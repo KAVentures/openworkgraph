@@ -60,6 +60,17 @@ class SelectedIncidents:
             raise StagingError("Selected-record read is not currently authorized")
 
 
+def _require_selected_scope(scope: SelectedIncidents) -> None:
+    """Enforce the exact validated authority type before any source operation.
+
+    Duck-typed objects and subclasses may override require_authority and
+    fabricate host, namespace or consent. They cannot be trusted as grants.
+    """
+    if type(scope) is not SelectedIncidents:
+        raise StagingError("Invalid selected incident scope")
+    scope.require_authority()
+
+
 def _validate_updated(value: str) -> None:
     """Require a real provider-local calendar timestamp, without claiming UTC."""
     if type(value) is not str or not _UPDATED.fullmatch(value):
@@ -73,7 +84,7 @@ def _validate_updated(value: str) -> None:
 def plan_page(scope: SelectedIncidents, *, offset: int = 0, limit: int = 50,
               since: str | None = None) -> dict[str, Any]:
     """Construct a fixed-host GET plan; never follows provider-supplied links."""
-    scope.require_authority()
+    _require_selected_scope(scope)
     if type(offset) is not int or not 0 <= offset <= 10_000:
         raise StagingError("Page offset outside bounded range")
     if type(limit) is not int or not 1 <= limit <= MAX_PAGE:
@@ -156,7 +167,7 @@ def project_page(scope: SelectedIncidents, raw: bytes, *, limit: int = 50,
     No persisted cursor is advanced here. A future caller must recheck scope,
     consent, lease/revision and source identity atomically with any append.
     """
-    scope.require_authority()
+    _require_selected_scope(scope)
     if type(limit) is not int or not 1 <= limit <= MAX_PAGE:
         raise StagingError("Page size outside bounded range")
     if since is not None:
@@ -232,7 +243,7 @@ def project_planned_page(scope: SelectedIncidents, raw: bytes, *,
     The caller must separately enforce transport identity and atomic revocation
     fencing before any later persistent operation.
     """
-    scope.require_authority()
+    _require_selected_scope(scope)
     if type(plan) is not dict:
         raise StagingError("Missing or invalid selected-record page plan")
     # Reconstruct from the current exact scope rather than trusting a copied
@@ -260,7 +271,7 @@ def project_planned_pages(scope: SelectedIncidents, pages: list[tuple[dict[str, 
     identical: an offset shift can hide a different incident. A future caller
     must independently fence source revocation and validate transport identity.
     """
-    scope.require_authority()
+    _require_selected_scope(scope)
     if type(pages) is not list or not 1 <= len(pages) <= 8:
         raise StagingError("Select one to eight consecutive page responses")
     first_limit: int | None = None
@@ -322,7 +333,7 @@ def reconcile_replayed_pages(scope: SelectedIncidents, earlier_raw: bytes,
     Missing records are *unknown* (ACL, pagination, deletion, concurrent edits).
     This cannot establish provider identity, completeness or checkpoint safety.
     """
-    scope.require_authority()
+    _require_selected_scope(scope)
     earlier = project_page(scope, earlier_raw, limit=limit, since=since)
     later = project_page(scope, later_raw, limit=limit, since=since)
     return _reconcile_projected(scope, earlier, later)
@@ -390,7 +401,7 @@ def reconcile_planned_replays(
     Offline consistency only: not authenticated transport, stable snapshots,
     a persistence-time revocation fence, or checkpoint authorization.
     """
-    scope.require_authority()
+    _require_selected_scope(scope)
     if (type(earlier_pages) is not list or type(later_pages) is not list
             or not 1 <= len(earlier_pages) == len(later_pages) <= 8):
         raise StagingError("Replay requires matching bounded page sequences")
