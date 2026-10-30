@@ -108,6 +108,36 @@ def test_window_sampling_provenance_at_and_above_cap():
     assert result["change_points"] == []
 
 
+
+def test_min_cases_requires_actual_sampled_support(monkeypatch):
+    """A full 21-case window must not satisfy a 21-case sample threshold when capped at 20."""
+    monkeypatch.setattr(drift, "SAMPLE_PER_WINDOW", 20)
+    rows = ["case,activity,time"]
+    for month in (1, 2):
+        for i in range(21):
+            day = datetime(2024, month, 1 + i, tzinfo=timezone.utc)
+            case = f"m{month}c{i}"
+            rows.append(f"{case},Receive,{day.isoformat()}")
+            rows.append(f"{case},Close,{(day + timedelta(hours=1)).isoformat()}")
+    log = workspace.import_log(
+        BytesIO(("\n".join(rows) + "\n").encode()), name="sample-support",
+        source_format="csv",
+        mapping={"case_column": "case", "activity_column": "activity",
+                 "timestamp_column": "time"})["log_id"]
+
+    insufficient = drift.drift(log, window="month", min_cases=21)
+    assert [(w["cases"], w["sampled_cases"], w["sampling_truncated"])
+            for w in insufficient["windows"]] == [(21, 20, True), (21, 20, True)]
+    assert insufficient["boundaries_tested"] == 0
+    assert insufficient["boundaries_skipped_small_windows"] == 1
+    assert insufficient["boundaries"] == [] and insufficient["change_points"] == []
+
+    sufficient = drift.drift(log, window="month", min_cases=20)
+    assert sufficient["boundaries_tested"] == 1
+    assert sufficient["boundaries_skipped_small_windows"] == 0
+    assert sufficient["change_points"] == []
+
+
 def test_no_change_means_no_change_points():
     result = drift.drift(_log(changed_from_month=99))
     assert result["change_points"] == [] and result["boundaries_tested"] == 4
