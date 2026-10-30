@@ -283,6 +283,24 @@ def _load_resume_metadata(
 
 
 
+def _validate_blind_json_shape(value: Any) -> None:
+    """Reject Python-only values and ambiguous object keys in blind evidence."""
+    if type(value) is dict:
+        for key, child in value.items():
+            if type(key) is not str:
+                raise ValueError("JSON object keys must be strings")
+            _validate_blind_json_shape(child)
+    elif type(value) is list:
+        for child in value:
+            _validate_blind_json_shape(child)
+    elif value is None or type(value) in (str, bool, int):
+        return
+    elif type(value) is float and math.isfinite(value):
+        return
+    else:
+        raise ValueError("unsupported or non-finite JSON value")
+
+
 def _validate_selected_blind_cases(cases: list[dict[str, Any]]) -> None:
     """Reject ambiguous selected evidence before a paid request or artifact write.
 
@@ -320,6 +338,18 @@ def _validate_selected_blind_cases(cases: list[dict[str, Any]]) -> None:
                     f"selected case {case_index} contains duplicate event_id at position {event_index}"
                 )
             seen_events.add(event_id)
+        # The digest used to bind persisted predictions is intentionally
+        # strict, but computing it only after a provider response can waste a
+        # paid request on malformed evidence. Preflight *all* selected cases
+        # before output creation or network access, including legacy resumes.
+        try:
+            _validate_blind_json_shape(evidence)
+            _blind_evidence_digest(case_id, evidence)
+        except (TypeError, ValueError, OverflowError, RecursionError) as exc:
+            # Do not echo potentially sensitive evidence into diagnostics.
+            raise ValueError(
+                f"selected case {case_index} blind evidence must be canonical finite JSON"
+            ) from exc
 
 
 def main(argv: list[str] | None = None) -> int:
