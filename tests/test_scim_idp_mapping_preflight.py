@@ -207,3 +207,40 @@ def test_contact_patch_rejects_invalid_selector_syntax_and_does_not_echo_values(
                 'emails[value eq "bad\\\\u0000"].primary'):
         users["patch_attributes"] = [bad]
         assert "unsupported_attribute" in codes(assess(mapping(users=users)))
+
+
+@pytest.mark.parametrize("bad_path", [
+    r'emails[type eq "\U0041"].value',
+    'emails[type\u00a0eq "work"].value',
+    'emails[type eq\u00a0"work"].value',
+    'emails[type eq "' + "x" * 65 + '"].value',
+    r'emails[value eq "\u0080"].value',
+    'emails[value eq "\ufffe"].value',
+], ids=[
+    "uppercase-json-escape", "nbsp-before-eq", "nbsp-after-eq",
+    "type-exceeds-64", "escaped-c1-control", "noncharacter",
+])
+def test_preflight_contact_selectors_match_shipped_parser_not_normalized_lookalikes(bad_path):
+    users = mapping()["users"]
+    users["patch_attributes"] = [bad_path]
+    report = assess(mapping(users=users))
+    assert report["status"] == "blocked"
+    assert "unsupported_attribute" in codes(report)
+    assert bad_path not in json.dumps(report)
+
+
+def test_contact_selectors_preserve_valid_json_escapes_and_case_insensitive_fields():
+    users = mapping()["users"]
+    users["patch_attributes"] = [
+        r'emails[type eq "\u0041"].value',
+        'EMAILS[TYPE EQ "MiXeD"].DISPLAY',
+        'EMAILS.PRIMARY',
+        'ACTIVE',
+        'Name.GivenName',
+    ]
+    report = assess(mapping(users=users))
+    assert report["status"] == "requires_live_validation"
+    assert "unsupported_attribute" not in codes(report)
+    assert report["checked"]["user_patch"] == 5
+    users["patch_attributes"] = ['emails[type eq "' + "x" * 64 + '"].value']
+    assert "unsupported_attribute" not in codes(assess(mapping(users=users)))
