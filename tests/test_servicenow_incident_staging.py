@@ -895,3 +895,82 @@ def test_selected_scope_subclass_cannot_override_revocation_authority():
         plan_page(denied)
     with pytest.raises(StagingError, match="Invalid selected incident scope"):
         project_page(denied, page(item(A)), limit=1)
+
+
+
+@pytest.mark.parametrize("observed,missing", [
+    ((), (A, B, C)),
+    ((B,), (A, C)),
+    ((C, A, B), ()),
+], ids=["empty", "partial", "all-selected"])
+def test_standalone_projection_discloses_unobserved_selected_ids(observed, missing):
+    selected = scope(sys_ids=(C, A, B))  # Deliberately unsorted input.
+    raw = page(*(item(incident_id) for incident_id in observed))
+    staged = project_page(selected, raw, limit=3)
+    assert staged["unobserved_selected_ids"] == list(missing)
+    assert staged["historical_completeness"] == "unknown"
+    assert staged["checkpoint_advanced"] is False
+    assert staged["not_an_authorization_to_append"] is True
+    assert staged["provider_timestamp_timezone_verified"] is False
+    assert all(not record["business_outcome_verified"] for record in staged["records"])
+
+
+def test_projection_omission_dedupe_is_by_exact_selected_id_only():
+    selected = scope(sys_ids=(A, B, C))
+    staged = project_page(selected, page(item(A), item(A)), limit=2)
+    assert staged["returned_rows"] == 2
+    assert staged["distinct_selected_rows"] == 1
+    assert staged["unobserved_selected_ids"] == [B, C]
+    assert staged["may_have_more"] is True
+    with pytest.raises(StagingError, match="unselected"):
+        project_page(selected, page(item("d" * 32)))
+
+
+def test_planned_offset_projection_discloses_unobserved_ids_across_pages():
+    selected = scope(sys_ids=(C, A, B))
+    first = plan_page(selected, offset=0, limit=1)
+    second = plan_page(selected, offset=1, limit=1)
+    staged = project_planned_pages(
+        selected, [(first, page(item(A))),
+                   (second, page(item(B, updated="2026-10-30 03:11:00")))]
+    )
+    assert staged["unobserved_selected_ids"] == [C]
+    assert staged["returned_rows"] == staged["distinct_selected_rows"] == 2
+    assert staged["pages_checked"] == 2
+    assert staged["historical_completeness"] == "unknown"
+    assert staged["checkpoint_advanced"] is False
+    assert staged["not_an_authorization_to_append"] is True
+
+    full = project_planned_pages(
+        selected, [(plan_page(selected, limit=3),
+                    page(item(A), item(B, updated="2026-10-30 03:11:00"),
+                         item(C, updated="2026-10-30 03:12:00")))]
+    )
+    assert full["unobserved_selected_ids"] == []
+    assert full["historical_completeness"] == "unknown"
+
+
+def test_planned_empty_page_discloses_all_unobserved_and_revocation_refuses():
+    selected = scope(sys_ids=(B, A))
+    plan = plan_page(selected, limit=2)
+    for staged in (project_planned_page(selected, page(), plan=plan),
+                   project_planned_pages(selected, [(plan, page())])):
+        assert staged["unobserved_selected_ids"] == [A, B]
+        assert staged["historical_completeness"] == "unknown"
+        assert staged["checkpoint_advanced"] is False
+    for revoked in (scope(sys_ids=(B, A), consented=False),
+                    scope(sys_ids=(B, A), grant_current=False)):
+        with pytest.raises(StagingError, match="not currently authorized"):
+            project_page(revoked, page())
+        with pytest.raises(StagingError, match="not currently authorized"):
+            project_planned_pages(revoked, [(plan, page())])
+
+
+def test_unobserved_selected_ids_are_tenant_scoped_without_private_fields():
+    raw = page(item(A, caller_id="private caller"))
+    left = project_page(scope(sys_ids=(A, B), tenant_scope="left"), raw)
+    right = project_page(scope(sys_ids=(A, B), tenant_scope="right"), raw)
+    assert left["unobserved_selected_ids"] == right["unobserved_selected_ids"] == [B]
+    assert left["records"][0]["source_namespace"] != right["records"][0]["source_namespace"]
+    assert "private caller" not in json.dumps(left)
+    assert "private caller" not in json.dumps(right)
