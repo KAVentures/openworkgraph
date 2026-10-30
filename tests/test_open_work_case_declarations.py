@@ -192,3 +192,13 @@ def test_sqlite_rollback_preserves_existing_fact(local):
     with pytest.raises(facts.CaseDeclarationError):
         save(B, depends_on_work_item_refs=[A], expected_revision=1)
     assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [first]
+
+
+def test_corrupt_declaration_db_cannot_block_explicit_review_deletion(local):
+    reviewed(A)
+    facts._path().write_bytes(b"not a SQLite database")
+    if os.name == "posix":
+        facts._path().chmod(0o600)
+    assert reviews.remove_review_intention(A, now=NOW) is True
+    assert not facts._path().exists()
+    assert A not in {i["work_item_ref"] for i in reviews.list_review_intentions(now=NOW)["items"]}
