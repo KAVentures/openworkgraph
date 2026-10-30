@@ -494,6 +494,7 @@ def test_runner_refuses_changed_resume_settings_before_request_or_write(
     from evals.reconstruction import run_external
 
     predictions_path = _write_jsonl(tmp_path, [_prediction("case-a")])
+    predictions_path = predictions_path.rename(tmp_path / "synthetic-model.predictions.jsonl")
     metadata_path = tmp_path / "synthetic-model.metadata.json"
     manifest = _resume_manifest(cases=1)
     manifest[field] = changed
@@ -516,7 +517,9 @@ def test_runner_refuses_changed_resume_settings_before_request_or_write(
 def test_runner_resume_preserves_prior_receipt_and_appends_new_one(tmp_path, monkeypatch):
     from evals.reconstruction import run_external
 
-    _write_jsonl(tmp_path, [_prediction("case-a")])
+    _write_jsonl(tmp_path, [_prediction("case-a")]).rename(
+        tmp_path / "synthetic-model.predictions.jsonl"
+    )
     metadata_path = tmp_path / "synthetic-model.metadata.json"
     metadata_path.write_text(json.dumps(_resume_manifest()), encoding="utf-8")
     monkeypatch.setenv("OPENAI_API_KEY", "synthetic-never-used")
@@ -541,7 +544,9 @@ def test_runner_resume_preserves_prior_receipt_and_appends_new_one(tmp_path, mon
 def test_interrupted_legacy_resume_without_manifest_is_marked_unattested(tmp_path, monkeypatch):
     from evals.reconstruction import run_external
 
-    _write_jsonl(tmp_path, [_prediction("case-a")])
+    _write_jsonl(tmp_path, [_prediction("case-a")]).rename(
+        tmp_path / "synthetic-model.predictions.jsonl"
+    )
     monkeypatch.setenv("OPENAI_API_KEY", "synthetic-never-used")
     monkeypatch.setattr(run_external, "load_cases", lambda: [_case("case-a"), _case("case-b")])
     monkeypatch.setattr(run_external, "split_cases", lambda cases, split: cases)
