@@ -1183,3 +1183,96 @@ def test_persisted_dependency_approval_window_fails_closed(local, corruption):
             depends_on_work_item_refs=[A],
             expected_revision=dependent["revision"],
             expected_edit_token=dependent["edit_token"], now=as_of)
+
+
+@pytest.mark.parametrize("scenario", ["new", "edit", "dependency"])
+def test_save_rolls_back_if_review_changes_after_write_before_commit(
+    local, monkeypatch, scenario,
+):
+    """The third review snapshot is taken after the row write, before COMMIT."""
+    reviewed(A)
+    previous = None
+    if scenario == "edit":
+        previous = save()
+    elif scenario == "dependency":
+        reviewed(B)
+        previous = save(A)
+
+    original = facts._reviewed
+    calls = 0
+
+    def revoke_on_final_snapshot(at):
+        nonlocal calls
+        calls += 1
+        snapshot = original(at)
+        if calls == 3:
+            # Simulate a separate review-store revocation after BEGIN's
+            # admission check but before the declaration COMMIT.
+            snapshot = dict(snapshot)
+            snapshot.pop(A)
+        return snapshot
+
+    monkeypatch.setattr(facts, "_reviewed", revoke_on_final_snapshot)
+    with pytest.raises(facts.CaseDeclarationError, match="before declaration commit"):
+        if scenario == "new":
+            save()
+        elif scenario == "edit":
+            facts.save_case_declaration(
+                A, SCOPE, goal_code="verify_operation",
+                expected_outcome_code="operation_receipt_reviewed",
+                expected_revision=previous["revision"],
+                expected_edit_token=previous["edit_token"],
+                now=NOW + timedelta(minutes=1))
+        else:
+            save(B, depends_on_work_item_refs=[A])
+    assert calls == 3
+    monkeypatch.setattr(facts, "_reviewed", original)
+
+    # The SQLite insert/update was rolled back, not merely hidden by the
+    # current review filter; unrelated existing approvals remain unchanged.
+    with facts._database(create=False) as db:
+        assert db is not None
+        stored = {row[0]: row for row in db.execute(
+            "SELECT work_item_ref,revision,goal_code FROM declarations")}
+    if scenario == "new":
+        assert stored == {}
+    else:
+        assert stored == {A: (A, 1, "review_source_state")}
+        assert facts.list_case_declarations(SCOPE, now=NOW + timedelta(minutes=1))["items"][0] == previous
+
+
+@pytest.mark.parametrize("scenario", ["new", "edit"])
+@pytest.mark.parametrize("changed_retention", [None, 1])
+def test_save_rolls_back_if_retention_changes_after_write_before_commit(
+    local, monkeypatch, scenario, changed_retention,
+):
+    reviewed(A)
+    previous = save() if scenario == "edit" else None
+    original = facts._retention_days
+    calls = 0
+
+    def policy_changes_on_final_check():
+        nonlocal calls
+        calls += 1
+        return changed_retention if calls == 3 else original()
+
+    monkeypatch.setattr(facts, "_retention_days", policy_changes_on_final_check)
+    with pytest.raises(facts.CaseDeclarationError, match="retention changed before declaration commit"):
+        if scenario == "new":
+            save()
+        else:
+            facts.save_case_declaration(
+                A, SCOPE, goal_code="verify_operation",
+                expected_outcome_code="operation_receipt_reviewed",
+                expected_revision=previous["revision"],
+                expected_edit_token=previous["edit_token"],
+                now=NOW + timedelta(minutes=1))
+    assert calls == 3
+    monkeypatch.setattr(facts, "_retention_days", original)
+
+    with facts._database(create=False) as db:
+        assert db is not None
+        stored = db.execute(
+            "SELECT work_item_ref,revision,goal_code FROM declarations"
+        ).fetchall()
+    assert stored == ([] if scenario == "new" else [(A, 1, "review_source_state")])
