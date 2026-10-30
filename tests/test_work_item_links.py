@@ -275,3 +275,54 @@ def test_non_object_reference_claims_cannot_impersonate_unreferenced_tab_events(
         result = linked_work_items([invalid, valid])
         assert result["items"] == [], invalid_claim
         assert result["candidate_links"] == [], invalid_claim
+
+
+def test_ephemeral_identifiers_reject_nonstring_metadata_claims():
+    # Python's str(True) and str(7) match the opaque-ID regex, but neither
+    # value is an observed string identifier. They must not join two records.
+    for field in ("tab_context_id", "clipboard_transfer_id"):
+        for invalid in (True, False, 7, 0):
+            first = _scoped(_event(1, A))
+            second = _scoped(_event(2, B))
+            first["metadata"][field] = invalid
+            second["metadata"][field] = invalid
+            result = linked_work_items([first, second])
+            assert result["items"] == [], (field, invalid)
+            assert result["candidate_links"] == [], (field, invalid)
+
+
+def test_invalid_explicit_top_level_identifier_never_falls_back_to_metadata():
+    # A malformed/empty explicit claim must not be replaced by a valid
+    # metadata ID, which would fabricate a shared tab or transfer.
+    for field in ("tab_context_id", "clipboard_transfer_id"):
+        for invalid in (None, False, 0, "", 7):
+            first = _scoped(_event(1, A))
+            second = _scoped(_event(2, B))
+            first["metadata"][field] = "shared-opaque"
+            second["metadata"][field] = "shared-opaque"
+            first[field] = invalid
+            result = linked_work_items([first, second])
+            assert result["items"] == [], (field, invalid)
+            assert result["candidate_links"] == [], (field, invalid)
+
+
+def test_literal_metadata_and_explicit_top_level_identifiers_still_work():
+    for field in ("tab_context_id", "clipboard_transfer_id"):
+        first = _scoped(_event(1, A))
+        second = _scoped(_event(2, B if field == "clipboard_transfer_id" else None))
+        first["metadata"][field] = "literal-opaque"
+        second["metadata"][field] = "literal-opaque"
+        expected_basis = "clipboard_transfer" if field == "clipboard_transfer_id" else "same_tab_single_record"
+        result = linked_work_items([first, second])
+        assert set(_items(result)) == {("e01", "e02")}, field
+        assert _items(result)[("e01", "e02")]["link_basis"] == {expected_basis: 1}
+
+        # Explicit valid string wins over malformed metadata, rather than
+        # rejecting a genuine top-level identifier.
+        first[field] = "top-level-opaque"
+        second[field] = "top-level-opaque"
+        first["metadata"][field] = 7
+        second["metadata"][field] = True
+        result = linked_work_items([first, second])
+        assert set(_items(result)) == {("e01", "e02")}, field
+        assert _items(result)[("e01", "e02")]["link_basis"] == {expected_basis: 1}
