@@ -1276,3 +1276,38 @@ def test_save_rolls_back_if_retention_changes_after_write_before_commit(
             "SELECT work_item_ref,revision,goal_code FROM declarations"
         ).fetchall()
     assert stored == ([] if scenario == "new" else [(A, 1, "review_source_state")])
+
+
+def test_persisted_row_overflow_withheld_and_write_refused(local):
+    reviewed(A)
+    reviewed(B)
+    save()
+    # Damage/legacy rows bypass the normal 50-item writer cap.
+    with sqlite3.connect(facts._path()) as db:
+        row = db.execute("SELECT * FROM declarations WHERE work_item_ref=?", (A,)).fetchone()
+        for index in range(facts._MAX_ITEMS):
+            db.execute("INSERT INTO declarations VALUES (?,?,?,?,?,?,?,?,?,?)",
+                       ("owg:w:" + f"{index:032x}", *row[1:]))
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == []
+    with pytest.raises(facts.CaseDeclarationError, match="exceeds item limit"):
+        save(B)
+    with sqlite3.connect(facts._path()) as db:
+        assert db.execute("SELECT COUNT(*) FROM declarations").fetchone()[0] == facts._MAX_ITEMS + 1
+    # Explicit review deletion must scrub the corrupt auxiliary ledger.
+    assert reviews.remove_review_intention(A, now=NOW)
+    assert not facts._path().exists()
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == []
+
+
+def test_persisted_row_limit_allows_bounded_cleanup(local):
+    reviewed(A)
+    reviewed(B)
+    save()
+    with sqlite3.connect(facts._path()) as db:
+        row = db.execute("SELECT * FROM declarations WHERE work_item_ref=?", (A,)).fetchone()
+        for index in range(facts._MAX_ITEMS - 1):
+            db.execute("INSERT INTO declarations VALUES (?,?,?,?,?,?,?,?,?,?)",
+                       ("owg:w:" + f"{index:032x}", *row[1:]))
+    assert [item["work_item_ref"] for item in facts.list_case_declarations(SCOPE, now=NOW)["items"]] == [A]
+    save(B)
+    assert {item["work_item_ref"] for item in facts.list_case_declarations(SCOPE, now=NOW)["items"]} == {A, B}
