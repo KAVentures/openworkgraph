@@ -55,10 +55,17 @@ def _validate_prediction(prediction: dict[str, Any], case_id: str, event_ids: se
         return members
 
     seen: set[str] = set()
+    prediction_ids: set[str] = set()
     for idx, workflow in enumerate(workflows, start=1):
         if not isinstance(workflow, dict):
             raise ValueError(f"workflow {idx} must be an object")
         workflow.setdefault("prediction_id", f"workflow_{idx}")
+        prediction_id = workflow["prediction_id"]
+        if not isinstance(prediction_id, str) or not prediction_id:
+            raise ValueError(f"workflow {idx} requires a nonempty string prediction_id")
+        if prediction_id in prediction_ids:
+            raise ValueError(f"duplicate workflow prediction_id: {prediction_id}")
+        prediction_ids.add(prediction_id)
         members = checked_ids(workflow.get("event_ids", []), "event_ids")
         for key in ("ordered_event_ids", "automation_relevant_event_ids", "ui_mechanic_event_ids"):
             submembers = checked_ids(workflow.get(key, []), key)
@@ -71,7 +78,19 @@ def _validate_prediction(prediction: dict[str, Any], case_id: str, event_ids: se
     unassigned = checked_ids(prediction.get("unassigned_event_ids", []), "unassigned_event_ids")
     if seen & unassigned:
         raise ValueError("events cannot be both assigned and unassigned")
-    prediction["insufficient_evidence"] = bool(prediction.get("insufficient_evidence", False))
+    # These values feed the preregistered uncertainty gate. Python's bool()
+    # would misread JSON strings such as "false" as True and overstate caution.
+    insufficient = prediction.get("insufficient_evidence", False)
+    if not isinstance(insufficient, bool):
+        raise ValueError("insufficient_evidence must be a boolean")
+    prediction["insufficient_evidence"] = insufficient
+    if "uncertainty" in prediction:
+        uncertainty = prediction["uncertainty"]
+        if not isinstance(uncertainty, dict):
+            raise ValueError("uncertainty must be an object")
+        for dimension in ("membership", "business_rule", "outcome"):
+            if dimension in uncertainty and not isinstance(uncertainty[dimension], bool):
+                raise ValueError(f"uncertainty.{dimension} must be a boolean")
     return prediction
 
 
