@@ -62,7 +62,8 @@
         Number.isFinite(windowEnd) && windowStart < windowEnd));
     const first = d?.first_observed_at, last = d?.last_observed_at;
     const observed = (d?.canonical_rows === 0 && first == null && last == null) ||
-      (instant(first) && instant(last) && Date.parse(first) <= Date.parse(last));
+      (d?.canonical_rows > 0 && instant(first) && instant(last) &&
+        Date.parse(first) <= Date.parse(last));
     // Observed events must belong to the selected window; the range end is
     // exclusive. Compare instants, not textual timezone representations.
     const observedWithinWindow = (first == null && last == null) ||
@@ -136,7 +137,8 @@
     const workValid = work == null || (object(work) && workCountsValid &&
       (work.recorder_liveness_verified == null ||
         typeof work.recorder_liveness_verified === 'boolean') &&
-      (lastWork == null || (instant(lastWork) && instant(first) && instant(last) &&
+      (lastWork == null || (d?.canonical_rows > healthRows &&
+        instant(lastWork) && instant(first) && instant(last) &&
         Date.parse(first) <= Date.parse(lastWork) &&
         Date.parse(lastWork) <= Date.parse(last))));
     if (!object(d) || !conserved || typeof d.request_text !== 'string' || !d.request_text.trim() ||
