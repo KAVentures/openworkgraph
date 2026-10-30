@@ -211,6 +211,45 @@ def _load_resume_predictions(
     return existing
 
 
+
+def _load_resume_metadata(
+    path: Path, expected: dict[str, Any], resumed_case_ids: set[str],
+) -> tuple[list[dict[str, Any]], bool]:
+    """Verify a prior completed-run manifest before mixing resumed predictions.
+
+    Interrupted runs may have no manifest because it is written only after
+    scoring. Those rows remain usable but must be reported as unattested.
+    """
+    if not path.exists():
+        return [], True
+    metadata = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(metadata, dict):
+        raise ValueError("resume metadata must be an object")
+    for field, requested in expected.items():
+        prior = metadata.get(field)
+        if field not in metadata or type(prior) is not type(requested) or prior != requested:
+            raise ValueError(f"resume metadata mismatch for {field}; use a new output directory")
+    responses = metadata.get("responses")
+    if not isinstance(responses, list):
+        raise ValueError("resume metadata responses must be a list")
+    seen: set[str] = set()
+    for row in responses:
+        if not isinstance(row, dict):
+            raise ValueError("resume metadata response must be an object")
+        cid = row.get("case_id")
+        if not isinstance(cid, str) or not cid or cid not in resumed_case_ids:
+            raise ValueError("resume metadata response refers to an invalid or absent case")
+        if cid in seen:
+            raise ValueError(f"resume metadata contains duplicate response case_id: {cid}")
+        seen.add(cid)
+    prior_unattested = metadata.get("resume_provenance_unverified", False)
+    if not isinstance(prior_unattested, bool):
+        raise ValueError("resume_provenance_unverified must be a boolean")
+    # Old runner versions discarded prior receipts on each resume. Do not
+    # fabricate receipts or silently claim complete response provenance.
+    return deepcopy(responses), prior_unattested or seen != resumed_case_ids
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the blind OWG reconstruction eval through an OpenAI-compatible endpoint")
     parser.add_argument("--model", required=True, help="exact model ID accepted by the endpoint")
@@ -244,6 +283,8 @@ def main(argv: list[str] | None = None) -> int:
     metadata_path = out_dir / f"{safe_model}{split_suffix}.metadata.json"
 
     existing: dict[str, dict[str, Any]] = {}
+    response_meta: list[dict[str, Any]] = []
+    resume_provenance_unverified = False
     if args.resume and predictions_path.exists():
         existing = _load_resume_predictions(
             predictions_path,
@@ -256,9 +297,20 @@ def main(argv: list[str] | None = None) -> int:
                 str(case["case_id"]): case["presented_evidence"] for case in cases
             },
         )
+        if existing:
+            response_meta, resume_provenance_unverified = _load_resume_metadata(
+                metadata_path,
+                {
+                    "model_requested": args.model,
+                    "base_url": args.base_url,
+                    "temperature": args.temperature,
+                    "split": args.split,
+                    "cases": len(cases),
+                },
+                set(existing),
+            )
 
     predictions: list[dict[str, Any]] = []
-    response_meta: list[dict[str, Any]] = []
     started = time.time()
     mode = "a" if args.resume else "w"
     with httpx.Client() as client, predictions_path.open(mode, encoding="utf-8") as fh:
@@ -296,6 +348,7 @@ def main(argv: list[str] | None = None) -> int:
         "revision": _revision(),
         "elapsed_seconds": round(time.time() - started, 3),
         "responses": response_meta,
+        "resume_provenance_unverified": resume_provenance_unverified,
     }
     metadata_path.write_text(json.dumps(metadata, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(json.dumps(result, indent=2, ensure_ascii=False))
