@@ -13,13 +13,25 @@
     if (period === 'custom') {
       if (!start || !end) throw new Error('Choose both dates.');
       const aa = new Date(start+'T00:00:00'), bb = new Date(end+'T00:00:00');
+      // Date silently rolls impossible days (e.g. February 30) into March.
+      if (!Number.isFinite(+aa) || !Number.isFinite(+bb) ||
+          dateInput(aa)!==start || dateInput(bb)!==end || aa>bb)
+        throw new Error('Choose valid dates, with end on or after start.');
       bb.setDate(bb.getDate()+1);
-      if (!Number.isFinite(+aa) || !Number.isFinite(+bb) || aa >= bb) throw new Error('End date must be on or after start.');
       return {scope:'range',since:aa.toISOString(),until:bb.toISOString()};
     }
     return {scope:'range',since:a.toISOString(),until:b.toISOString()};
   }
   window.owgEvidenceSelection = selection;
+  function matchesRequestedWindow(requested, returned) {
+    if (!returned || returned.scope!==requested.scope) return false;
+    if (requested.scope!=='range') return true;
+    // The server canonicalizes ISO UTC `Z` to `+00:00`; compare instants.
+    const sameInstant=(a,b)=>typeof b==='string' && Number.isFinite(Date.parse(b)) &&
+      Date.parse(a)===Date.parse(b);
+    return sameInstant(requested.since,returned.since) &&
+      sameInstant(requested.until,returned.until);
+  }
   async function api(path, options, stillCurrent=()=>true) {
     await window.__owgAuthReady;
     // An old auth wait must not start a read/export for a superseded scope.
@@ -60,8 +72,11 @@
       x.innerHTML='<progress aria-label="Checking selected evidence"></progress> Checking selected evidence…';
     });
     try {
-      const d=await api('/v1/analysis-preview?'+new URLSearchParams(selection()),{signal:pending.signal},()=>seq===generation);
+      const requested=selection();
+      const d=await api('/v1/analysis-preview?'+new URLSearchParams(requested),{signal:pending.signal},()=>seq===generation);
       if(seq!==generation)return null;
+      if(!matchesRequestedWindow(requested,d.window))
+        throw new Error('Preview period did not match the selected work period. Prepare again; no evidence was exported.');
       const text=d.canonical_rows
         ? `${d.canonical_rows} recorded events · observed ${new Date(d.first_observed_at).toLocaleString()} – ${new Date(d.last_observed_at).toLocaleString()}`
         : d.retained_rows ? 'No activity in this selection. Saved work is available; choose another period.' : 'No saved evidence yet. Work normally after enabling recording.';
