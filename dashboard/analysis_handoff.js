@@ -84,11 +84,29 @@
     const conserved = count(d?.canonical_rows) && count(d?.retained_rows) &&
       d.canonical_rows <= d.retained_rows && partitionCounts &&
       plannedRows !== null && plannedRows <= d.canonical_rows;
+    // Work and capture-health counts describe the same selected evidence,
+    // not a second independent estimate. Legacy previews may omit this block.
+    const work = d?.work_evidence;
+    const healthRows = sumSafe([d?.event_types?.capture_gap ?? 0,
+      d?.event_types?.capture_health ?? 0]);
+    const workCountsAbsent = work?.ordinary_event_rows == null &&
+      work?.health_event_rows == null;
+    const workCountsValid = workCountsAbsent ||
+      (count(work?.ordinary_event_rows) && count(work?.health_event_rows) &&
+        sumSafe([work.ordinary_event_rows, work.health_event_rows]) === d?.canonical_rows &&
+        work.health_event_rows === healthRows);
+    const lastWork = work?.last_work_observed_at;
+    const workValid = work == null || (object(work) && workCountsValid &&
+      (work.recorder_liveness_verified == null ||
+        typeof work.recorder_liveness_verified === 'boolean') &&
+      (lastWork == null || (instant(lastWork) && instant(first) && instant(last) &&
+        Date.parse(first) <= Date.parse(lastWork) &&
+        Date.parse(lastWork) <= Date.parse(last))));
     if (!object(d) || !conserved || typeof d.request_text !== 'string' || !d.request_text.trim() ||
         !count(d.canonical_rows) || !count(d.retained_rows) ||
         !counts(d.event_types) || !counts(d.sources) ||
         !Array.isArray(d.redacted_examples) || !d.redacted_examples.every(object) ||
-        !observed || !chunks) {
+        !observed || !chunks || !workValid) {
       throw new Error('Preview evidence was incomplete or malformed. Nothing was copied or downloaded; prepare again.');
     }
   }

@@ -179,3 +179,26 @@ Synthetic modal regressions cover source/event-type undercounts and
 overcounts, retained-count disagreement, safe-integer sum overflow,
 excess planned rows, zero-selected/positive-plan contradiction and a valid
 partial-date plan. No real customer or provider acceptance is claimed.
+
+## Work and capture-health count integrity
+
+When the optional `work_evidence` block is present, its ordinary and
+capture-health row counts must either both be absent (legacy metadata) or
+both be safe nonnegative integers. Their sum must equal the selected
+`canonical_rows`, and the health count must equal the sum of the
+`capture_gap` and `capture_health` event-type partitions. The sums
+are overflow-safe. A supplied recorder-liveness flag must be a boolean;
+a supplied last-work timestamp must be a valid instant between the
+preview's first and last observed instants. An absent work-evidence block
+or legacy empty block remains valid, as do health-only and ordinary-only
+histories.
+
+This prevents a malformed preview from making an unsupported claim about
+ordinary activity, recorder health or observed work coverage before the
+user copies a request or starts an export. It does **not** establish that
+the recorder was running, that unobserved intervals were productive or
+unproductive, or that a business outcome occurred. The local backend
+still owns authentication, export authorization and redaction. Synthetic
+modal tests cover over/undercount, mismatched health partitions, overflow,
+partial counts, invalid liveness and last-work bounds, plus valid mixed,
+health-only and legacy responses.

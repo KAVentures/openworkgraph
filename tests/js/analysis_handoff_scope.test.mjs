@@ -809,3 +809,56 @@ test('a valid partial date plan conserves counts without claiming complete cover
   assert.deepEqual(h.copied, ['request-partial-plan']);
   assert.equal(h.tickets.length, 0);
 });
+
+test('work evidence totals, capture-health partition and liveness metadata fail closed', async () => {
+  const base = {ordinary_event_rows: 2, health_event_rows: 0,
+    last_work_observed_at: '2026-10-29T10:00:00Z',
+    recorder_liveness_verified: false};
+  const invalid = [
+    {ordinary_event_rows: 3, health_event_rows: 0}, // exceeds selected rows
+    {ordinary_event_rows: 1, health_event_rows: 0}, // undercounts selected rows
+    {ordinary_event_rows: 1, health_event_rows: 1}, // no health event in partition
+    {ordinary_event_rows: Number.MAX_SAFE_INTEGER, health_event_rows: 1},
+    {ordinary_event_rows: -1, health_event_rows: 3},
+    {health_event_rows: undefined}, // a supplied partition cannot be partial
+    {recorder_liveness_verified: 'false'},
+    {last_work_observed_at: '2026-10-29T09:59:59Z'},
+    {last_work_observed_at: '2026-10-29T10:01:01Z'},
+    {last_work_observed_at: '2026-02-30T10:00:00Z'}
+  ];
+  for (const change of invalid) {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], {...h.preview('range'), work_evidence: {...base, ...change}});
+    await opening;
+    assert.equal(h.modals, 0, 'invalid work evidence must not open handoff: ' + JSON.stringify(change));
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+  }
+});
+
+test('valid selected work/health partition and optional legacy metadata still prepare safely', async () => {
+  const valid = [
+    {work_evidence: {ordinary_event_rows: 1, health_event_rows: 1,
+      last_work_observed_at: '2026-10-29T10:00:00+00:00',
+      recorder_liveness_verified: false},
+      event_types: {focus_span: 1, capture_gap: 1}},
+    {work_evidence: {ordinary_event_rows: 0, health_event_rows: 2,
+      last_work_observed_at: null, recorder_liveness_verified: false},
+      event_types: {capture_health: 2}},
+    {work_evidence: {}},
+    {work_evidence: undefined}
+  ];
+  for (const variant of valid) {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], {...h.preview('range'), ...variant});
+    await opening;
+    assert.equal(h.modals, 1, 'valid/legacy evidence should open: ' + JSON.stringify(variant));
+    assert.equal(h.modal['#analysisCopy'].disabled, false);
+  }
+});
