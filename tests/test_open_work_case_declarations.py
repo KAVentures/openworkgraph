@@ -716,6 +716,53 @@ def test_existing_v1_store_migrates_without_reauthorizing_declarations(local):
     assert updated["revision"] == 2
 
 
+
+@pytest.mark.parametrize("row_count", [facts._MAX_ITEMS, facts._MAX_ITEMS + 1])
+def test_legacy_v1_migration_is_bounded_and_atomic(local, monkeypatch, row_count):
+    """Damaged v1 ledgers must not bypass the 50-row cap during upgrade."""
+    path = facts._path()
+    with sqlite3.connect(path) as db:
+        db.execute("""CREATE TABLE declarations (
+            work_item_ref TEXT PRIMARY KEY, scope_ref TEXT NOT NULL,
+            goal_code TEXT NOT NULL, expected_outcome_code TEXT NOT NULL,
+            dependencies_json TEXT NOT NULL, revision INTEGER NOT NULL,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL)""")
+        db.executemany(
+            "INSERT INTO declarations VALUES (?,?,?,?,?,?,?,?,?)",
+            [("owg:w:" + f"{i:032x}", SCOPE, "review_source_state",
+              "source_state_rechecked", "[]", 1, NOW.isoformat(),
+              NOW.isoformat(), (NOW + timedelta(days=7)).isoformat())
+             for i in range(row_count)],
+        )
+        db.execute("PRAGMA user_version=1")
+    if os.name == "posix":
+        path.chmod(0o600)
+
+    if row_count > facts._MAX_ITEMS:
+        def forbidden_token(*_args, **_kwargs):
+            raise AssertionError("overflow migration generated a token")
+
+        monkeypatch.setattr(facts.secrets, "token_hex", forbidden_token)
+        with pytest.raises(facts.CaseDeclarationError, match="exceeds item limit"):
+            with facts._database(create=False):
+                pytest.fail("over-capacity legacy ledger was accepted")
+        with sqlite3.connect(path) as db:
+            assert db.execute("PRAGMA user_version").fetchone()[0] == 1
+            assert db.execute("SELECT COUNT(*) FROM declarations").fetchone()[0] == row_count
+            columns = [column[1] for column in db.execute("PRAGMA table_info(declarations)")]
+            assert "edit_token" not in columns  # No partial schema migration.
+    else:
+        with facts._database(create=False) as db:
+            assert db.execute("PRAGMA user_version").fetchone()[0] == 2
+            tokens = [row[0] for row in db.execute(
+                "SELECT edit_token FROM declarations"
+            ).fetchall()]
+            assert len(tokens) == facts._MAX_ITEMS
+            assert len(set(tokens)) == facts._MAX_ITEMS
+            assert all(len(token) == 32 for token in tokens)
+
+
 def test_as_of_read_never_displays_future_owner_approval_or_revision(local):
     # The review is already active: the declaration and its later CAS edit
     # must still not be represented as owner-approved at an earlier instant.
