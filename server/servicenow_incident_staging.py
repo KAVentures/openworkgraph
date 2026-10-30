@@ -104,15 +104,20 @@ def _unique_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return out
 
 
-def project_page(scope: SelectedIncidents, raw: bytes, *, limit: int = 50) -> dict[str, Any]:
+def project_page(scope: SelectedIncidents, raw: bytes, *, limit: int = 50,
+                 since: str | None = None) -> dict[str, Any]:
     """Validate one fake/provider page; return minimized staged source snapshots.
 
+    When plan_page used a since bound, the caller must supply that same bound
+    here: a provider may ignore a filter. Comparison is provider-local only.
     No persisted cursor is advanced here. A future caller must recheck scope,
     consent, lease/revision and source identity atomically with any append.
     """
     scope.require_authority()
     if type(limit) is not int or not 1 <= limit <= MAX_PAGE:
         raise StagingError("Page size outside bounded range")
+    if since is not None:
+        _validate_updated(since)
     if type(raw) is not bytes or len(raw) > MAX_BYTES:
         raise StagingError("Source response exceeds bounded byte limit")
     try:
@@ -132,6 +137,11 @@ def project_page(scope: SelectedIncidents, raw: bytes, *, limit: int = 50) -> di
             raise StagingError("Provider returned an unselected or invalid incident")
         updated = item.get("sys_updated_on")
         _validate_updated(updated)
+        # Fixed-width, calendar-validated provider-local timestamps compare in
+        # chronological order within the same unverified provider clock.
+        # Refuse a selected row if ServiceNow ignored the requested filter.
+        if since is not None and updated < since:
+            raise StagingError("Provider returned incident older than requested watermark")
         mod = item.get("sys_mod_count")
         if type(mod) is not str or not re.fullmatch(r"(?:0|[1-9][0-9]{0,11})", mod):
             raise StagingError("Invalid provider modification counter")
