@@ -39,9 +39,15 @@ Choosing another candidate, variant step or combined-map supporting variant
 also invalidates any pending compact evidence inspection. Click **Review
 selected examples** again to inspect the newly selected evidence. The explorer
 does not silently reuse old support counts, and a stale failed read cannot
-replace the current selection with an error. This is a local display/read
-freshness guarantee, **not** a claim that the underlying observed data is
-complete, current at the source, or sufficient to authorize an agent.
+replace the current selection with an error. An explicitly selected exact
+variant with no valid retained execution references displays **no selectable
+evidence**; it never substitutes candidate-wide references from another
+variant. The copied agent handoff likewise asks for independent exact evidence
+instead of misattributing unrelated executions. When no variant is selected,
+candidate-wide examples remain available but are not variant-specific proof.
+This is a local display/read freshness and reference-selection guarantee,
+**not** a claim that the underlying observed data is complete, current at the
+source, or sufficient to authorize an agent.
 
 ## Semantics and known limits
 
