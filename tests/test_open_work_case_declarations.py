@@ -432,3 +432,53 @@ def test_shortened_prerequisite_expiry_cannot_resurrect_old_dependent(local):
             expected_outcome_code="source_state_rechecked",
             depends_on_work_item_refs=[A], expected_revision=old_b["revision"],
             now=at)
+
+
+def test_missing_prerequisite_cannot_resurrect_dependent_on_redeclaration(local):
+    # Simulate an interrupted/partial auxiliary-ledger cleanup: A is gone
+    # while B -> A and C -> B remain. Read-time hiding alone is insufficient
+    # because recreating A could otherwise revive those old approvals.
+    d = "owg:w:" + "d" * 32
+    for ref in (A, B, C, d):
+        reviewed(ref)
+    save()
+    old_b = save(B, depends_on_work_item_refs=[A])
+    save(C, depends_on_work_item_refs=[B])
+    independent = save(d)
+    with facts._database(create=False) as db:
+        assert db is not None
+        db.execute("DELETE FROM declarations WHERE work_item_ref=?", (A,))
+
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [independent]
+    recreated = save()  # Prunes the orphan closure before inserting A.
+    assert recreated["revision"] == 1
+    remaining = facts.list_case_declarations(SCOPE, now=NOW)["items"]
+    assert {item["work_item_ref"] for item in remaining} == {A, d}
+    assert independent in remaining
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        save(B, expected_revision=old_b["revision"], depends_on_work_item_refs=[A])
+
+
+def test_wrong_scope_prerequisite_prunes_dependents_not_unrelated_cases(local):
+    # A declaration row changed to a different scope cannot lend authority
+    # to B -> A, nor to the transitive C -> B edge.
+    d = "owg:w:" + "d" * 32
+    e = "owg:w:" + "e" * 32
+    for ref in (A, B, C, d, e):
+        reviewed(ref)
+    save()
+    old_b = save(B, depends_on_work_item_refs=[A])
+    save(C, depends_on_work_item_refs=[B])
+    independent = save(d)
+    with facts._database(create=False) as db:
+        assert db is not None
+        db.execute("UPDATE declarations SET scope_ref=? WHERE work_item_ref=?",
+                   (OTHER_SCOPE, A))
+
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [independent]
+    new_case = save(e)  # Triggers fail-closed scope-aware pruning.
+    remaining = facts.list_case_declarations(SCOPE, now=NOW)["items"]
+    assert {item["work_item_ref"] for item in remaining} == {d, e}
+    assert independent in remaining and new_case in remaining
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        save(B, expected_revision=old_b["revision"])
