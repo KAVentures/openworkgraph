@@ -29,7 +29,7 @@ GROUP_MATCH = frozenset({"displayname", "externalid"})
 # not User search/matching filters or authenticated identity claims.
 _CONTACT_CHILDREN = frozenset({"value", "type", "display", "primary"})
 _CONTACT_SELECTOR = re.compile(
-    r'emails\\[(type|value)\\s+eq\\s+("(?:[^"\\\\]|\\\\.)*")\\](?:\\.(value|type|display|primary))?',
+    r'emails\[(type|value)\s+eq\s+("(?:[^"\\]|\\.)*")\](?:\.(value|type|display|primary))?',
     re.IGNORECASE,
 )
 
