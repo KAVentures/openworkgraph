@@ -6,6 +6,7 @@ import pytest
 
 from server.servicenow_incident_staging import (
     MAX_BYTES, SelectedIncidents, StagingError, plan_page, project_page,
+    project_planned_page,
 )
 
 A = "a" * 32
@@ -173,3 +174,75 @@ def test_incremental_projection_rejects_invalid_watermark_even_on_empty_page(bad
 def test_incremental_projection_does_not_bypass_revoked_authority():
     with pytest.raises(StagingError, match="not currently authorized"):
         project_page(scope(grant_current=False), page(item()), since="2026-10-30 03:10:00")
+
+
+def test_planned_projection_pins_requested_incremental_bound_and_page_size():
+    selected = scope()
+    since = "2026-10-30 03:10:00"
+    plan = plan_page(selected, offset=7, limit=2, since=since)
+    assert plan["since"] == since
+    staged = project_planned_page(
+        selected, page(item(updated=since), item(B, updated="2026-10-30 03:11:00")),
+        plan=plan,
+    )
+    assert staged["plan_bound"] is True
+    assert staged["planned_offset"] == 7 and staged["planned_since"] == since
+    assert staged["distinct_selected_rows"] == 2
+    assert staged["checkpoint_advanced"] is False
+    assert staged["historical_completeness"] == "unknown"
+    assert all(not r["business_outcome_verified"] for r in staged["records"])
+    # A provider ignoring the planned watermark cannot silently stage old rows.
+    with pytest.raises(StagingError, match="older than requested watermark"):
+        project_planned_page(selected, page(item(updated="2026-10-29 23:59:59")),
+                             plan=plan)
+    # A provider returning more rows than the planned limit is also rejected.
+    with pytest.raises(StagingError, match="page size"):
+        project_planned_page(selected, page(item(), item(B)),
+                             plan=plan_page(selected, limit=1, since=since))
+
+
+@pytest.mark.parametrize("mutation", [
+    ("since", None),
+    ("since", "2026-10-29 00:00:00"),
+    ("url", "https://evil.example/api/now/table/incident"),
+    ("limit", 1),
+    ("offset", 3),
+    ("source_namespace", "snow.other"),
+    ("selected_count", 1),
+    ("historical_completeness", "complete"),
+    ("unexpected", "untrusted"),
+])
+def test_planned_projection_rejects_tampered_plan_without_partial_staging(mutation):
+    selected = scope()
+    plan = plan_page(selected, offset=2, limit=2, since="2026-10-30 03:10:00")
+    key, value = mutation
+    plan[key] = value
+    with pytest.raises(StagingError):
+        project_planned_page(selected, page(item()), plan=plan)
+
+
+def test_planned_projection_rejects_missing_plan_keys_and_wrong_scope():
+    selected = scope()
+    plan = plan_page(selected, since="2026-10-30 03:10:00")
+    for key in ("since", "url", "offset", "limit"):
+        incomplete = dict(plan)
+        incomplete.pop(key)
+        with pytest.raises(StagingError):
+            project_planned_page(selected, page(item()), plan=incomplete)
+    for changed in (scope(sys_ids=(A,)), scope(tenant_scope="org2"),
+                    scope(host="another.service-now.com")):
+        with pytest.raises(StagingError, match="does not match"):
+            project_planned_page(changed, page(item()), plan=plan)
+    with pytest.raises(StagingError, match="not currently authorized"):
+        project_planned_page(scope(grant_current=False), page(item()), plan=plan)
+    with pytest.raises(StagingError):
+        project_planned_page(selected, page(item()), plan=None)
+
+
+def test_planned_projection_supports_explicit_unfiltered_selected_read():
+    selected = scope()
+    plan = plan_page(selected, limit=1)
+    assert plan["since"] is None
+    result = project_planned_page(selected, page(item()), plan=plan)
+    assert result["plan_bound"] and result["planned_since"] is None
+    assert not result["checkpoint_advanced"]
