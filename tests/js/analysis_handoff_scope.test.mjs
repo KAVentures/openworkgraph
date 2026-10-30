@@ -587,3 +587,64 @@ test('successful pending Copy after period change remains disabled and discloses
   assert.match(h.modal['#analysisActionStatus'].textContent, /period changed during copying/i);
   assert.equal(h.tickets.length, 0);
 });
+
+test('malformed counts and source maps refuse a misleading handoff', async t => {
+  const mutations = [
+    ['string zero', d => ({...d, canonical_rows: '0'})],
+    ['negative count', d => ({...d, canonical_rows: -1})],
+    ['unsafe integer', d => ({...d, retained_rows: Number.MAX_SAFE_INTEGER + 1})],
+    ['negative event count', d => ({...d, event_types: {focus_span: -1}})],
+    ['non-numeric source count', d => ({...d, sources: {desktop: '2'}})]
+  ];
+  for (const [name, mutate] of mutations) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const open = h.bars[0].controls.button.onclick();
+    await settle(); h.reply(h.reads[1], mutate(h.preview('range', 'bad')));
+    await open;
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+    assert.equal(h.toasts.length, 1);
+  });
+});
+
+test('missing request and malformed examples or chunks fail closed', async t => {
+  const mutations = [
+    ['missing request', d => ({...d, request_text: undefined})],
+    ['blank request', d => ({...d, request_text: '   '})],
+    ['missing examples', d => ({...d, redacted_examples: undefined})],
+    ['null example', d => ({...d, redacted_examples: [null]})],
+    ['bad chunks', d => ({...d, analysis_plan: {date_chunks: {since: 'x'}}})],
+    ['null chunk', d => ({...d, analysis_plan: {date_chunks: [null]}})]
+  ];
+  for (const [name, mutate] of mutations) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const open = h.bars[0].controls.button.onclick();
+    await settle(); h.reply(h.reads[1], mutate(h.preview('range', 'bad')));
+    await open;
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+  });
+});
+
+test('valid empty evidence and absent optional plan retain safe copy-only handoff', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle();
+  h.reply(h.reads[1], {...h.preview('range', 'empty'), canonical_rows: 0,
+    retained_rows: 0, event_types: {}, sources: {}, redacted_examples: [],
+    first_observed_at: null, last_observed_at: null, analysis_plan: undefined});
+  await open;
+  assert.equal(h.modals, 1);
+  assert.equal(h.modal['#analysisDownload'].disabled, true);
+  await h.modal['#analysisDownload'].onclick();
+  assert.equal(h.tickets.length, 0);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-empty']);
+});

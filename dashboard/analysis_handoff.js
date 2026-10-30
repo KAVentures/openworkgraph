@@ -23,6 +23,24 @@
     return {scope:'range',since:a.toISOString(),until:b.toISOString()};
   }
   window.owgEvidenceSelection = selection;
+  // A malformed preview cannot authorize a download or become an AI request.
+  // Optional legacy fields stay optional; fields used by this UI must be safe.
+  function validatePreview(d) {
+    const object = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+    const count = v => Number.isSafeInteger(v) && v >= 0;
+    const counts = v => object(v) && Object.values(v).every(count);
+    const chunks = d?.analysis_plan == null ||
+      (object(d.analysis_plan) && (d.analysis_plan.date_chunks == null ||
+        (Array.isArray(d.analysis_plan.date_chunks) &&
+          d.analysis_plan.date_chunks.every(object))));
+    if (!object(d) || typeof d.request_text !== 'string' || !d.request_text.trim() ||
+        !count(d.canonical_rows) || !count(d.retained_rows) ||
+        !counts(d.event_types) || !counts(d.sources) ||
+        !Array.isArray(d.redacted_examples) || !d.redacted_examples.every(object) ||
+        !chunks) {
+      throw new Error('Preview evidence was incomplete or malformed. Nothing was copied or downloaded; prepare again.');
+    }
+  }
   function matchesRequestedWindow(requested, returned) {
     if (!returned || returned.scope!==requested.scope) return false;
     if (requested.scope!=='range') return true;
@@ -114,6 +132,7 @@
       if(seq!==generation)return null;
       if(!matchesRequestedWindow(requested,d.window))
         throw new Error('Preview period did not match the selected work period. Prepare again; no evidence was exported.');
+      validatePreview(d);
       const text=d.canonical_rows
         ? `${d.canonical_rows} recorded events · observed ${new Date(d.first_observed_at).toLocaleString()} – ${new Date(d.last_observed_at).toLocaleString()}`
         : d.retained_rows ? 'No activity in this selection. Saved work is available; choose another period.' : 'No saved evidence yet. Work normally after enabling recording.';

@@ -103,3 +103,21 @@ These are deterministic JavaScript contract checks, **not** an actual
 consenting-user UX study, browser accessibility certification, provider
 acceptance, or evidence that a customer outcome occurred. Existing browser,
 native, packaging, accessibility and scale CI remain required before merge.
+
+
+## Malformed preview fail-closed contract
+
+The dashboard checks the preview shape before displaying event counts or
+enabling handoff actions. It requires a nonblank request, safe nonnegative
+integer canonical/retained counts, object maps with nonnegative integer
+per-event/per-source counts, and an array of redacted example objects.
+Optional date-chunk planning may be absent, but a supplied chunk list must
+be an array of objects. Invalid responses show a local preparation error
+instead of opening a broken modal, copying an undefined request or treating
+a truthy string `"0"` as evidence available for export. This is defensive
+client-side consistency, **not** server authorization or proof that event
+counts are complete. A legitimate zero-event preview still permits copying
+its explanatory request but does not offer a package download.
+
+Synthetic regression cases cover malformed counts/maps, missing
+request/examples, invalid chunk shapes and empty-evidence compatibility.
