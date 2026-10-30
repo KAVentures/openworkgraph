@@ -234,3 +234,21 @@ evidence, cross-case reused IDs, interleaved event ordering, and a command-level
 fail-before-request/fail-before-output guarantee. This is input/measurement
 integrity, **not** a demonstrated assignment F1 or contamination improvement,
 real-provider validation, or a consenting customer pilot.
+
+
+## Duplicate JSON object keys fail closed
+
+Python's ordinary JSON parser accepts duplicate keys and silently keeps the last
+value. In reconstruction this can hide contradictory `case_id`, nested
+`event_ids`, uncertainty flags, blind-evidence digest fields or metadata
+receipts. The external runner now rejects duplicate object keys **at any
+nesting depth** in model JSON responses, resumed prediction JSONL and existing
+resume metadata. It refuses an ambiguous resume before requesting another
+model response or changing the saved prediction/metadata bytes.
+
+This is a field-name constraint **within each JSON object**: separate workflow
+objects may use the same schema keys, and case-local event IDs in different
+cases are still valid. It does not alter the scorer, evidence order, holdout
+answers or any assignment/contamination threshold. Synthetic tests cover
+root/nested duplicates, a fake model response, and fail-before-request
+resume/manifest rejection. No real model or customer pilot was run.

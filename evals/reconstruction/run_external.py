@@ -34,12 +34,30 @@ def _blind_evidence_digest(case_id: str, presented_evidence: list[dict[str, Any]
 
 
 
+def _strict_json_loads(text: str) -> Any:
+    """Refuse ambiguous duplicate keys at every JSON object depth.
+
+    Standard json.loads silently keeps the final value, which can hide
+    contradictory case IDs, event assignments, digests or response receipts.
+    Repeated field names in *different* objects remain legitimate.
+    """
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON object key: {key}")
+            result[key] = value
+        return result
+
+    return json.loads(text, object_pairs_hook=unique_object)
+
+
 def _extract_json(text: str) -> dict[str, Any]:
     value = text.strip()
     if value.startswith("```"):
         value = re.sub(r"^```(?:json)?\s*", "", value, flags=re.I)
         value = re.sub(r"\s*```$", "", value)
-    parsed = json.loads(value)
+    parsed = _strict_json_loads(value)
     if not isinstance(parsed, dict):
         raise ValueError("model response must be a JSON object")
     return parsed
@@ -178,7 +196,7 @@ def _load_resume_predictions(
     for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         if not line.strip():
             continue
-        row = json.loads(line)
+        row = _strict_json_loads(line)
         if not isinstance(row, dict):
             raise ValueError(f"resume predictions line {line_number} must be an object")
         cid = row.get("case_id")
@@ -222,7 +240,7 @@ def _load_resume_metadata(
     """
     if not path.exists():
         return [], True
-    metadata = json.loads(path.read_text(encoding="utf-8"))
+    metadata = _strict_json_loads(path.read_text(encoding="utf-8"))
     if not isinstance(metadata, dict):
         raise ValueError("resume metadata must be an object")
     for field, requested in expected.items():

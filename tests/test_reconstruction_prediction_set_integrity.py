@@ -744,3 +744,88 @@ def test_runner_rejects_invalid_selected_blind_corpus_before_requests_or_files(
         ])
     assert not output_dir.exists()
 
+
+
+@pytest.mark.parametrize("raw", [
+    '{"case_id":"a","case_id":"b","workflows":[]}',
+    '{"case_id":"a","workflows":[{"event_ids":["e1"],"event_ids":["e2"]}]}',
+    '{"case_id":"a","workflows":[],"uncertainty":{"membership":true,"membership":false}}',
+])
+def test_model_json_rejects_duplicate_keys_at_any_depth(raw):
+    from evals.reconstruction.run_external import _extract_json
+
+    with pytest.raises(ValueError, match="duplicate JSON object key"):
+        _extract_json(raw)
+
+
+def test_strict_json_accepts_same_field_names_in_distinct_objects():
+    from evals.reconstruction.run_external import _strict_json_loads
+
+    assert _strict_json_loads('{"workflows":[{"event_ids":["a"]},{"event_ids":["b"]}]}') == {
+        "workflows": [{"event_ids": ["a"]}, {"event_ids": ["b"]}]
+    }
+
+
+def test_fake_provider_duplicate_json_key_is_rejected_before_persistence():
+    from evals.reconstruction.run_external import _request
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {
+                "content": '{"case_id":"case-a","case_id":"case-b","workflows":[]}'
+            }}]}
+
+    class FakeClient:
+        def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    with pytest.raises(ValueError, match="duplicate JSON object key"):
+        _request(
+            FakeClient(), base_url="https://invalid.example", api_key="synthetic-only",
+            model="synthetic-model", case=_blind_case(), temperature=None, timeout=1.0,
+        )
+
+
+@pytest.mark.parametrize("artifact", ["predictions", "metadata"])
+def test_resume_duplicate_json_key_fails_before_provider_or_mutation(
+    tmp_path, monkeypatch, artifact,
+):
+    from evals.reconstruction import run_external
+
+    predictions_path = tmp_path / "synthetic-model.predictions.jsonl"
+    metadata_path = tmp_path / "synthetic-model.metadata.json"
+    if artifact == "predictions":
+        predictions_path.write_text(
+            '{"case_id":"case-a","case_id":"case-a","workflows":[]}' + chr(10),
+            encoding="utf-8",
+        )
+    else:
+        predictions_path.write_text(
+            json.dumps(_prediction("case-a")) + chr(10), encoding="utf-8",
+        )
+        manifest = _resume_manifest(cases=2)
+        metadata_path.write_text(
+            json.dumps(manifest)[:-1] + ',"model_requested":"synthetic-model"}',
+            encoding="utf-8",
+        )
+    before_predictions = predictions_path.read_bytes()
+    before_metadata = metadata_path.read_bytes() if metadata_path.exists() else None
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-never-used")
+    monkeypatch.setattr(
+        run_external, "load_cases", lambda: [_case("case-a"), _case("case-b")]
+    )
+    monkeypatch.setattr(run_external, "split_cases", lambda cases, split: cases)
+    monkeypatch.setattr(run_external, "_request", lambda *args, **kwargs: (
+        (_ for _ in ()).throw(AssertionError("duplicate JSON must not call provider"))
+    ))
+
+    with pytest.raises(ValueError, match="duplicate JSON object key"):
+        run_external.main([
+            "--model", "synthetic-model", "--output-dir", str(tmp_path), "--resume",
+        ])
+    assert predictions_path.read_bytes() == before_predictions
+    assert (metadata_path.read_bytes() if metadata_path.exists() else None) == before_metadata
+    assert not (tmp_path / "synthetic-model.report.json").exists()
