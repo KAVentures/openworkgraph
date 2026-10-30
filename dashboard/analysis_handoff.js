@@ -165,8 +165,14 @@
       statusNode.textContent=staleScope+' Nothing was copied or downloaded by this action.';
       return true;
     };
+    // Clipboard permission prompts can remain pending. Repeated Copy clicks
+    // must not queue duplicate writes or race to announce an older result.
+    let copyInFlight=false;
     copyNode.onclick=async()=>{
-      if(expired())return;
+      if(expired()||copyInFlight)return;
+      copyInFlight=true;
+      copyNode.disabled=true;
+      statusNode.textContent='Copying the prepared request locally… No AI was invoked.';
       try{
         await navigator.clipboard.writeText(request);
         statusNode.textContent=current()
@@ -175,6 +181,11 @@
       }catch(_){statusNode.textContent=current()
         ? 'Clipboard unavailable. Open “Read the request” and copy the text.'
         : staleScope+' Clipboard write failed; prepare again.';}
+      finally{
+        copyInFlight=false;
+        // A superseded handoff must not regain a usable Copy button.
+        if(current())copyNode.disabled=false;
+      }
     };
     // A user may double-click while the local ticket is pending. Only one
     // ticket/download may be started for this prepared handoff at a time.
