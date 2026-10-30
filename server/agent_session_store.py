@@ -81,8 +81,24 @@ def _secret() -> bytes:
 
 
 def _opaque(prefix: str, value: str, *, chars: int) -> str:
-    digest = hmac.new(_secret(), value.encode("utf-8", errors="ignore"), hashlib.sha256).hexdigest()[:chars]
-    return f"{prefix}:{digest}"
+    # Keep historical references byte-for-byte unless their numeric substring
+    # would be redacted as a payment/personal identifier. Never exempt an
+    # inbound opaque-looking string from privacy checks: generate a stable
+    # reference which can pass those checks instead.
+    from shared.core.sensitive_identifiers import redact_sensitive_identifiers
+
+    key = _secret()
+    original = value.encode("utf-8", errors="ignore")
+    for attempt in range(64):
+        material = original if attempt == 0 else (
+            b"\x00owg-agent-ref-redaction-v1\x00" + str(attempt).encode("ascii") + b"\x00" + original
+        )
+        digest = hmac.new(key, material, hashlib.sha256).hexdigest()[:chars]
+        candidate = f"{prefix}:{digest}"
+        if redact_sensitive_identifiers(candidate) == candidate:
+            return candidate
+    # A broken detector/digest must not hang capture or persist a corrupt ID.
+    raise ValueError("Could not derive a privacy-stable agent reference")
 
 
 def session_ref(source: str, native_session_id: Any, native_file: Any = "") -> str:
