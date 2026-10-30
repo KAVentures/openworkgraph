@@ -185,6 +185,7 @@ def test_contact_patch_rejects_invalid_selector_syntax_and_does_not_echo_values(
     for bad in ('emails[type co "work"].value',
                 'emails[type eq "work" and value eq "x"].primary',
                 'emails[type eq "work"].password',
-                'emails[type eq ""].primary'):
+                'emails[type eq ""].primary',
+                'emails[value eq "bad\\\\u0000"].primary'):
         users["patch_attributes"] = [bad]
         assert "unsupported_attribute" in codes(assess(mapping(users=users)))
