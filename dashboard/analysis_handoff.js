@@ -114,6 +114,15 @@
       plannedRows !== null && plannedRows <= d.canonical_rows;
     // Work and capture-health counts describe the same selected evidence,
     // not a second independent estimate. Legacy previews may omit this block.
+    // The server samples at most six selected focus spans. Never show context
+    // examples inconsistent with the selected focus evidence or observed span.
+    const examplesValid = Array.isArray(d?.redacted_examples) &&
+      d.redacted_examples.length <= Math.min(6, d?.event_types?.focus_span ?? 0) &&
+      d.redacted_examples.every(sample => object(sample) &&
+        (sample.observed_at == null ||
+          (instant(sample.observed_at) && instant(first) && instant(last) &&
+           Date.parse(first) <= Date.parse(sample.observed_at) &&
+           Date.parse(sample.observed_at) <= Date.parse(last))));
     const work = d?.work_evidence;
     const healthRows = sumSafe([d?.event_types?.capture_gap ?? 0,
       d?.event_types?.capture_health ?? 0]);
@@ -133,7 +142,7 @@
     if (!object(d) || !conserved || typeof d.request_text !== 'string' || !d.request_text.trim() ||
         !count(d.canonical_rows) || !count(d.retained_rows) ||
         !counts(d.event_types) || !counts(d.sources) ||
-        !Array.isArray(d.redacted_examples) || !d.redacted_examples.every(object) ||
+        !examplesValid ||
         !observed || !observedWithinWindow || !validWindow || !chunks || !workValid) {
       throw new Error('Preview evidence was incomplete or malformed. Nothing was copied or downloaded; prepare again.');
     }
