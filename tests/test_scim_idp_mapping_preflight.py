@@ -173,6 +173,24 @@ def test_contact_matching_remains_blocked_even_with_shipped_contact_schema():
     assert "unverified_contact_metadata" in codes(report)
 
 
+def test_contact_selector_caution_preserves_user_matching_counts():
+    # A contact selector must never overwrite the separately parsed User match list.
+    users = mapping()["users"]
+    users["patch_attributes"] = ['emails[value eq "alias@example.invalid"].primary']
+    with_selector = assess(mapping(users=users))
+    assert with_selector["status"] == "requires_live_validation"
+    assert with_selector["checked"] == {
+        "user_matching": 2, "user_create": 4, "user_patch": 1,
+        "group_matching": 0,
+    }
+    assert {"contact_value_selector", "unverified_contact_metadata"} <= codes(with_selector)
+
+    users["patch_attributes"] = ["active"]
+    without_selector = assess(mapping(users=users))
+    assert without_selector["checked"] == with_selector["checked"]
+    assert "contact_value_selector" not in codes(without_selector)
+
+
 def test_contact_patch_rejects_invalid_selector_syntax_and_does_not_echo_values():
     users = mapping()["users"]
     users["patch_attributes"].extend([
