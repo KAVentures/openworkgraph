@@ -5,7 +5,8 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from server.servicenow_incident_staging import (
-    MAX_BYTES, SelectedIncidents, StagingError, plan_page, project_page,
+    MAX_BYTES, MAX_JSON_DEPTH, MAX_JSON_NODES, SelectedIncidents, StagingError,
+    plan_page, project_page,
     project_planned_page, project_planned_pages,
 )
 
@@ -668,3 +669,65 @@ def test_replay_unobserved_scope_is_tenant_and_grant_scoped():
                      scope(sys_ids=(A, B, C), grant_current=False)):
         with pytest.raises(StagingError, match="not currently authorized"):
             reconcile_replayed_pages(selected, page(), page())
+
+
+@pytest.mark.parametrize("private_fields", [
+    {"private": "\ud800"},
+    {"private": {"nested": ["\udc00"]}},
+    {"\ud800": "private key"},
+], ids=["high-surrogate-value", "low-surrogate-nested", "surrogate-key"])
+def test_discarded_private_invalid_unicode_refused_across_staging_paths(private_fields):
+    """Discarded private fields cannot hide invalid Unicode scalar escapes."""
+    from server.servicenow_incident_staging import (
+        reconcile_planned_replays, reconcile_replayed_pages,
+    )
+    selected = scope()
+    raw = page(item(A, **private_fields))
+    planned = plan_page(selected, limit=2)
+    paths = (
+        lambda: project_page(selected, raw, limit=2),
+        lambda: project_planned_page(selected, raw, plan=planned),
+        lambda: project_planned_pages(selected, [(planned, raw)]),
+        lambda: reconcile_replayed_pages(selected, raw, raw, limit=2),
+        lambda: reconcile_planned_replays(
+            selected, [(planned, raw)], [(planned, raw)],
+        ),
+    )
+    for invoke in paths:
+        with pytest.raises(StagingError, match="Unicode scalar"):
+            invoke()
+
+
+@pytest.mark.parametrize("private_value", [
+    "deep",
+    "wide",
+], ids=["over-depth", "over-node-budget"])
+def test_discarded_private_json_tree_stays_bounded(private_value):
+    """Even ignored source fields must respect depth and node limits."""
+    if private_value == "deep":
+        extra = "leaf"
+        for _ in range(MAX_JSON_DEPTH + 2):
+            extra = {"child": extra}
+    else:
+        extra = list(range(MAX_JSON_NODES))
+    raw = page(item(A, private=extra))
+    assert len(raw) < MAX_BYTES
+    with pytest.raises(StagingError, match="structural bounds"):
+        project_page(scope(), raw, limit=2)
+    planned = plan_page(scope(), limit=2)
+    with pytest.raises(StagingError, match="structural bounds"):
+        project_planned_page(scope(), raw, plan=planned)
+
+
+def test_valid_unicode_pair_and_small_discarded_tree_remain_compatible():
+    """A valid escaped surrogate pair is one Unicode scalar, not a lone half."""
+    selected = scope()
+    raw = page(item(A, private={"note": "\U0001f642", "values": list(range(40))}))
+    staged = project_page(selected, raw, limit=2)
+    assert staged["distinct_selected_rows"] == 1
+    assert staged["records"][0]["source_case_id"] == A
+    assert "private" not in staged["records"][0]
+    assert staged["historical_completeness"] == "unknown"
+    assert staged["checkpoint_advanced"] is False
+    planned = plan_page(selected, limit=2)
+    assert project_planned_page(selected, raw, plan=planned)["plan_bound"] is True
