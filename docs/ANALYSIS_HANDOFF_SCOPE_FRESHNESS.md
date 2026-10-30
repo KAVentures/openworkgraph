@@ -36,6 +36,16 @@ though the existing backend still applies its authorization checks.
   stale scope in the modal status (without waiting for a click). The old request
   remains visible for inspection but is explicitly stale. Preparing again
   creates a new enabled dialog with the newly selected scope.
+- Before clicking an issued export link, the dashboard checks that the ticket
+  response names the exact local `/v1/export/csvzip` endpoint, carries one
+  nonempty matching ticket token, preserves the selected scope and UTC-equivalent
+  range bounds, and keeps the user-requested detailed-evidence and name-redaction
+  flags. External/protocol-relative URLs, fragments, duplicate/unknown query
+  parameters, missing or contradictory ticket tokens, and changed privacy flags
+  are refused. A refusal creates no download and leaves a deliberate retry
+  available while the selection remains current. This is a client-side
+  consistency guard, **not** a substitute for the backend's single-use,
+  authenticated export-ticket binding and permission enforcement.
 - A stale copy click does not write to the clipboard. A stale download click
   does not request an export ticket. If the period changes while a ticket
   response is pending, no download is started; the user is told to prepare
@@ -62,7 +72,9 @@ deferred API responses and a minimal DOM model to verify: a superseded modal
 never opens, stale controls disable and announce their status immediately,
 current copy/download retains the exact selected scope, a late export ticket cannot trigger a
 download, an old authentication wait cannot start a stale preview read, a forged preview window cannot open a handoff, UTC-equivalent server bounds remain accepted,\nimpossible custom dates are rejected, repeated Download clicks issue one
-export ticket, ticket failures allow a deliberate retry, and delayed clipboard
+export ticket, ticket failures allow a deliberate retry, forged or mismatched
+export links cannot change the scope/redaction/detail settings or leave the
+local endpoint, UTC-equivalent range bounds still pass, and delayed clipboard
 errors preserve the stale-period warning.
 
 These are deterministic JavaScript contract checks, **not** an actual
