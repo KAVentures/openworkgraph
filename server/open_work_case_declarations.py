@@ -132,10 +132,18 @@ def _database(*, create: bool) -> Iterator[sqlite3.Connection | None]:
             db.execute("BEGIN IMMEDIATE")
             try:
                 if db.execute("PRAGMA user_version").fetchone()[0] == 1:
+                    # Legacy migration must honor the same global 50-row
+                    # limit as v2 reads/writes. Check before ALTER/token
+                    # generation: damaged v1 databases must not force an
+                    # unbounded fetch or silently become accepted v2 stores.
+                    legacy_refs = db.execute(
+                        "SELECT work_item_ref FROM declarations LIMIT ?",
+                        (_MAX_ITEMS + 1,),
+                    ).fetchall()
+                    if len(legacy_refs) > _MAX_ITEMS:
+                        raise CaseDeclarationError("local declaration ledger exceeds item limit")
                     db.execute("ALTER TABLE declarations ADD COLUMN edit_token TEXT NOT NULL DEFAULT ''")
-                    for (ref,) in db.execute(
-                        "SELECT work_item_ref FROM declarations"
-                    ).fetchall():
+                    for (ref,) in legacy_refs:
                         db.execute(
                             "UPDATE declarations SET edit_token=? WHERE work_item_ref=?",
                             (secrets.token_hex(16), ref),
