@@ -197,8 +197,18 @@ def benchmark(log_id: str, cohorts: Any, case_type: str | None = None, sla_secon
             f"SELECT duration FROM {t}_cs USING SAMPLE reservoir({BOOTSTRAP_SAMPLE} ROWS) REPEATABLE (42)").fetchall()]
             for t in ("ca", "cb")]
         d, low, high = median_difference(*samples)
-        differences["median_throughput_seconds"] = {"difference": d, "ci95": [low, high],
-                                                    "method": f"percentile bootstrap, {BOOTSTRAP_ROUNDS} rounds"}
+        differences["median_throughput_seconds"] = {
+            "difference": d, "ci95": [low, high],
+            "method": f"percentile bootstrap, {BOOTSTRAP_ROUNDS} rounds",
+            # Full-cohort p50/p90 above and this sampled bootstrap can use
+            # different denominators. Expose actual support, not just the cap.
+            "sampled_cases_first": len(samples[0]),
+            "sampled_cases_second": len(samples[1]),
+            "sampled_median_throughput_seconds_first": _median(samples[0]),
+            "sampled_median_throughput_seconds_second": _median(samples[1]),
+            "sampling_truncated_first": len(samples[0]) < a["cases"],
+            "sampling_truncated_second": len(samples[1]) < b["cases"],
+        }
         presence = conn.execute("""WITH pa AS (SELECT activity, count(DISTINCT case_id) AS n FROM ca GROUP BY 1),
               pb AS (SELECT activity, count(DISTINCT case_id) AS n FROM cb GROUP BY 1)
             SELECT coalesce(pa.activity, pb.activity), coalesce(pa.n, 0), coalesce(pb.n, 0)
