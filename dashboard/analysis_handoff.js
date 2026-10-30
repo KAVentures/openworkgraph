@@ -273,8 +273,37 @@
     if(!d){window.toast?.('Could not prepare selected evidence. Check the period and dashboard connection.');return;}
     const request=d.request_text;
     const chosen={scope:d.window.scope,...(d.window.scope==='range'?{since:d.window.since,until:d.window.until}:{})};
-    const access=d.local_ai_history_access || {};
-    const localRead=!d.local_ai_enabled ? 'Local AI access is off.' : access.mode==='off' ? 'Local AI can read the current run only; saved-history access is off.' : `Local saved-history permission: ${access.mode}${access.expires_at?' until '+new Date(access.expires_at).toLocaleString():''}.`;
+    const access=d.local_ai_history_access;
+    // This is a snapshot of local AI history consent, not an export grant.
+    // Do not turn malformed lease metadata into an apparent permission.
+    const leaseInstant=value=>{
+      if(typeof value!=='string' ||
+         !/^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$/.test(value))
+        return null;
+      const parts=value.slice(0,10).split('-').map(Number);
+      const day=new Date(0);day.setUTCFullYear(parts[0],parts[1]-1,parts[2]);
+      if(day.getUTCFullYear()!==parts[0] || day.getUTCMonth()!==parts[1]-1 ||
+         day.getUTCDate()!==parts[2] || !Number.isFinite(Date.parse(value)))return null;
+      return new Date(value).toISOString();
+    };
+    const leaseObject=access!==null && typeof access==='object' && !Array.isArray(access);
+    const leaseExpiry=leaseInstant(access?.expires_at);
+    const expiryValid=access?.expires_at==null || leaseExpiry!==null;
+    let localRead='Local AI saved-history permission could not be verified from this preview; check current settings before using an AI.';
+    if(d.local_ai_enabled===false) localRead='Local AI access is off.';
+    else if(d.local_ai_enabled===true && leaseObject && expiryValid){
+      const until=leaseExpiry?' Grant expiry: '+leaseExpiry+'.':'';
+      if(access.mode==='off')
+        localRead='Local AI can read the current run only; saved-history access is off.';
+      else if(access.mode==='all_saved')
+        localRead='Local saved-history grant: all saved work (snapshot only; current consent still applies).'+until;
+      else if(access.mode==='selected_range'){
+        const since=leaseInstant(access.since), end=leaseInstant(access.until);
+        if(since && end && Date.parse(since)<Date.parse(end))
+          localRead='Local saved-history grant: '+since+' to '+end+
+            ' (end exclusive; snapshot only, may not cover this selected work period).'+until;
+      }
+    }
     window.openModal?.('Prepare for AI','Discover opportunities from recorded work',`
       <p>No workflow description or repeated pattern is required. Your AI will interpret the evidence; this panel does not run a model.</p>
       <div class="note"><strong>What the AI will receive</strong>
@@ -282,12 +311,12 @@
         <p>Selected: ${esc(d.window.since||'all available history')} to ${esc(d.window.until||'the latest retained evidence')} (end exclusive, UTC). Observed: ${esc(d.first_observed_at||'none')} to ${esc(d.last_observed_at||'none')}.</p>
         <p>Sources: ${esc(Object.entries(d.sources).map(([k,v])=>`${k}: ${v}`).join(', ')||'none')}. Visible work text is not included in this activity package. Typed values and clipboard contents are not included.</p>
         <p>Latest work event: ${esc(d.work_evidence?.last_work_observed_at||'none in this period')}. Capture health and gaps are shown separately; they do not confirm the recorder is running.</p>
-        <p>${esc(localRead)} Hosted AI availability must be checked separately: it only sees previously shared evidence. Preparing a file does not change those permissions.</p>
+        <p>${esc(localRead)} Hosted AI availability must be checked separately: it only sees previously shared evidence. Preparing or downloading a local file does not grant AI history access.</p>
       </div>
       <details><summary>Analyze a large history in smaller parts</summary><p>Ask your AI to process one day at a time, follow every page, and keep track of what it has examined. Repeated-work maps are optional. The file download still contains the full selected period.</p><ul>${(d.analysis_plan?.date_chunks||[]).map(x=>`<li>${esc(x.since)} to ${esc(x.until)}: ${esc(x.event_rows)} events</li>`).join('')}</ul>${d.analysis_plan?.more_dates_not_listed?'<p>Only the first 31 dates are listed. Continue through the remaining selected dates.</p>':''}</details>
       <details><summary>Preview redacted context examples</summary><ul>${d.redacted_examples.map(x=>`<li>${esc(x.app)} · ${esc(x.window_title||'Untitled activity')}</li>`).join('')||'<li>No focus spans in this selection.</li>'}</ul><p>Filtering is best effort; inspect the downloaded package before sharing it.</p></details>
-      <label style="display:flex;gap:8px;margin:12px 0"><input id="analysisDetailed" type="checkbox">Include detailed chronological evidence (more events and labels for deeper investigation)</label>
-      <p>Downloaded evidence is redacted. Gaps and foreground time are not measured lost work or savings.</p>
+      <label style="display:flex;gap:8px;margin:12px 0"><input id="analysisDetailed" type="checkbox">Include detailed chronological evidence (raw local event rows, more labels and context)</label>
+      <p>Name redaction is best effort, not anonymization. Even summary exports may contain sensitive titles, URLs or metadata; detailed chronology adds raw local evidence that may contain more sensitive content. Inspect the file before sharing it. Gaps and foreground time are not measured lost work or savings.</p>
       <div class="modal-actions"><button type="button" id="analysisDownload" ${d.canonical_rows?'':'disabled'}>Download AI evidence package</button><button type="button" class="secondary" id="analysisCopy">Copy request for my AI</button></div>
       <details style="margin-top:12px"><summary>Read the request</summary><pre style="white-space:pre-wrap" id="analysisRequest"></pre></details>
       <div class="muted" id="analysisActionStatus" role="status">Nothing has been sent to an AI. Downloads work with any capable AI, without an OWG cloud account.</div>`);
