@@ -103,6 +103,12 @@ def test_benchmark_throughput_interval_discloses_actual_case_sample_support(monk
     assert full_gap["sampled_median_throughput_seconds_first"] == full["cohorts"][0]["throughput_seconds"]["p50"]
     assert full_gap["sampled_median_throughput_seconds_second"] == full["cohorts"][1]["throughput_seconds"]["p50"]
 
+    # A cap between the cohort sizes truncates only one side.
+    monkeypatch.setattr(cohorts, "BOOTSTRAP_SAMPLE", 30)
+    partial = cohorts.benchmark(log_id, specs)["differences_second_minus_first"]["median_throughput_seconds"]
+    assert (partial["sampled_cases_first"], partial["sampled_cases_second"]) == (30, 20)
+    assert partial["sampling_truncated_first"] and not partial["sampling_truncated_second"]
+
     monkeypatch.setattr(cohorts, "BOOTSTRAP_SAMPLE", 3)
     capped = cohorts.benchmark(log_id, specs)
     gap = capped["differences_second_minus_first"]["median_throughput_seconds"]
@@ -159,6 +165,11 @@ with TestClient(app) as client:
     result = client.post(base + "/benchmark", json=spec, headers=headers)
     assert result.status_code == 200, result.text
     assert [c["cases"] for c in result.json()["cohorts"]] == [10, 10]
+    gap = result.json()["differences_second_minus_first"]["median_throughput_seconds"]
+    assert (gap["sampled_cases_first"], gap["sampled_cases_second"]) == (10, 10)
+    assert not gap["sampling_truncated_first"] and not gap["sampling_truncated_second"]
+    assert gap["difference"] == (gap["sampled_median_throughput_seconds_second"]
+                                 - gap["sampled_median_throughput_seconds_first"])
     assert client.post(base + "/benchmark", json=[1], headers=headers).status_code == 422
     assert client.post(base + "/benchmark", content=b"x", headers={**headers, "Content-Type": "text/plain"}).status_code == 415
     assert client.post(base + "/benchmark", json={"cohorts": [{}, {}], "sla_seconds": "x"}, headers=headers).status_code == 422
