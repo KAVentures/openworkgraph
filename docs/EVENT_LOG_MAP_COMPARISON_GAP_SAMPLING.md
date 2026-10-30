@@ -77,3 +77,22 @@ Synthetic regressions check exact full-support and capped-support
 denominators and sample-median consistency. They do not establish
 provider-sandbox acceptance, representative sampling, a consenting
 customer pilot or competitor parity.
+
+### Bounded side-map result materialization
+
+Each side map ranks activity names by event frequency (literal-name tie
+break), displays at most 64, and now applies the selected-name predicate
+**inside** the SQL edge and start-activity queries. The SQL returns no more
+than 64 × 64 distinct displayed edges or 64 displayed start activities,
+respectively; it no longer transfers all distinct edges and start names to
+Python before discarding omitted names. The edge sort remains descending
+transition count, then literal source and destination; start activities
+remain sorted by descending case count and literal name. Parameter binding
+prevents activity labels from becoming SQL syntax.
+
+This bounds the *materialized side-map results*, not the underlying event
+scan, the complete cross-cohort path comparison or total workspace memory.
+No existing path, median, interval, case count, authorization, retention,
+consent or API shape is changed. Synthetic regression checks 66 distinct
+activities in each cohort and guards that SQL filtering and row limits occur
+before `fetchall`; it is not a real-provider scale benchmark.

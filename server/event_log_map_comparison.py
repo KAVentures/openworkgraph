@@ -123,11 +123,19 @@ def compare_maps(log_id: str, cohort_specs: Any, case_type: str | None = None, *
             activities_truncated = len(ranked) > MAX_MAP_ACTIVITIES
             acts = ranked[:MAX_MAP_ACTIVITIES]
             kept = {a for a, _, _ in acts}
+            # The displayed map contains at most 64 activity names. Push
+            # membership filtering and row limits into DuckDB instead of
+            # materializing every distinct edge/start activity in Python.
+            names = [a for a, _, _ in acts]
+            slots = ", ".join("?" for _ in names)
             edges = conn.execute(f"""SELECT src, dst, count(*), count(DISTINCT case_id), quantile_cont(gap, 0.5)
-                FROM {t}_dfg GROUP BY 1, 2 ORDER BY 3 DESC, 1, 2""").fetchall()
+                FROM {t}_dfg WHERE src IN ({slots}) AND dst IN ({slots})
+                GROUP BY 1, 2 ORDER BY 3 DESC, 1, 2 LIMIT {MAX_MAP_ACTIVITIES ** 2}""",
+                [*names, *names]).fetchall()
             starts = conn.execute(f"""SELECT activity, count(*) FROM (SELECT activity, row_number() OVER (
-                PARTITION BY case_id ORDER BY ts, event_id) AS k FROM {t}) WHERE k = 1 GROUP BY 1
-                ORDER BY 2 DESC, 1""").fetchall()
+                PARTITION BY case_id ORDER BY ts, event_id) AS k FROM {t})
+                WHERE k = 1 AND activity IN ({slots}) GROUP BY 1
+                ORDER BY 2 DESC, 1 LIMIT {MAX_MAP_ACTIVITIES}""", names).fetchall()
             return {"cases": n,
                     "activities": [{"activity": a, "event_count": e, "case_count": c} for a, e, c in acts],
                     "transitions": [{"from": s, "to": d, "transition_count": x, "case_count": c,

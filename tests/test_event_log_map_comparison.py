@@ -208,6 +208,56 @@ def test_activity_truncation_distinguishes_exact_cap_from_omitted_names():
     assert exact["start_activities"] == overflow["start_activities"] == {"Activity-000": 1}
 
 
+def test_map_side_aggregates_are_bounded_before_fetchall(monkeypatch):
+    """Even with omitted activity names, side-map rows are filtered in SQL."""
+    rows = ["case,activity,time"]
+    for month in (0, 1):
+        day = START + timedelta(days=32 * month)
+        for i in range(compare.MAX_MAP_ACTIVITIES + 2):
+            stamp = (day + timedelta(minutes=i)).isoformat()
+            rows.append(f"case-{month},Activity-{i:03d},{stamp}")
+    log = workspace.import_log(
+        BytesIO(("\\n".join(rows) + "\\n").encode()),
+        name="many-activities", source_format="csv",
+        mapping={"case_column": "case", "activity_column": "activity",
+                 "timestamp_column": "time"})["log_id"]
+
+    original_query = workspace._query
+    seen = {"edges": 0, "starts": 0}
+
+    class AuditedConnection:
+        def __init__(self, raw):
+            self.raw = raw
+
+        def execute(self, sql, params=None):
+            if "SELECT src, dst, count(*), count(DISTINCT case_id), quantile_cont(gap, 0.5)" in sql:
+                seen["edges"] += 1
+                assert "WHERE src IN (" in sql and "AND dst IN (" in sql
+                assert f"LIMIT {compare.MAX_MAP_ACTIVITIES ** 2}" in sql
+                assert len(params) == 2 * compare.MAX_MAP_ACTIVITIES
+            if "SELECT activity, count(*) FROM (SELECT activity, row_number()" in sql:
+                seen["starts"] += 1
+                assert "WHERE k = 1 AND activity IN (" in sql
+                assert f"LIMIT {compare.MAX_MAP_ACTIVITIES}" in sql
+                assert len(params) == compare.MAX_MAP_ACTIVITIES
+            return self.raw.execute(sql, params) if params is not None else self.raw.execute(sql)
+
+        def __getattr__(self, name):
+            return getattr(self.raw, name)
+
+    def audited_query(log_id, case_type, run):
+        return original_query(log_id, case_type, lambda conn: run(AuditedConnection(conn)))
+
+    monkeypatch.setattr(workspace, "_query", audited_query)
+    result = compare.compare_maps(log, [JANUARY, FEBRUARY])
+    assert seen == {"edges": 2, "starts": 2}
+    for side in result["maps"]:
+        assert side["activities_truncated"]
+        assert len(side["activities"]) == compare.MAX_MAP_ACTIVITIES
+        assert len(side["transitions"]) == compare.MAX_MAP_ACTIVITIES - 1
+        assert side["start_activities"] == {"Activity-000": 1}
+
+
 def test_real_http_route_requires_a_dashboard_session(tmp_path):
     code = r'''
 from fastapi.testclient import TestClient
