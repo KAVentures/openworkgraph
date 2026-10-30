@@ -207,6 +207,7 @@ test('open handoff is proactively disabled and announced stale before any click'
   // This is synchronous; a slow preview cannot leave old export controls active.
   assert.equal(h.modal['#analysisCopy'].disabled, true);
   assert.equal(h.modal['#analysisDownload'].disabled, true);
+  assert.equal(h.modal['#analysisDetailed'].disabled, true);
   assert.match(h.modal['#analysisActionStatus'].textContent, /period changed/i);
   assert.equal(h.modal['#analysisRequest'].textContent, 'request-reviewed-week');
   assert.equal(h.tickets.length, 0);
@@ -284,12 +285,59 @@ test('double-clicking Download issues one ticket and announces local pending wor
   await settle();
   assert.equal(h.tickets.length, 1);
   assert.equal(h.modal['#analysisDownload'].disabled, true);
-  assert.match(h.modal['#analysisActionStatus'].textContent, /preparing.*locally/i);
+  assert.equal(h.modal['#analysisDetailed'].disabled, true);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /preparing.*without detailed chronological evidence.*locally/i);
   h.reply(h.tickets[0], {url: '/v1/download-ticket/single'});
   await Promise.all([first, second]);
   assert.equal(h.downloads, 1);
   assert.equal(h.modal['#analysisDownload'].disabled, false);
+  assert.equal(h.modal['#analysisDetailed'].disabled, false);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /summary evidence only/i);
   assert.match(h.modal['#analysisActionStatus'].textContent, /download started/i);
+});
+
+test('detailed-evidence choice is frozen and accurately reported for a pending ticket', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await open;
+  h.modal['#analysisDetailed'].checked = true;
+  const download = h.modal['#analysisDownload'].onclick();
+  await settle();
+  assert.equal(h.tickets.length, 1);
+  assert.equal(JSON.parse(h.tickets[0].options.body).include_raw, true);
+  assert.equal(h.modal['#analysisDetailed'].disabled, true);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /with detailed chronological evidence locally/i);
+  // Even a programmatic DOM mutation cannot rewrite the already-issued ticket.
+  h.modal['#analysisDetailed'].checked = false;
+  h.reply(h.tickets[0], {url: '/ignored-by-valid-fixture'});
+  await download;
+  assert.equal(h.downloads, 1);
+  assert.equal(h.modal['#analysisDetailed'].disabled, false);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /detailed chronology included/i);
+});
+
+test('stale pending download never re-enables detailed-evidence option', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await open;
+  h.modal['#analysisDetailed'].checked = true;
+  const download = h.modal['#analysisDownload'].onclick();
+  await settle();
+  h.bars[0].controls.select.value = 'all';
+  h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+  assert.equal(h.modal['#analysisDetailed'].disabled, true);
+  h.reply(h.tickets[0], {url: '/ignored-by-stale-response'});
+  await download;
+  assert.equal(h.downloads, 0);
+  assert.equal(h.modal['#analysisDetailed'].disabled, true);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /period changed/i);
+  await settle(); h.reply(h.reads[2], h.preview('all', 'new')); await settle();
+  const again = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[3], h.preview('all', 'new-request')); await again;
+  assert.equal(h.modal['#analysisDetailed'].disabled, false);
+  assert.equal(h.modal['#analysisDetailed'].checked, false);
 });
 
 test('failed export ticket restores retry without duplicate downloads', async () => {
