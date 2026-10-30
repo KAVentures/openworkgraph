@@ -1115,3 +1115,72 @@ test('valid redacted focus examples preserve offset and legacy compatibility', a
     assert.equal(h.tickets.length, 0);
   });
 });
+
+
+test('zero selected events cannot claim an observed first/last span', async t => {
+  for (const retained of [0, 2]) await t.test('retained=' + retained, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const open = h.bars[0].controls.button.onclick();
+    await settle(); h.reply(h.reads[1], {...h.preview('range', 'false-observation'),
+      canonical_rows: 0, retained_rows: retained, event_types: {}, sources: {},
+      redacted_examples: [], analysis_plan: {date_chunks: []},
+      // A zero-row SQL selection cannot have first/last observed rows.
+      first_observed_at: observedStart, last_observed_at: observedEnd,
+      work_evidence: {ordinary_event_rows: 0, health_event_rows: 0,
+        last_work_observed_at: null}});
+    await open;
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+  });
+});
+
+test('health-only evidence cannot claim a latest ordinary work event', async t => {
+  for (const counts of ['explicit', 'legacy-omitted']) await t.test(counts, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const open = h.bars[0].controls.button.onclick();
+    await settle(); h.reply(h.reads[1], {...h.preview('range', 'false-work'),
+      event_types: {capture_gap: 1, capture_health: 1},
+      work_evidence: counts === 'explicit'
+        ? {ordinary_event_rows: 0, health_event_rows: 2,
+          last_work_observed_at: observedStart}
+        : {last_work_observed_at: observedStart}});
+    await open;
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+  });
+});
+
+test('health-only evidence with unknown work timestamp remains reviewable', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], {...h.preview('range', 'health-only'),
+    event_types: {capture_gap: 1, capture_health: 1},
+    work_evidence: {ordinary_event_rows: 0, health_event_rows: 2,
+      last_work_observed_at: null, recorder_liveness_verified: false}});
+  await open;
+  assert.equal(h.modals, 1);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-health-only']);
+  assert.equal(h.tickets.length, 0);
+});
+
+test('ordinary events may lack a latest work timestamp for excluded apps', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], {...h.preview('range', 'excluded'),
+    work_evidence: {ordinary_event_rows: 2, health_event_rows: 0,
+      last_work_observed_at: null, recorder_liveness_verified: false}});
+  await open;
+  assert.equal(h.modals, 1);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-excluded']);
+  assert.equal(h.tickets.length, 0);
+});
