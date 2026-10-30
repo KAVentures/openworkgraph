@@ -1270,6 +1270,7 @@ test('handoff refuses unsupported completeness and contradictory omission claims
 
 
 test('selected-range AI history grant shows exact bounds, expiry and export distinction', async () => {
+  const futureExpiry = new Date(Date.now() + 24 * 3600_000).toISOString();
   const h = harness();
   await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
   const open = h.bars[0].controls.button.onclick();
@@ -1278,12 +1279,12 @@ test('selected-range AI history grant shows exact bounds, expiry and export dist
     local_ai_enabled: true,
     local_ai_history_access: {mode: 'selected_range',
       since: '2026-10-20T00:00:00Z', until: '2026-10-25T00:00:00+00:00',
-      expires_at: '2026-10-31T00:00:00Z'}});
+      expires_at: futureExpiry}});
   await open;
   assert.equal(h.modals, 1);
   assert.match(h.modalHtml, /Local saved-history grant: 2026-10-20T00:00:00\.000Z to 2026-10-25T00:00:00\.000Z/);
   assert.match(h.modalHtml, /end exclusive; snapshot only, may not cover this selected work period/);
-  assert.match(h.modalHtml, /Grant expiry: 2026-10-31T00:00:00\.000Z/);
+  assert.ok(h.modalHtml.includes('Grant expiry: ' + futureExpiry));
   assert.match(h.modalHtml, /Preparing or downloading a local file does not grant AI history access/);
   assert.match(h.modalHtml, /Name redaction is best effort, not anonymization/);
   assert.match(h.modalHtml, /detailed chronology adds raw local evidence/);
@@ -1303,6 +1304,7 @@ test('AI grant disclosure fails conservatively for malformed or unrecognized lea
     ['reversed selected bounds', true, {mode:'selected_range',
       since:'2026-10-25T00:00:00Z', until:'2026-10-20T00:00:00Z'}],
     ['invalid expiry', true, {mode:'all_saved', expires_at:'not-a-date'}],
+    ['expired grant', true, {mode:'all_saved', expires_at:'2001-01-01T00:00:00Z'}],
     ['unrecognized grant', true, {mode:'<img src=x onerror=alert(1)>'}],
     ['non-boolean enabled flag', 'false', {mode:'all_saved'}],
     ['missing grant', true, undefined]
