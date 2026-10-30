@@ -39,3 +39,14 @@ This is a **measurement and provenance guard**, not an improvement in
 reconstruction assignment F1. The preregistered 0.90 F1, 0.05 contamination
 and interruption-rejection gates are unchanged. No provider/model was called
 and no real consenting customer pilot or competitor parity is claimed.
+
+## Model response case identity
+
+The external runner supplies a requested case ID to each model call. A model
+response may omit `case_id` (the runner attaches the requested ID), or it may
+repeat that exact string. If it supplies a different ID or a non-string ID, the
+runner now refuses the response instead of silently overwriting the model's
+value. This prevents a wrong-case response from being misattributed to the
+requested case in a persisted prediction artifact. No provider request is
+introduced by the check, and this does not authenticate model outputs or
+attest that the response content actually describes the correct case.
