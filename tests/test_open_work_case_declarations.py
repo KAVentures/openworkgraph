@@ -204,6 +204,35 @@ def test_corrupt_declaration_db_cannot_block_explicit_review_deletion(local):
     assert A not in {i["work_item_ref"] for i in reviews.list_review_intentions(now=NOW)["items"]}
 
 
+
+def test_expired_dependency_suppresses_transitive_dependents_but_not_independent_cases(local):
+    # A's review is renewed, but its declaration is not. B and C remain
+    # individually unexpired, yet neither may reference a hidden ancestor.
+    d = "owg:w:" + "d" * 32
+    reviewed(A)
+    save()
+    at_b = NOW + timedelta(days=1)
+    reviewed(A, at=at_b)
+    reviewed(B, at=at_b)
+    facts.save_case_declaration(B, SCOPE, goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked",
+        depends_on_work_item_refs=[A], now=at_b)
+    at_c = NOW + timedelta(days=2)
+    reviewed(C, at=at_c)
+    reviewed(d, at=at_c)
+    facts.save_case_declaration(C, SCOPE, goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked",
+        depends_on_work_item_refs=[B], now=at_c)
+    facts.save_case_declaration(d, SCOPE, goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked", now=at_c)
+
+    before = facts.list_case_declarations(SCOPE, now=NOW + timedelta(days=6))
+    assert {i["work_item_ref"] for i in before["items"]} == {A, B, C, d}
+    after = facts.list_case_declarations(SCOPE, now=NOW + timedelta(days=7, hours=1))
+    assert {i["work_item_ref"] for i in after["items"]} == {d}
+    assert after["items"][0]["depends_on_work_item_refs"] == []
+
+
 def test_expired_dependency_cannot_be_presented_as_live_declared_edge(local):
     reviewed(A)
     save()
