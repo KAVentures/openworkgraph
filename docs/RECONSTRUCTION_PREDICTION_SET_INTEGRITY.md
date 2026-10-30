@@ -123,3 +123,37 @@ regressions exercise malformed values, valid legacy omissions and a
 no-request resume refusal. They do not constitute a real-model run or
 a measured assignment-F1/contamination improvement. The held-out
 truth and release thresholds remain unchanged.
+
+## Exact blind-evidence binding for new external-runner rows
+
+Newly generated `run_external.py` JSONL predictions carry the reserved
+`_owg_blind_evidence_sha256` field. The runner computes SHA-256 over a
+domain-separated, canonical JSON encoding of the **requested case ID and the
+complete blind `presented_evidence` array**, retaining array order but
+normalizing object-key order. This uses only the material already shown to the
+model, **never** the hidden answer key or private evaluation truth. The model
+cannot supply or override this reserved field.
+
+On `--resume`, any row containing this field must have a well-formed
+lowercase 64-character digest matching the current case's complete blind
+evidence. A changed action, resource reference, tab, surface or event ordering
+is rejected **even if all event IDs remain identical**. A mismatched or
+unverifiable digest stops the run before any new model request and leaves the
+existing JSONL bytes unchanged. This check supplements, not replaces, the
+existing event-ID membership, cross-case, split and uncertainty validation.
+
+For backward compatibility, older prediction rows without the field remain
+loadable and continue to receive the prior event-ID validation, but their
+**content is not digest-attested**. The new field is local metadata, ignored by
+the existing scorer and does not change any metric or threshold. This is a
+deterministic consistency fingerprint, **not a signed authenticity proof**:
+a malicious actor with write access could change both evidence and digest.
+It does not bind the model ID, prompt, code revision, response provenance or
+original provider receipt. Keep metadata and corpus revisions separately.
+
+Synthetic fake-provider tests and offline replay tests exercise newly issued
+digests, canonical ordering, changed same-ID evidence, tampering, missing
+verification material, legacy compatibility and fail-before-request behavior.
+No model endpoint, live provider, private holdout truth or paid API was used.
+This closes a replay integrity gap, **not** the outstanding F1 >= 0.90,
+contamination <= 0.05 or real consenting pilot gates.
