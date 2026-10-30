@@ -73,6 +73,11 @@ def dotted_chart(log_id: str, case_type: str | None = None, *, time: str = "abso
             activities.append({"activity": None, "slot": other, "events": other_events,
                                "activities": sum(1 for a in counts if a not in slots)})
         span = max((d[0] for c in cases for d in c["points"]), default=0)
+        # Separate omitted case rows from within-case dot thinning. These
+        # counts describe the selected cohort, not the unfiltered log.
+        events_in_shown_cases = sum(c["events"] for c in cases)
+        omitted_by_case_sampling = total_events - events_in_shown_cases
+        omitted_by_point_thinning = events_in_shown_cases - points
         return {
             "settings": {"time": time, "order": order, "max_cases": int(max_cases)},
             "cohort": cohorts.describe(chosen),
@@ -80,8 +85,11 @@ def dotted_chart(log_id: str, case_type: str | None = None, *, time: str = "abso
             "time_origin": origin.isoformat() + "Z" if origin and time == "absolute" else None,
             "span_seconds": span,
             "coverage": {"cases": total_cases, "cases_shown": len(cases), "cases_sampled": len(cases) < total_cases,
-                         "events": total_events, "points_shown": points,
-                         "points_thinned": points < sum(c["events"] for c in cases),
+                         "events": total_events, "events_in_shown_cases": events_in_shown_cases,
+                         "events_omitted_by_case_sampling": omitted_by_case_sampling,
+                         "events_omitted_by_point_thinning": omitted_by_point_thinning,
+                         "points_shown": points,
+                         "points_thinned": omitted_by_point_thinning > 0,
                          "last_event_at": last.isoformat() + "Z" if last else None},
             "interpretation": ("Each row is a case and each dot an event at its recorded time. Sampled rows and "
                                "thinned dots keep the overall shape, not every event."),
