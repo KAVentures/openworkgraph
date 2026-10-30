@@ -862,7 +862,7 @@ def test_resume_refuses_nonfinite_prediction_before_mutation(tmp_path, invalid):
 
     path = tmp_path / "predictions.jsonl"
     path.write_text(
-        '{"case_id":"case-a","workflows":[],"extra":' + invalid + '}\\n',
+        '{"case_id":"case-a","workflows":[],"extra":' + invalid + '}\n',
         encoding="utf-8",
     )
     before = path.read_bytes()
