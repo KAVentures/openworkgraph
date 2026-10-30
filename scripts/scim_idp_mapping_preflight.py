@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -18,10 +19,38 @@ USER_MATCH = frozenset({"username", "externalid"})
 USER_CREATE = frozenset({
     "username", "externalid", "displayname", "active", "name",
     "name.formatted", "name.familyname", "name.givenname", "name.middlename",
-    "name.honorificprefix", "name.honorificsuffix",
+    "name.honorificprefix", "name.honorificsuffix", "emails",
 })
 USER_PATCH = USER_CREATE - {"username"}
 GROUP_MATCH = frozenset({"displayname", "externalid"})
+
+
+# The shipped contact array is descriptive only. These are PATCH path shapes,
+# not User search/matching filters or authenticated identity claims.
+_CONTACT_CHILDREN = frozenset({"value", "type", "display", "primary"})
+_CONTACT_SELECTOR = re.compile(
+    r'emails\\[(type|value)\\s+eq\\s+("(?:[^"\\\\]|\\\\.)*")\\](?:\\.(value|type|display|primary))?',
+    re.IGNORECASE,
+)
+
+
+def _supported_contact_patch_path(path: str) -> bool:
+    if path == "emails" or path in {"emails." + child for child in _CONTACT_CHILDREN}:
+        return True
+    match = _CONTACT_SELECTOR.fullmatch(path)
+    if match is None:
+        return False
+    try:
+        literal = json.loads(match.group(2))
+    except (ValueError, UnicodeError):
+        return False
+    return (
+        type(literal) is str
+        and bool(literal.strip())
+        and len(literal) <= 320
+        and not any(ord(char) < 32 or ord(char) == 127
+                    or 0xD800 <= ord(char) <= 0xDFFF for char in literal)
+    )
 
 
 class InvalidMapping(ValueError):
@@ -36,12 +65,12 @@ def _object(value: Any, path: str, required: set[str], optional: set[str] = froz
     return value
 
 
-def _attributes(value: Any, path: str, *, minimum: int) -> list[str]:
+def _attributes(value: Any, path: str, *, minimum: int, max_path: int = 128) -> list[str]:
     if type(value) is not list or not minimum <= len(value) <= MAX_ATTRIBUTES:
         raise InvalidMapping(f"{path} must have {minimum}–{MAX_ATTRIBUTES} paths")
     folded = []
     for item in value:
-        if type(item) is not str or not 1 <= len(item) <= 128 or any(ord(c) < 32 or ord(c) == 127 or 0xD800 <= ord(c) <= 0xDFFF for c in item):
+        if type(item) is not str or not 1 <= len(item) <= max_path or any(ord(c) < 32 or ord(c) == 127 or 0xD800 <= ord(c) <= 0xDFFF for c in item):
             raise InvalidMapping(f"{path} contains an invalid path")
         folded.append(item.casefold())
     if len(set(folded)) != len(folded):
@@ -66,7 +95,7 @@ def assess(mapping: Any) -> dict:
 
     match = _attributes(users["match_attributes"], "users.match_attributes", minimum=1)
     create = _attributes(users["create_attributes"], "users.create_attributes", minimum=1)
-    patch = _attributes(users["patch_attributes"], "users.patch_attributes", minimum=0)
+    patch = _attributes(users["patch_attributes"], "users.patch_attributes", minimum=0, max_path=1024)
     group_match = _attributes(groups["match_attributes"], "groups.match_attributes", minimum=0)
     findings: list[dict[str, str]] = []
 
@@ -80,9 +109,15 @@ def assess(mapping: Any) -> dict:
         ("groups.match_attributes", group_match, GROUP_MATCH),
     ):
         for index, value in enumerate(values):
-            if value not in supported:
+            if value not in supported and not (path == "users.patch_attributes" and _supported_contact_patch_path(value)):
                 add("blocker", "unsupported_attribute", f"{path}[{index}]",
                     "This attribute or selector is not supported for this operation")
+    if any(value.startswith("emails[value eq ") for value in patch):
+        add("caution", "contact_value_selector", "users.patch_attributes",
+            "A contact-value selector is data-dependent and is not an identity match or verification")
+    if "emails" in create or any(value.startswith("emails") for value in patch):
+        add("caution", "unverified_contact_metadata", "users",
+            "Contact arrays are descriptive only; matching, login and adoption still use stable userName/externalId")
     if "username" not in create:
         add("blocker", "missing_stable_username", "users.create_attributes",
             "User creation requires the stable work-email userName")
