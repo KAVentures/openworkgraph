@@ -25,6 +25,15 @@ DEFAULT_KEY_ENV = "OPENAI_API_KEY"
 BLIND_EVIDENCE_DIGEST_FIELD = "_owg_blind_evidence_sha256"
 
 
+def _system_instruction_digest(instruction: str) -> str:
+    """Bind completed-run metadata to the exact instruction sent to the model."""
+    if not isinstance(instruction, str):
+        raise ValueError("reconstruction system instruction must be text")
+    return hashlib.sha256(
+        b"owg-reconstruction-system-instruction-v1\0" + instruction.encode("utf-8")
+    ).hexdigest()
+
+
 def _blind_evidence_digest(case_id: str, presented_evidence: list[dict[str, Any]]) -> str:
     """Bind a prediction to exact *blind* evidence; never hash answer-key truth."""
     payload = json.dumps(
@@ -300,7 +309,7 @@ def _load_resume_metadata(
         raise ValueError("resume metadata must be an object")
     legacy_digest_unattested = False
     for field, requested in expected.items():
-        if field in ("selected_blind_corpus_sha256", "selected_prediction_set_sha256") and field not in metadata:
+        if field in ("selected_blind_corpus_sha256", "selected_prediction_set_sha256", "system_instruction_sha256") and field not in metadata:
             # Historical manifests predate these fields. Keep resumes usable,
             # but never claim full corpus/prediction provenance for them.
             legacy_digest_unattested = True
@@ -470,6 +479,7 @@ def main(argv: list[str] | None = None) -> int:
                     "split": args.split,
                     "cases": len(cases),
                     "selected_blind_corpus_sha256": selected_blind_corpus_sha256,
+                    "system_instruction_sha256": _system_instruction_digest(SYSTEM_INSTRUCTION),
                     "selected_prediction_set_sha256": _selected_prediction_set_digest(
                         [existing[str(case["case_id"])] for case in cases
                          if str(case["case_id"]) in existing]
@@ -535,6 +545,7 @@ def main(argv: list[str] | None = None) -> int:
         "split": args.split,
         "cases": len(cases),
         "selected_blind_corpus_sha256": selected_blind_corpus_sha256,
+        "system_instruction_sha256": _system_instruction_digest(SYSTEM_INSTRUCTION),
         "selected_prediction_set_sha256": _selected_prediction_set_digest(ordered),
         "revision": _revision(),
         "elapsed_seconds": round(time.time() - started, 3),
