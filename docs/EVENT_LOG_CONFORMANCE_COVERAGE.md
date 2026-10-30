@@ -49,3 +49,25 @@ variants, the same data with a larger limit, and a 301-event frequent
 trace that is excluded by length while a rarer short variant is omitted
 by the ranked limit. The tests do not establish real-provider/customer
 acceptance, completeness, or competitor parity.
+
+## Distinct-variant denominator (additive)
+
+The same ranked query also reports `variants_observed`: the exact number of
+distinct observed paths **within the selected case notion**, before the
+`max_variants` cap. `variants_not_selected_variant_limit` is the difference
+between that count and `variants_selected`; it excludes the selected variants
+that are too long to align. The count uses `count(*) OVER ()` on the already
+grouped path relation, not a second source query. If the selected case relation
+is empty, both counts are zero. This gives two separate partitions:
+
+```text
+variants_observed = variants_selected + variants_not_selected_variant_limit
+variants_selected = variants_aligned + variants_skipped_trace_too_long
+```
+
+Unlike case counts, these values measure distinct traces, not the number of
+people, events or cases. They do not establish source completeness, causality,
+provider acceptance, or fitness of omitted variants. Synthetic tests exercise
+frequency ties, truncated variants, too-long selected traces, an empty selected
+relation and the authenticated HTTP response; no real-provider/customer
+acceptance is claimed.

@@ -80,9 +80,10 @@ def conformance(log_id: str, model: Any, case_type: str | None = None,
 
     def run(conn):
         total_cases = conn.execute("SELECT count(DISTINCT case_id) FROM ce").fetchone()[0]
-        rows = conn.execute(f"""SELECT path, count(*) AS cases FROM (
+        rows = conn.execute(f"""SELECT path, count(*) AS cases, count(*) OVER () AS observed_variants FROM (
               SELECT string_agg(activity, '{_SEP}' ORDER BY ts, event_id) AS path FROM ce GROUP BY case_id)
             GROUP BY path ORDER BY cases DESC, path LIMIT {max_variants}""").fetchall()
+        observed_variants = rows[0][2] if rows else 0
         aligned_cases = fitting_cases = 0
         fitness_sum = 0.0
         skipped: dict[str, int] = {}
@@ -90,7 +91,7 @@ def conformance(log_id: str, model: Any, case_type: str | None = None,
         too_long = 0
         variants_aligned = variants_skipped_too_long = 0
         worst: list[dict[str, Any]] = []
-        for joined, cases in rows:
+        for joined, cases, _ in rows:
             trace = joined.split(_SEP)
             if len(trace) > MAX_ALIGNED_TRACE_LENGTH:
                 too_long += cases
@@ -124,6 +125,8 @@ def conformance(log_id: str, model: Any, case_type: str | None = None,
             "model_paths": len(paths),
             "max_variants_applied": max_variants,
             "variants_selected": len(rows),
+            "variants_observed": observed_variants,
+            "variants_not_selected_variant_limit": observed_variants - len(rows),
             "variants_aligned": variants_aligned,
             "variants_skipped_trace_too_long": variants_skipped_too_long,
             "cases": total_cases,

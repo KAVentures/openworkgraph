@@ -85,6 +85,12 @@ def test_conformance_variant_cap_discloses_omitted_cases_separately_from_long_tr
     assert limited["cases_not_aligned_trace_too_long"] == 0
     assert limited["cases_not_aligned_variant_limit"] == 2
     assert limited["variant_limit_truncated"] is True
+    assert (limited["variants_observed"], limited["variants_not_selected_variant_limit"]) == (3, 2)
+    # A and B tie in frequency. The deterministic literal path ordering selects A first.
+    tied = analytics.conformance(log_id, model, max_variants=2)
+    assert (tied["variants_observed"], tied["variants_selected"],
+            tied["variants_not_selected_variant_limit"]) == (3, 2, 1)
+    assert tied["cases_not_aligned_variant_limit"] == 1
     assert limited["fitting_cases"] == 2 and limited["fitness"] == 1
     complete = analytics.conformance(log_id, model, max_variants=3)
     assert complete["aligned_cases"] == 4
@@ -92,6 +98,7 @@ def test_conformance_variant_cap_discloses_omitted_cases_separately_from_long_tr
             complete["variants_aligned"], complete["variants_skipped_trace_too_long"]) == (3, 3, 3, 0)
     assert complete["cases_not_aligned_variant_limit"] == 0
     assert complete["variant_limit_truncated"] is False
+    assert (complete["variants_observed"], complete["variants_not_selected_variant_limit"]) == (3, 0)
 
     # A frequent 301-event trace exceeds the alignment bound. Its cases are
     # not cap omissions, even when a rarer short trace is excluded by LIMIT.
@@ -109,6 +116,7 @@ def test_conformance_variant_cap_discloses_omitted_cases_separately_from_long_tr
     assert limited["variant_limit_truncated"] is True
     assert (limited["variants_selected"], limited["variants_aligned"],
             limited["variants_skipped_trace_too_long"]) == (1, 0, 1)
+    assert (limited["variants_observed"], limited["variants_not_selected_variant_limit"]) == (2, 1)
     complete = analytics.conformance(long_log, short_model, max_variants=2)
     assert (complete["cases"], complete["aligned_cases"],
             complete["cases_not_aligned_trace_too_long"],
@@ -116,8 +124,32 @@ def test_conformance_variant_cap_discloses_omitted_cases_separately_from_long_tr
     assert complete["variant_limit_truncated"] is False
     assert (complete["variants_selected"], complete["variants_aligned"],
             complete["variants_skipped_trace_too_long"]) == (2, 1, 1)
+    assert (complete["variants_observed"], complete["variants_not_selected_variant_limit"]) == (2, 0)
     assert complete["variants_selected"] == (complete["variants_aligned"] +
                                              complete["variants_skipped_trace_too_long"])
+
+
+def test_conformance_empty_case_relation_has_zero_variant_denominators(monkeypatch):
+    """An empty selected case relation must not assume a ranked first row exists."""
+    class EmptyConn:
+        def execute(self, sql):
+            self.is_count = "count(DISTINCT case_id)" in sql
+            return self
+
+        def fetchone(self):
+            assert self.is_count
+            return (0,)
+
+        def fetchall(self):
+            assert not self.is_count
+            return []
+
+    monkeypatch.setattr(workspace, "_query", lambda log_id, case_type, fn: fn(EmptyConn()))
+    result = analytics.conformance("empty", {"format": "openworkgraph.reference-model.v1",
+                                              "paths": [["A"]]}, max_variants=1)
+    assert (result["cases"], result["aligned_cases"], result["variants_observed"],
+            result["variants_selected"], result["variants_not_selected_variant_limit"]) == (0, 0, 0, 0, 0)
+    assert result["variant_limit_truncated"] is False and result["fitness"] is None
 
 
 @pytest.mark.parametrize("model", [
@@ -224,6 +256,7 @@ with TestClient(app) as client:
     assert ok.json()["cases_not_aligned_variant_limit"] == 0 and not ok.json()["variant_limit_truncated"]
     assert (ok.json()["variants_selected"], ok.json()["variants_aligned"],
             ok.json()["variants_skipped_trace_too_long"]) == (2, 2, 0)
+    assert (ok.json()["variants_observed"], ok.json()["variants_not_selected_variant_limit"]) == (2, 0)
     assert client.post(base + "/conformance", content=b"x", headers={**headers, "Content-Type": "text/plain"}).status_code == 415
     assert client.post(base + "/conformance", content=b"{", headers={**headers, "Content-Type": "application/json"}).status_code == 422
     assert client.post(base + "/conformance", content=b" " * 70000, headers={**headers, "Content-Type": "application/json"}).status_code == 413
