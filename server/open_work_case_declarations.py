@@ -189,32 +189,55 @@ def _stored_dependencies(raw: str, owner_ref: str) -> list[str] | None:
     return dependencies
 
 
+def _stored_temporal_valid(
+    created: str, updated: str, expires: str, *,
+    now: datetime, days: int, review: tuple[datetime, datetime],
+) -> bool:
+    """Reject corrupt/future approval clocks rather than trusting text ordering.
+
+    The internal writer persists UTC ISO-8601 timestamps. A damaged auxiliary
+    row must never extend an owner approval, silently outlive its admitting
+    review, or crash a bounded list/save while hiding dependent invalidation.
+    """
+    stamps = (created, updated, expires)
+    try:
+        parsed = tuple(datetime.fromisoformat(value) for value in stamps)
+    except (TypeError, ValueError):
+        return False
+    if any(not isinstance(raw, str) or stamp.tzinfo is None or
+           stamp.utcoffset() != timedelta(0) or stamp.isoformat() != raw
+           for raw, stamp in zip(stamps, parsed)):
+        return False
+    start, revision, deadline = parsed
+    return (review[0] <= start <= revision <= now < deadline <= review[1] and
+            start > now - timedelta(days=days) and
+            deadline <= start + timedelta(days=days))
+
+
 def _prune(db: sqlite3.Connection, now: datetime, days: int,
            reviewed: dict[str, tuple[datetime, datetime]]) -> None:
-    cutoff = (now - timedelta(days=days)).isoformat()
-    current = now.isoformat()
     # Admit only a DAG rooted in current, same-scope, explicitly reviewed
     # declarations. A malformed row, orphan, or corrupt cycle cannot become
     # an independent approved case or revive its dependent closure on writes.
     rows = db.execute(
-        "SELECT work_item_ref,scope_ref,dependencies_json,created_at,expires_at "
+        "SELECT work_item_ref,scope_ref,dependencies_json,created_at,updated_at,expires_at "
         "FROM declarations"
     ).fetchall()
-    scopes = {ref: scope for ref, scope, _deps, _created, _expires in rows}
+    scopes = {ref: scope for ref, scope, _deps, _created, _updated, _expires in rows}
     dependencies = {
         ref: _stored_dependencies(raw, ref)
-        for ref, _scope, raw, _created, _expires in rows
+        for ref, _scope, raw, _created, _updated, _expires in rows
     }
     eligible = {
-        ref for ref, _scope, _raw, created, expires in rows
-        if (ref in reviewed and expires > current and created > cutoff and
-            datetime.fromisoformat(created) >= reviewed[ref][0] and
-            dependencies[ref] is not None)
+        ref for ref, _scope, _raw, created, updated, expires in rows
+        if (ref in reviewed and dependencies[ref] is not None and
+            _stored_temporal_valid(created, updated, expires,
+                                   now=now, days=days, review=reviewed[ref]))
     }
     available: set[str] = set()
     while True:
         newly_available = {
-            ref for ref, scope, _raw, _created, _expires in rows
+            ref for ref, scope, _raw, _created, _updated, _expires in rows
             if ref in eligible and ref not in available and
             all(dep in available and scopes.get(dep) == scope
                 for dep in dependencies[ref])
@@ -468,8 +491,9 @@ def list_case_declarations(scope_ref: str, *, now: datetime | None = None) -> di
                 eligible = {
                     r[0] for r in candidates
                     if r[0] in reviewed and
-                    datetime.fromisoformat(r[6]) >= reviewed[r[0]][0] and
-                    dependencies[r[0]] is not None
+                    dependencies[r[0]] is not None and
+                    _stored_temporal_valid(r[6], r[7], r[8], now=current,
+                                           days=days, review=reviewed[r[0]])
                 }
                 # Grow from independent reviewed roots. Starting with every
                 # row would incorrectly retain a corrupt A <-> B cycle.
