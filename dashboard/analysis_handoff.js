@@ -116,6 +116,15 @@
     const conserved = count(d?.canonical_rows) && count(d?.retained_rows) &&
       d.canonical_rows <= d.retained_rows && partitionCounts &&
       plannedRows !== null && plannedRows <= d.canonical_rows;
+    // The local preview never verifies complete capture. An omission marker
+    // must also leave at least one selected row outside the listed dates;
+    // otherwise the UI would present contradictory coverage evidence.
+    const planCoverageValid = d?.analysis_plan == null || (
+      (d.analysis_plan.complete_history_claimed == null ||
+        d.analysis_plan.complete_history_claimed === false) &&
+      (d.analysis_plan.more_dates_not_listed !== true ||
+        (Array.isArray(d.analysis_plan.date_chunks) &&
+          plannedRows !== null && plannedRows < d.canonical_rows)));
     // Work and capture-health counts describe the same selected evidence,
     // not a second independent estimate. Legacy previews may omit this block.
     // The server samples at most six selected focus spans. Never show context
@@ -148,7 +157,8 @@
         !count(d.canonical_rows) || !count(d.retained_rows) ||
         !counts(d.event_types) || !counts(d.sources) ||
         !examplesValid ||
-        !observed || !observedWithinWindow || !validWindow || !chunks || !workValid) {
+        !observed || !observedWithinWindow || !validWindow || !chunks ||
+        !planCoverageValid || !workValid) {
       throw new Error('Preview evidence was incomplete or malformed. Nothing was copied or downloaded; prepare again.');
     }
   }
