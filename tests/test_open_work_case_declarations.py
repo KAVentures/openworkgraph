@@ -713,3 +713,87 @@ def test_existing_v1_store_migrates_without_reauthorizing_declarations(local):
     updated = save(expected_revision=1,
                    expected_edit_token=migrated[0]["edit_token"])
     assert updated["revision"] == 2
+
+
+def test_as_of_read_never_displays_future_owner_approval_or_revision(local):
+    # The review is already active: the declaration and its later CAS edit
+    # must still not be represented as owner-approved at an earlier instant.
+    admitted = NOW - timedelta(hours=2)
+    reviewed(A, at=admitted)
+    reviewed(B, at=admitted)
+    independent = facts.save_case_declaration(
+        B, SCOPE, goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked",
+        now=NOW - timedelta(hours=1))
+    first = save()
+    earlier = facts.list_case_declarations(SCOPE, now=NOW - timedelta(minutes=30))
+    assert earlier["items"] == [independent]
+    assert {item["work_item_ref"] for item in
+            facts.list_case_declarations(SCOPE, now=NOW)["items"]} == {A, B}
+
+    revised = facts.save_case_declaration(
+        A, SCOPE, goal_code="verify_operation",
+        expected_outcome_code="operation_receipt_reviewed",
+        expected_revision=first["revision"],
+        expected_edit_token=first["edit_token"], now=NOW + timedelta(hours=1))
+    # There is no historical snapshot store. Suppress the revised A rather
+    # than falsely display its future revision as approved at this time.
+    mid = facts.list_case_declarations(SCOPE, now=NOW + timedelta(minutes=30))
+    assert mid["items"] == [independent]
+    latest = facts.list_case_declarations(SCOPE, now=NOW + timedelta(hours=1))
+    assert {item["work_item_ref"] for item in latest["items"]} == {A, B}
+    assert next(item for item in latest["items"] if item["work_item_ref"] == A) == revised
+
+
+def test_cas_rejects_backdated_owner_revision_without_mutation(local):
+    reviewed(A, at=NOW - timedelta(hours=2))
+    first = save()
+    with pytest.raises(facts.CaseDeclarationError, match="backdated"):
+        facts.save_case_declaration(
+            A, SCOPE, goal_code="verify_operation",
+            expected_outcome_code="operation_receipt_reviewed",
+            expected_revision=first["revision"],
+            expected_edit_token=first["edit_token"],
+            now=NOW - timedelta(minutes=1))
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [first]
+
+    revised = facts.save_case_declaration(
+        A, SCOPE, goal_code="verify_operation",
+        expected_outcome_code="operation_receipt_reviewed",
+        expected_revision=first["revision"],
+        expected_edit_token=first["edit_token"], now=NOW + timedelta(hours=1))
+    with pytest.raises(facts.CaseDeclarationError, match="backdated"):
+        facts.save_case_declaration(
+            A, SCOPE, goal_code="review_source_state",
+            expected_outcome_code="source_state_rechecked",
+            expected_revision=revised["revision"],
+            expected_edit_token=revised["edit_token"],
+            now=NOW + timedelta(minutes=30))
+    assert facts.list_case_declarations(SCOPE, now=NOW + timedelta(hours=1))["items"] == [revised]
+
+
+def test_dependent_approval_cannot_precede_prerequisite_or_revision(local):
+    admitted = NOW - timedelta(hours=2)
+    reviewed(A, at=admitted)
+    reviewed(B, at=admitted)
+    first = save()
+    with pytest.raises(facts.CaseDeclarationError, match="newer than approval"):
+        facts.save_case_declaration(
+            B, SCOPE, goal_code="review_source_state",
+            expected_outcome_code="source_state_rechecked",
+            depends_on_work_item_refs=[A], now=NOW - timedelta(minutes=1))
+    assert {item["work_item_ref"] for item in
+            facts.list_case_declarations(SCOPE, now=NOW)["items"]} == {A}
+
+    facts.save_case_declaration(
+        A, SCOPE, goal_code="verify_operation",
+        expected_outcome_code="operation_receipt_reviewed",
+        expected_revision=first["revision"],
+        expected_edit_token=first["edit_token"], now=NOW + timedelta(hours=1))
+    with pytest.raises(facts.CaseDeclarationError, match="newer than approval"):
+        facts.save_case_declaration(
+            B, SCOPE, goal_code="review_source_state",
+            expected_outcome_code="source_state_rechecked",
+            depends_on_work_item_refs=[A], now=NOW + timedelta(minutes=30))
+    assert {item["work_item_ref"] for item in
+            facts.list_case_declarations(SCOPE, now=NOW + timedelta(hours=1))["items"]} == {A}

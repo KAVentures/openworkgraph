@@ -341,6 +341,11 @@ def save_case_declaration(
                     raise CaseDeclarationError("source scope mismatch")
                 if old[5] != expected_revision or old[9] != expected_edit_token:
                     raise CaseDeclarationError("stale declaration revision or edit token")
+                # An edit cannot retroactively claim owner approval before the
+                # original declaration or its latest approved revision.
+                if (datetime.fromisoformat(old[6]) > current or
+                    datetime.fromisoformat(old[7]) > current):
+                    raise CaseDeclarationError("backdated declaration edit")
                 created, expires, revision = old[6], old[8], old[5] + 1
             # Dependencies must be declared within the same source scope.
             # Their expiry also caps this declaration's lifetime. Otherwise
@@ -351,6 +356,11 @@ def save_case_declaration(
                 other = _get(db, dep)
                 if other is None or other[1] != scope_ref:
                     raise CaseDeclarationError("dependency missing in this source scope")
+                # A dependent's approval must not precede the prerequisite's
+                # creation or most recent owner-approved revision.
+                if (datetime.fromisoformat(other[6]) > current or
+                    datetime.fromisoformat(other[7]) > current):
+                    raise CaseDeclarationError("dependency declaration newer than approval time")
                 dependency_expiries.append(datetime.fromisoformat(other[8]))
             # The bounded graph is a DAG, not a time-based inferred join.
             pending, seen = list(dependencies), set()
@@ -418,8 +428,10 @@ def list_case_declarations(scope_ref: str, *, now: datetime | None = None) -> di
                     "SELECT work_item_ref,scope_ref,goal_code,expected_outcome_code,"
                     "dependencies_json,revision,created_at,updated_at,expires_at,edit_token "
                     "FROM declarations WHERE scope_ref=? AND expires_at>? AND created_at>? "
+                    "AND created_at<=? AND updated_at<=? "
                     "ORDER BY updated_at DESC,work_item_ref LIMIT ?",
-                    (scope_ref, current.isoformat(), cutoff, _MAX_ITEMS),
+                    (scope_ref, current.isoformat(), cutoff,
+                     current.isoformat(), current.isoformat(), _MAX_ITEMS),
                 ).fetchall()
                 # A dependency whose own declaration expired or changed scope
                 # is not an available owner-declared edge, even if the local
