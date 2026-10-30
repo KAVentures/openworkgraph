@@ -1062,7 +1062,7 @@ test('calendar-covering, boundary and zero-count optional chunks preserve safe h
     const opening = h.bars[0].controls.button.onclick();
     await settle();
     h.reply(h.reads[1], {...h.preview('range', 'observed-intersection'),
-      analysis_plan: {date_chunks: [chunk], more_dates_not_listed: true}});
+      analysis_plan: {date_chunks: [chunk], more_dates_not_listed: chunk.event_rows < 2}});
     await opening;
     assert.equal(h.modals, 1, 'valid/partial plan should remain usable');
     await h.modal['#analysisCopy'].onclick();
