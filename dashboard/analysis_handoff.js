@@ -2,7 +2,7 @@
   'use strict';
   const $ = s => document.querySelector(s);
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  let period = 'week', start = '', end = '', generation = 0, pending = null;
+  let period = 'week', start = '', end = '', generation = 0, pending = null, activeHandoff = null;
   const staleScope = 'Work period changed. Prepare a new AI handoff for the selected period.';
   const dateInput = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   function selection() {
@@ -46,6 +46,14 @@
   }
   async function refresh() {
     const seq=++generation;
+    // An open handoff is only valid for its prepared evidence generation.
+    // Mark it stale immediately, including for keyboard/screen-reader users.
+    if(activeHandoff && activeHandoff.seq!==seq){
+      activeHandoff.copy.disabled=true;
+      activeHandoff.download.disabled=true;
+      activeHandoff.status.textContent=staleScope+' Nothing was copied or downloaded by this change.';
+      activeHandoff=null;
+    }
     pending?.abort(); pending=new AbortController();
     document.querySelectorAll('[data-period-summary]').forEach(x=>{
       x.setAttribute('aria-busy','true');
@@ -91,28 +99,33 @@
       <div class="modal-actions"><button type="button" id="analysisDownload" ${d.canonical_rows?'':'disabled'}>Download AI evidence package</button><button type="button" class="secondary" id="analysisCopy">Copy request for my AI</button></div>
       <details style="margin-top:12px"><summary>Read the request</summary><pre style="white-space:pre-wrap" id="analysisRequest"></pre></details>
       <div class="muted" id="analysisActionStatus" role="status">Nothing has been sent to an AI. Downloads work with any capable AI, without an OWG cloud account.</div>`);
-    $('#analysisRequest').textContent=request;
+    const requestNode=$('#analysisRequest'), statusNode=$('#analysisActionStatus');
+    const copyNode=$('#analysisCopy'), downloadNode=$('#analysisDownload'), detailedNode=$('#analysisDetailed');
+    requestNode.textContent=request;
+    copyNode.disabled=false;
+    downloadNode.disabled=!d.canonical_rows;
+    activeHandoff={seq,copy:copyNode,download:downloadNode,status:statusNode};
     const current=()=>seq===generation;
     const expired=()=>{
       if(current())return false;
-      $('#analysisActionStatus').textContent=staleScope+' Nothing was copied or downloaded by this action.';
+      statusNode.textContent=staleScope+' Nothing was copied or downloaded by this action.';
       return true;
     };
-    $('#analysisCopy').onclick=async()=>{
+    copyNode.onclick=async()=>{
       if(expired())return;
       try{
         await navigator.clipboard.writeText(request);
-        $('#analysisActionStatus').textContent=current()
+        statusNode.textContent=current()
           ? 'Request copied. Paste it into your AI; no model was invoked.'
           : 'The work period changed during copying. The copied request refers to the previous period; prepare again.';
-      }catch(_){$('#analysisActionStatus').textContent='Clipboard unavailable. Open “Read the request” and copy the text.';}
+      }catch(_){statusNode.textContent='Clipboard unavailable. Open “Read the request” and copy the text.';}
     };
-    $('#analysisDownload').onclick=async()=>{
+    downloadNode.onclick=async()=>{
       if(expired())return;
       try{
-        await download('csvzip',$('#analysisDetailed').checked,true,chosen,current);
-        $('#analysisActionStatus').textContent='Download started. Inspect the file, then attach it to your AI. No data was uploaded.';
-      }catch(e){$('#analysisActionStatus').textContent=e.message;}
+        await download('csvzip',detailedNode.checked,true,chosen,current);
+        statusNode.textContent='Download started. Inspect the file, then attach it to your AI. No data was uploaded.';
+      }catch(e){statusNode.textContent=e.message;}
     };
   }
   function install() {
