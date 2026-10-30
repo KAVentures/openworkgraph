@@ -63,6 +63,12 @@
     const first = d?.first_observed_at, last = d?.last_observed_at;
     const observed = (d?.canonical_rows === 0 && first == null && last == null) ||
       (instant(first) && instant(last) && Date.parse(first) <= Date.parse(last));
+    // Observed events must belong to the selected window; the range end is
+    // exclusive. Compare instants, not textual timezone representations.
+    const observedWithinWindow = (first == null && last == null) ||
+      (instant(first) && instant(last) &&
+        (windowStart === null || Date.parse(first) >= windowStart) &&
+        (windowEnd === null || Date.parse(last) < windowEnd));
     const chunks = d?.analysis_plan == null ||
       (object(d.analysis_plan) &&
         (d.analysis_plan.more_dates_not_listed == null ||
@@ -121,7 +127,7 @@
         !count(d.canonical_rows) || !count(d.retained_rows) ||
         !counts(d.event_types) || !counts(d.sources) ||
         !Array.isArray(d.redacted_examples) || !d.redacted_examples.every(object) ||
-        !observed || !validWindow || !chunks || !workValid) {
+        !observed || !observedWithinWindow || !validWindow || !chunks || !workValid) {
       throw new Error('Preview evidence was incomplete or malformed. Nothing was copied or downloaded; prepare again.');
     }
   }
