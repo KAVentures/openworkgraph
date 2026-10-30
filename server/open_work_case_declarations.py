@@ -173,42 +173,57 @@ def _reviewed(now: datetime) -> dict[str, tuple[datetime, datetime]]:
     return result
 
 
+def _stored_dependencies(raw: str, owner_ref: str) -> list[str] | None:
+    """Fail closed on malformed persisted edges; never coerce them to no edges."""
+    try:
+        dependencies = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    if (not isinstance(dependencies, list) or
+        len(dependencies) > _MAX_DEPENDENCIES or
+        any(not isinstance(dep, str) or not _REF.fullmatch(dep)
+            for dep in dependencies) or
+        owner_ref in dependencies or
+        len(set(dependencies)) != len(dependencies)):
+        return None
+    return dependencies
+
+
 def _prune(db: sqlite3.Connection, now: datetime, days: int,
            reviewed: dict[str, tuple[datetime, datetime]]) -> None:
     cutoff = (now - timedelta(days=days)).isoformat()
     current = now.isoformat()
-    # A reviewed prerequisite can expire before a dependent if its lifetime
-    # was shortened by a later CAS edit. Prune the entire dependent closure:
-    # recreating that prerequisite must never resurrect a stale owner edge.
-    # The store is bounded to 50 rows, and this runs inside BEGIN IMMEDIATE.
+    # Admit only a DAG rooted in current, same-scope, explicitly reviewed
+    # declarations. A malformed row, orphan, or corrupt cycle cannot become
+    # an independent approved case or revive its dependent closure on writes.
     rows = db.execute(
         "SELECT work_item_ref,scope_ref,dependencies_json,created_at,expires_at "
         "FROM declarations"
     ).fetchall()
     scopes = {ref: scope for ref, scope, _deps, _created, _expires in rows}
-    revoked = {
-        ref for ref, _scope, _deps, created, expires in rows
-        if (ref not in reviewed or expires <= current or created <= cutoff or
-            datetime.fromisoformat(created) < reviewed[ref][0])
+    dependencies = {
+        ref: _stored_dependencies(raw, ref)
+        for ref, _scope, raw, _created, _expires in rows
     }
-    # An absent or wrong-scope prerequisite is not an owner-approved edge.
-    # Without this guard, a later re-declaration of the missing prerequisite
-    # could resurrect an orphaned dependent that reads had merely hidden.
-    revoked.update(
-        ref for ref, scope, raw, _created, _expires in rows
-        if any(scopes.get(dep) != scope for dep in json.loads(raw))
-    )
+    eligible = {
+        ref for ref, _scope, _raw, created, expires in rows
+        if (ref in reviewed and expires > current and created > cutoff and
+            datetime.fromisoformat(created) >= reviewed[ref][0] and
+            dependencies[ref] is not None)
+    }
+    available: set[str] = set()
     while True:
-        newly_revoked = {
-            ref for ref, _scope, raw, _created, _expires in rows
-            if ref not in revoked and any(dep in revoked for dep in json.loads(raw))
+        newly_available = {
+            ref for ref, scope, _raw, _created, _expires in rows
+            if ref in eligible and ref not in available and
+            all(dep in available and scopes.get(dep) == scope
+                for dep in dependencies[ref])
         }
-        if not newly_revoked:
+        if not newly_available:
             break
-        revoked.update(newly_revoked)
-    for ref in sorted(revoked):
+        available.update(newly_available)
+    for ref in sorted(scopes.keys() - available):
         db.execute("DELETE FROM declarations WHERE work_item_ref=?", (ref,))
-
 
 def _public(row: tuple[Any, ...]) -> dict[str, Any]:
     ref, scope, goal, outcome, deps, revision, created, updated, expires, edit_token = row
@@ -244,12 +259,18 @@ def _dependent_closure(db: sqlite3.Connection, work_item_ref: str) -> set[str]:
     rows = db.execute(
         "SELECT work_item_ref,dependencies_json FROM declarations"
     ).fetchall()
+    edges = []
+    for ref, raw in rows:
+        dependencies = _stored_dependencies(raw, ref)
+        if dependencies is None:
+            raise CaseDeclarationError("invalid stored dependency graph")
+        edges.append((ref, dependencies))
     affected = {work_item_ref}
     while True:
         newly_affected = {
-            ref for ref, raw in rows
+            ref for ref, dependencies in edges
             if ref not in affected and
-            any(dep in affected for dep in json.loads(raw))
+            any(dep in affected for dep in dependencies)
         }
         if not newly_affected:
             return affected
@@ -374,7 +395,10 @@ def save_case_declaration(
                 linked = _get(db, dep)
                 if linked is None or linked[1] != scope_ref:
                     raise CaseDeclarationError("dependency scope changed")
-                pending.extend(json.loads(linked[4]))
+                linked_dependencies = _stored_dependencies(linked[4], dep)
+                if linked_dependencies is None:
+                    raise CaseDeclarationError("invalid stored dependency graph")
+                pending.extend(linked_dependencies)
             # Exact CAS updates may shorten an expiry, never extend it.
             # Retention reductions and the admitting review's deadline
             # remain authoritative even when the owner changes dependencies.
@@ -438,20 +462,27 @@ def list_case_declarations(scope_ref: str, *, now: datetime | None = None) -> di
                 # review queue still contains that opaque case reference.
                 # Close this condition transitively: A expired, B -> A, C -> B
                 # must suppress BOTH B and C, never expose C -> hidden B.
-                available = {
+                dependencies = {
+                    r[0]: _stored_dependencies(r[4], r[0]) for r in candidates
+                }
+                eligible = {
                     r[0] for r in candidates
                     if r[0] in reviewed and
-                    datetime.fromisoformat(r[6]) >= reviewed[r[0]][0]
+                    datetime.fromisoformat(r[6]) >= reviewed[r[0]][0] and
+                    dependencies[r[0]] is not None
                 }
+                # Grow from independent reviewed roots. Starting with every
+                # row would incorrectly retain a corrupt A <-> B cycle.
+                available: set[str] = set()
                 while True:
-                    supported = {
+                    newly_available = {
                         r[0] for r in candidates
-                        if r[0] in available and
-                        all(dep in available for dep in json.loads(r[4]))
+                        if r[0] in eligible and r[0] not in available and
+                        all(dep in available for dep in dependencies[r[0]])
                     }
-                    if supported == available:
+                    if not newly_available:
                         break
-                    available = supported
+                    available.update(newly_available)
                 rows = [r for r in candidates if r[0] in available]
     return {
         "format": "openworkgraph.local-case-declarations.v1",
