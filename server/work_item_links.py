@@ -61,9 +61,15 @@ class _Union:
 
 
 def _field(event: dict[str, Any], name: str, pattern: re.Pattern[str]) -> str:
+    """Read a literal opaque identifier, never a coerced or fallback claim.
+
+    An explicit top-level value takes precedence even when malformed/empty:
+    falling back to metadata could silently replace a rejected claim with a
+    different identifier. Legacy metadata-only string IDs remain supported.
+    """
     metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
-    value = str(event.get(name) or metadata.get(name) or "")
-    return value if pattern.fullmatch(value) else ""
+    value = event[name] if name in event else metadata.get(name)
+    return value if isinstance(value, str) and pattern.fullmatch(value) else ""
 
 
 _SCOPE_FIELDS = ("organization_id", "actor_id", "device_id", "session_id")
