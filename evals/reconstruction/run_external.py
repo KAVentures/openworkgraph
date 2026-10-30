@@ -54,6 +54,22 @@ def _selected_blind_corpus_digest(cases: list[dict[str, Any]]) -> str:
     ).hexdigest()
 
 
+def _selected_prediction_set_digest(predictions: list[dict[str, Any]]) -> str:
+    """Fingerprint the complete persisted prediction assignments, not the truth.
+
+    The caller supplies rows in selected-case order, so JSONL row order does
+    not affect scoring or this digest. JSON object-key order is normalized,
+    but workflow and event-array order is retained.
+    """
+    payload = json.dumps(
+        predictions, sort_keys=True, ensure_ascii=False,
+        separators=(",", ":"), allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(
+        b"owg-reconstruction-selected-prediction-set-v1\\0".replace(b"\\0", b"\0") + payload
+    ).hexdigest()
+
+
 def _strict_json_loads(text: str) -> Any:
     """Refuse ambiguous duplicate keys at every JSON object depth.
 
@@ -282,12 +298,12 @@ def _load_resume_metadata(
     metadata = _strict_json_loads(path.read_text(encoding="utf-8"))
     if not isinstance(metadata, dict):
         raise ValueError("resume metadata must be an object")
-    legacy_corpus_unattested = False
+    legacy_digest_unattested = False
     for field, requested in expected.items():
-        if field == "selected_blind_corpus_sha256" and field not in metadata:
-            # Historical manifests predate this field. Keep their resumes
-            # usable, but never claim complete selected-corpus provenance.
-            legacy_corpus_unattested = True
+        if field in ("selected_blind_corpus_sha256", "selected_prediction_set_sha256") and field not in metadata:
+            # Historical manifests predate these fields. Keep resumes usable,
+            # but never claim full corpus/prediction provenance for them.
+            legacy_digest_unattested = True
             continue
         prior = metadata.get(field)
         if field not in metadata or type(prior) is not type(requested) or prior != requested:
@@ -312,7 +328,7 @@ def _load_resume_metadata(
     # fabricate receipts or silently claim complete response provenance.
     return (
         deepcopy(responses),
-        prior_unattested or seen != resumed_case_ids or legacy_corpus_unattested,
+        prior_unattested or seen != resumed_case_ids or legacy_digest_unattested,
     )
 
 
@@ -454,6 +470,10 @@ def main(argv: list[str] | None = None) -> int:
                     "split": args.split,
                     "cases": len(cases),
                     "selected_blind_corpus_sha256": selected_blind_corpus_sha256,
+                    "selected_prediction_set_sha256": _selected_prediction_set_digest(
+                        [existing[str(case["case_id"])] for case in cases
+                         if str(case["case_id"]) in existing]
+                    ),
                 },
                 set(existing),
             )
@@ -515,6 +535,7 @@ def main(argv: list[str] | None = None) -> int:
         "split": args.split,
         "cases": len(cases),
         "selected_blind_corpus_sha256": selected_blind_corpus_sha256,
+        "selected_prediction_set_sha256": _selected_prediction_set_digest(ordered),
         "revision": _revision(),
         "elapsed_seconds": round(time.time() - started, 3),
         "responses": response_meta,
