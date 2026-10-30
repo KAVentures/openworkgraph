@@ -217,7 +217,7 @@ def test_map_side_aggregates_are_bounded_before_fetchall(monkeypatch):
             stamp = (day + timedelta(minutes=i)).isoformat()
             rows.append(f"case-{month},Activity-{i:03d},{stamp}")
     log = workspace.import_log(
-        BytesIO(("\\n".join(rows) + "\\n").encode()),
+        BytesIO(("\n".join(rows) + "\n").encode()),
         name="many-activities", source_format="csv",
         mapping={"case_column": "case", "activity_column": "activity",
                  "timestamp_column": "time"})["log_id"]
