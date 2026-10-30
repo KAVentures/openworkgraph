@@ -38,3 +38,13 @@ and a JSON-serialized leased spool round trip check raw, normalized and context
 tables plus native-tool identity agreement. Forged prefixed card numbers and
 adjacent secrets remain redacted. Capture consent, pause/stop, retention, source
 access and AI permissions are unchanged.
+
+Native Windows verification exposed a separate cold-start edge in this actual
+spool journey. When a fresh directory's synthesized default and the supplied
+run timestamp coincide on a coarse clock, initialization previously returned
+before writing `capture_control.json`. The spool correctly refused that missing
+recording decision. Initialization now treats an equal timestamp as a no-op
+only when the state file already exists. Same-run paused/stopped states and
+their skip intervals remain byte-identical. Deterministic equal-clock tests
+cover explicit/implicit start times and both off states; the actual spool test
+now forces that clock collision without bypassing lease or Observe checks.

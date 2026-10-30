@@ -114,11 +114,13 @@ def test_generated_hook_identity_survives_actual_ingest_and_spool(local, monkeyp
     from server import agent_spool as spool, db
     from server.agent_identity import normalize_agent_events
     from server.agent_ingest import ingest_agent_payloads
-    from shared.capture_control import initialize_run
+    from shared import capture_control
     from shared.claude_code_adapter import claude_hook_to_agent_events
 
     force_initial_collision(monkeypatch)
-    initialize_run(datetime.now(timezone.utc).isoformat())
+    started = datetime.now(timezone.utc).isoformat()
+    monkeypatch.setattr(capture_control, '_now', lambda: started)
+    capture_control.initialize_run(started)
     raw = claude_hook_to_agent_events({'session_id': 'synthetic-session',
         'prompt_id': 'synthetic-turn', 'hook_event_name': 'PostToolUse',
         'tool_use_id': 'synthetic-tool', 'tool_name': 'Read'},
