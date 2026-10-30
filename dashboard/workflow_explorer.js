@@ -417,7 +417,9 @@
       ' evidence references available. This is an observation, not a required step.';
   }
   function selectedIds(candidate, lane) {
-    const ids = lane && lane.ids.length ? lane.ids : safeArray(candidate.execution_ids);
+    // An explicitly selected variant with no retained refs must not borrow
+    // another variant's candidate-wide examples as its own evidence.
+    const ids = lane ? safeArray(lane.ids) : safeArray(candidate.execution_ids);
     return ids.filter(id => /^execution:[a-zA-Z0-9_-]+$/.test(String(id))).slice(0, 12);
   }
   async function inspect(candidate, lane) {
