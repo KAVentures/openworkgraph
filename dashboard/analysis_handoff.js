@@ -41,12 +41,48 @@
     if (!r.ok) throw new Error(d.detail || 'Could not prepare evidence.');
     return d;
   }
+  function checkedExportUrl(response, fmt, detailed, redacted, chosen) {
+    // Ticket responses are not permission grants. Do not let a response mix-up
+    // silently switch period, detail level, redaction, or download origin.
+    const invalid=()=>new Error('Export ticket did not match the selected evidence and privacy options. Prepare or retry the download.');
+    const path='/v1/export/'+fmt;
+    const value=response?.url;
+    if(typeof value!=='string' || value.length>8192 || !value.startsWith(path+'?'))
+      throw invalid();
+    let parsed;
+    try { parsed=new URL(value,window.location.origin); }
+    catch(_) { throw invalid(); }
+    if(parsed.origin!==window.location.origin || parsed.pathname!==path || parsed.hash ||
+       parsed.username || parsed.password) throw invalid();
+    const params=parsed.searchParams;
+    const expected={scope:chosen.scope,include_raw:String(!!detailed),
+      redact_names:String(!!redacted)};
+    if(chosen.scope==='range') {
+      expected.since=chosen.since;
+      expected.until=chosen.until;
+    } else if(chosen.scope!=='all' && chosen.scope!=='current') throw invalid();
+    const keys=[...params.keys()], allowed=new Set([...Object.keys(expected),'ticket']);
+    if(keys.length!==allowed.size || new Set(keys).size!==keys.length ||
+       keys.some(key=>!allowed.has(key))) throw invalid();
+    const ticket=params.get('ticket');
+    if(typeof response.ticket!=='string' || !ticket || !ticket.trim() ||
+       response.ticket!==ticket) throw invalid();
+    for(const [key,wanted] of Object.entries(expected)) {
+      const actual=params.get(key);
+      if(key==='since' || key==='until') {
+        if(typeof actual!=='string' || !Number.isFinite(Date.parse(actual)) ||
+           Date.parse(actual)!==Date.parse(wanted)) throw invalid();
+      } else if(actual!==wanted) throw invalid();
+    }
+    return value;
+  }
   async function download(fmt, detailed, redacted=true, chosen=selection(), stillCurrent=()=>true) {
     const d = await api('/v1/export-ticket',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({format:fmt,...chosen,include_raw:!!detailed,redact_names:!!redacted})},stillCurrent);
     // A delayed ticket response cannot initiate a download after period change.
     if(!stillCurrent())throw new Error(staleScope);
-    const a = document.createElement('a');a.href=d.url;a.download='';a.hidden=true;
+    const url=checkedExportUrl(d,fmt,detailed,redacted,chosen);
+    const a = document.createElement('a');a.href=url;a.download='';a.hidden=true;
     document.body.appendChild(a);a.click();a.remove();
   }
   function syncControls() {
