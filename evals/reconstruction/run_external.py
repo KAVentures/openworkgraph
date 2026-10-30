@@ -310,6 +310,27 @@ def main(argv: list[str] | None = None) -> int:
                 set(existing),
             )
 
+    # Do not overwrite a prior manifest whose prediction rows disappeared.
+    if args.resume and metadata_path.exists() and not existing:
+        raise ValueError(
+            "resume metadata exists without matching prediction rows; "
+            "use a new output directory"
+        )
+
+    # A valid final JSON object without a newline is readable, but append
+    # mode would concatenate the next JSON object onto it. Fail before calls.
+    if (
+        args.resume and predictions_path.exists()
+        and predictions_path.stat().st_size > 0 and len(existing) < len(cases)
+    ):
+        with predictions_path.open("rb") as prior_file:
+            prior_file.seek(-1, os.SEEK_END)
+            if prior_file.read(1) != b"\n":
+                raise ValueError(
+                    "resume predictions file must end with a newline before appending; "
+                    "repair the JSONL boundary or use a new output directory"
+                )
+
     predictions: list[dict[str, Any]] = []
     started = time.time()
     mode = "a" if args.resume else "w"

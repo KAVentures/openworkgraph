@@ -602,3 +602,77 @@ def test_resume_missing_old_receipt_stays_unattested_across_later_resumes(tmp_pa
     path.write_text(json.dumps(manifest), encoding="utf-8")
     _, unverified = _load_resume_metadata(path, expected, {"case-a"})
     assert unverified is True
+
+
+def test_resume_refuses_unterminated_jsonl_before_spending_or_mutating(tmp_path, monkeypatch):
+    from evals.reconstruction import run_external
+
+    path = tmp_path / "synthetic-model.predictions.jsonl"
+    path.write_text(json.dumps(_prediction("case-a")), encoding="utf-8")
+    before = path.read_bytes()
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-never-used")
+    monkeypatch.setattr(run_external, "load_cases", lambda: [_case("case-a"), _case("case-b")])
+    monkeypatch.setattr(run_external, "split_cases", lambda cases, split: cases)
+    monkeypatch.setattr(run_external, "_request", lambda *args, **kwargs: (
+        (_ for _ in ()).throw(AssertionError("unterminated resume must not call provider"))
+    ))
+    with pytest.raises(ValueError, match="must end with a newline"):
+        run_external.main([
+            "--model", "synthetic-model", "--base-url", "https://api.openai.com/v1",
+            "--output-dir", str(tmp_path), "--resume",
+        ])
+    assert path.read_bytes() == before
+    assert not (tmp_path / "synthetic-model.metadata.json").exists()
+    assert not (tmp_path / "synthetic-model.report.json").exists()
+
+
+def test_completed_unterminated_jsonl_resume_remains_readable(tmp_path, monkeypatch):
+    from evals.reconstruction import run_external
+
+    path = tmp_path / "synthetic-model.predictions.jsonl"
+    path.write_text(json.dumps(_prediction("case-a")), encoding="utf-8")
+    before = path.read_bytes()
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-never-used")
+    monkeypatch.setattr(run_external, "load_cases", lambda: [_case("case-a")])
+    monkeypatch.setattr(run_external, "split_cases", lambda cases, split: cases)
+    monkeypatch.setattr(run_external, "_request", lambda *args, **kwargs: (
+        (_ for _ in ()).throw(AssertionError("completed resume must not call provider"))
+    ))
+    run_external.main([
+        "--model", "synthetic-model", "--base-url", "https://api.openai.com/v1",
+        "--output-dir", str(tmp_path), "--resume",
+    ])
+    assert path.read_bytes() == before
+    assert (tmp_path / "synthetic-model.report.json").exists()
+    assert json.loads((tmp_path / "synthetic-model.metadata.json").read_text())[
+        "resume_provenance_unverified"
+    ] is True
+
+
+@pytest.mark.parametrize("prior_file", ["missing", "empty", "blank"])
+def test_resume_refuses_orphan_manifest_before_provider_request(
+    tmp_path, monkeypatch, prior_file,
+):
+    from evals.reconstruction import run_external
+
+    path = tmp_path / "synthetic-model.predictions.jsonl"
+    if prior_file != "missing":
+        path.write_text("" if prior_file == "empty" else "   ", encoding="utf-8")
+    before = path.read_bytes() if path.exists() else None
+    metadata_path = tmp_path / "synthetic-model.metadata.json"
+    metadata_path.write_text(json.dumps(_resume_manifest(cases=1)), encoding="utf-8")
+    before_metadata = metadata_path.read_bytes()
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-never-used")
+    monkeypatch.setattr(run_external, "load_cases", lambda: [_case("case-a")])
+    monkeypatch.setattr(run_external, "split_cases", lambda cases, split: cases)
+    monkeypatch.setattr(run_external, "_request", lambda *args, **kwargs: (
+        (_ for _ in ()).throw(AssertionError("orphan manifest must not call provider"))
+    ))
+    with pytest.raises(ValueError, match="metadata exists without matching prediction rows"):
+        run_external.main([
+            "--model", "synthetic-model", "--base-url", "https://api.openai.com/v1",
+            "--output-dir", str(tmp_path), "--resume",
+        ])
+    assert (path.read_bytes() if path.exists() else None) == before
+    assert metadata_path.read_bytes() == before_metadata
+    assert not (tmp_path / "synthetic-model.report.json").exists()

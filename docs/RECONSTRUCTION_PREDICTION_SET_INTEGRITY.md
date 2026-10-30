@@ -194,3 +194,21 @@ JSONL/metadata and no model request), malformed/duplicate/out-of-population
 receipts, preserving old receipts when adding new ones, and explicitly
 unattested legacy interrupted resumes. They do not establish real provider
 reproducibility, held-out F1 improvement or customer acceptance.
+
+## Crash-safe append boundaries
+
+A partially completed `--resume` with valid JSON on the final line but **no
+terminating newline** is now refused before another provider request if any
+selected cases remain to be appended. Otherwise append mode would concatenate
+the next prediction onto the previous JSON object, corrupting the JSONL after
+spending a model call. The original file is unchanged; repair its JSONL
+boundary deliberately or use a fresh output directory. A completed final row
+without a newline remains readable because nothing needs appending.
+
+A metadata manifest without matching persisted prediction rows (missing,
+empty or whitespace-only JSONL) is also rejected rather than silently
+overwritten. Legacy interrupted JSONL **without** a manifest remains supported
+and explicitly unattested. Synthetic regressions cover no-request,
+byte-preservation and completed-row compatibility. This does not establish
+multi-file transaction durability, model authenticity, assignment-F1
+improvement or real-provider acceptance.
