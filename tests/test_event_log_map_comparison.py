@@ -54,7 +54,29 @@ def test_frequency_and_time_differences_per_path():
     assert ab["median_gap_seconds_first"] == 3600 and ab["median_gap_seconds_second"] == 3 * 3600
     gap = ab["median_gap_difference"]
     assert gap["seconds"] == 2 * 3600 and gap["ci_excludes_zero"]
+    assert (gap["sampled_gaps_first"], gap["sampled_gaps_second"]) == (30, 15)
+    assert not gap["sampling_truncated_first"] and not gap["sampling_truncated_second"]
+    assert (gap["sampled_median_gap_seconds_first"], gap["sampled_median_gap_seconds_second"]) == (3600, 10800)
+    assert gap["seconds"] == gap["sampled_median_gap_seconds_second"] - gap["sampled_median_gap_seconds_first"]
     assert result["paths_only_in_second"] == 2 and result["paths_only_in_first"] == 0
+
+
+
+def test_timed_gap_interval_discloses_reservoir_cap_and_sample_medians(monkeypatch):
+    """A sampled interval must not silently inherit the full-cohort denominator."""
+    monkeypatch.setattr(compare, "GAP_SAMPLE", 4)
+    monkeypatch.setattr(compare, "GAP_ROUNDS", 12)
+    result = compare.compare_maps(_log(), [JANUARY, FEBRUARY])
+    ab = _paths(result)[("A", "B")]
+    gap = ab["median_gap_difference"]
+    assert (ab["transitions_in_first"], ab["transitions_in_second"]) == (30, 15)
+    assert (gap["sampled_gaps_first"], gap["sampled_gaps_second"]) == (4, 4)
+    assert gap["sampling_truncated_first"] and gap["sampling_truncated_second"]
+    assert gap["seconds"] == gap["sampled_median_gap_seconds_second"] - gap["sampled_median_gap_seconds_first"]
+    assert "12 rounds" in gap["method"] and "up to 4 sampled gaps" in gap["method"]
+    assert "sampled_gaps_first" not in ab, "sampling support belongs to the timed interval only"
+    assert result["intervals_assume_independent_cohorts"] is True
+
 
 
 def test_side_by_side_maps_and_overlap_warning():
