@@ -143,6 +143,9 @@ def _median(values: list[float]) -> float:
 def median_difference(a: list[float], b: list[float], rounds: int = BOOTSTRAP_ROUNDS,
                       seed: int = 20261023) -> tuple[float, float, float]:
     """Difference of medians (b - a) with a percentile bootstrap 95% interval."""
+    # SQL has no guaranteed row order. Canonicalize equal sample multisets
+    # before seeded draws so bootstrap intervals do not depend on fetch order.
+    a, b = sorted(a), sorted(b)
     rng = random.Random(seed)
     draws = []
     for _ in range(rounds):
