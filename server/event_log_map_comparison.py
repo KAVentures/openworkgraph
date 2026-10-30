@@ -83,9 +83,10 @@ def compare_maps(log_id: str, cohort_specs: Any, case_type: str | None = None, *
                           "only_in": "first" if not cb else ("second" if not ca else None),
                           "median_gap_seconds_first": ma, "median_gap_seconds_second": mb})
         # Time intervals for the paths both cohorts use most.
-        timed = sorted((p for p in paths if p["transitions_in_first"] > 1 and p["transitions_in_second"] > 1),
-                       key=lambda p: (-(p["transitions_in_first"] + p["transitions_in_second"]),
-                                      p["from"], p["to"]))[:TIMED_PATHS]
+        eligible = sorted((p for p in paths if p["transitions_in_first"] > 1 and p["transitions_in_second"] > 1),
+                          key=lambda p: (-(p["transitions_in_first"] + p["transitions_in_second"]),
+                                         p["from"], p["to"]))
+        timed = eligible[:TIMED_PATHS]
         for p in timed:
             # The full-cohort medians above and the reservoir-sampled bootstrap
             # below can have different point estimates. Expose the actual
@@ -93,6 +94,7 @@ def compare_maps(log_id: str, cohort_specs: Any, case_type: str | None = None, *
             first_gaps = _gaps(conn, "ca", p["from"], p["to"])
             second_gaps = _gaps(conn, "cb", p["from"], p["to"])
             d, low, high = _median_difference(first_gaps, second_gaps)
+            p["median_gap_interval_status"] = "estimated"
             p["median_gap_difference"] = {"seconds": d, "ci95": [low, high], "ci_excludes_zero": low > 0 or high < 0,
                                           "sampled_gaps_first": len(first_gaps),
                                           "sampled_gaps_second": len(second_gaps),
@@ -102,6 +104,15 @@ def compare_maps(log_id: str, cohort_specs: Any, case_type: str | None = None, *
                                           "sampling_truncated_second": len(second_gaps) < p["transitions_in_second"],
                                           "method": f"percentile bootstrap, {GAP_ROUNDS} rounds, up to "
                                                     f"{GAP_SAMPLE} sampled gaps per cohort"}
+        # Missing intervals are not all equivalent: some paths have too
+        # little support, while others exceeded the bounded bootstrap budget.
+        for p in paths:
+            if "median_gap_interval_status" not in p:
+                p["median_gap_interval_status"] = (
+                    "insufficient_support"
+                    if p["transitions_in_first"] <= 1 or p["transitions_in_second"] <= 1
+                    else "rank_limit"
+                )
         paths.sort(key=lambda p: (not p["ci_excludes_zero"], -abs(p["case_share_difference"]), p["from"], p["to"]))
 
         def side(t, n):
@@ -128,6 +139,9 @@ def compare_maps(log_id: str, cohort_specs: Any, case_type: str | None = None, *
             "cohorts": [cohorts.describe(first), cohorts.describe(second)],
             "cases": [na, nb], "overlapping_cases": overlap,
             "paths": paths[:limit], "paths_total": len(paths),
+            "timed_paths_eligible": len(eligible),
+            "timed_paths_evaluated": len(timed),
+            "timed_paths_omitted_rank_limit": len(eligible) - len(timed),
             "paths_only_in_first": sum(p["only_in"] == "first" for p in paths),
             "paths_only_in_second": sum(p["only_in"] == "second" for p in paths),
             "maps": [side("ca", na), side("cb", nb)],
