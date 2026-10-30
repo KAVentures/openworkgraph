@@ -50,3 +50,25 @@ value. This prevents a wrong-case response from being misattributed to the
 requested case in a persisted prediction artifact. No provider request is
 introduced by the check, and this does not authenticate model outputs or
 attest that the response content actually describes the correct case.
+
+## Resume validation against current blind evidence
+
+When the external runner resumes a prediction JSONL artifact, it now checks
+each saved row against the **current selected case's presented event IDs**,
+using the same membership validator as a fresh model response. A stale row
+that references an event no longer present, assigns one event to multiple
+workflows, or has malformed workflow/unassigned ID lists is refused **before**
+any new model request. The existing JSONL bytes remain untouched on failure.
+Valid rows are read without rewriting their persisted JSON.
+
+This guard uses only blind presented evidence, not hidden ground truth. It
+does not prove that the evidence is unchanged when the event ID set is
+identical, that the model/revision/prompt matches, or that a valid prediction
+is accurate. A run manifest with an authenticated corpus digest would be a
+separate improvement. The direct helper retains its older ID-only mode for
+callers that do not supply current evidence; the command-line runner always
+supplies it.
+
+Synthetic tests cover stale references, duplicated assignments, malformed
+membership lists, unchanged valid resume bytes and refusal before a model
+request. No real provider or model call is used.
