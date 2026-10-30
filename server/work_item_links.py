@@ -104,7 +104,8 @@ def _observations(events: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], i
     for event in events:
         if not isinstance(event, dict):
             continue
-        event_id = str(event.get("event_id") or "")
+        raw_event_id = event.get("event_id")
+        event_id = raw_event_id if isinstance(raw_event_id, str) else ""
         stamp = _stamp(event.get("observed_at"))
         if not _EVENT_ID.fullmatch(event_id) or event_id in seen or stamp is None:
             continue
@@ -134,7 +135,7 @@ def _observations(events: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], i
             "transfer": _field(event, "clipboard_transfer_id", _TRANSFER),
             "scope": _link_scope(event),
             "reference_tainted": False,
-            "app": str(event.get("app") or "").strip().casefold()[:120],
+            "app": event["app"].strip().casefold()[:120] if isinstance(event.get("app"), str) else "",
             "action": _token(event.get("event_type")),
             "source": _token(event.get("source")),
         })
