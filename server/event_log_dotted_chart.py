@@ -44,10 +44,13 @@ def dotted_chart(log_id: str, case_type: str | None = None, *, time: str = "abso
         total_cases, total_events = conn.execute("SELECT count(*), coalesce(sum(events), 0) FROM dc").fetchone()
         first, last = conn.execute("SELECT min(ts), max(ts) FROM ce").fetchone()
         shown = min(int(max_cases), total_cases)
-        # Even sample over the ordered cases keeps the chart's shape.
+        # Include both ends of the ordered cohort when at least two rows are
+        # displayed. The former floor(i * total_cases / shown) missed the
+        # final case whenever downsampling, hiding the newest/longest tail.
+        # A one-row chart deliberately selects rank zero.
         conn.execute("""CREATE OR REPLACE TEMP TABLE pick AS SELECT DISTINCT
-              CAST(floor(i * ? / ?) AS BIGINT) AS rank FROM range(?) t(i)""",
-                     [total_cases, max(shown, 1), shown])
+              CAST(floor(i * (? - 1) / greatest(? - 1, 1)) AS BIGINT) AS rank
+              FROM range(?) t(i)""", [total_cases, shown, shown])
         per_case = max(1, MAX_POINTS // max(shown, 1))
         rows = conn.execute("""WITH chosen AS (SELECT d.* FROM dc d JOIN pick p USING (rank)),
               numbered AS (SELECT e.case_id, e.activity, e.ts, c.rank, c.start_ts, c.end_ts, c.events,
