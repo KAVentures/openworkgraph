@@ -16,6 +16,18 @@ Two additive counts make the excluded cases distinguishable:
 - `variant_limit_truncated` (new): true exactly when the second count
   is nonzero.
 
+The same response additionally reports **distinct observed variant counts**
+without running a second query: `max_variants_applied` (the bounded
+requested cap), `variants_selected` (number of ranked variants retrieved,
+including too-long ones), `variants_aligned` (selected variants actually
+aligned), and `variants_skipped_trace_too_long` (selected variants above
+300 events). These satisfy `variants_selected = variants_aligned +
+variants_skipped_trace_too_long`. They count **distinct paths**, not
+cases; one variant can represent many cases. `variants_selected` may
+equal the cap without proving that further variants exist, while the
+separate case-omission count and `variant_limit_truncated` identify
+actual unselected cases.
+
 For any selected case notion, these are disjoint and satisfy:
 
 ```text
