@@ -255,7 +255,7 @@ def test_omission_counters_partition_mixed_small_sparse_and_pathless_boundaries(
             if i < path_cases:
                 rows.append(f"{case},Close,{(day + timedelta(hours=1)).isoformat()}")
     log = workspace.import_log(
-        BytesIO(("\\n".join(rows) + "\\n").encode()), name="mixed-omissions",
+        BytesIO(("\n".join(rows) + "\n").encode()), name="mixed-omissions",
         source_format="csv", mapping={"case_column": "case",
                                       "activity_column": "activity",
                                       "timestamp_column": "time"})["log_id"]
