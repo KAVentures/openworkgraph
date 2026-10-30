@@ -4,7 +4,7 @@ The read-only `/v1/event-logs/{log_id}/benchmark` result includes
 `cohorts[*].throughput_seconds.p50/p90` computed from **all** selected
 case durations. The `differences_second_minus_first.median_throughput_seconds`
 point estimate and 95% percentile-bootstrap interval instead use a
-deterministic reservoir sample of up to 5,000 cases **per cohort**.
+deterministic case-ID hash-priority sample of up to 5,000 cases **per cohort**.
 These are different denominators for larger cohorts; the sampled
 difference need not equal the difference between the two full-cohort p50s.
 
@@ -45,9 +45,20 @@ representative sampling, a consenting customer pilot or competitor parity.
 ## Seeded bootstrap and SQL row ordering
 
 SQL result rows have no guaranteed order. The bootstrap now sorts the
-sampled durations in each cohort before its seeded resampling draws, so
-**the same sampled multiset** produces the same point estimate and interval
-regardless of row-fetch order. This does not guarantee that a reservoir
-sample itself is identical if the underlying case set, execution plan or
-sampling conditions change. The interval remains a descriptive estimate,
-not a promise of reproducibility across different datasets or engines.
+sampled durations in each cohort before its seeded resampling draws.
+Case selection uses the first up-to-5,000 cases ordered by
+`md5(case_id), case_id` (a fixed hash-priority ranking), rather than
+DuckDB's plan-sensitive seeded reservoir operator. For identical case IDs
+and durations, repeated queries and differently ordered imports select the
+same cases and yield the same bootstrap interval, independently of SQL
+scan order. Only durations are returned to the bootstrap; case IDs are not
+exposed in the response.
+
+This is a deterministic pseudo-random case-ID selection, **not** a
+cryptographic security mechanism, a statistical guarantee of a
+representative sample, or a full-cohort confidence interval. It hashes
+each eligible case ID and performs a bounded top-k ordering, which can
+cost more CPU than reservoir sampling on very large cohorts. A changed
+case set, case identity, engine collation/hash implementation or sampling
+cap can change the selected sample. The interval remains descriptive,
+not a promise across different datasets or engine versions.

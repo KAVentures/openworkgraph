@@ -126,6 +126,25 @@ def test_benchmark_throughput_interval_discloses_actual_case_sample_support(monk
     assert not any("case_id" in key for key in gap)
 
 
+def test_benchmark_capped_hash_sample_is_independent_of_import_order(monkeypatch):
+    """Identical case sets produce identical capped bootstrap support across row orders."""
+    rows = _claims_csv().splitlines()
+    reversed_log = workspace.import_log(
+        BytesIO(("\\n".join([rows[0], *reversed(rows[1:])]) + "\\n").encode()),
+        name="claims-reversed", source_format="csv", mapping=MAPPING)["log_id"]
+    original_log = _log()
+    monkeypatch.setattr(cohorts, "BOOTSTRAP_SAMPLE", 3)
+    specs = [{"resource": "bob"}, {"resource": "ann"}]
+    expected = cohorts.benchmark(original_log, specs)[
+        "differences_second_minus_first"]["median_throughput_seconds"]
+    assert expected["sampled_cases_first"] == expected["sampled_cases_second"] == 3
+    for _ in range(3):
+        assert cohorts.benchmark(original_log, specs)[
+            "differences_second_minus_first"]["median_throughput_seconds"] == expected
+        assert cohorts.benchmark(reversed_log, specs)[
+            "differences_second_minus_first"]["median_throughput_seconds"] == expected
+
+
 def test_benchmark_reports_overlap_and_refuses_bad_input():
     log_id = _log()
     overlapping = cohorts.benchmark(log_id, [{}, {"resource": "ann"}])
