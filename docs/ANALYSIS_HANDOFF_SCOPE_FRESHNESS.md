@@ -315,3 +315,27 @@ observed-span intersection and the selected period. This is a bounded
 client-side preview consistency check, **not** proof that every date was
 captured, that sources are verified, or that a real consenting pilot
 demonstrates competitor parity or commercial benefit.
+
+## Honest completeness and omitted-date claims
+
+The local preview explicitly sets `analysis_plan.complete_history_claimed=false`:
+a selected time range is **not** proof of complete capture. A supplied
+`true` completeness assertion (or a non-boolean value) is rejected before
+the modal, Copy or Download. Older previews that omit the optional field
+remain usable; a literal `false` remains a statement of uncertainty.
+
+The backend's `more_dates_not_listed=true` means selected events exist on
+dates beyond those displayed. The dashboard now requires a supplied date
+list and strictly more selected canonical rows than the sum of its listed
+`event_rows`; a forged omission flag when all selected rows are already
+accounted for is inconsistent. It does **not** require all 31 possible
+displayed chunks: legitimate partial/truncated plans, including older
+short plans, remain reviewable. An absent omission flag is not treated as
+proof of completeness, and a zero-count legacy chunk is not evidence.
+
+Synthetic modal regressions cover affirmative/string completeness,
+contradictory omission with complete or absent chunks, honest partial
+coverage, explicit `false` and absent legacy flags. This is a
+client-side contradiction check, not a proof of complete recording,
+verified business workflows, consent, real provider state, a customer
+pilot or competitor parity.
