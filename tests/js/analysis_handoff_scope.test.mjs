@@ -1343,3 +1343,76 @@ test('off and all-saved AI modes remain distinguishable from local file exports'
     assert.equal(h.modals, 1);
   });
 });
+
+test('date-plan chunks must fit one UTC calendar day, including offset and clipped cases', async t => {
+  const today = dayLabel(0), yesterday = dayLabel(-1), tomorrow = dayLabel(1);
+  const ordinaryFirst = today + 'T10:00:00Z', ordinaryLast = today + 'T10:01:00Z';
+  const cases = [
+    ['two-day span falsely presented as one daily chunk',
+      {since: yesterday, until: tomorrow, event_rows: 2},
+      ordinaryFirst, ordinaryLast, false],
+    ['short chunk crossing UTC midnight despite being under 24 hours',
+      {since: yesterday + 'T23:30:00Z', until: today + 'T00:30:00Z', event_rows: 2},
+      yesterday + 'T23:45:00Z', today + 'T00:15:00Z', false],
+    ['clipped same-day chunk with UTC-equivalent offsets',
+      {since: asOffset(Date.parse(today + 'T09:00:00Z'), 2),
+        until: asOffset(Date.parse(today + 'T11:00:00Z'), 2), event_rows: 2},
+      ordinaryFirst, ordinaryLast, true],
+    ['one-day chunk ending exactly at next UTC midnight',
+      {since: yesterday + 'T23:59:00Z', until: today + 'T00:00:00Z', event_rows: 2},
+      yesterday + 'T23:59:20Z', yesterday + 'T23:59:50Z', true]
+  ];
+  for (const [name, chunk, first, last, accepted] of cases) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], {...h.preview('range', 'daily-plan'),
+      first_observed_at: first, last_observed_at: last,
+      analysis_plan: {page_size: 200, chunks_respect_selected_window: true,
+        date_chunks: [chunk], complete_history_claimed: false}});
+    await opening;
+    assert.equal(h.modals, accepted ? 1 : 0, name);
+    if (accepted) {
+      await h.modal['#analysisCopy'].onclick();
+      assert.deepEqual(h.copied, ['request-daily-plan']);
+    } else {
+      assert.equal(h.tickets.length, 0);
+      assert.deepEqual(h.copied, []);
+      assert.match(h.summary.textContent, /incomplete or malformed/i);
+    }
+  });
+});
+
+test('optional date-plan provenance metadata fails closed on contradictions', async t => {
+  const cases = [
+    ['zero page size', {page_size: 0}, false],
+    ['negative page size', {page_size: -1}, false],
+    ['fractional page size', {page_size: 1.5}, false],
+    ['boolean page size', {page_size: true}, false],
+    ['string page size', {page_size: '200'}, false],
+    ['unsafe page size', {page_size: Number.MAX_SAFE_INTEGER + 1}, false],
+    ['explicit false window-respect claim', {chunks_respect_selected_window: false}, false],
+    ['string true window-respect claim', {chunks_respect_selected_window: 'true'}, false],
+    ['valid backend plan metadata', {page_size: 200, chunks_respect_selected_window: true}, true],
+    ['legacy absent metadata', {}, true]
+  ];
+  for (const [name, metadata, accepted] of cases) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], {...h.preview('range', 'plan-metadata'),
+      analysis_plan: {date_chunks: [], complete_history_claimed: false, ...metadata}});
+    await opening;
+    assert.equal(h.modals, accepted ? 1 : 0, name);
+    if (accepted) {
+      await h.modal['#analysisCopy'].onclick();
+      assert.deepEqual(h.copied, ['request-plan-metadata']);
+    } else {
+      assert.equal(h.tickets.length, 0);
+      assert.deepEqual(h.copied, []);
+      assert.match(h.summary.textContent, /incomplete or malformed/i);
+    }
+  });
+});
