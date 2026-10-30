@@ -210,7 +210,19 @@ def save_case_declaration(
         assert db is not None
         db.execute("BEGIN IMMEDIATE")
         try:
-            _prune(db, current, days, reviewed)
+            # Admission is checked twice: the first snapshot avoids creating
+            # storage for an unreviewed case, while this check rejects a
+            # disconnect/review deletion between that snapshot and BEGIN.
+            # This is not a cross-process, multi-store revocation transaction.
+            live_reviewed = _reviewed(current)
+            if (work_item_ref not in live_reviewed or
+                any(dep not in live_reviewed for dep in dependencies)):
+                raise CaseDeclarationError("case or dependency review revoked before declaration save")
+            live_days = _retention_days()
+            if live_days is None:
+                raise CaseDeclarationError("durable review retention revoked before declaration save")
+            days = min(days, live_days)
+            _prune(db, current, days, live_reviewed)
             old = _get(db, work_item_ref)
             if old is None:
                 if expected_revision != 0:
