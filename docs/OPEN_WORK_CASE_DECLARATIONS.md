@@ -139,6 +139,18 @@ business obligation, verified outcome or agent execution authorization.
 The local auxiliary ledger is capped at **50 total declarations across all source scopes**. If damaged/legacy SQLite content exceeds this bound, scoped reads withhold the entire owner-approval projection instead of presenting a seemingly complete truncated subset. Transactional pruning and dependent-deletion traversal fetch at most 51 rows and refuse an over-capacity graph. A failed save rolls back; explicit review deletion can scrub the corrupt auxiliary ledger through the existing fail-closed cleanup path. Exactly 50 rows remain supported, with unreviewed entries removed by the next authorized save. This is a local resource/availability bound, not tamper-proof storage, tenant authorization or independently verified outcomes.
 
 
+### Bounded legacy schema-v1 migration
+
+An existing local schema-v1 declaration store is upgraded on first access to
+schema v2 with per-incarnation edit tokens. Migration now reads at most **51
+legacy references**, and refuses an over-capacity (>50) store **before**
+altering its table or generating any tokens. The SQLite migration transaction
+rolls back and leaves the v1 version, columns and rows unchanged on overflow;
+it never silently treats a partial migration as approved owner declarations.
+Exactly 50 legacy rows can migrate with distinct opaque edit tokens. These
+are synthetic boundary tests, not evidence of live source authority, a
+customer-verified outcome, or cross-process grant fencing.
+
 ### Persisted dependency JSON parsing bound
 
 The trusted owner-declaration writer emits a JSON array of at most eight
