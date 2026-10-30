@@ -72,3 +72,26 @@ supplies it.
 Synthetic tests cover stale references, duplicated assignments, malformed
 membership lists, unchanged valid resume bytes and refusal before a model
 request. No real provider or model call is used.
+
+## Within-prediction event membership integrity
+
+The external runner now requires every event ID in a model prediction to be a
+nonempty string from the **current selected case's blind evidence**. Each ID
+list must be duplicate-free. A predicted workflow's ordered, automation-relevant
+and UI-mechanic IDs must be subsets of **that workflow's** `event_ids`, not
+merely IDs appearing somewhere in the same case. An event may not appear in
+multiple workflows or in both an assigned workflow and
+`unassigned_event_ids`.
+
+These checks run on both fresh model responses and resumed prediction rows,
+before a resume makes another provider request. They do not require a full
+ordering list: a valid partial order remains valid, and optional lists may be
+omitted. The existing scoring thresholds, private/held-out truth and
+uncertainty policy are unchanged. Invalid outputs fail rather than being
+silently coerced or treated as successful reconstruction.
+
+This is **contract and measurement integrity**, not evidence of improved
+assignment F1, lower contamination, real-provider compatibility, or real
+customer outcomes. A prediction with internally consistent event IDs can
+still be semantically wrong or grounded in outdated evidence whose IDs did
+not change.
