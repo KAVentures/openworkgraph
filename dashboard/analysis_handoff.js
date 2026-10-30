@@ -76,6 +76,9 @@
           typeof d.analysis_plan.more_dates_not_listed === 'boolean') &&
         (d.analysis_plan.date_chunks == null ||
           (Array.isArray(d.analysis_plan.date_chunks) &&
+            // The server lists at most 31 dates. A larger plan is not a
+            // trustworthy local preview and must not grow the modal unbounded.
+            d.analysis_plan.date_chunks.length <= 31 &&
             d.analysis_plan.date_chunks.every((x, i, list) => {
               if (!object(x) || !dateLabel(x.since) || !dateLabel(x.until) ||
                   !count(x.event_rows)) return false;
