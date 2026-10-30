@@ -160,3 +160,10 @@ retain existing staging behavior. This protects the **local Python contract**;
 it does not authenticate HTTPS, independently verify the provider or source
 clock, provide a persisted grant/tenant revocation fence, prove completeness,
 authorize event-log writes or constitute real ServiceNow acceptance.
+
+
+## Explicitly selected incident IDs not observed in a staged page
+
+The standalone `project_page` and single-plan `project_planned_page` outputs, and the bounded consecutive `project_planned_pages` batch output, include `unobserved_selected_ids`: sorted exact selected incident IDs absent from the **validated supplied response(s)**. The value is derived solely from the consented, tenant-scoped selected IDs and the strictly validated returned IDs; repeated identical rows do not count as additional observed identities. An empty response lists every selected ID as unobserved. A multi-page result computes the union across its validated pages rather than treating a short last page as evidence of completeness.
+
+This field is a **local omission disclosure**, not a claim that ServiceNow deleted a record, denied access, returned a complete historical scan, or produced a verified outcome. A selected ID can be absent because of ACL filtering, pagination, concurrent updates, source-side query behavior, transport failure, or an incomplete batch. Even when `unobserved_selected_ids` is empty, the source's historical completeness, clock, authenticated transport and authorization at persistence time remain unverified. The existing `historical_completeness: unknown`, `checkpoint_advanced: false`, and `not_an_authorization_to_append: true` flags are unchanged. No source requests, event-log writes, checkpoint advancement or credential access are implemented here.
