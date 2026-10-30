@@ -88,6 +88,36 @@ def test_timed_gap_interval_discloses_reservoir_cap_and_sample_medians(monkeypat
 
 
 
+def test_timed_gap_cap_uses_literal_path_tiebreak_for_equal_support():
+    """Exactly 25 of 26 tied paths receive intervals, regardless of CSV row order."""
+    def make_log(reverse):
+        rows = ["case,activity,time"]
+        cases = [(month, index, repeat)
+                 for month in range(2) for index in range(26) for repeat in range(2)]
+        if reverse:
+            cases.reverse()
+        for month, index, repeat in cases:
+            start = START + timedelta(days=31 * month, minutes=3 * index + repeat)
+            case = f"c{month}-{index}-{repeat}"
+            rows.append(f"{case},A,{start.isoformat()}")
+            rows.append(f"{case},B{index:02d},{(start + timedelta(hours=1)).isoformat()}")
+        return workspace.import_log(
+            BytesIO(("\\n".join(rows) + "\\n").encode()),
+            name="tied-paths", source_format="csv",
+            mapping={"case_column": "case", "activity_column": "activity",
+                     "timestamp_column": "time"})["log_id"]
+
+    expected = {("A", f"B{i:02d}") for i in range(compare.TIMED_PATHS)}
+    for reverse in (False, True):
+        result = compare.compare_maps(make_log(reverse), [JANUARY, FEBRUARY], limit=40)
+        assert result["cases"] == [52, 52]
+        assert result["paths_total"] == compare.TIMED_PATHS + 1
+        assert {("A", f"B{i:02d}") for i in range(26)} == set(_paths(result))
+        timed = {(p["from"], p["to"]) for p in result["paths"] if "median_gap_difference" in p}
+        assert timed == expected
+        assert ("A", "B25") not in timed
+
+
 def test_side_by_side_maps_and_overlap_warning():
     result = compare.compare_maps(_log(), [{}, FEBRUARY])
     first, second = result["maps"]
