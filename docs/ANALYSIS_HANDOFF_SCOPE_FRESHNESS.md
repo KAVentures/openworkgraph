@@ -339,3 +339,34 @@ coverage, explicit `false` and absent legacy flags. This is a
 client-side contradiction check, not a proof of complete recording,
 verified business workflows, consent, real provider state, a customer
 pilot or competitor parity.
+
+## Local AI lease visibility and rich-export privacy disclosure
+
+The dashboard's authenticated preview reports a **snapshot** of local AI
+saved-history access, not an authorization for the selected export or a promise
+that access will remain active. When local AI access is enabled and the
+`selected_range` lease has valid, ordered, timezone-aware bounds, the handoff
+now displays both exact normalized UTC instants, the exclusive end, and any
+future expiry. `all_saved`, `off`, and disabled local AI remain distinct.
+Malformed, unrecognized, expired, or missing optional lease metadata is
+displayed as **unverified** rather than as an affirmative permission. This
+does not block a user's local copy or file download; the server still
+authenticates the preview and separately authorizes single-use export tickets.
+Preparing a file never widens local AI grants, and hosted AI only sees evidence
+previously shared with it.
+
+The detailed-chronology option is explicitly described as adding **raw local
+event rows**. Name redaction is best effort, not anonymization: titles, URLs
+and other metadata can remain sensitive in summary exports, and raw local
+chronology can contain additional sensitive content. Users are told to inspect
+the downloaded file before sharing. The detailed option remains unchecked by
+default; no AI call, upload, new source privilege or business write occurs.
+
+Deterministic mock-DOM regressions exercise valid selected-range bounds and
+expiry, explicit off/all-saved/disabled states, malformed dates, reversed
+bounds, expired grants, unknown modes, non-boolean enablement and missing
+metadata. They also check that the rich-export warning is visible before a
+detailed local ticket and that copying still works when lease metadata is
+unverified. These are synthetic interface-contract tests, **not** real
+consenting-user research, an IdP/provider validation, accessibility
+certification, or evidence of competitor parity or business ROI.
