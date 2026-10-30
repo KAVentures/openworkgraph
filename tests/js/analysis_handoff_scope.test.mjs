@@ -740,18 +740,32 @@ test('date chunks refuse reversed, overlapping, duplicated and out-of-order cove
   });
 });
 
+// Derive fixtures from the actual selected range, not the wall clock of CI.
+const selectedBounds = read => {
+  const params = new URLSearchParams(read.url.split('?')[1]);
+  return [Date.parse(params.get('since')), Date.parse(params.get('until'))];
+};
+const utc = ms => new Date(ms).toISOString();
+const asOffset = (ms, hours) => {
+  const local = utc(ms + hours * 3600_000).replace(/Z$/, '');
+  return local + (hours >= 0 ? '+' : '-') + String(Math.abs(hours)).padStart(2, '0') + ':00';
+};
+
 test('contiguous date chunks and equivalent UTC-offset boundaries remain copy-only safe', async () => {
   const h = harness();
   await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
   const open = h.bars[0].controls.button.onclick();
-  await settle(); h.reply(h.reads[1], {...h.preview('range', 'ordered-plan'),
+  await settle();
+  const [start] = selectedBounds(h.reads[1]), day = 86400_000;
+  h.reply(h.reads[1], {...h.preview('range', 'ordered-plan'),
     canonical_rows: 7, retained_rows: 7,
     event_types: {focus_span: 7}, sources: {desktop: 7},
     analysis_plan: {date_chunks: [
-      {since: '2026-10-26', until: '2026-10-27', event_rows: 1},
-      {since: '2026-10-27', until: '2026-10-28', event_rows: 2},
-      {since: '2026-10-28T00:00:00Z', until: '2026-10-29T00:00:00Z', event_rows: 3},
-      {since: '2026-10-29T02:00:00+02:00', until: '2026-10-30T02:00:00+02:00', event_rows: 1}
+      {since: utc(start), until: utc(start + day), event_rows: 1},
+      {since: utc(start + day), until: utc(start + 2 * day), event_rows: 2},
+      {since: utc(start + 2 * day), until: utc(start + 3 * day), event_rows: 3},
+      {since: asOffset(start + 3 * day, 2),
+        until: asOffset(start + 4 * day, 2), event_rows: 1}
     ], more_dates_not_listed: false}});
   await open;
   assert.equal(h.modals, 1);
@@ -762,21 +776,23 @@ test('contiguous date chunks and equivalent UTC-offset boundaries remain copy-on
 
 test('date chunks outside the selected range are refused even with conserved counts', async t => {
   const bad = [
-    ['before selected start', {since: '2026-10-22T23:59:00Z',
-      until: '2026-10-23T01:00:00Z', event_rows: 1}],
-    ['after selected end', {since: '2026-10-29T23:00:00Z',
-      until: '2026-10-30T00:01:00Z', event_rows: 1}],
-    ['offset before start', {since: '2026-10-23T01:59:59+02:00',
-      until: '2026-10-23T03:00:00+02:00', event_rows: 1}],
-    ['offset after end', {since: '2026-10-29T23:00:00Z',
-      until: '2026-10-30T02:00:00+01:00', event_rows: 1}]
+    ['before selected start', start => ({since: utc(start - 60_000),
+      until: utc(start + 60_000), event_rows: 1})],
+    ['after selected end', (_, end) => ({since: utc(end - 60_000),
+      until: utc(end + 60_000), event_rows: 1})],
+    ['offset before start', start => ({since: asOffset(start - 60_000, 2),
+      until: asOffset(start + 60_000, 2), event_rows: 1})],
+    ['offset after end', (_, end) => ({since: asOffset(end - 60_000, 1),
+      until: asOffset(end + 60_000, 1), event_rows: 1})]
   ];
-  for (const [name, chunk] of bad) await t.test(name, async () => {
+  for (const [name, makeChunk] of bad) await t.test(name, async () => {
     const h = harness();
     await settle(); h.reply(h.reads[0], h.preview('range')); await settle();
     const open = h.bars[0].controls.button.onclick();
-    await settle(); h.reply(h.reads[1], {...h.preview('range'),
-      analysis_plan: {date_chunks: [chunk]}});
+    await settle();
+    const [start, end] = selectedBounds(h.reads[1]);
+    h.reply(h.reads[1], {...h.preview('range'),
+      analysis_plan: {date_chunks: [makeChunk(start, end)]}});
     await open;
     assert.equal(h.modals, 0);
     assert.equal(h.tickets.length, 0);
@@ -789,10 +805,12 @@ test('UTC-equivalent date chunks at both selected boundaries remain valid', asyn
   const h = harness();
   await settle(); h.reply(h.reads[0], h.preview('range')); await settle();
   const open = h.bars[0].controls.button.onclick();
-  await settle(); h.reply(h.reads[1], {...h.preview('range', 'boundary-plan'),
+  await settle();
+  const [start, end] = selectedBounds(h.reads[1]);
+  h.reply(h.reads[1], {...h.preview('range', 'boundary-plan'),
     analysis_plan: {date_chunks: [
-      {since: '2026-10-23T02:00:00+02:00', until: '2026-10-24T00:00:00Z', event_rows: 1},
-      {since: '2026-10-29T00:00:00Z', until: '2026-10-30T01:00:00+01:00', event_rows: 1}
+      {since: asOffset(start, 2), until: utc(start + 3600_000), event_rows: 1},
+      {since: utc(end - 3600_000), until: asOffset(end, 1), event_rows: 1}
     ]}});
   await open;
   assert.equal(h.modals, 1);
