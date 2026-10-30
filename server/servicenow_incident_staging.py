@@ -233,6 +233,11 @@ def project_planned_pages(scope: SelectedIncidents, pages: list[tuple[dict[str, 
                 or plan.get("offset") != index * first_limit):
             raise StagingError("Nonconsecutive or inconsistent planned pages")
         staged = project_planned_page(scope, raw, plan=plan)
+        # Even identical duplicates consume offset slots. A later offset can
+        # therefore skip another selected incident while appearing consecutive.
+        # Standalone single-page projection retains its legacy dedupe contract.
+        if staged["distinct_selected_rows"] != staged["returned_rows"]:
+            raise StagingError("Duplicate incident row within planned offset page")
         if index < len(pages) - 1 and staged["returned_rows"] != first_limit:
             raise StagingError("Short page before another planned offset")
         keys = []

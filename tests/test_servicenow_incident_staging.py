@@ -405,3 +405,30 @@ def test_exact_result_envelope_remains_compatible_with_empty_planned_page():
     assert result["returned_rows"] == 0
     assert result["historical_completeness"] == "unknown"
     assert result["checkpoint_advanced"] is False
+
+
+@pytest.mark.parametrize("rows_by_page,selected_ids", [
+    (((item(A), item(A)),), (A, B)),
+    (((item(A), item(A)), (item(B),)), (A, B)),
+    (((item(A), item(B)), (item(C), item(C))), (A, B, C)),
+])
+def test_planned_pages_refuse_duplicate_rows_within_any_offset_page(rows_by_page, selected_ids):
+    selected = scope(sys_ids=selected_ids)
+    entries = [(plan_page(selected, offset=index * 2, limit=2), page(*rows))
+               for index, rows in enumerate(rows_by_page)]
+    # A standalone plan-bound page remains backwards-compatible: exact
+    # duplicate snapshots can be deduplicated when no offset batch is claimed.
+    first = project_planned_page(selected, entries[0][1], plan=entries[0][0])
+    assert first["returned_rows"] == 2
+    with pytest.raises(StagingError, match="Duplicate incident row within planned offset page"):
+        project_planned_pages(selected, entries)
+
+
+def test_planned_pages_unique_rows_still_stage_without_completeness_claim():
+    selected = scope()
+    entries = [(plan_page(selected, offset=0, limit=2), page(item(A), item(B)))]
+    staged = project_planned_pages(selected, entries)
+    assert staged["returned_rows"] == staged["distinct_selected_rows"] == 2
+    assert staged["plan_sequence_checked"] is True
+    assert staged["historical_completeness"] == "unknown"
+    assert staged["checkpoint_advanced"] is False
