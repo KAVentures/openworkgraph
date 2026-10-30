@@ -243,3 +243,69 @@ def test_resume_rejects_contradictory_membership_without_modifying_file(tmp_path
             path, {"case-a"}, evidence_ids_by_case={"case-a": {"task", "noise"}}
         )
     assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("prediction,pattern", [
+    ({"workflows": [], "insufficient_evidence": "false"}, "insufficient_evidence must be a boolean"),
+    ({"workflows": [], "insufficient_evidence": 0}, "insufficient_evidence must be a boolean"),
+    ({"workflows": [], "insufficient_evidence": None}, "insufficient_evidence must be a boolean"),
+    ({"workflows": [], "uncertainty": "unknown"}, "uncertainty must be an object"),
+    ({"workflows": [], "uncertainty": None}, "uncertainty must be an object"),
+    ({"workflows": [], "uncertainty": {"membership": "false"}}, "uncertainty.membership must be a boolean"),
+    ({"workflows": [], "uncertainty": {"business_rule": 0}}, "uncertainty.business_rule must be a boolean"),
+    ({"workflows": [], "uncertainty": {"outcome": None}}, "uncertainty.outcome must be a boolean"),
+    ({"workflows": [{"prediction_id": "", "event_ids": ["task"]}]},
+     "nonempty string prediction_id"),
+    ({"workflows": [{"prediction_id": 7, "event_ids": ["task"]}]},
+     "nonempty string prediction_id"),
+    ({"workflows": [
+        {"prediction_id": "same", "event_ids": ["task"]},
+        {"prediction_id": "same", "event_ids": ["noise"]},
+    ]}, "duplicate workflow prediction_id"),
+])
+def test_model_response_rejects_ambiguous_uncertainty_or_workflow_identity(prediction, pattern):
+    with pytest.raises(ValueError, match=pattern):
+        _validate_prediction(prediction, "case-a", {"task", "noise"})
+
+
+def test_legacy_omissions_and_explicit_boolean_uncertainty_remain_valid():
+    legacy = _validate_prediction(
+        {"workflows": [{"event_ids": ["task"]}, {"event_ids": ["noise"]}]},
+        "case-a", {"task", "noise"},
+    )
+    assert [row["prediction_id"] for row in legacy["workflows"]] == ["workflow_1", "workflow_2"]
+    assert legacy["insufficient_evidence"] is False
+    assert "uncertainty" not in legacy
+
+    explicit = _validate_prediction({
+        "workflows": [{"prediction_id": "first", "event_ids": ["task"]}],
+        "insufficient_evidence": False,
+        "uncertainty": {"membership": False, "business_rule": True, "outcome": True},
+    }, "case-a", {"task", "noise"})
+    assert explicit["workflows"][0]["prediction_id"] == "first"
+    assert explicit["uncertainty"]["membership"] is False
+    assert explicit["uncertainty"]["business_rule"] is True
+
+
+def test_resume_refuses_coerced_uncertainty_before_any_new_request(tmp_path, monkeypatch):
+    from evals.reconstruction import run_external
+
+    path = tmp_path / "synthetic-model.predictions.jsonl"
+    invalid = _prediction("case-a")
+    invalid["insufficient_evidence"] = "false"
+    path.write_text(json.dumps(invalid) + "\n", encoding="utf-8")
+    before = path.read_bytes()
+
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-never-used")
+    monkeypatch.setattr(run_external, "load_cases", lambda: [_case("case-a")])
+    monkeypatch.setattr(run_external, "split_cases", lambda cases, split: cases)
+    monkeypatch.setattr(run_external, "_request", lambda *args, **kwargs: (
+        (_ for _ in ()).throw(AssertionError("invalid resume must not request a model"))
+    ))
+    with pytest.raises(ValueError, match="insufficient_evidence must be a boolean"):
+        run_external.main([
+            "--model", "synthetic-model", "--output-dir", str(tmp_path), "--resume",
+        ])
+    assert path.read_bytes() == before
+    assert not (tmp_path / "synthetic-model.report.json").exists()
+    assert not (tmp_path / "synthetic-model.metadata.json").exists()
