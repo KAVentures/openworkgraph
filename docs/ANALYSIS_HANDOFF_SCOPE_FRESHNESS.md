@@ -226,3 +226,26 @@ early/late range observations, exclusive-end rejection, timezone offsets,
 valid inclusive-start/end-minus-one-second boundaries, current-run lower
 bounds and all-history compatibility. Shared fixture observations now follow
 the local calendar day rather than hardcoding October 2026.
+
+## Date-chunk intersection with actual observed evidence
+
+A selected week can contain a plausible, count-conserving, chronologically
+ordered date chunk even when the preview's **first and last observed events**
+are on a different day. The displayed plan would then claim positive evidence
+for a time interval in which the preview itself says no event was observed.
+
+Every date chunk with a positive `event_rows` count must now intersect the
+inclusive span from `first_observed_at` to `last_observed_at`. Chunk ends
+remain exclusive: a chunk ending exactly at the first observed instant cannot
+contain that event. Timestamp comparisons use actual UTC instants, so
+equivalent timezone offsets remain valid. A day-long chunk starting at midnight
+may legitimately precede the first observed time on that same day; partial
+and truncated plans remain supported. Zero-count optional legacy chunks are
+not treated as evidence of observation and may fall outside that span, but
+must still satisfy the selected-window and ordering checks.
+
+Synthetic regressions cover a falsely claimed earlier day, a chunk ending
+exactly at the first observation, a later same-day chunk, and offset-equivalent
+valid intervals (including a chunk beginning at the last observed instant).
+This is a **client-side contradiction check**, not a proof of source
+completeness, business-case linkage, consent, provider truth, or a real pilot.
