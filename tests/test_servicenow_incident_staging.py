@@ -128,3 +128,48 @@ def test_provider_local_leap_day_is_valid_but_never_promoted_to_utc():
     assert staged["records"][0]["reported_updated_on"] == local
     assert not staged["records"][0]["timestamp_timezone_verified"]
     assert not staged["provider_timestamp_timezone_verified"]
+
+
+def test_incremental_projection_refuses_ignored_provider_filter():
+    since = "2026-10-30 03:10:00"
+    plan = plan_page(scope(), since=since)
+    assert f"sys_updated_on>={since}" in parse_qs(urlsplit(plan["url"]).query)["sysparm_query"][0]
+
+    # Even a selected ID cannot bypass the caller's requested lower bound.
+    with pytest.raises(StagingError, match="older than requested watermark"):
+        project_page(scope(), page(item(updated="2026-10-29 23:59:59")),
+                     since=since)
+    # A single older row poisons the entire staged page; no partial return.
+    with pytest.raises(StagingError, match="older than requested watermark"):
+        project_page(scope(), page(item(), item(B, updated="2026-10-29 23:59:59")),
+                     since=since)
+
+
+def test_incremental_projection_accepts_equal_and_newer_provider_local_times():
+    since = "2024-02-29 23:59:59"
+    projected = project_page(
+        scope(), page(item(updated=since), item(B, updated="2024-03-01 00:00:00")),
+        since=since,
+    )
+    assert projected["distinct_selected_rows"] == 2
+    assert [r["reported_updated_on"] for r in projected["records"]] == [
+        since, "2024-03-01 00:00:00",
+    ]
+    assert not projected["checkpoint_advanced"]
+    assert not projected["provider_timestamp_timezone_verified"]
+    assert all(not r["timestamp_timezone_verified"] for r in projected["records"])
+
+
+@pytest.mark.parametrize("bad_since", [
+    "2026-02-29 00:00:00", "2026-13-01 00:00:00",
+    "2026-10-30 03:10:00^ORactive=true", "2026-10-30T03:10:00Z",
+    3, True,
+])
+def test_incremental_projection_rejects_invalid_watermark_even_on_empty_page(bad_since):
+    with pytest.raises(StagingError):
+        project_page(scope(), page(), since=bad_since)
+
+
+def test_incremental_projection_does_not_bypass_revoked_authority():
+    with pytest.raises(StagingError, match="not currently authorized"):
+        project_page(scope(grant_current=False), page(item()), since="2026-10-30 03:10:00")
