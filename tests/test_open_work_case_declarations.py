@@ -872,3 +872,47 @@ def test_corrupt_auxiliary_dependencies_do_not_block_review_deletion(local):
     assert reviews.remove_review_intention(A, now=NOW) is True
     assert not facts._path().exists()
     assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == []
+
+@pytest.mark.parametrize(("column", "value"), [
+    ("created_at", "not-a-date"),
+    ("created_at", (NOW + timedelta(hours=1)).isoformat()),
+    ("created_at", (NOW - timedelta(days=8)).isoformat()),
+    ("updated_at", ""),
+    ("updated_at", (NOW + timedelta(hours=1)).isoformat()),
+    ("updated_at", (NOW - timedelta(seconds=1)).isoformat()),
+    ("updated_at", "2026-10-30T09:00:00Z"),
+    ("updated_at", "2026-10-30T10:00:00+01:00"),
+    ("expires_at", "invalid"),
+    ("expires_at", (NOW - timedelta(seconds=1)).isoformat()),
+    ("expires_at", (NOW + timedelta(days=30)).isoformat()),
+])
+def test_corrupt_stored_approval_clock_withholds_dependent_chain_and_prunes(
+    local, column, value,
+):
+    # Simulate damaged auxiliary SQLite state, never an authorized write.
+    # A <- B <- C must not be laundered into approved work if A's stored
+    # approval timestamp is malformed, backdated, future, or over-retained.
+    d = "owg:w:" + "d" * 32
+    for ref in (A, B, C, d):
+        reviewed(ref)
+    save()
+    save(B, depends_on_work_item_refs=[A])
+    save(C, depends_on_work_item_refs=[B])
+    independent = save(d)
+    with facts._database(create=False) as db:
+        db.execute(f"UPDATE declarations SET {column}=? WHERE work_item_ref=?",
+                   (value, A))
+
+    # Read is non-mutating, fail-closed, and keeps unrelated reviewed work.
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [independent]
+    with facts._database(create=False) as db:
+        assert db.execute("SELECT count(*) FROM declarations").fetchone()[0] == 4
+
+    # A subsequent authorized write erases the invalid prerequisite and
+    # dependent closure, without extending or re-approving anything.
+    updated = save(d, expected_revision=independent["revision"],
+                   expected_edit_token=independent["edit_token"])
+    assert updated["revision"] == independent["revision"] + 1
+    with facts._database(create=False) as db:
+        assert db.execute("SELECT work_item_ref FROM declarations").fetchall() == [(d,)]
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [updated]
