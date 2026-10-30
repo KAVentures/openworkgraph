@@ -288,7 +288,8 @@
     };
     const leaseObject=access!==null && typeof access==='object' && !Array.isArray(access);
     const leaseExpiry=leaseInstant(access?.expires_at);
-    const expiryValid=access?.expires_at==null || leaseExpiry!==null;
+    const expiryValid=access?.expires_at==null ||
+      (leaseExpiry!==null && Date.parse(leaseExpiry)>Date.now());
     let localRead='Local AI saved-history permission could not be verified from this preview; check current settings before using an AI.';
     if(d.local_ai_enabled===false) localRead='Local AI access is off.';
     else if(d.local_ai_enabled===true && leaseObject && expiryValid){
