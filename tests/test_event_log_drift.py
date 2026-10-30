@@ -183,7 +183,7 @@ def test_pathless_windows_are_disclosed_not_mistaken_for_stable_behavior():
             if month == 2:
                 rows.append(f"{case},Close,{(day + timedelta(hours=1)).isoformat()}")
     log = workspace.import_log(
-        BytesIO(("\\n".join(rows) + "\\n").encode()), name="pathless-windows",
+        BytesIO(("\n".join(rows) + "\n").encode()), name="pathless-windows",
         source_format="csv", mapping={"case_column": "case",
                                       "activity_column": "activity",
                                       "timestamp_column": "time"})["log_id"]
@@ -212,7 +212,7 @@ def test_two_pathless_windows_are_not_counted_as_tested_no_change():
             day = datetime(2024, month, 1 + i % 27, tzinfo=timezone.utc)
             rows.append(f"m{month}c{i},Receive,{day.isoformat()}")
     log = workspace.import_log(
-        BytesIO(("\\n".join(rows) + "\\n").encode()), name="both-pathless",
+        BytesIO(("\n".join(rows) + "\n").encode()), name="both-pathless",
         source_format="csv", mapping={"case_column": "case",
                                       "activity_column": "activity",
                                       "timestamp_column": "time"})["log_id"]
@@ -277,7 +277,7 @@ with TestClient(app) as client:
                 pathless_rows.append(f"p{m}{c},B,2024-0{m}-{1 + c % 27:02d}T01:00:00Z")
     made_pathless = client.post("/v1/event-logs/import?format=csv&name=pathless&case_column=case"
                                 "&activity_column=activity&timestamp_column=time",
-                                content=("\\n".join(pathless_rows) + "\\n").encode(),
+                                content=("\n".join(pathless_rows) + "\n").encode(),
                                 headers={**headers, "x-owg-local-storage-confirmed": "true"})
     assert made_pathless.status_code == 200, made_pathless.text
     pathless = client.get("/v1/event-logs/" + made_pathless.json()["log_id"] + "/drift?window=month", headers=headers)
