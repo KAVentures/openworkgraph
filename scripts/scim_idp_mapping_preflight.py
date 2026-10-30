@@ -1,8 +1,8 @@
 """Offline, fail-closed preflight for *declared* SCIM IdP attribute mappings.
 
 This does not contact an IdP or OWG, provision users, or certify compatibility.
-It deliberately models the bounded core subset documented in OWG main before
-contact-email support; any broader mapping needs explicit separate review.
+It models the shipped bounded Users/Groups subset, including descriptive
+contact write paths but never email-based identity matching.
 """
 from __future__ import annotations
 
@@ -112,7 +112,8 @@ def assess(mapping: Any) -> dict:
             if value not in supported and not (path == "users.patch_attributes" and _supported_contact_patch_path(value)):
                 add("blocker", "unsupported_attribute", f"{path}[{index}]",
                     "This attribute or selector is not supported for this operation")
-    if any(value.startswith("emails[value eq ") for value in patch):
+    if any((match := _CONTACT_SELECTOR.fullmatch(value)) is not None
+           and match.group(1).casefold() == "value" for value in patch):
         add("caution", "contact_value_selector", "users.patch_attributes",
             "A contact-value selector is data-dependent and is not an identity match or verification")
     if "emails" in create or any(value.startswith("emails") for value in patch):
