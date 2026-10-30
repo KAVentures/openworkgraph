@@ -157,3 +157,40 @@ verification material, legacy compatibility and fail-before-request behavior.
 No model endpoint, live provider, private holdout truth or paid API was used.
 This closes a replay integrity gap, **not** the outstanding F1 >= 0.90,
 contamination <= 0.05 or real consenting pilot gates.
+
+
+## Resume metadata and response-receipt continuity
+
+The external runner also checks the prior metadata manifest **before**
+appending to an existing prediction JSONL. If a manifest exists, its exact
+requested model ID, endpoint base URL, temperature, family split and selected
+case count must match the new invocation. A mismatch or malformed prior
+response list fails closed before another provider request or any output-file
+rewrite. This catches sanitized-model-filename collisions and accidental
+cross-endpoint/configuration mixing; it is not proof that a remote endpoint
+served a particular model revision.
+
+On a valid resume, prior per-case response receipts are carried forward and
+new response receipts are appended. Duplicate, malformed or out-of-population
+receipt references are refused rather than silently relabeled. A completed
+run's manifest can have missing old receipts (for example from earlier
+versions that discarded them): the runner marks
+`resume_provenance_unverified: true` and **never invents** missing receipts.
+That flag persists across subsequent resumes. New complete runs start with
+`false`.
+
+An interrupted first run may have a JSONL prediction file but no manifest,
+because the manifest is written only after scoring. Such resumes remain
+possible for backward compatibility, but are marked
+`resume_provenance_unverified: true`; the original model/endpoint cannot be
+verified. Operators needing reproducible model attribution should start a
+fresh output directory and retain external provider receipts. The manifest
+check does not bind prompt version, model weights, provider identity,
+authorization or hidden evaluation truth. It does not change reconstruction
+assignments, scores or the preregistered acceptance thresholds.
+
+Synthetic no-network regressions cover mismatched settings (with unchanged
+JSONL/metadata and no model request), malformed/duplicate/out-of-population
+receipts, preserving old receipts when adding new ones, and explicitly
+unattested legacy interrupted resumes. They do not establish real provider
+reproducibility, held-out F1 improvement or customer acceptance.
