@@ -53,6 +53,7 @@ function harness(auth = Promise.resolve(true), clipboardWrite = null) {
   };
   const summary = element('span'); summaries.push(summary);
   const window = {
+    location: {origin: 'http://localhost:8765'},
     __owgAuthReady: auth,
     toast(message) {toasts.push(message);},
     openModal() {modals++;}
@@ -69,9 +70,9 @@ function harness(auth = Promise.resolve(true), clipboardWrite = null) {
     copied.push(value);
   }}};
   vm.runInNewContext(source, {window, document, fetch, navigator, Date, Intl,
-    URLSearchParams, AbortController, Event: class Event {}, setTimeout});
+    URL, URLSearchParams, AbortController, Event: class Event {}, setTimeout});
   document.ready();
-  const reply = (item, data, {preserveWindow = false} = {}) => {
+  const reply = (item, data, {preserveWindow = false, preserveTicket = false} = {}) => {
     // The real backend echoes the selected scope and normalizes UTC Z to +00:00.
     // Preserve deliberately forged windows only for adversarial response tests.
     if (!preserveWindow && item.url.startsWith('/v1/analysis-preview?')) {
@@ -80,6 +81,17 @@ function harness(auth = Promise.resolve(true), clipboardWrite = null) {
       const bound = key => params.get(key)?.replace(/Z$/, '+00:00');
       data = {...data, window: scope === 'range'
         ? {scope, since: bound('since'), until: bound('until')} : {scope}};
+    }
+    if (!preserveTicket && item.url === '/v1/export-ticket') {
+      const body = JSON.parse(item.options.body), ticket = 'synthetic-ticket';
+      const params = {scope: body.scope, include_raw: String(body.include_raw),
+        redact_names: String(body.redact_names), ticket};
+      if (body.scope === 'range') {
+        params.since = body.since;
+        params.until = body.until;
+      }
+      data = {...data, ticket, url: '/v1/export/' + body.format + '?' +
+        new URLSearchParams(params)};
     }
     item.resolve({ok: true, async json() {return data;}});
   };
@@ -315,4 +327,74 @@ test('late clipboard rejection cannot replace a period-change warning', async ()
   assert.match(h.modal['#analysisActionStatus'].textContent, /clipboard write failed/i);
   assert.deepEqual(h.copied, []);
   assert.equal(h.tickets.length, 0);
+});
+
+test('ticket URL must preserve exact selected scope, privacy flags and local endpoint', async t => {
+  const attacks = [
+    ['external origin', url => 'https://example.invalid' + url],
+    ['protocol-relative origin', url => '//example.invalid' + url],
+    ['wrong scope', url => url.replace('scope=range', 'scope=all')],
+    ['unredacted export', url => url.replace('redact_names=true', 'redact_names=false')],
+    ['unexpected detailed export', url => url.replace('include_raw=false', 'include_raw=true')],
+    ['wrong date bound', url => {
+      const u = new URL(url, 'http://localhost:8765');
+      u.searchParams.set('since', new Date(Date.parse(u.searchParams.get('since')) + 3600000).toISOString());
+      return u.pathname + u.search;
+    }],
+    ['duplicate scope parameter', url => url + '&scope=range'],
+    ['unexpected parameter', url => url + '&redirect=https%3A%2F%2Fexample.invalid'],
+    ['wrong endpoint', url => url.replace('/v1/export/csvzip?', '/v1/export/json?')],
+    ['fragment', url => url + '#other']
+  ];
+  for (const [name, mutate] of attacks) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const open = h.bars[0].controls.button.onclick();
+    await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await open;
+    const download = h.modal['#analysisDownload'].onclick();
+    await settle(); assert.equal(h.tickets.length, 1);
+    const body = JSON.parse(h.tickets[0].options.body);
+    const params = {scope: body.scope, include_raw: String(body.include_raw),
+      redact_names: String(body.redact_names), ticket: 'synthetic-ticket',
+      since: body.since, until: body.until};
+    const valid = '/v1/export/csvzip?' + new URLSearchParams(params);
+    h.reply(h.tickets[0], {ticket: 'synthetic-ticket', url: mutate(valid)},
+      {preserveTicket: true});
+    await download;
+    assert.equal(h.downloads, 0);
+    assert.equal(h.modal['#analysisDownload'].disabled, false);
+    assert.match(h.modal['#analysisActionStatus'].textContent, /ticket did not match/i);
+  });
+});
+
+test('ticket token disagreement fails closed, while UTC-equivalent detailed export works', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await open;
+  h.modal['#analysisDetailed'].checked = true;
+  const first = h.modal['#analysisDownload'].onclick();
+  await settle();
+  const body = JSON.parse(h.tickets[0].options.body);
+  assert.equal(body.include_raw, true);
+  assert.equal(body.redact_names, true);
+  const params = {scope: body.scope, include_raw: 'true', redact_names: 'true',
+    ticket: 'token-in-url', since: body.since, until: body.until};
+  h.reply(h.tickets[0], {ticket: 'different-token',
+    url: '/v1/export/csvzip?' + new URLSearchParams(params)}, {preserveTicket: true});
+  await first;
+  assert.equal(h.downloads, 0);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /ticket did not match/i);
+  const retry = h.modal['#analysisDownload'].onclick();
+  await settle();
+  const secondBody = JSON.parse(h.tickets[1].options.body);
+  const second = new URLSearchParams({scope: secondBody.scope, include_raw: 'true',
+    redact_names: 'true', ticket: 'matching-token',
+    since: new Date(secondBody.since).toISOString(),
+    until: new Date(secondBody.until).toISOString()});
+  h.reply(h.tickets[1], {ticket: 'matching-token',
+    url: '/v1/export/csvzip?' + second}, {preserveTicket: true});
+  await retry;
+  assert.equal(h.downloads, 1);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /download started/i);
 });
