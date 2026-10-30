@@ -151,16 +151,24 @@ def _prune(db: sqlite3.Connection, now: datetime, days: int, reviewed: dict[str,
     # recreating that prerequisite must never resurrect a stale owner edge.
     # The store is bounded to 50 rows, and this runs inside BEGIN IMMEDIATE.
     rows = db.execute(
-        "SELECT work_item_ref,dependencies_json,created_at,expires_at "
+        "SELECT work_item_ref,scope_ref,dependencies_json,created_at,expires_at "
         "FROM declarations"
     ).fetchall()
+    scopes = {ref: scope for ref, scope, _deps, _created, _expires in rows}
     revoked = {
-        ref for ref, _deps, created, expires in rows
+        ref for ref, _scope, _deps, created, expires in rows
         if ref not in reviewed or expires <= current or created <= cutoff
     }
+    # An absent or wrong-scope prerequisite is not an owner-approved edge.
+    # Without this guard, a later re-declaration of the missing prerequisite
+    # could resurrect an orphaned dependent that reads had merely hidden.
+    revoked.update(
+        ref for ref, scope, raw, _created, _expires in rows
+        if any(scopes.get(dep) != scope for dep in json.loads(raw))
+    )
     while True:
         newly_revoked = {
-            ref for ref, raw, _created, _expires in rows
+            ref for ref, _scope, raw, _created, _expires in rows
             if ref not in revoked and any(dep in revoked for dep in json.loads(raw))
         }
         if not newly_revoked:
