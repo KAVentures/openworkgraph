@@ -460,6 +460,18 @@
       : dailyChunks.length
         ? `<ul>${dailyChunks.map(x=>`<li>${esc(x.since)} to ${esc(x.until)}: ${esc(x.event_rows)} events</li>`).join('')}</ul>`
         : '<p>No daily chunks were listed; this does not prove complete recording or zero events.</p>';
+    // Focus-span totals and optional redacted examples are different facts.
+    // An empty example list is not evidence that no focus events were observed.
+    const focusSpanCount = d.event_types.focus_span || 0;
+    const focusExampleCount = d.redacted_examples.length;
+    const focusExampleSummary = focusExampleCount
+      ? `${focusExampleCount} redacted context example(s) supplied; ${focusSpanCount} selected focus-span events counted. Examples are a bounded sample, not proof of complete context capture.`
+      : focusSpanCount
+        ? `No redacted context examples were supplied, although ${focusSpanCount} selected focus-span events are counted. Missing examples do not mean no focus was observed.`
+        : 'No focus-span events recorded in this selection; this does not prove inactivity or complete capture.';
+    const focusExampleItems = focusExampleCount
+      ? d.redacted_examples.map(x=>`<li>${esc(visibleEvidenceLabel(x.app == null ? 'Unknown app' : x.app, 'sample'))} · ${esc(visibleEvidenceLabel(x.window_title||'Untitled activity', 'sample'))}</li>`).join('')
+      : '<li>No redacted context examples supplied.</li>';
     window.openModal?.('Prepare for AI','Discover opportunities from recorded work',`
       <p>No workflow description or repeated pattern is required. Your AI will interpret the evidence; this panel does not run a model.</p>
       <div class="note"><strong>What the AI will receive</strong>
@@ -470,7 +482,7 @@
         <p>${esc(localRead)} Hosted AI availability must be checked separately: it only sees previously shared evidence. Preparing or downloading a local file does not grant AI history access.</p>
       </div>
       <details><summary>Analyze a large history in smaller parts</summary><p>Ask your AI to process one day at a time, follow every page, and keep track of what it has examined. Repeated-work maps are optional. ${d.canonical_rows?'The file download still contains the full selected period.':'No evidence package is available for this zero-event selection; only the explanatory request can be copied.'}</p>${dailyBreakdown}${d.analysis_plan?.more_dates_not_listed?'<p>Only the first 31 dates are listed. Continue through the remaining selected dates.</p>':''}</details>
-      <details><summary>Preview redacted context examples</summary><ul>${d.redacted_examples.map(x=>`<li>${esc(visibleEvidenceLabel(x.app == null ? 'Unknown app' : x.app, 'sample'))} · ${esc(visibleEvidenceLabel(x.window_title||'Untitled activity', 'sample'))}</li>`).join('')||'<li>No focus spans in this selection.</li>'}</ul><p>Filtering is best effort; inspect any downloaded package before sharing it.</p></details>
+      <details><summary>Preview redacted context examples</summary><p>${esc(focusExampleSummary)}</p><ul>${focusExampleItems}</ul><p>Filtering is best effort; inspect any downloaded package before sharing it.</p></details>
       <label style="display:flex;gap:8px;margin:12px 0"><input id="analysisDetailed" type="checkbox" ${d.canonical_rows?'':'disabled'}>Include detailed chronological evidence (raw local event rows, more labels and context)</label>
       <p>Name redaction is best effort, not anonymization. Even summary exports may contain sensitive titles, URLs or metadata; detailed chronology adds raw local evidence that may contain more sensitive content. Inspect the file before sharing it. Gaps and foreground time are not measured lost work or savings.</p>
       ${d.canonical_rows?'':'<p class="muted">No recorded events in the selected period. An evidence package is unavailable; you can still copy the explanatory request. This does not establish inactivity or complete capture.</p>'}
