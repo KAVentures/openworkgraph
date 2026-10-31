@@ -221,3 +221,38 @@ They do **not** measure a held-out F1 uplift, authenticate identity, or prove
 interruption rejection on real customers. The preregistered family holdout,
 assignment F1 >= 0.90 and contamination <= 0.05 gates remain unchanged and
 unverified; no private truth or evaluation scoring has been modified.
+
+
+## Multiplexed clipboard-transfer token fanout
+
+A clipboard-transfer identifier is an opaque capture signal, **not** a
+globally unique business-case key. Even within one exact
+organization/actor/device/session scope, a token can be reused across
+interleaved work. Previously, three distinct valid record references
+sharing a token were automatically unioned into one linked work item.
+This fabricated cross-record membership despite unresolved fanout.
+
+For each **exact scoped token**, the linker now withholds automatic
+clipboard-transfer joining if more than two distinct valid record
+references appear in its observations. It still groups each record by
+independent exact-record evidence. The public projection adds
+`ambiguous_clipboard_transfer_groups` (aggregate count only) and
+`link_contract.multiplexed_clipboard_transfer_is_unmerged: true`.
+It does not emit the private token or assert which pair is related.
+Two-record transfers, including repeated observations of either
+record, retain the existing linking behavior. A third record in a
+*different* capture scope does not invalidate a valid two-record group.
+
+Synthetic regressions exercise a three-record interleaving in both
+input orders, unaffected same-record membership, repeated two-record
+copy/paste, and an independent capture session reusing the token.
+This is a conservative contamination guard, not a general guarantee
+that two-record transfers are genuine; the current linker does not
+authenticate provider identity or require semantic copy/paste direction
+for every transfer event. Time proximity never supplies a join.
+
+The preregistered held-out assignment F1 >= 0.90 and contamination
+<= 0.05 remain **unverified**; no holdout truth, split, evaluation
+scoring, provider calls, model spend, new source privileges or business
+writes were introduced. Native repository tests and exact-head CI are
+required before merging.
