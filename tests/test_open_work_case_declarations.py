@@ -2186,3 +2186,65 @@ def test_versioned_declarations_reject_foreign_defaults_and_conflict_policies(
             "SELECT type,name,sql FROM sqlite_master ORDER BY type,name"
         ).fetchall() == before_schema
         assert db.execute("SELECT * FROM declarations").fetchall() == before_rows
+
+
+def test_versioned_wal_ledger_is_refused_before_read_or_cas(local):
+    # SQLite persists WAL mode in the database header, even after its last
+    # connection closes and temporary sidecars disappear. A foreign WAL-mode
+    # auxiliary ledger must not be admitted as an approved owner fact store.
+    reviewed(A)
+    first = save()
+    with sqlite3.connect(facts._path()) as raw:
+        assert raw.execute("PRAGMA journal_mode=WAL").fetchone()[0].lower() == "wal"
+        before = raw.execute(
+            "SELECT revision,edit_token FROM declarations WHERE work_item_ref=?",
+            (A,),
+        ).fetchone()
+        version = raw.execute("PRAGMA user_version").fetchone()[0]
+
+    with pytest.raises(facts.CaseDeclarationError, match="journal mode"):
+        facts.list_case_declarations(SCOPE, now=NOW)
+    with pytest.raises(facts.CaseDeclarationError, match="journal mode"):
+        save(expected_revision=first["revision"],
+             expected_edit_token=first["edit_token"])
+
+    with sqlite3.connect(facts._path()) as raw:
+        assert raw.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+        assert raw.execute("PRAGMA user_version").fetchone()[0] == version
+        assert raw.execute(
+            "SELECT revision,edit_token FROM declarations WHERE work_item_ref=?",
+            (A,),
+        ).fetchone() == before
+
+
+def test_explicit_clear_removes_known_sqlite_sidecars_without_following_links(local):
+    reviewed(A)
+    save()
+    path = facts._path()
+    sidecars = [path.with_name(path.name + suffix)
+                for suffix in ("-journal", "-wal", "-shm")]
+    for sidecar in sidecars:
+        sidecar.write_bytes(b"synthetic-stale-owner-fact")
+    facts.clear_case_declarations()
+    assert not path.exists()
+    assert all(not sidecar.exists() for sidecar in sidecars)
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == []
+    assert not path.exists()
+
+    if os.name == "posix":
+        # Removing a malicious sidecar symlink must unlink only the entry,
+        # never the external file it points at.
+        external = local / "external-keep"
+        external.write_bytes(b"not-a-declaration")
+        sidecars[1].symlink_to(external)
+        facts.clear_case_declarations()
+        assert not sidecars[1].is_symlink()
+        assert external.read_bytes() == b"not-a-declaration"
+
+
+def test_trusted_delete_journal_mode_remains_compatible(local):
+    reviewed(A)
+    item = save()
+    with sqlite3.connect(facts._path()) as raw:
+        assert raw.execute("PRAGMA journal_mode").fetchone()[0].lower() == "delete"
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [item]
