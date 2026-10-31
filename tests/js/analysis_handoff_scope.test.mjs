@@ -25,7 +25,18 @@ const dayLabel = delta => {
   d.setDate(d.getDate() + delta);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
-function harness(auth = Promise.resolve(true), clipboardWrite = null) {
+// A controllable local clock exercises midnight rollover without waiting or
+// changing the runner's timezone. Date.parse/UTC retain native behavior.
+function adjustableClock() {
+  let time = new Date(fixtureDay.getFullYear(), fixtureDay.getMonth(),
+    fixtureDay.getDate(), 23, 59, 0).getTime();
+  class ClockDate extends Date {
+    constructor(...args) { super(...(args.length ? args : [time])); }
+    static now() { return time; }
+  }
+  return {Date: ClockDate, advance() { time += 2 * 60 * 1000; }};
+}
+function harness(auth = Promise.resolve(true), clipboardWrite = null, clockDate = null) {
   const reads = [], tickets = [], copied = [], toasts = [], summaries = [], bars = [];
   let downloads = 0, modals = 0, modalHtml = '';
   const modal = Object.fromEntries(['#analysisRequest', '#analysisCopy', '#analysisDownload',
@@ -81,7 +92,7 @@ function harness(auth = Promise.resolve(true), clipboardWrite = null) {
     if (clipboardWrite) return clipboardWrite(value);
     copied.push(value);
   }}};
-  vm.runInNewContext(source, {window, document, fetch, navigator, Date, Intl,
+  vm.runInNewContext(source, {window, document, fetch, navigator, Date: clockDate || Date, Intl,
     URL, URLSearchParams, AbortController, Event: class Event {}, setTimeout});
   document.ready();
   const reply = (item, data, {preserveWindow = false, preserveTicket = false} = {}) => {
@@ -2078,5 +2089,91 @@ test('copyable AI request discloses absent ordinary evidence without inventing w
     assert.deepEqual(h.copied, [request], name);
     assert.equal(h.tickets.length, 0, name);
     assert.equal(h.downloads, 0, name);
+  });
+});
+
+
+test('relative-period preview crossing local midnight fails closed before handoff', async () => {
+  const clock = adjustableClock();
+  const h = harness(Promise.resolve(true), null, clock.Date);
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const controls = h.bars[0].controls;
+  controls.select.value = 'today'; controls.select.onchange({target: controls.select});
+  await settle(); h.reply(h.reads.at(-1), h.preview('range', 'today')); await settle();
+  const opening = controls.button.onclick();
+  await settle();
+  const pending = h.reads.at(-1);
+  assert.match(pending.url, /scope=range/);
+  clock.advance();
+  h.reply(pending, h.preview('range', 'old-today'));
+  await opening;
+  assert.equal(h.modals, 0);
+  assert.match(h.summary.textContent, /Work period changed while evidence was loading/i);
+  assert.equal(h.tickets.length, 0);
+  assert.equal(h.downloads, 0);
+});
+
+test('relative-period modal cannot copy or request an export after midnight', async () => {
+  const clock = adjustableClock();
+  const h = harness(Promise.resolve(true), null, clock.Date);
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const controls = h.bars[0].controls;
+  controls.select.value = 'today'; controls.select.onchange({target: controls.select});
+  await settle(); h.reply(h.reads.at(-1), h.preview('range', 'today')); await settle();
+  const opening = controls.button.onclick();
+  await settle(); h.reply(h.reads.at(-1), h.preview('range', 'reviewed')); await opening;
+  assert.equal(h.modals, 1);
+  clock.advance();
+  await h.modal['#analysisCopy'].onclick();
+  await h.modal['#analysisDownload'].onclick();
+  assert.deepEqual(h.copied, []);
+  assert.equal(h.tickets.length, 0);
+  assert.equal(h.modal['#analysisCopy'].disabled, true);
+  assert.equal(h.modal['#analysisDownload'].disabled, true);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /period changed/i);
+});
+
+test('late export ticket cannot download a relative period that rolled over', async () => {
+  const clock = adjustableClock();
+  const h = harness(Promise.resolve(true), null, clock.Date);
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const controls = h.bars[0].controls;
+  controls.select.value = 'today'; controls.select.onchange({target: controls.select});
+  await settle(); h.reply(h.reads.at(-1), h.preview('range', 'today')); await settle();
+  const opening = controls.button.onclick();
+  await settle(); h.reply(h.reads.at(-1), h.preview('range', 'reviewed')); await opening;
+  const downloading = h.modal['#analysisDownload'].onclick();
+  await settle(); assert.equal(h.tickets.length, 1);
+  clock.advance();
+  h.reply(h.tickets[0], {});
+  await downloading;
+  assert.equal(h.downloads, 0);
+  assert.equal(h.modal['#analysisDownload'].disabled, true);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /period changed/i);
+});
+
+test('explicit all-history and fixed custom periods remain valid after midnight', async t => {
+  for (const scope of ['all', 'custom']) await t.test(scope, async () => {
+    const clock = adjustableClock();
+    const h = harness(Promise.resolve(true), null, clock.Date);
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const controls = h.bars[0].controls;
+    controls.select.value = scope; controls.select.onchange({target: controls.select});
+    if (scope === 'custom') {
+      controls.start.value = dayLabel(-1);
+      controls.end.value = dayLabel(0);
+      controls.start.onchange();
+    }
+    await settle(); h.reply(h.reads.at(-1), h.preview(scope === 'all' ? 'all' : 'range', 'selected'));
+    await settle();
+    const opening = controls.button.onclick();
+    await settle(); h.reply(h.reads.at(-1), h.preview(scope === 'all' ? 'all' : 'range', 'reviewed'));
+    await opening;
+    assert.equal(h.modals, 1);
+    clock.advance();
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-reviewed']);
+    assert.equal(h.modal['#analysisCopy'].disabled, false);
+    assert.equal(h.tickets.length, 0);
   });
 });
