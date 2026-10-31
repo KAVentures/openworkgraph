@@ -764,3 +764,44 @@ def test_unsupported_write_mode_is_still_blocked_with_permissive_policy():
     assert report["status"] == "blocked"
     assert "unsupported_write_mode" in codes(report)
     assert "etag_mode_with_unversioned_patch_policy" not in codes(report)
+
+
+@pytest.mark.parametrize("path,owned", [
+    ('emailſ[type eq "work"].value', False),
+    ('emails[type eq "work"].prımary', True),
+    ('emails[type eq "work"].diſplay', True),
+])
+def test_unicode_contact_structure_cannot_bypass_shipped_patch_dispatch(path, owned):
+    # The shipped regex accepts some Unicode IGNORECASE aliases, but the
+    # dispatcher and downstream canonical field validation do not.
+    from gateway.scim_user_emails import FIELDS, _path, owns
+
+    assert owns(path) is owned
+    field, literal, child = _path(path)
+    assert field == "type" and literal == "work"
+    if owned:
+        assert child not in FIELDS
+    users = mapping()["users"]
+    users["patch_attributes"] = [path]
+    result = assess(mapping(users=users))
+    assert result["status"] == "blocked"
+    assert "unsupported_attribute" in codes(result)
+    assert path not in json.dumps(result)
+
+
+@pytest.mark.parametrize("path", [
+    'EMAILS[TYPE EQ "work"].PRIMARY',
+    'urn:ietf:params:scim:schemas:core:2.0:User:Emails[Type Eq "work"].Display',
+])
+def test_ascii_case_contact_selector_remains_supported_by_shipped_dispatch(path):
+    from gateway.scim_user_emails import FIELDS, _path, owns
+
+    assert owns(path)
+    field, literal, child = _path(path)
+    assert field == "type" and literal == "work" and child in FIELDS
+    users = mapping()["users"]
+    users["patch_attributes"] = [path]
+    result = assess(mapping(users=users))
+    assert result["status"] == "requires_live_validation"
+    assert "unsupported_attribute" not in codes(result)
+    assert path not in json.dumps(result)
