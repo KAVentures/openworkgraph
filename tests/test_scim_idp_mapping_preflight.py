@@ -252,3 +252,32 @@ def test_declared_group_name_policy_is_optional_and_not_server_configuration():
         declared["provider_policy"]["unique_group_names"] = invalid
         with pytest.raises(InvalidMapping):
             assess(declared)
+
+
+@pytest.mark.parametrize("token", [
+    "1e309", "-1e309", "1.5e999999", "9.9e400",
+])
+def test_json_exponent_overflow_is_refused_even_in_unused_nested_data(token):
+    # Python's JSON parser otherwise converts valid exponent syntax to inf,
+    # unlike the already-refused literal NaN/Infinity constants.
+    for payload in (token, '{"unused":{"nested":[' + token + ']}}'):
+        with pytest.raises(InvalidMapping):
+            load_text(payload)
+
+
+@pytest.mark.parametrize("sign", ["", "-"])
+def test_json_integer_digit_bound_is_enforced_before_conversion(sign):
+    allowed = sign + "9" * 128
+    oversized = sign + "9" * 129
+    assert load_text(allowed) == int(allowed)
+    with pytest.raises(InvalidMapping):
+        load_text(oversized)
+    with pytest.raises(InvalidMapping):
+        load_text('{"discarded":[' + oversized + ']}')
+
+
+def test_finite_exponents_and_normal_mapping_remain_compatible():
+    assert load_text('{"finite":[1e308,-1e-308,0.5]}') == {
+        "finite": [1e308, -1e-308, 0.5],
+    }
+    assert assess(load_text(json.dumps(mapping())))["status"] == "requires_live_validation"
