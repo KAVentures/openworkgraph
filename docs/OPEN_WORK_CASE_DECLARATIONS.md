@@ -413,3 +413,26 @@ rows, without generating edit tokens or granting source/agent authority.
 Real tenant/source revocation fencing, filesystem tamper resistance,
 independent business outcomes and native cross-platform CI are separate
 acceptance gates.
+
+
+## SQLite journal-mode admission and explicit erasure
+
+The internal declaration writer uses SQLite's `DELETE` journal mode. A local
+auxiliary database may nevertheless have been changed by another process to
+persistent `WAL` mode. Merely validating the table schema does not establish
+that owner-declared facts are contained in the main SQLite file: WAL pages can
+retain older or newer facts in a `-wal` sidecar. Ledger admission therefore
+checks the current SQLite journal mode **before schema migration, read or
+write** and refuses any mode other than `DELETE`. It does not silently
+convert a foreign WAL-mode store or reinterpret its rows as approved facts.
+
+Explicit review/source/retention clear now unlinks the main auxiliary file
+and the known `-journal`, `-wal` and `-shm` sidecar paths, without following
+symlinks. Synthetic SQLite regressions cover a persisted WAL-mode ledger
+refusing reads and CAS saves without mutating its version/rows, stale sidecar
+erasure, symlink-target preservation on POSIX, and ordinary DELETE-mode
+compatibility. The checks **do not** establish secure disk overwrite, erase
+backups, or atomically revoke another process's open SQLite handles; a
+concurrent writer could race the clear. A company deployment still requires
+coordinated cross-process source-grant and storage lifecycle fencing. No new
+provider access, network reads, execution or verified business outcomes follow.
