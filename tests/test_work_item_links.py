@@ -1,6 +1,7 @@
 """Multi-signal work-item links with explicit uncertainty (roadmap #326 A1)."""
 from __future__ import annotations
 
+import copy
 import json
 
 from evals.reconstruction.fixtures import load_cases
@@ -125,3 +126,1201 @@ def test_accepting_ambiguous_candidates_would_break_the_contamination_gate():
     linked, _ = _gate(score_linked_items(holdout))
     assert accepted["workflow_assignment_f1"] > linked["workflow_assignment_f1"]
     assert accepted["cross_workflow_contamination"] > 0.05 >= linked["cross_workflow_contamination"]
+
+
+def _scoped(event, *, org="tenant-a", actor="actor-a", device="device-a", session="session-a"):
+    return {
+        **event,
+        "organization_id": org,
+        "actor_id": actor,
+        "device_id": device,
+        "session_id": session,
+    }
+
+
+def test_clipboard_transfer_is_not_global_across_tenant_actor_device_or_session():
+    for dimension in ("organization_id", "actor_id", "device_id", "session_id"):
+        first = _scoped(_event(1, A, transfer="reused-transfer"))
+        second = _scoped(_event(2, B, transfer="reused-transfer"))
+        second[dimension] = "different-scope"
+        result = linked_work_items([first, second])
+        assert result["items"] == [], dimension
+        assert result["candidate_links"] == [], dimension
+
+    same_scope = linked_work_items([
+        _scoped(_event(1, A, transfer="same-transfer")),
+        _scoped(_event(2, B, transfer="same-transfer")),
+    ])
+    assert set(_items(same_scope)) == {("e01", "e02")}
+    assert _items(same_scope)[("e01", "e02")]["link_basis"] == {"clipboard_transfer": 1}
+
+
+def test_reused_tab_id_cannot_attach_unreferenced_events_across_scope():
+    for dimension in ("organization_id", "actor_id", "device_id", "session_id"):
+        anchor = _scoped(_event(1, A, tab="reused-tab"))
+        loose = _scoped(_event(2, tab="reused-tab"))
+        loose[dimension] = "different-scope"
+        result = linked_work_items([anchor, loose])
+        assert result["items"] == [], dimension
+        assert result["candidate_links"] == [], dimension
+
+    # Two independently scoped tabs with the same opaque ID remain separate.
+    result = linked_work_items([
+        _scoped(_event(1, A, tab="reused-tab")),
+        _scoped(_event(2, tab="reused-tab")),
+        _scoped(_event(3, B, tab="reused-tab"), org="tenant-b"),
+        _scoped(_event(4, tab="reused-tab"), org="tenant-b"),
+    ])
+    assert set(_items(result)) == {("e01", "e02"), ("e03", "e04")}
+    assert result["candidate_links"] == []
+
+
+def test_surface_continuity_candidates_respect_scope_not_just_adjacency():
+    for dimension in ("organization_id", "actor_id", "device_id", "session_id"):
+        first = _scoped(_event(1, app="Excel"))
+        second = _scoped(_event(2, app="Excel"))
+        second[dimension] = "different-scope"
+        result = linked_work_items([first, second])
+        assert result["items"] == [], dimension
+        assert result["candidate_links"] == [], dimension
+
+    same_scope = linked_work_items([
+        _scoped(_event(1, app="Excel")),
+        _scoped(_event(2, app="Excel")),
+    ])
+    assert {c["relation"] for c in same_scope["candidate_links"]} == {"surface_continuity"}
+    assert all(c["merged"] is False for c in same_scope["candidate_links"])
+
+
+def test_missing_or_malformed_scope_is_never_a_cross_scope_wildcard():
+    named = _scoped(_event(1, A, transfer="x", tab="t"))
+    unknown = _event(2, B, transfer="x", tab="t")
+    invalid = _scoped(_event(3, C, transfer="x", tab="t"))
+    invalid["organization_id"] = {"invalid": "not-a-string"}
+    result = linked_work_items([named, unknown, invalid])
+    assert result["items"] == []
+    assert result["candidate_links"] == []
+    assert result["link_contract"]["missing_scope_is_wildcard"] is False
+    assert result["link_contract"]["ephemeral_signals_scope"] == "exact_organization_actor_device_session"
+
+
+def test_exact_record_evidence_can_still_link_across_actors_without_leaking_scope():
+    result = linked_work_items([
+        _scoped(_event(1, A), actor="human-a"),
+        _scoped(_event(2, A), actor="human-b"),
+    ])
+    assert set(_items(result)) == {("e01", "e02")}
+    assert _items(result)[("e01", "e02")]["link_basis"] == {"same_record": 1}
+    output = json.dumps(result)
+    for private_scope in ("tenant-a", "human-a", "human-b", "device-a", "session-a"):
+        assert private_scope not in output
+
+
+def test_conflicted_record_identity_cannot_rejoin_through_transfer_or_tab():
+    # A reused opaque reference with contradictory provider identity is
+    # suppressed even if its observations also share weaker linking tokens.
+    for signal in ("transfer", "tab"):
+        opts = {signal: "reused-ephemeral"}
+        first = _scoped(_event(1, A, action="copy", **opts))
+        conflicting = _scoped(_event(2, A, provider="github", action="paste", **opts))
+        independent = _scoped(_event(3, B, action="paste", **opts))
+        result = linked_work_items([first, conflicting, independent])
+        assert result["items"] == [], signal
+        assert result["candidate_links"] == [], signal
+        assert result["conflicting_reference_groups_suppressed"] == 1
+
+
+def test_invalid_explicit_reference_is_not_treated_as_loose_tab_or_transfer():
+    for signal in ("transfer", "tab"):
+        opts = {signal: "reused-ephemeral"}
+        invalid = _scoped(_event(1, app="Excel", action="copy", **opts))
+        invalid["metadata"]["resource_reference"] = {
+            "resource_ref": A, "provider": "BAD PROVIDER",
+            "resource_kind": "issue", "host": "work.atlassian.net",
+        }
+        valid = _scoped(_event(2, B, action="paste", **opts))
+        result = linked_work_items([invalid, valid])
+        assert result["items"] == [], signal
+        assert result["candidate_links"] == [], signal
+        assert result["conflicting_reference_groups_suppressed"] == 1
+
+
+def test_invalid_claim_cannot_create_surface_candidate_and_valid_loose_events_still_link():
+    invalid = _scoped(_event(1, app="Excel"))
+    invalid["metadata"]["resource_reference"] = {
+        "resource_ref": "not-an-opaque-record-ref", "provider": "jira",
+        "resource_kind": "issue",
+    }
+    ordinary = _scoped(_event(2, app="Excel"))
+    result = linked_work_items([invalid, ordinary])
+    assert result["items"] == []
+    assert result["candidate_links"] == []
+
+    # Genuine absence of a reference is different from an invalid claim.
+    result = linked_work_items([
+        _scoped(_event(1, A, tab="legitimate-tab")),
+        _scoped(_event(2, tab="legitimate-tab")),
+        _scoped(_event(3, A, tab="legitimate-tab")),
+    ])
+    assert set(_items(result)) == {("e01", "e02", "e03")}
+    assert _items(result)[("e01", "e02", "e03")]["link_basis"] == {
+        "same_record": 1, "same_tab_single_record": 1,
+    }
+
+
+def test_non_object_reference_claims_cannot_impersonate_unreferenced_tab_events():
+    for invalid_claim in ("bad-ref", ["bad-ref"], 7, {}):
+        invalid = _scoped(_event(1, tab="shared-tab"))
+        invalid["metadata"]["resource_reference"] = invalid_claim
+        valid = _scoped(_event(2, B, tab="shared-tab"))
+        result = linked_work_items([invalid, valid])
+        assert result["items"] == [], invalid_claim
+        assert result["candidate_links"] == [], invalid_claim
+
+
+def test_ephemeral_identifiers_reject_nonstring_metadata_claims():
+    # Python's str(True) and str(7) match the opaque-ID regex, but neither
+    # value is an observed string identifier. They must not join two records.
+    for field in ("tab_context_id", "clipboard_transfer_id"):
+        for invalid in (True, False, 7, 0):
+            first = _scoped(_event(1, A))
+            second = _scoped(_event(2, B))
+            first["metadata"][field] = invalid
+            second["metadata"][field] = invalid
+            result = linked_work_items([first, second])
+            assert result["items"] == [], (field, invalid)
+            assert result["candidate_links"] == [], (field, invalid)
+
+
+def test_invalid_explicit_top_level_identifier_never_falls_back_to_metadata():
+    # A malformed/empty explicit claim must not be replaced by a valid
+    # metadata ID, which would fabricate a shared tab or transfer.
+    for field in ("tab_context_id", "clipboard_transfer_id"):
+        for invalid in (None, False, 0, "", 7):
+            first = _scoped(_event(1, A))
+            second = _scoped(_event(2, B))
+            first["metadata"][field] = "shared-opaque"
+            second["metadata"][field] = "shared-opaque"
+            first[field] = invalid
+            result = linked_work_items([first, second])
+            assert result["items"] == [], (field, invalid)
+            assert result["candidate_links"] == [], (field, invalid)
+
+
+def test_literal_metadata_and_explicit_top_level_identifiers_still_work():
+    for field in ("tab_context_id", "clipboard_transfer_id"):
+        first = _scoped(_event(1, A))
+        second = _scoped(_event(2, B if field == "clipboard_transfer_id" else None))
+        first["metadata"][field] = "literal-opaque"
+        second["metadata"][field] = "literal-opaque"
+        expected_basis = "clipboard_transfer" if field == "clipboard_transfer_id" else "same_tab_single_record"
+        result = linked_work_items([first, second])
+        assert set(_items(result)) == {("e01", "e02")}, field
+        assert _items(result)[("e01", "e02")]["link_basis"] == {expected_basis: 1}
+
+        # Explicit valid string wins over malformed metadata, rather than
+        # rejecting a genuine top-level identifier.
+        first[field] = "top-level-opaque"
+        second[field] = "top-level-opaque"
+        first["metadata"][field] = 7
+        second["metadata"][field] = True
+        result = linked_work_items([first, second])
+        assert set(_items(result)) == {("e01", "e02")}, field
+        assert _items(result)[("e01", "e02")]["link_basis"] == {expected_basis: 1}
+
+
+
+def test_nonstring_event_ids_cannot_become_observation_identity():
+    # str(True) and str(7) satisfy the event-ID grammar, but they are not
+    # literal observed event IDs. Reject rather than fabricating membership.
+    for invalid in (True, False, 7, 0, {"id": "e01"}, ["e01"]):
+        first = _scoped(_event(1, A))
+        second = _scoped(_event(2, A))
+        first["event_id"] = invalid
+        result = linked_work_items([first, second])
+        assert result["items"] == [], invalid
+        assert result["candidate_links"] == [], invalid
+        assert result["unlinked_observation_count"] == 1, invalid
+
+    # Literal numeric-looking strings remain valid, just like ordinary IDs.
+    first = _scoped(_event(1, A))
+    second = _scoped(_event(2, A))
+    first["event_id"], second["event_id"] = "7", "8"
+    assert set(_items(linked_work_items([first, second]))) == {("7", "8")}
+
+
+def test_nonstring_app_labels_cannot_create_surface_continuity():
+    # Non-string values were coerced with str(...), allowing a fabricated
+    # match to a real app string and a misleading weak candidate.
+    for invalid in (True, 7, {"app": "Excel"}, ["Excel"]):
+        first = _scoped(_event(1, app="Excel"))
+        second = _scoped(_event(2, app=str(invalid)))
+        first["app"] = invalid
+        result = linked_work_items([first, second])
+        assert result["items"] == [], invalid
+        assert result["candidate_links"] == [], invalid
+        assert result["unlinked_observation_count"] == 2, invalid
+
+    # Legitimate literal strings still yield only unmerged uncertainty.
+    result = linked_work_items([
+        _scoped(_event(1, app="Excel")),
+        _scoped(_event(2, app="Excel")),
+    ])
+    assert {c["relation"] for c in result["candidate_links"]} == {"surface_continuity"}
+    assert all(c["merged"] is False for c in result["candidate_links"])
+
+
+def test_nonstring_record_source_and_tenant_claims_cannot_fabricate_same_record():
+    # The shared legacy normalizer coerces True -> "true" and 7 -> "7".
+    # Two matching coerced identities are not observed source identity.
+    for field, invalid in (("provider", True), ("resource_kind", True),
+                           ("host", 7), ("organization_id", 7)):
+        first = _scoped(_event(1, A))
+        second = _scoped(_event(2, A))
+        for row in (first, second):
+            if field == "organization_id":
+                row[field] = invalid
+            else:
+                row["metadata"]["resource_reference"][field] = invalid
+        result = linked_work_items([first, second])
+        assert result["items"] == [], (field, invalid)
+        assert result["candidate_links"] == [], (field, invalid)
+        assert result["conflicting_reference_groups_suppressed"] == 1, field
+
+
+def test_one_malformed_record_claim_suppresses_valid_ref_and_weak_fallbacks():
+    # A corrupt explicit claim must not leave the valid A observation linked
+    # through a transfer or tab to an independent B record.
+    for field, invalid in (("provider", True), ("resource_kind", True),
+                           ("host", 7), ("organization_id", 7)):
+        for signal in ("transfer", "tab"):
+            options = {signal: "shared-opaque"}
+            valid = _scoped(_event(1, A, **options))
+            malformed = _scoped(_event(2, A, **options))
+            independent = _scoped(_event(3, B, **options))
+            if field == "organization_id":
+                malformed[field] = invalid
+            else:
+                malformed["metadata"]["resource_reference"][field] = invalid
+            result = linked_work_items([valid, malformed, independent])
+            assert result["items"] == [], (field, signal)
+            assert result["candidate_links"] == [], (field, signal)
+            assert result["conflicting_reference_groups_suppressed"] == 1
+
+
+def test_literal_record_identity_and_missing_optional_legacy_fields_still_link():
+    # Strings that look like Python-coerced values are still legitimate
+    # *literal* identities, not forbidden words or numeric-looking strings.
+    for field, literal in (("provider", "true"), ("resource_kind", "true"),
+                           ("host", "7"), ("organization_id", "7")):
+        first = _scoped(_event(1, A))
+        second = _scoped(_event(2, A))
+        for row in (first, second):
+            if field == "organization_id":
+                row[field] = literal
+            else:
+                row["metadata"]["resource_reference"][field] = literal
+        result = linked_work_items([first, second])
+        assert set(_items(result)) == {("e01", "e02")}, field
+        assert _items(result)[("e01", "e02")]["link_basis"] == {"same_record": 1}
+
+    first, second = _event(1, A), _event(2, A)
+    for row in (first, second):
+        row["metadata"]["resource_reference"].pop("host")
+        row.pop("organization_id", None)
+    result = linked_work_items([first, second])
+    assert set(_items(result)) == {("e01", "e02")}
+    assert result["conflicting_reference_groups_suppressed"] == 0
+
+
+def test_conflicting_duplicate_event_ids_are_withheld_before_record_or_weak_joins():
+    # A reused event ID is not an authoritative "first occurrence wins"
+    # observation, even when the second copy has an invalid timestamp.
+    for contradiction in ("record", "tenant", "timestamp", "invalid_timestamp"):
+        first = _scoped(_event(1, A, tab="same-tab", transfer="same-transfer"))
+        conflicting = _scoped(_event(1, A, tab="same-tab", transfer="same-transfer"))
+        if contradiction == "record":
+            conflicting["metadata"]["resource_reference"]["resource_ref"] = B
+        elif contradiction == "tenant":
+            conflicting["organization_id"] = "tenant-b"
+        elif contradiction == "timestamp":
+            conflicting["observed_at"] = "2026-10-20T12:00:00+00:00"
+        else:
+            conflicting["observed_at"] = "invalid-timestamp"
+        independent = _scoped(_event(2, A, tab="same-tab", transfer="same-transfer"))
+        for events in ([first, conflicting, independent], [conflicting, first, independent]):
+            result = linked_work_items(events)
+            assert result["items"] == [], contradiction
+            assert result["candidate_links"] == [], contradiction
+            assert result["unlinked_observation_count"] == 1, contradiction
+
+
+def test_exact_duplicate_event_id_is_idempotent_and_unrelated_groups_survive_collision():
+    first = _scoped(_event(1, A))
+    second = _scoped(_event(2, A))
+    baseline = linked_work_items([first, second])
+    assert set(_items(baseline)) == {("e01", "e02")}
+    assert linked_work_items([first, dict(first), second]) == baseline
+
+    conflicting = _scoped(_event(1, B))
+    third = _scoped(_event(3, C))
+    fourth = _scoped(_event(4, C))
+    result = linked_work_items([first, conflicting, second, third, fourth])
+    assert set(_items(result)) == {("e03", "e04")}
+    assert result["unlinked_observation_count"] == 1
+
+
+def test_explicit_null_record_claim_is_not_loose_tab_or_transfer_evidence():
+    # An explicit null is a malformed reference claim, not evidence that the
+    # observation was genuinely unreferenced. It must not rejoin record B.
+    for signal in ("tab", "transfer"):
+        options = {signal: "shared-opaque"}
+        null_claim = _scoped(_event(1, app="Excel", **options))
+        null_claim["metadata"]["resource_reference"] = None
+        anchored = _scoped(_event(2, B, app="Excel", **options))
+        for events in ([null_claim, anchored], [anchored, null_claim]):
+            result = linked_work_items(events)
+            assert result["items"] == [], signal
+            assert result["candidate_links"] == [], signal
+            assert result["unlinked_observation_count"] == 2, signal
+
+
+def test_explicit_null_reference_cannot_become_surface_continuity_candidate():
+    null_claim = _scoped(_event(1, app="Excel"))
+    null_claim["metadata"]["resource_reference"] = None
+    ordinary = _scoped(_event(2, app="Excel"))
+    result = linked_work_items([null_claim, ordinary])
+    assert result["items"] == []
+    assert result["candidate_links"] == []
+    assert result["unlinked_observation_count"] == 2
+
+
+def test_missing_reference_key_still_supports_legitimate_ephemeral_evidence():
+    # Absence is not the same as an explicitly rejected null claim.
+    for signal in ("tab", "transfer"):
+        options = {signal: "shared-opaque"}
+        loose = _scoped(_event(1, app="Excel", **options))
+        anchored = _scoped(_event(2, B, app="Excel", **options))
+        result = linked_work_items([loose, anchored])
+        assert set(_items(result)) == {("e01", "e02")}, signal
+        basis = "same_tab_single_record" if signal == "tab" else "clipboard_transfer"
+        assert _items(result)[("e01", "e02")]["link_basis"] == {basis: 1}
+
+    first = _scoped(_event(1, app="Excel"))
+    second = _scoped(_event(2, app="Excel"))
+    result = linked_work_items([first, second])
+    assert result["items"] == []
+    assert {c["relation"] for c in result["candidate_links"]} == {"surface_continuity"}
+    assert all(c["merged"] is False for c in result["candidate_links"])
+
+
+
+def test_explicit_null_or_empty_scope_cannot_alias_absent_legacy_identity():
+    # Legacy missing dimensions are a stable unknown identity, not a wildcard
+    # for malformed *present* values. Check each dimension independently.
+    for dimension in ("organization_id", "actor_id", "device_id", "session_id"):
+        for invalid in (None, ""):
+            for signal in ("tab", "transfer"):
+                opts = {signal: "reused-legacy-token"}
+                anchor = _event(1, A, **opts)
+                malformed = _event(2, B if signal == "transfer" else None, **opts)
+                malformed[dimension] = invalid
+                for events in ([anchor, malformed], [malformed, anchor]):
+                    result = linked_work_items(events)
+                    assert result["items"] == [], (dimension, invalid, signal)
+                    assert result["candidate_links"] == [], (dimension, invalid, signal)
+                    assert result["unlinked_observation_count"] == 2
+
+                # Both fields genuinely absent: preserve the historical
+                # same-scope legacy transfer/tab behavior.
+                legacy = linked_work_items([anchor, _event(2, B if signal == "transfer" else None, **opts)])
+                assert set(_items(legacy)) == {("e01", "e02")}, (dimension, signal)
+
+
+def test_explicit_null_or_empty_scope_cannot_create_surface_candidates():
+    for dimension in ("organization_id", "actor_id", "device_id", "session_id"):
+        for invalid in (None, ""):
+            first = _event(1, app="Excel")
+            second = _event(2, app="Excel")
+            second[dimension] = invalid
+            result = linked_work_items([first, second])
+            assert result["items"] == []
+            assert result["candidate_links"] == [], (dimension, invalid)
+            assert result["unlinked_observation_count"] == 2
+
+    legacy = linked_work_items([_event(1, app="Excel"), _event(2, app="Excel")])
+    assert {c["relation"] for c in legacy["candidate_links"]} == {"surface_continuity"}
+    assert all(c["merged"] is False for c in legacy["candidate_links"])
+
+
+def test_malformed_ephemeral_scope_does_not_remove_exact_record_evidence():
+    # Exact normalized source references are a separate signal. Invalid local
+    # ephemeral scope prevents tab/transfer joins, not valid same-record links.
+    for dimension in ("organization_id", "actor_id", "device_id", "session_id"):
+        for invalid in (None, ""):
+            first, second = _event(1, A), _event(2, A)
+            first[dimension] = invalid
+            second[dimension] = invalid
+            result = linked_work_items([first, second])
+            assert set(_items(result)) == {("e01", "e02")}, (dimension, invalid)
+            assert _items(result)[("e01", "e02")]["link_basis"] == {"same_record": 1}
+
+
+def test_multiplexed_transfer_id_does_not_merge_three_interleaved_records():
+    # A reused transfer token is not evidence that three distinct business
+    # records belong to one task. Preserve independent same-record evidence.
+    events = [
+        _scoped(_event(1, A, transfer="reused-token", action="copy")),
+        _scoped(_event(2, B, transfer="reused-token", action="paste")),
+        _scoped(_event(3, C, transfer="reused-token", action="paste")),
+        _scoped(_event(4, A)),
+    ]
+    for order in (events, list(reversed(events))):
+        result = linked_work_items(order)
+        assert set(_items(result)) == {("e01", "e04")}
+        assert _items(result)[("e01", "e04")]["link_basis"] == {"same_record": 1}
+        assert result["unlinked_observation_count"] == 2
+        assert result["ambiguous_clipboard_transfer_groups"] == 1
+        assert result["link_contract"]["multiplexed_clipboard_transfer_is_unmerged"] is True
+        assert "reused-token" not in json.dumps(result)
+
+
+def test_two_record_transfer_with_repeated_observations_still_links():
+    # Repeated observations of two actual record identities are not a
+    # multiplexed third-record collision and preserve the prior contract.
+    events = [
+        _scoped(_event(1, A, transfer="two-records", action="copy")),
+        _scoped(_event(2, A, transfer="two-records", action="copy")),
+        _scoped(_event(3, B, transfer="two-records", action="paste")),
+        _scoped(_event(4, B, transfer="two-records", action="paste")),
+    ]
+    result = linked_work_items(events)
+    assert set(_items(result)) == {("e01", "e02", "e03", "e04")}
+    assert _items(result)[("e01", "e02", "e03", "e04")]["link_basis"] == {
+        "same_record": 2, "clipboard_transfer": 1,
+    }
+    assert result["ambiguous_clipboard_transfer_groups"] == 0
+
+
+def test_same_token_in_other_capture_scope_is_not_a_third_record():
+    # The fanout check applies per exact capture scope, not globally.
+    events = [
+        _scoped(_event(1, A, transfer="same-token")),
+        _scoped(_event(2, B, transfer="same-token")),
+        _scoped(_event(3, C, transfer="same-token"), session="another-session"),
+    ]
+    result = linked_work_items(events)
+    assert set(_items(result)) == {("e01", "e02")}
+    assert result["unlinked_observation_count"] == 1
+    assert result["ambiguous_clipboard_transfer_groups"] == 0
+
+
+def test_duplicate_event_id_rejects_type_coerced_nested_payload_claims():
+    # Python dict equality equates bool/int and int/float values, even deep
+    # inside metadata. Such conflicting observation claims cannot be
+    # resolved by first-row-wins dedupe or linked to another record event.
+    for left, right in ((True, 1), (False, 0), (1, 1.0), (0, 0.0)):
+        first = _scoped(_event(1, A, tab="shared-tab", transfer="shared-transfer"))
+        duplicate = copy.deepcopy(first)
+        first["metadata"]["target"]["flags"] = [{"observed": left}]
+        duplicate["metadata"]["target"]["flags"] = [{"observed": right}]
+        assert first == duplicate  # Documents the unsafe Python equality.
+        independent = _scoped(_event(2, A, tab="shared-tab", transfer="shared-transfer"))
+        for order in ((first, duplicate), (duplicate, first)):
+            result = linked_work_items([*order, independent])
+            assert result["items"] == [], (left, right)
+            assert result["candidate_links"] == [], (left, right)
+            assert result["unlinked_observation_count"] == 1, (left, right)
+
+
+def test_exact_nested_duplicate_payload_remains_idempotent_regardless_of_key_order():
+    first = _scoped(_event(1, A))
+    first["metadata"]["target"]["flags"] = [{"observed": True}, {"count": 1.0}]
+    duplicate = copy.deepcopy(first)
+    duplicate["metadata"] = dict(reversed(list(duplicate["metadata"].items())))
+    independent = _scoped(_event(2, A))
+    baseline = linked_work_items([first, independent])
+    assert set(_items(baseline)) == {("e01", "e02")}
+    assert linked_work_items([first, duplicate, independent]) == baseline
+    assert linked_work_items([duplicate, first, independent]) == baseline
+
+
+def test_duplicate_payload_comparison_is_bounded_and_rejects_non_json_values():
+    # Duplicate equality must not traverse arbitrarily large/cyclic metadata
+    # or grant first-row authority to an unsupported Python object.
+    for payload in (list(range(10_050)), {"non_json_set": {1, 2}}):
+        first = _scoped(_event(1, A))
+        first["metadata"]["target"]["payload"] = payload
+        duplicate = copy.deepcopy(first)
+        independent = _scoped(_event(2, A))
+        assert first == duplicate
+        result = linked_work_items([first, duplicate, independent])
+        assert result["items"] == []
+        assert result["unlinked_observation_count"] == 1
+
+    first = _scoped(_event(1, A))
+    first["metadata"]["self_reference"] = first["metadata"]
+    duplicate = copy.deepcopy(first)
+    result = linked_work_items([first, duplicate, _scoped(_event(2, A))])
+    assert result["items"] == []
+    assert result["unlinked_observation_count"] == 1
+
+
+def test_explicit_clipboard_direction_conflicts_do_not_join_two_records():
+    # Same opaque token alone is not a copy -> paste edge when the captured
+    # actions contradict transfer direction. Order of input rows cannot
+    # choose a different work-item membership.
+    for first_action, second_action in (
+        ("copy", "copy"), ("paste", "paste"), ("paste", "copy"),
+    ):
+        events = [
+            _scoped(_event(1, A, transfer="reused-direction", action=first_action)),
+            _scoped(_event(2, B, transfer="reused-direction", action=second_action)),
+        ]
+        for order in (events, list(reversed(events))):
+            result = linked_work_items(order)
+            assert result["items"] == [], (first_action, second_action)
+            assert result["candidate_links"] == []
+            assert result["unlinked_observation_count"] == 2
+            assert result["inconsistent_clipboard_transfer_direction_groups"] == 1
+            assert result["ambiguous_clipboard_transfer_groups"] == 0
+            assert result["link_contract"]["explicit_clipboard_direction_conflicts_are_unmerged"] is True
+            assert "reused-direction" not in json.dumps(result)
+
+
+def test_explicit_copy_paste_on_one_record_does_not_attach_copy_only_second_record():
+    # An ordered copy -> paste wholly inside record A cannot prove a
+    # cross-record transfer to B when B only has a copy observation.
+    events = [
+        _scoped(_event(1, A, transfer="same-record-only", action="copy")),
+        _scoped(_event(2, A, transfer="same-record-only", action="paste")),
+        _scoped(_event(3, B, transfer="same-record-only", action="copy")),
+    ]
+    result = linked_work_items(events)
+    assert set(_items(result)) == {("e01", "e02")}
+    assert _items(result)[("e01", "e02")]["link_basis"] == {"same_record": 1}
+    assert result["unlinked_observation_count"] == 1
+    assert result["inconsistent_clipboard_transfer_direction_groups"] == 1
+
+
+def test_ordered_explicit_copy_to_other_record_still_joins():
+    events = [
+        _scoped(_event(1, A, transfer="real-direction", action="copy")),
+        _scoped(_event(2, B, transfer="real-direction", action="paste")),
+    ]
+    for order in (events, list(reversed(events))):
+        result = linked_work_items(order)
+        assert set(_items(result)) == {("e01", "e02")}
+        assert _items(result)[("e01", "e02")]["link_basis"] == {"clipboard_transfer": 1}
+        assert result["inconsistent_clipboard_transfer_direction_groups"] == 0
+
+
+def test_direction_veto_preserves_legacy_nondirectional_capture():
+    # Existing non-directional capture rows do not assert copy/paste order.
+    # Preserve their historical linking contract instead of inventing a
+    # direction from timestamps or browser-click actions.
+    events = [
+        _scoped(_event(1, A, transfer="legacy-generic")),
+        _scoped(_event(2, B, transfer="legacy-generic")),
+    ]
+    result = linked_work_items(events)
+    assert set(_items(result)) == {("e01", "e02")}
+    assert _items(result)[("e01", "e02")]["link_basis"] == {"clipboard_transfer": 1}
+    assert result["inconsistent_clipboard_transfer_direction_groups"] == 0
+
+
+def test_explicit_clipboard_equal_timestamp_does_not_infer_direction():
+    copy_event = _scoped(_event(1, A, transfer="equal-time", action="copy"))
+    paste_event = _scoped(_event(2, B, transfer="equal-time", action="paste"))
+    paste_event["observed_at"] = copy_event["observed_at"]
+    result = linked_work_items([copy_event, paste_event])
+    assert result["items"] == []
+    assert result["inconsistent_clipboard_transfer_direction_groups"] == 1
+
+
+def test_unreferenced_direction_pair_cannot_attach_copy_only_second_record():
+    # A copy -> loose paste is a genuine directional pair, but it does not
+    # prove that an unrelated B copy belongs to the same business case.
+    # All rows share one exact capture scope and an opaque transfer token.
+    for events in (
+        [
+            _scoped(_event(1, A, transfer="loose-bridge", action="copy")),
+            _scoped(_event(2, transfer="loose-bridge", action="paste")),
+            _scoped(_event(3, B, transfer="loose-bridge", action="copy")),
+        ],
+        [
+            _scoped(_event(1, transfer="loose-bridge", action="copy")),
+            _scoped(_event(2, A, transfer="loose-bridge", action="paste")),
+            _scoped(_event(3, B, transfer="loose-bridge", action="copy")),
+        ],
+    ):
+        for ordered in (events, list(reversed(events))):
+            result = linked_work_items(ordered)
+            assert result["items"] == []
+            assert result["candidate_links"] == []
+            assert result["unlinked_observation_count"] == 3
+            assert result["inconsistent_clipboard_transfer_direction_groups"] == 1
+            assert "loose-bridge" not in json.dumps(result)
+
+
+def test_direct_cross_record_pair_remains_valid_with_loose_observation():
+    # A real A copy -> B paste still supports a two-record join; an additional
+    # unreferenced row does not erase independently observed direction.
+    events = [
+        _scoped(_event(1, A, transfer="direct-pair", action="copy")),
+        _scoped(_event(2, B, transfer="direct-pair", action="paste")),
+        _scoped(_event(3, transfer="direct-pair", action="paste")),
+    ]
+    for ordered in (events, list(reversed(events))):
+        result = linked_work_items(ordered)
+        assert set(_items(result)) == {("e01", "e02")}
+        assert _items(result)[("e01", "e02")]["cross_record_join"] is True
+        assert result["unlinked_observation_count"] == 1
+        assert result["inconsistent_clipboard_transfer_direction_groups"] == 0
+
+
+def test_one_record_to_unreferenced_paste_keeps_legacy_directional_link():
+    # Without a competing second record, explicit A copy -> loose paste
+    # retains its previous observed-transfer membership.
+    events = [
+        _scoped(_event(1, A, transfer="one-record", action="copy")),
+        _scoped(_event(2, transfer="one-record", action="paste")),
+    ]
+    for ordered in (events, list(reversed(events))):
+        result = linked_work_items(ordered)
+        assert set(_items(result)) == {("e01", "e02")}
+        assert _items(result)[("e01", "e02")]["link_basis"] == {"clipboard_transfer": 1}
+        assert result["inconsistent_clipboard_transfer_direction_groups"] == 0
+
+
+def test_mixed_generic_clipboard_actions_cannot_bypass_direction_veto():
+    # A generic event cannot turn two copies or a reversed paste/copy into
+    # observed cross-record transfer. The previous all() guard joined all 3.
+    for actions in (("copy", "copy", "browser_click"),
+                    ("paste", "copy", "browser_click"),
+                    ("copy", "browser_click", "browser_click")):
+        events = [
+            _scoped(_event(1, A, transfer="mixed-direction", action=actions[0])),
+            _scoped(_event(2, B, transfer="mixed-direction", action=actions[1])),
+            _scoped(_event(3, transfer="mixed-direction", action=actions[2])),
+        ]
+        for ordered in (events, list(reversed(events))):
+            result = linked_work_items(ordered)
+            assert result["items"] == [], actions
+            assert result["candidate_links"] == [], actions
+            assert result["unlinked_observation_count"] == 3, actions
+            assert result["inconsistent_clipboard_transfer_direction_groups"] == 1
+            assert "mixed-direction" not in json.dumps(result)
+
+
+def test_mixed_generic_event_cannot_attach_second_record_to_same_record_pair():
+    # A copy -> A paste is real evidence within A only. B's generic click
+    # cannot borrow the same token and become a cross-record transfer.
+    events = [
+        _scoped(_event(1, A, transfer="mixed-same-record", action="copy")),
+        _scoped(_event(2, A, transfer="mixed-same-record", action="paste")),
+        _scoped(_event(3, B, transfer="mixed-same-record", action="browser_click")),
+    ]
+    for ordered in (events, list(reversed(events))):
+        result = linked_work_items(ordered)
+        assert set(_items(result)) == {("e01", "e02")}
+        assert _items(result)[("e01", "e02")]["link_basis"] == {"same_record": 1}
+        assert result["unlinked_observation_count"] == 1
+        assert result["inconsistent_clipboard_transfer_direction_groups"] == 1
+
+
+def test_direct_cross_record_copy_paste_survives_extra_generic_observation():
+    # A genuine ordered A copy -> B paste remains valid even if a third
+    # event from the same scoped token has a non-directional action.
+    events = [
+        _scoped(_event(1, A, transfer="mixed-valid", action="copy")),
+        _scoped(_event(2, B, transfer="mixed-valid", action="paste")),
+        _scoped(_event(3, transfer="mixed-valid", action="browser_click")),
+    ]
+    for ordered in (events, list(reversed(events))):
+        result = linked_work_items(ordered)
+        assert set(_items(result)) == {("e01", "e02")}
+        assert _items(result)[("e01", "e02")]["link_basis"] == {"clipboard_transfer": 1}
+        assert result["unlinked_observation_count"] == 1
+        assert result["inconsistent_clipboard_transfer_direction_groups"] == 0
+
+
+def test_direct_two_record_transfer_never_borrows_unreferenced_token_rows():
+    # A valid A -> B transfer does not prove that unrelated loose events
+    # reusing the token belong to either business record. Check both input
+    # orders and all explicit/generic loose actions.
+    for loose_action in ("browser_click", "copy", "paste"):
+        events = [
+            _scoped(_event(1, A, transfer="reused-token", action="copy")),
+            _scoped(_event(2, B, transfer="reused-token", action="paste")),
+            _scoped(_event(3, transfer="reused-token", action=loose_action)),
+            _scoped(_event(4, A, action="browser_click")),
+        ]
+        for ordered in (events, list(reversed(events))):
+            result = linked_work_items(ordered)
+            assert set(_items(result)) == {("e01", "e02", "e04")}
+            joined = _items(result)[("e01", "e02", "e04")]
+            assert joined["link_basis"] == {"same_record": 1, "clipboard_transfer": 1}
+            assert joined["resource_refs"] == [A, B]
+            assert result["unlinked_observation_count"] == 1
+            assert result["candidate_links"] == []
+            assert "reused-token" not in json.dumps(result)
+
+
+def test_loose_token_row_can_still_join_on_independent_single_record_tab():
+    # Withholding clipboard authority does not suppress a separately
+    # evidenced single-record tab relationship.
+    events = [
+        _scoped(_event(1, A, tab="one-record-tab", transfer="tab-independent", action="copy")),
+        _scoped(_event(2, B, transfer="tab-independent", action="paste")),
+        _scoped(_event(3, tab="one-record-tab", transfer="tab-independent", action="browser_click")),
+    ]
+    for ordered in (events, list(reversed(events))):
+        result = linked_work_items(ordered)
+        assert set(_items(result)) == {("e01", "e02", "e03")}
+        assert _items(result)[("e01", "e02", "e03")]["link_basis"] == {
+            "clipboard_transfer": 1, "same_tab_single_record": 1,
+        }
+
+
+def test_legacy_nondirectional_two_record_token_keeps_prior_membership():
+    # This conservative change applies only when explicit copy/paste
+    # evidence exists; legacy generic-only capture stays compatible.
+    events = [
+        _scoped(_event(1, A, transfer="legacy-token")),
+        _scoped(_event(2, B, transfer="legacy-token")),
+        _scoped(_event(3, transfer="legacy-token")),
+    ]
+    for ordered in (events, list(reversed(events))):
+        result = linked_work_items(ordered)
+        assert set(_items(result)) == {("e01", "e02", "e03")}
+        assert _items(result)[("e01", "e02", "e03")]["link_basis"] == {"clipboard_transfer": 2}
+
+
+def test_tainted_record_in_scoped_tab_vetoes_loose_single_record_attachment():
+    # An invalid explicit record claim in the same tab is evidence of
+    # ambiguity, not an invisible row that makes the tab look single-record.
+    events = [
+        _scoped(_event(1, A, tab="shared-tainted-tab")),
+        _scoped(_event(2, tab="shared-tainted-tab")),
+        _scoped(_event(3, C, tab="shared-tainted-tab", provider="INVALID PROVIDER")),
+        _scoped(_event(4, A, tab="shared-tainted-tab")),
+    ]
+    for ordered in (events, list(reversed(events))):
+        result = linked_work_items(ordered)
+        assert set(_items(result)) == {("e01", "e04")}
+        assert _items(result)[("e01", "e04")]["link_basis"] == {"same_record": 1}
+        assert result["unlinked_observation_count"] == 2
+        assert result["candidate_links"] == []
+        assert "shared-tainted-tab" not in json.dumps(result)
+
+
+def test_tainted_record_in_scoped_transfer_vetoes_otherwise_valid_pair():
+    # A valid A-copy -> B-paste does not overcome a contradictory explicit
+    # record claim sharing its exact scoped clipboard token.
+    events = [
+        _scoped(_event(1, A, transfer="shared-tainted-transfer", action="copy")),
+        _scoped(_event(2, B, transfer="shared-tainted-transfer", action="paste")),
+        _scoped(_event(3, C, transfer="shared-tainted-transfer",
+                       provider="INVALID PROVIDER", action="browser_click")),
+        _scoped(_event(4, A)),
+    ]
+    for ordered in (events, list(reversed(events))):
+        result = linked_work_items(ordered)
+        assert set(_items(result)) == {("e01", "e04")}
+        assert _items(result)[("e01", "e04")]["link_basis"] == {"same_record": 1}
+        assert result["unlinked_observation_count"] == 2
+        assert result["candidate_links"] == []
+        assert "shared-tainted-transfer" not in json.dumps(result)
+
+
+def test_tainted_ephemeral_token_veto_is_exactly_scoped_and_token_local():
+    # Reused token values in a different tenant/session, or an unrelated
+    # token in the same scope, must not suppress independently valid links.
+    for signal in ("tab", "transfer"):
+        for dimension in ("organization_id", "actor_id", "device_id", "session_id"):
+            options = {signal: "reused-token"}
+            first = _scoped(_event(1, A, action="copy", **options))
+            second = _scoped(_event(2, B if signal == "transfer" else None,
+                                    action="paste", **options))
+            tainted = _scoped(_event(3, C, provider="INVALID PROVIDER", **options))
+            tainted[dimension] = "other-scope"
+            result = linked_work_items([first, second, tainted])
+            assert set(_items(result)) == {("e01", "e02")}, (signal, dimension)
+            assert result["unlinked_observation_count"] == 1
+
+        first = _scoped(_event(1, A, action="copy", **{signal: "good-token"}))
+        second = _scoped(_event(2, B if signal == "transfer" else None,
+                                action="paste", **{signal: "good-token"}))
+        tainted = _scoped(_event(3, C, provider="INVALID PROVIDER",
+                                 **{signal: "other-token"}))
+        result = linked_work_items([first, second, tainted])
+        assert set(_items(result)) == {("e01", "e02")}, signal
+        assert result["unlinked_observation_count"] == 1
+
+
+def test_conflicting_valid_reference_identities_also_veto_scoped_tokens():
+    # Both observations of C have individually well-formed references, but
+    # incompatible provider identities. Neither may disappear and make a
+    # shared tab or transfer token look unambiguous.
+    for signal in ("tab", "transfer"):
+        options = {signal: "conflicted-reference-token"}
+        events = [
+            _scoped(_event(1, A, action="copy", **options)),
+            _scoped(_event(2, B if signal == "transfer" else None,
+                           action="paste", **options)),
+            _scoped(_event(3, C, provider="jira", **options)),
+            _scoped(_event(4, C, provider="github", **options)),
+            _scoped(_event(5, A)),
+        ]
+        for ordered in (events, list(reversed(events))):
+            result = linked_work_items(ordered)
+            assert set(_items(result)) == {("e01", "e05")}, signal
+            assert _items(result)[("e01", "e05")]["link_basis"] == {"same_record": 1}
+            assert result["conflicting_reference_groups_suppressed"] == 1
+            assert result["unlinked_observation_count"] == 3
+            assert result["candidate_links"] == []
+
+
+def test_conflicting_duplicate_id_vetoes_single_record_tab_even_after_both_rows_drop():
+    # Two contradictory e01 record claims disappear during event-id dedupe.
+    # Without their scoped token veto, e02 + e03 falsely look like a clean
+    # one-record tab and e03 is attached to A.
+    first = _scoped(_event(1, A, tab="duplicate-tab"))
+    duplicate = _scoped(_event(1, B, tab="duplicate-tab"))
+    anchor = _scoped(_event(2, A, tab="duplicate-tab"))
+    loose = _scoped(_event(3, tab="duplicate-tab"))
+    independent = _scoped(_event(4, A))
+    for collisions in ((first, duplicate), (duplicate, first)):
+        result = linked_work_items([*collisions, anchor, loose, independent])
+        assert set(_items(result)) == {("e02", "e04")}
+        assert _items(result)[("e02", "e04")]["link_basis"] == {"same_record": 1}
+        assert result["candidate_links"] == []
+        assert result["unlinked_observation_count"] == 1
+        assert "duplicate-tab" not in json.dumps(result)
+
+
+def test_conflicting_duplicate_id_vetoes_otherwise_valid_direct_transfer():
+    # e01 is observed as both A-copy and C-copy. Removing it must not make
+    # the remaining A-copy -> B-paste look like an uncontested transfer.
+    first = _scoped(_event(1, A, transfer="duplicate-transfer", action="copy"))
+    duplicate = _scoped(_event(1, C, transfer="duplicate-transfer", action="copy"))
+    copy_a = _scoped(_event(2, A, transfer="duplicate-transfer", action="copy"))
+    paste_b = _scoped(_event(3, B, transfer="duplicate-transfer", action="paste"))
+    independent = _scoped(_event(4, A))
+    for collisions in ((first, duplicate), (duplicate, first)):
+        result = linked_work_items([*collisions, copy_a, paste_b, independent])
+        assert set(_items(result)) == {("e02", "e04")}
+        assert _items(result)[("e02", "e04")]["link_basis"] == {"same_record": 1}
+        assert result["unlinked_observation_count"] == 1
+        assert result["candidate_links"] == []
+        assert "duplicate-transfer" not in json.dumps(result)
+
+
+def test_duplicate_id_veto_is_exact_to_each_occurrence_scope_and_token():
+    # Conflicting duplicate ID occurrences in two tenants may veto their
+    # own exact token groups, but not a third tenant or a different token.
+    first = _scoped(_event(1, A, tab="reused-tab"))
+    duplicate = _scoped(_event(1, B, tab="reused-tab"), org="tenant-b")
+    events = [
+        _scoped(_event(2, A, tab="reused-tab")),
+        _scoped(_event(3, tab="reused-tab")),
+        _scoped(_event(4, B, tab="reused-tab"), org="tenant-b"),
+        _scoped(_event(5, tab="reused-tab"), org="tenant-b"),
+        _scoped(_event(6, C, tab="reused-tab"), org="tenant-c"),
+        _scoped(_event(7, tab="reused-tab"), org="tenant-c"),
+        _scoped(_event(8, A, tab="other-tab")),
+        _scoped(_event(9, tab="other-tab")),
+    ]
+    for collisions in ((first, duplicate), (duplicate, first)):
+        result = linked_work_items([*collisions, *events])
+        assert set(_items(result)) == {("e06", "e07"), ("e08", "e09")}
+        assert result["unlinked_observation_count"] == 4
+        assert result["candidate_links"] == []
+
+
+def test_duplicate_id_invalid_timestamp_cannot_poison_unrelated_token():
+    first = _scoped(_event(1, A, tab="valid-token"))
+    duplicate = _scoped(_event(1, B, tab="other-token"))
+    duplicate["observed_at"] = "not-a-timestamp"
+    unrelated_anchor = _scoped(_event(2, C, tab="other-token"))
+    unrelated_loose = _scoped(_event(3, tab="other-token"))
+    for collisions in ((first, duplicate), (duplicate, first)):
+        result = linked_work_items([*collisions, unrelated_anchor, unrelated_loose])
+        assert set(_items(result)) == {("e02", "e03")}
+        assert result["unlinked_observation_count"] == 0
+        assert result["candidate_links"] == []
+
+
+def test_single_record_tab_does_not_bridge_foreign_clipboard_record_component():
+    # The tab only names A, but its loose event was already attached to B
+    # through an independent scoped B-copy -> loose-paste transfer. Attaching
+    # the loose component to A would fabricate a cross-record A/B case.
+    events = [
+        _scoped(_event(1, A, tab="tab-bridge-a")),
+        _scoped(_event(2, B, transfer="transfer-bridge", action="copy")),
+        _scoped(_event(3, tab="tab-bridge-a", transfer="transfer-bridge", action="paste")),
+        _scoped(_event(4, A)),
+    ]
+    for ordered in (events, list(reversed(events))):
+        result = linked_work_items(ordered)
+        assert set(_items(result)) == {("e01", "e04"), ("e02", "e03")}
+        assert _items(result)[("e01", "e04")]["link_basis"] == {"same_record": 1}
+        assert _items(result)[("e02", "e03")]["link_basis"] == {"clipboard_transfer": 1}
+        assert result["ambiguous_tab_component_attachments_suppressed"] == 1
+        assert result["link_contract"]["competing_tab_component_records_are_unmerged"] is True
+        assert result["candidate_links"] == []
+        for private_token in ("tab-bridge-a", "transfer-bridge", "tenant-a", "actor-a"):
+            assert private_token not in json.dumps(result)
+
+
+def test_two_single_record_tabs_cannot_bridge_through_shared_loose_transfer_component():
+    # A generic clipboard token connects two loose observations, each in a
+    # different single-record tab. Neither tab can claim the whole component:
+    # accepting both would merge A and B, and accepting the first would make
+    # tab iteration order choose an arbitrary owner.
+    events = [
+        _scoped(_event(1, A, tab="tab-for-a")),
+        _scoped(_event(2, B, tab="tab-for-b")),
+        _scoped(_event(3, tab="tab-for-a", transfer="shared-loose-token")),
+        _scoped(_event(4, tab="tab-for-b", transfer="shared-loose-token")),
+        _scoped(_event(5, A)),
+        _scoped(_event(6, B)),
+    ]
+    for ordered in (events, list(reversed(events))):
+        result = linked_work_items(ordered)
+        assert set(_items(result)) == {("e01", "e05"), ("e02", "e06"), ("e03", "e04")}
+        assert _items(result)[("e03", "e04")]["link_basis"] == {"clipboard_transfer": 1}
+        assert result["ambiguous_tab_component_attachments_suppressed"] == 2
+        assert result["unlinked_observation_count"] == 0
+        assert result["candidate_links"] == []
+
+
+def test_uncontested_single_record_tab_still_attaches_loose_transfer_component():
+    # A loose clipboard component targeted by exactly one single-record tab
+    # is still attachable; an independent tab for B is unaffected.
+    events = [
+        _scoped(_event(1, A, tab="tab-for-a")),
+        _scoped(_event(2, tab="tab-for-a", transfer="generic-loose-token")),
+        _scoped(_event(3, transfer="generic-loose-token")),
+        _scoped(_event(4, A)),
+        _scoped(_event(5, B, tab="tab-for-b")),
+        _scoped(_event(6, tab="tab-for-b")),
+    ]
+    for ordered in (events, list(reversed(events))):
+        result = linked_work_items(ordered)
+        assert set(_items(result)) == {("e01", "e02", "e03", "e04"), ("e05", "e06")}
+        assert result["ambiguous_tab_component_attachments_suppressed"] == 0
+        assert result["candidate_links"] == []
+        assert result["link_contract"]["time_alone_never_links"] is True
+
+
+def test_whitespace_and_control_scope_values_never_anchor_ephemeral_joins():
+    # These are present but malformed identity claims, not legacy omissions.
+    # A repeated malformed tenant/actor/device/session must not manufacture a
+    # shared clipboard, tab, or even a candidate same-app association.
+    invalid_values = ("   ", "\t", "\x00", "\x7f", "\u2003")
+    for dimension in ("organization_id", "actor_id", "device_id", "session_id"):
+        for invalid in invalid_values:
+            for signal in ("transfer", "tab", "surface"):
+                if signal == "transfer":
+                    first = _scoped(_event(1, A, transfer="shared-token"))
+                    second = _scoped(_event(2, B, transfer="shared-token"))
+                elif signal == "tab":
+                    first = _scoped(_event(1, A, tab="shared-tab"))
+                    second = _scoped(_event(2, tab="shared-tab"))
+                else:
+                    first = _scoped(_event(1, app="Excel"))
+                    second = _scoped(_event(2, app="Excel"))
+                first[dimension] = invalid
+                second[dimension] = invalid
+                for ordered in ((first, second), (second, first)):
+                    result = linked_work_items(list(ordered))
+                    assert result["items"] == [], (dimension, repr(invalid), signal)
+                    assert result["candidate_links"] == [], (dimension, repr(invalid), signal)
+                    assert result["unlinked_observation_count"] == 2
+                    assert result["link_contract"]["time_alone_never_links"] is True
+
+
+def test_literal_nonblank_scope_strings_still_join_without_normalization():
+    # Machine identity remains literal: interior spaces are not trimmed,
+    # case-folded or conflated with different scope values.
+    first = _scoped(_event(1, A, transfer="valid-token"), org="tenant alpha")
+    second = _scoped(_event(2, B, transfer="valid-token"), org="tenant alpha")
+    result = linked_work_items([first, second])
+    assert set(_items(result)) == {("e01", "e02")}
+    assert _items(result)[("e01", "e02")]["link_basis"] == {"clipboard_transfer": 1}
+
+    second["organization_id"] = "tenant  alpha"
+    result = linked_work_items([first, second])
+    assert result["items"] == []
+    assert result["candidate_links"] == []
+
+    anchor = _scoped(_event(1, A, tab="valid-tab"), actor="actor one")
+    loose = _scoped(_event(2, tab="valid-tab"), actor="actor one")
+    result = linked_work_items([anchor, loose])
+    assert set(_items(result)) == {("e01", "e02")}
+    assert _items(result)[("e01", "e02")]["link_basis"] == {"same_tab_single_record": 1}
+
+
+def test_bad_ephemeral_actor_device_session_does_not_erase_exact_record_link():
+    # Record-reference evidence is independently assessed and never rescued
+    # by a malformed tab/clipboard scope. Keep that distinction explicit.
+    for dimension in ("actor_id", "device_id", "session_id"):
+        first, second = _scoped(_event(1, A)), _scoped(_event(2, A))
+        first[dimension] = second[dimension] = "\x00"
+        result = linked_work_items([first, second])
+        assert set(_items(result)) == {("e01", "e02")}
+        assert _items(result)[("e01", "e02")]["link_basis"] == {"same_record": 1}
+        assert result["candidate_links"] == []
+
+
+def test_invalid_timestamp_cannot_hide_conflicting_exact_record_identity():
+    """Bad time drops the observation, not its contradictory source claim."""
+    bad_time = _event(3, A, provider="github")
+    bad_time["observed_at"] = "not-a-timestamp"
+    result = linked_work_items([
+        _event(1, A), _event(2, B), bad_time, _event(4, A), _event(5, B),
+    ])
+    assert set(_items(result)) == {("e02", "e05")}
+    assert result["conflicting_reference_groups_suppressed"] == 1
+    assert result["unlinked_observation_count"] == 2
+    assert result["candidate_links"] == []
+
+
+def test_invalid_timestamp_malformed_claim_cannot_hide_exact_ref_conflict():
+    """An explicit malformed provider claim still vetoes its literal ref."""
+    bad_time = _event(3, A)
+    bad_time["metadata"]["resource_reference"]["provider"] = False
+    bad_time["observed_at"] = "invalid"
+    result = linked_work_items([
+        _event(1, A), _event(2, B), bad_time, _event(4, A), _event(5, B),
+    ])
+    assert set(_items(result)) == {("e02", "e05")}
+    assert result["conflicting_reference_groups_suppressed"] == 1
+
+
+def test_invalid_timestamp_valid_claim_is_not_membership_or_ephemeral_veto():
+    """A same-identity bad-time row neither joins nor poisons valid transfers."""
+    bad_time = _event(3, A, transfer="valid-transfer", action="copy")
+    bad_time["observed_at"] = "not-a-timestamp"
+    result = linked_work_items([
+        _event(1, A, transfer="valid-transfer", action="copy"),
+        _event(2, B, transfer="valid-transfer", action="paste"),
+        bad_time,
+        _event(4, C), _event(5, C),
+    ])
+    assert set(_items(result)) == {("e01", "e02"), ("e04", "e05")}
+    assert result["conflicting_reference_groups_suppressed"] == 0
+    assert result["ambiguous_clipboard_transfer_groups"] == 0
+    assert result["inconsistent_clipboard_transfer_direction_groups"] == 0
+    assert "e03" not in json.dumps(result)
+
+
+def test_explicit_whitespace_or_control_host_and_tenant_cannot_anchor_exact_record():
+    # Both matching malformed claims used to look like the same exact record:
+    # whitespace host normalized to missing host; tenant controls persisted.
+    invalid_claims = (
+        ("host", "   "), ("host", "\t"), ("host", "work.atlassian.net\n"),
+        ("host", "work.atlassian.net\x7f"), ("host", "\u2003"),
+        ("organization_id", "   "), ("organization_id", "\t"),
+        ("organization_id", "tenant-a\n"), ("organization_id", "tenant-a\x7f"),
+        ("organization_id", "\u2003"),
+    )
+    for field, invalid in invalid_claims:
+        first, second = _scoped(_event(1, A)), _scoped(_event(2, A))
+        for row in (first, second):
+            if field == "host":
+                row["metadata"]["resource_reference"]["host"] = invalid
+            else:
+                row[field] = invalid
+        result = linked_work_items([first, second, _event(3, B), _event(4, B)])
+        assert set(_items(result)) == {("e03", "e04")}, (field, repr(invalid))
+        assert result["conflicting_reference_groups_suppressed"] == 1
+        assert result["candidate_links"] == []
+
+
+def test_one_malformed_optional_identity_vetoes_otherwise_valid_record_group():
+    for field, invalid in (("host", " \t "), ("organization_id", "tenant\x00bad")):
+        first, second, third = (_scoped(_event(n, A, tab="shared-tab"))
+                                for n in (1, 2, 3))
+        if field == "host":
+            second["metadata"]["resource_reference"]["host"] = invalid
+        else:
+            second[field] = invalid
+        # A corrupted explicit identity cannot be ignored to let the two
+        # otherwise valid A rows join, including by a shared tab.
+        result = linked_work_items([first, second, third, _event(4, B), _event(5, B)])
+        assert set(_items(result)) == {("e04", "e05")}, field
+        assert result["candidate_links"] == [], field
+        assert result["conflicting_reference_groups_suppressed"] == 1
+
+
+def test_absent_null_empty_optional_identity_and_valid_literals_remain_supported():
+    # Do not turn a conservative identity guard into a legacy schema break.
+    for host, org in ((None, None), ("", ""), ("work.atlassian.net", "tenant-a")):
+        first, second = _event(1, A), _event(2, A)
+        for row in (first, second):
+            row["metadata"]["resource_reference"]["host"] = host
+            row["organization_id"] = org
+        result = linked_work_items([first, second])
+        assert set(_items(result)) == {("e01", "e02")}, (host, org)
+        assert _items(result)[("e01", "e02")]["link_basis"] == {"same_record": 1}
+        assert result["conflicting_reference_groups_suppressed"] == 0
+
+
+def test_conflicting_duplicate_id_provider_claim_vetoes_same_ref_group():
+    # The duplicate event cannot become a member, but its contradictory
+    # provider identity must still veto other otherwise valid A observations.
+    for reverse in (False, True):
+        events = [
+            _event(1, A), _event(1, A, provider="github"),
+            _event(2, A), _event(3, A), _event(4, B), _event(5, B),
+        ]
+        if reverse:
+            events.reverse()
+        result = linked_work_items(events)
+        assert set(_items(result)) == {("e04", "e05")}
+        assert result["conflicting_reference_groups_suppressed"] == 1
+        assert result["candidate_links"] == []
+
+
+def test_malformed_duplicate_id_claim_vetoes_exact_ref_even_with_bad_time():
+    for invalid in ("provider", "host"):
+        valid = _event(1, A)
+        malformed = _event(1, A)
+        if invalid == "provider":
+            malformed["metadata"]["resource_reference"]["provider"] = 123
+        else:
+            malformed["metadata"]["resource_reference"]["host"] = " \t "
+        malformed["observed_at"] = "not-a-timestamp"
+        for events in (
+            [valid, malformed, _event(2, A), _event(3, A), _event(4, B), _event(5, B)],
+            [malformed, valid, _event(2, A), _event(3, A), _event(4, B), _event(5, B)],
+        ):
+            result = linked_work_items(events)
+            assert set(_items(result)) == {("e04", "e05")}, invalid
+            assert result["conflicting_reference_groups_suppressed"] == 1, invalid
+
+
+def test_conflicting_duplicate_id_different_refs_does_not_poison_independent_groups():
+    # An event ID reused across A and B invalidates that event, not two
+    # independently observed records whose source identities are consistent.
+    for reverse in (False, True):
+        events = [
+            _event(1, A), _event(1, B), _event(2, A), _event(3, A),
+            _event(4, B), _event(5, B),
+        ]
+        if reverse:
+            events.reverse()
+        result = linked_work_items(events)
+        assert set(_items(result)) == {("e02", "e03"), ("e04", "e05")}
+        assert result["conflicting_reference_groups_suppressed"] == 0
+        assert result["candidate_links"] == []
+
+
+def test_identical_duplicate_id_stays_idempotent_with_exact_record():
+    first = _event(1, A)
+    result = linked_work_items([first, copy.deepcopy(first), _event(2, A)])
+    assert set(_items(result)) == {("e01", "e02")}
+    assert result["conflicting_reference_groups_suppressed"] == 0
