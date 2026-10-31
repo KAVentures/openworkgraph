@@ -367,3 +367,66 @@ def test_nonstring_app_labels_cannot_create_surface_continuity():
     ])
     assert {c["relation"] for c in result["candidate_links"]} == {"surface_continuity"}
     assert all(c["merged"] is False for c in result["candidate_links"])
+
+
+def test_nonstring_record_source_and_tenant_claims_cannot_fabricate_same_record():
+    # The shared legacy normalizer coerces True -> "true" and 7 -> "7".
+    # Two matching coerced identities are not observed source identity.
+    for field, invalid in (("provider", True), ("resource_kind", True),
+                           ("host", 7), ("organization_id", 7)):
+        first = _scoped(_event(1, A))
+        second = _scoped(_event(2, A))
+        for row in (first, second):
+            if field == "organization_id":
+                row[field] = invalid
+            else:
+                row["metadata"]["resource_reference"][field] = invalid
+        result = linked_work_items([first, second])
+        assert result["items"] == [], (field, invalid)
+        assert result["candidate_links"] == [], (field, invalid)
+        assert result["conflicting_reference_groups_suppressed"] == 1, field
+
+
+def test_one_malformed_record_claim_suppresses_valid_ref_and_weak_fallbacks():
+    # A corrupt explicit claim must not leave the valid A observation linked
+    # through a transfer or tab to an independent B record.
+    for field, invalid in (("provider", True), ("resource_kind", True),
+                           ("host", 7), ("organization_id", 7)):
+        for signal in ("transfer", "tab"):
+            options = {signal: "shared-opaque"}
+            valid = _scoped(_event(1, A, **options))
+            malformed = _scoped(_event(2, A, **options))
+            independent = _scoped(_event(3, B, **options))
+            if field == "organization_id":
+                malformed[field] = invalid
+            else:
+                malformed["metadata"]["resource_reference"][field] = invalid
+            result = linked_work_items([valid, malformed, independent])
+            assert result["items"] == [], (field, signal)
+            assert result["candidate_links"] == [], (field, signal)
+            assert result["conflicting_reference_groups_suppressed"] == 1
+
+
+def test_literal_record_identity_and_missing_optional_legacy_fields_still_link():
+    # Strings that look like Python-coerced values are still legitimate
+    # *literal* identities, not forbidden words or numeric-looking strings.
+    for field, literal in (("provider", "true"), ("resource_kind", "true"),
+                           ("host", "7"), ("organization_id", "7")):
+        first = _scoped(_event(1, A))
+        second = _scoped(_event(2, A))
+        for row in (first, second):
+            if field == "organization_id":
+                row[field] = literal
+            else:
+                row["metadata"]["resource_reference"][field] = literal
+        result = linked_work_items([first, second])
+        assert set(_items(result)) == {("e01", "e02")}, field
+        assert _items(result)[("e01", "e02")]["link_basis"] == {"same_record": 1}
+
+    first, second = _event(1, A), _event(2, A)
+    for row in (first, second):
+        row["metadata"]["resource_reference"].pop("host")
+        row.pop("organization_id", None)
+    result = linked_work_items([first, second])
+    assert set(_items(result)) == {("e01", "e02")}
+    assert result["conflicting_reference_groups_suppressed"] == 0
