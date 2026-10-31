@@ -206,7 +206,7 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
             union.union(group[0], other)
 
     by_ref: dict[str, list[str]] = defaultdict(list)
-    by_transfer: dict[tuple[tuple[str, str, str, str], str], list[str]] = defaultdict(list)
+    by_transfer: dict[tuple[tuple[str, str, str, str], str], list[dict[str, Any]]] = defaultdict(list)
     by_tab: dict[tuple[tuple[str, str, str, str], str], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
         if row["ref"]:
@@ -216,14 +216,22 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
         # Do not use missing/invalid identity as a wildcard.
         if row["scope"] is not None and not row["reference_tainted"]:
             if row["transfer"]:
-                by_transfer[(row["scope"], row["transfer"])].append(row["event_id"])
+                by_transfer[(row["scope"], row["transfer"])].append(row)
             if row["tab"]:
                 by_tab[(row["scope"], row["tab"])].append(row)
     for group in by_ref.values():
         join(group, "same_record")
+    ambiguous_transfer_groups = 0
     for group in by_transfer.values():
-        if len(group) >= 2:
-            join(group, "clipboard_transfer")
+        if len(group) < 2:
+            continue
+        # A single scoped token claiming three distinct records is not a
+        # reliable copy/paste edge: token reuse or interleaved work is possible.
+        # Keep independent same-record evidence but do not merge the fanout.
+        if len({row["ref"] for row in group if row["ref"]}) > 2:
+            ambiguous_transfer_groups += 1
+            continue
+        join([row["event_id"] for row in group], "clipboard_transfer")
 
     candidates: list[dict[str, Any]] = []
     for tab_rows in by_tab.values():
@@ -256,7 +264,8 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
     for row in rows:
         members[union.find(row["event_id"])].append(row["event_id"])
     return {"rows": rows, "members": members, "root": union.find, "links": links,
-            "candidates": candidates, "conflicting_references": conflicts}
+            "candidates": candidates, "conflicting_references": conflicts,
+            "ambiguous_transfer_groups": ambiguous_transfer_groups}
 
 
 def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> dict[str, Any]:
@@ -322,12 +331,14 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
         "total_candidate_links": len(candidates),
         "unlinked_observation_count": unlinked,
         "conflicting_reference_groups_suppressed": linked["conflicting_references"],
+        "ambiguous_clipboard_transfer_groups": linked["ambiguous_transfer_groups"],
         "link_contract": {
             "merged_bases": sorted(_CONFIDENCE),
             "candidate_only_bases": sorted(_CANDIDATE_CONFIDENCE),
             "time_alone_never_links": True,
             "ephemeral_signals_scope": "exact_organization_actor_device_session",
             "missing_scope_is_wildcard": False,
+            "multiplexed_clipboard_transfer_is_unmerged": True,
             "labels_titles_urls_and_clipboard_contents_read": False,
             "linked_items_are_tasks": False,
             "ask_when_ambiguous": True,
