@@ -173,7 +173,8 @@ def _database(*, create: bool) -> Iterator[sqlite3.Connection | None]:
                         in legacy_columns
                     )
                     if (legacy_table != ("table",) or
-                        legacy_actual_columns != legacy_expected_columns):
+                        legacy_actual_columns != legacy_expected_columns or
+                        _unexpected_schema_object(db)):
                         raise CaseDeclarationError("incompatible legacy declaration schema")
                     # Legacy migration must honor the same global 50-row
                     # limit as v2 reads/writes. Check before ALTER/token
@@ -228,11 +229,26 @@ def _database(*, create: bool) -> Iterator[sqlite3.Connection | None]:
             (name, declared_type.upper(), required, primary)
             for _index, name, declared_type, required, _default, primary in columns
         )
-        if table != ("table",) or actual_columns != expected_columns:
+        if (table != ("table",) or actual_columns != expected_columns or
+            _unexpected_schema_object(db)):
             raise CaseDeclarationError("incompatible versioned declaration schema")
         yield db
     finally:
         db.close()
+
+
+def _unexpected_schema_object(db: sqlite3.Connection) -> bool:
+    """Reject executable/foreign schema alongside the private declaration table.
+
+    SQLite's implicit PRIMARY KEY autoindex has a reserved sqlite_* name.
+    The trusted writer creates no other tables, views, indexes or triggers.
+    A trigger is especially dangerous: table_info alone cannot reveal one,
+    and it can silently rewrite or erase owner facts during a CAS/migration.
+    """
+    return db.execute(
+        "SELECT 1 FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' "
+        "AND NOT (type='table' AND name='declarations') LIMIT 1"
+    ).fetchone() is not None
 
 
 def _reviewed(now: datetime) -> dict[str, tuple[datetime, datetime]]:
