@@ -5,11 +5,21 @@
   let period = 'week', start = '', end = '', generation = 0, pending = null, activeHandoff = null;
   const staleScope = 'Work period changed. Prepare a new AI handoff for the selected period.';
   const dateInput = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-  // Date.parse accepts 24:00:00 and rolls it into the next day. Evidence,
-  // consent-lease and ticket bounds must not silently change calendar dates.
+  // Date.parse accepts 24:00:00 and impossible dates such as February 30,
+  // rolling both into a different day. No evidence or export-bound aliasing.
+  const calendarDay = value => {
+    if (typeof value !== 'string') return false;
+    const parts = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+    if (!parts) return false;
+    const year = +parts[1], month = +parts[2], day = +parts[3];
+    const check = new Date(0);
+    check.setUTCFullYear(year, month - 1, day);
+    return check.getUTCFullYear() === year &&
+      check.getUTCMonth() === month - 1 && check.getUTCDate() === day;
+  };
   const strictClockInstant = value => typeof value === 'string' &&
     /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.test(value) &&
-    Number.isFinite(Date.parse(value));
+    calendarDay(value) && Number.isFinite(Date.parse(value));
   function selection() {
     if (period === 'current' || period === 'all') return {scope: period};
     const now = new Date(), a = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -34,19 +44,8 @@
     const object = v => v !== null && typeof v === 'object' && !Array.isArray(v);
     const count = v => Number.isSafeInteger(v) && v >= 0;
     const counts = v => object(v) && Object.values(v).every(count);
-    // Reject invalid/reversed observed times rather than display "Invalid Date".
-    // Date.parse may normalize impossible calendar days, so verify the day.
-    const calendarDay = value => {
-      if (typeof value !== 'string') return false;
-      const parts = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
-      if (!parts) return false;
-      const year = +parts[1], month = +parts[2], day = +parts[3];
-      const check = new Date(0);
-      check.setUTCFullYear(year, month - 1, day);
-      return check.getUTCFullYear() === year &&
-        check.getUTCMonth() === month - 1 && check.getUTCDate() === day;
-    };
-    const instant = value => strictClockInstant(value) && calendarDay(value);
+    // Shared clock/calendar validation also applies to ticket and lease bounds.
+    const instant = strictClockInstant;
     const dateLabel = value => typeof value === 'string' &&
       (/^\d{4}-\d{2}-\d{2}$/.test(value) || instant(value)) &&
       calendarDay(value) && Number.isFinite(Date.parse(value));
