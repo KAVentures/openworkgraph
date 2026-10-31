@@ -1525,8 +1525,8 @@ def test_corrupt_blob_ref_prunes_transitive_dependents_on_authorized_save(local)
     for ref in (A, B, C, d):
         reviewed(ref)
     save(A)
-    dependent = save(B, depends_on_work_item_refs=[A])
-    save(C, depends_on_work_item_refs=[B])
+    save(B, depends_on_work_item_refs=[A])
+    dependent = save(C, depends_on_work_item_refs=[B])
     independent = save(d)
 
     damaged_ref = sqlite3.Binary(b"\x00damaged-ref\xff")
