@@ -719,3 +719,29 @@ script and exercise rollover during preview, after modal opening and while a
 single-use ticket is pending, plus fixed-range/all-history positive controls.
 They do not establish real-user usability, browser accessibility, customer
 consent, provider acceptance, commercial benefit or competitor parity.
+
+
+## Zero-event copy-only affordance
+
+A preview with **zero selected recorded events** can still provide an
+explanatory request for the user to copy, but cannot supply an event-evidence
+ZIP. The modal now states that limitation visibly, does not promise a full-period
+file in its large-history guidance, and disables both Download and the
+detailed-chronology checkbox. The disabled checkbox cannot imply that a
+detailed package is configurable when no package exists. Programmatically
+invoking Download still issues no ticket. This is true both when other retained
+history exists and when the backend reports zero retained rows.
+
+Selected **capture-health/gap-only rows are not zero recorded rows**. They may
+still be exported for user-reviewed diagnostics with the same existing local
+permission/redaction checks, while the copyable request warns that they are
+not evidence of an ordinary workflow. Ordinary-work positive previews retain
+their existing detailed-export option. No change is made to server-side export
+eligibility or to the meaning of capture gaps.
+
+The two deterministic synthetic Node regressions in
+`tests/js/analysis_handoff_scope.test.mjs` exercise both empty-selection
+variants and ordinary/health-only positive controls, including programmatic
+disabled-button invocation and an explicit detailed export ticket. They do
+not verify a live browser, accessibility audit, current consent, capture
+completeness, inactivity, real provider acceptance or commercial benefit.
