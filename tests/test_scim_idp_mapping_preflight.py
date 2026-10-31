@@ -556,3 +556,50 @@ def test_missing_active_patch_warning_is_independent_of_unversioned_policy():
     }))
     assert approved["status"] == "requires_live_validation"
     assert {"deactivation_patch_not_declared", "unversioned_patch_overwrite"} <= codes(approved)
+
+
+@pytest.mark.parametrize("client", ["entra", "okta", "other"])
+@pytest.mark.parametrize("create_paths", [
+    ["userName"],
+    ["userName", "externalId", "displayName"],
+    ["userName", "emails"],
+], ids=["username-only", "descriptive-fields", "descriptive-contacts"])
+def test_create_without_active_cautions_about_default_active_state(client, create_paths):
+    # Shipped create_user offboards only for literal active=False. Without an
+    # active field in the declared create mapping, disabled-user creation has
+    # not been demonstrated. The warning is static, not a provider test.
+    users = mapping()["users"]
+    users["create_attributes"] = create_paths
+    report = assess(mapping(client=client, users=users))
+    assert report["status"] == "requires_live_validation"
+    assert "creation_active_not_declared" in codes(report)
+    assert "deactivation_patch_not_declared" not in codes(report)
+    assert "unsupported_attribute" not in codes(report)
+    assert "live_validation_required" in codes(report)
+    assert "userName" not in json.dumps(report)
+    assert "emails" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("create_paths", [
+    ["userName", "active"],
+    ["userName", "ACTIVE"],
+    ["userName", "active", "name.givenName"],
+], ids=["minimal", "case-insensitive", "with-name"])
+def test_create_with_declared_active_is_not_certified(create_paths):
+    users = mapping()["users"]
+    users["create_attributes"] = create_paths
+    report = assess(mapping(users=users))
+    assert report["status"] == "requires_live_validation"
+    assert "creation_active_not_declared" not in codes(report)
+    assert "live_validation_required" in codes(report)
+
+
+def test_missing_create_active_is_independent_of_patch_and_username_blockers():
+    users = mapping()["users"]
+    users["create_attributes"] = ["displayName"]
+    users["patch_attributes"] = ["displayName"]
+    report = assess(mapping(users=users))
+    assert report["status"] == "blocked"
+    assert {"creation_active_not_declared", "deactivation_patch_not_declared",
+            "missing_stable_username"} <= codes(report)
+    assert "unsupported_attribute" not in codes(report)
