@@ -306,9 +306,11 @@ displayed chunks, rather than rendering an unbounded plan or silently
 truncating server-returned evidence. It checks this before opening the
 handoff modal, Copy or export-ticket Download.
 
-Exactly 31 displayed chunks remain valid, including a partial plan marked
-`more_dates_not_listed`; an absent plan, fewer chunks and legacy zero-count
-chunks retain the existing compatibility rules. Synthetic mock-DOM
+Exactly 31 displayed chunks remain valid; when `more_dates_not_listed`
+is explicitly true, all 31 must be present and the latest selected observation
+must fall on a later unlisted date. An absent plan, fewer chunks and legacy
+zero-count chunks retain compatibility only when no explicit coverage flag
+contradicts their counts. Synthetic mock-DOM
 regressions distinguish the exact 31-entry boundary from a forged 32-entry
 response while preserving count conservation, chronological ordering,
 observed-span intersection and the selected period. This is a bounded
@@ -325,17 +327,21 @@ the modal, Copy or Download. Older previews that omit the optional field
 remain usable; a literal `false` remains a statement of uncertainty.
 
 The backend's `more_dates_not_listed=true` means selected events exist on
-dates beyond those displayed. The dashboard now requires a supplied date
-list and strictly more selected canonical rows than the sum of its listed
-`event_rows`; a forged omission flag when all selected rows are already
-accounted for is inconsistent. It does **not** require all 31 possible
-displayed chunks: legitimate partial/truncated plans, including older
-short plans, remain reviewable. An absent omission flag is not treated as
-proof of completeness, and a zero-count legacy chunk is not evidence.
+dates beyond the **first 31 displayed UTC dates**. The dashboard requires
+exactly 31 listed chunks, fewer listed rows than selected canonical rows,
+and a latest observed event at or after the last listed chunk's exclusive
+end. A forged omission flag for a short or fully accounted-for list is
+inconsistent. Conversely, explicit `more_dates_not_listed=false` requires
+the listed row counts to equal the selected canonical count; otherwise the
+UI would falsely imply that an incomplete daily plan listed all dates.
 
-Synthetic modal regressions cover affirmative/string completeness,
-contradictory omission with complete or absent chunks, honest partial
-coverage, explicit `false` and absent legacy flags. This is a
+An **absent** omission flag remains legacy-compatible, including short
+partial plans, without treating it as a proof of completeness. Zero-count
+legacy chunks are not positive evidence of observations. Synthetic modal
+regressions cover forged true/false flags, missing rows, short truncation
+claims, a latest observation still within the listed dates, and a valid
+32-day selected history with 31 displayed days. These remain client-side
+consistency checks, not guarantees of capture completeness or source truth. This is a
 client-side contradiction check, not a proof of complete recording,
 verified business workflows, consent, real provider state, a customer
 pilot or competitor parity.
@@ -419,3 +425,26 @@ splits, and a zero-row second fragment. The 31/32-chunk boundary fixture now
 uses **distinct UTC dates in an all-retained-history selection** instead of
 31 one-second fragments of a single day. These are fake local responses, not
 real-user usability research, live-source validation or verified outcomes.
+
+## Exact explicit date-plan coverage reconciliation
+
+For the authenticated backend's `analysis_plan`, the omission flag describes
+whether its bounded SQL query found a **32nd distinct UTC date**. It is not a
+generic indicator that a plan is partial. A selected 32-day history can
+legitimately display the first 31 dates with `more_dates_not_listed=true`;
+a one-day plan with one of two selected rows omitted cannot use that flag
+to claim ordinary pagination.
+
+When the flag is explicitly `false`, the safe-integer sum of displayed
+`event_rows` must equal `canonical_rows`. When explicitly `true`, the
+preview must contain 31 distinct ordered UTC date chunks, fewer displayed
+rows than selected, and an observed last event on a later date. An omitted
+flag is tolerated for legacy previews, but does not certify that the
+displayed plan is exhaustive. Invalid or contradictory previews cannot open
+the modal or issue Copy/Download; no server authorization is inferred.
+
+Synthetic regressions distinguish legitimate 32-day truncation from a
+forged one-day truncation, an undercounting explicit no-omission claim, an
+empty explicit no-omission plan with selected events, and a last-observation
+timestamp that contradicts an unlisted later date. This does not establish
+complete recording, a live pilot, provider verification or competitor parity.
