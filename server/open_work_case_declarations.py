@@ -145,6 +145,36 @@ def _database(*, create: bool) -> Iterator[sqlite3.Connection | None]:
             db.execute("BEGIN IMMEDIATE")
             try:
                 if db.execute("PRAGMA user_version").fetchone()[0] == 1:
+                    # A version marker is not proof of the old declaration
+                    # schema. Validate the complete v1 identity contract
+                    # *before* ALTER or token generation; otherwise an
+                    # incompatible v1 table can be mutated/stamped as v2
+                    # before the later v2 shape check rejects it.
+                    legacy_expected_columns = (
+                        ("work_item_ref", "TEXT", 0, 1),
+                        ("scope_ref", "TEXT", 1, 0),
+                        ("goal_code", "TEXT", 1, 0),
+                        ("expected_outcome_code", "TEXT", 1, 0),
+                        ("dependencies_json", "TEXT", 1, 0),
+                        ("revision", "INTEGER", 1, 0),
+                        ("created_at", "TEXT", 1, 0),
+                        ("updated_at", "TEXT", 1, 0),
+                        ("expires_at", "TEXT", 1, 0),
+                    )
+                    legacy_table = db.execute(
+                        "SELECT type FROM sqlite_master WHERE name='declarations'"
+                    ).fetchone()
+                    legacy_columns = db.execute(
+                        "PRAGMA table_info(declarations)"
+                    ).fetchall()
+                    legacy_actual_columns = tuple(
+                        (name, declared_type.upper(), required, primary)
+                        for _index, name, declared_type, required, _default, primary
+                        in legacy_columns
+                    )
+                    if (legacy_table != ("table",) or
+                        legacy_actual_columns != legacy_expected_columns):
+                        raise CaseDeclarationError("incompatible legacy declaration schema")
                     # Legacy migration must honor the same global 50-row
                     # limit as v2 reads/writes. Check before ALTER/token
                     # generation: damaged v1 databases must not force an
