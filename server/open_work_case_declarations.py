@@ -260,13 +260,36 @@ def _unexpected_schema_constraints(db: sqlite3.Connection) -> bool:
     sqlite_master user objects misses them. Foreign keys add no schema object
     at all and may change deletion semantics or reject otherwise valid saves.
     Both the original v1 table and the v2 writer have exactly one implicit
-    work_item_ref PRIMARY KEY index and no foreign keys.
+    ascending BINARY work_item_ref PRIMARY KEY index and no foreign keys,
+    CHECK constraints or explicit collations.
     """
     indexes = db.execute("PRAGMA index_list(declarations)").fetchall()
     foreign_keys = db.execute("PRAGMA foreign_key_list(declarations)").fetchall()
+    # The same PK index name and index_list row can hide a NOCASE or
+    # descending primary key. Exact opaque refs require binary identity.
+    primary_key_parts = db.execute(
+        "PRAGMA index_xinfo('sqlite_autoindex_declarations_1')"
+    ).fetchall()
+    # CHECK clauses can change admitted owner facts without creating an index,
+    # FK, trigger, extra column or any other schema object. COLLATE on a
+    # non-indexed column (such as scope_ref) is similarly invisible to xinfo.
+    # The trusted v1/v2 writers emit neither keyword. Reject any occurrence
+    # conservatively, including ambiguous SQL text, rather than interpreting
+    # foreign schema as a trusted declaration ledger.
+    ddl = db.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='declarations'"
+    ).fetchone()
+    foreign_semantics = (
+        ddl is None or not isinstance(ddl[0], str) or
+        re.search(r"\b(?:CHECK|COLLATE)\b", ddl[0], re.IGNORECASE) is not None
+    )
     return (
         indexes != [(0, "sqlite_autoindex_declarations_1", 1, "pk", 0)]
-        or bool(foreign_keys)
+        or primary_key_parts != [
+            (0, 0, "work_item_ref", 0, "BINARY", 1),
+            (1, -1, None, 0, "BINARY", 0),
+        ]
+        or bool(foreign_keys) or foreign_semantics
     )
 
 
