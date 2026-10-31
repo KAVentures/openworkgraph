@@ -252,3 +252,307 @@ def test_declared_group_name_policy_is_optional_and_not_server_configuration():
         declared["provider_policy"]["unique_group_names"] = invalid
         with pytest.raises(InvalidMapping):
             assess(declared)
+
+
+@pytest.mark.parametrize("token", [
+    "1e309", "-1e309", "1.5e999999", "9.9e400",
+])
+def test_json_exponent_overflow_is_refused_even_in_unused_nested_data(token):
+    # Python's JSON parser otherwise converts valid exponent syntax to inf,
+    # unlike the already-refused literal NaN/Infinity constants.
+    for payload in (token, '{"unused":{"nested":[' + token + ']}}'):
+        with pytest.raises(InvalidMapping):
+            load_text(payload)
+
+
+@pytest.mark.parametrize("sign", ["", "-"])
+def test_json_integer_digit_bound_is_enforced_before_conversion(sign):
+    allowed = sign + "9" * 128
+    oversized = sign + "9" * 129
+    assert load_text(allowed) == int(allowed)
+    with pytest.raises(InvalidMapping):
+        load_text(oversized)
+    with pytest.raises(InvalidMapping):
+        load_text('{"discarded":[' + oversized + ']}')
+
+
+def test_finite_exponents_and_normal_mapping_remain_compatible():
+    assert load_text('{"finite":[1e308,-1e-308,0.5]}') == {
+        "finite": [1e308, -1e-308, 0.5],
+    }
+    assert assess(load_text(json.dumps(mapping())))["status"] == "requires_live_validation"
+
+
+@pytest.mark.parametrize("payload", [
+    r'"\ud800"',
+    r'"\udfff"',
+    r'{"unused":["\ud800"]}',
+    r'{"unused":{"\udfff":"value"}}',
+    r'{"unused":{"nested":{"key":"\ud83d"}}}',
+], ids=["lone-high", "lone-low", "nested-value", "nested-key", "deep-value"])
+def test_unpaired_surrogate_escapes_are_refused_even_in_unused_fields(payload):
+    with pytest.raises(InvalidMapping):
+        load_text(payload)
+
+
+@pytest.mark.parametrize("text", [
+    chr(0xD800),
+    '{"unused":"' + chr(0xDFFF) + '"}',
+], ids=["raw-high", "raw-low-in-object"])
+def test_direct_load_text_normalizes_unencodable_unicode_to_invalid_mapping(text):
+    with pytest.raises(InvalidMapping):
+        load_text(text)
+
+
+def test_valid_supplementary_unicode_surrogate_pair_is_preserved():
+    assert load_text(r'{"unused":"\ud83d\ude80"}') == {"unused": "\U0001f680"}
+    assert load_text('{"unused":"\U0001f680"}') == {"unused": "\U0001f680"}
+
+
+def test_cli_surrogate_rejection_is_generic_and_does_not_echo_input():
+    invalid = subprocess.run(
+        [sys.executable, str(SCRIPT), "-"],
+        input=br'{"unused":"\ud800"}',
+        capture_output=True,
+    )
+    assert invalid.returncode == 1
+    assert json.loads(invalid.stdout)["status"] == "invalid_input"
+    assert b"unused" not in invalid.stdout + invalid.stderr
+    assert b"ud800" not in invalid.stdout + invalid.stderr
+
+
+CORE_USER = "urn:ietf:params:scim:schemas:core:2.0:User:"
+
+
+@pytest.mark.parametrize("path,accepted", [
+    (CORE_USER + "emails", True),
+    (CORE_USER.upper() + "EMAILS.PRIMARY", True),
+    (CORE_USER + 'emails[type eq "work"].value', True),
+    (CORE_USER + 'emails[value eq "alias@example.invalid"].display', True),
+    (CORE_USER + r'emails[type eq "\u0041"].value', True),
+    (CORE_USER + r'emails[type eq "\U0041"].value', False),
+    (CORE_USER + r'emails[value eq "bad\u0000"].primary', False),
+    (CORE_USER + 'emails[type eq ""].value', False),
+    (CORE_USER + 'emails[type eq "work"].password', False),
+    (CORE_USER + 'emails[type\u00a0eq\u00a0"work"].value', False),
+    (CORE_USER + ":emails", False),
+    ("urn:ietf:params:scim:schemas:core:2.0:Group:emails", False),
+    ("urn:ietf:params:scim:schemas:extension:enterprise:2.0:User:emails", False),
+], ids=[
+    "whole-array", "mixed-case-child", "type-selector", "value-selector",
+    "valid-json-escape", "invalid-json-escape", "decoded-control",
+    "empty-selector", "unsupported-child", "unicode-separator",
+    "extra-colon", "foreign-group-urn", "foreign-extension-urn",
+])
+def test_core_qualified_contact_patch_matches_shipped_parser(path, accepted):
+    # Differential against the actual shipped PATCH path parser, not a
+    # mirrored regex. Preflight never makes a provider or provisioning call.
+    from gateway.scim_user_emails import _path
+    from gateway.scim_provisioning import Error
+
+    try:
+        _path(path)
+        shipped_accepts = True
+    except Error:
+        shipped_accepts = False
+    assert shipped_accepts is accepted
+
+    users = mapping()["users"]
+    users["patch_attributes"] = [path]
+    report = assess(mapping(users=users))
+    assert ("unsupported_attribute" not in codes(report)) is accepted
+    assert report["checked"]["user_matching"] == 2
+    assert path not in json.dumps(report)
+    if accepted:
+        assert report["status"] == "requires_live_validation"
+        assert "unverified_contact_metadata" in codes(report)
+    else:
+        assert report["status"] == "blocked"
+
+
+def test_qualified_contact_value_selector_retains_cautions_without_value_echo():
+    users = mapping()["users"]
+    users["patch_attributes"] = [
+        CORE_USER + 'emails[value eq "private@example.invalid"].primary',
+    ]
+    report = assess(mapping(users=users))
+    assert report["status"] == "requires_live_validation"
+    assert {"contact_value_selector", "unverified_contact_metadata",
+            "live_validation_required"} <= codes(report)
+    assert "private@example.invalid" not in json.dumps(report)
+
+
+def test_core_qualified_contact_does_not_enable_matching_or_creation():
+    users = mapping()["users"]
+    qualified = CORE_USER + "emails"
+    users["match_attributes"] = [qualified]
+    users["create_attributes"].append(qualified)
+    users["patch_attributes"] = [qualified]
+    report = assess(mapping(users=users))
+    assert report["status"] == "blocked"
+    assert sum(item["code"] == "unsupported_attribute" for item in report["findings"]) == 2
+    assert "unverified_contact_metadata" in codes(report)
+    assert qualified not in json.dumps(report)
+
+
+@pytest.mark.parametrize("first,second", [
+    ("emails", CORE_USER + "emails"),
+    ("emails.primary", CORE_USER + "EMAILS.PRIMARY"),
+    ('emails[type eq "work"].value', r'emails[type eq "\u0077ork"].value'),
+    ('emails[type eq "work"].value',
+     CORE_USER + 'emails[type eq "WORK"].value'),
+    ('emails[type eq "ss"].primary', r'emails[type eq "\u00df"].primary'),
+    ('emails[value eq "private@example.invalid"].display',
+     CORE_USER + r'emails[value eq "private\u0040example.invalid"].display'),
+    ('emails[value eq "alias@example.invalid"].primary',
+     r'emails[value eq "\u0061lias@example.invalid"].primary'),
+], ids=[
+    "qualified-whole-array", "qualified-child", "decoded-type-literal",
+    "qualified-casefolded-type", "unicode-casefolded-type",
+    "qualified-decoded-value", "decoded-value-literal",
+])
+def test_semantically_duplicate_contact_patch_targets_fail_closed(first, second):
+    # Shipped selector matching decodes JSON escapes and casefolds literals.
+    # An IdP mapping must not declare the same effective write target twice,
+    # including when its two raw paths are not byte-for-byte duplicates.
+    from gateway.scim_user_emails import _path
+
+    def effective(path):
+        field, literal, child = _path(path)
+        return field, literal.casefold() if literal is not None else None, child
+
+    assert effective(first) == effective(second)
+    users = mapping()["users"]
+    users["patch_attributes"].extend([first, second])
+    with pytest.raises(InvalidMapping, match="duplicate effective contact paths") as exc:
+        assess(mapping(users=users))
+    assert "private@example.invalid" not in str(exc.value)
+    assert "alias@example.invalid" not in str(exc.value)
+
+
+def test_distinct_contact_patch_targets_remain_supported_and_private():
+    users = mapping()["users"]
+    users["patch_attributes"].extend([
+        "emails", "emails.primary",
+        'emails[type eq "work"].value',
+        'emails[type eq "work"].primary',
+        'emails[value eq "work"].value',
+        'emails[type eq "home"].value',
+    ])
+    report = assess(mapping(users=users))
+    assert report["status"] == "requires_live_validation"
+    assert "unsupported_attribute" not in codes(report)
+    assert {"unverified_contact_metadata", "contact_value_selector"} <= codes(report)
+
+
+@pytest.mark.parametrize("paths", [
+    ["emails", "emails.primary"],
+    ["emails", CORE_USER + 'emails[type eq "work"].value'],
+    ["emails.primary", 'emails[type eq "work"].primary'],
+    ['emails[type eq "work"]', CORE_USER + 'emails[type eq "WORK"].primary'],
+    ['emails[type eq "work"]', r'emails[type eq "\u0077ork"].value'],
+    ["emails.value", 'emails[type eq "work"]'],
+], ids=[
+    "whole-array-and-child", "whole-array-and-qualified-selector",
+    "all-contacts-child-and-selector-child", "selected-contact-and-child",
+    "selected-contact-and-decoded-child", "all-contacts-child-and-selected-contact",
+])
+def test_overlapping_contact_patch_paths_warn_without_claiming_duplicate_target(paths):
+    # The shipped parser supports both operations, but execution order and
+    # current stored contacts determine whether one write overwrites another.
+    from gateway.scim_user_emails import _path
+    for path in paths:
+        _path(path)
+    users = mapping()["users"]
+    users["patch_attributes"] = paths
+    report = assess(mapping(users=users))
+    assert report["status"] == "requires_live_validation"
+    assert {"overlapping_contact_patch_paths", "unverified_contact_metadata",
+            "live_validation_required"} <= codes(report)
+    assert "unsupported_attribute" not in codes(report)
+    assert not any(path in json.dumps(report) for path in paths)
+
+
+@pytest.mark.parametrize("paths", [
+    ["emails"],
+    ["emails.primary", "emails.display"],
+    ["emails.value", 'emails[type eq "work"].display'],
+    ['emails[type eq "work"].value', 'emails[type eq "work"].primary'],
+    ['emails[type eq "work"]', 'emails[type eq "home"].value'],
+    ['emails[type eq "work"].value', 'emails[value eq "work"].value'],
+], ids=[
+    "whole-array-only", "distinct-all-contacts-children",
+    "different-child-fields", "distinct-selected-children",
+    "distinct-selected-type", "different-selector-kinds",
+])
+def test_nonoverlapping_declared_contact_paths_do_not_get_overlap_warning(paths):
+    users = mapping()["users"]
+    users["patch_attributes"] = paths
+    report = assess(mapping(users=users))
+    assert report["status"] == "requires_live_validation"
+    assert "overlapping_contact_patch_paths" not in codes(report)
+    assert "unsupported_attribute" not in codes(report)
+
+
+def test_unsupported_contact_paths_remain_explicit_blockers_not_duplicates():
+    users = mapping()["users"]
+    users["patch_attributes"] = [
+        "emails[unknown eq \"work\"].value",
+        CORE_USER + "emails[unknown eq \"work\"].value",
+    ]
+    report = assess(mapping(users=users))
+    assert report["status"] == "blocked"
+    assert sum(finding["code"] == "unsupported_attribute"
+               for finding in report["findings"]) == 2
+
+
+@pytest.mark.parametrize("patch_paths", [
+    [],
+    ["displayName"],
+    ["name.givenName", "externalId"],
+    ["emails"],
+    ['emails[type eq "private@example.invalid"].primary'],
+], ids=[
+    "no-patch-attributes", "display-only", "name-and-external-id",
+    "contact-only", "selected-contact-only",
+])
+@pytest.mark.parametrize("client", ["entra", "okta"])
+def test_declared_patch_without_active_warns_about_deactivation_gap(patch_paths, client):
+    # A syntactically supported IdP mapping can still omit the one attribute
+    # needed for PATCH-based deactivation. This is a static rollout caution,
+    # not evidence that PUT or another separately tested path is unavailable.
+    users = mapping()["users"]
+    users["patch_attributes"] = patch_paths
+    report = assess(mapping(client=client, users=users))
+    assert report["status"] == "requires_live_validation"
+    assert "deactivation_patch_not_declared" in codes(report)
+    assert "live_validation_required" in codes(report)
+    assert "unsupported_attribute" not in codes(report)
+    assert "private@example.invalid" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("patch_paths", [
+    ["active"],
+    ["ACTIVE"],
+    ["name.givenName", "active"],
+])
+def test_declared_active_patch_does_not_claim_deactivation_certification(patch_paths):
+    users = mapping()["users"]
+    users["patch_attributes"] = patch_paths
+    report = assess(mapping(users=users))
+    assert report["status"] == "requires_live_validation"
+    assert "deactivation_patch_not_declared" not in codes(report)
+    assert "live_validation_required" in codes(report)
+
+
+def test_missing_active_patch_warning_is_independent_of_unversioned_policy():
+    users = mapping()["users"]
+    users["write_mode"] = "unversioned_user_patch"
+    users["patch_attributes"] = ["displayName"]
+    denied = assess(mapping(users=users))
+    assert {"deactivation_patch_not_declared", "missing_patch_policy"} <= codes(denied)
+    approved = assess(mapping(users=users, provider_policy={
+        "allow_unversioned_user_patch": True,
+    }))
+    assert approved["status"] == "requires_live_validation"
+    assert {"deactivation_patch_not_declared", "unversioned_patch_overwrite"} <= codes(approved)

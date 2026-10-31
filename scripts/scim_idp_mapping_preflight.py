@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import sys
 from pathlib import Path
 from typing import Any
 
 MAX_BYTES = 32_768
+MAX_JSON_INTEGER_DIGITS = 128
 MAX_ATTRIBUTES = 32
 USER_MATCH = frozenset({"username", "externalid"})
 USER_CREATE = frozenset({
@@ -23,6 +25,7 @@ USER_CREATE = frozenset({
 })
 USER_PATCH = USER_CREATE - {"username"}
 GROUP_MATCH = frozenset({"displayname", "externalid"})
+_CORE_USER_PREFIX = "urn:ietf:params:scim:schemas:core:2.0:User:"
 
 
 # The shipped contact array is descriptive only. These are PATCH path shapes,
@@ -34,7 +37,19 @@ _CONTACT_SELECTOR = re.compile(
 )
 
 
+def _unqualified_contact_patch_path(path: str) -> str:
+    """Mirror the shipped contact parser's exact core User URN stripping.
+
+    Only PATCH contact paths are normalized; never reinterpret matching or
+    create declarations, or casefold a quoted selector literal.
+    """
+    if path[:len(_CORE_USER_PREFIX)].casefold() == _CORE_USER_PREFIX.casefold():
+        return path[len(_CORE_USER_PREFIX):]
+    return path
+
+
 def _supported_contact_patch_path(path: str) -> bool:
+    path = _unqualified_contact_patch_path(path)
     if path == "emails" or path in {"emails." + child for child in _CONTACT_CHILDREN}:
         return True
     match = _CONTACT_SELECTOR.fullmatch(path)
@@ -104,6 +119,28 @@ def assess(mapping: Any) -> dict:
     create = _attributes(users["create_attributes"], "users.create_attributes", minimum=1)
     patch = _attributes(users["patch_attributes"], "users.patch_attributes", minimum=0, max_path=1024)
     group_match = _attributes(groups["match_attributes"], "groups.match_attributes", minimum=0)
+    # Different spellings of the same *supported* contact PATCH target must
+    # not pass as independent mappings. The shipped contact parser strips the
+    # exact core User URN, decodes JSON selector literals and compares selected
+    # values with casefold(). A raw-path duplicate check misses all three.
+    # Unsupported paths retain their ordinary explicit blocker below.
+    effective_contact_paths: set[tuple[str, ...]] = set()
+    for value in patch:
+        if not _supported_contact_patch_path(value):
+            continue
+        unqualified = _unqualified_contact_patch_path(value)
+        selector = _CONTACT_SELECTOR.fullmatch(unqualified)
+        if selector is None:
+            effective = ("field", unqualified.casefold())
+        else:
+            effective = (
+                "selector", selector.group(1).casefold(),
+                json.loads(selector.group(2)).casefold(),
+                (selector.group(3) or "").casefold(),
+            )
+        if effective in effective_contact_paths:
+            raise InvalidMapping("users.patch_attributes contains duplicate effective contact paths")
+        effective_contact_paths.add(effective)
     findings: list[dict[str, str]] = []
 
     def add(severity: str, code: str, path: str, message: str) -> None:
@@ -119,19 +156,52 @@ def assess(mapping: Any) -> dict:
             if value not in supported and not (path == "users.patch_attributes" and _supported_contact_patch_path(value)):
                 add("blocker", "unsupported_attribute", f"{path}[{index}]",
                     "This attribute or selector is not supported for this operation")
+    # The shipped contact PATCH parser accepts the exact core User schema URN
+    # as a prefix. Keep cautions consistent with accepted qualified paths.
+    contact_patch_paths = [_unqualified_contact_patch_path(value) for value in patch]
     if any((contact_match := _CONTACT_SELECTOR.fullmatch(value)) is not None
-           and contact_match.group(1).casefold() == "value" for value in patch):
+           and contact_match.group(1).casefold() == "value" for value in contact_patch_paths):
         add("caution", "contact_value_selector", "users.patch_attributes",
             "A contact-value selector is data-dependent and is not an identity match or verification")
-    if "emails" in create or any(value.casefold().startswith("emails") for value in patch):
+    if "emails" in create or any(value.casefold().startswith("emails") for value in contact_patch_paths):
         add("caution", "unverified_contact_metadata", "users",
             "Contact arrays are descriptive only; matching, login and adoption still use stable userName/externalId")
+    # Different *supported* PATCH targets can overlap without being identical:
+    # replacing an entire array and then a child, or a selected contact and
+    # then one of its children, depends on operation order and current data.
+    # Warn rather than block: these are legal shipped operations and a static
+    # declaration cannot know whether a client actually sends them together.
+    contact_keys = effective_contact_paths
+    contact_overlap = ("field", "emails") in contact_keys and len(contact_keys) > 1
+    if not contact_overlap:
+        for child in _CONTACT_CHILDREN:
+            if (("field", "emails." + child) in contact_keys and any(
+                    key[0] == "selector" and key[3] in ("", child)
+                    for key in contact_keys)):
+                contact_overlap = True
+                break
+    if not contact_overlap:
+        selected_children: dict[tuple[str, str], set[str]] = {}
+        for key in contact_keys:
+            if key[0] == "selector":
+                selected_children.setdefault((key[1], key[2]), set()).add(key[3])
+        contact_overlap = any("" in children and len(children) > 1
+                              for children in selected_children.values())
+    if contact_overlap:
+        add("caution", "overlapping_contact_patch_paths", "users.patch_attributes",
+            "Contact PATCH paths may overwrite overlapping targets; review client operation order and current data")
     if "username" not in create:
         add("blocker", "missing_stable_username", "users.create_attributes",
             "User creation requires the stable work-email userName")
     if "username" in patch:
         add("blocker", "immutable_username", "users.patch_attributes",
             "OWG does not support changing the stable userName/evidence actor")
+    if "active" not in patch:
+        # A declared PATCH mapping without active does not demonstrate that an
+        # IdP can deactivate an employee. Do not block a possible separately
+        # tested PUT/other lifecycle path or imply live provider certification.
+        add("caution", "deactivation_patch_not_declared", "users.patch_attributes",
+            "Declared User PATCH mapping omits active; verify a supported deactivate operation before rollout")
     for path, values in (("users.create_attributes", create), ("users.patch_attributes", patch)):
         if "name" in values and any(value.startswith("name.") for value in values):
             add("caution", "overlapping_name_paths", path,
@@ -192,19 +262,48 @@ def _reject_duplicates(pairs: list[tuple[str, Any]]) -> dict:
 def _bounded_tree(value: Any, depth: int = 0) -> None:
     if depth > 32:
         raise InvalidMapping("Mapping JSON nesting exceeds 32 levels")
-    if type(value) is dict:
-        for child in value.values():
+    if type(value) is str:
+        # Python's JSON decoder permits lone UTF-16 surrogate escapes. They
+        # are not Unicode scalar values and must not survive strict preflight,
+        # including in fields the mapping schema will otherwise discard.
+        if any(0xD800 <= ord(char) <= 0xDFFF for char in value):
+            raise InvalidMapping("Mapping JSON contains an unpaired Unicode surrogate")
+    elif type(value) is dict:
+        for key, child in value.items():
+            _bounded_tree(key, depth)
             _bounded_tree(child, depth + 1)
     elif type(value) is list:
         for child in value:
             _bounded_tree(child, depth + 1)
 
 
+def _bounded_json_int(token: str) -> int:
+    """Reject enormous numeric tokens before constructing Python integers."""
+    if len(token) - int(token.startswith("-")) > MAX_JSON_INTEGER_DIGITS:
+        raise InvalidMapping("Mapping JSON integer exceeds bounded digits")
+    return int(token)
+
+
+def _finite_json_float(token: str) -> float:
+    """JSON exponents may overflow to infinity despite valid JSON syntax."""
+    value = float(token)
+    if not math.isfinite(value):
+        raise InvalidMapping("Nonfinite JSON is refused")
+    return value
+
+
 def load_text(text: str) -> Any:
-    if len(text.encode("utf-8")) > MAX_BYTES:
+    try:
+        encoded_size = len(text.encode("utf-8"))
+    except UnicodeError as exc:
+        # Direct Python callers must get the same generic validation error as
+        # CLI callers, not a raw UnicodeEncodeError with their input attached.
+        raise InvalidMapping("Mapping is not bounded, strict JSON") from exc
+    if encoded_size > MAX_BYTES:
         raise InvalidMapping("Mapping exceeds the 32 KiB input limit")
     try:
         parsed = json.loads(text, object_pairs_hook=_reject_duplicates,
+                            parse_int=_bounded_json_int, parse_float=_finite_json_float,
                             parse_constant=lambda _: (_ for _ in ()).throw(InvalidMapping("Nonfinite JSON is refused")))
         _bounded_tree(parsed)
         return parsed
