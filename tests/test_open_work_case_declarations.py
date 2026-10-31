@@ -1730,3 +1730,71 @@ def test_stamped_v2_schema_does_not_authorize_incompatible_case_identity(local, 
         assert db.execute("SELECT COUNT(*) FROM declarations").fetchone()[0] == (
             2 if damage == "missing_primary_key" else 0
         )
+
+
+@pytest.mark.parametrize(
+    "damage",
+    ["missing_primary_key", "missing_revision", "extra_column",
+     "wrong_revision_type", "nullable_scope", "view_instead_of_table"],
+)
+def test_incompatible_v1_schema_is_never_mutated_or_stamped_v2(
+    local, monkeypatch, damage,
+):
+    """Reject a false v1 marker before token generation or ALTER TABLE."""
+    reviewed(A)
+    ddl = """CREATE TABLE declarations (
+        work_item_ref TEXT PRIMARY KEY, scope_ref TEXT NOT NULL,
+        goal_code TEXT NOT NULL, expected_outcome_code TEXT NOT NULL,
+        dependencies_json TEXT NOT NULL, revision INTEGER NOT NULL,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL)"""
+    if damage == "missing_primary_key":
+        ddl = ddl.replace("work_item_ref TEXT PRIMARY KEY", "work_item_ref TEXT")
+    elif damage == "missing_revision":
+        ddl = ddl.replace(", revision INTEGER NOT NULL", "")
+    elif damage == "extra_column":
+        ddl = ddl.replace("expires_at TEXT NOT NULL)",
+                          "expires_at TEXT NOT NULL, foreign_field TEXT)")
+    elif damage == "wrong_revision_type":
+        ddl = ddl.replace("revision INTEGER NOT NULL", "revision TEXT NOT NULL")
+    elif damage == "nullable_scope":
+        ddl = ddl.replace("scope_ref TEXT NOT NULL", "scope_ref TEXT")
+    elif damage == "view_instead_of_table":
+        ddl = "CREATE VIEW declarations AS SELECT 'sentinel' AS work_item_ref"
+
+    path = facts._path()
+    with sqlite3.connect(path) as db:
+        db.execute(ddl)
+        db.execute("PRAGMA user_version=1")
+        if damage == "missing_primary_key":
+            row = (A, SCOPE, "review_source_state", "source_state_rechecked",
+                   "[]", 1, NOW.isoformat(), NOW.isoformat(),
+                   (NOW + timedelta(days=7)).isoformat())
+            db.execute("INSERT INTO declarations VALUES (?,?,?,?,?,?,?,?,?)", row)
+            db.execute("INSERT INTO declarations VALUES (?,?,?,?,?,?,?,?,?)", row)
+        before_schema = db.execute(
+            "SELECT type,name,sql FROM sqlite_master ORDER BY type,name"
+        ).fetchall()
+        before_count = (db.execute("SELECT COUNT(*) FROM declarations").fetchone()[0]
+                        if damage != "view_instead_of_table" else None)
+    if os.name == "posix":
+        path.chmod(0o600)
+
+    def no_token(*_args, **_kwargs):
+        raise AssertionError("invalid legacy schema generated an edit token")
+    monkeypatch.setattr(facts.secrets, "token_hex", no_token)
+
+    with pytest.raises(facts.CaseDeclarationError, match="incompatible legacy"):
+        facts.list_case_declarations(SCOPE, now=NOW)
+    with pytest.raises(facts.CaseDeclarationError, match="incompatible legacy"):
+        save()
+    with sqlite3.connect(path) as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert db.execute(
+            "SELECT type,name,sql FROM sqlite_master ORDER BY type,name"
+        ).fetchall() == before_schema
+        assert "edit_token" not in [
+            column[1] for column in db.execute("PRAGMA table_info(declarations)")
+        ]
+        if before_count is not None:
+            assert db.execute("SELECT COUNT(*) FROM declarations").fetchone()[0] == before_count
