@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import Path as PathParam
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
@@ -30,6 +31,7 @@ from . import process_discovery_provenance as discovery_provenance
 from . import event_log_object_attributes as object_attributes
 from . import event_log_object_constraints as object_constraints
 from . import event_log_object_process_model as object_process_model
+from . import event_log_domain_packs as domain_packs
 from . import event_log_object_diagnostics as object_diagnostics
 from . import event_log_objects as objects
 from . import event_log_object_relationships as object_relationships
@@ -446,6 +448,51 @@ async def event_log_object_process_model_conformance(request: Request, log_id: s
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+_PACK_ID = r"^[a-z][a-z0-9_]{0,39}$"
+
+
+@router.get("/v1/event-log-domain-packs")
+def event_log_domain_pack_catalog(request: Request):
+    _require_dashboard(request)
+    return _respond(domain_packs.catalog)
+
+
+@router.get("/v1/event-log-domain-packs/{pack_id}")
+def event_log_domain_pack_definitions(request: Request, pack_id: str = PathParam(pattern=_PACK_ID),
+                                      version: str | None = Query(default=None, pattern=r"^\d{1,4}\.\d{1,4}\.\d{1,4}$")):
+    _require_dashboard(request)
+    return _respond(domain_packs.definitions, pack_id, version)
+
+
+@router.get("/v1/event-logs/{log_id}/domain-packs")
+def event_log_domain_packs_installed(request: Request, log_id: str):
+    _require_dashboard(request)
+    return _respond(domain_packs.installed, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}")
+async def event_log_domain_pack_install(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    _require_dashboard(request)
+    spec = await _json_body(request, "domain pack install", strict=True)
+    try:
+        result = await run_in_threadpool(domain_packs.install, log_id, pack_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.delete("/v1/event-logs/{log_id}/domain-packs/{pack_id}")
+def event_log_domain_pack_uninstall(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    _require_dashboard(request)
+    return _respond(domain_packs.uninstall, log_id, pack_id)
+
+
+@router.get("/v1/event-logs/{log_id}/domain-packs/{pack_id}/report")
+def event_log_domain_pack_report(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    _require_dashboard(request)
+    return _respond(domain_packs.report, log_id, pack_id)
 
 
 @router.post("/v1/event-logs/{log_id}/map-comparison")
