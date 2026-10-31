@@ -108,7 +108,10 @@ def conformance(log_id: str, model: Any, case_type: str | None = None,
             aligned_cases += cases
             fitness_sum += fitness * cases
             fitting_cases += cases if best_cost == 0 else 0
-            for kind, activity in best_moves:
+            # These diagnostics report *cases*, not alignment-move counts.
+            # Repeated identical missing/extra activities in one trace must
+            # contribute this variant's cases only once per activity and kind.
+            for kind, activity in set(best_moves):
                 bucket = skipped if kind == "model" else inserted if kind == "log" else None
                 if bucket is not None:
                     bucket[activity] = bucket.get(activity, 0) + cases
