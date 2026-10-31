@@ -261,3 +261,24 @@ This is a narrow structural admission check, **not** filesystem tamper
 resistance, SQLite integrity verification, a cross-process source-revocation
 fence, or proof of provider/customer outcomes. It grants no source reads,
 new business obligations, agent rights or execution.
+
+
+## Legacy v1 schema admission before migration
+
+A local auxiliary file claiming `PRAGMA user_version=1` is not automatically a
+valid legacy declaration ledger. Before enumerating rows, generating incarnation
+tokens, or running `ALTER TABLE`, the migration now checks that
+`declarations` is a table with the exact nine original v1 columns, their
+declared SQLite types, required NOT NULL fields, and the opaque
+`work_item_ref TEXT PRIMARY KEY`. A marker on a view, a table without that
+primary key, or a table with missing/extra/wrongly typed or nullable fields
+fails closed. Rejection rolls back without stamping v2, modifying existing
+rows, or generating tokens. The normal bounded 50-row v1 migration remains
+supported, and the existing v2 shape preflight still runs after migration.
+
+Six synthetic SQLite regressions exercise malformed legacy schemas, including
+duplicate opaque identities without a primary key, and verify that both reads
+and writes refuse the ledger while preserving its version, schema, and rows.
+This guards schema identity only; it does not authenticate the filesystem,
+repair arbitrary SQLite corruption, establish cross-process revocation
+atomicity, verify source/customer outcomes, or grant agent execution.
