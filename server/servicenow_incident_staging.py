@@ -71,7 +71,14 @@ def _require_selected_scope(scope: SelectedIncidents) -> None:
     """
     if type(scope) is not SelectedIncidents:
         raise StagingError("Invalid selected incident scope")
-    scope.require_authority()
+    # A frozen dataclass prevents ordinary assignment, not reflection-based
+    # mutation of its __dict__ / object.__setattr__. Recheck the current
+    # fields before constructing a source URL or interpreting provider rows.
+    # Call the class methods directly: an instance can also shadow methods
+    # after construction. This is a local input invariant, NOT a trusted
+    # consent grant or protection against malicious in-process code/races.
+    SelectedIncidents.__post_init__(scope)
+    SelectedIncidents.require_authority(scope)
 
 
 def _validate_updated(value: str) -> None:
