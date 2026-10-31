@@ -43,6 +43,7 @@ MAX_TRACE_LENGTH = 300
 MAX_REPLAY_EVENTS = 300_000
 MAX_DISPLAY_VARIANTS = 10
 MAX_EXAMPLES = 20
+MAX_REQUEST_BYTES = 262_144   # a conformance request carries up to eight bounded type models
 _UNMODELLED = "\x00"          # prefix that no model label can carry, so a raw name never matches a label
 Label = Annotated[str, Field(min_length=1, max_length=200)]
 

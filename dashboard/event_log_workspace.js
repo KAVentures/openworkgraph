@@ -714,6 +714,67 @@
     return box;
   }
 
+  // Discovered or edited object-centric model: arcs as Single/Variable/Removed choices.
+  const ARC_CHOICES=[['single','Exactly one'],['variable','One or more'],['remove','Not involved']];
+  function objectModelArcs(arcs,choices){
+    return arcs.map((a,i)=>[a,choices[i]??(a.variable?'variable':'single')]).filter(([,c])=>c!=='remove')
+      .map(([a,c])=>({activity:a.activity,object_type:a.object_type,variable:c==='variable'}));
+  }
+  // Plain reading of an object-centric conformance result.
+  function objectModelText(r){
+    const s=r.summary,ratio=(n,d)=>Number(n).toLocaleString()+' of '+Number(d).toLocaleString();
+    const issue={missing_object:'No object of the type',several_objects_on_single_arc:'Several objects where one is expected',type_without_arc:'Type involved without an arc'};
+    const deviating=t=>Object.entries({...t.missing_tokens_by_activity}).slice(0,3).map(([a,n])=>a+' ('+n+')').join(', ')||'—';
+    return {
+      summary:ratio(s.fitting_objects,s.replayed_objects)+' replayed objects fit their type’s model; '+ratio(s.fitting_events,s.events_checked)+' events match their arcs.'+(s.complete?'':' Some objects were not replayed (see Unknown).'),
+      lifecycles:r.lifecycles.map(t=>[t.object_type,Number(t.objects).toLocaleString(),ratio(t.fitting_objects,t.replayed_objects),t.token_fitness===null?'—':Number(t.token_fitness).toFixed(3),Number(t.unknown_objects).toLocaleString(),deviating(t)]),
+      issues:r.arcs.issues_by_arc.slice(0,20).map(i=>[i.activity,i.object_type,issue[i.issue]||i.issue,Number(i.events).toLocaleString()]),
+      examples:r.arcs.examples.slice(0,5).map(e=>e.event_id+' ('+e.activity+', '+e.object_type+': '+e.objects+')')};
+  }
+
+  function objectModelSection(){
+    const box=el('div');box.id='owgObjectModel';
+    box.append(el('h4','Object process model'),el('div','Discover one lifecycle model per object type and which object types each activity involves, then check every object and event of the log against it. Edit the arcs to state what you expect. This checks lifecycles and arcs separately; use object rules to check that objects move together. Results describe recorded links, not verified business relationships.','muted'));
+    const discover=button('Discover object model','secondary');discover.id='owgObjectModelDiscover';
+    const check=button('Check object model');check.id='owgObjectModelCheck';check.disabled=true;
+    const message=el('div',null,'muted');message.id='owgObjectModelStatus';message.setAttribute('role','status');
+    const arcsOut=el('div');arcsOut.id='owgObjectModelArcs';
+    const out=el('div');out.id='owgObjectModelResults';
+    box.append(discover,arcsOut,check,message,out);
+    const generation=state.generation,logId=state.logId;let turn=0,model=null,selects=[];
+    const current=t=>generation===state.generation&&box.isConnected&&t===turn;
+    const path=p=>'/v1/event-logs/'+encodeURIComponent(logId)+'/object-process-model/'+p;
+    discover.onclick=async()=>{
+      const t=++turn;discover.disabled=check.disabled=true;out.replaceChildren();message.textContent='Discovering…';
+      try{
+        const r=await (await api(path('discovery'),{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();
+        if(!current(t))return;
+        model=r.model;selects=model.arcs.map((a,i)=>{const s=select('owgObjectModelArc'+i,ARC_CHOICES);s.value=a.variable?'variable':'single';s.setAttribute('aria-label',a.activity+' involves '+a.object_type);return s;});
+        const skipped=r.types_not_discovered.map(x=>x.object_type+': '+x.reason);
+        message.textContent='Discovered '+model.types.length+' object type models with '+model.arcs.length+' arcs.'+(skipped.length?' Not discovered: '+skipped.join('; '):'');
+        arcsOut.replaceChildren(table(['Activity','Object type','Objects per event (measured)','Expected'],model.arcs.map((a,i)=>{
+          const m=r.arc_measurements.find(x=>x.activity===a.activity&&x.object_type===a.object_type);
+          return [a.activity,a.object_type,m?m.objects_per_event.min+'–'+m.objects_per_event.max+' in '+Number(m.events_with_type).toLocaleString()+' events':'—',selects[i]];})));
+        check.disabled=false;
+      }catch(error){if(current(t))message.textContent=error.message;}
+      finally{if(current(t))discover.disabled=false;}
+    };
+    check.onclick=async()=>{
+      const t=++turn;check.disabled=true;out.replaceChildren(el('div','Checking…','muted'));
+      try{
+        const spec={model:{...model,arcs:objectModelArcs(model.arcs,selects.map(s=>s.value))}};
+        const r=await (await api(path('conformance'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        if(!current(t))return;
+        const v=objectModelText(r);
+        out.replaceChildren(el('div',v.summary,'note'),table(['Object type','Objects','Fitting','Token fitness','Unknown','Missing tokens at'],v.lifecycles),
+          ...(v.issues.length?[table(['Activity','Object type','Arc issue','Events'],v.issues),el('div','Examples: '+v.examples.join(', '),'muted')]:[el('div','Every checked event matches its arcs.','muted')]),
+          el('div',r.interpretation,'muted'));
+      }catch(error){if(current(t))out.replaceChildren(el('div',error.message,'muted'));}
+      finally{if(current(t))check.disabled=false;}
+    };
+    return box;
+  }
+
   function objectMapSection(){
     const box=section('Object-centric map');
     const generation=state.generation;
@@ -794,7 +855,7 @@
       if(state.caseType)pick.value=state.caseType;
       const touching=g.activities_touching_several_types||[];
       shared.replaceChildren(el('p','Showing '+g.object_types.length+' of '+g.object_type_count+' object types.','muted'),...(touching.length?[el('h4','Activities shared by several object types'),table(['Activity','Object types','Events'],touching.slice(0,15).map(a=>[a.activity,a.object_types.join(', '),Number(a.events).toLocaleString()]))]:[]),
-        ...((g.object_types||[]).length>1||state.objectTypes.length>1||g.log&&(g.log.object_relationships||['ocel','ocelxml'].includes(g.log.source_format))?[objectRuleSection(g)]:[]));
+        ...((g.object_types||[]).length>1||state.objectTypes.length>1||g.log&&(g.log.object_relationships||['ocel','ocelxml'].includes(g.log.source_format))?[objectRuleSection(g),objectModelSection()]:[]));
       render();
     }).catch(error=>{if(current())out.replaceChildren(el('div',error.message,'muted'));});
     getJSON(logPath('object-flattening').replace(/\?.*$/,'')).then(f=>{if(current()){flat=f;renderFlat();}}).catch(()=>{});
@@ -2456,6 +2517,6 @@
     return box;
   }
 
-  window.__owgEventLogModel={visitRows,simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
+  window.__owgEventLogModel={objectModelArcs,objectModelText,visitRows,simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
