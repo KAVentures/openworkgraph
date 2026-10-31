@@ -739,9 +739,23 @@ not evidence of an ordinary workflow. Ordinary-work positive previews retain
 their existing detailed-export option. No change is made to server-side export
 eligibility or to the meaning of capture gaps.
 
-The two deterministic synthetic Node regressions in
+The deterministic synthetic Node regressions in
 `tests/js/analysis_handoff_scope.test.mjs` exercise both empty-selection
 variants and ordinary/health-only positive controls, including programmatic
 disabled-button invocation and an explicit detailed export ticket. They do
 not verify a live browser, accessibility audit, current consent, capture
 completeness, inactivity, real provider acceptance or commercial benefit.
+
+## Server UTC serialization and local scope freshness
+
+The authenticated backend serializes UTC preview bounds with `+00:00`, while
+browser period selections use `Z`. A bytewise comparison of those strings
+incorrectly treated **every unchanged range** as stale after its preview
+returned, preventing the user from opening a legitimate range handoff. The
+scope-freshness check now validates and compares the actual UTC instants.
+An equivalent `+02:00` representation also remains valid; a shifted instant
+or a local-midnight rollover still fails closed. This does not make a stale
+server response authoritative or override the export-ticket's independent
+scope/privacy checks. Synthetic regressions cover equivalent offsets with
+copy and detailed download, plus a changed-instant refusal. Native browser,
+accessibility, packaged and cross-platform CI remain required.
