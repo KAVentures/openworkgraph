@@ -1524,3 +1524,33 @@ def test_oversized_identical_duplicate_does_not_authorize_tab_or_record_join():
         assert result["unlinked_observation_count"] == 1
         assert result["candidate_links"] == []
         assert result["conflicting_reference_groups_suppressed"] == 0
+
+
+def test_nonstring_source_claims_are_unknown_not_coerced_provenance():
+    # A malformed source is not an observed provider name. In particular,
+    # Python str(True)/str(False) must not become plausible source tokens.
+    events = [_event(n, A) for n in range(1, 7)]
+    for event, source in zip(events, (True, False, 1, [], {"provider": "jira"}, None)):
+        event["source"] = source
+    result = linked_work_items(events)
+    [item] = result["items"]
+    assert item["event_ids"] == [f"e{n:02d}" for n in range(1, 7)]
+    assert [step["source"] for step in item["observed_steps"]] == ["unknown"] * 6
+    assert item["link_basis"] == {"same_record": 5}
+    assert result["candidate_links"] == []
+    assert result["link_contract"]["time_alone_never_links"] is True
+
+
+def test_literal_source_tokens_preserve_legacy_case_normalization_and_links():
+    first, second, third = (_event(n, A) for n in range(1, 4))
+    first["source"] = "browser_extension"
+    second["source"] = "Browser_Extension"
+    third["source"] = "true"  # Literal text, not a coerced boolean.
+    result = linked_work_items([first, second, third])
+    [item] = result["items"]
+    assert [step["source"] for step in item["observed_steps"]] == [
+        "browser_extension", "browser_extension", "true",
+    ]
+    assert item["link_basis"] == {"same_record": 2}
+    assert item["task_identity_inferred"] is False
+    assert item["business_outcome_verified"] is False
