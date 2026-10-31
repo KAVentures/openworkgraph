@@ -2243,3 +2243,45 @@ test('ordinary and health-only selected rows retain explicit diagnostic exports'
     assert.equal(h.modal['#analysisDetailed'].disabled, false);
   });
 });
+
+
+test('range handoff accepts equivalent UTC offsets but rejects a changed instant', async t => {
+  const offset = (iso, hours) => new Date(Date.parse(iso) + hours * 3600_000)
+    .toISOString().replace(/Z$/, hours ? '+02:00' : '+00:00');
+  for (const hours of [0, 2]) await t.test('offset=' + hours, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    const requested = new URLSearchParams(h.reads[1].url.split('?')[1]);
+    h.reply(h.reads[1], {...h.preview('range', 'equivalent'),
+      window: {scope: 'range', since: offset(requested.get('since'), hours),
+        until: offset(requested.get('until'), hours)}}, {preserveWindow: true});
+    await opening;
+    assert.equal(h.modals, 1);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-equivalent']);
+    const downloading = h.modal['#analysisDownload'].onclick();
+    await settle();
+    assert.equal(h.tickets.length, 1);
+    h.reply(h.tickets[0], {});
+    await downloading;
+    assert.equal(h.downloads, 1);
+  });
+  await t.test('changed UTC instant', async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    const requested = new URLSearchParams(h.reads[1].url.split('?')[1]);
+    h.reply(h.reads[1], {...h.preview('range', 'wrong-instant'),
+      window: {scope: 'range',
+        since: new Date(Date.parse(requested.get('since')) + 60_000).toISOString(),
+        until: requested.get('until')}}, {preserveWindow: true});
+    await opening;
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+    assert.match(h.summary.textContent, /Preview period did not match/i);
+  });
+});
