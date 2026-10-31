@@ -1267,3 +1267,60 @@ def test_absent_null_empty_optional_identity_and_valid_literals_remain_supported
         assert set(_items(result)) == {("e01", "e02")}, (host, org)
         assert _items(result)[("e01", "e02")]["link_basis"] == {"same_record": 1}
         assert result["conflicting_reference_groups_suppressed"] == 0
+
+
+def test_conflicting_duplicate_id_provider_claim_vetoes_same_ref_group():
+    # The duplicate event cannot become a member, but its contradictory
+    # provider identity must still veto other otherwise valid A observations.
+    for reverse in (False, True):
+        events = [
+            _event(1, A), _event(1, A, provider="github"),
+            _event(2, A), _event(3, A), _event(4, B), _event(5, B),
+        ]
+        if reverse:
+            events.reverse()
+        result = linked_work_items(events)
+        assert set(_items(result)) == {("e04", "e05")}
+        assert result["conflicting_reference_groups_suppressed"] == 1
+        assert result["candidate_links"] == []
+
+
+def test_malformed_duplicate_id_claim_vetoes_exact_ref_even_with_bad_time():
+    for invalid in ("provider", "host"):
+        valid = _event(1, A)
+        malformed = _event(1, A)
+        if invalid == "provider":
+            malformed["metadata"]["resource_reference"]["provider"] = 123
+        else:
+            malformed["metadata"]["resource_reference"]["host"] = " \t "
+        malformed["observed_at"] = "not-a-timestamp"
+        for events in (
+            [valid, malformed, _event(2, A), _event(3, A), _event(4, B), _event(5, B)],
+            [malformed, valid, _event(2, A), _event(3, A), _event(4, B), _event(5, B)],
+        ):
+            result = linked_work_items(events)
+            assert set(_items(result)) == {("e04", "e05")}, invalid
+            assert result["conflicting_reference_groups_suppressed"] == 1, invalid
+
+
+def test_conflicting_duplicate_id_different_refs_does_not_poison_independent_groups():
+    # An event ID reused across A and B invalidates that event, not two
+    # independently observed records whose source identities are consistent.
+    for reverse in (False, True):
+        events = [
+            _event(1, A), _event(1, B), _event(2, A), _event(3, A),
+            _event(4, B), _event(5, B),
+        ]
+        if reverse:
+            events.reverse()
+        result = linked_work_items(events)
+        assert set(_items(result)) == {("e02", "e03"), ("e04", "e05")}
+        assert result["conflicting_reference_groups_suppressed"] == 0
+        assert result["candidate_links"] == []
+
+
+def test_identical_duplicate_id_stays_idempotent_with_exact_record():
+    first = _event(1, A)
+    result = linked_work_items([first, copy.deepcopy(first), _event(2, A)])
+    assert set(_items(result)) == {("e01", "e02")}
+    assert result["conflicting_reference_groups_suppressed"] == 0
