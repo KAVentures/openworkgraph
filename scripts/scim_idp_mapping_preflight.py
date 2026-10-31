@@ -248,7 +248,15 @@ def assess(mapping: Any) -> dict:
         else:
             add("caution", "unversioned_patch_overwrite", "users.write_mode",
                 "Approved unversioned PATCH can overwrite newer targeted values")
-    elif mode != "etag":
+    elif mode == "etag":
+        if policy["allow_unversioned_user_patch"]:
+            # The declared client's normal ETag behavior does not disable a
+            # separately approved server-side missing-If-Match exception.
+            # A static declaration cannot verify the current provider policy.
+            add("caution", "etag_mode_with_unversioned_patch_policy",
+                "provider_policy.allow_unversioned_user_patch",
+                "ETag mapping coexists with a declared missing-If-Match User PATCH allowance; verify the current provider policy")
+    else:
         add("blocker", "unsupported_write_mode", "users.write_mode",
             "Only exact ETag writes or explicitly approved standalone unversioned User PATCH are supported")
 
