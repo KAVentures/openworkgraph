@@ -207,6 +207,13 @@ def assess(mapping: Any) -> dict:
     if "username" not in create:
         add("blocker", "missing_stable_username", "users.create_attributes",
             "User creation requires the stable work-email userName")
+    if "externalid" in match and "externalid" not in create:
+        # externalId is a client-issued, provider-scoped correlation key.
+        # A declared create without it cannot demonstrate that subsequent
+        # externalId matching will find the created resource. userName may
+        # provide a separate fallback, so warn rather than reject the mapping.
+        add("caution", "externalid_match_not_created", "users.create_attributes",
+            "Matching declares externalId but creation omits it; verify stable provider-scoped matching and fallback before rollout")
     if "active" not in create:
         # Shipped SCIM User creation starts a new roster employee active unless
         # the actual request carries literal active=False. A declared mapping
