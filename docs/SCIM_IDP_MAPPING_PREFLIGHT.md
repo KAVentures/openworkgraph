@@ -138,3 +138,25 @@ This closes a static false-positive compatibility gap only. It does not
 validate IdP-generated payloads, enable new mappings, alter actual SCIM
 requests, or certify Entra/Okta compatibility. Strict server-side identity,
 provider, tenant, ETag and revocation rules are unchanged.
+
+
+## Group displayName collision review for Okta and other clients (offline only)
+
+When Group provisioning is declared enabled and Group matching uses
+`displayName` without a declared `provider_policy.unique_group_names: true`,
+the preflight now emits `group_displayname_collision_risk` for **Okta and
+other** clients. This is a **nonblocking caution**: Group names may collide
+within a provider, making name-based matching ambiguous. Unlike Microsoft's
+Entra requirement, uniqueness is **not a general SCIM requirement** and the
+preflight does not presume every other IdP needs a uniqueness constraint.
+Entra's existing `entra_group_name_uniqueness` blocker remains unchanged.
+
+Matching only by `externalId` does not trigger the displayName collision
+caution. Declaring the optional unique-name policy suppresses the caution but
+still emits `declared_group_name_policy` and `groups_not_certified`: this
+JSON flag neither enables nor verifies the actual default-off server policy.
+Before rollout, an authorized administrator must check the provider's current
+policy/revision, uniformly upgraded workers, existing active-name collisions,
+real IdP filter behavior and tenant/provider isolation. No Group identity,
+membership, login or permission is granted by a clean static report. These
+synthetic mapping checks do not establish live Okta/Entra interoperability.
