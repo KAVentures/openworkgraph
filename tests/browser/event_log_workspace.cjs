@@ -523,6 +523,10 @@ const path=require('node:path');
    // Manual reviews belong to the current evaluated state. They do not grant
    // business-action authority and cannot occur before an explicit check.
    const reviewPanel=page.locator('#owgSignalInbox');
+   await reviewPanel.getByRole('button',{name:'Snooze 1 hour for signal Skipped approval'}).click();
+   await reviewPanel.getByText('snoozed',{exact:true}).waitFor();
+   await reviewPanel.getByRole('button',{name:'Resume review for signal Skipped approval'}).click();
+   await reviewPanel.getByText('unreviewed',{exact:true}).waitFor();
    await reviewPanel.getByRole('button',{name:'Acknowledge signal Skipped approval'}).click();
    await reviewPanel.getByText('acknowledged',{exact:true}).waitFor();
    assert.match(await reviewPanel.textContent(),/No automatic actions or delivery/);

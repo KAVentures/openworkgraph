@@ -2319,7 +2319,7 @@
     const message=el('div',null,'muted');message.id='owgSignalStatus';message.setAttribute('role','status');
     const out=el('div');out.id='owgSignalResults';
     const reviewHeading=el('h4','Review evaluated signals');
-    const reviewNote=el('p','Acknowledge a specific triggered result locally, or reopen it. Reviews never send notifications, approve actions, or imply business outcomes. Stale results require a fresh Check signals.','muted');
+    const reviewNote=el('p','Acknowledge a specific triggered result locally, or reopen it. Snooze a result for one hour or one day; it returns on refresh after expiry. Reviews never send notifications, approve actions, or imply business outcomes. Stale results require a fresh Check signals.','muted');
     const inbox=el('div');inbox.id='owgSignalInbox';
     const reviewRefresh=button('Refresh review inbox','secondary');reviewRefresh.id='owgSignalReviewRefresh';
     box.append(row,message,rules,evaluate,out,reviewHeading,reviewNote,reviewRefresh,inbox);
@@ -2349,13 +2349,25 @@
             finally{await refreshInbox().catch(error=>{message.textContent=error.message;});}
           };
           action.appendChild(click);
+          if(!acknowledged)for(const [label,minutes] of (item.status==='snoozed'?[['Resume review',0]]:[['Snooze 1 hour',60],['Snooze 1 day',1440]])){
+            const defer=button(label,'secondary');defer.setAttribute('aria-label',label+' for signal '+item.name);
+            defer.onclick=async()=>{
+              if(generation!==state.generation||state.logId!==selectedLogId)return;
+              defer.disabled=true;
+              try{await api(inboxBase()+'/'+encodeURIComponent(item.rule_id)+'/snooze',{
+                method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({state_fingerprint:item.state_fingerprint,minutes})});
+                message.textContent=minutes?'Signal snoozed locally.':'Signal returned to review.';
+              }catch(error){message.textContent=error.message;}
+              finally{await refreshInbox().catch(error=>{message.textContent=error.message;});}
+            };action.appendChild(defer);
+          }
         }
         return [item.name,item.status.replace(/_/g,' '),item.evaluated_at||'not checked',
-          item.acknowledged_at||'—',action];
+          item.acknowledged_at||'—',item.snoozed_until||'—',action];
       });
       inbox.replaceChildren(
         el('div',r.unreviewed+' signals currently require review. No automatic actions or delivery.','muted'),
-        rows.length?table(['Signal','Review status','Evaluated','Acknowledged',''],rows):el('div','No saved signals to review.','muted'));
+        rows.length?table(['Signal','Review status','Evaluated','Acknowledged','Snoozed until',''],rows):el('div','No saved signals to review.','muted'));
     }
     reviewRefresh.onclick=()=>refreshInbox().catch(error=>{message.textContent=error.message;});
     async function refresh(){

@@ -205,6 +205,11 @@ with TestClient(app) as client:
     assert client.get(base + "/signal-inbox", headers=bearer).status_code in (401, 403)
     assert client.post(base + "/signal-inbox/" + rid + "/acknowledge",
                        headers=bearer, json={"state_fingerprint": fingerprint}).status_code in (401, 403)
+    snooze_url = base + "/signal-inbox/" + rid + "/snooze"
+    assert client.post(snooze_url, headers=bearer, json={"state_fingerprint": fingerprint, "minutes":60}).status_code in (401,403)
+    deferred = client.post(snooze_url, headers=auth, json={"state_fingerprint": fingerprint, "minutes":60})
+    assert deferred.status_code == 200 and deferred.json()["items"][0]["status"] == "snoozed"
+    assert client.post(snooze_url, headers=auth, json={"state_fingerprint": fingerprint, "minutes":0}).status_code == 200
     bad = client.post(base + "/signal-inbox/" + rid + "/acknowledge",
                       headers=auth, json={"state_fingerprint": "0" * 64})
     assert bad.status_code == 422
@@ -222,3 +227,51 @@ with TestClient(app) as client:
     result = subprocess.run([sys.executable, "-c", script], cwd=ROOT,
                             env=env, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+
+def test_snooze_expiry_resume_and_state_pin(monkeypatch):
+    from datetime import datetime, timedelta
+    clock = datetime(2026, 10, 31, 12)
+    monkeypatch.setattr(inbox, '_now', lambda: clock)
+    log = _log()
+    rid = signals.add_rule(log, _rule('Count', kind='kpi', metric='case_count', operator='above', threshold=0))['rule_id']
+    signals.evaluate(log)
+    fp = inbox.list_inbox(log)['items'][0]['state_fingerprint']
+    spec = {'state_fingerprint': fp, 'minutes': 60}
+    result = inbox.snooze(log, rid, spec)
+    assert result['items'][0]['status'] == 'snoozed'
+    assert result['unreviewed'] == 0
+    assert result['items'][0]['acknowledged_at'] is None
+    until = result['items'][0]['snoozed_until']
+    monkeypatch.setattr(inbox, '_now', lambda: clock + timedelta(minutes=30))
+    assert inbox.snooze(log, rid, spec)['items'][0]['snoozed_until'] == until
+    monkeypatch.setattr(inbox, '_now', lambda: clock + timedelta(minutes=60))
+    assert inbox.list_inbox(log)['items'][0]['status'] == 'unreviewed'
+    inbox.snooze(log, rid, spec)
+    assert inbox.snooze(log, rid, dict(spec, minutes=0))['unreviewed'] == 1
+    for minutes in (-1, 43201, True, 1.5):
+        with pytest.raises(workspace.EventLogWorkspaceError):
+            inbox.snooze(log, rid, dict(spec, minutes=minutes))
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        inbox.snooze(log, rid, dict(spec, state_fingerprint='0'*64))
+    inbox.snooze(log, rid, spec)
+    inbox.review(log, rid, {'state_fingerprint': fp}, acknowledge=True)
+    assert inbox.list_inbox(log)['items'][0]['status'] == 'acknowledged'
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        inbox.snooze(log, rid, spec)
+    inbox.review(log, rid, {'state_fingerprint': fp}, acknowledge=False)
+    assert inbox.list_inbox(log)['items'][0]['status'] == 'unreviewed'
+    # A changed dataset basis must not be hidden by a snooze.
+    inbox.snooze(log, rid, spec)
+    with workspace._LOCK:
+        conn = workspace._connect()
+        conn.execute('UPDATE logs SET events=events+1 WHERE log_id=?', [log])
+        conn.close()
+    assert inbox.list_inbox(log)['items'][0]['status'] == 'stale'
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        inbox.snooze(log, rid, spec)
+    workspace.delete_log(log)
+    with workspace._LOCK:
+        conn = workspace._connect()
+        assert conn.execute('SELECT COUNT(*) FROM signal_snoozes WHERE log_id=?', [log]).fetchone()[0] == 0
+        conn.close()
