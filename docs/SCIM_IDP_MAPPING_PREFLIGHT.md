@@ -43,6 +43,19 @@ separators and qualified/foreign URNs with the actual shipped PATCH parser. The 
 counts remain separate from selector match objects, including on CLI requests
 with nonempty PATCH declarations.
 
+The declared contact PATCH paths must also be **unique after interpreting the
+shipped path grammar**. An unqualified path and its exact core User-qualified
+spelling refer to the same target; so do selector strings whose JSON escapes
+decode to the same value, or whose decoded values compare equally after the
+shipped casefolded selector matching. The offline preflight refuses these
+ambiguous duplicate write declarations rather than allowing an IdP mapping to
+silently target one contact field twice. Distinct child fields, selector kinds
+and distinct selector values remain separate. This is only a mapping-level
+consistency check: it cannot predict a live client's PATCH operation ordering,
+current contact values, no-match behavior or whether a real provider sends
+such requests. Invalid mappings receive generic errors without echoing contact
+values or addresses.
+
 ## Required acceptance after a clean static result
 
 With a customer-controlled test tenant and explicit authorization, inspect actual generated SCIM requests against ServiceProviderConfig, Schemas and ResourceTypes; test matching filters, create/read/PUT/PATCH/deactivate/delete, Group identity if enabled, ETag/428/412 behavior, provider isolation, revoked-token refusal, employee offboarding/rehire, restore/downgrade and consent boundaries. Validate uniform worker versions before enabling optional mappings. Record failures and timestamps; synthetic CI or this local mapping file is **not** an Entra/Okta certificate, production pilot, customer outcome or business ROI evidence.
