@@ -148,3 +148,26 @@ valid literal strings including `"true"` and `"7"`, and missing optional
 legacy host/organization. No hidden truth, model, real-provider or business
 write is involved. The preregistered F1 and contamination targets remain
 unverified until an independent held-out run.
+
+
+## Conflicting duplicate observation IDs
+
+An `event_id` is the identity of an observed event, not a dedupe preference.
+Previously, a second row with the same ID was silently dropped even when it
+contradicted the first row's record reference, tenant scope or timestamp.
+This allowed a first-row-wins observation to participate in same-record,
+clipboard, tab and candidate links despite ambiguous provenance.
+
+The linker now preflights all literal, grammar-valid event IDs. Equal duplicate
+payloads remain idempotent. If **any** occurrence of an ID has a different
+payload, **every** occurrence of that ID is withheld before reference grouping,
+including when one copy has an invalid timestamp. Other valid IDs and their
+unrelated evidence remain available. Input order cannot choose which
+contradictory claim wins. This conservative rule can reduce recall, but cannot
+fabricate a task, a business outcome or a source permission.
+
+Synthetic regressions cover changed record identity, tenant scope, valid and
+invalid timestamps, reversed duplicate order, idempotent exact duplicates and
+unaffected independent record groups. They are not a held-out F1 improvement
+or evidence of real customer/provider validation. The preregistered family
+holdout and its private truth remain unchanged.
