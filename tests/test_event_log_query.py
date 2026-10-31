@@ -84,7 +84,7 @@ def test_case_duration_filters_and_aggregates_keep_fractional_seconds():
         "d,End,2024-01-01T00:03:02.750000Z,team",
     ]
     log = workspace.import_log(
-        BytesIO(("\\n".join(rows) + "\\n").encode()),
+        BytesIO(("\n".join(rows) + "\n").encode()),
         name="query-subsecond-synthetic", source_format="csv",
         mapping={"case_column": "case", "activity_column": "activity",
                  "timestamp_column": "time", "resource_column": "who"},
