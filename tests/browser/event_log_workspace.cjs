@@ -383,6 +383,19 @@ const path=require('node:path');
    const special=(await simulationResponse.json()).result.activities.find(a=>a.activity==='__proto__');
    assert.equal(special.minutes,7);assert.equal(special.resources,2);
    await page.getByText('Simulated baseline').waitFor();
+   const [simJson]=await Promise.all([page.waitForEvent('download'),page.locator('#owgEventLogSimulationJson').click()]);
+   const simReport=JSON.parse(await fs.readFile(await simJson.path(),'utf8'));
+   assert.equal(simReport.format,'openworkgraph.simulation-report.v1');
+   assert.equal(simReport.submitted_scenario.label,'Validate first');
+   assert.equal(simReport.analysis.scenario.cases,500);
+   assert.ok(simReport.analysis.assumptions.length);
+   assert.match(simReport.interpretation,/not measured savings/);
+   const [simCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgEventLogSimulationCsv').click()]);
+   const simCsvText=await fs.readFile(await simCsv.path(),'utf8');
+   assert.match(simCsvText,/^section,run,metric,value,unit\r\n/);
+   assert.match(simCsvText,/cycle_time,baseline,p50,/);
+   assert.match(simCsvText,/assumption,both,/);
+
    const simulated=await page.locator('#owgEventLogSimRun').locator('xpath=../..').textContent();
    assert.match(simulated,/Validate first/);assert.match(simulated,/Median cycle time change/);assert.match(simulated,/not forecasts/);assert.match(simulated,/Poisson/);
    // Held-out validation: calibrate on earlier cases only and compare with the later ones.
