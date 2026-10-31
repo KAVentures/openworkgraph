@@ -69,3 +69,27 @@ agent causality or business completion. Four synthetic provider families cover
 wrong/missing record references, malformed/missing exact-scope flags and
 positive controls. No source credentials, permissions, REST/MCP schema or
 background sync are added.
+
+## Permitted history-window binding
+
+The operation receipt now also requires the returned graph's `source_window`
+to be an exact two-key object matching the caller's `since` and `until`
+arguments, including explicit null boundaries. Production `record_graph`
+already echoes these exact arguments. A missing, malformed, wider, narrower,
+or different returned window yields
+`availability=unknown / reason=source_window_scope_conflict`, without
+reflecting the unexpected window or any provider/customer fields. This
+prevents a stale or mis-scoped cached graph from being promoted to verified
+operation evidence for a different permitted selection. It does **not**
+prove that the trusted reader honored its requested window before source
+access, nor does it add tenant authorization or revocation fencing.
+
+The synthetic fake-reader regressions add 28 malformed/mismatched default
+window cases, four missing-window cases, 16 bounded-request mismatches and
+16 valid matching-window controls across GitHub PR, Jira issue, Stripe invoice
+and Stripe refund operations (64 parameterized cases total). These assert
+no customer text in responses, no agent/customer/business completion claims,
+and unchanged single-read arguments. They are not live-provider acceptance
+or real-customer outcome verification. The receipt remains opt-in,
+read-only, and non-executing, with no new source grants, API calls, routes,
+background sync, or REST/MCP schema additions.
