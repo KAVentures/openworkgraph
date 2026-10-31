@@ -89,7 +89,9 @@ def _contradictory_field_tokens(
     if name not in event or name not in metadata:
         return set()
     top, nested = event[name], metadata[name]
-    if type(top) is type(nested) and top == nested:
+    # Compare only bounded literal tokens; deep untrusted JSON equality can
+    # recurse or consume unbounded work and has no linking authority.
+    if isinstance(top, str) and isinstance(nested, str) and top == nested:
         return set()
     return {value for value in (top, nested)
             if isinstance(value, str) and pattern.fullmatch(value)}
