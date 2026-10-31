@@ -527,3 +527,31 @@ No time-only joins, source privileges, model/API spending, private evaluation
 truth or business writes were added. The preregistered held-out assignment
 F1 >= 0.90 and contamination <= 0.05 remain **unverified**. Native pytest,
 exact-head CI, review and current-main compatibility are still merge gates.
+
+
+## Explicit whitespace/control scope rejection
+
+The four ephemeral-link identity dimensions (organization, actor, device,
+capture session) must be **literal, nonempty, bounded strings**. In addition to
+rejecting explicit null, empty, nonstring and overlong values, the linker now
+rejects strings that are entirely Unicode whitespace or contain ASCII C0/DEL
+control characters. A repeated malformed value cannot become a common tab,
+clipboard-transfer or same-app candidate identity. This is a fail-closed
+validation rule for *ephemeral* evidence, not a tenant-authentication mechanism.
+
+No whitespace trimming, case folding, guessed defaults or wildcard matching
+is introduced: a legitimate nonblank string with interior spaces is retained
+verbatim and distinct from another spelling. Genuinely absent legacy scope
+fields keep their existing exact-unknown behavior. Independently validated
+same-record evidence still uses its separate source-identity conflict checks;
+a malformed actor/device/session scope does not erase such evidence.
+
+Three synthetic regression functions exercise all four dimensions with
+whitespace-only, tab, NUL, DEL and Unicode whitespace inputs across transfer,
+single-record-tab and same-app candidate paths, in both input orders. Positive
+controls preserve literal nonblank scope, exact matching, and independent
+same-record linking. No source/tenant permission, retention or capture behavior
+is changed. This does not prove tenant isolation against maliciously fabricated
+*valid* identities, and it does not measure any held-out F1 uplift. The
+preregistered assignment F1 >= 0.90 / contamination <= 0.05 gates remain
+unverified until unchanged held-out scoring and exact-head native CI run.
