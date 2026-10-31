@@ -341,8 +341,8 @@ primary key while still changing owner-declaration behavior. A table-level
 `UNIQUE(scope_ref)` creates an extra **implicit** `sqlite_autoindex_*` that
 was previously excluded from the user-defined schema-object check. A foreign
 key, including `ON DELETE CASCADE`, creates no additional schema object at
-all. Either can make otherwise valid owner saves fail or delete unrelated
-approved declarations without a reviewed dependency change.
+all. Either can reject otherwise valid owner saves or change deletion semantics
+without a reviewed dependency change.
 
 Both v1 migration and v2 read/write admission now require the exact one
 implicit `work_item_ref` primary-key index reported by
