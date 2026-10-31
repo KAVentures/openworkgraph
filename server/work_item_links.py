@@ -161,7 +161,7 @@ def _observations(events: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], i
             # A malformed explicit reference (including non-object values) is
             # not an unreferenced observation. It cannot regain authority via
             # a tab, transfer, or adjacent surface candidate.
-            if "resource_reference" in metadata and raw_claim is not None:
+            if "resource_reference" in metadata:
                 invalid_claim_events.add(event_id)
             if _RESOURCE.fullmatch(claimed_ref):
                 conflicts.add(claimed_ref)
