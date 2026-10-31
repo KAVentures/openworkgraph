@@ -93,7 +93,7 @@ def test_benchmark_preserves_fractional_seconds_and_strict_sla_boundary():
         "b2,End,2024-01-01T00:04:02.750000Z,team_b",
     ]
     log_id = workspace.import_log(
-        BytesIO(("\\n".join(rows) + "\\n").encode()),
+        BytesIO(("\n".join(rows) + "\n").encode()),
         name="fractional-duration-synthetic", source_format="csv", mapping=MAPPING,
     )["log_id"]
     result = cohorts.benchmark(
