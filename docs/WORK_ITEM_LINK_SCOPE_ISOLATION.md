@@ -610,3 +610,37 @@ records, and legacy/valid positives. They do not authenticate source
 identities or prove that observed records are business tasks. No private
 holdout labels, scoring, API/model usage or provider permissions change.
 Assignment F1 ≥ 0.90 and contamination ≤ 0.05 remain **unverified**.
+
+
+## Conflicting duplicate event IDs cannot hide exact-record identity conflicts
+
+The linker already discards all occurrences of a reused event ID when their
+payloads differ, and vetoes valid exact-scoped tab/clipboard tokens on those
+occurrences. That did not fully protect **exact source-record identity**:
+two discarded rows could claim the same opaque record under different
+provider, kind, host or organization identities, while other surviving rows
+still formed an apparently unconflicted same-record group.
+
+All conflicting duplicate-ID occurrences now contribute **identity
+consistency checks only**, using the same literal source-claim admission as
+ordinary observations. A contradictory or malformed explicit claim naming
+a valid opaque reference suppresses that reference's entire linked group,
+including other otherwise valid observations. A duplicate that merely
+claims *different* valid references does not poison either independent
+record group; neither discarded occurrence is treated as a link endpoint.
+Exact duplicate payloads remain idempotent. Timestamp-invalid duplicate
+occurrences can still invalidate an inconsistent source identity, but never
+contribute membership, chronology or weak token attachment.
+
+Synthetic regressions cover same-reference provider contradictions in
+both input orders, malformed provider/host claims with invalid timestamps,
+independent A/B records with a reused event ID, and identical duplicates.
+This is a fail-closed consistency rule, **not** authentication of source
+identities or proof of task/case boundaries. No titles, clipboard content,
+source locators or tenant identifiers are newly exported; no automatic
+agent execution, provider calls, new permissions or business writes occur.
+
+Preregistered held-out assignment F1 >= 0.90 and contamination <= 0.05
+remain **unverified**. The synthetic tests do not replace native pytest,
+cross-platform exact-head CI, independent review or real consenting pilots.
+No private evaluation truth, split, scorer or thresholds were changed.
