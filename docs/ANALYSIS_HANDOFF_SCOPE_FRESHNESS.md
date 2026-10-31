@@ -502,3 +502,30 @@ instants, an expired-shape saved-history lease, and ticket bounds with rollover 
 `Date.parse` considers identical to a valid selected local midnight. They do
 not establish live-provider behavior, capture completeness, a real
 consenting-user pilot, commercial outcomes or competitor parity.
+
+
+## A later observed hour is not an omitted UTC date
+
+The authenticated preview's `more_dates_not_listed=true` means the bounded
+date query found a **32nd distinct UTC calendar date**. It cannot be justified
+merely by an event timestamp later than the end of the 31st listed chunk.
+For example, if that chunk was clipped to 10:00 UTC and the last observation
+was at 12:00 UTC **on the same date**, comparing timestamps alone would
+incorrectly advertise an unlisted date. This was especially misleading
+when the displayed row totals already indicated some evidence was not listed.
+
+The handoff now requires the last observation's **UTC day number** to be
+strictly greater than the 31st chunk's UTC start-day number before trusting
+an explicit omission flag. Timezone-offset representations are normalized
+to UTC instants for this check, so a local date label from the previous day
+does not hide a genuine 32nd UTC date. The existing 31-distinct-chunk,
+safe-count, observed-span, chronological and selected-window checks remain.
+Legacy previews without an explicit omission flag are still reviewable
+without a completeness assurance.
+
+A synthetic mock-DOM regression constructs 31 daily chunks with the last
+clipped at 10:00, an omitted selected row, and a last observation at 12:00
+on the same UTC date: Copy/Download must remain unavailable. The positive
+case places that observation on the next UTC day using a negative timezone
+offset and retains safe local Copy. These fixtures are not evidence of
+real-user acceptance, complete capture, live-provider validation or ROI.
