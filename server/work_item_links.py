@@ -263,6 +263,7 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
     for group in by_ref.values():
         join(group, "same_record")
     ambiguous_transfer_groups = 0
+    inconsistent_transfer_direction_groups = 0
     for group in by_transfer.values():
         if len(group) < 2:
             continue
@@ -272,6 +273,28 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
         if len({row["ref"] for row in group if row["ref"]}) > 2:
             ambiguous_transfer_groups += 1
             continue
+        # When the entire token group explicitly says copy/paste, a transfer
+        # needs an observed copy BEFORE a compatible paste. Two copies, two
+        # pastes, a reversed sequence, or a copy/paste confined to record A
+        # with only a copy on B are not evidence of an A -> B transfer.
+        # Legacy generic capture actions remain unchanged: timestamps can
+        # veto contradictory directional evidence, never create a link.
+        if all(row["action"] in ("copy", "paste") for row in group):
+            earlier_copies: dict[str, str] = {}
+            directional_pair = False
+            for row in group:  # rows are already ordered by observed UTC time
+                if row["action"] == "copy":
+                    earlier_copies.setdefault(row["ref"], row["observed_at"])
+                elif any(
+                    at < row["observed_at"] and
+                    (copy_ref != row["ref"] or not copy_ref or not row["ref"])
+                    for copy_ref, at in earlier_copies.items()
+                ):
+                    directional_pair = True
+                    break
+            if not directional_pair:
+                inconsistent_transfer_direction_groups += 1
+                continue
         join([row["event_id"] for row in group], "clipboard_transfer")
 
     candidates: list[dict[str, Any]] = []
@@ -306,7 +329,8 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
         members[union.find(row["event_id"])].append(row["event_id"])
     return {"rows": rows, "members": members, "root": union.find, "links": links,
             "candidates": candidates, "conflicting_references": conflicts,
-            "ambiguous_transfer_groups": ambiguous_transfer_groups}
+            "ambiguous_transfer_groups": ambiguous_transfer_groups,
+            "inconsistent_transfer_direction_groups": inconsistent_transfer_direction_groups}
 
 
 def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> dict[str, Any]:
@@ -373,6 +397,7 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
         "unlinked_observation_count": unlinked,
         "conflicting_reference_groups_suppressed": linked["conflicting_references"],
         "ambiguous_clipboard_transfer_groups": linked["ambiguous_transfer_groups"],
+        "inconsistent_clipboard_transfer_direction_groups": linked["inconsistent_transfer_direction_groups"],
         "link_contract": {
             "merged_bases": sorted(_CONFIDENCE),
             "candidate_only_bases": sorted(_CANDIDATE_CONFIDENCE),
@@ -380,6 +405,7 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             "ephemeral_signals_scope": "exact_organization_actor_device_session",
             "missing_scope_is_wildcard": False,
             "multiplexed_clipboard_transfer_is_unmerged": True,
+            "explicit_clipboard_direction_conflicts_are_unmerged": True,
             "labels_titles_urls_and_clipboard_contents_read": False,
             "linked_items_are_tasks": False,
             "ask_when_ambiguous": True,
