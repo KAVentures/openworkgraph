@@ -1798,3 +1798,72 @@ def test_incompatible_v1_schema_is_never_mutated_or_stamped_v2(
         ]
         if before_count is not None:
             assert db.execute("SELECT COUNT(*) FROM declarations").fetchone()[0] == before_count
+
+
+@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("extra_ddl", [
+    "CREATE TRIGGER extra_insert AFTER INSERT ON declarations "
+    "BEGIN DELETE FROM declarations; END",
+    "CREATE TRIGGER extra_update AFTER UPDATE ON declarations "
+    "BEGIN DELETE FROM declarations; END",
+    "CREATE INDEX extra_scope_index ON declarations(scope_ref)",
+    "CREATE VIEW extra_view AS SELECT work_item_ref FROM declarations",
+    "CREATE TABLE extra_table (unrelated TEXT)",
+])
+def test_versioned_declarations_reject_foreign_schema_objects(
+    local, version, extra_ddl,
+):
+    """A matching table_info is insufficient if triggers can mutate approvals.
+
+    Version-one migration updates each row's incarnation token; a hidden
+    UPDATE trigger could erase the entire ledger. Version-two INSERT/UPDATE
+    triggers can likewise mutate owner facts outside the reviewed CAS intent.
+    Read/save must reject such schema before any migration or write.
+    """
+    reviewed(A)
+    reviewed(B)
+    path = facts._path()
+    v1_ddl = """CREATE TABLE declarations (
+        work_item_ref TEXT PRIMARY KEY, scope_ref TEXT NOT NULL,
+        goal_code TEXT NOT NULL, expected_outcome_code TEXT NOT NULL,
+        dependencies_json TEXT NOT NULL, revision INTEGER NOT NULL,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL)"""
+    ddl = (v1_ddl if version == 1 else
+           v1_ddl[:-1] + ", edit_token TEXT NOT NULL)")
+    with sqlite3.connect(path) as db:
+        db.execute(ddl)
+        row = (A, SCOPE, "review_source_state", "source_state_rechecked",
+               "[]", 1, NOW.isoformat(), NOW.isoformat(),
+               (NOW + timedelta(days=7)).isoformat())
+        if version == 2:
+            row += ("f" * 32,)
+        db.execute(
+            "INSERT INTO declarations VALUES (" + ",".join("?" for _ in row) + ")",
+            row,
+        )
+        db.execute(extra_ddl)
+        db.execute(f"PRAGMA user_version={version}")
+        before_schema = db.execute(
+            "SELECT type,name,sql FROM sqlite_master "
+            "WHERE name NOT GLOB 'sqlite_*' ORDER BY type,name"
+        ).fetchall()
+        before_rows = db.execute("SELECT * FROM declarations").fetchall()
+    if os.name == "posix":
+        path.chmod(0o600)
+
+    error = "incompatible legacy" if version == 1 else "incompatible versioned"
+    with pytest.raises(facts.CaseDeclarationError, match=error):
+        facts.list_case_declarations(SCOPE, now=NOW)
+    with pytest.raises(facts.CaseDeclarationError, match=error):
+        save(B)
+
+    # The rejected v1 migration never stamps v2 or executes an UPDATE
+    # trigger; rejected v2 never accepts foreign executable schema.
+    with sqlite3.connect(path) as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == version
+        assert db.execute(
+            "SELECT type,name,sql FROM sqlite_master "
+            "WHERE name NOT GLOB 'sqlite_*' ORDER BY type,name"
+        ).fetchall() == before_schema
+        assert db.execute("SELECT * FROM declarations").fetchall() == before_rows
