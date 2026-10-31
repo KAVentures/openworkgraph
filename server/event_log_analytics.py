@@ -164,7 +164,7 @@ def kpis(log_id: str, case_type: str | None = None, sla_seconds: int | None = No
     def run(conn):
         restrict(conn, chosen, log_id)
         conn.execute("""CREATE OR REPLACE TEMP TABLE cs AS SELECT case_id, count(*) AS events,
-              date_diff('second', min(ts), max(ts)) AS duration, max(ts) AS ended,
+              epoch(max(ts) - min(ts)) AS duration, max(ts) AS ended,
               count(*) > count(DISTINCT activity) AS rework
             FROM ce GROUP BY case_id""")
         cases, q, mean, events, rework = conn.execute("""SELECT count(*), quantile_cont(duration, [0.5, 0.9, 0.95]),
@@ -226,7 +226,7 @@ def root_cause(log_id: str, outcome: str, case_type: str | None = None, *, thres
         raise EventLogWorkspaceError("activity is required for this outcome")
     limit = max(1, min(int(limit), 100))
     outcome_sql = {
-        "duration_over": "date_diff('second', min(ts), max(ts)) > $threshold",
+        "duration_over": "epoch(max(ts) - min(ts)) > $threshold",
         "contains_activity": "bool_or(activity = $activity)",
         "ends_with": "arg_max(activity, (ts, event_id)) = $activity",
         "rework": "count(*) > count(DISTINCT activity)",
