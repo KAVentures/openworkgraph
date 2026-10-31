@@ -173,6 +173,33 @@ def _database(*, create: bool) -> Iterator[sqlite3.Connection | None]:
             version = db.execute("PRAGMA user_version").fetchone()[0]
         if version != 2:
             raise CaseDeclarationError("unsupported or incomplete declaration store")
+        # user_version is only a marker, not proof of a compatible ledger.
+        # In particular, a missing PRIMARY KEY would permit duplicate
+        # work_item_ref rows, making exact CAS and owner approval ambiguous.
+        # Check the fixed v2 contract before any read or mutation. Both a
+        # fresh v2 table and the supported v1 migration have this shape.
+        expected_columns = (
+            ("work_item_ref", "TEXT", 0, 1),
+            ("scope_ref", "TEXT", 1, 0),
+            ("goal_code", "TEXT", 1, 0),
+            ("expected_outcome_code", "TEXT", 1, 0),
+            ("dependencies_json", "TEXT", 1, 0),
+            ("revision", "INTEGER", 1, 0),
+            ("created_at", "TEXT", 1, 0),
+            ("updated_at", "TEXT", 1, 0),
+            ("expires_at", "TEXT", 1, 0),
+            ("edit_token", "TEXT", 1, 0),
+        )
+        table = db.execute(
+            "SELECT type FROM sqlite_master WHERE name='declarations'"
+        ).fetchone()
+        columns = db.execute("PRAGMA table_info(declarations)").fetchall()
+        actual_columns = tuple(
+            (name, declared_type.upper(), required, primary)
+            for _index, name, declared_type, required, _default, primary in columns
+        )
+        if table != ("table",) or actual_columns != expected_columns:
+            raise CaseDeclarationError("incompatible versioned declaration schema")
         yield db
     finally:
         db.close()
