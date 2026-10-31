@@ -450,7 +450,7 @@ def test_distinct_contact_patch_targets_remain_supported_and_private():
     ["emails", CORE_USER + 'emails[type eq "work"].value'],
     ["emails.primary", 'emails[type eq "work"].primary'],
     ['emails[type eq "work"]', CORE_USER + 'emails[type eq "WORK"].primary'],
-    ['emails[type eq "work"]', r'emails[type eq "\\u0077ork"].value'],
+    ['emails[type eq "work"]', r'emails[type eq "\u0077ork"].value'],
     ["emails.value", 'emails[type eq "work"]'],
 ], ids=[
     "whole-array-and-child", "whole-array-and-qualified-selector",
