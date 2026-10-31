@@ -445,6 +445,55 @@ def test_distinct_contact_patch_targets_remain_supported_and_private():
     assert {"unverified_contact_metadata", "contact_value_selector"} <= codes(report)
 
 
+@pytest.mark.parametrize("paths", [
+    ["emails", "emails.primary"],
+    ["emails", CORE_USER + 'emails[type eq "work"].value'],
+    ["emails.primary", 'emails[type eq "work"].primary'],
+    ['emails[type eq "work"]', CORE_USER + 'emails[type eq "WORK"].primary'],
+    ['emails[type eq "work"]', r'emails[type eq "\\u0077ork"].value'],
+    ["emails.value", 'emails[type eq "work"]'],
+], ids=[
+    "whole-array-and-child", "whole-array-and-qualified-selector",
+    "all-contacts-child-and-selector-child", "selected-contact-and-child",
+    "selected-contact-and-decoded-child", "all-contacts-child-and-selected-contact",
+])
+def test_overlapping_contact_patch_paths_warn_without_claiming_duplicate_target(paths):
+    # The shipped parser supports both operations, but execution order and
+    # current stored contacts determine whether one write overwrites another.
+    from gateway.scim_user_emails import _path
+    for path in paths:
+        _path(path)
+    users = mapping()["users"]
+    users["patch_attributes"] = paths
+    report = assess(mapping(users=users))
+    assert report["status"] == "requires_live_validation"
+    assert {"overlapping_contact_patch_paths", "unverified_contact_metadata",
+            "live_validation_required"} <= codes(report)
+    assert "unsupported_attribute" not in codes(report)
+    assert not any(path in json.dumps(report) for path in paths)
+
+
+@pytest.mark.parametrize("paths", [
+    ["emails"],
+    ["emails.primary", "emails.display"],
+    ["emails.value", 'emails[type eq "work"].display'],
+    ['emails[type eq "work"].value', 'emails[type eq "work"].primary'],
+    ['emails[type eq "work"]', 'emails[type eq "home"].value'],
+    ['emails[type eq "work"].value', 'emails[value eq "work"].value'],
+], ids=[
+    "whole-array-only", "distinct-all-contacts-children",
+    "different-child-fields", "distinct-selected-children",
+    "distinct-selected-type", "different-selector-kinds",
+])
+def test_nonoverlapping_declared_contact_paths_do_not_get_overlap_warning(paths):
+    users = mapping()["users"]
+    users["patch_attributes"] = paths
+    report = assess(mapping(users=users))
+    assert report["status"] == "requires_live_validation"
+    assert "overlapping_contact_patch_paths" not in codes(report)
+    assert "unsupported_attribute" not in codes(report)
+
+
 def test_unsupported_contact_paths_remain_explicit_blockers_not_duplicates():
     users = mapping()["users"]
     users["patch_attributes"] = [
