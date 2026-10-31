@@ -2028,3 +2028,55 @@ test('zero recorded events never become a claim of inactivity or recorder consen
     assert.equal(h.downloads, 0, name);
   });
 });
+
+test('copyable AI request discloses absent ordinary evidence without inventing workflows', async t => {
+  const cases = [
+    {name: 'no retained events', patch: {
+      canonical_rows: 0, retained_rows: 0, first_observed_at: null,
+      last_observed_at: null, event_types: {}, sources: {},
+      work_evidence: {ordinary_event_rows: 0, health_event_rows: 0,
+        last_work_observed_at: null}
+    }, expected: /No recorded events in this local preview's selected period/,
+    forbidden: /only capture-health or gap records/},
+    {name: 'empty selected period with other retained events', patch: {
+      canonical_rows: 0, retained_rows: 2, first_observed_at: null,
+      last_observed_at: null, event_types: {}, sources: {},
+      work_evidence: {ordinary_event_rows: 0, health_event_rows: 0,
+        last_work_observed_at: null}
+    }, expected: /No recorded events in this local preview's selected period/,
+    forbidden: /only capture-health or gap records/},
+    {name: 'only health and gap rows', patch: {
+      event_types: {capture_gap: 1, capture_health: 1},
+      work_evidence: {ordinary_event_rows: 0, health_event_rows: 2,
+        last_work_observed_at: null}
+    }, expected: /only capture-health or gap records, not ordinary work events/,
+    forbidden: /No recorded events in this local preview's selected period/},
+    {name: 'ordinary work evidence', patch: {},
+      expected: null, forbidden: /Evidence limitation:/}
+  ];
+  for (const {name, patch, expected, forbidden} of cases) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], {...h.preview('range', 'reviewed'), ...patch});
+    await opening;
+    assert.equal(h.modals, 1, name);
+    const request = h.modal['#analysisRequest'].textContent;
+    if (expected) {
+      assert.match(request, expected, name);
+      assert.match(request, /This is not proof of inactivity or complete capture|Health and gap records are not workflow steps/, name);
+      assert.match(request, /Do not infer a workflow, business completion, time savings, or ROI/, name);
+      assert.match(request, /other currently authorized evidence.*disclose its source and limits; otherwise report insufficient evidence/, name);
+      assert.ok(request.startsWith('request-reviewed\\n\\nEvidence limitation:'), name);
+    } else {
+      assert.equal(request, 'request-reviewed', name);
+    }
+    assert.doesNotMatch(request, forbidden, name);
+    assert.equal(h.modal['#analysisDownload'].disabled, patch.canonical_rows === 0, name);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, [request], name);
+    assert.equal(h.tickets.length, 0, name);
+    assert.equal(h.downloads, 0, name);
+  });
+});
