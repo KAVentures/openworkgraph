@@ -2782,3 +2782,95 @@ test('ticket bounds reject submillisecond changes but accept exact offset equiva
     assert.equal(h.tickets.length, 1);
   });
 });
+
+
+test('submillisecond observation ordering and sample provenance fail closed', async t => {
+  const micro = (stamp, digits) => stamp.replace(/\\.000Z$/, '.' + digits + 'Z');
+  for (const [name, changes] of [
+    ['reversed first/last within one millisecond', {
+      first_observed_at: micro(observedStart, '000002'),
+      last_observed_at: micro(observedStart, '000001')
+    }],
+    ['sample precedes first observed event by one microsecond', {
+      first_observed_at: micro(observedStart, '000002'),
+      redacted_examples: [{app: 'Editor', window_title: 'Redacted',
+        observed_at: micro(observedStart, '000001')}]
+    }],
+    ['sample follows last observed event by one microsecond', {
+      last_observed_at: micro(observedEnd, '000001'),
+      redacted_examples: [{app: 'Editor', window_title: 'Redacted',
+        observed_at: micro(observedEnd, '000002')}]
+    }],
+    ['latest work timestamp exceeds last observed by one microsecond', {
+      last_observed_at: micro(observedEnd, '000001'),
+      work_evidence: {last_work_observed_at: micro(observedEnd, '000002')}
+    }]
+  ]) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], {...h.preview('range', 'untrustworthy'), ...changes});
+    await opening;
+    assert.equal(h.modals, 0);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+    assert.deepEqual(h.copied, []);
+  });
+});
+
+test('current-run start excludes a microsecond-earlier observation', async t => {
+  const micro = (stamp, digits) => stamp.replace(/\\.000Z$/, '.' + digits + 'Z');
+  for (const [name, first, accepted] of [
+    ['event before current-run start', micro(observedStart, '000001'), false],
+    ['event after current-run start', micro(observedStart, '000003'), true]
+  ]) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const select = h.bars[0].controls.select;
+    select.value = 'current';
+    select.onchange({target: select});
+    await settle(); h.reply(h.reads[1], h.preview('current', 'selected')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[2], {...h.preview('current', 'microsecond-boundary'),
+      first_observed_at: first,
+      window: {scope: 'current', since: micro(observedStart, '000002')}},
+    {preserveWindow: true});
+    await opening;
+    assert.equal(h.modals, accepted ? 1 : 0);
+    if (accepted) {
+      assert.match(h.modalHtml, /Current recorder run/);
+      await h.modal['#analysisCopy'].onclick();
+      assert.deepEqual(h.copied, ['request-microsecond-boundary']);
+    } else {
+      assert.match(h.summary.textContent, /incomplete or malformed/i);
+      assert.deepEqual(h.copied, []);
+    }
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+  });
+});
+
+test('valid submillisecond observation and sample order accepts offset-equivalent instants', async () => {
+  const micro = (stamp, digits) => stamp.replace(/\\.000Z$/, '.' + digits + 'Z');
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const opening = h.bars[0].controls.button.onclick();
+  await settle();
+  const first = micro(observedStart, '000001');
+  const last = micro(observedStart, '000003');
+  h.reply(h.reads[1], {...h.preview('range', 'precise-observation'),
+    first_observed_at: first, last_observed_at: last,
+    redacted_examples: [{app: 'Editor', window_title: 'Redacted',
+      observed_at: micro(observedStart, '000002000')}],
+    work_evidence: {last_work_observed_at: last}});
+  await opening;
+  assert.equal(h.modals, 1);
+  assert.match(h.modalHtml, /000002000Z/);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-precise-observation']);
+  assert.equal(h.tickets.length, 0);
+  assert.equal(h.downloads, 0);
+});
