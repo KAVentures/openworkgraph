@@ -576,8 +576,8 @@ def test_create_without_active_cautions_about_default_active_state(client, creat
     assert "deactivation_patch_not_declared" not in codes(report)
     assert "unsupported_attribute" not in codes(report)
     assert "live_validation_required" in codes(report)
-    assert "userName" not in json.dumps(report)
-    assert "emails" not in json.dumps(report)
+    # Reports identify declaration positions/codes, not contact values.
+    assert "private@example.invalid" not in json.dumps(report)
 
 
 @pytest.mark.parametrize("create_paths", [
