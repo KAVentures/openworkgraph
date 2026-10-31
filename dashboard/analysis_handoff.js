@@ -160,6 +160,15 @@
           (instant(sample.observed_at) && instant(first) && instant(last) &&
            Date.parse(first) <= Date.parse(sample.observed_at) &&
            Date.parse(sample.observed_at) <= Date.parse(last))));
+    // The modal must not promise text exclusion when a supplied preview
+    // explicitly contradicts the local export's privacy contract. Legacy
+    // previews without this optional attestation remain usable, but uncertain.
+    const workText = d?.work_text;
+    const workTextValid = workText == null || (object(workText) &&
+      (workText.included_in_activity_package == null ||
+        workText.included_in_activity_package === false) &&
+      (workText.local_capture_enabled == null ||
+        typeof workText.local_capture_enabled === 'boolean'));
     const work = d?.work_evidence;
     const healthRows = sumSafe([d?.event_types?.capture_gap ?? 0,
       d?.event_types?.capture_health ?? 0]);
@@ -182,7 +191,7 @@
         !counts(d.event_types) || !counts(d.sources) ||
         !examplesValid ||
         !observed || !observedWithinWindow || !validWindow || !chunks ||
-        !planCoverageValid || !workValid) {
+        !planCoverageValid || !workValid || !workTextValid) {
       throw new Error('Preview evidence was incomplete or malformed. Nothing was copied or downloaded; prepare again.');
     }
   }
@@ -329,12 +338,15 @@
             ' (end exclusive; snapshot only, may not cover this selected work period).'+until;
       }
     }
+    const workTextStatement = d.work_text?.included_in_activity_package === false
+      ? 'Visible work text is not included in this activity package. Typed values and clipboard contents are not included.'
+      : 'This preview does not confirm that visible work text, typed values or clipboard contents are excluded. Inspect the package before sharing it.';
     window.openModal?.('Prepare for AI','Discover opportunities from recorded work',`
       <p>No workflow description or repeated pattern is required. Your AI will interpret the evidence; this panel does not run a model.</p>
       <div class="note"><strong>What the AI will receive</strong>
         <p>${esc(d.canonical_rows)} recorded events · ${esc(d.event_types.focus_span||0)} focus spans · ${esc(d.event_types.capture_gap||0)} unobserved-gap records.</p>
         <p>Selected: ${esc(d.window.since||'all available history')} to ${esc(d.window.until||'the latest retained evidence')} (end exclusive, UTC). Observed: ${esc(d.first_observed_at||'none')} to ${esc(d.last_observed_at||'none')}.</p>
-        <p>Sources: ${esc(Object.entries(d.sources).map(([k,v])=>`${k}: ${v}`).join(', ')||'none')}. Visible work text is not included in this activity package. Typed values and clipboard contents are not included.</p>
+        <p>Sources: ${esc(Object.entries(d.sources).map(([k,v])=>`${k}: ${v}`).join(', ')||'none')}. ${esc(workTextStatement)}</p>
         <p>Latest work event: ${esc(d.work_evidence?.last_work_observed_at||'none in this period')}. Capture health and gaps are shown separately; they do not confirm the recorder is running.</p>
         <p>${esc(localRead)} Hosted AI availability must be checked separately: it only sees previously shared evidence. Preparing or downloading a local file does not grant AI history access.</p>
       </div>
