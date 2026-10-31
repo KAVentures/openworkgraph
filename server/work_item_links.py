@@ -305,7 +305,18 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
             if not directional_pair:
                 inconsistent_transfer_direction_groups += 1
                 continue
-        join([row["event_id"] for row in group], "clipboard_transfer")
+        # A direct A-copy -> B-paste proves a relationship between those
+        # referenced records, not membership for every loose event reusing
+        # the token. In explicit two-record groups, only the referenced
+        # observations receive the clipboard edge. Independent tab evidence
+        # can still attach a loose event later on its own merits.
+        # Preserve the legacy all-generic and one-record transfer contracts.
+        if len(referenced_records) == 2 and any(
+            row["action"] in ("copy", "paste") for row in group
+        ):
+            join([row["event_id"] for row in group if row["ref"]], "clipboard_transfer")
+        else:
+            join([row["event_id"] for row in group], "clipboard_transfer")
 
     candidates: list[dict[str, Any]] = []
     for tab_rows in by_tab.values():
