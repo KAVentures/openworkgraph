@@ -833,3 +833,27 @@ Synthetic mock-DOM regression cases cover a bidi override, directional
 isolate, embedded newline, C1 control, bounded focus example, ordinary Arabic
 text and HTML-like text. They do not replace native Node, Chromium,
 accessibility, cross-platform, scale or real consenting-user acceptance.
+
+
+### 2026-10-31 — source-count delimiter and invisible-label disclosure (Worker B)
+
+The bounded reported-source preview is **not a verified provider identity list**. A
+single imported source name may contain punctuation that looks like a separate
+`source: count` entry or the `; omitted` disclosure. In the modal **only**,
+commas, colons and semicolons inside source names now appear as explicit
+`[U+002C]`, `[U+003A]` and `[U+003B]` markers; the actual list/count
+separators and exact omitted totals remain distinct. Selected default-ignorable
+formatting characters (soft hyphen, combining grapheme joiner, Mongolian vowel
+separator, zero-width space/non-joiner/joiner, word joiner and BOM) are also
+shown as `[U+XXXX]` in source and focus-example labels. Ordinary names such
+as `desktop` and Arabic text without such characters render as before.
+
+This is a **display-only ambiguity safeguard**, not a source-identity
+verification, a change to canonical labels, a provider authorization, or a
+complete Unicode-confusables defense. Existing source counts, event partition,
+selection, copyable request, consent, export and download behavior remain
+unchanged. Synthetic mock-DOM regressions cover a forged source-count/
+omission label, zero-width/default-ignorable names, unchanged ordinary labels
+and no unintended ticket/export on Copy. They do not replace native Node,
+Chromium, WCAG, cross-platform, scale or packaging checks, or a consenting
+real-user pilot. Claim: [#326 comment 6546499009](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6546499009).
