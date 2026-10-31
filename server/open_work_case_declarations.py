@@ -90,7 +90,13 @@ def _database(*, create: bool) -> Iterator[sqlite3.Connection | None]:
         else:
             os.close(fd)
         info = path.lstat()
-    if not stat.S_ISREG(info.st_mode) or path.is_symlink():
+    # A regular file can still have another name outside the private auth
+    # directory. SQLite writes through the inode, so a hard-linked ledger
+    # could mutate that other path despite passing the symlink/mode checks.
+    # Require a single link before opening the database. This is an admission
+    # guard, not an atomic defense against concurrent path replacement.
+    if (not stat.S_ISREG(info.st_mode) or path.is_symlink() or
+        info.st_nlink != 1):
         raise CaseDeclarationError("unsafe case declaration storage path")
     if os.name == "posix" and (info.st_mode & 0o077):
         raise CaseDeclarationError("case declaration storage permissions are too broad")
