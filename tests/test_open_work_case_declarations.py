@@ -2248,3 +2248,39 @@ def test_trusted_delete_journal_mode_remains_compatible(local):
     with sqlite3.connect(facts._path()) as raw:
         assert raw.execute("PRAGMA journal_mode").fetchone()[0].lower() == "delete"
     assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [item]
+
+
+@pytest.mark.skipif(os.name != "posix" or not hasattr(os, "link"),
+                    reason="requires POSIX hard-link identity")
+def test_hardlinked_ledger_rejected_before_read_or_cas_write(local):
+    # A hard link is not a symlink. Without st_nlink validation, SQLite
+    # mutates the same inode through an unrelated path outside the private
+    # ledger directory even when the primary path has mode 0600.
+    reviewed(A)
+    initial = save()
+    path = facts._path()
+    alias = local / "separate-owner-facts.sqlite3"
+    try:
+        os.link(path, alias)
+    except OSError as exc:
+        pytest.skip(f"filesystem does not support hard links: {exc}")
+    assert path.lstat().st_nlink == 2
+    original = alias.read_bytes()
+
+    with pytest.raises(facts.CaseDeclarationError, match="unsafe case declaration storage"):
+        facts.list_case_declarations(SCOPE, now=NOW)
+    with pytest.raises(facts.CaseDeclarationError, match="unsafe case declaration storage"):
+        save(expected_revision=initial["revision"],
+             expected_edit_token=initial["edit_token"])
+    assert alias.read_bytes() == original
+    assert path.read_bytes() == original
+
+    # Removing the foreign link restores the single-inode-name admission
+    # contract without migrating, resetting revisions or losing owner facts.
+    alias.unlink()
+    assert path.lstat().st_nlink == 1
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [initial]
+    updated = save(expected_revision=initial["revision"],
+                   expected_edit_token=initial["edit_token"])
+    assert updated["revision"] == initial["revision"] + 1
+    assert updated["edit_token"] == initial["edit_token"]
