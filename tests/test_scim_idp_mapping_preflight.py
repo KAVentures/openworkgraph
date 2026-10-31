@@ -504,3 +504,55 @@ def test_unsupported_contact_paths_remain_explicit_blockers_not_duplicates():
     assert report["status"] == "blocked"
     assert sum(finding["code"] == "unsupported_attribute"
                for finding in report["findings"]) == 2
+
+
+@pytest.mark.parametrize("patch_paths", [
+    [],
+    ["displayName"],
+    ["name.givenName", "externalId"],
+    ["emails"],
+    ['emails[type eq "private@example.invalid"].primary'],
+], ids=[
+    "no-patch-attributes", "display-only", "name-and-external-id",
+    "contact-only", "selected-contact-only",
+])
+@pytest.mark.parametrize("client", ["entra", "okta"])
+def test_declared_patch_without_active_warns_about_deactivation_gap(patch_paths, client):
+    # A syntactically supported IdP mapping can still omit the one attribute
+    # needed for PATCH-based deactivation. This is a static rollout caution,
+    # not evidence that PUT or another separately tested path is unavailable.
+    users = mapping()["users"]
+    users["patch_attributes"] = patch_paths
+    report = assess(mapping(client=client, users=users))
+    assert report["status"] == "requires_live_validation"
+    assert "deactivation_patch_not_declared" in codes(report)
+    assert "live_validation_required" in codes(report)
+    assert "unsupported_attribute" not in codes(report)
+    assert "private@example.invalid" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("patch_paths", [
+    ["active"],
+    ["ACTIVE"],
+    ["name.givenName", "active"],
+])
+def test_declared_active_patch_does_not_claim_deactivation_certification(patch_paths):
+    users = mapping()["users"]
+    users["patch_attributes"] = patch_paths
+    report = assess(mapping(users=users))
+    assert report["status"] == "requires_live_validation"
+    assert "deactivation_patch_not_declared" not in codes(report)
+    assert "live_validation_required" in codes(report)
+
+
+def test_missing_active_patch_warning_is_independent_of_unversioned_policy():
+    users = mapping()["users"]
+    users["write_mode"] = "unversioned_user_patch"
+    users["patch_attributes"] = ["displayName"]
+    denied = assess(mapping(users=users))
+    assert {"deactivation_patch_not_declared", "missing_patch_policy"} <= codes(denied)
+    approved = assess(mapping(users=users, provider_policy={
+        "allow_unversioned_user_patch": True,
+    }))
+    assert approved["status"] == "requires_live_validation"
+    assert {"deactivation_patch_not_declared", "unversioned_patch_overwrite"} <= codes(approved)
