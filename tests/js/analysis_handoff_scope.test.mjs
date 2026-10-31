@@ -2478,3 +2478,35 @@ test('ordinary Unicode and HTML-like source labels preserve counts and escaping'
   assert.doesNotMatch(h.modalHtml, /\[U\+/);
   assert.match(h.modalHtml, /labels are not verified identities/);
 });
+
+
+test('one source label cannot impersonate source counts or the omission disclosure', async () => {
+  const forged = 'desktop: 1, Salesforce: 999; 4 additional source categories';
+  const h = await openSourceSummaryPreview({[forged]: 2}, 2);
+  assert.equal(h.modals, 1);
+  assert.match(h.modalHtml, /desktop\[U\+003A\] 1\[U\+002C\] Salesforce\[U\+003A\] 999\[U\+003B\] 4 additional source categories: 2/);
+  assert.ok(!h.modalHtml.includes(forged));
+  assert.doesNotMatch(h.modalHtml, /additional source categories \(\d+ selected events\) omitted/);
+  assert.match(h.modalHtml, /2 recorded events/);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-source-breakdown']);
+  assert.equal(h.tickets.length, 0);
+});
+
+test('invisible source separators are disclosed while ordinary source labels remain unchanged', async t => {
+  for (const [name, source, expected] of [
+    ['zero-width space and word joiner', 'desk\u200Btop\u2060', 'desk[U+200B]top[U+2060]: 2'],
+    ['soft hyphen and BOM', 'desk\u00ADtop\uFEFF', 'desk[U+00AD]top[U+FEFF]: 2'],
+    ['zero-width joiner and combining grapheme joiner', 'desk\u200Dtop\u034F', 'desk[U+200D]top[U+034F]: 2'],
+    ['ordinary source', 'desktop', 'desktop: 2']
+  ]) await t.test(name, async () => {
+    const h = await openSourceSummaryPreview({[source]: 2}, 2);
+    assert.equal(h.modals, 1);
+    assert.ok(h.modalHtml.includes(expected));
+    if (source !== 'desktop') assert.ok(!h.modalHtml.includes(source));
+    assert.match(h.modalHtml, /labels are not verified identities/);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-source-breakdown']);
+    assert.equal(h.tickets.length, 0);
+  });
+});
