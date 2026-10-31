@@ -106,7 +106,12 @@
               return since < until && until <= nextUtcMidnight &&
                 (windowStart === null || since >= windowStart) &&
                 (windowEnd === null || until <= windowEnd) &&
-                (i === 0 || Date.parse(list[i - 1].until) <= since);
+                // A daily plan is one entry per UTC calendar date, not
+                // several disjoint fragments of the same day. UTC instants
+                // (rather than textual timezone labels) define identity.
+                (i === 0 || (Date.parse(list[i - 1].until) <= since &&
+                  Math.floor(Date.parse(list[i - 1].since) / 86400000) <
+                    Math.floor(since / 86400000)));
             }))));
     // Both maps partition the selected events; a date plan may list only
     // the first 31 days, but cannot list more events than were selected.
