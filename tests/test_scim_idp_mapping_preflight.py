@@ -115,6 +115,79 @@ def test_entra_group_name_collision_is_explicit_blocker():
     assert "entra_group_name_uniqueness" not in codes(report)
 
 
+@pytest.mark.parametrize("client", ["entra", "okta", "other"])
+@pytest.mark.parametrize("create_attrs,expected", [
+    (["displayName", "externalId"], None),
+    (["DISPLAYNAME", "members"], "group_externalid_match_not_created"),
+    (["externalId"], "missing_group_create_displayname"),
+    (["displayName"], "group_externalid_match_not_created"),
+], ids=["matched-create", "member-only-externalid-gap",
+        "missing-required-name", "externalid-not-created"])
+def test_group_create_declaration_matches_shipped_required_name_and_lineage(
+        client, create_attrs, expected):
+    groups = {"enabled": True, "match_attributes": ["externalId"],
+              "create_attributes": create_attrs}
+    report = assess(mapping(client=client, groups=groups))
+    assert report["status"] == ("blocked" if expected == "missing_group_create_displayname"
+                                else "requires_live_validation")
+    assert ("group_externalid_match_not_created" in codes(report)) == (
+        "displayname" in {value.lower() for value in create_attrs}
+        and "externalid" not in {value.lower() for value in create_attrs})
+    assert ("missing_group_create_displayname" in codes(report)) == (
+        "displayname" not in {value.lower() for value in create_attrs})
+    assert "group_create_mapping_not_declared" not in codes(report)
+    assert "groups_not_certified" in codes(report)
+    assert "live_validation_required" in codes(report)
+    assert "unsupported_attribute" not in codes(report)
+
+
+@pytest.mark.parametrize("client", ["entra", "okta", "other"])
+def test_group_create_mapping_absence_is_unknown_not_inferred_from_matching(client):
+    groups = {"enabled": True, "match_attributes": ["externalId"]}
+    report = assess(load_text(json.dumps(mapping(client=client, groups=groups))))
+    assert report["status"] == "requires_live_validation"
+    assert "group_create_mapping_not_declared" in codes(report)
+    assert "group_externalid_match_not_created" not in codes(report)
+    assert "missing_group_create_displayname" not in codes(report)
+    assert "groups_not_certified" in codes(report)
+
+
+@pytest.mark.parametrize("create_attrs", [[], ["displayName"], ["displayName", "externalId"]])
+def test_disabled_groups_cannot_declare_create_even_with_empty_mapping(create_attrs):
+    groups = {"enabled": False, "match_attributes": [], "create_attributes": create_attrs}
+    report = assess(mapping(groups=groups))
+    assert report["status"] == "blocked"
+    assert "disabled_groups_with_create_mapping" in codes(report)
+    assert "group_create_mapping_not_declared" not in codes(report)
+
+
+@pytest.mark.parametrize("create_attrs", [
+    ["displayName", "roles"], ["displayName", "groups"],
+    ["displayName", "members.value"], ["displayName", "DISPLAYNAME"],
+])
+def test_group_create_declaration_rejects_unsupported_or_duplicate_attributes(create_attrs):
+    groups = {"enabled": True, "match_attributes": ["externalId"],
+              "create_attributes": create_attrs}
+    if create_attrs[-1] == "DISPLAYNAME":
+        with pytest.raises(InvalidMapping):
+            assess(mapping(groups=groups))
+    else:
+        report = assess(mapping(groups=groups))
+        assert report["status"] == "blocked"
+        assert "unsupported_attribute" in codes(report)
+
+
+def test_group_create_declaration_does_not_imply_group_permissions_or_live_idp_acceptance():
+    groups = {"enabled": True, "match_attributes": ["displayName"],
+              "create_attributes": ["displayName", "members"]}
+    report = assess(mapping(client="okta", groups=groups))
+    assert report["status"] == "requires_live_validation"
+    assert {"groups_not_certified", "group_displayname_collision_risk",
+            "live_validation_required"} <= codes(report)
+    assert "missing_group_create_displayname" not in codes(report)
+    assert "group_externalid_match_not_created" not in codes(report)
+
+
 def test_group_mapping_cannot_be_enabled_implicitly():
     report = assess(mapping(groups={"enabled": False, "match_attributes": ["displayName"]}))
     assert "disabled_groups_with_mapping" in codes(report)
