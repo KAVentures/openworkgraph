@@ -308,9 +308,13 @@
       if(!matchesRequestedWindow(requested,d.window))
         throw new Error('Preview period did not match the selected work period. Prepare again; no evidence was exported.');
       validatePreview(d);
+      // No selected observations is not proof that no work occurred, nor
+      // evidence of the recorder's current consent or capture state.
       const text=d.canonical_rows
         ? `${d.canonical_rows} recorded events · observed ${new Date(d.first_observed_at).toLocaleString()} – ${new Date(d.last_observed_at).toLocaleString()}`
-        : d.retained_rows ? 'No activity in this selection. Saved work is available; choose another period.' : 'No saved evidence yet. Work normally after enabling recording.';
+        : d.retained_rows
+          ? 'No events recorded in this selection. Other retained evidence exists; inactivity and capture completeness are unverified.'
+          : 'No retained events reported. Recording and consent status are unverified; this does not establish inactivity.';
       document.querySelectorAll('[data-period-summary]').forEach(x=>{x.textContent=text;x.removeAttribute('aria-busy');});
       return d;
     } catch(e) {
