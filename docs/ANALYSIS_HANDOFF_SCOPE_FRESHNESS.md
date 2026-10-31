@@ -685,3 +685,37 @@ observations, and an ordinary-work positive control. It checks the exact
 copyable request, no automatic ticket/download, and that no false inference
 or business-completion claim is introduced. It is **not** a real consenting
 user study, external provider validation, or competitor parity evidence.
+
+
+## Relative calendar rollover without a period-control change
+
+The `Today` and `Last 7 days` selections are local calendar ranges. Their
+UTC start/end instants change when local midnight passes, even if nobody
+changes a dropdown or date input. The UI generation counter alone therefore
+cannot establish that a pending preview, an already opened handoff or an
+export ticket still belongs to the currently selected relative period.
+
+The handoff now recomputes the local selection and requires the exact same
+range instants before accepting a preview, opening the modal, copying a
+request or starting a ticket download. If the date changes while a preview
+is pending, the preview is refused with a retry instruction; no modal opens.
+If the date changes after preparation, the first Copy/Download attempt
+refuses the old scope, disables the stale controls and announces that a fresh
+preparation is needed. If it changes during an export-ticket request, the
+returned ticket cannot start a download. An already-started clipboard write
+cannot be revoked; the existing completion message discloses the old period.
+
+There is **no background midnight timer or automatic export**. Without a
+user action, an already open modal may remain visually present until the
+next refresh or action; the action guard still fails closed. Fixed custom
+ranges and all-retained-history selections do not become stale solely
+because the calendar day changes. Current-run scope has no client-side
+source-run identity, so any run change and source permission/revocation
+remain the server's responsibility. This is a local scope-consistency guard,
+not proof of capture completeness or authorization.
+
+Synthetic tests inject a controllable local clock into the actual dashboard
+script and exercise rollover during preview, after modal opening and while a
+single-use ticket is pending, plus fixed-range/all-history positive controls.
+They do not establish real-user usability, browser accessibility, customer
+consent, provider acceptance, commercial benefit or competitor parity.
