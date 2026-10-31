@@ -274,15 +274,15 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
         if len(referenced_records) > 2:
             ambiguous_transfer_groups += 1
             continue
-        # When the entire token group explicitly says copy/paste, a transfer
-        # needs an observed copy BEFORE a compatible paste. Two copies, two
-        # pastes, a reversed sequence, or a copy/paste confined to record A
-        # with only a copy on B are not evidence of an A -> B transfer.
-        # For two referenced records, even a copy -> paste through a loose
-        # observation does not authorize joining a third, copy-only record.
-        # Legacy generic capture actions remain unchanged: timestamps can
-        # veto contradictory directional evidence, never create a link.
-        if all(row["action"] in ("copy", "paste") for row in group):
+        # Any explicit copy/paste observation makes direction relevant.
+        # A generic click in the same token group cannot erase contradictory
+        # copy-only, paste-only, or reversed directional evidence. Groups with
+        # *no* explicit direction retain the legacy generic capture contract.
+        # For two referenced records, the ordered copy -> paste must span
+        # both records directly; a loose observation is not a substitute.
+        # Timestamps only veto an observed token's inconsistent direction;
+        # they never establish a link without the shared transfer token.
+        if any(row["action"] in ("copy", "paste") for row in group):
             earlier_copies: dict[str, str] = {}
             directional_pair = False
             for row in group:  # rows are already ordered by observed UTC time
