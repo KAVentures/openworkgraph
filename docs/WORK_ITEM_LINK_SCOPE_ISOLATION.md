@@ -666,3 +666,39 @@ only 50 previewed. These are deterministic contract/scale-shape checks,
 **not** a wall-clock benchmark, full 300k-event acceptance, held-out F1
 improvement, or real consenting-user pilot. Native exact-head CI and
 preregistered held-out assignment/contamination scoring remain required.
+
+
+## Malformed explicit action claims cannot authorize clipboard links (2026-10-31)
+
+The shared legacy action normalizer stringifies input before reducing it to a
+safe action token. An explicitly supplied nonstring `event_type` (for example
+JSON `true`, `1`, `null`, an array or an object) could consequently appear
+as an ordinary non-copy/non-paste event and allow a reused clipboard token to
+link two unrelated records under the backward-compatible generic-token path.
+
+For **timestamp-valid** observations, the work-item linker now distinguishes
+an absent legacy `event_type` from a present but nonstring action claim. The
+latter vetoes **only its exact organization/actor/device/session-scoped
+clipboard-transfer token**. It cannot supply or rescue a directional transfer,
+nor be laundered into a generic clipboard action. The public observed action
+for that row is `unknown`, not a stringified boolean or object. A legitimate
+literal string action, including a legacy generic action, and an absent legacy
+action retain their prior behavior. A valid literal `copy` followed by a
+strictly later literal `paste` still supports the existing transfer contract.
+
+This is a conservative evidence-integrity rule, **not** proof that clipboard
+transfers belong to the same business case. Independently supported exact
+record and single-record-tab membership remain available, including for the
+malformed-action observation; no timestamp-only or app-only merge is added.
+A malformed action on a token in another exact capture scope cannot suppress
+a valid local transfer. The three synthetic regression functions exercise
+six malformed JSON-shaped action values, independent same-record and tab
+evidence, cross-scope veto isolation, absent/generic legacy compatibility,
+and a valid directional positive control.
+
+No raw clipboard data, tenant IDs, tab tokens or untrusted labels are newly
+exported. No provider reads, permissions, agent execution, model/API spend,
+private evaluation truth, scorer, split or thresholds change. Preregistered
+held-out assignment F1 >= 0.90 and contamination <= 0.05 remain **unverified**;
+native pytest, exact-head CI, review and current-main compatibility remain
+merge gates.
