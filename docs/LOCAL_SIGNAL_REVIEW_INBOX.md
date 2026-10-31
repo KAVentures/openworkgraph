@@ -27,7 +27,25 @@ or modify an alert rule.
   local-dashboard auth and no-action boundaries remain unchanged.
 
 This is a first slice. Remaining R10 acceptance: explicit opt-in schedules,
-deduplicated alert event lifecycle, quiet hours, snooze and expiration,
+deduplicated alert event lifecycle, quiet hours,
 auditable recipient authorization, safe retry, source freshness/revocation,
 real-browser UX and company deployment. No scheduled task or external
 notification is enabled by this patch.
+
+
+## Time-bounded local snooze
+
+Triggered unreviewed results offer **Snooze 1 hour**, **Snooze 1 day** and
+**Resume review**. The inbox shows the UTC expiration. On the next refresh at
+or after expiration, the exact result returns to review; no background timer or
+notification runs. The API POST `signal-inbox/{rule_id}/snooze` accepts only
+`state_fingerprint` and integer `minutes` (1–43200, or 0 to resume).
+Repeated requests while the same snooze is active preserve the original expiry.
+To change its duration, resume and snooze again.
+
+Snooze is separate from acknowledgement. Acknowledge/reopen removes the snooze;
+acknowledged results must be reopened before snoozing. A changed evaluation
+clears it, and a changed dataset makes the result stale even during a snooze.
+Deleting the rule or log removes its snooze. It grants no actions, delivery,
+source access or execution permissions. The local computer clock determines
+expiry; this is not a guaranteed reminder or enterprise notification service.

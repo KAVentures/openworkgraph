@@ -141,6 +141,7 @@ def delete_rule(log_id: str, rule_id: str) -> dict[str, Any]:
                                  [log_id, str(rule_id)]).fetchone()[0]
             if not found:
                 raise workspace.EventLogWorkspaceError("unknown signal rule")
+            conn.execute("DELETE FROM signal_snoozes WHERE log_id = ? AND rule_id = ?", [log_id, str(rule_id)])
             conn.execute("DELETE FROM signal_reviews WHERE log_id = ? AND rule_id = ?", [log_id, str(rule_id)])
             conn.execute("DELETE FROM signal_rules WHERE log_id = ? AND rule_id = ?", [log_id, str(rule_id)])
         finally:
@@ -266,6 +267,7 @@ def evaluate(log_id: str) -> dict[str, Any]:
                 # A new state is a new review event even if it later cycles
                 # back to an old value. Do not resurrect an obsolete approval.
                 if previous is None or previous != state:
+                    conn.execute("DELETE FROM signal_snoozes WHERE log_id=? AND rule_id=?", [log_id, rule_id])
                     conn.execute("DELETE FROM signal_reviews WHERE log_id=? AND rule_id=?", [log_id, rule_id])
                 conn.execute("UPDATE signal_rules SET last_evaluated_at = ?, last_state = ? WHERE log_id = ? AND rule_id = ?",
                              [now, json.dumps(state), log_id, rule_id])
