@@ -51,10 +51,12 @@ def source_operation_receipt(
         resource_ref, since=since, until=until,
         include_source_status=True,
     )
-    if not isinstance(graph, dict) or not graph.get("record_observed"):
+    if not isinstance(graph, dict) or graph.get("record_observed") is not True:
         return _unknown(resource_ref, expected_operation, "record_not_observed_in_permitted_window")
+    # These are positive evidence assertions, not merely truthy metadata.
+    # Malformed strings/integers must not attest retained record identity.
     if (graph.get("source_event_limit_reached") or
-        not graph.get("record_identity_complete_within_retained_window", False)):
+        graph.get("record_identity_complete_within_retained_window") is not True):
         return _unknown(resource_ref, expected_operation, "incomplete_or_conflicting_record_identity")
     provider, kind, required_state = _OPS[expected_operation]
     if graph.get("record_type") != {"provider": provider, "kind": kind}:
