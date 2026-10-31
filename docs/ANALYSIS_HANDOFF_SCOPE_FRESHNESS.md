@@ -779,3 +779,30 @@ malformed evidence, safe escaping, and an unchanged user-initiated
 copy-only request for valid previews. Native browser/accessibility and
 full CI are still required; these synthetic cases do not substitute for
 consenting-user pilot evidence.
+## Bounded reported-source breakdown in the review modal
+
+The local preview groups selected events by the **reported source label**. These
+labels are not verified provider identities, business-object attestations or
+independent proof of complete capture. A selected import or retained history
+can have many distinct labels; concatenating all of them into the review modal
+can obscure the consent and evidence limitations, or make the modal expensive
+to render.
+
+The modal now shows **at most eight** source categories in the backend's
+reported order. A label longer than **96 Unicode code points** is visibly
+shortened with a **[source label truncated]** marker, rather than being
+silently presented as the full identity. Blank labels are explicitly shown as
+**[blank source label]**. Labels remain HTML-escaped. If categories are
+omitted, the modal states both their **exact category count** and the **sum
+of selected events** they represent; the existing preview validation still
+requires the full source partition to sum to the selected canonical event
+count. The bounded display does not discard or rewrite the source map in the
+backend, request, or existing user-initiated export.
+
+Deterministic synthetic mock-DOM regressions cover 12 distinct source
+categories with four omitted events, long HTML-looking labels, Unicode
+codepoint truncation, blank labels, and ordinary single-source compatibility.
+The displayed subset is not a source-completeness claim; it is a deliberately
+bounded review aid. Native browser, accessibility, cross-platform and
+packaging checks remain required, as do real consenting-user acceptance and
+provider/source verification before claiming competitor parity.
