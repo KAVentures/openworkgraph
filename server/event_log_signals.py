@@ -149,7 +149,7 @@ def delete_rule(log_id: str, rule_id: str) -> dict[str, Any]:
 
 
 _PER_CASE = """CREATE OR REPLACE TEMP TABLE sc AS SELECT case_id, count(*) AS events,
-    date_diff('second', min(ts), max(ts)) AS duration, count(*) > count(DISTINCT activity) AS rework,
+    epoch(max(ts) - min(ts)) AS duration, count(*) > count(DISTINCT activity) AS rework,
     arg_max(activity, struct_pack(at := ts, event_order := event_id)) AS last_activity,
     min(ts) AS first_ts, max(ts) AS last_ts, list(DISTINCT activity) AS acts
   FROM rc GROUP BY case_id"""
