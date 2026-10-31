@@ -324,3 +324,31 @@ These tests do not establish real-user acceptance or improvement on
 preregistered held-out F1; the 0.90 F1 / 0.05 contamination gates remain
 unverified. No private truth, scoring, model/API calls, provider permissions,
 business writes or automatic execution were changed.
+
+
+## Two-record clipboard direction cannot be established by loose events alone
+
+The explicit-direction guard also needs to distinguish a *direct* observed
+cross-record transfer from an unrelated pair involving an unreferenced
+observation. A scoped token containing A-copy, unreferenced-paste and
+B-copy-only previously passed because A-copy preceded the loose paste; the
+linker then unioned **all** token members, incorrectly attaching B. The
+inverse loose-copy → A-paste with unrelated B-copy had the same problem.
+
+For groups containing **two distinct referenced records**, a directionally
+explicit token now requires a strictly earlier copy from one referenced
+record followed by a paste on the *other referenced record*. An unreferenced
+copy or paste cannot stand in for either endpoint to justify joining both
+records. If the direct cross-record pair is absent, the entire clipboard
+token join is withheld, while independent same-record evidence remains.
+For zero or one referenced record, existing copy→paste-to-unreferenced
+behavior is preserved. Mixed legacy/non-directional actions are unchanged,
+and the preexisting >2-record fanout veto still applies.
+
+Three new synthetic regression functions cover two loose-bridge false joins
+in both input orders, a genuine A-copy→B-paste with an extra loose event,
+and a one-record-to-loose positive control. They do not authenticate source
+records or prove that every valid-looking token is a real transfer. No time
+alone creates a link. The preregistered held-out F1 ≥ 0.90 and contamination
+≤ 0.05 targets remain unverified, with no truth, split or scoring changes,
+model spend, provider calls, new permissions or business writes.
