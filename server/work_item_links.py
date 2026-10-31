@@ -285,6 +285,12 @@ def _observations(events: list[dict[str, Any]]) -> tuple[
             if identities.setdefault(ref, (provider, kind, host, org)) != (provider, kind, host, org):
                 conflicts.add(ref)
         else:
+            # Explicit malformed metadata cannot be treated as an absent legacy
+            # object. We cannot inspect a hidden/conflicting resource claim,
+            # so its top-level tab/clipboard tokens must not authorize joins.
+            # Truly absent metadata remains a supported legacy capture shape.
+            if "metadata" in event and not isinstance(event["metadata"], dict):
+                invalid_claim_events.add(event_id)
             metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
             raw_claim = metadata.get("resource_reference")
             claimed = raw_claim if isinstance(raw_claim, dict) else {}
