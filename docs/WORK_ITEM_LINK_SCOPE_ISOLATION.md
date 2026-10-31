@@ -795,3 +795,29 @@ Run native `python -m pytest -q tests/test_work_item_links.py
 tests/test_reconstruction_owg_native.py` and exact-head cross-platform
 Actions before merge. Held-out assignment F1 >= 0.90 and contamination
 <= 0.05 remain **unverified**, not achieved by these synthetic tests.
+
+
+## Explicit malformed metadata cannot authorize weak evidence (2026-10-31)
+
+A capture row with a **present but non-object** `metadata` envelope (for
+example JSON `null`, a list, string, boolean or number) cannot establish
+that its source-reference evidence is consistent. Previously, a valid
+top-level `clipboard_transfer_id` or `tab_context_id` on such a row could
+still participate in a weak join. Excluding that row alone would also let the
+remaining token group appear uncontested.
+
+The reconstruction linker now treats the row as untrusted for ephemeral
+linking and vetoes its well-formed token **only within the exact
+organization/actor/device/session scope**. It does not discard independent
+valid same-record evidence on other observations, poison matching tokens in
+other scopes, or infer a join from elapsed time. A truly **absent** `metadata`
+field remains supported for legacy capture with a top-level tab/transfer
+identifier. The result remains a derived, read-only association, never a
+verified task or business outcome.
+
+Synthetic regressions exercise malformed envelope types, both tab and
+clipboard false-join cases, reverse input order, preserved same-record
+associations, all four scope dimensions and absent-metadata positive controls.
+They are not a consenting-user pilot, real-provider acceptance or evidence
+that preregistered assignment F1 >= 0.90 and contamination <= 0.05 have
+been achieved. Native repository pytest and exact-head CI are required.
