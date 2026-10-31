@@ -91,7 +91,10 @@ def assess(mapping: Any) -> dict:
         "match_attributes", "create_attributes", "patch_attributes", "write_mode",
     })
     groups = _object(root["groups"], "groups", {"enabled", "match_attributes"})
-    policy = _object(root["provider_policy"], "provider_policy", {"allow_unversioned_user_patch"})
+    policy = _object(root["provider_policy"], "provider_policy", {"allow_unversioned_user_patch"},
+                     {"unique_group_names"})
+    if type(policy.get("unique_group_names", False)) is not bool:
+        raise InvalidMapping("unique_group_names must be a boolean")
     if type(groups["enabled"]) is not bool or type(policy["allow_unversioned_user_patch"]) is not bool:
         raise InvalidMapping("enabled and allow_unversioned_user_patch must be booleans")
     if type(users["write_mode"]) is not str:
@@ -141,9 +144,12 @@ def assess(mapping: Any) -> dict:
         if not group_match:
             add("blocker", "missing_group_match", "groups.match_attributes",
                 "Enabled Groups require an explicit matching attribute")
-        if root["client"] == "entra" and "displayname" in group_match:
+        if root["client"] == "entra" and "displayname" in group_match and not policy.get("unique_group_names", False):
             add("blocker", "entra_group_name_uniqueness", "groups.match_attributes",
-                "OWG does not enforce the unique Group displayName expected by Entra")
+                "Declare and verify the provider's unique Group name policy before Entra displayName matching")
+        if policy.get("unique_group_names", False):
+            add("caution", "declared_group_name_policy", "provider_policy.unique_group_names",
+                "This declaration does not enable or verify the server policy; check current provider revision and worker versions")
         add("caution", "groups_not_certified", "groups.enabled",
             "Group provisioning requires a customer-controlled IdP test; group names grant no OWG permissions")
 

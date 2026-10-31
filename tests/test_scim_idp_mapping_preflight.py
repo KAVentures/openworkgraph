@@ -237,3 +237,18 @@ def test_raw_control_or_noncharacter_in_declared_path_is_invalid(character):
     users["patch_attributes"] = ['emails[type eq "wo' + character + 'rk"].value']
     with pytest.raises(InvalidMapping, match="invalid path"):
         assess(mapping(users=users))
+
+
+def test_declared_group_name_policy_is_optional_and_not_server_configuration():
+    groups = {"enabled": True, "match_attributes": ["displayName"]}
+    assert "entra_group_name_uniqueness" in codes(assess(mapping(groups=groups)))
+    declared = mapping(groups=groups, provider_policy={
+        "allow_unversioned_user_patch": False, "unique_group_names": True})
+    report = assess(declared)
+    assert report["status"] == "requires_live_validation"
+    assert "entra_group_name_uniqueness" not in codes(report)
+    assert {"declared_group_name_policy", "groups_not_certified", "live_validation_required"} <= codes(report)
+    for invalid in [1, "true", None]:
+        declared["provider_policy"]["unique_group_names"] = invalid
+        with pytest.raises(InvalidMapping):
+            assess(declared)
