@@ -1,0 +1,588 @@
+"""Offline ServiceNow incident page staging; no network, credentials or storage.
+
+Caller must separately authorize a selected-record read and validate the grant
+again before committing any later event-log append. Provider responses are not
+proof of completeness, identity authority or customer outcomes.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import re
+import unicodedata
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any
+from urllib.parse import urlencode
+
+MAX_BYTES = 262_144
+MAX_PAGE = 100
+MAX_JSON_DEPTH = 32
+MAX_JSON_NODES = 4096
+MAX_JSON_INTEGER_DIGITS = 128
+_ID = re.compile(r"[0-9a-f]{32}\Z")
+_HOST = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.service-now\.com\Z")
+_UPDATED = re.compile(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\Z")
+_INCIDENT_FIELDS = frozenset({"sys_id", "sys_updated_on", "sys_mod_count", "state"})
+
+
+class StagingError(ValueError):
+    """Fail closed; messages never echo provider values."""
+
+
+@dataclass(frozen=True)
+class SelectedIncidents:
+    host: str
+    tenant_scope: str
+    sys_ids: tuple[str, ...]
+    consented: bool = False
+    grant_current: bool = False
+    # Exact constructor-time selection. This is an in-process consistency
+    # check, NOT a cryptographic or independently authenticated grant.
+
+    def __post_init__(self) -> None:
+        SelectedIncidents._validate_fields(self)
+        object.__setattr__(self, "_bound_selection", (
+            self.host, self.tenant_scope, self.sys_ids,
+            self.consented, self.grant_current))
+
+    def _validate_fields(self) -> None:
+        if type(self.host) is not str or not _HOST.fullmatch(self.host):
+            raise StagingError("Unsupported ServiceNow instance host")
+        if type(self.tenant_scope) is not str or not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", self.tenant_scope):
+            raise StagingError("Invalid local tenant scope")
+        if type(self.sys_ids) is not tuple or not 1 <= len(self.sys_ids) <= 8:
+            raise StagingError("Select one to eight exact incident IDs")
+        if any(type(x) is not str or not _ID.fullmatch(x) for x in self.sys_ids):
+            raise StagingError("Invalid incident ID")
+        if len(set(self.sys_ids)) != len(self.sys_ids):
+            raise StagingError("Duplicate selected incident ID")
+        if type(self.consented) is not bool or type(self.grant_current) is not bool:
+            raise StagingError("Invalid consent or grant state")
+
+    @property
+    def namespace(self) -> str:
+        scope = f"{self.host}\0{self.tenant_scope}\0incident".encode("ascii")
+        return "snow." + hashlib.sha256(scope).hexdigest()[:24]
+
+    def require_authority(self) -> None:
+        if not self.consented or not self.grant_current:
+            raise StagingError("Selected-record read is not currently authorized")
+
+
+def _require_selected_scope(scope: SelectedIncidents) -> None:
+    """Enforce the exact validated authority type before any source operation.
+
+    Duck-typed objects and subclasses may override require_authority and
+    fabricate host, namespace or consent. They cannot be trusted as grants.
+    """
+    if type(scope) is not SelectedIncidents:
+        raise StagingError("Invalid selected incident scope")
+    # A frozen dataclass prevents ordinary assignment, not reflection-based
+    # mutation of its __dict__ / object.__setattr__. Recheck the current
+    # fields before constructing a source URL or interpreting provider rows.
+    # Call the class methods directly: an instance can also shadow methods
+    # after construction. This is a local input invariant, NOT a trusted
+    # consent grant or protection against malicious in-process code/races.
+    # Re-running __post_init__ here would re-bind a mutated but valid-looking
+    # tenant, host, selected ID or grant. Validate WITHOUT resetting the
+    # constructor-time binding, then reject any changed scope/authority fields.
+    try:
+        SelectedIncidents._validate_fields(scope)
+        current = (scope.host, scope.tenant_scope, scope.sys_ids,
+                   scope.consented, scope.grant_current)
+        if object.__getattribute__(scope, "_bound_selection") != current:
+            raise StagingError("Selected incident scope changed after authorization")
+    except (AttributeError, TypeError) as exc:
+        raise StagingError("Invalid selected incident scope binding") from exc
+    SelectedIncidents.require_authority(scope)
+
+
+def _validate_updated(value: str) -> None:
+    """Require a real provider-local calendar timestamp, without claiming UTC."""
+    if type(value) is not str or not _UPDATED.fullmatch(value):
+        raise StagingError("Invalid provider-local update timestamp")
+    try:
+        datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+    except ValueError as exc:
+        raise StagingError("Invalid provider-local update timestamp") from exc
+
+
+def plan_page(scope: SelectedIncidents, *, offset: int = 0, limit: int = 50,
+              since: str | None = None) -> dict[str, Any]:
+    """Construct a fixed-host GET plan; never follows provider-supplied links."""
+    _require_selected_scope(scope)
+    if type(offset) is not int or not 0 <= offset <= 10_000:
+        raise StagingError("Page offset outside bounded range")
+    if type(limit) is not int or not 1 <= limit <= MAX_PAGE:
+        raise StagingError("Page size outside bounded range")
+    if since is not None:
+        _validate_updated(since)
+    query = "sys_idIN" + ",".join(sorted(scope.sys_ids))
+    if since is not None:
+        query += "^sys_updated_on>=" + since
+    query += "^ORDERBYsys_updated_on^ORDERBYsys_id"
+    params = {
+        "sysparm_query": query,
+        "sysparm_fields": "sys_id,sys_updated_on,sys_mod_count,state",
+        "sysparm_display_value": "false",
+        "sysparm_exclude_reference_link": "true",
+        "sysparm_limit": str(limit),
+        "sysparm_offset": str(offset),
+    }
+    return {"method": "GET", "url": f"https://{scope.host}/api/now/table/incident?{urlencode(params)}",
+            "source_namespace": scope.namespace, "selected_count": len(scope.sys_ids),
+            "offset": offset, "limit": limit, "since": since,
+            "historical_completeness": "unknown",
+            "provider_timestamp_timezone_verified": False}
+
+
+def _unique_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in out:
+            raise StagingError("Duplicate JSON keys")
+        out[key] = value
+    return out
+
+
+def _bounded_json_int(value: str) -> int:
+    """Bound ignored provider integer tokens before allocating a large int."""
+    digits = len(value) - int(value.startswith("-"))
+    if digits > MAX_JSON_INTEGER_DIGITS:
+        raise StagingError("Provider JSON integer exceeds bounded digits")
+    return int(value)
+
+
+def _finite_json_float(value: str) -> float:
+    """Refuse numeric JSON overflow, including fields later discarded."""
+    number = float(value)
+    if not math.isfinite(number):
+        raise StagingError("Nonfinite JSON")
+    return number
+
+
+def _validate_json_tree(body: Any) -> None:
+    """Bound discarded fields too; JSON escapes must decode to Unicode scalars.
+
+    The byte cap alone does not bound the number of tiny nested values, and
+    Python's JSON decoder permits isolated escaped UTF-16 surrogates. Neither
+    should be silently accepted just because the field is later discarded.
+    """
+    pending: list[tuple[Any, int]] = [(body, 0)]
+    visited = 0
+    while pending:
+        value, depth = pending.pop()
+        visited += 1
+        if visited > MAX_JSON_NODES or depth > MAX_JSON_DEPTH:
+            raise StagingError("Provider JSON exceeds structural bounds")
+        if type(value) is str:
+            if any(0xD800 <= ord(char) <= 0xDFFF for char in value):
+                raise StagingError("Invalid provider JSON Unicode scalar")
+        elif type(value) is dict:
+            # Count keys as well as values, including discarded private fields.
+            if visited + len(pending) + 2 * len(value) > MAX_JSON_NODES:
+                raise StagingError("Provider JSON exceeds structural bounds")
+            for key, child in value.items():
+                pending.append((key, depth + 1))
+                pending.append((child, depth + 1))
+        elif type(value) is list:
+            if visited + len(pending) + len(value) > MAX_JSON_NODES:
+                raise StagingError("Provider JSON exceeds structural bounds")
+            pending.extend((child, depth + 1) for child in value)
+
+
+def project_page(scope: SelectedIncidents, raw: bytes, *, limit: int = 50,
+                 since: str | None = None,
+                 _require_planned_order: bool = False) -> dict[str, Any]:
+    """Validate one fake/provider page; return minimized staged source snapshots.
+
+    When plan_page used a since bound, the caller must supply that same bound
+    here: a provider may ignore a filter. Comparison is provider-local only.
+    No persisted cursor is advanced here. A future caller must recheck scope,
+    consent, lease/revision and source identity atomically with any append.
+    """
+    _require_selected_scope(scope)
+    if type(limit) is not int or not 1 <= limit <= MAX_PAGE:
+        raise StagingError("Page size outside bounded range")
+    if since is not None:
+        _validate_updated(since)
+    if type(raw) is not bytes or len(raw) > MAX_BYTES:
+        raise StagingError("Source response exceeds bounded byte limit")
+    try:
+        body = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_pairs,
+                          parse_int=_bounded_json_int, parse_float=_finite_json_float,
+                          parse_constant=lambda _: (_ for _ in ()).throw(StagingError("Nonfinite JSON")))
+    except (ValueError, UnicodeError, RecursionError) as exc:
+        raise StagingError("Invalid bounded provider JSON") from exc
+    _validate_json_tree(body)
+    # A ServiceNow Table API read has one result array. Never silently stage
+    # a mixed success/error envelope or provider-supplied pagination metadata:
+    # an HTTP status/ACL failure must not masquerade as an empty successful page.
+    if (type(body) is not dict or set(body) != {"result"}
+            or type(body["result"]) is not list or len(body["result"]) > limit):
+        raise StagingError("Invalid provider result envelope or page size")
+    selected = set(scope.sys_ids)
+    seen: dict[str, dict[str, Any]] = {}
+    last_sort_key: tuple[str, str] | None = None
+    for item in body["result"]:
+        if type(item) is not dict:
+            raise StagingError("Invalid incident record")
+        # ServiceNow field names are canonical and case-sensitive. A second
+        # spelling of an identity/status field must not be silently discarded
+        # as a private extra: it could contradict the staged source evidence.
+        if any(key not in _INCIDENT_FIELDS and
+               unicodedata.normalize("NFKC", key).casefold() in _INCIDENT_FIELDS
+               for key in item):
+            raise StagingError("Ambiguous provider incident field")
+        sys_id = item.get("sys_id")
+        if type(sys_id) is not str or not _ID.fullmatch(sys_id) or sys_id not in selected:
+            raise StagingError("Provider returned an unselected or invalid incident")
+        updated = item.get("sys_updated_on")
+        _validate_updated(updated)
+        # Fixed-width, calendar-validated provider-local timestamps compare in
+        # chronological order within the same unverified provider clock.
+        # Refuse a selected row if ServiceNow ignored the requested filter.
+        if since is not None and updated < since:
+            raise StagingError("Provider returned incident older than requested watermark")
+        mod = item.get("sys_mod_count")
+        if type(mod) is not str or not re.fullmatch(r"(?:0|[1-9][0-9]{0,11})", mod):
+            raise StagingError("Invalid provider modification counter")
+        state = item.get("state")
+        if type(state) is not str or not 1 <= len(state) <= 64 or any(ord(c) < 32 or ord(c) > 126 for c in state):
+            raise StagingError("Invalid incident state")
+        record = {"source_namespace": scope.namespace, "source_case_id": sys_id,
+                  "source_event_id": f"{sys_id}:{mod}", "reported_state": state,
+                  "reported_updated_on": updated, "timestamp_timezone_verified": False,
+                  "source_status_only": True, "business_outcome_verified": False}
+        # A planned offset read requires ascending ORDERBY updated_on, sys_id.
+        # Do not normalize away evidence that the provider ignored that order.
+        # Equal keys (including exact duplicate rows) remain valid.
+        if _require_planned_order:
+            sort_key = (updated, sys_id)
+            if last_sort_key is not None and sort_key < last_sort_key:
+                raise StagingError("Provider page out of planned order")
+            last_sort_key = sort_key
+        prior = seen.get(sys_id)
+        if prior is not None and prior != record:
+            raise StagingError("Conflicting incident revision within page")
+        seen[sys_id] = record
+    return {"records": [seen[k] for k in sorted(seen)],
+            "unobserved_selected_ids": sorted(selected - seen.keys()),
+            "returned_rows": len(body["result"]), "distinct_selected_rows": len(seen),
+            "may_have_more": len(body["result"]) == limit,
+            "historical_completeness": "unknown", "checkpoint_advanced": False,
+            "provider_timestamp_timezone_verified": False,
+            "not_an_authorization_to_append": True}
+
+
+def project_planned_page(scope: SelectedIncidents, raw: bytes, *,
+                         plan: dict[str, Any]) -> dict[str, Any]:
+    """Stage a response against the *same* selected-record GET plan.
+
+    This prevents an accidental omission/change of the incremental watermark
+    between request construction and response projection. The plan is local
+    metadata, not a provider receipt, signed grant, or permission to append.
+    The caller must separately enforce transport identity and atomic revocation
+    fencing before any later persistent operation.
+    """
+    _require_selected_scope(scope)
+    if type(plan) is not dict:
+        raise StagingError("Missing or invalid selected-record page plan")
+    # Reconstruct from the current exact scope rather than trusting a copied
+    # URL, namespace, selected-count, limit, offset or watermark in isolation.
+    # Missing/extra fields and tampered query parameters fail closed.
+    expected = plan_page(scope, offset=plan.get("offset"),
+                         limit=plan.get("limit"), since=plan.get("since"))
+    # Python considers True == 1 and 0 == False. A plan's source and
+    # provenance metadata is a typed contract, not just a value comparison:
+    # a caller must not substitute booleans/floats for selected counts or
+    # source-verification flags and still claim an exact plan match.
+    if (plan != expected or any(
+            type(plan[key]) is not type(expected[key]) for key in expected
+    )):
+        raise StagingError("Selected-record page plan does not match current scope")
+    result = project_page(scope, raw, limit=expected["limit"],
+                          since=expected["since"], _require_planned_order=True)
+    return {**result, "plan_bound": True, "planned_offset": expected["offset"],
+            "planned_since": expected["since"], "page_order_matches_plan": True}
+
+
+def project_supplied_http_response(
+    scope: SelectedIncidents, *, plan: dict[str, Any],
+    request_method: str, request_url: str, response_url: str,
+    status: int, content_type: str, redirect_count: int, body: bytes,
+) -> dict[str, Any]:
+    """Validate caller-supplied HTTP metadata before staging one planned page.
+
+    This is a pure fake-transport contract, NOT an authenticated provider
+    receipt. A future transport must independently enforce TLS, host/tenant
+    grant and revocation, actual request/response binding and atomic append.
+    """
+    _require_selected_scope(scope)
+    if type(plan) is not dict:
+        raise StagingError("Invalid supplied HTTP page plan")
+    if (type(request_method) is not str or request_method != "GET"
+            or type(request_url) is not str or request_url != plan.get("url")
+            or type(response_url) is not str or response_url != request_url):
+        raise StagingError("Supplied HTTP request/response identity mismatch")
+    # A redirect, including one returning to the same URL, is never silently
+    # accepted as an authorized selected-record read.
+    if type(redirect_count) is not int or redirect_count != 0:
+        raise StagingError("Supplied HTTP redirect is not permitted")
+    if type(status) is not int or status != 200:
+        raise StagingError("Supplied HTTP response is not a successful GET")
+    if (type(content_type) is not str or len(content_type) > 80
+            or re.fullmatch(
+                r"application/json(?:[ ]*;[ ]*charset=[ ]*utf-8)?",
+                content_type, re.IGNORECASE | re.ASCII,
+            ) is None):
+        raise StagingError("Supplied HTTP response is not UTF-8 JSON")
+    staged = project_planned_page(scope, body, plan=plan)
+    return {**staged, "supplied_http_metadata_checked": True,
+            "authenticated_transport_receipt": False,
+            "transport_grant_verified": False}
+
+
+
+def project_supplied_http_pages(
+    scope: SelectedIncidents, responses: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Check supplied HTTP metadata for *every* bounded offset page.
+
+    This is an offline fake-transport contract. It does not authenticate the
+    source, grant, TLS connection, completeness or permission to append.
+    Existing raw planned-page callers remain supported without this flag.
+    """
+    _require_selected_scope(scope)
+    if type(responses) is not list or not 1 <= len(responses) <= 8:
+        raise StagingError("Select one to eight supplied HTTP pages")
+    required = frozenset({
+        "plan", "request_method", "request_url", "response_url", "status",
+        "content_type", "redirect_count", "body",
+    })
+    planned: list[tuple[dict[str, Any], bytes]] = []
+    for envelope in responses:
+        if type(envelope) is not dict or set(envelope) != required:
+            raise StagingError("Invalid supplied HTTP page envelope")
+        # Validate each page's metadata and exact selected-record plan before
+        # any batch result can be reported. Never trust only the first page.
+        project_supplied_http_response(
+            scope, plan=envelope["plan"],
+            request_method=envelope["request_method"],
+            request_url=envelope["request_url"],
+            response_url=envelope["response_url"],
+            status=envelope["status"],
+            content_type=envelope["content_type"],
+            redirect_count=envelope["redirect_count"],
+            body=envelope["body"],
+        )
+        planned.append((envelope["plan"], envelope["body"]))
+    # Reuse the established consecutive-offset, duplicate, ordering and
+    # watermark guards; a per-page valid response is not a valid batch.
+    result = project_planned_pages(scope, planned)
+    return {
+        **result, "all_supplied_pages_checked": True,
+        "supplied_http_metadata_checked": True,
+        "authenticated_transport_receipt": False,
+        "transport_grant_verified": False,
+    }
+
+
+def project_planned_pages(scope: SelectedIncidents, pages: list[tuple[dict[str, Any], bytes]]) -> dict[str, Any]:
+    """Check a bounded consecutive run of planned pages without claiming completeness.
+
+    No network or append occurs. A cross-page duplicate is rejected even when
+    identical: an offset shift can hide a different incident. A future caller
+    must independently fence source revocation and validate transport identity.
+    """
+    _require_selected_scope(scope)
+    if type(pages) is not list or not 1 <= len(pages) <= 8:
+        raise StagingError("Select one to eight consecutive page responses")
+    first_limit: int | None = None
+    first_since: str | None = None
+    previous_last: tuple[str, str] | None = None
+    seen: dict[str, dict[str, Any]] = {}
+    returned_rows = 0
+    last_page: dict[str, Any] | None = None
+    for index, entry in enumerate(pages):
+        if type(entry) is not tuple or len(entry) != 2 or type(entry[0]) is not dict:
+            raise StagingError("Invalid planned page entry")
+        plan, raw = entry
+        if index == 0:
+            first_limit = plan.get("limit")
+            if type(first_limit) is not int or not 1 <= first_limit <= MAX_PAGE:
+                raise StagingError("Invalid planned page size")
+            first_since = plan.get("since")
+        if (plan.get("limit") != first_limit or plan.get("since") != first_since
+                or plan.get("offset") != index * first_limit):
+            raise StagingError("Nonconsecutive or inconsistent planned pages")
+        staged = project_planned_page(scope, raw, plan=plan)
+        # Even identical duplicates consume offset slots. A later offset can
+        # therefore skip another selected incident while appearing consecutive.
+        # Standalone single-page projection retains its legacy dedupe contract.
+        if staged["distinct_selected_rows"] != staged["returned_rows"]:
+            raise StagingError("Duplicate incident row within planned offset page")
+        if index < len(pages) - 1 and staged["returned_rows"] != first_limit:
+            raise StagingError("Short page before another planned offset")
+        keys = []
+        for record in staged["records"]:
+            incident_id = record["source_case_id"]
+            if incident_id in seen:
+                raise StagingError("Incident repeated across planned pages")
+            seen[incident_id] = record
+            keys.append((record["reported_updated_on"], incident_id))
+        if keys:
+            if previous_last is not None and min(keys) < previous_last:
+                raise StagingError("Provider page order regressed across offsets")
+            previous_last = max(keys)
+        returned_rows += staged["returned_rows"]
+        last_page = staged
+    return {"records": [seen[k] for k in sorted(seen)],
+            "unobserved_selected_ids": sorted(set(scope.sys_ids) - seen.keys()),
+            "returned_rows": returned_rows, "distinct_selected_rows": len(seen),
+            "pages_checked": len(pages), "plan_sequence_checked": True,
+            "may_have_more": last_page["may_have_more"],
+            "historical_completeness": "unknown", "checkpoint_advanced": False,
+            "provider_timestamp_timezone_verified": False,
+            "not_an_authorization_to_append": True}
+
+
+def reconcile_replayed_pages(scope: SelectedIncidents, earlier_raw: bytes,
+                             later_raw: bytes, *, limit: int = 50,
+                             since: str | None = None) -> dict[str, Any]:
+    """Compare two independently staged selected-incident reads, without writes.
+
+    Only identical source IDs within the exact selected scope are compared.
+    Equal reported revision counters must carry identical minimized status and
+    timestamp evidence; a lower counter is a conflict, not a deletion/replay.
+    Missing records are *unknown* (ACL, pagination, deletion, concurrent edits).
+    This cannot establish provider identity, completeness or checkpoint safety.
+    """
+    _require_selected_scope(scope)
+    earlier = project_page(scope, earlier_raw, limit=limit, since=since)
+    later = project_page(scope, later_raw, limit=limit, since=since)
+    # Standalone staging deduplicates identical rows for legacy callers, but
+    # a replay comparison must not silently hide offset-consuming duplicates:
+    # one repeated selected ID can displace another incident from a page.
+    if (earlier["returned_rows"] != earlier["distinct_selected_rows"]
+            or later["returned_rows"] != later["distinct_selected_rows"]):
+        raise StagingError("Duplicate incident row in replay page")
+    return _reconcile_projected(scope, earlier, later)
+
+
+def _reconcile_projected(scope: SelectedIncidents, earlier: dict[str, Any],
+                         later: dict[str, Any]) -> dict[str, Any]:
+    """Compare strictly projected selected-source identities and revisions."""
+    before = {r["source_case_id"]: r for r in earlier["records"]}
+    after = {r["source_case_id"]: r for r in later["records"]}
+    same: list[str] = []
+    higher: list[str] = []
+    timestamp_regression_unknown: list[str] = []
+    revision_gap_unknown: list[str] = []
+    for incident_id in sorted(before.keys() & after.keys()):
+        old = before[incident_id]
+        new = after[incident_id]
+        old_revision = int(old["source_event_id"].rsplit(":", 1)[1])
+        new_revision = int(new["source_event_id"].rsplit(":", 1)[1])
+        if new_revision < old_revision:
+            raise StagingError("Provider revision counter regressed across selected replay")
+        if new_revision == old_revision:
+            if (new["reported_state"] != old["reported_state"]
+                    or new["reported_updated_on"] != old["reported_updated_on"]):
+                raise StagingError("Conflicting evidence for same provider revision")
+            same.append(incident_id)
+        elif new["reported_updated_on"] < old["reported_updated_on"]:
+            # An increasing source revision with an earlier provider-local time
+            # is contradictory source evidence, not a clean observed advance.
+            # Clock/timezone truth is unknown, so withhold rather than infer
+            # rollback, deletion, or a verified chronological update.
+            timestamp_regression_unknown.append(incident_id)
+        elif new_revision > old_revision + 1:
+            # A non-adjacent reported counter leaves intermediate revisions
+            # unobserved. Do not label a gap as a clean adjacent advance or
+            # infer any historical statuses, actions or business outcomes.
+            revision_gap_unknown.append(incident_id)
+        else:
+            # Equal-second adjacent updates are possible. A higher counter is
+            # source-reported, not verified chronology or completion.
+            higher.append(incident_id)
+    return {
+        "source_namespace": scope.namespace,
+        "same_reported_revision_ids": same,
+        "higher_reported_revision_ids": higher,
+        "timestamp_regression_unknown_ids": timestamp_regression_unknown,
+        "revision_gap_unknown_ids": revision_gap_unknown,
+        "newly_observed_ids": sorted(after.keys() - before.keys()),
+        "missing_unknown_ids": sorted(before.keys() - after.keys()),
+        # Selected records absent from both pages are still unknown, not
+        # evidence of a successful empty or complete provider read.
+        "unobserved_in_either_read_ids": sorted(
+            set(scope.sys_ids) - (before.keys() | after.keys())),
+        "replay_consistency_checked": True,
+        "historical_completeness": "unknown",
+        "missing_means_deleted": False,
+        "provider_timestamp_timezone_verified": False,
+        "business_outcome_verified": False,
+        "checkpoint_advanced": False,
+        "not_an_authorization_to_append": True,
+    }
+
+
+
+def reconcile_planned_replays(
+    scope: SelectedIncidents,
+    earlier_pages: list[tuple[dict[str, Any], bytes]],
+    later_pages: list[tuple[dict[str, Any], bytes]],
+) -> dict[str, Any]:
+    """Compare two bounded offset batches under the exact same GET plans.
+
+    Offline consistency only: not authenticated transport, stable snapshots,
+    a persistence-time revocation fence, or checkpoint authorization.
+    """
+    _require_selected_scope(scope)
+    if (type(earlier_pages) is not list or type(later_pages) is not list
+            or not 1 <= len(earlier_pages) == len(later_pages) <= 8):
+        raise StagingError("Replay requires matching bounded page sequences")
+    for entries in (earlier_pages, later_pages):
+        if any(type(entry) is not tuple or len(entry) != 2
+               or type(entry[0]) is not dict for entry in entries):
+            raise StagingError("Invalid planned replay entry")
+    if [entry[0] for entry in earlier_pages] != [entry[0] for entry in later_pages]:
+        raise StagingError("Replay reads used different selected-record plans")
+    earlier = project_planned_pages(scope, earlier_pages)
+    later = project_planned_pages(scope, later_pages)
+    return {**_reconcile_projected(scope, earlier, later),
+            "same_plans_checked": True, "plan_sequence_checked": True,
+            "pages_per_read": len(earlier_pages)}
+
+def reconcile_supplied_http_replays(
+    scope: SelectedIncidents,
+    earlier_responses: list[dict[str, Any]],
+    later_responses: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Compare two fake-HTTP page batches only after checking *both* transports.
+
+    This is a pure caller-supplied metadata check, never an authenticated
+    provider receipt. Exact plan identity, bounded offsets and source revision
+    consistency are delegated to the existing planned-replay implementation.
+    """
+    _require_selected_scope(scope)
+    if (type(earlier_responses) is not list or type(later_responses) is not list
+            or not 1 <= len(earlier_responses) == len(later_responses) <= 8):
+        raise StagingError("Supplied HTTP replay requires matching bounded page counts")
+    # Both sides must pass *every* fake HTTP envelope and planned offset batch
+    # before the result may claim any replay consistency. This is intentionally
+    # separate from legacy raw replay, which has no transport metadata.
+    project_supplied_http_pages(scope, earlier_responses)
+    project_supplied_http_pages(scope, later_responses)
+    earlier_pages = [(entry["plan"], entry["body"]) for entry in earlier_responses]
+    later_pages = [(entry["plan"], entry["body"]) for entry in later_responses]
+    result = reconcile_planned_replays(scope, earlier_pages, later_pages)
+    return {
+        **result, "all_supplied_replay_pages_checked": True,
+        "supplied_http_metadata_checked": True,
+        "authenticated_transport_receipt": False,
+        "transport_grant_verified": False,
+    }
