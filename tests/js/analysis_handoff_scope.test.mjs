@@ -1662,3 +1662,42 @@ test('ticket bound with equivalent parsed instant but rollover hour is rejected'
   assert.equal(h.modal['#analysisDownload'].disabled, false);
   assert.match(h.modal['#analysisActionStatus'].textContent, /ticket did not match/i);
 });
+
+
+test('ticket impossible calendar day cannot alias a selected valid custom date', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  h.bars[0].controls.select.value = 'custom';
+  h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+  await settle();
+  const observed = {...h.preview('range', 'custom'),
+    first_observed_at: '2026-03-02T12:00:00Z',
+    last_observed_at: '2026-03-02T12:01:00Z'};
+  h.reply(h.reads.at(-1), observed); await settle();
+  h.bars[0].controls.start.value = '2026-03-02';
+  h.bars[0].controls.end.value = '2026-03-02';
+  h.bars[0].controls.start.onchange();
+  await settle(); h.reply(h.reads.at(-1), observed); await settle();
+  const opening = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads.at(-1), observed); await opening;
+  assert.equal(h.modals, 1);
+  const downloading = h.modal['#analysisDownload'].onclick();
+  await settle();
+  const body = JSON.parse(h.tickets[0].options.body);
+  const selected = new Date(body.since);
+  const eastMinutes = -selected.getTimezoneOffset();
+  const sign = eastMinutes >= 0 ? '+' : '-';
+  const magnitude = Math.abs(eastMinutes);
+  const offset = sign + String(Math.floor(magnitude / 60)).padStart(2, '0') +
+    ':' + String(magnitude % 60).padStart(2, '0');
+  const impossible = '2026-02-30T00:00:00' + offset;
+  assert.equal(Date.parse(impossible), Date.parse(body.since));
+  const params = new URLSearchParams({scope: body.scope,
+    include_raw: String(body.include_raw), redact_names: String(body.redact_names),
+    ticket: 'synthetic-ticket', since: impossible, until: body.until});
+  h.reply(h.tickets[0], {ticket: 'synthetic-ticket',
+    url: '/v1/export/csvzip?' + params}, {preserveTicket: true});
+  await downloading;
+  assert.equal(h.downloads, 0);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /ticket did not match/i);
+});
