@@ -73,6 +73,13 @@ def source_operation_receipt(
     # Do not echo an unexpected window: it may contain sensitive context.
     if graph.get("source_window") != {"since": since, "until": until}:
         return _unknown(resource_ref, expected_operation, "source_window_scope_conflict")
+    # The retained record graph independently allowlists provider, object
+    # kind and source host before permitting a source-log join. Do not promote
+    # a source status for an unsupported host or an injected graph whose join
+    # eligibility was absent/malformed. Production record_graph emits this
+    # literal Boolean from its exact observed source identity.
+    if graph.get("source_log_join_supported") is not True:
+        return _unknown(resource_ref, expected_operation, "source_join_not_supported")
     if graph.get("record_observed") is not True:
         return _unknown(resource_ref, expected_operation, "record_not_observed_in_permitted_window")
     # These are positive evidence assertions, not merely truthy metadata.
