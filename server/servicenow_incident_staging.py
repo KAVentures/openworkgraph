@@ -336,7 +336,7 @@ def project_supplied_http_response(
     if (type(content_type) is not str or len(content_type) > 80
             or re.fullmatch(
                 r"application/json(?:[ ]*;[ ]*charset=[ ]*utf-8)?",
-                content_type, re.IGNORECASE,
+                content_type, re.IGNORECASE | re.ASCII,
             ) is None):
         raise StagingError("Supplied HTTP response is not UTF-8 JSON")
     staged = project_planned_page(scope, body, plan=plan)
