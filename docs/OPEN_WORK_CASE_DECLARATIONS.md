@@ -227,3 +227,10 @@ local ledger, not a repair of arbitrary SQLite corruption or a change to the
 existing fail-closed full scrub when a dependency graph cannot be decoded.
 It does not add source authority, cross-process revocation fencing, provider
 or customer outcome verification, or any agent execution permission.
+
+
+## Unversioned auxiliary-store admission
+
+A newly created or existing **empty** SQLite file at schema version zero may be initialized to the supported v2 declaration table by an explicit, reviewed save. A version-zero file that already contains any user-defined table, view, index or trigger is **not** adopted: the save fails closed and rolls back without stamping `user_version=2` or modifying the existing schema. This prevents `CREATE TABLE IF NOT EXISTS` from silently treating an incompatible or unrelated pre-existing `declarations` table as a valid durable approval ledger. A read of an unsupported version also fails closed rather than interpreting its contents as approved facts.
+
+The explicit bounded v1-to-v2 migration remains separate and unchanged. This guard does not authenticate the local filesystem, repair corrupt databases, prove cross-process grant revocation, or verify provider/customer outcomes. Synthetic SQLite tests cover incompatible declaration tables, unrelated tables/views, unchanged version/data on rejection, and initialization of a clean version-zero file.
