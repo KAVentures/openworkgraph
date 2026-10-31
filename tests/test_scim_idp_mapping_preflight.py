@@ -58,6 +58,39 @@ def test_immutable_actor_and_missing_username_are_blockers():
     assert {"missing_stable_username", "immutable_username"} <= codes(report)
 
 
+@pytest.mark.parametrize("client", ["entra", "okta", "other"])
+@pytest.mark.parametrize("match_attrs,created_externalid,expect_caution", [
+    (["externalId"], False, True),
+    (["userName", "externalId"], False, True),
+    (["userName"], False, False),
+    (["externalId"], True, False),
+], ids=["externalid-only-missing", "username-fallback-missing",
+        "username-only", "externalid-created"])
+def test_declared_externalid_matching_requires_creation_lineage_review(
+        client, match_attrs, created_externalid, expect_caution):
+    users = mapping()["users"]
+    users["match_attributes"] = match_attrs
+    users["create_attributes"] = ["userName", "active"] + (
+        ["externalId"] if created_externalid else [])
+    report = assess(mapping(client=client, users=users))
+    assert report["status"] == "requires_live_validation"
+    assert ("externalid_match_not_created" in codes(report)) is expect_caution
+    assert "missing_stable_username" not in codes(report)
+    assert "unsupported_attribute" not in codes(report)
+    assert report["checked"]["user_matching"] == len(match_attrs)
+    assert report["checked"]["user_create"] == len(users["create_attributes"])
+    assert "live_validation_required" in codes(report)
+
+
+def test_externalid_lineage_caution_never_masks_missing_username_blocker():
+    users = mapping()["users"]
+    users["match_attributes"] = ["externalId"]
+    users["create_attributes"] = ["active"]
+    report = assess(mapping(users=users))
+    assert report["status"] == "blocked"
+    assert {"externalid_match_not_created", "missing_stable_username"} <= codes(report)
+
+
 def test_unversioned_patch_requires_explicit_admin_policy_and_warns_when_approved():
     users = mapping()["users"]
     users["write_mode"] = "unversioned_user_patch"
