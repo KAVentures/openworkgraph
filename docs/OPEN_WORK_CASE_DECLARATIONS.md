@@ -282,3 +282,28 @@ and writes refuse the ledger while preserving its version, schema, and rows.
 This guards schema identity only; it does not authenticate the filesystem,
 repair arbitrary SQLite corruption, establish cross-process revocation
 atomicity, verify source/customer outcomes, or grant agent execution.
+
+
+## Versioned schema-object admission (v1 migration and v2 reads/writes)
+
+Exact column and primary-key checks do **not** detect additional SQLite
+triggers. A pre-existing `AFTER UPDATE` trigger can erase or rewrite rows
+when v1 migration assigns incarnation tokens; an `AFTER INSERT` or
+`AFTER UPDATE` trigger can mutate owner facts during an otherwise reviewed
+v2 save. Neither effect is an independently approved declaration.
+
+Before migrating a v1 ledger or exposing/editing a v2 ledger, the local store
+now refuses **any user-defined schema object beyond the one
+`declarations` table**. This includes foreign tables, views, explicit indexes
+and executable triggers. SQLite's implicit `sqlite_autoindex_*` for the
+`work_item_ref TEXT PRIMARY KEY` is permitted. Rejected stores retain their
+schema, rows and `user_version`; there is no automatic repair or migration
+of unrecognized objects. Ten parameterized synthetic SQLite regressions
+exercise both versions and five extra-object forms, including INSERT/UPDATE
+triggers, while existing clean v1/v2 compatibility tests remain applicable.
+
+This is a narrow fail-closed schema admission guard, not cryptographic
+tamper resistance, `PRAGMA integrity_check`, protection from a concurrently
+malicious local process, or atomic source-grant revocation. The ledger remains
+internal-only and disabled by default; no provider reads, obligations, agent
+permissions, execution or verified customer outcomes are introduced.
