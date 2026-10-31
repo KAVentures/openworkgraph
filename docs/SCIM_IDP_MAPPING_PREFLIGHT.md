@@ -77,6 +77,28 @@ With a customer-controlled test tenant and explicit authorization, inspect actua
 Relevant existing contracts: [Users](SCIM_USER_PROVISIONING.md), [names](SCIM_USER_NAMES.md), [search](SCIM_SEARCH.md), [Groups](SCIM_GROUPS.md), [client policy](SCIM_CLIENT_POLICY.md). Coordination: #458, #412, #326 Section B, #264 Stage 3.
 
 
+## User creation activation mapping review (offline only)
+
+A declared User **create** mapping without `active` now receives the
+nonblocking `creation_active_not_declared` caution. In the shipped SCIM
+User creation implementation, an otherwise valid new User is **active by
+default**; only an actual create request carrying the literal JSON Boolean
+`"active": false` immediately offboards that newly created employee. Thus
+an IdP mapping that omits `active` cannot demonstrate that a disabled
+upstream user will be created inactive in OWG. This is distinct from the
+PATCH deactivation warning below: declaring `active` for updates does not
+ensure it is sent on creation, or vice versa.
+
+The preflight does not block otherwise valid create mappings, because
+a separately validated client lifecycle may create then deactivate, or
+may only provision active accounts. Declaring `active` removes this
+particular caution but does **not** prove a real Entra/Okta request contains
+the correct Boolean, that an inactive account cannot access OWG, or that
+revocation works. Before rollout, explicitly test a disabled upstream
+test employee's create request and OWG status, followed by deactivate,
+rehire, ETag and credential-revocation checks with authorized fake/test
+identities. No real IdP calls, identities or permissions are changed here.
+
 ## Deactivation lifecycle mapping review (offline only)
 
 A declared User PATCH mapping without the `active` attribute now produces the
