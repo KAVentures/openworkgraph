@@ -306,7 +306,11 @@ def _prune(db: sqlite3.Connection, now: datetime, days: int,
         if not newly_available:
             break
         available.update(newly_available)
-    for ref in sorted(scopes.keys() - available):
+    # SQLite TEXT-affinity columns can still contain BLOB keys in a damaged
+    # auxiliary ledger. Such keys are ineligible, but sorting them beside
+    # valid string refs raises TypeError and prevents authorized pruning.
+    # Deletion order has no semantic significance inside this transaction.
+    for ref in scopes.keys() - available:
         db.execute("DELETE FROM declarations WHERE work_item_ref=?", (ref,))
 
 def _public(row: tuple[Any, ...]) -> dict[str, Any]:
