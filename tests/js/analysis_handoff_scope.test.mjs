@@ -1516,3 +1516,65 @@ test('optional date-plan provenance metadata fails closed on contradictions', as
     }
   });
 });
+
+test('contradictory work-text disclosure refuses a handoff before copy or export', async t => {
+  const invalid = [
+    ['text explicitly included', {included_in_activity_package: true}],
+    ['string false is not a verified exclusion', {included_in_activity_package: 'false'}],
+    ['numeric inclusion is not a verified exclusion', {included_in_activity_package: 0}],
+    ['malformed capture consent flag', {included_in_activity_package: false,
+      local_capture_enabled: 'false'}],
+    ['non-object work-text metadata', []],
+    ['string work-text metadata', 'excluded']
+  ];
+  for (const [name, work_text] of invalid) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle(); h.reply(h.reads[1], {...h.preview('range', 'contradictory'),
+      work_text});
+    await opening;
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+  });
+});
+
+test('explicitly excluded work text preserves accurate privacy notice and safe copy', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const opening = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], {...h.preview('range', 'text-excluded'),
+    work_text: {included_in_activity_package: false, local_capture_enabled: true}});
+  await opening;
+  assert.equal(h.modals, 1);
+  assert.match(h.modalHtml, /Visible work text is not included in this activity package/);
+  assert.doesNotMatch(h.modalHtml, /does not confirm that visible work text/);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-text-excluded']);
+  assert.equal(h.tickets.length, 0);
+});
+
+test('legacy or unknown work-text exclusion is disclosed as uncertain, not verified', async t => {
+  const variants = [
+    ['missing legacy metadata', undefined],
+    ['legacy empty object', {}],
+    ['unknown inclusion value', {included_in_activity_package: null}],
+    ['null legacy metadata', null]
+  ];
+  for (const [name, work_text] of variants) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle(); h.reply(h.reads[1], {...h.preview('range', 'text-unknown'),
+      work_text});
+    await opening;
+    assert.equal(h.modals, 1);
+    assert.match(h.modalHtml, /does not confirm that visible work text, typed values or clipboard contents are excluded/);
+    assert.doesNotMatch(h.modalHtml, /Visible work text is not included in this activity package/);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-text-unknown']);
+    assert.equal(h.tickets.length, 0);
+  });
+});
