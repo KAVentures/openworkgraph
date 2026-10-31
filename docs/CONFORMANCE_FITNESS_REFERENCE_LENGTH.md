@@ -21,8 +21,17 @@ paths `A` and `A → B → C → D` aligns best to the second path (one missing
 `D`). Its fitness is `1 - 1/(3+4) = 0.857143`, not `1 - 1/(3+1) = 0.75`.
 Adding or removing the unrelated short path does not alter that score.
 A deterministic mocked-query regression checks both reference-path orders,
-the single-path control, selected path index, and deviation evidence. This
-is **synthetic contract testing**, not a native multi-platform test result.
+the single-path control, selected path index, and deviation evidence.
+A separate synthetic regression checks that diagnostic `cases` counts for
+`skipped_model_activities` and `extra_observed_activities` mean **distinct
+cases containing each missing or extra activity**, not the number of repeated
+alignment moves. For example, one case with two missing `A` moves counts as
+one affected case for `A`, not two; its `share_of_aligned_cases` cannot
+exceed 1.0. Individual repeated moves remain visible in the bounded
+`deviating_variants[].deviations` evidence. This corrects formerly inflated
+diagnostic counts and shares without changing alignment costs, fitness,
+reference-path selection or the response schema. These are **synthetic
+contract tests**, not native multi-platform test results.
 
 This correction can change historical displayed conformance scores for
 multi-path models; previously stored raw events and reference paths are
