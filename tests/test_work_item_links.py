@@ -980,3 +980,73 @@ def test_conflicting_valid_reference_identities_also_veto_scoped_tokens():
             assert result["conflicting_reference_groups_suppressed"] == 1
             assert result["unlinked_observation_count"] == 3
             assert result["candidate_links"] == []
+
+
+def test_conflicting_duplicate_id_vetoes_single_record_tab_even_after_both_rows_drop():
+    # Two contradictory e01 record claims disappear during event-id dedupe.
+    # Without their scoped token veto, e02 + e03 falsely look like a clean
+    # one-record tab and e03 is attached to A.
+    first = _scoped(_event(1, A, tab="duplicate-tab"))
+    duplicate = _scoped(_event(1, B, tab="duplicate-tab"))
+    anchor = _scoped(_event(2, A, tab="duplicate-tab"))
+    loose = _scoped(_event(3, tab="duplicate-tab"))
+    independent = _scoped(_event(4, A))
+    for collisions in ((first, duplicate), (duplicate, first)):
+        result = linked_work_items([*collisions, anchor, loose, independent])
+        assert set(_items(result)) == {("e02", "e04")}
+        assert _items(result)[("e02", "e04")]["link_basis"] == {"same_record": 1}
+        assert result["candidate_links"] == []
+        assert result["unlinked_observation_count"] == 1
+        assert "duplicate-tab" not in json.dumps(result)
+
+
+def test_conflicting_duplicate_id_vetoes_otherwise_valid_direct_transfer():
+    # e01 is observed as both A-copy and C-copy. Removing it must not make
+    # the remaining A-copy -> B-paste look like an uncontested transfer.
+    first = _scoped(_event(1, A, transfer="duplicate-transfer", action="copy"))
+    duplicate = _scoped(_event(1, C, transfer="duplicate-transfer", action="copy"))
+    copy_a = _scoped(_event(2, A, transfer="duplicate-transfer", action="copy"))
+    paste_b = _scoped(_event(3, B, transfer="duplicate-transfer", action="paste"))
+    independent = _scoped(_event(4, A))
+    for collisions in ((first, duplicate), (duplicate, first)):
+        result = linked_work_items([*collisions, copy_a, paste_b, independent])
+        assert set(_items(result)) == {("e02", "e04")}
+        assert _items(result)[("e02", "e04")]["link_basis"] == {"same_record": 1}
+        assert result["unlinked_observation_count"] == 1
+        assert result["candidate_links"] == []
+        assert "duplicate-transfer" not in json.dumps(result)
+
+
+def test_duplicate_id_veto_is_exact_to_each_occurrence_scope_and_token():
+    # Conflicting duplicate ID occurrences in two tenants may veto their
+    # own exact token groups, but not a third tenant or a different token.
+    first = _scoped(_event(1, A, tab="reused-tab"))
+    duplicate = _scoped(_event(1, B, tab="reused-tab"), org="tenant-b")
+    events = [
+        _scoped(_event(2, A, tab="reused-tab")),
+        _scoped(_event(3, tab="reused-tab")),
+        _scoped(_event(4, B, tab="reused-tab"), org="tenant-b"),
+        _scoped(_event(5, tab="reused-tab"), org="tenant-b"),
+        _scoped(_event(6, C, tab="reused-tab"), org="tenant-c"),
+        _scoped(_event(7, tab="reused-tab"), org="tenant-c"),
+        _scoped(_event(8, A, tab="other-tab")),
+        _scoped(_event(9, tab="other-tab")),
+    ]
+    for collisions in ((first, duplicate), (duplicate, first)):
+        result = linked_work_items([*collisions, *events])
+        assert set(_items(result)) == {("e06", "e07"), ("e08", "e09")}
+        assert result["unlinked_observation_count"] == 4
+        assert result["candidate_links"] == []
+
+
+def test_duplicate_id_invalid_timestamp_cannot_poison_unrelated_token():
+    first = _scoped(_event(1, A, tab="valid-token"))
+    duplicate = _scoped(_event(1, B, tab="other-token"))
+    duplicate["observed_at"] = "not-a-timestamp"
+    unrelated_anchor = _scoped(_event(2, C, tab="other-token"))
+    unrelated_loose = _scoped(_event(3, tab="other-token"))
+    for collisions in ((first, duplicate), (duplicate, first)):
+        result = linked_work_items([*collisions, unrelated_anchor, unrelated_loose])
+        assert set(_items(result)) == {("e02", "e03")}
+        assert result["unlinked_observation_count"] == 0
+        assert result["candidate_links"] == []
