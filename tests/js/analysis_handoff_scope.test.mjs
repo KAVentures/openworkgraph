@@ -2785,7 +2785,7 @@ test('ticket bounds reject submillisecond changes but accept exact offset equiva
 
 
 test('submillisecond observation ordering and sample provenance fail closed', async t => {
-  const micro = (stamp, digits) => stamp.replace(/\\.000Z$/, '.' + digits + 'Z');
+  const micro = (stamp, digits) => stamp.replace(/\.000Z$/, '.' + digits + 'Z');
   for (const [name, changes] of [
     ['reversed first/last within one millisecond', {
       first_observed_at: micro(observedStart, '000002'),
@@ -2821,7 +2821,7 @@ test('submillisecond observation ordering and sample provenance fail closed', as
 });
 
 test('current-run start excludes a microsecond-earlier observation', async t => {
-  const micro = (stamp, digits) => stamp.replace(/\\.000Z$/, '.' + digits + 'Z');
+  const micro = (stamp, digits) => stamp.replace(/\.000Z$/, '.' + digits + 'Z');
   for (const [name, first, accepted] of [
     ['event before current-run start', micro(observedStart, '000001'), false],
     ['event after current-run start', micro(observedStart, '000003'), true]
@@ -2854,7 +2854,7 @@ test('current-run start excludes a microsecond-earlier observation', async t => 
 });
 
 test('valid submillisecond observation and sample order accepts offset-equivalent instants', async () => {
-  const micro = (stamp, digits) => stamp.replace(/\\.000Z$/, '.' + digits + 'Z');
+  const micro = (stamp, digits) => stamp.replace(/\.000Z$/, '.' + digits + 'Z');
   const h = harness();
   await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
   const opening = h.bars[0].controls.button.onclick();
