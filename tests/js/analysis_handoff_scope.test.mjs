@@ -1804,3 +1804,78 @@ test('explicit daily-plan endpoints must include observed evidence, not merely c
     }
   });
 });
+
+
+test('explicit daily coverage refuses invented empty dates without breaking legacy previews', async t => {
+  const day = 86400_000;
+  const base = Date.parse('2026-01-01T00:00:00Z');
+  const first = utc(base + 3600_000);
+  const second = utc(base + day + 3600_000);
+  const twoDays = [
+    {since: utc(base), until: utc(base + day), event_rows: 0},
+    {since: utc(base + day), until: utc(base + 2 * day), event_rows: 2}
+  ];
+  const clipped = Array.from({length: 31}, (_, i) => ({
+    since: utc(base + i * day),
+    until: utc(base + (i + 1) * day),
+    event_rows: i === 1 ? 0 : i === 2 ? 2 : 1
+  }));
+  const cases = [
+    ['explicit complete plan with fabricated empty first date', {
+      canonical_rows: 2, retained_rows: 2, first_observed_at: first,
+      last_observed_at: second, event_types: {focus_span: 2},
+      sources: {desktop: 2},
+      analysis_plan: {date_chunks: twoDays, more_dates_not_listed: false}
+    }, false],
+    ['explicit truncated plan with fabricated empty interior date', {
+      canonical_rows: 32, retained_rows: 32, first_observed_at: first,
+      last_observed_at: utc(base + 31 * day + 3600_000),
+      event_types: {focus_span: 32}, sources: {desktop: 32},
+      analysis_plan: {date_chunks: clipped, more_dates_not_listed: true}
+    }, false],
+    ['explicit zero-event plan cannot fabricate an empty date', {
+      canonical_rows: 0, retained_rows: 2, first_observed_at: null,
+      last_observed_at: null, event_types: {}, sources: {},
+      analysis_plan: {date_chunks: [twoDays[0]], more_dates_not_listed: false}
+    }, false],
+    ['legacy partial plan may retain an empty date without a coverage claim', {
+      canonical_rows: 2, retained_rows: 2, first_observed_at: first,
+      last_observed_at: second, event_types: {focus_span: 2},
+      sources: {desktop: 2}, analysis_plan: {date_chunks: twoDays}
+    }, true],
+    ['explicit complete positive-count date remains valid', {
+      canonical_rows: 2, retained_rows: 2, first_observed_at: first,
+      last_observed_at: utc(base + 2 * 3600_000),
+      event_types: {focus_span: 2}, sources: {desktop: 2},
+      analysis_plan: {date_chunks: [
+        {since: utc(base), until: utc(base + day), event_rows: 2}
+      ], more_dates_not_listed: false}
+    }, true],
+    ['explicit zero-event empty plan remains copy-only', {
+      canonical_rows: 0, retained_rows: 2, first_observed_at: null,
+      last_observed_at: null, event_types: {}, sources: {},
+      analysis_plan: {date_chunks: [], more_dates_not_listed: false}
+    }, true]
+  ];
+  for (const [name, variant, accepted] of cases) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    h.bars[0].controls.select.value = 'all';
+    h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+    await settle(); h.reply(h.reads[1], h.preview('all', 'all-selected')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[2], {...h.preview('all', 'daily-coverage'), ...variant});
+    await opening;
+    assert.equal(h.modals, accepted ? 1 : 0, name);
+    assert.equal(h.tickets.length, 0, name);
+    if (accepted) {
+      await h.modal['#analysisCopy'].onclick();
+      assert.deepEqual(h.copied, ['request-daily-coverage']);
+      assert.equal(h.modal['#analysisDownload'].disabled, variant.canonical_rows === 0);
+    } else {
+      assert.deepEqual(h.copied, []);
+      assert.match(h.summary.textContent, /incomplete or malformed/i);
+    }
+  });
+});
