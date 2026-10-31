@@ -1990,3 +1990,41 @@ test('latest-work disclosure distinguishes known, missing and health-only eviden
     assert.equal(h.tickets.length, 0, name);
   });
 });
+
+test('zero recorded events never become a claim of inactivity or recorder consent', async t => {
+  const cases = [
+    {name: 'selected period empty while retained history exists', retained: 2,
+      expected: /No events recorded in this selection\. Other retained evidence exists; inactivity and capture completeness are unverified/},
+    {name: 'no retained events reported', retained: 0,
+      expected: /No retained events reported\. Recording and consent status are unverified; this does not establish inactivity/}
+  ];
+  for (const {name, retained, expected} of cases) await t.test(name, async () => {
+    const h = harness();
+    const empty = {
+      ...h.preview('range', name),
+      canonical_rows: 0, retained_rows: retained,
+      first_observed_at: null, last_observed_at: null,
+      event_types: {}, sources: {}, redacted_examples: [],
+      analysis_plan: {date_chunks: []},
+      work_evidence: {ordinary_event_rows: 0, health_event_rows: 0,
+        last_work_observed_at: null}
+    };
+    await settle();
+    h.reply(h.reads[0], empty);
+    await settle();
+    assert.match(h.summary.textContent, expected, name);
+    assert.doesNotMatch(h.summary.textContent, /No activity in this selection|Work normally after enabling recording/i, name);
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], empty);
+    await opening;
+    assert.equal(h.modals, 1, name);
+    assert.match(h.summary.textContent, expected, name);
+    assert.match(h.modalHtml, /No ordinary work events recorded in this selection; this does not establish that no work occurred/, name);
+    assert.equal(h.modal['#analysisDownload'].disabled, true, name);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-' + name], name);
+    assert.equal(h.tickets.length, 0, name);
+    assert.equal(h.downloads, 0, name);
+  });
+});
