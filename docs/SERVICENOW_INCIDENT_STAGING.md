@@ -265,3 +265,24 @@ and both replay entrypoints. This protects only local source-field integrity:
 it does not authenticate the provider, assert completeness or source chronology,
 grant a current consent/tenant lease at persistence, authorize an event-log
 append/checkpoint, or constitute real ServiceNow sandbox acceptance.
+
+
+## Revalidating mutable Python scope objects
+
+`SelectedIncidents` is a frozen dataclass, but Python reflection such as
+`object.__setattr__` can still alter an existing instance after construction.
+All six offline planner/projector/replay entrypoints now recheck the **current**
+exact-class host, tenant, selected-ID tuple and consent/grant field types before
+using the scope. Validation and authorization methods are called on the exact
+`SelectedIncidents` class, so shadowing an instance method cannot skip these
+checks. Invalid mutated hosts, tenant strings, ID lists/duplicates and
+non-boolean grant/consent values fail closed with generic errors. Ordinary
+unmodified scopes and existing projection/replay return contracts are unchanged.
+
+This is **defense-in-depth for local input invariants**, not a security boundary
+against an attacker already executing Python in the process. A caller able to
+forge a *valid-looking* scope or mutate it concurrently is not authenticated by
+these checks. Real enterprise reads still require separately verified current
+provider/tenant/consent authority, exact HTTPS request/response identity,
+revocation fences and atomic persistence-time checks. No transport, checkpoint,
+source append, permission expansion or real ServiceNow acceptance was added.
