@@ -72,6 +72,28 @@ def _field(event: dict[str, Any], name: str, pattern: re.Pattern[str]) -> str:
     return value if isinstance(value, str) and pattern.fullmatch(value) else ""
 
 
+def _literal_record_claim(event: dict[str, Any]) -> bool:
+    """Reject type-coerced provider and tenant identity before exact-record joins.
+
+    The shared record-lane normalizer is backward-compatible with older input
+    shapes. Here, a present explicit record claim must use literal string
+    identity fields; otherwise unrelated records could become the same coerced
+    boolean or integer identity. Missing optional host/organization remains
+    a distinct legacy identity, not a wildcard.
+    """
+    metadata = event.get("metadata")
+    reference = metadata.get("resource_reference") if isinstance(metadata, dict) else None
+    if not isinstance(reference, dict):
+        return False
+    if any(not isinstance(reference.get(name), str)
+           for name in ("resource_ref", "provider", "resource_kind")):
+        return False
+    host = reference.get("host")
+    organization = event.get("organization_id")
+    return ((host is None or isinstance(host, str))
+            and (organization is None or isinstance(organization, str)))
+
+
 _SCOPE_FIELDS = ("organization_id", "actor_id", "device_id", "session_id")
 
 
@@ -110,7 +132,7 @@ def _observations(events: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], i
         if not _EVENT_ID.fullmatch(event_id) or event_id in seen or stamp is None:
             continue
         seen.add(event_id)
-        match = _identity(event)
+        match = _identity(event) if _literal_record_claim(event) else None
         ref = ""
         if match:
             ref, provider, kind, host, org = match
