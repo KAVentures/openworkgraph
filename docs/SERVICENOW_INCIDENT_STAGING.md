@@ -320,3 +320,34 @@ The optional pure `project_supplied_http_response(scope, plan=..., request_metho
 This is intentionally **not an HTTP client, TLS validator, source receipt or proof that the supplied metadata matches a real response**. An untrusted caller can fabricate all of these fields. A future actual ServiceNow transport must separately enforce HTTPS certificate and origin verification, reject redirects before following them, authenticate its own exact request/response pairing, check the current provider account/tenant grant and consent, implement bounded retries/backoff, and fence revocation at atomic persistence time. A successful offline gate never authorizes append, checkpoint advancement, user provisioning, business completion or agent execution.
 
 Synthetic fake-transport tests cover accepted JSON media types, wrong request/final URLs, redirects, 301/401/403/429/500, type-confused status/redirect fields, HTML/non-UTF-8/header-injected media types, wrong tenant or revoked grant, changed plan watermark, unselected records, old source times and malformed JSON. No provider request or customer-controlled IdP/ServiceNow sandbox acceptance is performed.
+
+
+## Offline per-page transport metadata for offset batches
+
+`project_supplied_http_pages(scope, responses)` is a separate **fake-transport**
+batch contract. It accepts one to eight dictionaries, each containing **exactly**
+`plan`, `request_method`, `request_url`, `response_url`, `status`,
+`content_type`, `redirect_count`, and `body`. Every entry must independently
+pass the same exact selected-record GET URL, unchanged final URL, zero-redirect,
+HTTP 200, UTF-8 JSON media-type, consent/grant and plan-bound response checks as
+`project_supplied_http_response`. One valid first page cannot authorize a
+redirect, foreign tenant/host, failed HTTP response, unexpected metadata or
+malformed body on a later page.
+
+Only **after every supplied envelope passes** does the wrapper reuse
+`project_planned_pages` for consecutive offsets, consistent watermark/limit,
+complete intermediate pages, no repeated incident rows and monotonic source
+ordering. A successful result includes `all_supplied_pages_checked: true` and
+`supplied_http_metadata_checked: true`, but always
+`authenticated_transport_receipt: false`,
+`transport_grant_verified: false`, `checkpoint_advanced: false`, and
+`historical_completeness: unknown`. Existing raw
+`project_planned_pages(scope, [(plan, raw), ...])` remains compatible and **does
+not** acquire HTTP transport claims.
+
+These values are caller-supplied, not signed or authenticated receipts. They
+cannot establish a real TLS connection, current ServiceNow ACL, stable
+pagination snapshot, timezone, provider identity, deletion, completeness,
+business outcome or permission to persist. A future real connector must enforce
+current tenant-scoped grants and revocation at actual transport **and** atomically
+at append/checkpoint, and obtain separate real sandbox/client acceptance.
