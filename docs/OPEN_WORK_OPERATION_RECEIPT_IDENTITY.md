@@ -93,3 +93,34 @@ and unchanged single-read arguments. They are not live-provider acceptance
 or real-customer outcome verification. The receipt remains opt-in,
 read-only, and non-executing, with no new source grants, API calls, routes,
 background sync, or REST/MCP schema additions.
+
+## Authenticated source-read method provenance
+
+The source receipt's provider name and reported status are insufficient to
+attest an independently verified provider operation if the read mechanism is
+unknown. The existing receipt verifier now requires an exact
+`source_evidence.verification_method` emitted by the already opt-in,
+authenticated provider adapter:
+
+| Provider | Accepted read method |
+| --- | --- |
+| GitHub PR | `explicit_opt_in_authenticated_local_github_cli_read` |
+| Jira issue | `explicit_opt_in_site_verified_oauth_jira_issue_status_read` |
+| Stripe invoice/refund | `opted_in_restricted_key_stripe_account_and_record_get` |
+
+Missing, malformed, cached/export-labelled or cross-provider method claims
+return `availability=unknown` with
+`reason=source_verification_provenance_conflict`. The untrusted method
+string and private source data are not reflected in the result. This is
+intentionally conservative: new legitimate adapter methods need an explicit
+reviewed contract update, rather than silently being treated as equivalent
+authentication evidence.
+
+Synthetic fake-reader tests cover each of the four operation families, absent
+method fields, malformed and cross-provider method values, and matching
+positive controls. The change does not invoke any new source reads, broaden
+grants, create credentials, execute agents, or change the REST/MCP response
+shape. A matching string is only **post-read provenance consistency**, not
+cryptographic proof of authentication, active tenant authorization, consent,
+revocation fencing, an actual customer outcome, or independent live-provider
+acceptance. The existing trusted adapters must enforce those properties.
