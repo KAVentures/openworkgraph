@@ -430,3 +430,40 @@ def test_literal_record_identity_and_missing_optional_legacy_fields_still_link()
     result = linked_work_items([first, second])
     assert set(_items(result)) == {("e01", "e02")}
     assert result["conflicting_reference_groups_suppressed"] == 0
+
+
+def test_conflicting_duplicate_event_ids_are_withheld_before_record_or_weak_joins():
+    # A reused event ID is not an authoritative "first occurrence wins"
+    # observation, even when the second copy has an invalid timestamp.
+    for contradiction in ("record", "tenant", "timestamp", "invalid_timestamp"):
+        first = _scoped(_event(1, A, tab="same-tab", transfer="same-transfer"))
+        conflicting = _scoped(_event(1, A, tab="same-tab", transfer="same-transfer"))
+        if contradiction == "record":
+            conflicting["metadata"]["resource_reference"]["resource_ref"] = B
+        elif contradiction == "tenant":
+            conflicting["organization_id"] = "tenant-b"
+        elif contradiction == "timestamp":
+            conflicting["observed_at"] = "2026-10-20T12:00:00+00:00"
+        else:
+            conflicting["observed_at"] = "invalid-timestamp"
+        independent = _scoped(_event(2, A, tab="same-tab", transfer="same-transfer"))
+        for events in ([first, conflicting, independent], [conflicting, first, independent]):
+            result = linked_work_items(events)
+            assert result["items"] == [], contradiction
+            assert result["candidate_links"] == [], contradiction
+            assert result["unlinked_observation_count"] == 1, contradiction
+
+
+def test_exact_duplicate_event_id_is_idempotent_and_unrelated_groups_survive_collision():
+    first = _scoped(_event(1, A))
+    second = _scoped(_event(2, A))
+    baseline = linked_work_items([first, second])
+    assert set(_items(baseline)) == {("e01", "e02")}
+    assert linked_work_items([first, dict(first), second]) == baseline
+
+    conflicting = _scoped(_event(1, B))
+    third = _scoped(_event(3, C))
+    fourth = _scoped(_event(4, C))
+    result = linked_work_items([first, conflicting, second, third, fourth])
+    assert set(_items(result)) == {("e03", "e04")}
+    assert result["unlinked_observation_count"] == 1
