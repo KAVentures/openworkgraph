@@ -196,6 +196,12 @@ def assess(mapping: Any) -> dict:
     if "username" in patch:
         add("blocker", "immutable_username", "users.patch_attributes",
             "OWG does not support changing the stable userName/evidence actor")
+    if "active" not in patch:
+        # A declared PATCH mapping without active does not demonstrate that an
+        # IdP can deactivate an employee. Do not block a possible separately
+        # tested PUT/other lifecycle path or imply live provider certification.
+        add("caution", "deactivation_patch_not_declared", "users.patch_attributes",
+            "Declared User PATCH mapping omits active; verify a supported deactivate operation before rollout")
     for path, values in (("users.create_attributes", create), ("users.patch_attributes", patch)):
         if "name" in values and any(value.startswith("name.") for value in values):
             add("caution", "overlapping_name_paths", path,
