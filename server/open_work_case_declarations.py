@@ -107,7 +107,19 @@ def _database(*, create: bool) -> Iterator[sqlite3.Connection | None]:
             try:
                 version = db.execute("PRAGMA user_version").fetchone()[0]
                 if version == 0:
-                    db.execute("""CREATE TABLE IF NOT EXISTS declarations (
+                    # A version-zero file is safe to initialize only when
+                    # its user-defined schema is empty. IF NOT EXISTS would
+                    # silently bless an unrelated/incomplete declarations
+                    # table as v2 and turn a corrupt auxiliary file into
+                    # seemingly authoritative owner facts.
+                    existing = db.execute(
+                        "SELECT name FROM sqlite_master "
+                        "WHERE name NOT GLOB 'sqlite_*' LIMIT 1"
+                    ).fetchone()
+                    if existing is not None:
+                        raise CaseDeclarationError(
+                            "unversioned declaration store has existing schema")
+                    db.execute("""CREATE TABLE declarations (
                         work_item_ref TEXT PRIMARY KEY,
                         scope_ref TEXT NOT NULL,
                         goal_code TEXT NOT NULL,
