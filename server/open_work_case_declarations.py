@@ -258,7 +258,7 @@ def _unexpected_schema_constraints(db: sqlite3.Connection) -> bool:
 
     SQLite names implicit UNIQUE indexes sqlite_autoindex_*; checking only
     sqlite_master user objects misses them. Foreign keys add no schema object
-    at all and may cascade owner-declared facts during an unrelated delete.
+    at all and may change deletion semantics or reject otherwise valid saves.
     Both the original v1 table and the v2 writer have exactly one implicit
     work_item_ref PRIMARY KEY index and no foreign keys.
     """
