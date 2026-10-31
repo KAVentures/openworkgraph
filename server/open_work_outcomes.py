@@ -8,6 +8,7 @@ It does not verify any agent actually caused the state change.
 """
 from datetime import datetime, timezone
 import re
+import httpx
 from typing import Any, Callable
 
 from .record_graph import record_graph
@@ -54,10 +55,16 @@ def source_operation_receipt(
         raise ValueError("unsupported provider operation")
     if not 1 <= max_age_seconds <= 3600:
         raise ValueError("invalid maximum source age")
-    graph = record_reader(
-        resource_ref, since=since, until=until,
-        include_source_status=True,
-    )
+    # Source/transport outages must not become a 500 or disclose provider
+    # exception text. Do not retry or widen the permitted read; leave invalid
+    # requests and programming errors visible to their normal callers.
+    try:
+        graph = record_reader(
+            resource_ref, since=since, until=until,
+            include_source_status=True,
+        )
+    except (OSError, httpx.HTTPError):
+        return _unknown(resource_ref, expected_operation, "source_read_unavailable")
     if not isinstance(graph, dict):
         return _unknown(resource_ref, expected_operation, "record_not_observed_in_permitted_window")
     # A source receipt for a different record (or from an unscoped reader)
