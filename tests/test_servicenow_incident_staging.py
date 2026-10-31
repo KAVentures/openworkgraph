@@ -1061,3 +1061,44 @@ def test_replay_newly_observed_large_counter_is_not_inferred_history(mode):
     assert result["historical_completeness"] == "unknown"
     assert result["business_outcome_verified"] is False
     assert result["checkpoint_advanced"] is False
+
+
+@pytest.mark.parametrize("mode", ["standalone", "planned", "batch", "replay", "planned_replay"])
+@pytest.mark.parametrize("token", ["9" * 129, "-" + "9" * 129])
+def test_oversized_discarded_json_integer_refused_before_bignum_conversion(mode, token):
+    from server.servicenow_incident_staging import (
+        reconcile_replayed_pages, reconcile_planned_replays,
+    )
+    selected = scope()
+    raw = _page_with_private_json_number(token)
+    planned = plan_page(selected, limit=1)
+    assert len(raw) < MAX_BYTES
+    with pytest.raises(StagingError, match="Invalid bounded provider JSON") as caught:
+        if mode == "standalone":
+            project_page(selected, raw, limit=1)
+        elif mode == "planned":
+            project_planned_page(selected, raw, plan=planned)
+        elif mode == "batch":
+            project_planned_pages(selected, [(planned, raw)])
+        elif mode == "replay":
+            reconcile_replayed_pages(selected, raw, page(item(A)), limit=1)
+        else:
+            reconcile_planned_replays(
+                selected, [(planned, raw)], [(planned, page(item(A)))]
+            )
+    assert token not in str(caught.value)
+    assert "nested_metric" not in str(caught.value)
+
+
+@pytest.mark.parametrize("token", ["9" * 128, "-" + "9" * 128, "0", "-0"])
+def test_bounded_discarded_json_integers_stay_private_and_compatible(token):
+    selected = scope()
+    planned = plan_page(selected, limit=1)
+    staged = project_planned_pages(
+        selected, [(planned, _page_with_private_json_number(token))]
+    )
+    assert staged["returned_rows"] == staged["distinct_selected_rows"] == 1
+    assert staged["records"][0]["source_event_id"] == A + ":3"
+    assert "nested_metric" not in json.dumps(staged)
+    assert not staged["checkpoint_advanced"]
+    assert staged["historical_completeness"] == "unknown"
