@@ -171,3 +171,26 @@ invalid timestamps, reversed duplicate order, idempotent exact duplicates and
 unaffected independent record groups. They are not a held-out F1 improvement
 or evidence of real customer/provider validation. The preregistered family
 holdout and its private truth remain unchanged.
+
+
+## Explicit null reference claims
+
+A present `metadata.resource_reference: null` is an explicit but invalid
+record-reference claim, not an absent key. Previously, the linker treated
+this particular non-object value as ordinary unreferenced evidence. That
+allowed a null-claim row to attach to a valid record through the same
+browser tab or clipboard-transfer token, or to appear as a weak same-app
+candidate. Other malformed non-object claims were already withheld.
+
+The linker now taints **every present non-valid reference claim**, including
+explicit `null`, before constructing ephemeral links or weak candidates.
+A genuinely absent `resource_reference` key still means no record was
+claimed and retains legacy tab/transfer behavior and unmerged surface
+candidates. Valid literal record references remain unchanged.
+
+Three synthetic regression functions cover null-claim tab/transfer
+withholding in both input orders, surface-candidate withholding, and
+positive absent-key behavior. This is conservative evidence hygiene,
+not authentication of source records, evidence of business completion,
+or a measured improvement in held-out F1. It introduces no provider
+calls, new permissions, model spending, or changes to evaluation truth.
