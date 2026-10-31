@@ -1672,3 +1672,61 @@ def test_empty_existing_version_zero_store_initializes_normally(local):
             "SELECT edit_token FROM declarations WHERE work_item_ref=?", (A,)
         ).fetchone() == (item["edit_token"],)
     assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [item]
+
+
+@pytest.mark.parametrize(
+    "damage",
+    ["missing_primary_key", "missing_token", "extra_column",
+     "wrong_revision_type", "nullable_scope"],
+)
+def test_stamped_v2_schema_does_not_authorize_incompatible_case_identity(local, damage):
+    # A user_version marker alone is not proof of the fixed v2 schema.
+    # In particular, without a PRIMARY KEY, duplicate A rows make CAS
+    # ambiguous and could silently update multiple owner declarations.
+    reviewed(A)
+    ddl = """CREATE TABLE declarations (
+        work_item_ref TEXT PRIMARY KEY, scope_ref TEXT NOT NULL,
+        goal_code TEXT NOT NULL, expected_outcome_code TEXT NOT NULL,
+        dependencies_json TEXT NOT NULL, revision INTEGER NOT NULL,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL, edit_token TEXT NOT NULL)"""
+    if damage == "missing_primary_key":
+        ddl = ddl.replace("work_item_ref TEXT PRIMARY KEY", "work_item_ref TEXT")
+    elif damage == "missing_token":
+        ddl = ddl.replace(", edit_token TEXT NOT NULL", "")
+    elif damage == "extra_column":
+        ddl = ddl.replace("edit_token TEXT NOT NULL",
+                          "edit_token TEXT NOT NULL, unexpected TEXT")
+    elif damage == "wrong_revision_type":
+        ddl = ddl.replace("revision INTEGER NOT NULL", "revision TEXT NOT NULL")
+    elif damage == "nullable_scope":
+        ddl = ddl.replace("scope_ref TEXT NOT NULL", "scope_ref TEXT")
+
+    path = facts._path()
+    with sqlite3.connect(path) as db:
+        db.execute(ddl)
+        db.execute("PRAGMA user_version=2")
+        if damage == "missing_primary_key":
+            row = (A, SCOPE, "review_source_state", "source_state_rechecked",
+                   "[]", 1, NOW.isoformat(), NOW.isoformat(),
+                   (NOW + timedelta(days=7)).isoformat(), "f" * 32)
+            db.execute("INSERT INTO declarations VALUES (?,?,?,?,?,?,?,?,?,?)", row)
+            db.execute("INSERT INTO declarations VALUES (?,?,?,?,?,?,?,?,?,?)", row)
+            assert db.execute("SELECT COUNT(*) FROM declarations").fetchone()[0] == 2
+    if os.name == "posix":
+        path.chmod(0o600)
+
+    with pytest.raises(facts.CaseDeclarationError, match="incompatible versioned"):
+        facts.list_case_declarations(SCOPE, now=NOW)
+    with pytest.raises(facts.CaseDeclarationError, match="incompatible versioned"):
+        save()
+    # Neither the read nor the rejected save stamps/migrates a damaged v2
+    # store or deletes its rows; manual recovery must not grant approval.
+    with sqlite3.connect(path) as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert db.execute(
+            "SELECT sql FROM sqlite_master WHERE name='declarations'"
+        ).fetchone()[0] == ddl
+        assert db.execute("SELECT COUNT(*) FROM declarations").fetchone()[0] == (
+            2 if damage == "missing_primary_key" else 0
+        )
