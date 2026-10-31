@@ -1186,32 +1186,66 @@ test('ordinary events may lack a latest work timestamp for excluded apps', async
   assert.equal(h.tickets.length, 0);
 });
 
-test('handoff date plan refuses more than 31 displayed chunks without truncating silently', async t => {
-  // The backend deliberately lists only days[:31]. Both responses otherwise
-  // conserve counts, respect the selected window and intersect observations.
-  for (const [name, rows, accepted] of [
-    ['31 chunks is the maximum supported plan', 31, true],
-    ['32 chunks is not a trustworthy server preview', 32, false]
-  ]) await t.test(name, async () => {
+test('daily evidence plan rejects disjoint fragments of the same UTC day', async t => {
+  const first = Date.parse(observedStart);
+  const earlier = {since: utc(first - 60_000), until: utc(first + 30_000), event_rows: 1};
+  const later = {since: utc(first + 30_000), until: utc(first + 120_000), event_rows: 1};
+  const cases = [
+    ['two non-overlapping pieces of the same UTC day', [earlier, later]],
+    ['same-day split with an equivalent UTC-offset boundary', [
+      earlier, {...later, since: asOffset(first + 30_000, 2),
+        until: asOffset(first + 120_000, 2)}]],
+    ['zero-row fragment still cannot create a second daily step', [
+      {...earlier, event_rows: 2}, {...later, event_rows: 0}]]
+  ];
+  for (const [name, chunks] of cases) await t.test(name, async () => {
     const h = harness();
     await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
     const opening = h.bars[0].controls.button.onclick();
     await settle();
-    const first = Date.parse(observedStart);
-    const d = h.preview('range', 'bounded-date-plan');
+    h.reply(h.reads[1], {...h.preview('range', 'split-utc-day'),
+      analysis_plan: {date_chunks: chunks, more_dates_not_listed: false}});
+    await opening;
+    assert.equal(h.modals, 0, name);
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+  });
+});
+
+test('handoff date plan refuses more than 31 displayed UTC days without truncating silently', async t => {
+  // Use actual distinct UTC days over all retained history. A plan with 31
+  // one-second fragments of one day would contradict the server contract.
+  for (const [name, rows, accepted] of [
+    ['31 distinct UTC days is the maximum supported plan', 31, true],
+    ['32 distinct UTC days is not a trustworthy server preview', 32, false]
+  ]) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    h.bars[0].controls.select.value = 'all';
+    h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+    await settle(); h.reply(h.reads[1], h.preview('all', 'selected-all')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    const day = 86400_000;
+    const lastDay = Math.floor(Date.parse(observedStart) / day) * day;
+    const firstDay = lastDay - (rows - 1) * day;
+    const d = h.preview('all', 'bounded-date-plan');
     d.canonical_rows = rows;
     d.retained_rows = rows;
+    d.first_observed_at = utc(firstDay + 3600_000);
+    d.last_observed_at = utc(lastDay + 3600_000);
     d.event_types = {focus_span: rows};
     d.sources = {desktop: rows};
     d.analysis_plan = {
       date_chunks: Array.from({length: rows}, (_, i) => ({
-        since: utc(first + i * 1000),
-        until: utc(first + (i + 1) * 1000),
+        since: utc(firstDay + i * day),
+        until: utc(firstDay + (i + 1) * day),
         event_rows: 1
       })),
       more_dates_not_listed: false
     };
-    h.reply(h.reads[1], d);
+    h.reply(h.reads[2], d);
     await opening;
     assert.equal(h.modals, accepted ? 1 : 0);
     assert.equal(h.tickets.length, 0);
