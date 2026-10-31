@@ -38,7 +38,7 @@ _CONTACT_SELECTOR = re.compile(
 
 
 def _unqualified_contact_patch_path(path: str) -> str:
-    """Mirror the shipped contact parser\'s exact core User URN stripping.
+    """Mirror the shipped contact parser's exact core User URN stripping.
 
     Only PATCH contact paths are normalized; never reinterpret matching or
     create declarations, or casefold a quoted selector literal.
