@@ -4,7 +4,7 @@
   const MODEL_FORMAT='openworkgraph.reference-model.v1';
   const state={logs:[],logId:'',caseType:'',generation:0,refresh:0,follows:[],objectTypes:[]};
   // Views that honour the workspace case filter; every other section uses all cases.
-  const FILTERED=new Set(['summary','variants','activities','kpis','process-map','playback','dotted-chart','waiting-time','drift','model-discovery','organization']);
+  const FILTERED=new Set(['summary','variants','variant-coverage','activities','kpis','process-map','playback','dotted-chart','waiting-time','drift','model-discovery','organization']);
 
   const el=(tag,text,cls)=>{
     const node=document.createElement(tag);
@@ -347,6 +347,7 @@
     variantBox.appendChild(table(['Path','Cases','Share','Median time','Evidence'],(variants.variants||[]).map(v=>{const open=button('Inspect cases','secondary');open.onclick=()=>inspection.path(v.path);return [v.path.join(' → '),Number(v.cases).toLocaleString(),pct(v.share),duration(v.median_duration_seconds),open];})));
     variantBox.appendChild(el('div',Number(variants.distinct_variants).toLocaleString()+' distinct variants.','muted'));
     results.appendChild(variantBox);
+    results.appendChild(variantCoverageSection());
     results.appendChild(objectMapSection());
     if(summary.log&&summary.log.object_relationships)results.appendChild(objectRelationshipSection());
     results.appendChild(processMapSection());
@@ -564,6 +565,31 @@
     box.appendChild(row);
     return {node:box,read:()=>cohortSpec({label:label.value,from:from.value,before:before.value,resource:resource.value,activity:activity.value,attribute:attribute.value})};
   }
+  function variantCoverageSection(){
+    const box=section('Variant coverage');
+    const run=button('Analyse variant coverage','secondary');run.id='owgVariantCoverageRun';
+    const out=el('div');box.append(el('p','See how many observed paths cover most cases, before deciding which variations to investigate.'),run,out);
+    run.onclick=async()=>{
+      run.disabled=true;
+      const generation=state.generation;
+      try{
+        const r=await getJSON(logPath('variant-coverage'));
+        if(generation!==state.generation)return;
+        const exports=exportButtons('owgVariantCoverage',()=>r,()=>[
+          ['rank','path','cases','case_share','cumulative_cases','cumulative_share','path_truncated'],
+          ...r.displayed_variants.map(v=>[v.rank,JSON.stringify(v.path),v.cases,v.share,v.cumulative_cases,v.cumulative_share,v.path_truncated])]);
+        exports.enable(true);
+        out.replaceChildren(
+          table(['Target case coverage','Variants needed'],r.coverage_targets.map(t=>[t.target_percent+'%',t.variants_needed??'—'])),
+          table(['Rank','Observed path','Cases','Cumulative coverage'],r.displayed_variants.map(v=>[v.rank,v.path.join(' → ')+(v.path_truncated?' … ('+v.path_activity_count+' activities)':''),v.cases,pct(v.cumulative_share)])),
+          el('p',r.cases+' cases across '+r.distinct_variants+' variants. '+r.omitted_variants+' variants containing '+r.omitted_cases+' cases are outside the displayed rows. Targets use every variant, including omitted rows.','muted'),
+          el('p',r.interpretation,'muted'),exports.node);
+      }catch(error){if(generation===state.generation)out.replaceChildren(el('p',error.message,'muted'));}
+      finally{run.disabled=false;}
+    };
+    return box;
+  }
+
   function toCSV(rows){
     const cell=v=>{const t=v===null||v===undefined?'':String(v);const safe=/^[=+\-@\t\r]/.test(t)?"'"+t:t;return /[",\n\r]/.test(safe)?'"'+safe.replace(/"/g,'""')+'"':safe;};
     return rows.map(r=>r.map(cell).join(',')).join('\r\n')+'\r\n';
