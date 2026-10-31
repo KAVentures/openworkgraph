@@ -51,10 +51,14 @@ def source_operation_receipt(
         resource_ref, since=since, until=until,
         include_source_status=True,
     )
-    if not isinstance(graph, dict) or not graph.get("record_observed"):
+    if not isinstance(graph, dict) or graph.get("record_observed") is not True:
         return _unknown(resource_ref, expected_operation, "record_not_observed_in_permitted_window")
-    if (graph.get("source_event_limit_reached") or
-        not graph.get("record_identity_complete_within_retained_window", False)):
+    # These are positive evidence assertions, not merely truthy metadata.
+    # Malformed strings/integers must not attest retained record identity.
+    # Missing/malformed truncation metadata is not affirmative completeness.
+    # Only a literal False proves this exact retained history was untruncated.
+    if (graph.get("source_event_limit_reached") is not False or
+        graph.get("record_identity_complete_within_retained_window") is not True):
         return _unknown(resource_ref, expected_operation, "incomplete_or_conflicting_record_identity")
     provider, kind, required_state = _OPS[expected_operation]
     if graph.get("record_type") != {"provider": provider, "kind": kind}:
@@ -62,6 +66,15 @@ def source_operation_receipt(
     source = graph.get("source_evidence")
     if not isinstance(source, dict) or source.get("availability") != "source_reported" or source.get("source_state_reported") is not True:
         return _unknown(resource_ref, expected_operation, "authoritative_provider_status_unavailable")
+    # Record identity and the independently refreshed source receipt are two
+    # separate pieces of evidence. Do not promote a mixed-provider receipt
+    # (or a receipt for a different object kind) into an operation success.
+    # Older Stripe receipts omit object_type; their exact record kind is
+    # already established above by the retained record graph. When a source
+    # supplies object_type, it must agree rather than being silently ignored.
+    if (source.get("provider") != provider or
+        ("object_type" in source and source["object_type"] != kind)):
+        return _unknown(resource_ref, expected_operation, "provider_receipt_identity_conflict")
     stamp = source.get("verified_at")
     try:
         when = datetime.fromisoformat(str(stamp or "").replace("Z", "+00:00"))
