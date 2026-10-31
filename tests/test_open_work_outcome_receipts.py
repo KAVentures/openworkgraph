@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
+import httpx
 
 from server.open_work_outcomes import source_operation_receipt
 
@@ -695,3 +696,51 @@ def test_allowlisted_source_log_join_preserves_provider_only_receipt(
     assert result["agent_caused_operation_verified"] is False
     assert result["agent_execution_authorized"] is False
     assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+@pytest.mark.parametrize("failure", [
+    OSError, TimeoutError, ConnectionError, httpx.ConnectError, httpx.ReadTimeout,
+])
+def test_source_reader_transport_outage_is_privacy_safe_unknown(
+    operation, provider, kind, state, failure,
+):
+    # Provider failures can surface from the trusted graph reader itself,
+    # not just from its existing adapters. Never turn a transport exception
+    # into an operation success or leak the exception's native record details.
+    calls = []
+    def failing_reader(ref, **kwargs):
+        calls.append((ref, kwargs))
+        raise failure("PRIVATE_NATIVE_RECORD_AND_CUSTOMER")
+    result = source_operation_receipt(
+        REF, operation, record_reader=failing_reader, now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "source_read_unavailable"
+    assert result["operation_verified"] is False
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert result["read_only"] is True
+    assert calls == [(REF, {
+        "since": None, "until": None, "include_source_status": True,
+    })]
+    assert "PRIVATE_NATIVE_RECORD_AND_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize("failure", [ValueError, RuntimeError])
+def test_source_reader_programming_and_request_errors_are_not_masked(failure):
+    # Invalid history windows and programming bugs are not provider outages.
+    # Preserve their normal error handling instead of claiming an outage.
+    calls = []
+    def failing_reader(ref, **kwargs):
+        calls.append((ref, kwargs))
+        raise failure("invalid_request_or_programming_error")
+    with pytest.raises(failure, match="invalid_request_or_programming_error"):
+        source_operation_receipt(
+            REF, "stripe_invoice_paid", record_reader=failing_reader, now=WHEN,
+        )
+    assert calls == [(REF, {
+        "since": None, "until": None, "include_source_status": True,
+    })]
