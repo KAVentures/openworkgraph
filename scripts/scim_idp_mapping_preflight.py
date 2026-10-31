@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import sys
 from pathlib import Path
 from typing import Any
 
 MAX_BYTES = 32_768
+MAX_JSON_INTEGER_DIGITS = 128
 MAX_ATTRIBUTES = 32
 USER_MATCH = frozenset({"username", "externalid"})
 USER_CREATE = frozenset({
@@ -200,11 +202,27 @@ def _bounded_tree(value: Any, depth: int = 0) -> None:
             _bounded_tree(child, depth + 1)
 
 
+def _bounded_json_int(token: str) -> int:
+    """Reject enormous numeric tokens before constructing Python integers."""
+    if len(token) - int(token.startswith("-")) > MAX_JSON_INTEGER_DIGITS:
+        raise InvalidMapping("Mapping JSON integer exceeds bounded digits")
+    return int(token)
+
+
+def _finite_json_float(token: str) -> float:
+    """JSON exponents may overflow to infinity despite valid JSON syntax."""
+    value = float(token)
+    if not math.isfinite(value):
+        raise InvalidMapping("Nonfinite JSON is refused")
+    return value
+
+
 def load_text(text: str) -> Any:
     if len(text.encode("utf-8")) > MAX_BYTES:
         raise InvalidMapping("Mapping exceeds the 32 KiB input limit")
     try:
         parsed = json.loads(text, object_pairs_hook=_reject_duplicates,
+                            parse_int=_bounded_json_int, parse_float=_finite_json_float,
                             parse_constant=lambda _: (_ for _ in ()).throw(InvalidMapping("Nonfinite JSON is refused")))
         _bounded_tree(parsed)
         return parsed
