@@ -555,3 +555,34 @@ is changed. This does not prove tenant isolation against maliciously fabricated
 *valid* identities, and it does not measure any held-out F1 uplift. The
 preregistered assignment F1 >= 0.90 / contamination <= 0.05 gates remain
 unverified until unchanged held-out scoring and exact-head native CI run.
+
+
+## Invalid timestamps do not erase contradictory source identity
+
+A validly identified observation can carry a malformed or missing `observed_at`
+while still claiming an exact opaque source record. Previously, the linker
+discarded that observation **before** checking its provider, kind, host and
+organization identity. Two timestamp-valid rows for record A could therefore
+be published as one linked item despite a third row claiming the same opaque
+reference under a contradictory provider or tenant, solely because the third
+row's timestamp could not be ordered.
+
+The exact-reference identity conflict pass now precedes timestamp admission,
+consistent with the existing record-lane fail-closed contract. A conflicting
+or explicitly malformed source claim naming a literal valid opaque ref
+suppresses the affected reference group, even if that observation's timestamp
+is invalid. Other independent record groups remain available. A valid
+same-identity claim with a bad timestamp does **not** itself create a conflict.
+
+An invalid-time row still contributes **no** observation membership,
+chronology, clipboard direction, tab attachment, scoped ephemeral-token veto
+or app-continuity candidate. Time is not used to infer a link. Synthetic
+regressions cover contradictory provider identity, malformed provider type,
+independent record survival, and valid directional transfer unaffected by a
+same-identity invalid-time row.
+
+This is conservative source-identity consistency, **not** verification of the
+provider, record, workflow, completion or business outcome. It does not alter
+private holdout truth, evaluation splits or score thresholds. Native pytest,
+held-out assignment F1 and contamination, and exact-head CI remain required;
+F1 >= 0.90 and contamination <= 0.05 are not claimed.
