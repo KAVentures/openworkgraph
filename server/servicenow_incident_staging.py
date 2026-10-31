@@ -11,7 +11,7 @@ import json
 import math
 import re
 import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlencode
@@ -40,8 +40,6 @@ class SelectedIncidents:
     grant_current: bool = False
     # Exact constructor-time selection. This is an in-process consistency
     # check, NOT a cryptographic or independently authenticated grant.
-    _bound_selection: tuple[str, str, tuple[str, ...], bool, bool] = field(
-        init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         SelectedIncidents._validate_fields(self)
