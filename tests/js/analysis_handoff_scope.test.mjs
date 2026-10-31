@@ -1222,6 +1222,58 @@ test('redacted focus examples cannot contradict selected counts or observation s
   });
 });
 
+test('malformed redacted sample labels cannot masquerade as observed app or title', async t => {
+  const cases = [
+    ['object app', {app: {name: 'Editor'}, window_title: 'Redacted'}],
+    ['array app', {app: ['Editor'], window_title: 'Redacted'}],
+    ['numeric app', {app: 42, window_title: 'Redacted'}],
+    ['empty app', {app: '', window_title: 'Redacted'}],
+    ['whitespace app', {app: '  ', window_title: 'Redacted'}],
+    ['object title', {app: 'Editor', window_title: {text: 'Redacted'}}],
+    ['array title', {app: 'Editor', window_title: ['Redacted']}],
+    ['numeric title', {app: 'Editor', window_title: 42}]
+  ];
+  for (const [name, sample] of cases) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const open = h.bars[0].controls.button.onclick(); await settle();
+    h.reply(h.reads[1], {...h.preview('range', 'malformed-label'),
+      redacted_examples: [{...sample, observed_at: observedStart}]});
+    await open;
+    assert.equal(h.modals, 0, 'malformed labels must not be shown as evidence');
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+  });
+});
+
+test('valid redacted sample text is escaped and missing labels stay explicitly unknown', async t => {
+  const cases = [
+    ['HTML-looking labels', {app: '<script>alert(1)</script>',
+      window_title: '<img src=x onerror=1>'}, '&lt;script&gt;', '&lt;img src=x onerror=1&gt;'],
+    ['null app and title', {app: null, window_title: null},
+      'Unknown app', 'Untitled activity'],
+    ['legacy missing app and title', {}, 'Unknown app', 'Untitled activity']
+  ];
+  for (const [name, sample, expectedApp, expectedTitle] of cases)
+    await t.test(name, async () => {
+      const h = harness();
+      await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+      const open = h.bars[0].controls.button.onclick(); await settle();
+      h.reply(h.reads[1], {...h.preview('range', 'valid-label'),
+        redacted_examples: [{...sample, observed_at: observedStart}]});
+      await open;
+      assert.equal(h.modals, 1);
+      assert.ok(h.modalHtml.includes(expectedApp));
+      assert.ok(h.modalHtml.includes(expectedTitle));
+      assert.ok(!h.modalHtml.includes('<script>'));
+      assert.ok(!h.modalHtml.includes('<img src=x onerror=1>'));
+      await h.modal['#analysisCopy'].onclick();
+      assert.deepEqual(h.copied, ['request-valid-label']);
+      assert.equal(h.tickets.length, 0);
+    });
+});
+
 test('valid redacted focus examples preserve offset and legacy compatibility', async t => {
   const cases = [
     ['UTC-offset equivalent observations', d => {d.redacted_examples = [{app: 'Editor', observed_at: observedStart.replace(/Z$/, '+00:00')}, {app: 'Browser', observed_at: observedEnd}];}],
