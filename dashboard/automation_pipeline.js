@@ -21,6 +21,27 @@
     return {ease,cases_per_month:cases,minutes_per_case:minutes,eligible_share:share/100,compliance_review_needed:values.compliance===true,expected_revision:revision};
   }
 
+  // View-only triage: never changes assessments, review state or stored order.
+  function portfolioView(ideas,{query='',quadrant='',sort='priority'}={}){
+    const terms=query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+    const view=ideas.filter(idea=>{
+      if(quadrant==='unassessed'?!!idea.score:quadrant&&idea.score?.quadrant!==quadrant)return false;
+      const text=[idea.title,idea.description,idea.source?.reference,idea.source?.kind].filter(Boolean).join(' ').toLocaleLowerCase();
+      return terms.every(term=>text.includes(term));
+    });
+    const cmp=(a,b)=>a<b?-1:a>b?1:0;
+    if(sort!=='priority')view.sort((a,b)=>{
+      let result=0;
+      if(sort==='impact'||sort==='ease'){
+        if(!a.score||!b.score)result=Number(!a.score)-Number(!b.score);
+        else result=Number(b.score[sort==='impact'?'modeled_hours_per_month':'ease_score'])-Number(a.score[sort==='impact'?'modeled_hours_per_month':'ease_score']);
+      }else if(sort==='recent')result=cmp(b.updated_at||'',a.updated_at||'');
+      else if(sort==='title')result=cmp(a.title.toLocaleLowerCase(),b.title.toLocaleLowerCase());
+      return result||cmp(a.idea_id,b.idea_id);
+    });
+    return view;
+  }
+
   async function api(path,init){
     await window.__owgAuthReady;
     const response=await fetch(path,{cache:'no-store',...(init||{})});
@@ -42,28 +63,43 @@
     const add=button('Add idea');add.id='owgPipelineAdd';
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Idea',title),field('Details',description),field('Found in',source),field('Reference',reference),add);
     const filter=select('owgPipelineFilter',[['','All states'],...Object.entries(STATE_LABELS)]);
-    const exportLink=button('Download CSV','secondary');exportLink.id='owgPipelineCsv';
-    const tools=el('div',null,'row');tools.style.alignItems='end';tools.append(field('Show',filter),exportLink);
+    const exportLink=button('Download state CSV','secondary');exportLink.id='owgPipelineCsv';
+    const tools=el('div',null,'row');tools.style.alignItems='end';const search=input('owgPipelineSearch','search','Title, details or source reference');search.maxLength=200;
+    const quadrant=select('owgPipelineQuadrant',[['','All priorities'],...Object.entries(QUADRANTS),['unassessed','Not assessed']]);
+    const sort=select('owgPipelineSort',[['priority','Priority (default)'],['impact','Modeled hours: highest first'],['ease','Ease: highest first'],['recent','Recently updated'],['title','Title A–Z']]);
+    const reset=button('Reset view','secondary');reset.id='owgPipelineReset';
+    tools.append(field('Show',filter),field('Search ideas',search),field('Priority',quadrant),field('Sort',sort),reset,exportLink);
+    exportLink.title='Exports every idea in the selected state; search and priority filters apply only to the table.';
     const status=el('div',null,'muted');status.id='owgPipelineStatus';status.setAttribute('role','status');status.setAttribute('aria-live','polite');
     const counts=el('div',null,'muted');counts.id='owgPipelineCounts';
     const list=el('div');list.id='owgPipelineList';
+    const viewCount=el('div',null,'muted');viewCount.id='owgPipelineViewCount';viewCount.setAttribute('role','status');
     const detail=el('div');detail.id='owgPipelineDetail';
-    card.append(row,tools,status,counts,list,detail);
+    card.append(row,tools,status,counts,viewCount,list,detail);
     panel.appendChild(card);
 
-    async function refresh(){
-      const q=filter.value?'?state='+encodeURIComponent(filter.value):'';
-      const r=await (await api('/v1/automation-pipeline'+q)).json();
-      counts.textContent=Object.entries(r.counts).filter(([,n])=>n).map(([s,n])=>STATE_LABELS[s]+': '+n).join(' · ')||'No ideas yet.';
+    let latestIdeas=[],refreshGeneration=0;
+    function render(){
+      const ideas=portfolioView(latestIdeas,{query:search.value,quadrant:quadrant.value,sort:sort.value});
+      viewCount.textContent=ideas.length+' shown of '+latestIdeas.length+' in selected state. CSV includes the entire selected state.';
       const wrap=el('div',null,'table-wrap');const t=el('table');const head=el('tr');
       ['Idea','State','Ease','Modeled hours / month','Priority',''].forEach(h=>head.appendChild(el('th',h)));
       const thead=el('thead');thead.appendChild(head);const body=el('tbody');
-      r.ideas.forEach(idea=>{
+      ideas.forEach(idea=>{
         const tr=el('tr');const open=button('Open','secondary');open.setAttribute('aria-label','Open idea '+idea.title);open.onclick=()=>show(idea.idea_id).catch(e=>{status.textContent=e.message;});
         [idea.title,STATE_LABELS[idea.state],idea.score?idea.score.ease_score:'—',idea.score?idea.score.modeled_hours_per_month:'—',idea.score?QUADRANTS[idea.score.quadrant]:'Not assessed'].forEach(v=>tr.appendChild(el('td',v)));
         const cell=el('td');cell.appendChild(open);tr.appendChild(cell);body.appendChild(tr);
       });
-      t.append(thead,body);wrap.appendChild(t);list.replaceChildren(r.ideas.length?wrap:el('div','No ideas in this view.','muted'));
+      t.append(thead,body);wrap.appendChild(t);list.replaceChildren(ideas.length?wrap:el('div','No ideas in this view.','muted'));
+    }
+
+    async function refresh(){
+      const generation=++refreshGeneration;
+      const q=filter.value?'?state='+encodeURIComponent(filter.value):'';
+      const r=await (await api('/v1/automation-pipeline'+q)).json();
+      if(generation!==refreshGeneration)return;
+      counts.textContent=Object.entries(r.counts).filter(([,n])=>n).map(([s,n])=>STATE_LABELS[s]+': '+n).join(' · ')||'No ideas yet.';
+      latestIdeas=r.ideas;render();
     }
 
     let detailGeneration=0;
@@ -334,6 +370,8 @@
       const idea=await post('/v1/automation-pipeline',{title:title.value.trim(),description:description.value.trim(),source:{kind:source.value,reference:reference.value.trim()}});
       title.value='';description.value='';reference.value='';await refresh();await show(idea.idea_id);status.textContent='Idea added.';
     }catch(e){status.textContent=e.message;}};
+    search.oninput=render;quadrant.onchange=render;sort.onchange=render;
+    reset.onclick=()=>{search.value='';quadrant.value='';sort.value='priority';filter.value='';refresh().catch(e=>{status.textContent=e.message;});};
     filter.onchange=()=>refresh().catch(e=>{status.textContent=e.message;});
     exportLink.onclick=async()=>{try{
       const blob=await (await api('/v1/automation-pipeline/export.csv'+(filter.value?'?state='+encodeURIComponent(filter.value):''))).blob();
@@ -342,6 +380,6 @@
     refresh().catch(e=>{status.textContent=e.message;});
   }
 
-  window.__owgPipelineModel={assessmentBody};
+  window.__owgPipelineModel={assessmentBody,portfolioView};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
