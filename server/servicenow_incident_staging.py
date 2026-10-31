@@ -308,6 +308,43 @@ def project_planned_page(scope: SelectedIncidents, raw: bytes, *,
     return {**result, "plan_bound": True, "planned_offset": expected["offset"],
             "planned_since": expected["since"], "page_order_matches_plan": True}
 
+
+def project_supplied_http_response(
+    scope: SelectedIncidents, *, plan: dict[str, Any],
+    request_method: str, request_url: str, response_url: str,
+    status: int, content_type: str, redirect_count: int, body: bytes,
+) -> dict[str, Any]:
+    """Validate caller-supplied HTTP metadata before staging one planned page.
+
+    This is a pure fake-transport contract, NOT an authenticated provider
+    receipt. A future transport must independently enforce TLS, host/tenant
+    grant and revocation, actual request/response binding and atomic append.
+    """
+    _require_selected_scope(scope)
+    if type(plan) is not dict:
+        raise StagingError("Invalid supplied HTTP page plan")
+    if (type(request_method) is not str or request_method != "GET"
+            or type(request_url) is not str or request_url != plan.get("url")
+            or type(response_url) is not str or response_url != request_url):
+        raise StagingError("Supplied HTTP request/response identity mismatch")
+    # A redirect, including one returning to the same URL, is never silently
+    # accepted as an authorized selected-record read.
+    if type(redirect_count) is not int or redirect_count != 0:
+        raise StagingError("Supplied HTTP redirect is not permitted")
+    if type(status) is not int or status != 200:
+        raise StagingError("Supplied HTTP response is not a successful GET")
+    if (type(content_type) is not str or len(content_type) > 80
+            or re.fullmatch(
+                r"application/json(?:[ \\t]*;[ \\t]*charset=[ \\t]*utf-8)?",
+                content_type, re.IGNORECASE,
+            ) is None):
+        raise StagingError("Supplied HTTP response is not UTF-8 JSON")
+    staged = project_planned_page(scope, body, plan=plan)
+    return {**staged, "supplied_http_metadata_checked": True,
+            "authenticated_transport_receipt": False,
+            "transport_grant_verified": False}
+
+
 def project_planned_pages(scope: SelectedIncidents, pages: list[tuple[dict[str, Any], bytes]]) -> dict[str, Any]:
     """Check a bounded consecutive run of planned pages without claiming completeness.
 
