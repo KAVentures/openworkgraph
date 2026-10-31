@@ -45,3 +45,27 @@ assertions. These are deterministic fake-reader tests, **not** authorized
 real-provider checks, live tenant isolation proofs, commercial ROI, or
 customer-outcome validation. No new network requests or source privileges are
 introduced; the endpoint and optional MCP contract remain unchanged.
+
+## Exact-record scope and provenance
+
+The receipt additionally requires the graph's returned `resource_ref` to equal
+the exact requested opaque `owg:r:` reference, and the graph's
+`source_rows_scoped_to_exact_record` to be the literal Boolean `true`.
+A different, missing or malformed returned reference, or a missing, false,
+truthy-string or numeric exact-scope assertion, returns
+`unknown/record_reference_scope_conflict` without echoing the mismatched
+record identifier or private provider fields. This prevents a cached or
+injected graph for a different case, or an unscoped test/integration reader,
+from being mistaken for source-confirmed operation evidence. The production
+`record_graph` emits both fields on its existing exact-record query, so its
+normal response shape remains compatible.
+
+These checks are **post-read receipt admission**, not proof that an upstream
+reader never accessed a wrong provider or tenant: the trusted graph reader,
+source adapters and existing authorization/consent controls must enforce
+that boundary *before* any provider refresh. They do not establish
+cross-process revocation fencing, complete source history, customer outcome,
+agent causality or business completion. Four synthetic provider families cover
+wrong/missing record references, malformed/missing exact-scope flags and
+positive controls. No source credentials, permissions, REST/MCP schema or
+background sync are added.
