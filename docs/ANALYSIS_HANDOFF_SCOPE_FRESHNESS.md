@@ -650,3 +650,38 @@ user-initiated Prepare for AI, copy-only review, disabled Download and no
 export-ticket request. These are synthetic UI contract tests, not proof of
 complete capture, real consenting-user acceptance or competitor parity.
 Native Node/browser/accessibility/scale/packaging checks remain required.
+
+## Copyable request when ordinary work evidence is absent
+
+The server's generic request asks an AI to analyze the selected chronology,
+but a local preview with zero ordinary work events cannot support an observed
+workflow. The dashboard therefore appends an **evidence limitation** to the
+copyable request (and the visible, copyable request preview) in exactly two
+cases:
+
+- **Zero selected events:** the preview has no recorded events for this
+  selection, regardless of whether other retained events exist. This is not
+  proof of inactivity, a running/stopped recorder, consent, or complete capture.
+- **Capture-health/gap-only selection:** selected rows exist but are only
+  capture-health or gap records. These are not ordinary workflow steps and
+  cannot independently substantiate a business process.
+
+The appended warning asks the receiving AI not to infer a workflow, business
+completion, time savings, or ROI from absent ordinary evidence. Other
+**currently authorized** sources may still be examined separately, with their
+own provenance and limitations; otherwise the correct result is insufficient
+evidence. This warning is a presentation/communication safeguard, **not**
+permission enforcement, evidence of source completeness, or an AI execution
+gate. The backend's permission and export-ticket checks remain authoritative.
+
+When at least one ordinary work event is recorded, the dashboard copies the
+original server-provided request byte-for-byte, without this additional
+zero-evidence warning. The existing local modal remains user-initiated and
+non-executing, and zero selected events still disable package download.
+
+The deterministic synthetic mock-DOM test exercises zero retained events,
+an empty selected period with retained history, capture-health/gap-only
+observations, and an ordinary-work positive control. It checks the exact
+copyable request, no automatic ticket/download, and that no false inference
+or business-completion claim is introduced. It is **not** a real consenting
+user study, external provider validation, or competitor parity evidence.
