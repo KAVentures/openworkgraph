@@ -101,18 +101,22 @@ def _link_scope(event: dict[str, Any]) -> tuple[str, str, str, str] | None:
     """Exact local identity for ephemeral tab/transfer/app signals.
 
     Legacy absent fields have their own empty identity; they never match a
-    known organization/actor/device/session. Malformed fields cannot anchor
+    known organization/actor/device/session. Explicit null/empty and other
+    malformed fields cannot anchor
     ephemeral joins. This does not authorize cross-actor record linking.
     """
     values: list[str] = []
     for name in _SCOPE_FIELDS:
-        value = event.get(name)
-        if value is None:
+        # Only an absent legacy field denotes an unknown scope component.
+        # An explicit null/empty value is a malformed identity claim, not a
+        # wildcard or a synonym for absence: it cannot anchor weak joins.
+        if name not in event:
             values.append("")
-        elif isinstance(value, str) and len(value) <= 160:
-            values.append(value)
-        else:
+            continue
+        value = event[name]
+        if not isinstance(value, str) or not value or len(value) > 160:
             return None
+        values.append(value)
     return tuple(values)  # type: ignore[return-value]
 
 
