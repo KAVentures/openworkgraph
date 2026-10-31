@@ -785,11 +785,11 @@ admission rules. This is deliberately conservative: it may withhold genuine
 links when capture evidence is inconsistent. It does **not** authenticate a
 provider, prove a business case, infer a handoff or authorize execution.
 
-Four new deterministic synthetic regression functions cover mismatched
+Five new deterministic synthetic regression functions cover mismatched
 top-level/metadata clipboard tokens (including both otherwise-valid
 transfers), conflicting single-record tabs, malformed alternatives on either
 side, matching dual claims, legacy single-location claims, cyclic malformed
-payloads and cross-tenant noninterference. They do not alter private
+payloads, continuity-neighbor suppression and cross-tenant noninterference. They do not alter private
 holdout truth, family splits, scorer, thresholds or model/API spending.
 Run native `python -m pytest -q tests/test_work_item_links.py
 tests/test_reconstruction_owg_native.py` and exact-head cross-platform
