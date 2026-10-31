@@ -156,7 +156,7 @@ def median_difference(a: list[float], b: list[float], rounds: int = BOOTSTRAP_RO
 
 def _cohort_stats(conn, table: str, sla_seconds: int | None) -> dict[str, Any]:
     conn.execute(f"""CREATE OR REPLACE TEMP TABLE {table}_cs AS SELECT case_id,
-          date_diff('second', min(ts), max(ts)) AS duration, count(*) > count(DISTINCT activity) AS rework,
+          epoch(max(ts) - min(ts)) AS duration, count(*) > count(DISTINCT activity) AS rework,
           string_agg(activity, '{_SEP}' ORDER BY ts, event_id) AS path
         FROM {table} GROUP BY case_id""")
     cases, q, rework = conn.execute(f"""SELECT count(*), quantile_cont(duration, [0.5, 0.9]),
