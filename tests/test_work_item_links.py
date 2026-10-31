@@ -957,3 +957,26 @@ def test_tainted_ephemeral_token_veto_is_exactly_scoped_and_token_local():
         result = linked_work_items([first, second, tainted])
         assert set(_items(result)) == {("e01", "e02")}, signal
         assert result["unlinked_observation_count"] == 1
+
+
+def test_conflicting_valid_reference_identities_also_veto_scoped_tokens():
+    # Both observations of C have individually well-formed references, but
+    # incompatible provider identities. Neither may disappear and make a
+    # shared tab or transfer token look unambiguous.
+    for signal in ("tab", "transfer"):
+        options = {signal: "conflicted-reference-token"}
+        events = [
+            _scoped(_event(1, A, action="copy", **options)),
+            _scoped(_event(2, B if signal == "transfer" else None,
+                           action="paste", **options)),
+            _scoped(_event(3, C, provider="jira", **options)),
+            _scoped(_event(4, C, provider="github", **options)),
+            _scoped(_event(5, A)),
+        ]
+        for ordered in (events, list(reversed(events))):
+            result = linked_work_items(ordered)
+            assert set(_items(result)) == {("e01", "e05")}, signal
+            assert _items(result)[("e01", "e05")]["link_basis"] == {"same_record": 1}
+            assert result["conflicting_reference_groups_suppressed"] == 1
+            assert result["unlinked_observation_count"] == 3
+            assert result["candidate_links"] == []
