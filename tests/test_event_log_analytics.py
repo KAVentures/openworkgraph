@@ -70,6 +70,51 @@ def test_conformance_fitness_and_deviations():
     assert analytics.conformance(log_id, alternatives)["fitting_cases"] == 54
 
 
+
+def test_conformance_fitness_uses_the_selected_reference_path_length(monkeypatch):
+    """Synthetic one-variant regression, without requiring a native DuckDB query.
+
+    The shortest model path is A (length 1), but ABCD (length 4) is
+    the minimum-cost alignment for the observed ABC trace. Its fitness
+    denominator is 3 + 4, not 3 + 1.
+    """
+    class OneVariant:
+        def execute(self, sql):
+            self.is_count = "count(DISTINCT case_id)" in sql
+            return self
+
+        def fetchone(self):
+            assert self.is_count
+            return (1,)
+
+        def fetchall(self):
+            assert not self.is_count
+            return [("A\\x1fB\\x1fC", 1, 1)]
+
+    monkeypatch.setattr(workspace, "_query", lambda log_id, case_type, fn: fn(OneVariant()))
+    long_path = ["A", "B", "C", "D"]
+    short_path = ["A"]
+    model = lambda paths: {"format": "openworkgraph.reference-model.v1", "paths": paths}
+
+    with_short_first = analytics.conformance("synthetic", model([short_path, long_path]))
+    with_long_first = analytics.conformance("synthetic", model([long_path, short_path]))
+    without_short = analytics.conformance("synthetic", model([long_path]))
+
+    expected = round(1 - 1 / (3 + 4), 6)
+    assert with_short_first["fitness"] == expected
+    assert with_long_first["fitness"] == expected
+    assert without_short["fitness"] == expected
+    assert with_short_first["fitting_cases"] == 0
+    assert with_short_first["deviating_variants"] == [{
+        "path": ["A", "B", "C"], "cases": 1, "fitness": expected,
+        "closest_model_path": 1, "deviations": [{"move": "skipped", "activity": "D"}],
+    }]
+    assert with_long_first["deviating_variants"][0]["closest_model_path"] == 0
+    assert with_short_first["skipped_model_activities"] == [
+        {"activity": "D", "cases": 1, "share_of_aligned_cases": 1.0}
+    ]
+
+
 def test_conformance_variant_cap_discloses_omitted_cases_separately_from_long_traces():
     """Fitness only covers aligned cases; the two omission reasons partition the rest."""
     model = {"format": "openworkgraph.reference-model.v1", "paths": [["C"]]}
