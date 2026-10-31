@@ -20,6 +20,24 @@
   const strictClockInstant = value => typeof value === 'string' &&
     /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.test(value) &&
     calendarDay(value) && Number.isFinite(Date.parse(value));
+  // Date.parse truncates sub-millisecond fractions. A returned preview or
+  // ticket shifted by even one microsecond must not alias the selected range.
+  // Strip the fraction only for the whole-second UTC conversion; compare the
+  // entire decimal fraction after removing insignificant trailing zeros.
+  function exactInstantParts(value) {
+    if (!strictClockInstant(value)) return null;
+    const fraction = /\.(\d+)(?=Z|[+-]\d{2}:\d{2}$)/.exec(value);
+    const wholeSecond = fraction
+      ? value.slice(0, fraction.index) + value.slice(fraction.index + fraction[0].length)
+      : value;
+    const seconds = Date.parse(wholeSecond);
+    return Number.isFinite(seconds)
+      ? [seconds, fraction ? fraction[1].replace(/0+$/, '') : ''] : null;
+  }
+  function sameExactInstant(a, b) {
+    const left = exactInstantParts(a), right = exactInstantParts(b);
+    return !!left && !!right && left[0] === right[0] && left[1] === right[1];
+  }
   function selection() {
     if (period === 'current' || period === 'all') return {scope: period};
     const now = new Date(), a = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -45,9 +63,8 @@
       const now = selection();
       if (now.scope !== chosen?.scope) return false;
       if (now.scope !== 'range') return true;
-      return strictClockInstant(chosen.since) && strictClockInstant(chosen.until) &&
-        Date.parse(now.since) === Date.parse(chosen.since) &&
-        Date.parse(now.until) === Date.parse(chosen.until);
+      return sameExactInstant(now.since, chosen.since) &&
+        sameExactInstant(now.until, chosen.until);
     } catch (_) { return false; }
   }
   window.owgEvidenceSelection = selection;
@@ -282,10 +299,9 @@
   function matchesRequestedWindow(requested, returned) {
     if (!returned || returned.scope!==requested.scope) return false;
     if (requested.scope!=='range') return true;
-    // The server canonicalizes ISO UTC `Z` to `+00:00`; compare instants.
-    const sameInstant=(a,b)=>strictClockInstant(b) && Date.parse(a)===Date.parse(b);
-    return sameInstant(requested.since,returned.since) &&
-      sameInstant(requested.until,returned.until);
+    // Equivalent UTC offsets are valid; submillisecond shifts are not.
+    return sameExactInstant(requested.since,returned.since) &&
+      sameExactInstant(requested.until,returned.until);
   }
   async function api(path, options, stillCurrent=()=>true) {
     await window.__owgAuthReady;
@@ -325,8 +341,7 @@
     for(const [key,wanted] of Object.entries(expected)) {
       const actual=params.get(key);
       if(key==='since' || key==='until') {
-        if(!strictClockInstant(actual) || Date.parse(actual)!==Date.parse(wanted))
-          throw invalid();
+        if(!sameExactInstant(actual,wanted)) throw invalid();
       } else if(actual!==wanted) throw invalid();
     }
     return value;
