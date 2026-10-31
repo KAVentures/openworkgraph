@@ -586,3 +586,27 @@ provider, record, workflow, completion or business outcome. It does not alter
 private holdout truth, evaluation splits or score thresholds. Native pytest,
 held-out assignment F1 and contamination, and exact-head CI remain required;
 F1 >= 0.90 and contamination <= 0.05 are not claimed.
+
+
+## Explicit host and tenant identity admission
+
+The exact-record linker also rejects **explicit nonempty** host or
+`organization_id` values that are entirely whitespace or contain ASCII
+C0/DEL control characters. Previously a whitespace-only host could be
+stripped by the shared legacy normalizer and silently treated as an absent
+host; a repeated control-bearing organization string could become an
+apparently identical tenant identity. Neither is reliable source provenance.
+
+A malformed explicit identity vetoes the claimed opaque record group,
+including otherwise valid observations of that same reference. It cannot
+be reintroduced through tab/clipboard/app-continuity signals. Independent
+record groups remain available. Genuinely absent, null or empty legacy
+optional host/organization values remain backward compatible; this guard
+does not rewrite the shared record-lane normalizer.
+
+The committed synthetic regressions exercise matching malformed identities,
+one malformed claim amid otherwise valid records, unaffected independent
+records, and legacy/valid positives. They do not authenticate source
+identities or prove that observed records are business tasks. No private
+holdout labels, scoring, API/model usage or provider permissions change.
+Assignment F1 ≥ 0.90 and contamination ≤ 0.05 remain **unverified**.
