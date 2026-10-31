@@ -916,3 +916,35 @@ focus-event count, and copy-only behavior without ticket/download. Native
 Node, Chromium, accessibility, cross-platform, scale and packaging CI
 remain independent acceptance gates; no real consenting-user pilot or
 commercial benefit is claimed. Coordination: [#326 claim 6547775463](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6547775463).
+
+
+### 2026-10-31 — local preview is not an AI transfer or immutable export (Worker B)
+
+The Prepare for AI modal previously headed its selected-event metadata
+**"What the AI will receive"**. That was misleading for its two distinct,
+explicit actions:
+
+- **Copy request:** copies only the prepared request text to the local
+  clipboard. It does not attach an evidence package, call a model, or send
+  the selected event rows to an AI. The completion status now says this.
+- **Download evidence package:** requests a local export ticket and starts
+  a local download only on explicit click. A user must inspect and separately
+  attach/share that file with any AI. The modal labels the metadata as a
+  **local preview, not sent to an AI**.
+
+Scope freshness is a separate limitation. **Current recorder run** can
+change as events arrive or the recorder restarts; **all retained history**
+can change with new/deleted/inaccessible evidence. Even a **fixed date
+range** does not freeze the underlying rows, consent, retention or access.
+The selected preview is therefore **not an immutable export snapshot**,
+nor a checksum of a later download or proof of complete capture. The modal
+now explicitly tells users to review the actual downloaded file before
+sharing. Existing ticket-bound scope/privacy validation and stale relative
+date rejection remain intact; this change does **not** add snapshot isolation
+or new read/export permissions.
+
+Three deterministic synthetic mock-DOM subtests cover the range, current
+run and all-history disclosures; they verify the prompt-only copy path,
+zero export tickets/downloads on Copy, and no implicit AI transfer. These
+tests do not establish native Node/Chromium/WCAG/scale/packaging acceptance
+or a real consenting-user pilot. Coordination: [#326 claim 6548395286](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6548395286).
