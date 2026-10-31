@@ -74,6 +74,23 @@ def _field(event: dict[str, Any], name: str, pattern: re.Pattern[str]) -> str:
     return value if isinstance(value, str) and pattern.fullmatch(value) else ""
 
 
+def _malformed_optional_identity(value: Any) -> bool:
+    """Reject corrupt explicit host/tenant claims, retaining empty legacy IDs.
+
+    The shared normalizer strips host whitespace. An explicitly supplied
+    whitespace-only host must not silently become a missing legacy host;
+    control-bearing identities must not anchor source-grounded membership.
+    Genuinely absent/null/empty optional identities retain prior semantics.
+    """
+    return (value is not None and (
+        not isinstance(value, str) or
+        (bool(value) and (
+            value.isspace() or
+            any(ord(char) < 32 or ord(char) == 127 for char in value)
+        ))
+    ))
+
+
 def _literal_record_claim(event: dict[str, Any]) -> bool:
     """Reject type-coerced provider and tenant identity before exact-record joins.
 
@@ -92,8 +109,8 @@ def _literal_record_claim(event: dict[str, Any]) -> bool:
         return False
     host = reference.get("host")
     organization = event.get("organization_id")
-    return ((host is None or isinstance(host, str))
-            and (organization is None or isinstance(organization, str)))
+    return (not _malformed_optional_identity(host)
+            and not _malformed_optional_identity(organization))
 
 
 _SCOPE_FIELDS = ("organization_id", "actor_id", "device_id", "session_id")
