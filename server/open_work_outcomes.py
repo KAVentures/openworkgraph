@@ -55,7 +55,9 @@ def source_operation_receipt(
         return _unknown(resource_ref, expected_operation, "record_not_observed_in_permitted_window")
     # These are positive evidence assertions, not merely truthy metadata.
     # Malformed strings/integers must not attest retained record identity.
-    if (graph.get("source_event_limit_reached") or
+    # Missing/malformed truncation metadata is not affirmative completeness.
+    # Only a literal False proves this exact retained history was untruncated.
+    if (graph.get("source_event_limit_reached") is not False or
         graph.get("record_identity_complete_within_retained_window") is not True):
         return _unknown(resource_ref, expected_operation, "incomplete_or_conflicting_record_identity")
     provider, kind, required_state = _OPS[expected_operation]
