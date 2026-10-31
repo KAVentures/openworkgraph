@@ -1351,7 +1351,7 @@ def test_supplied_http_metadata_accepts_only_exact_selected_get(media_type):
     ("content_type", "text/html"),
     ("content_type", "application/json, text/html"),
     ("content_type", "application/json; charset=iso-8859-1"),
-    ("content_type", "application/json\\r\\nX-Secret: private"),
+    ("content_type", "application/json\r\nX-Secret: private"),
     ("content_type", None),
 ], ids=[
     "write-method", "lowercase-method", "request-url", "final-url",
