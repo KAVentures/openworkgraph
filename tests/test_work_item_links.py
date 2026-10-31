@@ -1113,3 +1113,63 @@ def test_uncontested_single_record_tab_still_attaches_loose_transfer_component()
         assert result["ambiguous_tab_component_attachments_suppressed"] == 0
         assert result["candidate_links"] == []
         assert result["link_contract"]["time_alone_never_links"] is True
+
+
+def test_whitespace_and_control_scope_values_never_anchor_ephemeral_joins():
+    # These are present but malformed identity claims, not legacy omissions.
+    # A repeated malformed tenant/actor/device/session must not manufacture a
+    # shared clipboard, tab, or even a candidate same-app association.
+    invalid_values = ("   ", "\\t", "\\x00", "\\x7f", "\\u2003")
+    for dimension in ("organization_id", "actor_id", "device_id", "session_id"):
+        for invalid in invalid_values:
+            for signal in ("transfer", "tab", "surface"):
+                if signal == "transfer":
+                    first = _scoped(_event(1, A, transfer="shared-token"))
+                    second = _scoped(_event(2, B, transfer="shared-token"))
+                elif signal == "tab":
+                    first = _scoped(_event(1, A, tab="shared-tab"))
+                    second = _scoped(_event(2, tab="shared-tab"))
+                else:
+                    first = _scoped(_event(1, app="Excel"))
+                    second = _scoped(_event(2, app="Excel"))
+                first[dimension] = invalid
+                second[dimension] = invalid
+                for ordered in ((first, second), (second, first)):
+                    result = linked_work_items(list(ordered))
+                    assert result["items"] == [], (dimension, repr(invalid), signal)
+                    assert result["candidate_links"] == [], (dimension, repr(invalid), signal)
+                    assert result["unlinked_observation_count"] == 2
+                    assert result["link_contract"]["time_alone_never_links"] is True
+
+
+def test_literal_nonblank_scope_strings_still_join_without_normalization():
+    # Machine identity remains literal: interior spaces are not trimmed,
+    # case-folded or conflated with different scope values.
+    first = _scoped(_event(1, A, transfer="valid-token"), org="tenant alpha")
+    second = _scoped(_event(2, B, transfer="valid-token"), org="tenant alpha")
+    result = linked_work_items([first, second])
+    assert set(_items(result)) == {("e01", "e02")}
+    assert _items(result)[("e01", "e02")]["link_basis"] == {"clipboard_transfer": 1}
+
+    second["organization_id"] = "tenant  alpha"
+    result = linked_work_items([first, second])
+    assert result["items"] == []
+    assert result["candidate_links"] == []
+
+    anchor = _scoped(_event(1, A, tab="valid-tab"), actor="actor one")
+    loose = _scoped(_event(2, tab="valid-tab"), actor="actor one")
+    result = linked_work_items([anchor, loose])
+    assert set(_items(result)) == {("e01", "e02")}
+    assert _items(result)[("e01", "e02")]["link_basis"] == {"same_tab_single_record": 1}
+
+
+def test_bad_ephemeral_actor_device_session_does_not_erase_exact_record_link():
+    # Record-reference evidence is independently assessed and never rescued
+    # by a malformed tab/clipboard scope. Keep that distinction explicit.
+    for dimension in ("actor_id", "device_id", "session_id"):
+        first, second = _scoped(_event(1, A)), _scoped(_event(2, A))
+        first[dimension] = second[dimension] = "\\x00"
+        result = linked_work_items([first, second])
+        assert set(_items(result)) == {("e01", "e02")}
+        assert _items(result)[("e01", "e02")]["link_basis"] == {"same_record": 1}
+        assert result["candidate_links"] == []
