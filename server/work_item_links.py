@@ -237,14 +237,12 @@ def _observations(events: list[dict[str, Any]]) -> tuple[
             duplicate_tainted_transfers.add((scope, transfer))
         if tab:
             duplicate_tainted_tabs.add((scope, tab))
-    for event_id, event in unique_events.items():
-        if event_id in conflicting_event_ids:
-            continue
-        # An invalid observation time removes membership, not the source
-        # identity claim. A contradictory provider/tenant assertion must not
-        # disappear merely because its timestamp cannot be ordered.
+    def register_record_claim(event: dict[str, Any], event_id: str) -> tuple[str, str, str, str, str] | None:
+        # Record identity contradictions must be assessed even for rows that
+        # cannot become members (invalid time or conflicting duplicate IDs).
+        # Discarding a duplicate must not erase a conflicting provider/tenant
+        # claim about the *same* opaque reference.
         match = _identity(event) if _literal_record_claim(event) else None
-        ref = ""
         if match:
             ref, provider, kind, host, org = match
             if identities.setdefault(ref, (provider, kind, host, org)) != (provider, kind, host, org):
@@ -254,13 +252,32 @@ def _observations(events: list[dict[str, Any]]) -> tuple[
             raw_claim = metadata.get("resource_reference")
             claimed = raw_claim if isinstance(raw_claim, dict) else {}
             claimed_ref = str(claimed.get("resource_ref") or "").lower()
-            # A malformed explicit reference (including non-object values) is
-            # not an unreferenced observation. It cannot regain authority via
-            # a tab, transfer, or adjacent surface candidate.
+            # Malformed explicit source claims cannot be reintroduced through
+            # tab, transfer or adjacent-surface evidence.
             if "resource_reference" in metadata:
                 invalid_claim_events.add(event_id)
             if _RESOURCE.fullmatch(claimed_ref):
                 conflicts.add(claimed_ref)
+        return match
+
+    # Every conflicting duplicate occurrence still contributes its literal
+    # source identity claim. None contributes observation membership, a
+    # timestamp, or an ephemeral link endpoint. Independent refs stay separate.
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        event_id = event.get("event_id")
+        if isinstance(event_id, str) and event_id in conflicting_event_ids:
+            register_record_claim(event, event_id)
+
+    for event_id, event in unique_events.items():
+        if event_id in conflicting_event_ids:
+            continue
+        # An invalid observation time removes membership, not the source
+        # identity claim. A contradictory provider/tenant assertion must not
+        # disappear merely because its timestamp cannot be ordered.
+        match = register_record_claim(event, event_id)
+        ref = match[0] if match else ""
         # Invalid timestamps never become linked observations or scoped
         # clipboard/tab vetoes; only their literal source-identity claims can
         # invalidate a conflicting exact-reference group.
