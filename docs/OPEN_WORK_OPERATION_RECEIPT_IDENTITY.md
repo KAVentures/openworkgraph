@@ -149,3 +149,23 @@ cryptographic evidence that an upstream reader was authorized or that a
 provider was not contacted before a malformed graph was returned. Existing
 opt-in, tenant/actor scope, source revocation and credential controls remain
 the responsibility of the trusted source adapters.
+
+## Source transport outage handling
+
+The existing explicit, opt-in `record_graph` reader may fail during its
+bounded source refresh. The receipt now converts only transport-level
+`OSError` (including timeout/connection failures) and `httpx.HTTPError`
+into `availability=unknown / reason=source_read_unavailable`, with all
+operation, business, customer and agent-success flags false. No exception
+message, native source ID, customer text or credential is echoed. It makes
+exactly the same single reader invocation; there is no retry, background
+poll, widened read or new source permission.
+
+Invalid history-window requests (`ValueError`) and unexpected programming
+errors (`RuntimeError`) are intentionally not hidden as source outages:
+their existing request/error handling remains responsible. The four provider
+operation families are covered by 20 synthetic fake-reader transport
+exceptions and two negative controls. These tests do not prove live-provider
+availability, tenant isolation, revocation fencing or business completion.
+A successful authenticated provider state remains narrower than a customer
+outcome and never authorizes agent execution.
