@@ -1586,7 +1586,7 @@ def test_review_delete_with_blob_dependent_preserves_unrelated_declarations(loca
     save(C, depends_on_work_item_refs=[A])
     independent = save(d)
 
-    corrupt_ref = sqlite3.Binary(b"\\xff\\x00")
+    corrupt_ref = sqlite3.Binary(b"\xff\x00")
     with sqlite3.connect(facts._path()) as db:
         original = db.execute(
             "SELECT * FROM declarations WHERE work_item_ref=?", (A,)
