@@ -18,6 +18,13 @@ _OPS = {
     "stripe_refund_processor_succeeded": ("stripe", "refund", "succeeded"),
     "jira_issue_resolved": ("jira", "issue", "done"),
 }
+# Exact provenance emitted by the existing opt-in source adapters. A source
+# status without its authenticated read path cannot verify an operation.
+_VERIFICATION_METHODS = {
+    "github": "explicit_opt_in_authenticated_local_github_cli_read",
+    "jira": "explicit_opt_in_site_verified_oauth_jira_issue_status_read",
+    "stripe": "opted_in_restricted_key_stripe_account_and_record_get",
+}
 _REF = re.compile(r"^owg:r:[0-9a-f]{32}$")
 
 
@@ -90,6 +97,11 @@ def source_operation_receipt(
     if (source.get("provider") != provider or
         ("object_type" in source and source["object_type"] != kind)):
         return _unknown(resource_ref, expected_operation, "provider_receipt_identity_conflict")
+    # The reported state is independently verified only when it comes from
+    # the already-permitted authenticated source-read path. A missing,
+    # malformed or different method is not proof of that provenance.
+    if source.get("verification_method") != _VERIFICATION_METHODS[provider]:
+        return _unknown(resource_ref, expected_operation, "source_verification_provenance_conflict")
     stamp = source.get("verified_at")
     try:
         when = datetime.fromisoformat(str(stamp or "").replace("Z", "+00:00"))
