@@ -702,3 +702,39 @@ private evaluation truth, scorer, split or thresholds change. Preregistered
 held-out assignment F1 >= 0.90 and contamination <= 0.05 remain **unverified**;
 native pytest, exact-head CI, review and current-main compatibility remain
 merge gates.
+
+
+## Bound duplicate-claim comparison before expanding JSON worklists
+
+Two observations with the same event ID are treated as identical only when
+their JSON-shaped payloads compare exactly, including scalar types. A duplicate
+with contradictory or unsupported payload must not silently acquire the first
+row's record, tab or clipboard authority.
+
+The iterative comparison has a **10,000-node budget**. It now checks whether
+expanding a nested list or object would exceed that budget **before** enqueuing
+all its children. The previous check counted processed nodes only: a single
+50,000-element JSON array/object could allocate tens of thousands of queued
+comparison pairs before the following loop iteration rejected it. This is a
+bounded-memory/denial-of-service guard for selected capture evidence, not a
+semantic task-linking improvement.
+
+Synthetic regressions cover 50,000-element list and object payloads (including
+a generous comparator-only peak-allocation ceiling), exactly budget-sized
+nested JSON, multiple sibling containers, and an oversized identical duplicate
+event ID sharing a scoped tab with an independent valid same-record group.
+Oversized duplicate claims fail closed, their ephemeral tab token is vetoed,
+and independent exact-record evidence remains usable. Input events themselves
+are not copied or deleted by this rule; the memory ceiling applies only to
+extra worklist allocation. This does not change the preregistered reconstruction
+holdout, scoring, source privileges, consent, or output schema.
+
+Run the committed tests using:
+
+```bash
+python -m pytest -q tests/test_work_item_links.py tests/test_reconstruction_owg_native.py
+```
+
+Synthetic regression coverage does not demonstrate real-tenant or held-out
+assignment F1 improvement. The target F1 >= 0.90 and contamination <= 0.05
+remain unverified pending preregistered evaluation.
