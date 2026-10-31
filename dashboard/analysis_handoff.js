@@ -235,6 +235,32 @@
       throw new Error('Preview evidence was incomplete or malformed. Nothing was copied or downloaded; prepare again.');
     }
   }
+  // Source names are observed labels, not verified provider identities. Keep
+  // the review modal bounded even when an import supplies many source labels;
+  // disclose every omitted category and its selected-event count.
+  function sourceSummary(sources) {
+    const shown = [];
+    let omittedCategories = 0, omittedEvents = 0;
+    const displayLabel = name => {
+      if (!name.trim()) return '[blank source label]';
+      let label = '', length = 0;
+      // Iterate Unicode code points, not UTF-16 halves; never silently
+      // present a clipped opaque label as the complete observed source.
+      for (const character of name) {
+        if (length === 96) return label + '… [source label truncated]';
+        label += character;
+        length++;
+      }
+      return label;
+    };
+    for (const [name, count] of Object.entries(sources)) {
+      if (shown.length < 8) shown.push(`${displayLabel(name)}: ${count}`);
+      else { omittedCategories++; omittedEvents += count; }
+    }
+    return (shown.join(', ') || 'none') + (omittedCategories
+      ? `; ${omittedCategories} additional source categories (${omittedEvents} selected events) omitted from this preview`
+      : '');
+  }
   function matchesRequestedWindow(requested, returned) {
     if (!returned || returned.scope!==requested.scope) return false;
     if (requested.scope!=='range') return true;
@@ -426,7 +452,7 @@
       <div class="note"><strong>What the AI will receive</strong>
         <p>${esc(d.canonical_rows)} recorded events · ${esc(d.event_types.focus_span||0)} focus spans · ${esc(d.event_types.capture_gap||0)} unobserved-gap records.</p>
         <p>${esc(selectedPeriod)} Observed: ${esc(d.first_observed_at||'none')} to ${esc(d.last_observed_at||'none')}.</p>
-        <p>Sources: ${esc(Object.entries(d.sources).map(([k,v])=>`${k}: ${v}`).join(', ')||'none')}. ${esc(workTextStatement)}</p>
+        <p>Reported sources (bounded preview; labels are not verified identities): ${esc(sourceSummary(d.sources))}. ${esc(workTextStatement)}</p>
         <p>${esc(latestWorkStatement)} Capture health and gaps are shown separately; they do not confirm the recorder is running.</p>
         <p>${esc(localRead)} Hosted AI availability must be checked separately: it only sees previously shared evidence. Preparing or downloading a local file does not grant AI history access.</p>
       </div>
