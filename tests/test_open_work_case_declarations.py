@@ -2243,6 +2243,108 @@ def test_versioned_declarations_reject_foreign_defaults_and_conflict_policies(
         assert db.execute("SELECT * FROM declarations").fetchall() == before_rows
 
 
+@pytest.mark.parametrize("kind", [
+    "journal_symlink", "journal_hardlink", "journal_directory",
+    "journal_permissions", "journal_oversized", "wal", "shm",
+])
+def test_untrusted_sqlite_sidecar_refused_before_open_and_clearable(
+    local, monkeypatch, kind,
+):
+    # A journal can be touched by SQLite before _database validates the
+    # stored schema or journal mode. Unsafe auxiliary paths must fail before
+    # sqlite3.connect; explicit review deletion must still scrub the ledger.
+    reviewed(A)
+    original = save()
+    path = facts._path()
+    before = path.read_bytes()
+    suffix = "-wal" if kind == "wal" else "-shm" if kind == "shm" else "-journal"
+    sidecar = path.with_name(path.name + suffix)
+    external = local.parent / (local.name + "-sidecar-target")
+    try:
+        if kind == "journal_symlink":
+            external.write_bytes(b"outside-owner-facts")
+            try:
+                sidecar.symlink_to(external)
+            except (OSError, NotImplementedError) as exc:
+                pytest.skip(f"symlinks unavailable: {exc}")
+        elif kind == "journal_hardlink":
+            external.write_bytes(b"outside-owner-facts")
+            try:
+                os.link(external, sidecar)
+            except (OSError, NotImplementedError) as exc:
+                pytest.skip(f"hard links unavailable: {exc}")
+        elif kind == "journal_directory":
+            sidecar.mkdir()
+        elif kind == "journal_permissions":
+            if os.name != "posix":
+                pytest.skip("POSIX file mode required")
+            sidecar.write_bytes(b"synthetic-journal")
+            sidecar.chmod(0o644)
+        elif kind == "journal_oversized":
+            with sidecar.open("wb") as output:
+                output.truncate(2 * facts._MAX_DATABASE_BYTES + 1)
+            if os.name == "posix":
+                sidecar.chmod(0o600)
+        else:
+            sidecar.write_bytes(b"synthetic-stale-sidecar")
+            if os.name == "posix":
+                sidecar.chmod(0o600)
+
+        def forbidden_sqlite_open(*_args, **_kwargs):
+            raise AssertionError("untrusted SQLite sidecar reached sqlite3.connect")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(facts.sqlite3, "connect", forbidden_sqlite_open)
+            with pytest.raises(facts.CaseDeclarationError, match="sidecar|journal"):
+                facts.list_case_declarations(SCOPE, now=NOW)
+            with pytest.raises(facts.CaseDeclarationError, match="sidecar|journal"):
+                save(expected_revision=original["revision"],
+                     expected_edit_token=original["edit_token"])
+        assert path.read_bytes() == before
+        if kind in ("journal_symlink", "journal_hardlink"):
+            assert external.read_bytes() == b"outside-owner-facts"
+
+        # A directory is not a SQLite file and cannot be unlinked by the
+        # existing file-only clear helper. Remove the synthetic directory
+        # before checking normal explicit review deletion.
+        if kind == "journal_directory":
+            sidecar.rmdir()
+        assert reviews.remove_review_intention(A, now=NOW)
+        assert not path.exists()
+        assert not sidecar.exists()
+        if kind in ("journal_symlink", "journal_hardlink"):
+            assert external.read_bytes() == b"outside-owner-facts"
+    finally:
+        if sidecar.is_dir() and not sidecar.is_symlink():
+            sidecar.rmdir()
+        elif sidecar.exists() or sidecar.is_symlink():
+            sidecar.unlink()
+        if external.exists():
+            external.unlink()
+
+
+def test_trusted_active_delete_rollback_journal_still_allows_read(local):
+    # An ordinary in-progress SQLite DELETE-mode writer creates a private
+    # rollback journal. Do not reject it merely because it exists: readers
+    # can still inspect the last committed owner-approved snapshot.
+    reviewed(A)
+    item = save()
+    path = facts._path()
+    with sqlite3.connect(path) as writer:
+        writer.execute("BEGIN IMMEDIATE")
+        writer.execute(
+            "UPDATE declarations SET goal_code=? WHERE work_item_ref=?",
+            ("assess_declared_policy", A),
+        )
+        journal = path.with_name(path.name + "-journal")
+        assert journal.exists()
+        if os.name == "posix":
+            assert journal.stat().st_mode & 0o077 == 0
+        assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [item]
+        writer.rollback()
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [item]
+
+
 def test_versioned_wal_ledger_is_refused_before_read_or_cas(local):
     # SQLite persists WAL mode in the database header, even after its last
     # connection closes and temporary sidecars disappear. A foreign WAL-mode
