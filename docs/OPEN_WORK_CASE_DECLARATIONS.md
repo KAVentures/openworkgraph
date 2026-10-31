@@ -307,3 +307,28 @@ tamper resistance, `PRAGMA integrity_check`, protection from a concurrently
 malicious local process, or atomic source-grant revocation. The ledger remains
 internal-only and disabled by default; no provider reads, obligations, agent
 permissions, execution or verified customer outcomes are introduced.
+
+
+## Generated-column schema admission
+
+SQLite's `PRAGMA table_info` excludes generated/hidden columns. An otherwise
+exact nine-column v1 or ten-column v2 `declarations` table can therefore carry
+an additional `GENERATED ALWAYS AS ... VIRTUAL` or `STORED` column without
+appearing different to `table_info`, and without creating an extra user-defined
+`sqlite_master` object. A version marker and visible-column match do not
+establish the private ledger's exact identity.
+
+Both v1 migration preflight and v2 read/write admission now use
+`PRAGMA table_xinfo` and require **exactly** the trusted columns with
+`hidden=0` for every field. Extra generated/hidden fields fail closed before
+migration or owner fact exposure, even if the visible fields, primary key and
+schema-object list otherwise match. Four synthetic real-SQLite regressions
+cover v1/v2 × VIRTUAL/STORED, checking rejection before token generation,
+version changes or row mutation. Existing clean v1 migration and v2 operation
+tests remain the compatibility baseline.
+
+This is **schema-shape** validation, not a full SQL-DDL equivalence proof:
+arbitrary CHECK constraints, malicious concurrent filesystem writes, and
+cross-process source-grant revocation remain outside this guard. No new
+provider reads, agent rights, background execution, or business outcome
+verification are implied.
