@@ -1554,3 +1554,114 @@ def test_literal_source_tokens_preserve_legacy_case_normalization_and_links():
     assert item["link_basis"] == {"same_record": 2}
     assert item["task_identity_inferred"] is False
     assert item["business_outcome_verified"] is False
+
+
+def test_contradictory_dual_clipboard_claims_veto_both_named_tokens():
+    # A conflicting top-level token must not silently hide the alternative
+    # metadata token, which could otherwise make either transfer look clean.
+    d = "owg:r:" + "d" * 32
+    rows = [
+        _scoped(_event(1, A, transfer="token-a", action="copy")),
+        _scoped(_event(2, B, transfer="token-a", action="paste")),
+        _scoped(_event(3, C, transfer="token-b", action="copy")),
+        _scoped(_event(4, d, transfer="token-b", action="paste")),
+    ]
+    contradictory = _scoped(_event(5, transfer="token-a"))
+    contradictory["clipboard_transfer_id"] = "token-b"
+    for ordered in (rows + [contradictory], list(reversed(rows + [contradictory]))):
+        result = linked_work_items(ordered)
+        assert result["items"] == []
+        assert result["candidate_links"] == []
+        assert result["unlinked_observation_count"] == 5
+        assert result["link_contract"]["time_alone_never_links"] is True
+        assert "token-a" not in json.dumps(result)
+        assert "token-b" not in json.dumps(result)
+
+
+def test_contradictory_dual_tab_claims_veto_both_single_record_attachments():
+    # The conflict itself is unreferenced; the two tabs would each otherwise
+    # attach an unrelated loose observation to a record.
+    rows = [
+        _scoped(_event(1, A, tab="tab-a")),
+        _scoped(_event(2, tab="tab-a")),
+        _scoped(_event(3, B, tab="tab-b")),
+        _scoped(_event(4, tab="tab-b")),
+    ]
+    contradictory = _scoped(_event(5, tab="tab-a"))
+    contradictory["tab_context_id"] = "tab-b"
+    independent = [
+        _scoped(_event(6, C, tab="tab-c")),
+        _scoped(_event(7, tab="tab-c")),
+    ]
+    for ordered in (rows + [contradictory] + independent,
+                    list(reversed(rows + [contradictory] + independent))):
+        result = linked_work_items(ordered)
+        assert set(_items(result)) == {("e06", "e07")}
+        assert _items(result)[("e06", "e07")]["link_basis"] == {
+            "same_tab_single_record": 1,
+        }
+        assert result["candidate_links"] == []
+        assert result["unlinked_observation_count"] == 5
+
+
+def test_malformed_dual_claim_vetoes_valid_alternative_without_deep_comparison():
+    # Both a corrupt top-level claim and corrupt nested metadata are explicit
+    # contradictory evidence, not an invitation to use whichever token parses.
+    for signal in ("tab", "transfer"):
+        for corrupt_side in ("top", "metadata"):
+            for malformed in (None, True, "", "not a valid token"):
+                token = "shared-token"
+                first = _scoped(_event(1, A, **{signal: token}, action="copy"))
+                second = _scoped(_event(
+                    2, B if signal == "transfer" else None,
+                    **{signal: token}, action="paste",
+                ))
+                third = _scoped(_event(3, **{signal: token}))
+                field = "tab_context_id" if signal == "tab" else "clipboard_transfer_id"
+                if corrupt_side == "top":
+                    third[field] = malformed
+                else:
+                    third["metadata"][field] = malformed
+                    third[field] = token
+                for ordered in ([first, second, third], [third, second, first]):
+                    result = linked_work_items(ordered)
+                    assert result["items"] == [], (signal, corrupt_side, malformed)
+                    assert result["candidate_links"] == []
+                    assert result["unlinked_observation_count"] == 3
+
+    # No recursive equality of nested invalid JSON values is needed to
+    # determine that neither is a syntactically valid token.
+    from server.work_item_links import _contradictory_field_tokens, _TRANSFER
+
+    deep = {}
+    deep["self"] = deep
+    assert _contradictory_field_tokens(
+        {"clipboard_transfer_id": deep,
+         "metadata": {"clipboard_transfer_id": {"nested": deep}}},
+        "clipboard_transfer_id", _TRANSFER,
+    ) == set()
+
+
+def test_matching_dual_and_single_location_tokens_remain_valid_and_scoped():
+    for signal in ("tab", "transfer"):
+        token = "consistent-token"
+        first = _scoped(_event(1, A, **{signal: token}, action="copy"))
+        second = _scoped(_event(
+            2, B if signal == "transfer" else None,
+            **{signal: token}, action="paste",
+        ))
+        field = "tab_context_id" if signal == "tab" else "clipboard_transfer_id"
+        first[field] = token  # Matching dual claims are not contradictory.
+        second["metadata"].pop(field)
+        second[field] = token  # Legacy top-level-only claim is still accepted.
+        for ordered in ([first, second], [second, first]):
+            result = linked_work_items(ordered)
+            assert set(_items(result)) == {("e01", "e02")}, signal
+
+        # A contradictory token in another organization cannot veto this
+        # exact capture scope, even when its token spelling is identical.
+        other = _scoped(_event(3, **{signal: token}), org="tenant-b")
+        other[field] = "different-token"
+        result = linked_work_items([first, second, other])
+        assert set(_items(result)) == {("e01", "e02")}, signal
+        assert result["unlinked_observation_count"] == 1
