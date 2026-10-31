@@ -19,6 +19,7 @@ MAX_BYTES = 262_144
 MAX_PAGE = 100
 MAX_JSON_DEPTH = 32
 MAX_JSON_NODES = 4096
+MAX_JSON_INTEGER_DIGITS = 128
 _ID = re.compile(r"[0-9a-f]{32}\Z")
 _HOST = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.service-now\.com\Z")
 _UPDATED = re.compile(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\Z")
@@ -119,6 +120,14 @@ def _unique_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return out
 
 
+def _bounded_json_int(value: str) -> int:
+    """Bound ignored provider integer tokens before allocating a large int."""
+    digits = len(value) - int(value.startswith("-"))
+    if digits > MAX_JSON_INTEGER_DIGITS:
+        raise StagingError("Provider JSON integer exceeds bounded digits")
+    return int(value)
+
+
 def _finite_json_float(value: str) -> float:
     """Refuse numeric JSON overflow, including fields later discarded."""
     number = float(value)
@@ -176,7 +185,7 @@ def project_page(scope: SelectedIncidents, raw: bytes, *, limit: int = 50,
         raise StagingError("Source response exceeds bounded byte limit")
     try:
         body = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_pairs,
-                          parse_float=_finite_json_float,
+                          parse_int=_bounded_json_int, parse_float=_finite_json_float,
                           parse_constant=lambda _: (_ for _ in ()).throw(StagingError("Nonfinite JSON")))
     except (ValueError, UnicodeError, RecursionError) as exc:
         raise StagingError("Invalid bounded provider JSON") from exc
