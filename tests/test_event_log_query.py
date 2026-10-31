@@ -67,6 +67,65 @@ def test_case_filters_variants_and_ordering():
     assert cohort["rows"] == [[1]]
 
 
+def test_case_duration_filters_and_aggregates_keep_fractional_seconds():
+    """Synthetic timestamps: strict duration filters and typed metrics agree to microseconds.
+
+    This tests local imported evidence, not provider-verified business timing.
+    """
+    rows = [
+        "case,activity,time,who",
+        "a,Start,2024-01-01T00:00:00Z,team",
+        "a,End,2024-01-01T00:00:00.500000Z,team",
+        "b,Start,2024-01-01T00:01:00Z,team",
+        "b,End,2024-01-01T00:01:01.000000Z,team",
+        "c,Start,2024-01-01T00:02:00Z,team",
+        "c,End,2024-01-01T01:02:01.500000+01:00,team",
+        "d,Start,2024-01-01T00:03:00Z,team",
+        "d,End,2024-01-01T00:03:02.750000Z,team",
+    ]
+    log = workspace.import_log(
+        BytesIO(("\\n".join(rows) + "\\n").encode()),
+        name="query-subsecond-synthetic", source_format="csv",
+        mapping={"case_column": "case", "activity_column": "activity",
+                 "timestamp_column": "time", "resource_column": "who"},
+    )["log_id"]
+    base = {"level": "cases", "measures": [
+        {"fn": "median", "of": "duration_seconds"},
+        {"fn": "p90", "of": "duration_seconds"},
+        {"fn": "avg", "of": "duration_seconds"},
+    ]}
+    result = query.run(log, base)
+    assert result["matching"] == {"rows": 4, "cases": 4}
+    assert result["units"] == {
+        "median_duration_seconds": "seconds",
+        "p90_duration_seconds": "seconds",
+        "avg_duration_seconds": "seconds",
+    }
+    assert result["rows"][0] == pytest.approx([1.25, 2.375, 1.4375])
+
+    def matching(where):
+        return query.run(log, {"level": "cases", "measures": [{"fn": "count"}],
+                               "where": where})["rows"][0][0]
+
+    # Comparisons remain strict: exactly 1s is neither >1 nor <1.
+    assert matching({"duration_over_seconds": 1}) == 2
+    assert matching({"duration_under_seconds": 1}) == 1
+    assert matching({"duration_under_seconds": 2}) == 3
+    assert matching({"duration_over_seconds": 1, "duration_under_seconds": 2}) == 1
+
+    # The existing time_between metric already uses precise epoch arithmetic.
+    # Its median must agree with the built-in case duration for Start->End logs.
+    aligned = query.run(log, {
+        "level": "cases",
+        "metrics": [{"name": "elapsed", "kind": "time_between",
+                     "from_activity": "Start", "to_activity": "End"}],
+        "measures": [{"fn": "median", "of": "duration_seconds"},
+                     {"fn": "median", "of": "metric:elapsed"}],
+    })
+    assert aligned["rows"][0] == pytest.approx([1.25, 1.25])
+    assert aligned["metrics"][0]["cases_with_value"] == 4
+
+
 def test_event_level_dimensions_and_attribute_values():
     log = _log()
     by_channel = query.run(log, {"level": "events", "dimensions": ["attribute:channel", "activity"],
