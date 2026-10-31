@@ -1879,3 +1879,68 @@ test('explicit daily coverage refuses invented empty dates without breaking lega
     }
   });
 });
+
+
+test('handoff labels current-run and all-history scope without conflating them', async t => {
+  const oneMinuteBeforeObserved = new Date(Date.parse(observedStart) - 60_000).toISOString();
+  const variants = [
+    {name: 'current run without start metadata', scope: 'current',
+      expected: /Current recorder run \(start not supplied by preview\)/,
+      forbidden: /all available history|All retained history/},
+    {name: 'current run with explicit recorder start', scope: 'current',
+      since: oneMinuteBeforeObserved,
+      expected: /Current recorder run \(from /,
+      forbidden: /all available history|All retained history/},
+    {name: 'all retained history', scope: 'all',
+      expected: /All retained history \(unbounded date selection\)/,
+      forbidden: /Current recorder run/}
+  ];
+  for (const variant of variants) await t.test(variant.name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const select = h.bars[0].controls.select;
+    select.value = variant.scope;
+    select.onchange({target: select});
+    await settle();
+    const data = {...h.preview(variant.scope, 'reviewed'),
+      ...(variant.since ? {window: {scope: variant.scope, since: variant.since}} : {})};
+    const preserveWindow = !!variant.since;
+    h.reply(h.reads[1], data, {preserveWindow});
+    await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[2], data, {preserveWindow});
+    await opening;
+    assert.equal(h.modals, 1);
+    assert.match(h.modalHtml, variant.expected);
+    assert.doesNotMatch(h.modalHtml, variant.forbidden);
+    if (variant.since) assert.match(h.modalHtml, new RegExp(variant.since.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-reviewed']);
+    assert.equal(h.tickets.length, 0);
+  });
+});
+
+test('missing daily plan and empty daily list are labelled as unknown, not zero evidence', async t => {
+  const variants = [
+    {name: 'absent daily plan', plan: undefined,
+      expected: /No daily breakdown was provided; date coverage is unknown/},
+    {name: 'empty daily plan', plan: {date_chunks: []},
+      expected: /No daily chunks were listed; this does not prove complete recording or zero events/}
+  ];
+  for (const variant of variants) await t.test(variant.name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], {...h.preview('range', 'two-observed-events'),
+      analysis_plan: variant.plan});
+    await opening;
+    assert.equal(h.modals, 1);
+    assert.match(h.modalHtml, variant.expected);
+    assert.match(h.modalHtml, /2 recorded events/);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-two-observed-events']);
+    assert.equal(h.tickets.length, 0);
+  });
+});
