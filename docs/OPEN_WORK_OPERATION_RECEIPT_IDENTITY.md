@@ -34,7 +34,7 @@ customer received the intended outcome, or that a business objective was met.
 
 `tests/test_open_work_outcome_receipts.py` contains synthetic conflicting
 provider and object-kind fixtures for GitHub PRs, Jira issues, Stripe invoices,
-and Stripe refunds, including positive compatibility controls, 128 malformed-positive-flag
+and Stripe refunds, including positive compatibility controls, 64 malformed-positive-flag
 provider/field/value combinations, four valid controls, and privacy
 assertions. These are deterministic fake-reader tests, **not** authorized
 real-provider checks, live tenant isolation proofs, commercial ROI, or
