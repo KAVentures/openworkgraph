@@ -1944,3 +1944,49 @@ test('missing daily plan and empty daily list are labelled as unknown, not zero 
     assert.equal(h.tickets.length, 0);
   });
 });
+
+test('latest-work disclosure distinguishes known, missing and health-only evidence', async t => {
+  const cases = [
+    {name: 'known latest work timestamp', patch: {
+      work_evidence: {ordinary_event_rows: 2, health_event_rows: 0,
+        last_work_observed_at: observedStart}},
+    expected: /Latest work event: /, forbidden: /timestamp not supplied|No ordinary work events recorded/},
+    {name: 'ordinary events but missing timestamp', patch: {
+      work_evidence: {ordinary_event_rows: 2, health_event_rows: 0,
+        last_work_observed_at: null}},
+    expected: /Latest work event timestamp not supplied \(2 ordinary selected events\); this does not imply no work occurred/,
+    forbidden: /Latest work event: none in this period|No ordinary work events recorded/},
+    {name: 'legacy preview omits work metadata', patch: {work_evidence: undefined},
+    expected: /Latest work event timestamp not supplied \(2 ordinary selected events\)/,
+    forbidden: /Latest work event: none in this period|No ordinary work events recorded/},
+    {name: 'health-only selected evidence', patch: {
+      event_types: {capture_gap: 1, capture_health: 1},
+      work_evidence: {ordinary_event_rows: 0, health_event_rows: 2,
+        last_work_observed_at: null}},
+    expected: /No ordinary work events recorded in this selection; this does not establish that no work occurred/,
+    forbidden: /Latest work event: none in this period|timestamp not supplied/},
+    {name: 'zero selected events', patch: {
+      canonical_rows: 0, retained_rows: 2,
+      first_observed_at: null, last_observed_at: null,
+      event_types: {}, sources: {},
+      work_evidence: {ordinary_event_rows: 0, health_event_rows: 0,
+        last_work_observed_at: null}},
+    expected: /No ordinary work events recorded in this selection; this does not establish that no work occurred/,
+    forbidden: /Latest work event: none in this period|timestamp not supplied/}
+  ];
+  for (const {name, patch, expected, forbidden} of cases) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle(); h.reply(h.reads[1], {...h.preview('range', name), ...patch});
+    await opening;
+    assert.equal(h.modals, 1, name);
+    assert.match(h.modalHtml, expected, name);
+    assert.doesNotMatch(h.modalHtml, forbidden, name);
+    assert.match(h.modalHtml, /do not confirm the recorder is running/, name);
+    assert.equal(h.modal['#analysisDownload'].disabled, patch.canonical_rows === 0, name);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-' + name], name);
+    assert.equal(h.tickets.length, 0, name);
+  });
+});
