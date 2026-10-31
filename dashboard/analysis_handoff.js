@@ -5,6 +5,11 @@
   let period = 'week', start = '', end = '', generation = 0, pending = null, activeHandoff = null;
   const staleScope = 'Work period changed. Prepare a new AI handoff for the selected period.';
   const dateInput = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  // Date.parse accepts 24:00:00 and rolls it into the next day. Evidence,
+  // consent-lease and ticket bounds must not silently change calendar dates.
+  const strictClockInstant = value => typeof value === 'string' &&
+    /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.test(value) &&
+    Number.isFinite(Date.parse(value));
   function selection() {
     if (period === 'current' || period === 'all') return {scope: period};
     const now = new Date(), a = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -41,9 +46,7 @@
       return check.getUTCFullYear() === year &&
         check.getUTCMonth() === month - 1 && check.getUTCDate() === day;
     };
-    const instant = value => typeof value === 'string' &&
-      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value) &&
-      calendarDay(value) && Number.isFinite(Date.parse(value));
+    const instant = value => strictClockInstant(value) && calendarDay(value);
     const dateLabel = value => typeof value === 'string' &&
       (/^\d{4}-\d{2}-\d{2}$/.test(value) || instant(value)) &&
       calendarDay(value) && Number.isFinite(Date.parse(value));
@@ -199,8 +202,7 @@
     if (!returned || returned.scope!==requested.scope) return false;
     if (requested.scope!=='range') return true;
     // The server canonicalizes ISO UTC `Z` to `+00:00`; compare instants.
-    const sameInstant=(a,b)=>typeof b==='string' && Number.isFinite(Date.parse(b)) &&
-      Date.parse(a)===Date.parse(b);
+    const sameInstant=(a,b)=>strictClockInstant(b) && Date.parse(a)===Date.parse(b);
     return sameInstant(requested.since,returned.since) &&
       sameInstant(requested.until,returned.until);
   }
@@ -242,8 +244,8 @@
     for(const [key,wanted] of Object.entries(expected)) {
       const actual=params.get(key);
       if(key==='since' || key==='until') {
-        if(typeof actual!=='string' || !Number.isFinite(Date.parse(actual)) ||
-           Date.parse(actual)!==Date.parse(wanted)) throw invalid();
+        if(!strictClockInstant(actual) || Date.parse(actual)!==Date.parse(wanted))
+          throw invalid();
       } else if(actual!==wanted) throw invalid();
     }
     return value;
@@ -310,9 +312,7 @@
     // This is a snapshot of local AI history consent, not an export grant.
     // Do not turn malformed lease metadata into an apparent permission.
     const leaseInstant=value=>{
-      if(typeof value!=='string' ||
-         !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value))
-        return null;
+      if(!strictClockInstant(value)) return null;
       const parts=value.slice(0,10).split('-').map(Number);
       const day=new Date(0);day.setUTCFullYear(parts[0],parts[1]-1,parts[2]);
       if(day.getUTCFullYear()!==parts[0] || day.getUTCMonth()!==parts[1]-1 ||
