@@ -75,3 +75,25 @@ declared selector values or email addresses.
 With a customer-controlled test tenant and explicit authorization, inspect actual generated SCIM requests against ServiceProviderConfig, Schemas and ResourceTypes; test matching filters, create/read/PUT/PATCH/deactivate/delete, Group identity if enabled, ETag/428/412 behavior, provider isolation, revoked-token refusal, employee offboarding/rehire, restore/downgrade and consent boundaries. Validate uniform worker versions before enabling optional mappings. Record failures and timestamps; synthetic CI or this local mapping file is **not** an Entra/Okta certificate, production pilot, customer outcome or business ROI evidence.
 
 Relevant existing contracts: [Users](SCIM_USER_PROVISIONING.md), [names](SCIM_USER_NAMES.md), [search](SCIM_SEARCH.md), [Groups](SCIM_GROUPS.md), [client policy](SCIM_CLIENT_POLICY.md). Coordination: #458, #412, #326 Section B, #264 Stage 3.
+
+
+## Deactivation lifecycle mapping review (offline only)
+
+A declared User PATCH mapping without the `active` attribute now produces the
+nonblocking `deactivation_patch_not_declared` caution. This includes mappings
+that otherwise pass the supported attribute and ETag checks, and applies to
+declared Entra, Okta or other clients. It identifies a **missing declaration**:
+the preflight cannot demonstrate that a deactivation request will be sent via
+the declared PATCH attributes. It does **not** prove that an IdP cannot
+deactivate through a separately supported and tested PUT or other lifecycle
+operation. Conversely, declaring `active` removes this particular caution
+but does **not** prove the IdP sends the request, that the current service
+credential has the correct scope, or that OWG offboarding/revocation succeeds.
+
+Before any company rollout, use a disposable, customer-controlled IdP and
+employee to exercise disabled-by-default authorization, create, deactivate,
+rehire without old credentials, current/stale ETags, tenant/provider isolation,
+revocation, audit and backup/restore. Inspect actual source-scoped results;
+synthetic mapping validation is not live Entra/Okta conformance or permission
+to provision identities. No provisioning, provider requests or identity
+mutations are performed by this preflight.
