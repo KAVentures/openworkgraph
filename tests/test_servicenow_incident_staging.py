@@ -993,3 +993,71 @@ def test_unobserved_selected_ids_are_tenant_scoped_without_private_fields():
     assert left["records"][0]["source_namespace"] != right["records"][0]["source_namespace"]
     assert "private caller" not in json.dumps(left)
     assert "private caller" not in json.dumps(right)
+
+
+@pytest.mark.parametrize("mode", ["standalone", "planned"])
+@pytest.mark.parametrize("gap_time", [
+    "2026-10-30 03:10:00", "2026-10-30 03:11:00",
+], ids=["equal-second-gap", "later-second-gap"])
+def test_replay_revision_gap_is_unknown_not_adjacent_advance(mode, gap_time):
+    """Missing intermediate provider counters must not look like clean advances."""
+    from server.servicenow_incident_staging import (
+        reconcile_planned_replays, reconcile_replayed_pages,
+    )
+
+    selected = scope(sys_ids=(C, A, B))
+    before = page(item(A), item(B), item(C))
+    after_rows = [
+        item(A, mod="6", state="6", updated=gap_time),
+        item(B, mod="4"),  # Adjacent counter, same reported second.
+        item(C, mod="8", updated="2026-10-30 03:09:59"),
+    ]
+    # The planned path validates source ORDERBY; reorder only the raw rows,
+    # not source identities or the previously reported revision evidence.
+    after_rows.sort(key=lambda row: (row["sys_updated_on"], row["sys_id"]))
+    after = page(*after_rows)
+    if mode == "standalone":
+        result = reconcile_replayed_pages(selected, before, after, limit=3)
+    else:
+        plan = plan_page(selected, limit=3)
+        result = reconcile_planned_replays(
+            selected, [(plan, before)], [(plan, after)],
+        )
+
+    assert result["revision_gap_unknown_ids"] == [A]
+    assert result["higher_reported_revision_ids"] == [B]
+    # Source time disagreement takes precedence over revision-gap classification.
+    assert result["timestamp_regression_unknown_ids"] == [C]
+    assert result["same_reported_revision_ids"] == []
+    assert result["missing_unknown_ids"] == []
+    assert result["historical_completeness"] == "unknown"
+    assert result["business_outcome_verified"] is False
+    assert result["provider_timestamp_timezone_verified"] is False
+    assert result["checkpoint_advanced"] is False
+    assert result["not_an_authorization_to_append"] is True
+
+
+@pytest.mark.parametrize("mode", ["standalone", "planned"])
+def test_replay_newly_observed_large_counter_is_not_inferred_history(mode):
+    """An ID absent from the first read has no observed counter baseline."""
+    from server.servicenow_incident_staging import (
+        reconcile_planned_replays, reconcile_replayed_pages,
+    )
+
+    selected = scope(sys_ids=(A, B))
+    before = page()
+    after = page(item(A, mod="999"))
+    if mode == "standalone":
+        result = reconcile_replayed_pages(selected, before, after, limit=2)
+    else:
+        plan = plan_page(selected, limit=2)
+        result = reconcile_planned_replays(
+            selected, [(plan, before)], [(plan, after)],
+        )
+    assert result["newly_observed_ids"] == [A]
+    assert result["revision_gap_unknown_ids"] == []
+    assert result["higher_reported_revision_ids"] == []
+    assert result["unobserved_in_either_read_ids"] == [B]
+    assert result["historical_completeness"] == "unknown"
+    assert result["business_outcome_verified"] is False
+    assert result["checkpoint_advanced"] is False
