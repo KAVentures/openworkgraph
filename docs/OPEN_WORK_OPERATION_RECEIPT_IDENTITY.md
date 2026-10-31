@@ -124,3 +124,28 @@ shape. A matching string is only **post-read provenance consistency**, not
 cryptographic proof of authentication, active tenant authorization, consent,
 revocation fencing, an actual customer outcome, or independent live-provider
 acceptance. The existing trusted adapters must enforce those properties.
+
+
+## Allowlisted source-log join admission
+
+The existing `record_graph` computes `source_log_join_supported` from the
+exact retained record's provider, kind, and host: GitHub pull requests at
+`github.com`, Jira issues at an `.atlassian.net` site, and Stripe invoices
+or refunds at `dashboard.stripe.com`. A source-operation receipt now requires
+that field to be the literal JSON Boolean `true`. A missing, false, numeric,
+string, array or object value returns `unknown/source_join_not_supported`,
+even if an injected/cached source receipt otherwise claims a fresh matching
+provider state and authenticated read method. This does not expand the source
+allowlist or grant access; production `record_graph` already emits this
+positive assertion.
+
+The additional synthetic regressions cover 28 malformed/nonaffirmative
+join values, four missing-field cases and four valid positive controls
+across GitHub PR, Jira issue, Stripe invoice and Stripe refund operations.
+They check privacy-safe unknowns, unchanged single-read arguments and no
+agent/customer/business outcome authority. These tests are not live-provider
+or tenant acceptance. This guard is a **post-read contract assertion**, not
+cryptographic evidence that an upstream reader was authorized or that a
+provider was not contacted before a malformed graph was returned. Existing
+opt-in, tenant/actor scope, source revocation and credential controls remain
+the responsibility of the trusted source adapters.
