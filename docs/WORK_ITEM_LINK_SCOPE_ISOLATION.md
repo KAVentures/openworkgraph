@@ -644,3 +644,25 @@ Preregistered held-out assignment F1 >= 0.90 and contamination <= 0.05
 remain **unverified**. The synthetic tests do not replace native pytest,
 cross-platform exact-head CI, independent review or real consenting pilots.
 No private evaluation truth, split, scorer or thresholds were changed.
+
+## Multiplexed-tab candidate lookup complexity (2026-10-31)
+
+For a scoped tab containing two or more distinct exact record references,
+unreferenced observations remain **ambiguous candidate-only** associations.
+The former implementation scanned all referenced tab observations separately
+for every unreferenced row (quadratic in long interleaved tabs). It now builds
+one timestamp-sorted index of referenced observations and uses an upper-bound
+lookup per unreferenced row: O(n log n) candidate selection per scoped tab,
+with linear index storage. This does **not** change the union/merge policy,
+confidence, time-only-join prohibition, source/tenant scope, or public
+candidate-preview limit (50). It still selects the last observed referenced
+row whose normalized UTC timestamp is <= the loose observation's timestamp,
+including ties; no preceding reference means no candidate.
+
+Synthetic regressions exercise equal timestamps, input-order independence,
+absence of prior references, reused tab IDs in separate organizations and
+a 2,400-observation interleaved tab with 1,200 ambiguous candidates but
+only 50 previewed. These are deterministic contract/scale-shape checks,
+**not** a wall-clock benchmark, full 300k-event acceptance, held-out F1
+improvement, or real consenting-user pilot. Native exact-head CI and
+preregistered held-out assignment/contamination scoring remain required.
