@@ -396,7 +396,8 @@ def test_receipt_rejects_wrong_record_reference_even_with_valid_provider_state(
     assert len(calls) == 1
     assert calls[0][1]["include_source_status"] is True
     assert "VERY_PRIVATE_CUSTOMER" not in str(result)
-    if isinstance(wrong_ref, str):\n        assert wrong_ref not in str(result)
+    if isinstance(wrong_ref, str):
+        assert wrong_ref not in str(result)
 
 
 @pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
