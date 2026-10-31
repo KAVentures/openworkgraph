@@ -25,6 +25,7 @@ USER_CREATE = frozenset({
 })
 USER_PATCH = USER_CREATE - {"username"}
 GROUP_MATCH = frozenset({"displayname", "externalid"})
+GROUP_CREATE = frozenset({"displayname", "externalid", "members"})
 _CORE_USER_PREFIX = "urn:ietf:params:scim:schemas:core:2.0:User:"
 
 
@@ -119,7 +120,8 @@ def assess(mapping: Any) -> dict:
     users = _object(root["users"], "users", {
         "match_attributes", "create_attributes", "patch_attributes", "write_mode",
     })
-    groups = _object(root["groups"], "groups", {"enabled", "match_attributes"})
+    groups = _object(root["groups"], "groups", {"enabled", "match_attributes"},
+                     {"create_attributes"})
     policy = _object(root["provider_policy"], "provider_policy", {"allow_unversioned_user_patch"},
                      {"unique_group_names"})
     if type(policy.get("unique_group_names", False)) is not bool:
@@ -133,6 +135,10 @@ def assess(mapping: Any) -> dict:
     create = _attributes(users["create_attributes"], "users.create_attributes", minimum=1)
     patch = _attributes(users["patch_attributes"], "users.patch_attributes", minimum=0, max_path=1024)
     group_match = _attributes(groups["match_attributes"], "groups.match_attributes", minimum=0)
+    # Optional for old declaration files. Absence means the Group creation
+    # mapping has not been reviewed, not that the IdP sends these attributes.
+    group_create = (_attributes(groups["create_attributes"], "groups.create_attributes", minimum=0)
+                    if "create_attributes" in groups else None)
     # Different spellings of the same *supported* contact PATCH target must
     # not pass as independent mappings. The shipped contact parser strips the
     # exact core User URN, decodes JSON selector literals and compares selected
@@ -160,12 +166,15 @@ def assess(mapping: Any) -> dict:
     def add(severity: str, code: str, path: str, message: str) -> None:
         findings.append({"severity": severity, "code": code, "path": path, "message": message})
 
-    for path, values, supported in (
+    declared_paths = [
         ("users.match_attributes", match, USER_MATCH),
         ("users.create_attributes", create, USER_CREATE),
         ("users.patch_attributes", patch, USER_PATCH),
         ("groups.match_attributes", group_match, GROUP_MATCH),
-    ):
+    ]
+    if group_create is not None:
+        declared_paths.append(("groups.create_attributes", group_create, GROUP_CREATE))
+    for path, values, supported in declared_paths:
         for index, value in enumerate(values):
             if value not in supported and not (path == "users.patch_attributes" and _supported_contact_patch_path(value)):
                 add("blocker", "unsupported_attribute", f"{path}[{index}]",
@@ -238,7 +247,23 @@ def assess(mapping: Any) -> dict:
     if not groups["enabled"] and group_match:
         add("blocker", "disabled_groups_with_mapping", "groups.match_attributes",
             "Group matching is declared although Group provisioning is disabled")
+    if not groups["enabled"] and group_create is not None:
+        add("blocker", "disabled_groups_with_create_mapping", "groups.create_attributes",
+            "Group creation is declared although Group provisioning is disabled")
     if groups["enabled"]:
+        if group_create is None:
+            add("caution", "group_create_mapping_not_declared", "groups.create_attributes",
+                "Group creation mapping was not declared; verify required displayName and stable externalId lineage")
+        else:
+            # Shipped Group creation requires displayName; externalId is
+            # optional, but externalId-based matching cannot be demonstrated
+            # when the declared create flow omits that correlation key.
+            if "displayname" not in group_create:
+                add("blocker", "missing_group_create_displayname", "groups.create_attributes",
+                    "Shipped Group creation requires displayName")
+            if "externalid" in group_match and "externalid" not in group_create:
+                add("caution", "group_externalid_match_not_created", "groups.create_attributes",
+                    "Group matching declares externalId but Group creation omits it; verify provider-scoped correlation")
         if not group_match:
             add("blocker", "missing_group_match", "groups.match_attributes",
                 "Enabled Groups require an explicit matching attribute")
