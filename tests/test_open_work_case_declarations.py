@@ -1614,3 +1614,60 @@ def test_review_delete_with_blob_dependent_preserves_unrelated_declarations(loca
         ).fetchall() == [(d,)]
     assert {item["work_item_ref"] for item in
             reviews.list_review_intentions(now=NOW)["items"]} == {C, d}
+
+
+@pytest.mark.parametrize(
+    "ddl,table_name",
+    [
+        ("CREATE TABLE declarations (work_item_ref TEXT PRIMARY KEY, secret TEXT)", "declarations"),
+        ("CREATE TABLE unrelated (secret TEXT)", "unrelated"),
+        ("CREATE VIEW unrelated AS SELECT 'sentinel' AS secret", "unrelated"),
+    ],
+)
+def test_unversioned_existing_schema_is_never_stamped_as_v2(
+    local, ddl, table_name,
+):
+    reviewed(A)
+    path = facts._path()
+    with sqlite3.connect(path) as db:
+        db.execute(ddl)
+        if ddl.startswith("CREATE TABLE"):
+            db.execute(f"INSERT INTO {table_name} VALUES (" +
+                       ("?, ?" if table_name == "declarations" else "?") + ")",
+                       (A, "sentinel") if table_name == "declarations" else ("sentinel",))
+        before = db.execute(
+            "SELECT type,name,sql FROM sqlite_master "
+            "WHERE name NOT GLOB 'sqlite_*' ORDER BY type,name"
+        ).fetchall()
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 0
+    path.chmod(0o600)
+
+    with pytest.raises(facts.CaseDeclarationError, match="unversioned declaration store"):
+        save()
+    with sqlite3.connect(path) as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 0
+        assert db.execute(
+            "SELECT type,name,sql FROM sqlite_master "
+            "WHERE name NOT GLOB 'sqlite_*' ORDER BY type,name"
+        ).fetchall() == before
+        if ddl.startswith("CREATE TABLE"):
+            assert db.execute(
+                f"SELECT secret FROM {table_name}"
+            ).fetchone()[0] == "sentinel"
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == []
+
+
+def test_empty_existing_version_zero_store_initializes_normally(local):
+    reviewed(A)
+    path = facts._path()
+    with sqlite3.connect(path) as db:
+        db.execute("PRAGMA user_version=0")
+    path.chmod(0o600)
+    item = save()
+    assert item["revision"] == 1
+    with sqlite3.connect(path) as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert db.execute(
+            "SELECT edit_token FROM declarations WHERE work_item_ref=?", (A,)
+        ).fetchone() == (item["edit_token"],)
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [item]
