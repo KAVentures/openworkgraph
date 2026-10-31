@@ -116,7 +116,12 @@ def _link_scope(event: dict[str, Any]) -> tuple[str, str, str, str] | None:
             values.append("")
             continue
         value = event[name]
-        if not isinstance(value, str) or not value or len(value) > 160:
+        if (not isinstance(value, str) or not value or len(value) > 160
+                or value.isspace()
+                or any(ord(char) < 32 or ord(char) == 127 for char in value)):
+            # Explicit whitespace-only or control-bearing scope strings are
+            # not trustworthy identity, even when repeated verbatim. Do not
+            # normalize them into a different tenant/actor/session identity.
             return None
         values.append(value)
     return tuple(values)  # type: ignore[return-value]
