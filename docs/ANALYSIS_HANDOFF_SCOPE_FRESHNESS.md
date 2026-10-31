@@ -529,3 +529,30 @@ on the same UTC date: Copy/Download must remain unavailable. The positive
 case places that observation on the next UTC day using a negative timezone
 offset and retains safe local Copy. These fixtures are not evidence of
 real-user acceptance, complete capture, live-provider validation or ROI.
+
+
+## First and last observed dates in explicit daily plans
+
+The authenticated preview's daily-plan query groups selected events by UTC
+calendar day and orders those days chronologically. Therefore an explicit
+`more_dates_not_listed=true` plan must begin with a chunk that actually
+contains `first_observed_at`, not merely list 31 later dates and show an
+unlisted last observation. Likewise, when the omission flag is explicitly
+`false`, the final listed chunk must contain `last_observed_at`. Both
+endpoint checks compare absolute instants (including UTC-offset equivalents)
+and treat the chunk's end as **exclusive**.
+
+A conserved sum of displayed event counts cannot by itself establish that
+the displayed dates cover the selected evidence span. The browser refuses
+an explicitly contradictory plan before offering Copy or Download, while
+retaining the existing safe-count, distinct-UTC-date, selected-window and
+observed-span checks. For backward compatibility, older previews without
+an explicit omission flag remain reviewable but do not certify complete
+daily coverage. Zero-event plans remain valid without invented endpoints.
+
+Five deterministic mock-DOM cases cover a 31-day truncated plan that omits
+its earliest selected date, its valid first-date counterpart, an explicitly
+complete two-day plan whose last observation falls outside its final chunk,
+its valid counterpart, and the legacy omitted-flag case. These tests exercise
+synthetic responses only: they do not prove capture completeness, real
+consenting-user usability, live provider state, competitor parity or ROI.
