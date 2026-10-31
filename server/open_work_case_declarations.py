@@ -853,8 +853,15 @@ def clear_case_declarations() -> None:
     for candidate in (path, *(Path(str(path) + suffix)
                              for suffix in ("-journal", "-wal", "-shm"))):
         try:
+            # A hostile auxiliary path may be a directory. Never recurse
+            # into it or follow a symlink, but do not let that unrelated
+            # directory block explicit removal of the human review itself.
+            # The actual ledger and regular/symlink sidecars are still
+            # unlinked; future admission refuses the remaining directory.
+            if candidate.is_dir() and not candidate.is_symlink():
+                continue
             candidate.unlink()
-        except FileNotFoundError:
+        except (FileNotFoundError, IsADirectoryError):
             pass
 
 
