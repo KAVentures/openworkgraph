@@ -2259,7 +2259,7 @@ def test_hardlinked_ledger_rejected_before_read_or_cas_write(local):
     reviewed(A)
     initial = save()
     path = facts._path()
-    alias = local / "separate-owner-facts.sqlite3"
+    alias = local.parent / (local.name + "-separate-owner-facts.sqlite3")
     try:
         os.link(path, alias)
     except OSError as exc:
