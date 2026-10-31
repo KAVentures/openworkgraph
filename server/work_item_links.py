@@ -500,6 +500,7 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
         "conflicting_reference_groups_suppressed": linked["conflicting_references"],
         "ambiguous_clipboard_transfer_groups": linked["ambiguous_transfer_groups"],
         "inconsistent_clipboard_transfer_direction_groups": linked["inconsistent_transfer_direction_groups"],
+        "ambiguous_tab_component_attachments_suppressed": linked["tab_component_conflicts"],
         "link_contract": {
             "merged_bases": sorted(_CONFIDENCE),
             "candidate_only_bases": sorted(_CANDIDATE_CONFIDENCE),
@@ -508,6 +509,7 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             "missing_scope_is_wildcard": False,
             "multiplexed_clipboard_transfer_is_unmerged": True,
             "explicit_clipboard_direction_conflicts_are_unmerged": True,
+            "competing_tab_component_records_are_unmerged": True,
             "labels_titles_urls_and_clipboard_contents_read": False,
             "linked_items_are_tasks": False,
             "ask_when_ambiguous": True,
