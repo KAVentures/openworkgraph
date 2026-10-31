@@ -1578,3 +1578,87 @@ test('legacy or unknown work-text exclusion is disclosed as uncertain, not verif
     assert.equal(h.tickets.length, 0);
   });
 });
+
+
+// Date.parse accepts T24:00:00 and silently shifts the date. This helper
+// isolates the response validation from the local-week selection boundary.
+async function openAllRetainedPreview(mutate) {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  h.bars[0].controls.select.value = 'all';
+  h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+  await settle(); h.reply(h.reads[1], h.preview('all', 'all-selected')); await settle();
+  const opening = h.bars[0].controls.button.onclick();
+  await settle();
+  h.reply(h.reads[2], mutate(h.preview('all', 'rollover')));
+  await opening;
+  return h;
+}
+
+test('ISO rollover hour is refused for observed evidence and UTC daily plan', async t => {
+  const today = dayLabel(0), tomorrow = dayLabel(1);
+  const cases = [
+    ['observed last timestamp rolls into next UTC day', d => ({
+      ...d, last_observed_at: today + 'T24:00:00Z'
+    })],
+    ['daily chunk start rolls into next UTC day', d => ({
+      ...d,
+      first_observed_at: tomorrow + 'T00:30:00Z',
+      last_observed_at: tomorrow + 'T00:45:00Z',
+      analysis_plan: {date_chunks: [{
+        since: today + 'T24:00:00Z', until: tomorrow + 'T01:00:00Z',
+        event_rows: 2
+      }]}
+    })]
+  ];
+  for (const [name, mutate] of cases) await t.test(name, async () => {
+    const h = await openAllRetainedPreview(mutate);
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+  });
+});
+
+test('rollover clock in an AI history lease never becomes an affirmative grant', async () => {
+  const h = await openAllRetainedPreview(d => ({
+    ...d, local_ai_enabled: true,
+    local_ai_history_access: {mode: 'all_saved', expires_at: '2099-01-01T24:00:00Z'}
+  }));
+  assert.equal(h.modals, 1);
+  assert.match(h.modalHtml, /permission could not be verified from this preview/);
+  assert.doesNotMatch(h.modalHtml, /Local saved-history grant:/);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-rollover']);
+  assert.equal(h.tickets.length, 0);
+});
+
+test('ticket bound with equivalent parsed instant but rollover hour is rejected', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const opening = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await opening;
+  const downloading = h.modal['#analysisDownload'].onclick();
+  await settle();
+  const body = JSON.parse(h.tickets[0].options.body);
+  const selected = new Date(body.since);
+  const eastMinutes = -selected.getTimezoneOffset();
+  const sign = eastMinutes >= 0 ? '+' : '-';
+  const magnitude = Math.abs(eastMinutes);
+  const offset = sign + String(Math.floor(magnitude / 60)).padStart(2, '0') +
+    ':' + String(magnitude % 60).padStart(2, '0');
+  const priorDate = new Date(+selected + eastMinutes * 60000 - 86400000)
+    .toISOString().slice(0, 10);
+  const rollover = priorDate + 'T24:00:00' + offset;
+  // Demonstrates the bypass that existed with Date.parse-only comparison.
+  assert.equal(Date.parse(rollover), Date.parse(body.since));
+  const params = new URLSearchParams({scope: body.scope,
+    include_raw: String(body.include_raw), redact_names: String(body.redact_names),
+    ticket: 'synthetic-ticket', since: rollover, until: body.until});
+  h.reply(h.tickets[0], {ticket: 'synthetic-ticket',
+    url: '/v1/export/csvzip?' + params}, {preserveTicket: true});
+  await downloading;
+  assert.equal(h.downloads, 0);
+  assert.equal(h.modal['#analysisDownload'].disabled, false);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /ticket did not match/i);
+});
