@@ -756,3 +756,42 @@ membership, change a link basis, or authorize an agent action. Synthetic
 regressions cover malformed and valid source claims and preserve exact-record
 linking. The preregistered held-out accuracy gates remain unverified; this is
 an evidence-integrity change, not a measured F1 improvement.
+
+
+## Contradictory dual-location ephemeral token claims
+
+Legacy capture can provide `tab_context_id` or `clipboard_transfer_id`
+either at the top level or under `metadata`. When only one location supplies
+a valid literal opaque token, that signal retains its existing exact
+organization/actor/device/session-scoped behavior. Matching literal strings in
+both locations are likewise compatible.
+
+If **both** locations explicitly supply different claims, choosing the
+top-level value alone is unsafe: the ignored metadata token might already
+belong to a separate apparently uncontested record/tab group. For every
+timestamp-valid observation with a valid exact capture scope, the linker now
+vetoes **each syntactically valid token named by either conflicting location**.
+A malformed/null/empty claim cannot grant linking authority, but does not
+silently erase a competing valid token's conflict. The veto is token-local and
+scope-local; other tenants, devices, sessions and unrelated tokens are not
+affected. Neither value is exported. The row may still participate in
+independently valid exact-record grouping; contradictory ephemeral claims
+cannot become a tab/clipboard join endpoint or an app-continuity candidate.
+
+The comparison tests only literal bounded strings, never recursive equality
+of arbitrary nested metadata. Invalid timestamps and invalid/missing exact
+scope cannot name a scoped token veto, consistent with the existing evidence
+admission rules. This is deliberately conservative: it may withhold genuine
+links when capture evidence is inconsistent. It does **not** authenticate a
+provider, prove a business case, infer a handoff or authorize execution.
+
+Four new deterministic synthetic regression functions cover mismatched
+top-level/metadata clipboard tokens (including both otherwise-valid
+transfers), conflicting single-record tabs, malformed alternatives on either
+side, matching dual claims, legacy single-location claims, cyclic malformed
+payloads and cross-tenant noninterference. They do not alter private
+holdout truth, family splits, scorer, thresholds or model/API spending.
+Run native `python -m pytest -q tests/test_work_item_links.py
+tests/test_reconstruction_owg_native.py` and exact-head cross-platform
+Actions before merge. Held-out assignment F1 >= 0.90 and contamination
+<= 0.05 remain **unverified**, not achieved by these synthetic tests.
