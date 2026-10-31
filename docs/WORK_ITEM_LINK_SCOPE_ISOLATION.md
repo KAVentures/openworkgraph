@@ -296,8 +296,8 @@ automatically merged when their observed actions were **both copies**,
 **both pastes**, or a paste occurred before the only copy. Those events do
 not establish an observed copy-to-paste transfer.
 
-For token groups whose **every** event has an explicit `copy` or `paste`
-action, the linker now requires at least one copy **strictly earlier** than
+For token groups containing **any** explicit `copy` or `paste` action,
+the linker now requires at least one copy **strictly earlier** than
 a compatible paste. For two referenced records, the copy/paste pair must
 span the records (or involve an unreferenced event). A copy/paste pair
 entirely inside record A cannot attach a copy-only record B. Contradictory
@@ -310,7 +310,7 @@ The response adds only aggregate
 `inconsistent_clipboard_transfer_direction_groups` and the boolean
 `link_contract.explicit_clipboard_direction_conflicts_are_unmerged`;
 private token values, source locators, titles and clipboard contents are
-not returned. Existing groups with generic `browser_click` or other
+not returned. Groups containing **only** generic `browser_click` or other
 non-directional event types retain legacy behavior; this change does not
 authenticate clipboard transfers or guarantee that every two-record token
 represents one business case. Source-identity and exact-scope checks still
@@ -342,8 +342,9 @@ copy or paste cannot stand in for either endpoint to justify joining both
 records. If the direct cross-record pair is absent, the entire clipboard
 token join is withheld, while independent same-record evidence remains.
 For zero or one referenced record, existing copy→paste-to-unreferenced
-behavior is preserved. Mixed legacy/non-directional actions are unchanged,
-and the preexisting >2-record fanout veto still applies.
+behavior is preserved. Entirely non-directional legacy groups remain unchanged; mixed groups now
+require explicit direction as described below, and the preexisting >2-record
+fanout veto still applies.
 
 Three new synthetic regression functions cover two loose-bridge false joins
 in both input orders, a genuine A-copy→B-paste with an extra loose event,
