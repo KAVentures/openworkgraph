@@ -238,23 +238,32 @@
   // Source names are observed labels, not verified provider identities. Keep
   // the review modal bounded even when an import supplies many source labels;
   // disclose every omitted category and its selected-event count.
+  // Imported evidence labels are untrusted display text. HTML escaping does
+  // not neutralize bidi overrides or invisible line/control separators that
+  // can visually spoof a different source or focus observation. Expose their
+  // code points in the review only; never rewrite canonical evidence/exports.
+  function visibleEvidenceLabel(value, kind) {
+    let shown = '', length = 0;
+    for (const character of value) {
+      if (length === 96) return shown + `… [${kind} label truncated]`;
+      length++;
+      const cp = character.codePointAt(0);
+      const formatting = cp <= 0x1f || cp === 0x7f ||
+        (cp >= 0x80 && cp <= 0x9f) || cp === 0x061c ||
+        cp === 0x200e || cp === 0x200f ||
+        (cp >= 0x202a && cp <= 0x202e) ||
+        (cp >= 0x2066 && cp <= 0x2069);
+      shown += formatting
+        ? `[U+${cp.toString(16).toUpperCase().padStart(4, '0')}]`
+        : character;
+    }
+    return shown;
+  }
   function sourceSummary(sources) {
     const shown = [];
     let omittedCategories = 0, omittedEvents = 0;
-    const displayLabel = name => {
-      if (!name.trim()) return '[blank source label]';
-      let label = '', length = 0;
-      // Iterate Unicode code points, not UTF-16 halves; never silently
-      // present a clipped opaque label as the complete observed source.
-      for (const character of name) {
-        if (length === 96) return label + '… [source label truncated]';
-        label += character;
-        length++;
-      }
-      return label;
-    };
     for (const [name, count] of Object.entries(sources)) {
-      if (shown.length < 8) shown.push(`${displayLabel(name)}: ${count}`);
+      if (shown.length < 8) shown.push(`${name.trim() ? visibleEvidenceLabel(name, 'source') : '[blank source label]'}: ${count}`);
       else { omittedCategories++; omittedEvents += count; }
     }
     return (shown.join(', ') || 'none') + (omittedCategories
@@ -457,7 +466,7 @@
         <p>${esc(localRead)} Hosted AI availability must be checked separately: it only sees previously shared evidence. Preparing or downloading a local file does not grant AI history access.</p>
       </div>
       <details><summary>Analyze a large history in smaller parts</summary><p>Ask your AI to process one day at a time, follow every page, and keep track of what it has examined. Repeated-work maps are optional. ${d.canonical_rows?'The file download still contains the full selected period.':'No evidence package is available for this zero-event selection; only the explanatory request can be copied.'}</p>${dailyBreakdown}${d.analysis_plan?.more_dates_not_listed?'<p>Only the first 31 dates are listed. Continue through the remaining selected dates.</p>':''}</details>
-      <details><summary>Preview redacted context examples</summary><ul>${d.redacted_examples.map(x=>`<li>${esc(x.app == null ? 'Unknown app' : x.app)} · ${esc(x.window_title||'Untitled activity')}</li>`).join('')||'<li>No focus spans in this selection.</li>'}</ul><p>Filtering is best effort; inspect any downloaded package before sharing it.</p></details>
+      <details><summary>Preview redacted context examples</summary><ul>${d.redacted_examples.map(x=>`<li>${esc(visibleEvidenceLabel(x.app == null ? 'Unknown app' : x.app, 'sample'))} · ${esc(visibleEvidenceLabel(x.window_title||'Untitled activity', 'sample'))}</li>`).join('')||'<li>No focus spans in this selection.</li>'}</ul><p>Filtering is best effort; inspect any downloaded package before sharing it.</p></details>
       <label style="display:flex;gap:8px;margin:12px 0"><input id="analysisDetailed" type="checkbox" ${d.canonical_rows?'':'disabled'}>Include detailed chronological evidence (raw local event rows, more labels and context)</label>
       <p>Name redaction is best effort, not anonymization. Even summary exports may contain sensitive titles, URLs or metadata; detailed chronology adds raw local evidence that may contain more sensitive content. Inspect the file before sharing it. Gaps and foreground time are not measured lost work or savings.</p>
       ${d.canonical_rows?'':'<p class="muted">No recorded events in the selected period. An evidence package is unavailable; you can still copy the explanatory request. This does not establish inactivity or complete capture.</p>'}
