@@ -166,6 +166,30 @@ def assess(mapping: Any) -> dict:
     if "emails" in create or any(value.casefold().startswith("emails") for value in contact_patch_paths):
         add("caution", "unverified_contact_metadata", "users",
             "Contact arrays are descriptive only; matching, login and adoption still use stable userName/externalId")
+    # Different *supported* PATCH targets can overlap without being identical:
+    # replacing an entire array and then a child, or a selected contact and
+    # then one of its children, depends on operation order and current data.
+    # Warn rather than block: these are legal shipped operations and a static
+    # declaration cannot know whether a client actually sends them together.
+    contact_keys = effective_contact_paths
+    contact_overlap = ("field", "emails") in contact_keys and len(contact_keys) > 1
+    if not contact_overlap:
+        for child in _CONTACT_CHILDREN:
+            if (("field", "emails." + child) in contact_keys and any(
+                    key[0] == "selector" and key[3] in ("", child)
+                    for key in contact_keys)):
+                contact_overlap = True
+                break
+    if not contact_overlap:
+        selected_children: dict[tuple[str, str], set[str]] = {}
+        for key in contact_keys:
+            if key[0] == "selector":
+                selected_children.setdefault((key[1], key[2]), set()).add(key[3])
+        contact_overlap = any("" in children and len(children) > 1
+                              for children in selected_children.values())
+    if contact_overlap:
+        add("caution", "overlapping_contact_patch_paths", "users.patch_attributes",
+            "Contact PATCH paths may overwrite overlapping targets; review client operation order and current data")
     if "username" not in create:
         add("blocker", "missing_stable_username", "users.create_attributes",
             "User creation requires the stable work-email userName")
