@@ -448,3 +448,28 @@ forged one-day truncation, an undercounting explicit no-omission claim, an
 empty explicit no-omission plan with selected events, and a last-observation
 timestamp that contradicts an unlisted later date. This does not establish
 complete recording, a live pilot, provider verification or competitor parity.
+
+
+## Work-text exclusion disclosure integrity
+
+The current local `/v1/analysis-preview` response includes
+`work_text.included_in_activity_package: false`. The handoff can state that
+visible work text is excluded **only when this explicit false is present**.
+An explicit `true`, a string/number masquerading as false, a malformed
+`work_text` block, or a non-boolean supplied `local_capture_enabled` flag
+fails closed before opening the handoff or enabling Copy/Download. This avoids
+presenting a known contradictory privacy disclosure as an assurance.
+
+Older previews that omit `work_text`, omit its inclusion field or report
+unknown/null inclusion remain compatible. Their modal instead warns that
+exclusion is **not confirmed** and instructs the user to inspect the package
+before sharing it; it does not assert that visible text, typed values or
+clipboard contents are absent. The backend's actual export-ticket privacy and
+redaction checks remain authoritative; this browser validation neither changes
+the contents of a package nor grants permission to export it.
+
+Deterministic mock-DOM tests cover explicit true, string/numeric inclusion,
+malformed capture flags and container types, a verified false with successful
+copy, and legacy missing/empty/null metadata with a visible uncertainty
+warning. These synthetic tests do not prove real-package contents, live-provider
+behavior, consenting-user acceptance or competitor parity.
