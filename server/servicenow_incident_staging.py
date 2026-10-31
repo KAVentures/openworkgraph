@@ -345,6 +345,51 @@ def project_supplied_http_response(
             "transport_grant_verified": False}
 
 
+
+def project_supplied_http_pages(
+    scope: SelectedIncidents, responses: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Check supplied HTTP metadata for *every* bounded offset page.
+
+    This is an offline fake-transport contract. It does not authenticate the
+    source, grant, TLS connection, completeness or permission to append.
+    Existing raw planned-page callers remain supported without this flag.
+    """
+    _require_selected_scope(scope)
+    if type(responses) is not list or not 1 <= len(responses) <= 8:
+        raise StagingError("Select one to eight supplied HTTP pages")
+    required = frozenset({
+        "plan", "request_method", "request_url", "response_url", "status",
+        "content_type", "redirect_count", "body",
+    })
+    planned: list[tuple[dict[str, Any], bytes]] = []
+    for envelope in responses:
+        if type(envelope) is not dict or set(envelope) != required:
+            raise StagingError("Invalid supplied HTTP page envelope")
+        # Validate each page's metadata and exact selected-record plan before
+        # any batch result can be reported. Never trust only the first page.
+        project_supplied_http_response(
+            scope, plan=envelope["plan"],
+            request_method=envelope["request_method"],
+            request_url=envelope["request_url"],
+            response_url=envelope["response_url"],
+            status=envelope["status"],
+            content_type=envelope["content_type"],
+            redirect_count=envelope["redirect_count"],
+            body=envelope["body"],
+        )
+        planned.append((envelope["plan"], envelope["body"]))
+    # Reuse the established consecutive-offset, duplicate, ordering and
+    # watermark guards; a per-page valid response is not a valid batch.
+    result = project_planned_pages(scope, planned)
+    return {
+        **result, "all_supplied_pages_checked": True,
+        "supplied_http_metadata_checked": True,
+        "authenticated_transport_receipt": False,
+        "transport_grant_verified": False,
+    }
+
+
 def project_planned_pages(scope: SelectedIncidents, pages: list[tuple[dict[str, Any], bytes]]) -> dict[str, Any]:
     """Check a bounded consecutive run of planned pages without claiming completeness.
 
