@@ -80,6 +80,58 @@ def test_kpi_and_case_rules_trigger_with_evidence_and_remember_new_cases():
     assert len(signals.list_rules(log)["rules"]) == 3
 
 
+
+def test_saved_signals_use_fractional_seconds_for_kpis_sla_and_case_evidence():
+    """Synthetic timestamps: 1.5s breaches a strict 1s rule; exactly 1s does not."""
+    rows = [
+        "case,activity,time,who",
+        "a,Start,2024-01-01T00:00:00Z,team",
+        "a,End,2024-01-01T00:00:00.500000Z,team",
+        "b,Start,2024-01-01T00:01:00Z,team",
+        "b,End,2024-01-01T00:01:01.000000Z,team",
+        "c,Start,2024-01-01T00:02:00Z,team",
+        "c,End,2024-01-01T00:02:01.500000Z,team",
+        "d,Start,2024-01-01T00:03:00Z,team",
+        "d,End,2024-01-01T00:03:02.750000Z,team",
+    ]
+    log = workspace.import_log(
+        BytesIO(("\n".join(rows) + "\n").encode()),
+        name="fractional-signal-synthetic", source_format="csv",
+        mapping={"case_column": "case", "activity_column": "activity",
+                 "timestamp_column": "time", "resource_column": "who"},
+    )["log_id"]
+    signals.add_rule(log, _rule("median", kind="kpi",
+                                metric="median_throughput_seconds", operator="above",
+                                threshold=1.1))
+    signals.add_rule(log, _rule("p90", kind="kpi",
+                                metric="p90_throughput_seconds", operator="above",
+                                threshold=2.3))
+    signals.add_rule(log, _rule("sla", kind="kpi", metric="sla_breach_rate",
+                                operator="above", threshold=0.49, sla_seconds=1))
+    signals.add_rule(log, _rule("over one", kind="cases", condition="duration_over",
+                                seconds=1, minimum_cases=2))
+    signals.add_rule(log, _rule("over two", kind="cases", condition="duration_over",
+                                seconds=2))
+    first = signals.evaluate(log)
+    by_name = {item["name"]: item for item in first["signals"]}
+    assert first["triggered"] == 5
+    assert by_name["median"]["value"] == pytest.approx(1.25)
+    assert by_name["p90"]["value"] == pytest.approx(2.375)
+    assert by_name["sla"]["value"] == pytest.approx(0.5)
+    assert all(by_name[name]["triggered"] for name in by_name)
+    over_one = by_name["over one"]
+    assert over_one["matching_cases"] == 2
+    assert [item["case_id"] for item in over_one["evidence_cases"]] == ["d", "c"]
+    assert [item["duration_seconds"] for item in over_one["evidence_cases"]] == pytest.approx([2.75, 1.5])
+    assert by_name["over two"]["matching_cases"] == 1
+    assert [item["case_id"] for item in by_name["over two"]["evidence_cases"]] == ["d"]
+    assert first["signals_execute_actions"] is False
+    assert first["execution_authorized"] is False
+    again = {item["name"]: item for item in signals.evaluate(log)["signals"]}
+    assert again["over one"]["new_cases_since_last_evaluation"] == 0
+    assert again["sla"]["changed_since_last_evaluation"] is False
+
+
 @pytest.mark.parametrize("spec,message", [
     (_rule("x", kind="kpi", metric="sla_breach_rate", operator="above", threshold=0.1), "sla_seconds"),
     (_rule("x", kind="kpi", metric="rework_rate", operator="above", threshold=5), "fractions"),
