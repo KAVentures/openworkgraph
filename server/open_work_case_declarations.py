@@ -637,7 +637,12 @@ def purge_case_declaration(work_item_ref: str) -> None:
             # dependent declaration into an independent one. Erase all
             # transitively affected declarations; their owners must review
             # and declare any replacement graph explicitly.
-            for ref in sorted(_dependent_closure(db, work_item_ref)):
+            # A damaged auxiliary SQLite row can contain a BLOB ref even
+            # in a TEXT-affinity column. Explicit review deletion must not
+            # fail on sorted(str, bytes), which would force the review
+            # subsystem to scrub otherwise independent declarations.
+            # Dependency closure is a set; deletion order is irrelevant.
+            for ref in _dependent_closure(db, work_item_ref):
                 db.execute("DELETE FROM declarations WHERE work_item_ref=?", (ref,))
             db.execute("COMMIT")
         except Exception:
