@@ -966,6 +966,61 @@ def test_corrupt_stored_approval_clock_withholds_dependent_chain_and_prunes(
     assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [updated]
 
 
+@pytest.mark.parametrize("legacy", [False, True], ids=["v2", "v1"])
+def test_oversized_sqlite_ledger_refused_before_open_and_explicitly_scrubbed(local, monkeypatch, legacy):
+    # The 50-row bound cannot prevent SQLite from materializing a corrupt
+    # multi-megabyte cell. Neither read nor CAS may open an oversized ledger;
+    # explicit review deletion must still scrub the entire auxiliary store.
+    reviewed(A)
+    path = facts._path()
+    oversized = " " * (facts._MAX_DATABASE_BYTES + 8192)
+    if legacy:
+        with sqlite3.connect(path) as db:
+            db.execute("""CREATE TABLE declarations (
+                work_item_ref TEXT PRIMARY KEY, scope_ref TEXT NOT NULL,
+                goal_code TEXT NOT NULL, expected_outcome_code TEXT NOT NULL,
+                dependencies_json TEXT NOT NULL, revision INTEGER NOT NULL,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL)""")
+            db.execute("INSERT INTO declarations VALUES (?,?,?,?,?,?,?,?,?)",
+                       (A, SCOPE, "review_source_state", "source_state_rechecked",
+                        oversized, 1, NOW.isoformat(), NOW.isoformat(),
+                        (NOW + timedelta(days=7)).isoformat()))
+            db.execute("PRAGMA user_version=1")
+    else:
+        save()
+        with sqlite3.connect(path) as db:
+            db.execute("UPDATE declarations SET dependencies_json=? WHERE work_item_ref=?",
+                       (oversized, A))
+    if os.name == "posix":
+        path.chmod(0o600)
+    assert path.stat().st_size > facts._MAX_DATABASE_BYTES
+    before = path.read_bytes()
+
+    def unexpected_sqlite_open(*_args, **_kwargs):
+        raise AssertionError("oversized ledger reached sqlite3.connect")
+
+    # Patch only during admission; the review subsystem must retain its
+    # existing independent JSON review queue and explicit scrub path.
+    with monkeypatch.context() as patch:
+        patch.setattr(facts.sqlite3, "connect", unexpected_sqlite_open)
+        with pytest.raises(facts.CaseDeclarationError, match="size limit"):
+            facts.list_case_declarations(SCOPE, now=NOW)
+        with pytest.raises(facts.CaseDeclarationError, match="size limit"):
+            save()
+    assert path.read_bytes() == before
+    if legacy:
+        with sqlite3.connect(path) as db:
+            assert db.execute("PRAGMA user_version").fetchone()[0] == 1
+
+    assert reviews.remove_review_intention(A, now=NOW)
+    assert not path.exists()
+    reviewed(A)
+    restored = save()
+    assert restored["revision"] == 1
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [restored]
+
+
 def test_oversized_persisted_clock_rejected_before_iso_parser(monkeypatch):
     # The guard runs before datetime.fromisoformat even for a corrupt huge
     # auxiliary timestamp. This does NOT bound SQLite cell materialization.
