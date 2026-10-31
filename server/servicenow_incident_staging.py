@@ -556,3 +556,33 @@ def reconcile_planned_replays(
     return {**_reconcile_projected(scope, earlier, later),
             "same_plans_checked": True, "plan_sequence_checked": True,
             "pages_per_read": len(earlier_pages)}
+
+def reconcile_supplied_http_replays(
+    scope: SelectedIncidents,
+    earlier_responses: list[dict[str, Any]],
+    later_responses: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Compare two fake-HTTP page batches only after checking *both* transports.
+
+    This is a pure caller-supplied metadata check, never an authenticated
+    provider receipt. Exact plan identity, bounded offsets and source revision
+    consistency are delegated to the existing planned-replay implementation.
+    """
+    _require_selected_scope(scope)
+    if (type(earlier_responses) is not list or type(later_responses) is not list
+            or not 1 <= len(earlier_responses) == len(later_responses) <= 8):
+        raise StagingError("Supplied HTTP replay requires matching bounded page counts")
+    # Both sides must pass *every* fake HTTP envelope and planned offset batch
+    # before the result may claim any replay consistency. This is intentionally
+    # separate from legacy raw replay, which has no transport metadata.
+    project_supplied_http_pages(scope, earlier_responses)
+    project_supplied_http_pages(scope, later_responses)
+    earlier_pages = [(entry["plan"], entry["body"]) for entry in earlier_responses]
+    later_pages = [(entry["plan"], entry["body"]) for entry in later_responses]
+    result = reconcile_planned_replays(scope, earlier_pages, later_pages)
+    return {
+        **result, "all_supplied_replay_pages_checked": True,
+        "supplied_http_metadata_checked": True,
+        "authenticated_transport_receipt": False,
+        "transport_grant_verified": False,
+    }
