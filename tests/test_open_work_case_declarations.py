@@ -1573,3 +1573,44 @@ def test_mixed_sqlite_storage_classes_do_not_abort_bounded_pruning(local):
         assert {row[0] for row in db.execute(
             "SELECT work_item_ref FROM declarations")} == {A, B}
     assert original in facts.list_case_declarations(SCOPE, now=NOW)["items"]
+
+
+def test_review_delete_with_blob_dependent_preserves_unrelated_declarations(local):
+    # A damaged BLOB work-item key may still contain a valid explicit edge
+    # to A. The closure then mixes bytes and str. Explicit review deletion
+    # must purge that closure without falling back to wiping independent D.
+    d = "owg:w:" + "d" * 32
+    for ref in (A, C, d):
+        reviewed(ref)
+    save(A)
+    save(C, depends_on_work_item_refs=[A])
+    independent = save(d)
+
+    corrupt_ref = sqlite3.Binary(b"\\xff\\x00")
+    with sqlite3.connect(facts._path()) as db:
+        original = db.execute(
+            "SELECT * FROM declarations WHERE work_item_ref=?", (A,)
+        ).fetchone()
+        db.execute(
+            "INSERT INTO declarations VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (corrupt_ref, *original[1:4], json.dumps([A]), *original[5:]),
+        )
+        assert db.execute(
+            "SELECT typeof(work_item_ref) FROM declarations WHERE work_item_ref=?",
+            (corrupt_ref,),
+        ).fetchone()[0] == "blob"
+
+    # The invalid BLOB is never approved; C remains dependent on A.
+    assert {item["work_item_ref"] for item in
+            facts.list_case_declarations(SCOPE, now=NOW)["items"]} == {A, C, d}
+    assert reviews.remove_review_intention(A, now=NOW) is True
+
+    # Previously sorted(str, bytes) raised TypeError, triggering a full
+    # auxiliary-ledger scrub and wrongly deleting unrelated reviewed D.
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [independent]
+    with sqlite3.connect(facts._path()) as db:
+        assert db.execute(
+            "SELECT work_item_ref FROM declarations"
+        ).fetchall() == [(d,)]
+    assert {item["work_item_ref"] for item in
+            reviews.list_review_intentions(now=NOW)["items"]} == {C, d}
