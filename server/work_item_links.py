@@ -75,6 +75,26 @@ def _field(event: dict[str, Any], name: str, pattern: re.Pattern[str]) -> str:
     return value if isinstance(value, str) and pattern.fullmatch(value) else ""
 
 
+def _contradictory_field_tokens(
+    event: dict[str, Any], name: str, pattern: re.Pattern[str],
+) -> set[str]:
+    """Return valid scoped tokens tainted by two inconsistent explicit claims.
+
+    Both top-level and metadata-only IDs are accepted for legacy capture.
+    If both are present but disagree, neither can attest an unambiguous
+    tab/clipboard group, even when one claim is malformed. Veto every
+    syntactically valid token they named; never infer a missing token.
+    """
+    metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+    if name not in event or name not in metadata:
+        return set()
+    top, nested = event[name], metadata[name]
+    if type(top) is type(nested) and top == nested:
+        return set()
+    return {value for value in (top, nested)
+            if isinstance(value, str) and pattern.fullmatch(value)}
+
+
 def _malformed_optional_identity(value: Any) -> bool:
     """Reject corrupt explicit host/tenant claims, retaining empty legacy IDs.
 
@@ -223,19 +243,26 @@ def _observations(events: list[dict[str, Any]]) -> tuple[
     # observations. Otherwise discarding a competing record makes a tab look
     # single-record or a transfer look like an uncontested A-copy/B-paste.
     # Both conflicting occurrences contribute their *own* valid scoped token;
-    # neither is allowed to poison a different scope or opaque token.
+    # neither is allowed to poison a different scope or opaque token. A row
+    # with contradictory top-level/metadata claims also vetoes BOTH named
+    # valid tokens: otherwise one silently ignored alternative can make a
+    # surviving tab or clipboard group appear uncontested.
     duplicate_tainted_transfers: set[tuple[tuple[str, str, str, str], str]] = set()
     duplicate_tainted_tabs: set[tuple[tuple[str, str, str, str], str]] = set()
     for event in events:
         if not isinstance(event, dict):
             continue
-        event_id = event.get("event_id")
-        if not isinstance(event_id, str) or event_id not in conflicting_event_ids:
-            continue
         if _stamp(event.get("observed_at")) is None:
             continue
         scope = _link_scope(event)
         if scope is None:
+            continue
+        for token in _contradictory_field_tokens(event, "clipboard_transfer_id", _TRANSFER):
+            duplicate_tainted_transfers.add((scope, token))
+        for token in _contradictory_field_tokens(event, "tab_context_id", _TAB):
+            duplicate_tainted_tabs.add((scope, token))
+        event_id = event.get("event_id")
+        if not isinstance(event_id, str) or event_id not in conflicting_event_ids:
             continue
         transfer = _field(event, "clipboard_transfer_id", _TRANSFER)
         tab = _field(event, "tab_context_id", _TAB)
