@@ -393,3 +393,65 @@ def test_core_qualified_contact_does_not_enable_matching_or_creation():
     assert sum(item["code"] == "unsupported_attribute" for item in report["findings"]) == 2
     assert "unverified_contact_metadata" in codes(report)
     assert qualified not in json.dumps(report)
+
+
+@pytest.mark.parametrize("first,second", [
+    ("emails", CORE_USER + "emails"),
+    ("emails.primary", CORE_USER + "EMAILS.PRIMARY"),
+    ('emails[type eq "work"].value', r'emails[type eq "\u0077ork"].value'),
+    ('emails[type eq "work"].value',
+     CORE_USER + 'emails[type eq "WORK"].value'),
+    ('emails[type eq "ss"].primary', r'emails[type eq "\u00df"].primary'),
+    ('emails[value eq "private@example.invalid"].display',
+     CORE_USER + r'emails[value eq "private\u0040example.invalid"].display'),
+    ('emails[value eq "alias@example.invalid"].primary',
+     r'emails[value eq "\u0061lias@example.invalid"].primary'),
+], ids=[
+    "qualified-whole-array", "qualified-child", "decoded-type-literal",
+    "qualified-casefolded-type", "unicode-casefolded-type",
+    "qualified-decoded-value", "decoded-value-literal",
+])
+def test_semantically_duplicate_contact_patch_targets_fail_closed(first, second):
+    # Shipped selector matching decodes JSON escapes and casefolds literals.
+    # An IdP mapping must not declare the same effective write target twice,
+    # including when its two raw paths are not byte-for-byte duplicates.
+    from gateway.scim_user_emails import _path
+
+    def effective(path):
+        field, literal, child = _path(path)
+        return field, literal.casefold() if literal is not None else None, child
+
+    assert effective(first) == effective(second)
+    users = mapping()["users"]
+    users["patch_attributes"].extend([first, second])
+    with pytest.raises(InvalidMapping, match="duplicate effective contact paths") as exc:
+        assess(mapping(users=users))
+    assert "private@example.invalid" not in str(exc.value)
+    assert "alias@example.invalid" not in str(exc.value)
+
+
+def test_distinct_contact_patch_targets_remain_supported_and_private():
+    users = mapping()["users"]
+    users["patch_attributes"].extend([
+        "emails", "emails.primary",
+        'emails[type eq "work"].value',
+        'emails[type eq "work"].primary',
+        'emails[value eq "work"].value',
+        'emails[type eq "home"].value',
+    ])
+    report = assess(mapping(users=users))
+    assert report["status"] == "requires_live_validation"
+    assert "unsupported_attribute" not in codes(report)
+    assert {"unverified_contact_metadata", "contact_value_selector"} <= codes(report)
+
+
+def test_unsupported_contact_paths_remain_explicit_blockers_not_duplicates():
+    users = mapping()["users"]
+    users["patch_attributes"] = [
+        "emails[unknown eq \"work\"].value",
+        CORE_USER + "emails[unknown eq \"work\"].value",
+    ]
+    report = assess(mapping(users=users))
+    assert report["status"] == "blocked"
+    assert sum(finding["code"] == "unsupported_attribute"
+               for finding in report["findings"]) == 2
