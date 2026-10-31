@@ -253,7 +253,12 @@
         cp === 0x00ad || cp === 0x034f || cp === 0x180e ||
         (cp >= 0x200b && cp <= 0x200f) || cp === 0x2060 ||
         (cp >= 0x202a && cp <= 0x202e) ||
-        (cp >= 0x2066 && cp <= 0x2069) || cp === 0xfeff ||
+        // Unicode line/paragraph separators can visually create a new
+        // evidence row; invisible math/deprecated bidi format controls can
+        // conceal distinctions between reported source and sample labels.
+        cp === 0x2028 || cp === 0x2029 ||
+        (cp >= 0x2061 && cp <= 0x2064) ||
+        (cp >= 0x2066 && cp <= 0x206f) || cp === 0xfeff ||
         // A single untrusted source name must not masquerade as multiple
         // "source: count" entries or the "; omitted" disclosure.
         (kind === 'source' && (cp === 0x2c || cp === 0x3a || cp === 0x3b));
