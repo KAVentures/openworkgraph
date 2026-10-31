@@ -360,16 +360,29 @@
     const workTextStatement = d.work_text?.included_in_activity_package === false
       ? 'Visible work text is not included in this activity package. Typed values and clipboard contents are not included.'
       : 'This preview does not confirm that visible work text, typed values or clipboard contents are excluded. Inspect the package before sharing it.';
+    // A current recorder run is not the same as all retained history. Missing
+    // daily-plan metadata means unknown coverage, not zero recorded events.
+    const selectedPeriod = d.window.scope === 'range'
+      ? `Selected range: ${d.window.since} to ${d.window.until} (end exclusive, UTC).`
+      : d.window.scope === 'current'
+        ? `Current recorder run${d.window.since ? ` (from ${d.window.since})` : ' (start not supplied by preview)'}.`
+        : 'All retained history (unbounded date selection).';
+    const dailyChunks = d.analysis_plan?.date_chunks;
+    const dailyBreakdown = !Array.isArray(dailyChunks)
+      ? '<p>No daily breakdown was provided; date coverage is unknown.</p>'
+      : dailyChunks.length
+        ? `<ul>${dailyChunks.map(x=>`<li>${esc(x.since)} to ${esc(x.until)}: ${esc(x.event_rows)} events</li>`).join('')}</ul>`
+        : '<p>No daily chunks were listed; this does not prove complete recording or zero events.</p>';
     window.openModal?.('Prepare for AI','Discover opportunities from recorded work',`
       <p>No workflow description or repeated pattern is required. Your AI will interpret the evidence; this panel does not run a model.</p>
       <div class="note"><strong>What the AI will receive</strong>
         <p>${esc(d.canonical_rows)} recorded events · ${esc(d.event_types.focus_span||0)} focus spans · ${esc(d.event_types.capture_gap||0)} unobserved-gap records.</p>
-        <p>Selected: ${esc(d.window.since||'all available history')} to ${esc(d.window.until||'the latest retained evidence')} (end exclusive, UTC). Observed: ${esc(d.first_observed_at||'none')} to ${esc(d.last_observed_at||'none')}.</p>
+        <p>${esc(selectedPeriod)} Observed: ${esc(d.first_observed_at||'none')} to ${esc(d.last_observed_at||'none')}.</p>
         <p>Sources: ${esc(Object.entries(d.sources).map(([k,v])=>`${k}: ${v}`).join(', ')||'none')}. ${esc(workTextStatement)}</p>
         <p>Latest work event: ${esc(d.work_evidence?.last_work_observed_at||'none in this period')}. Capture health and gaps are shown separately; they do not confirm the recorder is running.</p>
         <p>${esc(localRead)} Hosted AI availability must be checked separately: it only sees previously shared evidence. Preparing or downloading a local file does not grant AI history access.</p>
       </div>
-      <details><summary>Analyze a large history in smaller parts</summary><p>Ask your AI to process one day at a time, follow every page, and keep track of what it has examined. Repeated-work maps are optional. The file download still contains the full selected period.</p><ul>${(d.analysis_plan?.date_chunks||[]).map(x=>`<li>${esc(x.since)} to ${esc(x.until)}: ${esc(x.event_rows)} events</li>`).join('')}</ul>${d.analysis_plan?.more_dates_not_listed?'<p>Only the first 31 dates are listed. Continue through the remaining selected dates.</p>':''}</details>
+      <details><summary>Analyze a large history in smaller parts</summary><p>Ask your AI to process one day at a time, follow every page, and keep track of what it has examined. Repeated-work maps are optional. The file download still contains the full selected period.</p>${dailyBreakdown}${d.analysis_plan?.more_dates_not_listed?'<p>Only the first 31 dates are listed. Continue through the remaining selected dates.</p>':''}</details>
       <details><summary>Preview redacted context examples</summary><ul>${d.redacted_examples.map(x=>`<li>${esc(x.app)} · ${esc(x.window_title||'Untitled activity')}</li>`).join('')||'<li>No focus spans in this selection.</li>'}</ul><p>Filtering is best effort; inspect the downloaded package before sharing it.</p></details>
       <label style="display:flex;gap:8px;margin:12px 0"><input id="analysisDetailed" type="checkbox">Include detailed chronological evidence (raw local event rows, more labels and context)</label>
       <p>Name redaction is best effort, not anonymization. Even summary exports may contain sensitive titles, URLs or metadata; detailed chronology adds raw local evidence that may contain more sensitive content. Inspect the file before sharing it. Gaps and foreground time are not measured lost work or savings.</p>
