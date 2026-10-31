@@ -360,7 +360,34 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
         else:
             join([row["event_id"] for row in group], "clipboard_transfer")
 
+    # A tab containing only record A cannot safely absorb a loose event
+    # already attached (via clipboard) to record B. Nor may two single-record
+    # tabs attach A and B to the *same* loose clipboard component. Evaluate
+    # these competing claims against the fixed post-transfer components BEFORE
+    # any tab union, so tab iteration order cannot choose a winning record.
+    pre_tab_root = {row["event_id"]: union.find(row["event_id"]) for row in rows}
+    component_refs: dict[str, set[str]] = defaultdict(set)
+    for row in rows:
+        if row["ref"]:
+            refs = component_refs[pre_tab_root[row["event_id"]]]
+            if len(refs) < 2:
+                refs.add(row["ref"])
+    tab_targets: dict[str, set[str]] = defaultdict(set)
+    for token_key, tab_rows in by_tab.items():
+        if token_key in tainted_tabs:
+            continue
+        refs = {row["ref"] for row in tab_rows if row["ref"]}
+        if len(refs) != 1:
+            continue
+        sole_ref = next(iter(refs))
+        for row in tab_rows:
+            if not row["ref"]:
+                targets = tab_targets[pre_tab_root[row["event_id"]]]
+                if len(targets) < 2:
+                    targets.add(sole_ref)
+
     candidates: list[dict[str, Any]] = []
+    tab_component_conflicts = 0
     for token_key, tab_rows in by_tab.items():
         if token_key in tainted_tabs:
             continue
@@ -369,6 +396,15 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
         if len(refs) == 1:
             anchor = next(row["event_id"] for row in tab_rows if row["ref"])
             for row in loose:
+                original_root = pre_tab_root[row["event_id"]]
+                # A loose clipboard component already containing another
+                # record, or targeted by two different single-record tabs,
+                # is ambiguous. Do not let transitive union manufacture an
+                # A/B case from two individually plausible weak signals.
+                if (component_refs.get(original_root, set()) - refs or
+                        len(tab_targets.get(original_root, set())) > 1):
+                    tab_component_conflicts += 1
+                    continue
                 join([anchor, row["event_id"]], "same_tab_single_record")
         elif len(refs) > 1:
             for row in loose:
@@ -395,7 +431,8 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
     return {"rows": rows, "members": members, "root": union.find, "links": links,
             "candidates": candidates, "conflicting_references": conflicts,
             "ambiguous_transfer_groups": ambiguous_transfer_groups,
-            "inconsistent_transfer_direction_groups": inconsistent_transfer_direction_groups}
+            "inconsistent_transfer_direction_groups": inconsistent_transfer_direction_groups,
+            "tab_component_conflicts": tab_component_conflicts}
 
 
 def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> dict[str, Any]:
