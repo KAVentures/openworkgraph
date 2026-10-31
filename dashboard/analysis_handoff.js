@@ -37,6 +37,16 @@
     }
     return {scope:'range',since:a.toISOString(),until:b.toISOString()};
   }
+  // Relative calendar selections can change at local midnight without a DOM
+  // event. The generation counter alone cannot keep a prepared handoff fresh.
+  // Exact local selection instants are compared, not labels or elapsed time.
+  function selectionStillMatches(chosen) {
+    try {
+      const now = selection();
+      return now.scope === chosen.scope && (now.scope !== 'range' ||
+        (now.since === chosen.since && now.until === chosen.until));
+    } catch (_) { return false; }
+  }
   window.owgEvidenceSelection = selection;
   // A malformed preview cannot authorize a download or become an AI request.
   // Optional legacy fields stay optional; fields used by this UI must be safe.
@@ -305,6 +315,8 @@
       const requested=selection();
       const d=await api('/v1/analysis-preview?'+new URLSearchParams(requested),{signal:pending.signal},()=>seq===generation);
       if(seq!==generation)return null;
+      if(!selectionStillMatches(requested))
+        throw new Error('Work period changed while evidence was loading. Prepare again; no evidence was exported.');
       if(!matchesRequestedWindow(requested,d.window))
         throw new Error('Preview period did not match the selected work period. Prepare again; no evidence was exported.');
       validatePreview(d);
@@ -343,6 +355,10 @@
       : '';
     const request=d.request_text+evidenceWarning;
     const chosen={scope:d.window.scope,...(d.window.scope==='range'?{since:d.window.since,until:d.window.until}:{})};
+    if(!selectionStillMatches(chosen)){
+      window.toast?.('Work period changed while preparing the handoff. Prepare again; nothing was copied or downloaded.');
+      return;
+    }
     const access=d.local_ai_history_access;
     // This is a snapshot of local AI history consent, not an export grant.
     // Do not turn malformed lease metadata into an apparent permission.
@@ -421,9 +437,12 @@
     detailedNode.checked=false;
     detailedNode.disabled=false;
     activeHandoff={seq,copy:copyNode,download:downloadNode,detailed:detailedNode,status:statusNode};
-    const current=()=>seq===generation;
+    const current=()=>seq===generation && selectionStillMatches(chosen);
     const expired=()=>{
       if(current())return false;
+      copyNode.disabled=true;
+      downloadNode.disabled=true;
+      detailedNode.disabled=true;
       statusNode.textContent=staleScope+' Nothing was copied or downloaded by this action.';
       return true;
     };
