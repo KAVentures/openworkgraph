@@ -11,6 +11,14 @@ from server.open_work_outcomes import source_operation_receipt
 REF = "owg:r:" + "a" * 32
 WHEN = datetime(2026, 10, 19, 10, 0, tzinfo=timezone.utc)
 
+# These are the current opt-in read paths emitted by production adapters,
+# not inferred authority from source status or observed human activity.
+SOURCE_READ_METHOD = {
+    "github": "explicit_opt_in_authenticated_local_github_cli_read",
+    "jira": "explicit_opt_in_site_verified_oauth_jira_issue_status_read",
+    "stripe": "opted_in_restricted_key_stripe_account_and_record_get",
+}
+
 
 def response(provider="stripe", kind="invoice", state="paid",
              operation="stripe_invoice_paid", verified=True):
@@ -26,6 +34,7 @@ def response(provider="stripe", kind="invoice", state="paid",
             "provider": provider, "availability": "source_reported",
             "source_state_reported": True, "source_state": state,
             "verified_at": WHEN.isoformat(),
+            "verification_method": SOURCE_READ_METHOD[provider],
             "verified_operational_outcome": {
                 "kind": operation, "scope": "stripe_processor_only",
                 "verified": verified,
@@ -544,6 +553,76 @@ def test_receipt_accepts_exact_history_window_without_new_authority(
     data["source_window"] = window
     result = source_operation_receipt(
         REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN, **window,
+    )
+    assert result["availability"] == "source_reported"
+    assert result["operation_verified"] is True
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+@pytest.mark.parametrize("untrusted_method", [
+    None, False, 0, 1, "", [], {},
+    "untrusted_cached_export",
+    SOURCE_READ_METHOD["github"],
+    SOURCE_READ_METHOD["jira"],
+    SOURCE_READ_METHOD["stripe"],
+])
+def test_receipt_requires_exact_authenticated_source_read_method(
+    operation, provider, kind, state, untrusted_method,
+):
+    # A valid state, timestamp and provider label are insufficient without
+    # provenance from the matching existing authenticated opt-in source path.
+    if untrusted_method == SOURCE_READ_METHOD[provider]:
+        pytest.skip("matching method is the separate positive control")
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    data["source_evidence"]["verification_method"] = untrusted_method
+    calls = []
+    result = source_operation_receipt(
+        REF, operation, record_reader=reader(data, calls), now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "source_verification_provenance_conflict"
+    assert result["operation_verified"] is False
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert result["read_only"] is True
+    assert calls == [(REF, {
+        "since": None, "until": None, "include_source_status": True,
+    })]
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+    assert "untrusted_cached_export" not in str(result)
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+def test_receipt_missing_source_read_method_is_unknown(
+    operation, provider, kind, state,
+):
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    del data["source_evidence"]["verification_method"]
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "source_verification_provenance_conflict"
+    assert result["operation_verified"] is False
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+def test_matching_authenticated_source_read_method_keeps_provider_only_scope(
+    operation, provider, kind, state,
+):
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    assert data["source_evidence"]["verification_method"] == SOURCE_READ_METHOD[provider]
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
     )
     assert result["availability"] == "source_reported"
     assert result["operation_verified"] is True
