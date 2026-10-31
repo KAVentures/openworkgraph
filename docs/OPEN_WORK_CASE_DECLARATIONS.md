@@ -385,3 +385,31 @@ SQL parser or a cryptographic database integrity proof. Other foreign DDL
 semantics, concurrent filesystem mutation and cross-process source-grant
 revocation remain separate risks. The ledger still does not verify provider
 status, customer outcomes or agent authorization.
+
+
+## Column defaults and explicit conflict policies
+
+SQLite's exact `PRAGMA table_xinfo` column names/types and
+`PRAGMA index_xinfo` primary-key shape do not expose every write semantic.
+For example, `scope_ref TEXT NOT NULL DEFAULT '...'` adds a foreign fallback
+without changing the reported column identity, while `work_item_ref TEXT
+PRIMARY KEY ON CONFLICT REPLACE` (or `IGNORE`) changes duplicate-key
+behavior without changing the implicit PK index. A version marker alone must
+not promote either into a trusted owner-approval ledger.
+
+The v1 pre-migration check now requires **no column defaults**. The v2
+admission check requires no defaults on its first nine columns and permits
+only the known `edit_token` default `''` from the supported v1→v2
+`ALTER TABLE` migration, or no default from a fresh v2 writer. Both
+versions also conservatively reject the `CONFLICT` keyword in the table
+DDL (alongside the existing `CHECK`/`COLLATE` veto). This is deliberately
+strict for this internal-only, fixed-writer schema, not a general SQLite DDL
+parser.
+
+Nine synthetic SQLite regression scenarios cover v1/v2 canonical schemas,
+foreign scope defaults, `ON CONFLICT REPLACE`/`IGNORE`, and the supported
+migrated-v2 token default. Rejected stores retain their schema, version and
+rows, without generating edit tokens or granting source/agent authority.
+Real tenant/source revocation fencing, filesystem tamper resistance,
+independent business outcomes and native cross-platform CI are separate
+acceptance gates.
