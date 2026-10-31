@@ -319,3 +319,77 @@ def test_cli_surrogate_rejection_is_generic_and_does_not_echo_input():
     assert json.loads(invalid.stdout)["status"] == "invalid_input"
     assert b"unused" not in invalid.stdout + invalid.stderr
     assert b"ud800" not in invalid.stdout + invalid.stderr
+
+
+CORE_USER = "urn:ietf:params:scim:schemas:core:2.0:User:"
+
+
+@pytest.mark.parametrize("path,accepted", [
+    (CORE_USER + "emails", True),
+    (CORE_USER.upper() + "EMAILS.PRIMARY", True),
+    (CORE_USER + 'emails[type eq "work"].value', True),
+    (CORE_USER + 'emails[value eq "alias@example.invalid"].display', True),
+    (CORE_USER + r'emails[type eq "\u0041"].value', True),
+    (CORE_USER + r'emails[type eq "\U0041"].value', False),
+    (CORE_USER + r'emails[value eq "bad\u0000"].primary', False),
+    (CORE_USER + 'emails[type eq ""].value', False),
+    (CORE_USER + 'emails[type eq "work"].password', False),
+    (CORE_USER + 'emails[type\u00a0eq\u00a0"work"].value', False),
+    (CORE_USER + ":emails", False),
+    ("urn:ietf:params:scim:schemas:core:2.0:Group:emails", False),
+    ("urn:ietf:params:scim:schemas:extension:enterprise:2.0:User:emails", False),
+], ids=[
+    "whole-array", "mixed-case-child", "type-selector", "value-selector",
+    "valid-json-escape", "invalid-json-escape", "decoded-control",
+    "empty-selector", "unsupported-child", "unicode-separator",
+    "extra-colon", "foreign-group-urn", "foreign-extension-urn",
+])
+def test_core_qualified_contact_patch_matches_shipped_parser(path, accepted):
+    # Differential against the actual shipped PATCH path parser, not a
+    # mirrored regex. Preflight never makes a provider or provisioning call.
+    from gateway.scim_user_emails import _path
+    from gateway.scim_provisioning import Error
+
+    try:
+        _path(path)
+        shipped_accepts = True
+    except Error:
+        shipped_accepts = False
+    assert shipped_accepts is accepted
+
+    users = mapping()["users"]
+    users["patch_attributes"] = [path]
+    report = assess(mapping(users=users))
+    assert ("unsupported_attribute" not in codes(report)) is accepted
+    assert report["checked"]["user_matching"] == 2
+    assert path not in json.dumps(report)
+    if accepted:
+        assert report["status"] == "requires_live_validation"
+        assert "unverified_contact_metadata" in codes(report)
+    else:
+        assert report["status"] == "blocked"
+
+
+def test_qualified_contact_value_selector_retains_cautions_without_value_echo():
+    users = mapping()["users"]
+    users["patch_attributes"] = [
+        CORE_USER + 'emails[value eq "private@example.invalid"].primary',
+    ]
+    report = assess(mapping(users=users))
+    assert report["status"] == "requires_live_validation"
+    assert {"contact_value_selector", "unverified_contact_metadata",
+            "live_validation_required"} <= codes(report)
+    assert "private@example.invalid" not in json.dumps(report)
+
+
+def test_core_qualified_contact_does_not_enable_matching_or_creation():
+    users = mapping()["users"]
+    qualified = CORE_USER + "emails"
+    users["match_attributes"] = [qualified]
+    users["create_attributes"].append(qualified)
+    users["patch_attributes"] = [qualified]
+    report = assess(mapping(users=users))
+    assert report["status"] == "blocked"
+    assert sum(item["code"] == "unsupported_attribute" for item in report["findings"]) == 2
+    assert "unverified_contact_metadata" in codes(report)
+    assert qualified not in json.dumps(report)
