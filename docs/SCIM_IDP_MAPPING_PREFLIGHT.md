@@ -76,10 +76,12 @@ When Groups are enabled, the mapping may now include an **optional**
 `groups.create_attributes` array, for example:
 
 ```json
-"groups": {
-  "enabled": true,
-  "match_attributes": ["externalId"],
-  "create_attributes": ["displayName", "externalId", "members"]
+{
+  "groups": {
+    "enabled": true,
+    "match_attributes": ["externalId"],
+    "create_attributes": ["displayName", "externalId", "members"]
+  }
 }
 ```
 
