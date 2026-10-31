@@ -563,3 +563,52 @@ def test_malformed_ephemeral_scope_does_not_remove_exact_record_evidence():
             result = linked_work_items([first, second])
             assert set(_items(result)) == {("e01", "e02")}, (dimension, invalid)
             assert _items(result)[("e01", "e02")]["link_basis"] == {"same_record": 1}
+
+
+def test_multiplexed_transfer_id_does_not_merge_three_interleaved_records():
+    # A reused transfer token is not evidence that three distinct business
+    # records belong to one task. Preserve independent same-record evidence.
+    events = [
+        _scoped(_event(1, A, transfer="reused-token", action="copy")),
+        _scoped(_event(2, B, transfer="reused-token", action="paste")),
+        _scoped(_event(3, C, transfer="reused-token", action="paste")),
+        _scoped(_event(4, A)),
+    ]
+    for order in (events, list(reversed(events))):
+        result = linked_work_items(order)
+        assert set(_items(result)) == {("e01", "e04")}
+        assert _items(result)[("e01", "e04")]["link_basis"] == {"same_record": 1}
+        assert result["unlinked_observation_count"] == 2
+        assert result["ambiguous_clipboard_transfer_groups"] == 1
+        assert result["link_contract"]["multiplexed_clipboard_transfer_is_unmerged"] is True
+        assert "reused-token" not in json.dumps(result)
+
+
+def test_two_record_transfer_with_repeated_observations_still_links():
+    # Repeated observations of two actual record identities are not a
+    # multiplexed third-record collision and preserve the prior contract.
+    events = [
+        _scoped(_event(1, A, transfer="two-records", action="copy")),
+        _scoped(_event(2, A, transfer="two-records", action="copy")),
+        _scoped(_event(3, B, transfer="two-records", action="paste")),
+        _scoped(_event(4, B, transfer="two-records", action="paste")),
+    ]
+    result = linked_work_items(events)
+    assert set(_items(result)) == {("e01", "e02", "e03", "e04")}
+    assert _items(result)[("e01", "e02", "e03", "e04")]["link_basis"] == {
+        "same_record": 2, "clipboard_transfer": 1,
+    }
+    assert result["ambiguous_clipboard_transfer_groups"] == 0
+
+
+def test_same_token_in_other_capture_scope_is_not_a_third_record():
+    # The fanout check applies per exact capture scope, not globally.
+    events = [
+        _scoped(_event(1, A, transfer="same-token")),
+        _scoped(_event(2, B, transfer="same-token")),
+        _scoped(_event(3, C, transfer="same-token"), session="another-session"),
+    ]
+    result = linked_work_items(events)
+    assert set(_items(result)) == {("e01", "e02")}
+    assert result["unlinked_observation_count"] == 1
+    assert result["ambiguous_clipboard_transfer_groups"] == 0
