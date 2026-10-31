@@ -773,8 +773,9 @@ def test_direct_cross_record_pair_remains_valid_with_loose_observation():
     ]
     for ordered in (events, list(reversed(events))):
         result = linked_work_items(ordered)
-        assert set(_items(result)) == {("e01", "e02", "e03")}
-        assert _items(result)[("e01", "e02", "e03")]["cross_record_join"] is True
+        assert set(_items(result)) == {("e01", "e02")}
+        assert _items(result)[("e01", "e02")]["cross_record_join"] is True
+        assert result["unlinked_observation_count"] == 1
         assert result["inconsistent_clipboard_transfer_direction_groups"] == 0
 
 
@@ -838,6 +839,59 @@ def test_direct_cross_record_copy_paste_survives_extra_generic_observation():
     ]
     for ordered in (events, list(reversed(events))):
         result = linked_work_items(ordered)
+        assert set(_items(result)) == {("e01", "e02")}
+        assert _items(result)[("e01", "e02")]["link_basis"] == {"clipboard_transfer": 1}
+        assert result["unlinked_observation_count"] == 1
+        assert result["inconsistent_clipboard_transfer_direction_groups"] == 0
+
+
+def test_direct_two_record_transfer_never_borrows_unreferenced_token_rows():
+    # A valid A -> B transfer does not prove that unrelated loose events
+    # reusing the token belong to either business record. Check both input
+    # orders and all explicit/generic loose actions.
+    for loose_action in ("browser_click", "copy", "paste"):
+        events = [
+            _scoped(_event(1, A, transfer="reused-token", action="copy")),
+            _scoped(_event(2, B, transfer="reused-token", action="paste")),
+            _scoped(_event(3, transfer="reused-token", action=loose_action)),
+            _scoped(_event(4, A, action="browser_click")),
+        ]
+        for ordered in (events, list(reversed(events))):
+            result = linked_work_items(ordered)
+            assert set(_items(result)) == {("e01", "e02", "e04")}
+            joined = _items(result)[("e01", "e02", "e04")]
+            assert joined["link_basis"] == {"same_record": 1, "clipboard_transfer": 1}
+            assert joined["resource_refs"] == [A, B]
+            assert result["unlinked_observation_count"] == 1
+            assert result["candidate_links"] == []
+            assert "reused-token" not in json.dumps(result)
+
+
+def test_loose_token_row_can_still_join_on_independent_single_record_tab():
+    # Withholding clipboard authority does not suppress a separately
+    # evidenced single-record tab relationship.
+    events = [
+        _scoped(_event(1, A, tab="one-record-tab", transfer="tab-independent", action="copy")),
+        _scoped(_event(2, B, transfer="tab-independent", action="paste")),
+        _scoped(_event(3, tab="one-record-tab", transfer="tab-independent", action="browser_click")),
+    ]
+    for ordered in (events, list(reversed(events))):
+        result = linked_work_items(ordered)
+        assert set(_items(result)) == {("e01", "e02", "e03")}
+        assert _items(result)[("e01", "e02", "e03")]["link_basis"] == {
+            "clipboard_transfer": 1, "same_tab_single_record": 1,
+        }
+
+
+def test_legacy_nondirectional_two_record_token_keeps_prior_membership():
+    # This conservative change applies only when explicit copy/paste
+    # evidence exists; legacy generic-only capture stays compatible.
+    events = [
+        _scoped(_event(1, A, transfer="legacy-token")),
+        _scoped(_event(2, B, transfer="legacy-token")),
+        _scoped(_event(3, transfer="legacy-token")),
+    ]
+    for ordered in (events, list(reversed(events))):
+        result = linked_work_items(ordered)
         assert set(_items(result)) == {("e01", "e02", "e03")}
         assert _items(result)[("e01", "e02", "e03")]["link_basis"] == {"clipboard_transfer": 2}
-        assert result["inconsistent_clipboard_transfer_direction_groups"] == 0
