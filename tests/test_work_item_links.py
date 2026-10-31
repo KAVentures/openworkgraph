@@ -1679,3 +1679,67 @@ def test_contradictory_ephemeral_claim_cannot_be_app_continuity_neighbor():
             assert result["items"] == []
             assert result["candidate_links"] == []
             assert result["unlinked_observation_count"] == 3
+
+
+def test_explicit_nonobject_metadata_vetoes_weak_clipboard_or_tab_evidence():
+    # Explicit malformed metadata is not legacy absence: a source-reference
+    # claim might be unreadable, so top-level weak tokens cannot authorize a
+    # cross-record transfer or a single-record tab attachment.
+    for malformed in (None, [], "not-an-object", False, 17):
+        for signal in ("transfer", "tab"):
+            token = "untrusted-metadata-token"
+            first = _scoped(_event(1, A, **{signal: token}, action="copy"))
+            second = _scoped(_event(
+                2, B if signal == "transfer" else None,
+                **{signal: token}, action="paste",
+            ))
+            corrupt = _scoped(_event(3))
+            corrupt["metadata"] = malformed
+            corrupt["clipboard_transfer_id" if signal == "transfer" else "tab_context_id"] = token
+            rows = [first, second, corrupt, _scoped(_event(4, A)), _scoped(_event(5, B))]
+            for ordered in (rows, list(reversed(rows))):
+                result = linked_work_items(ordered)
+                expected = (
+                    {("e01", "e04"), ("e02", "e05")} if signal == "transfer"
+                    else {("e01", "e04")}
+                )
+                assert set(_items(result)) == expected, (signal, malformed)
+                assert result["candidate_links"] == []
+                assert result["unlinked_observation_count"] == (
+                    1 if signal == "transfer" else 3
+                )
+                assert all(not item["cross_record_join"] for item in result["items"])
+                assert token not in json.dumps(result)
+
+
+def test_nonobject_metadata_veto_is_scoped_and_absent_metadata_remains_legacy():
+    # Malformed metadata in another tenant/actor/device/session cannot veto
+    # the independently valid source/destination transfer in this scope.
+    for dimension in ("organization_id", "actor_id", "device_id", "session_id"):
+        first = _scoped(_event(1, A, transfer="scoped-clipboard", action="copy"))
+        second = _scoped(_event(2, B, transfer="scoped-clipboard", action="paste"))
+        invalid = _scoped(_event(3))
+        invalid["metadata"] = []
+        invalid["clipboard_transfer_id"] = "scoped-clipboard"
+        invalid[dimension] = "other-scope"
+        result = linked_work_items([first, second, invalid])
+        assert set(_items(result)) == {("e01", "e02")}, dimension
+        assert result["unlinked_observation_count"] == 1
+
+    # Genuinely absent legacy metadata remains compatible with top-level
+    # identifiers when the signal is uncontested.
+    anchor = _scoped(_event(1, A, tab="legacy-tab"))
+    loose = _scoped(_event(2))
+    del loose["metadata"]
+    loose["tab_context_id"] = "legacy-tab"
+    tab = linked_work_items([anchor, loose])
+    assert set(_items(tab)) == {("e01", "e02")}
+    assert tab["items"][0]["link_basis"] == {"same_tab_single_record": 1}
+
+    source = _scoped(_event(3, A, transfer="legacy-copy", action="copy"))
+    destination = _scoped(_event(4, transfer="legacy-copy", action="paste"))
+    del destination["metadata"]
+    destination["clipboard_transfer_id"] = "legacy-copy"
+    transfer = linked_work_items([source, destination])
+    assert set(_items(transfer)) == {("e03", "e04")}
+    assert transfer["items"][0]["link_basis"] == {"clipboard_transfer": 1}
