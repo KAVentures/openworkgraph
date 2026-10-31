@@ -2425,3 +2425,54 @@ test('ordinary single-source and blank-source previews remain explicit and copy-
     assert.equal(h.tickets.length, 0);
   });
 });
+
+
+test('source preview exposes bidi and control formatting instead of visually spoofed identities', async t => {
+  for (const [name, source, marker] of [
+    ['right-to-left override', 'desktop\u202Espoof', '[U+202E]'],
+    ['embedded newline', 'desktop\nother: 999', '[U+000A]'],
+    ['directional isolate', 'desktop\u2066hidden\u2069', '[U+2066]'],
+    ['C1 control', 'desktop\u0085hidden', '[U+0085]']
+  ]) await t.test(name, async () => {
+    const h = await openSourceSummaryPreview({[source]: 2}, 2);
+    assert.equal(h.modals, 1);
+    assert.ok(h.modalHtml.includes(marker));
+    assert.doesNotMatch(h.modalHtml, /[\u202a-\u202e\u2066-\u2069\u0000-\u001f\u007f-\u009f]/);
+    assert.match(h.modalHtml, /2 recorded events/);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-source-breakdown']);
+    assert.equal(h.tickets.length, 0);
+  });
+});
+
+test('redacted focus labels expose bidi controls and bound long untrusted samples', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const opening = h.bars[0].controls.button.onclick();
+  await settle();
+  h.reply(h.reads[1], {...h.preview('range', 'sample-formatting'),
+    redacted_examples: [{
+      app: 'App\u202Efake\nnext',
+      window_title: 'Case\u2067masked\u2069\u0000' + 'x'.repeat(130)
+    }]
+  });
+  await opening;
+  assert.equal(h.modals, 1);
+  assert.match(h.modalHtml, /App\[U\+202E\]fake\[U\+000A\]next/);
+  assert.match(h.modalHtml, /Case\[U\+2067\]masked\[U\+2069\]\[U\+0000\]/);
+  assert.match(h.modalHtml, /… \[sample label truncated\]/);
+  assert.doesNotMatch(h.modalHtml, /x{100}/);
+  assert.doesNotMatch(h.modalHtml, /[\u202a-\u202e\u2066-\u2069\u0000-\u001f\u007f-\u009f]/);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-sample-formatting']);
+  assert.equal(h.tickets.length, 0);
+});
+
+test('ordinary Unicode and HTML-like source labels preserve counts and escaping', async () => {
+  const h = await openSourceSummaryPreview({'مرحبا <strong>🧩</strong>': 2}, 2);
+  assert.equal(h.modals, 1);
+  assert.match(h.modalHtml, /مرحبا &lt;strong&gt;🧩&lt;\/strong&gt;: 2/);
+  assert.doesNotMatch(h.modalHtml, /<strong>🧩<\/strong>/);
+  assert.doesNotMatch(h.modalHtml, /\[U\+/);
+  assert.match(h.modalHtml, /labels are not verified identities/);
+});
