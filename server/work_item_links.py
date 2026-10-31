@@ -161,7 +161,11 @@ def _same_observation_payload(first: Any, second: Any) -> bool:
     return True
 
 
-def _observations(events: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+def _observations(events: list[dict[str, Any]]) -> tuple[
+    list[dict[str, Any]], int,
+    set[tuple[tuple[str, str, str, str], str]],
+    set[tuple[tuple[str, str, str, str], str]],
+]:
     """Validated, de-duplicated, chronologically ordered observations."""
     identities: dict[str, tuple[str, str, str, str]] = {}
     conflicts: set[str] = set()
@@ -186,6 +190,31 @@ def _observations(events: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], i
                 conflicting_event_ids.add(event_id)
         else:
             unique_events[event_id] = event
+    # Conflicting duplicate event IDs are discarded, but their exact-scoped
+    # ephemeral token claims must still veto weaker joins among surviving
+    # observations. Otherwise discarding a competing record makes a tab look
+    # single-record or a transfer look like an uncontested A-copy/B-paste.
+    # Both conflicting occurrences contribute their *own* valid scoped token;
+    # neither is allowed to poison a different scope or opaque token.
+    duplicate_tainted_transfers: set[tuple[tuple[str, str, str, str], str]] = set()
+    duplicate_tainted_tabs: set[tuple[tuple[str, str, str, str], str]] = set()
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        event_id = event.get("event_id")
+        if not isinstance(event_id, str) or event_id not in conflicting_event_ids:
+            continue
+        if _stamp(event.get("observed_at")) is None:
+            continue
+        scope = _link_scope(event)
+        if scope is None:
+            continue
+        transfer = _field(event, "clipboard_transfer_id", _TRANSFER)
+        tab = _field(event, "tab_context_id", _TAB)
+        if transfer:
+            duplicate_tainted_transfers.add((scope, transfer))
+        if tab:
+            duplicate_tainted_tabs.add((scope, tab))
     for event_id, event in unique_events.items():
         if event_id in conflicting_event_ids:
             continue
@@ -229,12 +258,12 @@ def _observations(events: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], i
             row["reference_tainted"] = True
             row["ref"] = ""
     rows.sort(key=lambda row: (row["observed_at"], row["event_id"]))
-    return rows, len(conflicts)
+    return rows, len(conflicts), duplicate_tainted_transfers, duplicate_tainted_tabs
 
 
 def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
     """Internal membership (event ids per item) plus typed links and candidates."""
-    rows, conflicts = _observations(events)
+    rows, conflicts, tainted_transfers, tainted_tabs = _observations(events)
     union = _Union()
     for row in rows:
         union.find(row["event_id"])
@@ -249,8 +278,6 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
     by_ref: dict[str, list[str]] = defaultdict(list)
     by_transfer: dict[tuple[tuple[str, str, str, str], str], list[dict[str, Any]]] = defaultdict(list)
     by_tab: dict[tuple[tuple[str, str, str, str], str], list[dict[str, Any]]] = defaultdict(list)
-    tainted_transfers: set[tuple[tuple[str, str, str, str], str]] = set()
-    tainted_tabs: set[tuple[tuple[str, str, str, str], str]] = set()
     for row in rows:
         if row["ref"]:
             by_ref[row["ref"]].append(row["event_id"])
