@@ -790,3 +790,54 @@ def test_one_record_to_unreferenced_paste_keeps_legacy_directional_link():
         assert set(_items(result)) == {("e01", "e02")}
         assert _items(result)[("e01", "e02")]["link_basis"] == {"clipboard_transfer": 1}
         assert result["inconsistent_clipboard_transfer_direction_groups"] == 0
+
+
+def test_mixed_generic_clipboard_actions_cannot_bypass_direction_veto():
+    # A generic event cannot turn two copies or a reversed paste/copy into
+    # observed cross-record transfer. The previous all() guard joined all 3.
+    for actions in (("copy", "copy", "browser_click"),
+                    ("paste", "copy", "browser_click"),
+                    ("copy", "browser_click", "browser_click")):
+        events = [
+            _scoped(_event(1, A, transfer="mixed-direction", action=actions[0])),
+            _scoped(_event(2, B, transfer="mixed-direction", action=actions[1])),
+            _scoped(_event(3, transfer="mixed-direction", action=actions[2])),
+        ]
+        for ordered in (events, list(reversed(events))):
+            result = linked_work_items(ordered)
+            assert result["items"] == [], actions
+            assert result["candidate_links"] == [], actions
+            assert result["unlinked_observation_count"] == 3, actions
+            assert result["inconsistent_clipboard_transfer_direction_groups"] == 1
+            assert "mixed-direction" not in json.dumps(result)
+
+
+def test_mixed_generic_event_cannot_attach_second_record_to_same_record_pair():
+    # A copy -> A paste is real evidence within A only. B's generic click
+    # cannot borrow the same token and become a cross-record transfer.
+    events = [
+        _scoped(_event(1, A, transfer="mixed-same-record", action="copy")),
+        _scoped(_event(2, A, transfer="mixed-same-record", action="paste")),
+        _scoped(_event(3, B, transfer="mixed-same-record", action="browser_click")),
+    ]
+    for ordered in (events, list(reversed(events))):
+        result = linked_work_items(ordered)
+        assert set(_items(result)) == {("e01", "e02")}
+        assert _items(result)[("e01", "e02")]["link_basis"] == {"same_record": 1}
+        assert result["unlinked_observation_count"] == 1
+        assert result["inconsistent_clipboard_transfer_direction_groups"] == 1
+
+
+def test_direct_cross_record_copy_paste_survives_extra_generic_observation():
+    # A genuine ordered A copy -> B paste remains valid even if a third
+    # event from the same scoped token has a non-directional action.
+    events = [
+        _scoped(_event(1, A, transfer="mixed-valid", action="copy")),
+        _scoped(_event(2, B, transfer="mixed-valid", action="paste")),
+        _scoped(_event(3, transfer="mixed-valid", action="browser_click")),
+    ]
+    for ordered in (events, list(reversed(events))):
+        result = linked_work_items(ordered)
+        assert set(_items(result)) == {("e01", "e02", "e03")}
+        assert _items(result)[("e01", "e02", "e03")]["link_basis"] == {"clipboard_transfer": 2}
+        assert result["inconsistent_clipboard_transfer_direction_groups"] == 0
