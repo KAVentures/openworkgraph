@@ -1466,3 +1466,61 @@ def test_legacy_absent_and_literal_unknown_actions_remain_compatible():
     ])
     assert set(_items(direct)) == {("e01", "e02")}
     assert _items(direct)[("e01", "e02")]["cross_record_join"] is True
+
+
+def test_duplicate_payload_budget_rejects_wide_json_before_worklist_allocation():
+    """The work budget must bound queued pairs, not only processed pairs."""
+    import tracemalloc
+
+    from server.work_item_links import _same_observation_payload
+
+    # Construct outside tracing: the limit concerns *additional comparator*
+    # allocations, not the caller's already-retained event metadata.
+    for wide in (list(range(50_000)), {f"field_{n}": n for n in range(50_000)}):
+        first = {"payload": wide}
+        second = copy.deepcopy(first)
+        tracemalloc.start()
+        try:
+            assert _same_observation_payload(first, second) is False
+            _current, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        # The old pending.extend(...) allocated ~50k comparison tuples before
+        # noticing the 10k budget. This deliberately generous bound detects
+        # that regression without asserting a precise platform allocation.
+        assert peak < 1_500_000, peak
+
+
+def test_duplicate_payload_budget_accepts_exactly_bounded_nested_json():
+    from server.work_item_links import (
+        _MAX_DUPLICATE_PAYLOAD_NODES,
+        _same_observation_payload,
+    )
+
+    # Root dict + nested list + N scalars = exactly the 10k-node budget.
+    first = {"payload": [7] * (_MAX_DUPLICATE_PAYLOAD_NODES - 2)}
+    assert _same_observation_payload(first, copy.deepcopy(first)) is True
+    assert _same_observation_payload(
+        first, {"payload": [7] * (_MAX_DUPLICATE_PAYLOAD_NODES - 3) + [8]}
+    ) is False
+    # A pair of wide siblings must account for the still-queued sibling.
+    over_budget = {"left": [0] * 6_000, "right": [0] * 6_000}
+    assert _same_observation_payload(over_budget, copy.deepcopy(over_budget)) is False
+
+
+def test_oversized_identical_duplicate_does_not_authorize_tab_or_record_join():
+    first = _scoped(_event(1, A, tab="wide-duplicate-tab"))
+    first["metadata"]["target"]["oversized"] = list(range(50_000))
+    duplicate = copy.deepcopy(first)
+    events = [
+        first, duplicate,
+        _scoped(_event(2, A, tab="wide-duplicate-tab")),
+        _scoped(_event(3, tab="wide-duplicate-tab")),
+        _scoped(_event(4, A)),
+    ]
+    for ordered in (events, list(reversed(events))):
+        result = linked_work_items(ordered)
+        assert set(_items(result)) == {("e02", "e04")}
+        assert result["unlinked_observation_count"] == 1
+        assert result["candidate_links"] == []
+        assert result["conflicting_reference_groups_suppressed"] == 0
