@@ -454,3 +454,34 @@ permissions, or business state changed. Held-out assignment F1 >= 0.90
 and contamination <= 0.05 remain **unverified**, and synthetic regression
 coverage is not a real-user pilot or real-provider acceptance. Native
 repository pytest and exact-head CI remain required before merge.
+
+
+## Conflicting duplicate event IDs also veto their own ephemeral tokens
+
+When two observations reuse the same `event_id` with contradictory payloads,
+the linker already discards both instead of choosing an arbitrary winner.
+That removal alone was not sufficient: the surviving observations could make
+the discarded row's browser tab look single-record, or make its clipboard
+transfer appear to be an uncontested direct A-copy → B-paste. Either could
+create a false work-item membership despite the contradictory source evidence.
+
+For each conflicting duplicate occurrence with a valid timestamp and literal
+exact capture scope, the linker now vetoes only its own valid scoped
+`tab_context_id` and/or `clipboard_transfer_id`. Both contradictory
+occurrences contribute their own scoped token; the veto never crosses
+organization, actor, device, session or a different opaque token. A malformed
+scope, invalid timestamp or invalid token cannot name a group to veto.
+Independent valid same-record links still work. Byte-identical duplicates
+remain idempotent, and no new public token, title, clipboard text or source
+locator is exposed.
+
+Four synthetic regressions exercise false single-record tab and direct
+cross-record transfer joins after conflicting-ID removal, both input orders,
+independent same-record evidence, two-tenant veto isolation, a third unaffected
+tenant, a separate unaffected token and an invalid-timestamp occurrence.
+These cases check **conservative contamination prevention**, not an improved
+measured assignment F1. The preregistered held-out F1 ≥ 0.90 and
+contamination ≤ 0.05 gates remain unverified. Native pytest, cross-platform
+CI, review and current-main compatibility are required before merging.
+No private evaluation truth/splits/scoring, model/API spending, provider
+access, permissions or business writes were changed.
