@@ -1994,3 +1994,100 @@ def test_versioned_declarations_reject_hidden_unique_and_foreign_key_constraints
             "SELECT type,name,sql FROM sqlite_master ORDER BY type,name"
         ).fetchall() == before_schema
         assert db.execute("SELECT * FROM declarations").fetchall() == before_rows
+
+
+@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("semantic", [
+    "check", "scope_collate", "pk_collate", "pk_desc", "clean",
+])
+def test_versioned_declarations_reject_hidden_check_collation_and_pk_order(
+    local, monkeypatch, version, semantic,
+):
+    """Matching table_xinfo/index_list/FK lists do not prove exact owner semantics.
+
+    CHECK can veto owner-declared goals; nonbinary scope comparisons can join
+    unrelated opaque scopes; PK NOCASE or DESC changes exact key identity.
+    Neither v1 migration nor v2 reads/saves may adopt those foreign semantics.
+    """
+    reviewed(A)
+    reviewed(B)
+    path = facts._path()
+    base = """CREATE TABLE declarations (
+        work_item_ref TEXT PRIMARY KEY, scope_ref TEXT NOT NULL,
+        goal_code TEXT NOT NULL, expected_outcome_code TEXT NOT NULL,
+        dependencies_json TEXT NOT NULL, revision INTEGER NOT NULL,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL"""
+    if version == 2:
+        base += ", edit_token TEXT NOT NULL"
+    ddl = base + ")"
+    if semantic == "check":
+        ddl = base + ", CHECK(goal_code = 'review_source_state'))"
+    elif semantic == "scope_collate":
+        ddl = ddl.replace("scope_ref TEXT NOT NULL",
+                          "scope_ref TEXT NOT NULL COLLATE NOCASE")
+    elif semantic == "pk_collate":
+        ddl = ddl.replace("work_item_ref TEXT PRIMARY KEY",
+                          "work_item_ref TEXT PRIMARY KEY COLLATE NOCASE")
+    elif semantic == "pk_desc":
+        ddl = ddl.replace("work_item_ref TEXT PRIMARY KEY",
+                          "work_item_ref TEXT PRIMARY KEY DESC")
+    row = (A, SCOPE, "review_source_state", "source_state_rechecked",
+           "[]", 1, NOW.isoformat(), NOW.isoformat(),
+           (NOW + timedelta(days=7)).isoformat())
+    if version == 2:
+        row += ("f" * 32,)
+    with sqlite3.connect(path) as db:
+        db.execute(ddl)
+        db.execute("INSERT INTO declarations VALUES (" +
+                   ",".join("?" for _ in row) + ")", row)
+        db.execute(f"PRAGMA user_version={version}")
+        # All five shapes pass the earlier column, object and index-list
+        # checks; only the new DDL and index_xinfo admission distinguishes.
+        assert len(db.execute("PRAGMA table_xinfo(declarations)").fetchall()) == (
+            9 if version == 1 else 10
+        )
+        assert db.execute("PRAGMA index_list(declarations)").fetchall() == [
+            (0, "sqlite_autoindex_declarations_1", 1, "pk", 0)
+        ]
+        assert db.execute("PRAGMA foreign_key_list(declarations)").fetchall() == []
+        assert db.execute(
+            "SELECT name FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'"
+        ).fetchall() == [("declarations",)]
+        pk = db.execute(
+            "PRAGMA index_xinfo('sqlite_autoindex_declarations_1')"
+        ).fetchall()
+        if semantic == "pk_collate":
+            assert pk[0][4] == "NOCASE"
+        elif semantic == "pk_desc":
+            assert pk[0][3] == 1
+        else:
+            assert pk[0][3:5] == (0, "BINARY")
+        before_schema = db.execute(
+            "SELECT type,name,sql FROM sqlite_master ORDER BY type,name"
+        ).fetchall()
+        before_rows = db.execute("SELECT * FROM declarations").fetchall()
+    if os.name == "posix":
+        path.chmod(0o600)
+
+    if semantic == "clean":
+        assert [item["work_item_ref"] for item in
+                facts.list_case_declarations(SCOPE, now=NOW)["items"]] == [A]
+        assert save(B)["work_item_ref"] == B
+        return
+
+    def no_token(*_args, **_kwargs):
+        raise AssertionError("rejected schema generated an owner edit token")
+
+    monkeypatch.setattr(facts.secrets, "token_hex", no_token)
+    error = "incompatible legacy" if version == 1 else "incompatible versioned"
+    with pytest.raises(facts.CaseDeclarationError, match=error):
+        facts.list_case_declarations(SCOPE, now=NOW)
+    with pytest.raises(facts.CaseDeclarationError, match=error):
+        save(B)
+    with sqlite3.connect(path) as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == version
+        assert db.execute(
+            "SELECT type,name,sql FROM sqlite_master ORDER BY type,name"
+        ).fetchall() == before_schema
+        assert db.execute("SELECT * FROM declarations").fetchall() == before_rows
