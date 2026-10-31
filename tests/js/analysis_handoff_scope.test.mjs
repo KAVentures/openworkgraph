@@ -2715,3 +2715,70 @@ test('prepared handoff distinguishes request-only copy from mutable local eviden
     assert.equal(h.downloads, 0);
   });
 });
+
+
+test('preview range does not alias a submillisecond-shifted server window', async t => {
+  for (const [name, mutate] of [
+    ['start shifted by one microsecond', (since, until) =>
+      [since.replace(/\\.000Z$/, '.000001Z'), until]],
+    ['end shifted by one microsecond', (since, until) =>
+      [since, until.replace(/\\.000Z$/, '.000001Z')]]
+  ]) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    const requested = new URLSearchParams(h.reads[1].url.split('?')[1]);
+    const [since, until] = mutate(requested.get('since'), requested.get('until'));
+    assert.notEqual(since + until, requested.get('since') + requested.get('until'));
+    assert.equal(Date.parse(since), Date.parse(requested.get('since')));
+    assert.equal(Date.parse(until), Date.parse(requested.get('until')));
+    h.reply(h.reads[1], {...h.preview('range', 'shifted'),
+      window: {scope: 'range', since, until}}, {preserveWindow: true});
+    await opening;
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /Preview period did not match/i);
+  });
+});
+
+test('ticket bounds reject submillisecond changes but accept exact offset equivalents', async t => {
+  for (const [name, valid] of [
+    ['microsecond-shifted ticket', false],
+    ['six-digit equivalent UTC fraction and +02:00 offset', true]
+  ]) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    const requested = new URLSearchParams(h.reads[1].url.split('?')[1]);
+    h.reply(h.reads[1], {...h.preview('range', 'precise'),
+      window: {scope: 'range',
+        since: requested.get('since').replace(/\\.000Z$/, '.000000Z'),
+        until: requested.get('until').replace(/\\.000Z$/, '.000000+00:00')}},
+      {preserveWindow: true});
+    await opening;
+    assert.equal(h.modals, 1);
+    const downloading = h.modal['#analysisDownload'].onclick();
+    await settle();
+    assert.equal(h.tickets.length, 1);
+    const body = JSON.parse(h.tickets[0].options.body);
+    const since = valid
+      ? asOffset(Date.parse(body.since), 2).replace(/\\.000\\+02:00$/, '.000000+02:00')
+      : body.since.replace(/\\.000Z$/, '.000001Z');
+    const until = body.until.replace(/\\.000Z$/, '.000000+00:00');
+    assert.equal(Date.parse(since), Date.parse(body.since));
+    const params = new URLSearchParams({scope: 'range', include_raw: 'false',
+      redact_names: 'true', ticket: 'synthetic-ticket', since, until});
+    h.reply(h.tickets[0], {ticket: 'synthetic-ticket',
+      url: '/v1/export/csvzip?' + params}, {preserveTicket: true});
+    await downloading;
+    assert.equal(h.downloads, valid ? 1 : 0);
+    assert.match(h.modal['#analysisActionStatus'].textContent,
+      valid ? /download started/i : /ticket did not match/i);
+    assert.equal(h.modal['#analysisDownload'].disabled, false);
+    assert.equal(h.tickets.length, 1);
+  });
+});
