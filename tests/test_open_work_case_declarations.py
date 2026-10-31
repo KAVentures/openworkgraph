@@ -1654,7 +1654,8 @@ def test_unversioned_existing_schema_is_never_stamped_as_v2(
             assert db.execute(
                 f"SELECT secret FROM {table_name}"
             ).fetchone()[0] == "sentinel"
-    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == []
+    with pytest.raises(facts.CaseDeclarationError, match="unsupported or incomplete"):
+        facts.list_case_declarations(SCOPE, now=NOW)
 
 
 def test_empty_existing_version_zero_store_initializes_normally(local):
