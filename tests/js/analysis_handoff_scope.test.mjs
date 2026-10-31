@@ -2611,3 +2611,58 @@ test('Unicode separators and invisible formatting in redacted focus samples stay
   assert.equal(h.tickets.length, 0);
   assert.equal(h.downloads, 0);
 });
+
+
+test('prepared handoff distinguishes request-only copy from mutable local evidence', async t => {
+  for (const {name, scope, expected} of [
+    {
+      name: 'fixed calendar bounds do not freeze retained rows or consent',
+      scope: 'range',
+      expected: /The selected date bounds are fixed, but retained events and access can change/
+    },
+    {
+      name: 'current recorder run may change after preview',
+      scope: 'current',
+      expected: /This recorder-run selection can change as events arrive or the recorder restarts/
+    },
+    {
+      name: 'all retained history may change after preview',
+      scope: 'all',
+      expected: /All retained history can change as events arrive, are deleted, or become inaccessible/
+    }
+  ]) await t.test(name, async () => {
+    const h = harness();
+    await settle();
+    h.reply(h.reads[0], h.preview('range', 'initial'));
+    await settle();
+    if (scope !== 'range') {
+      const select = h.bars[0].controls.select;
+      select.value = scope;
+      select.onchange({target: select});
+      await settle();
+      h.reply(h.reads.at(-1), h.preview(scope, 'selected'));
+      await settle();
+    }
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads.at(-1), h.preview(scope, 'scope-disclosure'));
+    await opening;
+    assert.equal(h.modals, 1);
+    assert.match(h.modalHtml, /Selected local evidence preview — not sent to an AI/);
+    assert.doesNotMatch(h.modalHtml, /What the AI will receive/);
+    assert.match(h.modalHtml, expected);
+    assert.match(h.modalHtml, /The downloaded file may differ from this preview; review it before sharing/);
+    assert.match(h.modalHtml, /This preview is not an immutable export snapshot or proof of complete capture/);
+    assert.match(h.modalHtml, /Copy request copies only the prepared request text/);
+    assert.match(h.modalHtml, /an AI will not receive that file unless you inspect and attach or share it yourself/);
+    assert.equal(h.copied.length, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-scope-disclosure']);
+    assert.match(h.modal['#analysisActionStatus'].textContent, /Only the prepared request text was copied/);
+    assert.match(h.modal['#analysisActionStatus'].textContent, /No evidence file was attached or sent/);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+  });
+});
