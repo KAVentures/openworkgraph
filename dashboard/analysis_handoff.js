@@ -459,6 +459,14 @@
       : d.window.scope === 'current'
         ? `Current recorder run${d.window.since ? ` (from ${d.window.since})` : ' (start not supplied by preview)'}.`
         : 'All retained history (unbounded date selection).';
+    // A scope identifies what to read, not an immutable evidence snapshot.
+    // Even fixed date bounds can change after consent revocation, deletion,
+    // retention or newly synchronized events. Never promise preview/file parity.
+    const scopeFreshnessStatement = d.window.scope === 'current'
+      ? 'This recorder-run selection can change as events arrive or the recorder restarts. The downloaded file may differ from this preview; review it before sharing.'
+      : d.window.scope === 'all'
+        ? 'All retained history can change as events arrive, are deleted, or become inaccessible. The downloaded file may differ from this preview; review it before sharing.'
+        : 'The selected date bounds are fixed, but retained events and access can change. The downloaded file may differ from this preview; review it before sharing.';
     const dailyChunks = d.analysis_plan?.date_chunks;
     const dailyBreakdown = !Array.isArray(dailyChunks)
       ? '<p>No daily breakdown was provided; date coverage is unknown.</p>'
@@ -479,9 +487,10 @@
       : '<li>No redacted context examples supplied.</li>';
     window.openModal?.('Prepare for AI','Discover opportunities from recorded work',`
       <p>No workflow description or repeated pattern is required. Your AI will interpret the evidence; this panel does not run a model.</p>
-      <div class="note"><strong>What the AI will receive</strong>
+      <div class="note"><strong>Selected local evidence preview — not sent to an AI</strong>
         <p>${esc(d.canonical_rows)} recorded events · ${esc(d.event_types.focus_span||0)} focus spans · ${esc(d.event_types.capture_gap||0)} unobserved-gap records.</p>
         <p>${esc(selectedPeriod)} Observed: ${esc(d.first_observed_at||'none')} to ${esc(d.last_observed_at||'none')}.</p>
+        <p>${esc(scopeFreshnessStatement)} This preview is not an immutable export snapshot or proof of complete capture.</p>
         <p>Reported sources (bounded preview; labels are not verified identities): ${esc(sourceSummary(d.sources))}. ${esc(workTextStatement)}</p>
         <p>${esc(latestWorkStatement)} Capture health and gaps are shown separately; they do not confirm the recorder is running.</p>
         <p>${esc(localRead)} Hosted AI availability must be checked separately: it only sees previously shared evidence. Preparing or downloading a local file does not grant AI history access.</p>
@@ -489,6 +498,7 @@
       <details><summary>Analyze a large history in smaller parts</summary><p>Ask your AI to process one day at a time, follow every page, and keep track of what it has examined. Repeated-work maps are optional. ${d.canonical_rows?'The file download still contains the full selected period.':'No evidence package is available for this zero-event selection; only the explanatory request can be copied.'}</p>${dailyBreakdown}${d.analysis_plan?.more_dates_not_listed?'<p>Only the first 31 dates are listed. Continue through the remaining selected dates.</p>':''}</details>
       <details><summary>Preview redacted context examples</summary><p>${esc(focusExampleSummary)}</p><ul>${focusExampleItems}</ul><p>Filtering is best effort; inspect any downloaded package before sharing it.</p></details>
       <label style="display:flex;gap:8px;margin:12px 0"><input id="analysisDetailed" type="checkbox" ${d.canonical_rows?'':'disabled'}>Include detailed chronological evidence (raw local event rows, more labels and context)</label>
+      <p>Copy request copies only the prepared request text. Download saves a separate local evidence file; an AI will not receive that file unless you inspect and attach or share it yourself.</p>
       <p>Name redaction is best effort, not anonymization. Even summary exports may contain sensitive titles, URLs or metadata; detailed chronology adds raw local evidence that may contain more sensitive content. Inspect the file before sharing it. Gaps and foreground time are not measured lost work or savings.</p>
       ${d.canonical_rows?'':'<p class="muted">No recorded events in the selected period. An evidence package is unavailable; you can still copy the explanatory request. This does not establish inactivity or complete capture.</p>'}
       <div class="modal-actions"><button type="button" id="analysisDownload" ${d.canonical_rows?'':'disabled'}>Download AI evidence package</button><button type="button" class="secondary" id="analysisCopy">Copy request for my AI</button></div>
@@ -526,7 +536,7 @@
       try{
         await navigator.clipboard.writeText(request);
         statusNode.textContent=current()
-          ? 'Request copied. Paste it into your AI; no model was invoked.'
+          ? 'Only the prepared request text was copied. No evidence file was attached or sent; review and share any downloaded file separately. No model was invoked.'
           : 'The work period changed during copying. The copied request refers to the previous period; prepare again.';
       }catch(_){statusNode.textContent=current()
         ? 'Clipboard unavailable. Open “Read the request” and copy the text.'
