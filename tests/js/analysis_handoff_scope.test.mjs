@@ -1296,6 +1296,55 @@ test('valid redacted focus examples preserve offset and legacy compatibility', a
 });
 
 
+
+test('redacted focus samples distinguish observed instants from missing provenance time', async t => {
+  for (const {name, sample, expectedTime} of [
+    {
+      name: 'explicit UTC observation',
+      sample: {app: 'Editor', window_title: 'Case', observed_at: observedStart},
+      expectedTime: observedStart
+    },
+    {
+      name: 'UTC-equivalent offset retains its original spelling',
+      sample: {app: 'Editor', window_title: 'Case',
+        observed_at: observedStart.replace(/Z$/, '+00:00')},
+      expectedTime: observedStart.replace(/Z$/, '+00:00')
+    },
+    {
+      name: 'legacy sample without timestamp',
+      sample: {app: 'Editor', window_title: 'Case'},
+      expectedTime: null
+    },
+    {
+      name: 'explicit null timestamp',
+      sample: {app: 'Editor', window_title: 'Case', observed_at: null},
+      expectedTime: null
+    }
+  ]) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], {...h.preview('range', 'sample-provenance'),
+      redacted_examples: [sample]});
+    await opening;
+    assert.equal(h.modals, 1);
+    if (expectedTime) {
+      assert.ok(h.modalHtml.includes('<time datetime="' + expectedTime + '">' +
+        expectedTime + '</time>'), 'show validated original offset-aware instant');
+      assert.match(h.modalHtml, /observed at <time datetime=/);
+      assert.doesNotMatch(h.modalHtml, /observation time not supplied/);
+    } else {
+      assert.match(h.modalHtml, /observation time not supplied/);
+      assert.doesNotMatch(h.modalHtml, /observed at <time datetime=/);
+    }
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-sample-provenance']);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+  });
+});
+
 test('zero selected events cannot claim an observed first/last span', async t => {
   for (const retained of [0, 2]) await t.test('retained=' + retained, async () => {
     const h = harness();
