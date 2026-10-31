@@ -1514,3 +1514,62 @@ def test_legacy_migration_does_not_materialize_unbounded_refs(local, monkeypatch
     assert not any("SELECT work_item_ref FROM declarations LIMIT" in sql
                    for sql in traced_sql)
     assert any("WHERE rowid=" in sql for sql in traced_sql)
+
+
+
+def test_corrupt_blob_ref_prunes_transitive_dependents_on_authorized_save(local):
+    # A damaged auxiliary SQLite row can have a BLOB work_item_ref despite
+    # TEXT affinity. Its former dependents must not survive as independent
+    # owner approvals, nor block an unrelated authorized save.
+    d = "owg:w:" + "d" * 32
+    for ref in (A, B, C, d):
+        reviewed(ref)
+    save(A)
+    dependent = save(B, depends_on_work_item_refs=[A])
+    save(C, depends_on_work_item_refs=[B])
+    independent = save(d)
+
+    damaged_ref = sqlite3.Binary(b"\x00damaged-ref\xff")
+    with sqlite3.connect(facts._path()) as db:
+        db.execute(
+            "UPDATE declarations SET work_item_ref=? WHERE work_item_ref=?",
+            (damaged_ref, B),
+        )
+        assert db.execute(
+            "SELECT typeof(work_item_ref) FROM declarations WHERE work_item_ref=?",
+            (damaged_ref,),
+        ).fetchone()[0] == "blob"
+
+    # Reads fail closed even before an authorized write prunes the invalid
+    # prerequisite and C -> B, while preserving unrelated A and D.
+    assert {item["work_item_ref"] for item in
+            facts.list_case_declarations(SCOPE, now=NOW)["items"]} == {A, d}
+    updated = save(d, expected_revision=independent["revision"],
+                   expected_edit_token=independent["edit_token"])
+    assert updated["revision"] == 2
+    with sqlite3.connect(facts._path()) as db:
+        assert {row[0] for row in db.execute(
+            "SELECT work_item_ref FROM declarations")} == {A, d}
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        save(C, expected_revision=1, expected_edit_token=dependent["edit_token"])
+
+
+def test_mixed_sqlite_storage_classes_do_not_abort_bounded_pruning(local):
+    reviewed(A)
+    reviewed(B)
+    original = save(A)
+    with sqlite3.connect(facts._path()) as db:
+        row = db.execute("SELECT * FROM declarations WHERE work_item_ref=?", (A,)).fetchone()
+        db.execute("INSERT INTO declarations VALUES (?,?,?,?,?,?,?,?,?,?)",
+                   (sqlite3.Binary(b"\xff\x00"), *row[1:]))
+        # SQLite TEXT affinity converts integer 42 to the invalid string '42'.
+        db.execute("INSERT INTO declarations VALUES (?,?,?,?,?,?,?,?,?,?)",
+                   (42, *row[1:]))
+        assert set(db.execute(
+            "SELECT typeof(work_item_ref) FROM declarations")) == {("text",), ("blob",)}
+    # Previously sorted(str, bytes) raised TypeError and rolled this save back.
+    save(B)
+    with sqlite3.connect(facts._path()) as db:
+        assert {row[0] for row in db.execute(
+            "SELECT work_item_ref FROM declarations")} == {A, B}
+    assert original in facts.list_case_declarations(SCOPE, now=NOW)["items"]
