@@ -2275,6 +2275,7 @@ def test_untrusted_sqlite_sidecar_refused_before_open_and_clearable(
                 pytest.skip(f"hard links unavailable: {exc}")
         elif kind == "journal_directory":
             sidecar.mkdir()
+            (sidecar / "unrelated").write_text("must-not-recurse")
         elif kind == "journal_permissions":
             if os.name != "posix":
                 pytest.skip("POSIX file mode required")
@@ -2304,18 +2305,20 @@ def test_untrusted_sqlite_sidecar_refused_before_open_and_clearable(
         if kind in ("journal_symlink", "journal_hardlink"):
             assert external.read_bytes() == b"outside-owner-facts"
 
-        # A directory is not a SQLite file and cannot be unlinked by the
-        # existing file-only clear helper. Remove the synthetic directory
-        # before checking normal explicit review deletion.
-        if kind == "journal_directory":
-            sidecar.rmdir()
+        # Even a non-empty hostile sidecar directory must not block review
+        # revocation. It remains untouched, and cannot be admitted later.
         assert reviews.remove_review_intention(A, now=NOW)
         assert not path.exists()
-        assert not sidecar.exists()
+        if kind == "journal_directory":
+            assert (sidecar / "unrelated").read_text() == "must-not-recurse"
+        else:
+            assert not sidecar.exists()
         if kind in ("journal_symlink", "journal_hardlink"):
             assert external.read_bytes() == b"outside-owner-facts"
     finally:
         if sidecar.is_dir() and not sidecar.is_symlink():
+            for child in sidecar.iterdir():
+                child.unlink()
             sidecar.rmdir()
         elif sidecar.exists() or sidecar.is_symlink():
             sidecar.unlink()
