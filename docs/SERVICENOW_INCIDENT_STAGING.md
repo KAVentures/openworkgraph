@@ -351,3 +351,32 @@ pagination snapshot, timezone, provider identity, deletion, completeness,
 business outcome or permission to persist. A future real connector must enforce
 current tenant-scoped grants and revocation at actual transport **and** atomically
 at append/checkpoint, and obtain separate real sandbox/client acceptance.
+
+## Offline HTTP-metadata replay consistency (two reads)
+
+`reconcile_supplied_http_replays(scope, earlier_responses, later_responses)`
+is an additive, **pure fake-provider** counterpart to
+`reconcile_planned_replays`. Each side must contain one to eight bounded
+supplied-HTTP envelopes, with matching page counts. **Every** earlier and later
+page passes the existing `project_supplied_http_pages` request/final URL,
+GET, status, redirect, UTF-8 JSON, selected scope, ordered offset, and
+consecutive-page guards. Only then does the existing planned-replay engine
+require exactly matching plans and compare selected source revisions.
+
+The new result explicitly reports `all_supplied_replay_pages_checked: true`
+and `supplied_http_metadata_checked: true`, but always
+`authenticated_transport_receipt: false` and
+`transport_grant_verified: false`. Missing selected incidents remain
+unknown, non-adjacent reported revisions remain gaps, and source-local
+timestamps do not become verified UTC chronology. The function does not
+perform HTTP requests, authenticate a ServiceNow account, verify a current
+external consent grant, persist events, advance checkpoints, infer deletion,
+or verify business outcomes. Existing raw replay callers remain compatible
+and do **not** gain any HTTP provenance flags.
+
+Synthetic adversarial regressions cover accepted two-record replay, missing
+and non-adjacent revisions, plan mismatch, revocation, and corrupt second-page
+metadata on **either** read (redirect, status, method, URL, media type, body,
+missing/extra envelope fields and foreign tenant). These fixtures do not
+replace real sandbox, customer-tenant, source-receipt, atomic append/revocation,
+or live-provider acceptance tests.
