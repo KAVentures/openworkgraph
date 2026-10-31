@@ -234,3 +234,30 @@ or customer outcome verification, or any agent execution permission.
 A newly created or existing **empty** SQLite file at schema version zero may be initialized to the supported v2 declaration table by an explicit, reviewed save. A version-zero file that already contains any user-defined table, view, index or trigger is **not** adopted: the save fails closed and rolls back without stamping `user_version=2` or modifying the existing schema. This prevents `CREATE TABLE IF NOT EXISTS` from silently treating an incompatible or unrelated pre-existing `declarations` table as a valid durable approval ledger. A read of an unsupported version also fails closed rather than interpreting its contents as approved facts.
 
 The explicit bounded v1-to-v2 migration remains separate and unchanged. This guard does not authenticate the local filesystem, repair corrupt databases, prove cross-process grant revocation, or verify provider/customer outcomes. Synthetic SQLite tests cover incompatible declaration tables, unrelated tables/views, unchanged version/data on rejection, and initialization of a clean version-zero file.
+
+
+## Version-two schema identity admission
+
+An auxiliary SQLite file stamped `PRAGMA user_version=2` is **not** automatically
+a valid declaration ledger. Before reading or writing owner-approved facts,
+the internal store checks the fixed ten-column v2 table contract: exact
+column names/order, declared SQLite types, required NOT NULL fields, and
+`work_item_ref TEXT PRIMARY KEY`. A missing primary key could otherwise
+allow two rows with the same opaque case identity, making exact optimistic
+CAS and deletion ambiguous. Missing/extra columns, a wrong revision type,
+or a nullable required scope also fail closed without attempting to repair,
+delete or adopt that incompatible table.
+
+Both freshly initialized v2 stores and the supported bounded v1-to-v2
+migration retain their existing behavior; v1's default on the newly added
+`edit_token` column is permitted because it does not change identity or
+CAS requirements. Five synthetic SQLite regressions exercise malformed
+v2 schemas, including two duplicate case rows in the no-PK variant, and
+verify that reads/saves refuse them while preserving the stored schema,
+rows and version. Existing clean initialization and v1 migration tests
+cover compatibility.
+
+This is a narrow structural admission check, **not** filesystem tamper
+resistance, SQLite integrity verification, a cross-process source-revocation
+fence, or proof of provider/customer outcomes. It grants no source reads,
+new business obligations, agent rights or execution.
