@@ -1,0 +1,2446 @@
+"""Local owner-declared case facts: exact versions, provenance and lifecycle."""
+from __future__ import annotations
+
+from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
+import json
+import os
+import sqlite3
+
+import pytest
+
+from server import open_work_case_declarations as facts
+from server import open_work_reviews as reviews
+
+A = "owg:w:" + "a" * 32
+B = "owg:w:" + "b" * 32
+C = "owg:w:" + "c" * 32
+SCOPE = "owg:scope:" + "1" * 32
+OTHER_SCOPE = "owg:scope:" + "2" * 32
+NOW = datetime(2026, 10, 30, 9, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def local(tmp_path, monkeypatch):
+    monkeypatch.setenv("WORKFLOW_OBSERVER_AUTH_DIR", str(tmp_path))
+    policy = lambda: {"human_retention": {"mode": "forever"}}
+    monkeypatch.setattr(facts, "read_policy", policy)
+    monkeypatch.setattr(reviews, "read_policy", policy)
+    return tmp_path
+
+
+def reviewed(ref, at=NOW):
+    reviews.save_review_intention(ref, "assess_follow_up",
+        provider_candidate_currently_open=True, now=at)
+
+
+def save(ref=A, scope=SCOPE, **kwargs):
+    return facts.save_case_declaration(
+        ref, scope, goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked", now=NOW, **kwargs)
+
+
+def test_default_off_requires_prior_explicit_review_and_never_reads_source(local):
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == []
+    assert not facts._path().exists()
+    with pytest.raises(facts.CaseDeclarationError, match="local review"):
+        save()
+    assert not facts._path().exists()
+    reviewed(A)
+    item = save()
+    assert item["revision"] == 1
+    assert item["provenance"] == "explicit_owner_declaration_not_source_verified"
+    assert item["source_state"] == "unknown_until_explicit_recheck"
+    for key in ("expected_outcome_verified", "business_obligation_verified",
+                "customer_outcome_verified", "agent_execution_authorized"):
+        assert item[key] is False
+    listing = facts.list_case_declarations(SCOPE, now=NOW)
+    assert listing["source_read_performed"] is False
+    assert listing["not_synced"] is True
+    assert listing["items"] == [item]
+    assert facts.list_case_declarations(OTHER_SCOPE, now=NOW)["items"] == []
+    if os.name == "posix":
+        assert facts._path().stat().st_mode & 0o777 == 0o600
+    payload = facts._path().read_bytes()
+    for secret in (b"in_1234567890ABCDEF", b"customer@example.com", b"api_key", b"acct_"):
+        assert secret not in payload
+
+
+def test_exact_revision_no_implicit_renewal_and_no_partial_stale_write(local):
+    reviewed(A)
+    first = save()
+    later = NOW + timedelta(hours=1)
+    updated = facts.save_case_declaration(A, SCOPE,
+        goal_code="verify_operation", expected_outcome_code="operation_receipt_reviewed",
+        expected_revision=1, expected_edit_token=first["edit_token"], now=later)
+    assert updated["revision"] == 2
+    assert updated["created_at"] == first["created_at"]
+    assert updated["expires_at"] == first["expires_at"]
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        save(expected_revision=1, expected_edit_token=first["edit_token"])
+    assert facts.list_case_declarations(SCOPE, now=later)["items"][0] == updated
+
+
+def test_dependency_scope_review_and_cycle_guard(local):
+    for ref in (A, B, C):
+        reviewed(ref)
+    a = save()
+    b = save(B, depends_on_work_item_refs=[A])
+    c = save(C, depends_on_work_item_refs=[B])
+    assert b["depends_on_work_item_refs"] == [A]
+    assert c["depends_on_work_item_refs"] == [B]
+    with pytest.raises(facts.CaseDeclarationError, match="cyclic"):
+        save(expected_revision=a["revision"], expected_edit_token=a["edit_token"], depends_on_work_item_refs=[C])
+    with pytest.raises(facts.CaseDeclarationError, match="source scope"):
+        save(expected_revision=a["revision"], expected_edit_token=a["edit_token"], scope=OTHER_SCOPE)
+    with pytest.raises(facts.CaseDeclarationError, match="duplicate"):
+        save(expected_revision=a["revision"], expected_edit_token=a["edit_token"], depends_on_work_item_refs=[B, B])
+    with pytest.raises(facts.CaseDeclarationError, match="self-referential"):
+        save(expected_revision=a["revision"], expected_edit_token=a["edit_token"], depends_on_work_item_refs=[A])
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"]
+
+
+def test_dependency_requires_same_scope_and_review(local):
+    reviewed(A)
+    reviewed(B)
+    save()
+    with pytest.raises(facts.CaseDeclarationError, match="dependency missing"):
+        save(B, depends_on_work_item_refs=[A], scope=OTHER_SCOPE)
+    reviewed(C)
+    with pytest.raises(facts.CaseDeclarationError, match="dependency missing"):
+        save(C, depends_on_work_item_refs=[B])
+    assert len(facts.list_case_declarations(SCOPE, now=NOW)["items"]) == 1
+
+
+def test_review_removal_erases_transitive_dependent_declarations(local):
+    # B -> A and C -> B were explicitly owner-declared. Removing A's
+    # review must not silently turn B (and therefore C) into unblocked work.
+    d = "owg:w:" + "d" * 32
+    for ref in (A, B, C, d):
+        reviewed(ref)
+    save()
+    b = save(B, depends_on_work_item_refs=[A])
+    save(C, depends_on_work_item_refs=[B])
+    independent = save(d)
+    assert {i["work_item_ref"] for i in facts.list_case_declarations(SCOPE, now=NOW)["items"]} == {A, B, C, d}
+
+    assert reviews.remove_review_intention(A, now=NOW) is True
+    remaining = facts.list_case_declarations(SCOPE, now=NOW)["items"]
+    assert remaining == [independent]
+    # B and C retain their human review requests, but not the now-invalid
+    # owner declarations or their previously approved dependency graph.
+    reviewed_refs = {i["work_item_ref"] for i in reviews.list_review_intentions(now=NOW)["items"]}
+    assert {B, C, d}.issubset(reviewed_refs)
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        save(B, expected_revision=b["revision"], expected_edit_token=b["edit_token"])
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [independent]
+
+    reviews.clear_review_intentions()
+    assert not facts._path().exists()
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == []
+
+
+
+def test_review_disconnected_between_admission_snapshot_and_write(local, monkeypatch):
+    reviewed(A)
+    original = facts._reviewed
+    calls = 0
+
+    def disconnect_after_first_snapshot(at):
+        nonlocal calls
+        snapshot = original(at)
+        calls += 1
+        if calls == 1:
+            reviews.clear_review_intentions()
+        return snapshot
+
+    monkeypatch.setattr(facts, "_reviewed", disconnect_after_first_snapshot)
+    with pytest.raises(facts.CaseDeclarationError, match="review revoked"):
+        save()
+    assert calls >= 2
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == []
+
+
+def test_dependency_review_removed_between_snapshot_and_write(local, monkeypatch):
+    reviewed(A)
+    reviewed(B)
+    save()
+    original = facts._reviewed
+    calls = 0
+
+    def remove_dependency_after_first_snapshot(at):
+        nonlocal calls
+        snapshot = original(at)
+        calls += 1
+        if calls == 1:
+            assert reviews.remove_review_intention(A, now=at)
+        return snapshot
+
+    monkeypatch.setattr(facts, "_reviewed", remove_dependency_after_first_snapshot)
+    with pytest.raises(facts.CaseDeclarationError, match="review revoked"):
+        save(B, depends_on_work_item_refs=[A])
+    assert {i["work_item_ref"] for i in facts.list_case_declarations(SCOPE, now=NOW)["items"]} == set()
+
+
+def test_retention_revoked_between_snapshot_and_write(local, monkeypatch):
+    reviewed(A)
+    original = facts._reviewed
+    calls = 0
+
+    def revoke_retention_after_first_snapshot(at):
+        nonlocal calls
+        snapshot = original(at)
+        calls += 1
+        if calls == 1:
+            monkeypatch.setattr(facts, "read_policy",
+                lambda: {"human_retention": {"mode": "ephemeral"}})
+        return snapshot
+
+    monkeypatch.setattr(facts, "_reviewed", revoke_retention_after_first_snapshot)
+    with pytest.raises(facts.CaseDeclarationError, match="retention revoked"):
+        save()
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == []
+
+def test_retention_shrink_and_session_only_scrub(local, monkeypatch):
+    reviewed(A)
+    save()
+    policy = lambda: {"human_retention": {"mode": "days", "days": 1}}
+    monkeypatch.setattr(facts, "read_policy", policy)
+    monkeypatch.setattr(reviews, "read_policy", policy)
+    assert facts.list_case_declarations(SCOPE, now=NOW + timedelta(days=2))["items"] == []
+    policy = lambda: {"human_retention": {"mode": "ephemeral"}}
+    monkeypatch.setattr(facts, "read_policy", policy)
+    monkeypatch.setattr(reviews, "read_policy", policy)
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == []
+    assert not facts._path().exists()
+    with pytest.raises(facts.CaseDeclarationError, match="retained human history"):
+        save()
+
+
+def test_storage_symlink_and_permissions_fail_closed(local):
+    reviewed(A)
+    target = local / "other"
+    target.write_text("untouched")
+    try:
+        facts._path().symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    with pytest.raises(facts.CaseDeclarationError, match="unsafe"):
+        save()
+    assert target.read_text() == "untouched"
+    facts._path().unlink()
+    save()
+    if os.name == "posix":
+        facts._path().chmod(0o644)
+        with pytest.raises(facts.CaseDeclarationError, match="permissions"):
+            facts.list_case_declarations(SCOPE, now=NOW)
+
+
+def test_two_concurrent_edits_with_same_revision_cannot_both_commit(local):
+    reviewed(A)
+    first = save()
+    def edit(goal):
+        try:
+            return facts.save_case_declaration(A, SCOPE, goal_code=goal,
+                expected_outcome_code="source_state_rechecked",
+                expected_revision=1, expected_edit_token=first["edit_token"], now=NOW + timedelta(minutes=1))
+        except facts.CaseDeclarationError as exc:
+            return str(exc)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(edit, ("verify_operation", "assess_declared_policy")))
+    assert sum(isinstance(v, dict) for v in results) == 1
+    assert sum(isinstance(v, str) and "stale" in v for v in results) == 1
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"][0]["revision"] == 2
+
+
+@pytest.mark.parametrize("bad", ["owg:w:" + "A" * 32, "in_1234567890ABCDEF", "owg:w:" + "a" * 31])
+def test_ref_validation_precedes_storage(local, bad):
+    with pytest.raises(facts.CaseDeclarationError):
+        save(ref=bad)
+    assert not facts._path().exists()
+
+
+def test_sqlite_rollback_preserves_existing_fact(local):
+    reviewed(A)
+    reviewed(B)
+    first = save()
+    with pytest.raises(facts.CaseDeclarationError):
+        save(B, depends_on_work_item_refs=[A], expected_revision=1, expected_edit_token=first["edit_token"])
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [first]
+
+
+def test_corrupt_declaration_db_cannot_block_explicit_review_deletion(local):
+    reviewed(A)
+    facts._path().write_bytes(b"not a SQLite database")
+    if os.name == "posix":
+        facts._path().chmod(0o600)
+    assert reviews.remove_review_intention(A, now=NOW) is True
+    assert not facts._path().exists()
+    assert A not in {i["work_item_ref"] for i in reviews.list_review_intentions(now=NOW)["items"]}
+
+
+
+def test_expired_dependency_suppresses_transitive_dependents_but_not_independent_cases(local):
+    # A expires before independently reviewed D. B and C must not
+    # reference a missing prerequisite, even through multiple hops.
+    d = "owg:w:" + "d" * 32
+    reviewed(A)
+    save()
+    at_b = NOW + timedelta(days=1)
+    reviewed(B, at=at_b)
+    facts.save_case_declaration(B, SCOPE, goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked",
+        depends_on_work_item_refs=[A], now=at_b)
+    at_c = NOW + timedelta(days=2)
+    reviewed(C, at=at_c)
+    reviewed(d, at=at_c)
+    facts.save_case_declaration(C, SCOPE, goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked",
+        depends_on_work_item_refs=[B], now=at_c)
+    facts.save_case_declaration(d, SCOPE, goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked", now=at_c)
+
+    before = facts.list_case_declarations(SCOPE, now=NOW + timedelta(days=6))
+    assert {i["work_item_ref"] for i in before["items"]} == {A, B, C, d}
+    after = facts.list_case_declarations(SCOPE, now=NOW + timedelta(days=7, hours=1))
+    assert {i["work_item_ref"] for i in after["items"]} == {d}
+    assert after["items"][0]["depends_on_work_item_refs"] == []
+
+
+def test_early_re_review_invalidates_prior_owner_approvals_and_dependents(local):
+    # A's human review is replaced before its TTL expires. That is not
+    # renewed approval for A's old goal or B -> A / C -> B dependency facts.
+    d = "owg:w:" + "d" * 32
+    for ref in (A, B, C, d):
+        reviewed(ref)
+    old_a = save()
+    old_b = save(B, depends_on_work_item_refs=[A])
+    save(C, depends_on_work_item_refs=[B])
+    independent = save(d)
+
+    at = NOW + timedelta(days=1)
+    reviewed(A, at=at)
+    assert facts.list_case_declarations(SCOPE, now=at)["items"] == [independent]
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        facts.save_case_declaration(
+            A, SCOPE, goal_code="review_source_state",
+            expected_outcome_code="source_state_rechecked",
+            expected_revision=old_a["revision"], expected_edit_token=old_a["edit_token"], now=at)
+
+    # Pruning is durable: recreating A cannot resurrect the old dependent
+    # approvals, even though B and C remain in the human review queue.
+    fresh_a = facts.save_case_declaration(
+        A, SCOPE, goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked", now=at)
+    assert fresh_a["revision"] == 1
+    assert {i["work_item_ref"] for i in
+            facts.list_case_declarations(SCOPE, now=at)["items"]} == {A, d}
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        facts.save_case_declaration(
+            B, SCOPE, goal_code="review_source_state",
+            expected_outcome_code="source_state_rechecked",
+            depends_on_work_item_refs=[A],
+            expected_revision=old_b["revision"], expected_edit_token=old_b["edit_token"], now=at)
+    fresh_b = facts.save_case_declaration(
+        B, SCOPE, goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked",
+        depends_on_work_item_refs=[A], now=at)
+    facts.save_case_declaration(
+        C, SCOPE, goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked",
+        depends_on_work_item_refs=[B], now=at)
+    assert fresh_b["depends_on_work_item_refs"] == [A]
+    assert {i["work_item_ref"] for i in
+            facts.list_case_declarations(SCOPE, now=at)["items"]} == {A, B, C, d}
+
+
+def test_review_replaced_between_admission_snapshots_refuses_stale_cas(local, monkeypatch):
+    reviewed(A)
+    original = save()
+    real_reviewed = facts._reviewed
+    calls = 0
+    at = NOW + timedelta(minutes=1)
+
+    def replace_after_first_snapshot(timestamp):
+        nonlocal calls
+        snapshot = real_reviewed(timestamp)
+        calls += 1
+        if calls == 1:
+            reviewed(A, at=at)
+        return snapshot
+
+    monkeypatch.setattr(facts, "_reviewed", replace_after_first_snapshot)
+    with pytest.raises(facts.CaseDeclarationError, match="review changed"):
+        facts.save_case_declaration(
+            A, SCOPE, goal_code="verify_operation",
+            expected_outcome_code="operation_receipt_reviewed",
+            expected_revision=original["revision"], expected_edit_token=original["edit_token"], now=at)
+    assert calls >= 2
+    # The failed transaction must not rewrite the old owner declaration;
+    # its now-obsolete review generation also hides it on reads.
+    assert facts.list_case_declarations(SCOPE, now=at)["items"] == []
+
+
+def test_lapsed_review_cannot_resurrect_a_later_saved_declaration(local):
+    # A review expires seven days after its own creation. A declaration
+    # saved later must not gain an extra seven days of authority.
+    reviewed(A)
+    saved_at = NOW + timedelta(days=1)
+    item = facts.save_case_declaration(A, SCOPE,
+        goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked", now=saved_at)
+    assert item["expires_at"] == (NOW + timedelta(days=7)).isoformat()
+    assert facts.list_case_declarations(SCOPE, now=NOW + timedelta(days=6))["items"] == [item]
+
+    after_lapse = NOW + timedelta(days=7, hours=1)
+    assert facts.list_case_declarations(SCOPE, now=after_lapse)["items"] == []
+    reviewed(A, at=after_lapse)
+    # A newly saved review is not a reapproval of the old goal/outcome.
+    assert facts.list_case_declarations(SCOPE, now=after_lapse)["items"] == []
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        facts.save_case_declaration(A, SCOPE,
+            goal_code="review_source_state",
+            expected_outcome_code="source_state_rechecked",
+            expected_revision=item["revision"], expected_edit_token=item["edit_token"], now=after_lapse)
+    fresh = facts.save_case_declaration(A, SCOPE,
+        goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked", now=after_lapse)
+    assert fresh["revision"] == 1
+    assert fresh["created_at"] == after_lapse.isoformat()
+
+
+def test_dependency_expiry_cascades_and_cas_update_never_renews(local):
+    # B is reviewed later than A; B cannot outlive A's declared prerequisite
+    # and reappear merely because A is re-reviewed after expiry.
+    reviewed(A)
+    later = NOW + timedelta(days=1)
+    reviewed(B, at=later)
+    a = facts.save_case_declaration(A, SCOPE,
+        goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked", now=later)
+    b = facts.save_case_declaration(B, SCOPE,
+        goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked", now=later)
+    assert b["expires_at"] == (later + timedelta(days=7)).isoformat()
+
+    linked = facts.save_case_declaration(B, SCOPE,
+        goal_code="assess_declared_policy",
+        expected_outcome_code="source_state_rechecked",
+        depends_on_work_item_refs=[A], expected_revision=1, expected_edit_token=b["edit_token"],
+        now=later + timedelta(hours=1))
+    assert linked["expires_at"] == a["expires_at"]
+    # Removing the dependency by explicit CAS must not silently renew B.
+    unlinked = facts.save_case_declaration(B, SCOPE,
+        goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked",
+        expected_revision=2, expected_edit_token=linked["edit_token"], now=later + timedelta(hours=2))
+    assert unlinked["expires_at"] == a["expires_at"]
+
+    # Reapprove B -> A before expiry; even this cannot extend the deadline.
+    linked_again = facts.save_case_declaration(B, SCOPE,
+        goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked",
+        depends_on_work_item_refs=[A], expected_revision=3, expected_edit_token=unlinked["edit_token"],
+        now=later + timedelta(hours=3))
+    assert linked_again["expires_at"] == a["expires_at"]
+
+    after_lapse = NOW + timedelta(days=7, hours=1)
+    reviewed(A, at=after_lapse)
+    facts.save_case_declaration(A, SCOPE,
+        goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked", now=after_lapse)
+    items = facts.list_case_declarations(SCOPE, now=after_lapse)["items"]
+    assert {item["work_item_ref"] for item in items} == {A}
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        facts.save_case_declaration(B, SCOPE,
+            goal_code="review_source_state",
+            expected_outcome_code="source_state_rechecked",
+            expected_revision=linked_again["revision"], expected_edit_token=linked_again["edit_token"], now=after_lapse)
+
+
+def test_shortened_prerequisite_expiry_cannot_resurrect_old_dependent(local):
+    # D is older than A. Adding A -> D shortens A's expiry after B -> A
+    # was approved. When A expires, a fresh A must not revive stale B -> A.
+    d = "owg:w:" + "d" * 32
+    early = NOW - timedelta(days=2)
+    reviewed(d, at=early)
+    dependency = facts.save_case_declaration(d, SCOPE,
+        goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked", now=early)
+    reviewed(A)
+    reviewed(B)
+    first_a = save()
+    old_b = save(B, depends_on_work_item_refs=[A])
+    assert old_b["expires_at"] == first_a["expires_at"]
+
+    shortened_a = facts.save_case_declaration(A, SCOPE,
+        goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked",
+        depends_on_work_item_refs=[d], expected_revision=1, expected_edit_token=first_a["edit_token"],
+        now=NOW + timedelta(days=1))
+    assert shortened_a["expires_at"] == dependency["expires_at"]
+    at = NOW + timedelta(days=5, hours=1)
+    assert facts.list_case_declarations(SCOPE, now=at)["items"] == []
+
+    fresh_a = facts.save_case_declaration(A, SCOPE,
+        goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked", now=at)
+    assert fresh_a["revision"] == 1
+    assert {i["work_item_ref"] for i in facts.list_case_declarations(SCOPE, now=at)["items"]} == {A}
+    # The old B revision was transitively erased by the write-time prune.
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        facts.save_case_declaration(B, SCOPE,
+            goal_code="review_source_state",
+            expected_outcome_code="source_state_rechecked",
+            depends_on_work_item_refs=[A], expected_revision=old_b["revision"], expected_edit_token=old_b["edit_token"],
+            now=at)
+
+
+def test_missing_prerequisite_cannot_resurrect_dependent_on_redeclaration(local):
+    # Simulate an interrupted/partial auxiliary-ledger cleanup: A is gone
+    # while B -> A and C -> B remain. Read-time hiding alone is insufficient
+    # because recreating A could otherwise revive those old approvals.
+    d = "owg:w:" + "d" * 32
+    for ref in (A, B, C, d):
+        reviewed(ref)
+    save()
+    old_b = save(B, depends_on_work_item_refs=[A])
+    save(C, depends_on_work_item_refs=[B])
+    independent = save(d)
+    with facts._database(create=False) as db:
+        assert db is not None
+        db.execute("DELETE FROM declarations WHERE work_item_ref=?", (A,))
+
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [independent]
+    recreated = save()  # Prunes the orphan closure before inserting A.
+    assert recreated["revision"] == 1
+    remaining = facts.list_case_declarations(SCOPE, now=NOW)["items"]
+    assert {item["work_item_ref"] for item in remaining} == {A, d}
+    assert independent in remaining
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        save(B, expected_revision=old_b["revision"], expected_edit_token=old_b["edit_token"], depends_on_work_item_refs=[A])
+
+
+def test_wrong_scope_prerequisite_prunes_dependents_not_unrelated_cases(local):
+    # A declaration row changed to a different scope cannot lend authority
+    # to B -> A, nor to the transitive C -> B edge.
+    d = "owg:w:" + "d" * 32
+    e = "owg:w:" + "e" * 32
+    for ref in (A, B, C, d, e):
+        reviewed(ref)
+    save()
+    old_b = save(B, depends_on_work_item_refs=[A])
+    save(C, depends_on_work_item_refs=[B])
+    independent = save(d)
+    with facts._database(create=False) as db:
+        assert db is not None
+        db.execute("UPDATE declarations SET scope_ref=? WHERE work_item_ref=?",
+                   (OTHER_SCOPE, A))
+
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [independent]
+    new_case = save(e)  # Triggers fail-closed scope-aware pruning.
+    remaining = facts.list_case_declarations(SCOPE, now=NOW)["items"]
+    assert {item["work_item_ref"] for item in remaining} == {d, e}
+    assert independent in remaining and new_case in remaining
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        save(B, expected_revision=old_b["revision"], expected_edit_token=old_b["edit_token"])
+
+
+def test_prerequisite_revision_erases_transitive_owner_approvals_not_unrelated(local):
+    # B -> A was approved for A revision 1; changing A's declared goal
+    # cannot silently carry B (or C -> B) into A revision 2.
+    d = "owg:w:" + "d" * 32
+    for ref in (A, B, C, d):
+        reviewed(ref)
+    a = save()
+    old_b = save(B, depends_on_work_item_refs=[A])
+    save(C, depends_on_work_item_refs=[B])
+    independent = save(d)
+
+    revised = facts.save_case_declaration(
+        A, SCOPE, goal_code="verify_operation",
+        expected_outcome_code="operation_receipt_reviewed",
+        expected_revision=a["revision"], expected_edit_token=a["edit_token"], now=NOW + timedelta(minutes=1))
+    assert revised["revision"] == 2
+    assert revised["goal_code"] == "verify_operation"
+    assert facts.list_case_declarations(SCOPE, now=NOW + timedelta(minutes=1))["items"] == [
+        revised, independent
+    ]
+    # Review requests are not erased, but old dependent declarations are.
+    reviewed_refs = {
+        item["work_item_ref"] for item in reviews.list_review_intentions(now=NOW)["items"]
+    }
+    assert {A, B, C, d}.issubset(reviewed_refs)
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        facts.save_case_declaration(
+            B, SCOPE, goal_code="review_source_state",
+            expected_outcome_code="source_state_rechecked",
+            depends_on_work_item_refs=[A], expected_revision=old_b["revision"], expected_edit_token=old_b["edit_token"],
+            now=NOW + timedelta(minutes=2))
+    fresh_b = facts.save_case_declaration(
+        B, SCOPE, goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked",
+        depends_on_work_item_refs=[A], now=NOW + timedelta(minutes=2))
+    assert fresh_b["revision"] == 1
+    assert fresh_b["depends_on_work_item_refs"] == [A]
+
+
+def test_failed_prerequisite_cas_rolls_back_and_same_value_revision_invalidates(local):
+    reviewed(A)
+    reviewed(B)
+    a = save()
+    b = save(B, depends_on_work_item_refs=[A])
+    # Invalid A -> B would create a cycle and must not erase B.
+    with pytest.raises(facts.CaseDeclarationError, match="cyclic"):
+        facts.save_case_declaration(
+            A, SCOPE, goal_code="verify_operation",
+            expected_outcome_code="operation_receipt_reviewed",
+            depends_on_work_item_refs=[B], expected_revision=1, expected_edit_token=a["edit_token"],
+            now=NOW + timedelta(minutes=1))
+    assert {item["work_item_ref"] for item in
+            facts.list_case_declarations(SCOPE, now=NOW)["items"]} == {A, B}
+    # Even a same-value CAS advances A's exact revision. Without pinned
+    # dependency versions, B must be explicitly re-declared.
+    same_value = facts.save_case_declaration(
+        A, SCOPE, goal_code=a["goal_code"],
+        expected_outcome_code=a["expected_outcome_code"],
+        expected_revision=1, expected_edit_token=a["edit_token"], now=NOW + timedelta(minutes=1))
+    assert same_value["revision"] == 2
+    assert facts.list_case_declarations(SCOPE, now=NOW + timedelta(minutes=1))["items"] == [same_value]
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        facts.save_case_declaration(
+            B, SCOPE, goal_code=b["goal_code"],
+            expected_outcome_code=b["expected_outcome_code"],
+            depends_on_work_item_refs=[A], expected_revision=b["revision"], expected_edit_token=b["edit_token"],
+            now=NOW + timedelta(minutes=2))
+
+
+def test_edit_requires_incarnation_token_and_preserves_it_on_cas(local):
+    reviewed(A)
+    first = save()
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        save(expected_revision=first["revision"])
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        save(expected_revision=first["revision"], expected_edit_token="0" * 32)
+    updated = save(expected_revision=first["revision"],
+                   expected_edit_token=first["edit_token"])
+    assert updated["revision"] == first["revision"] + 1
+    assert updated["edit_token"] == first["edit_token"]
+
+
+def test_prerequisite_edit_redeclaration_blocks_old_dependent_aba(local):
+    # Independent repro #6518893543: B rev1 is erased after A changes,
+    # and a newly approved B rev1 must not accept an old B rev1 edit.
+    for ref in (A, B, C):
+        reviewed(ref)
+    a = save()
+    old_b = save(B, depends_on_work_item_refs=[A])
+    save(C, depends_on_work_item_refs=[B])
+    facts.save_case_declaration(
+        A, SCOPE, goal_code="verify_operation",
+        expected_outcome_code="operation_receipt_reviewed",
+        expected_revision=a["revision"], expected_edit_token=a["edit_token"],
+        now=NOW + timedelta(minutes=1))
+    fresh_b = facts.save_case_declaration(
+        B, SCOPE, goal_code="assess_declared_policy",
+        expected_outcome_code="source_state_rechecked",
+        depends_on_work_item_refs=[A], now=NOW + timedelta(minutes=2))
+    assert old_b["revision"] == fresh_b["revision"] == 1
+    assert old_b["edit_token"] != fresh_b["edit_token"]
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        facts.save_case_declaration(
+            B, SCOPE, goal_code="verify_operation",
+            expected_outcome_code="operation_receipt_reviewed",
+            depends_on_work_item_refs=[A],
+            expected_revision=old_b["revision"],
+            expected_edit_token=old_b["edit_token"],
+            now=NOW + timedelta(minutes=3))
+    current = facts.list_case_declarations(SCOPE, now=NOW + timedelta(minutes=3))
+    assert next(i for i in current["items"] if i["work_item_ref"] == B) == fresh_b
+    assert C not in {i["work_item_ref"] for i in current["items"]}
+
+
+def test_explicit_review_delete_redeclare_blocks_old_incarnation_cas(local):
+    reviewed(A)
+    old = save()
+    assert reviews.remove_review_intention(A, now=NOW)
+    at = NOW + timedelta(minutes=1)
+    reviewed(A, at=at)
+    fresh = facts.save_case_declaration(
+        A, SCOPE, goal_code="assess_declared_policy",
+        expected_outcome_code="source_state_rechecked", now=at)
+    assert fresh["revision"] == old["revision"] == 1
+    assert fresh["edit_token"] != old["edit_token"]
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        facts.save_case_declaration(
+            A, SCOPE, goal_code="verify_operation",
+            expected_outcome_code="operation_receipt_reviewed",
+            expected_revision=old["revision"],
+            expected_edit_token=old["edit_token"],
+            now=at + timedelta(minutes=1))
+    assert facts.list_case_declarations(SCOPE, now=at + timedelta(minutes=1))["items"] == [fresh]
+
+
+def test_existing_v1_store_migrates_without_reauthorizing_declarations(local):
+    reviewed(A)
+    path = facts._path()
+    db = sqlite3.connect(path)
+    try:
+        db.execute("""CREATE TABLE declarations (
+            work_item_ref TEXT PRIMARY KEY, scope_ref TEXT NOT NULL,
+            goal_code TEXT NOT NULL, expected_outcome_code TEXT NOT NULL,
+            dependencies_json TEXT NOT NULL, revision INTEGER NOT NULL,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL)""")
+        db.execute("PRAGMA user_version=1")
+        db.execute("INSERT INTO declarations VALUES (?,?,?,?,?,?,?,?,?)",
+                   (A, SCOPE, "review_source_state", "source_state_rechecked",
+                    json.dumps([]), 1, NOW.isoformat(), NOW.isoformat(),
+                    (NOW + timedelta(days=7)).isoformat()))
+        db.commit()
+    finally:
+        db.close()
+    if os.name == "posix":
+        path.chmod(0o600)
+    migrated = facts.list_case_declarations(SCOPE, now=NOW)["items"]
+    assert len(migrated) == 1
+    assert migrated[0]["revision"] == 1
+    assert len(migrated[0]["edit_token"]) == 32
+    with facts._database(create=False) as upgraded:
+        assert upgraded.execute("PRAGMA user_version").fetchone()[0] == 2
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        save(expected_revision=1)
+    updated = save(expected_revision=1,
+                   expected_edit_token=migrated[0]["edit_token"])
+    assert updated["revision"] == 2
+
+
+
+@pytest.mark.parametrize("row_count", [facts._MAX_ITEMS, facts._MAX_ITEMS + 1])
+def test_legacy_v1_migration_is_bounded_and_atomic(local, monkeypatch, row_count):
+    """Damaged v1 ledgers must not bypass the 50-row cap during upgrade."""
+    path = facts._path()
+    with sqlite3.connect(path) as db:
+        db.execute("""CREATE TABLE declarations (
+            work_item_ref TEXT PRIMARY KEY, scope_ref TEXT NOT NULL,
+            goal_code TEXT NOT NULL, expected_outcome_code TEXT NOT NULL,
+            dependencies_json TEXT NOT NULL, revision INTEGER NOT NULL,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL)""")
+        db.executemany(
+            "INSERT INTO declarations VALUES (?,?,?,?,?,?,?,?,?)",
+            [("owg:w:" + f"{i:032x}", SCOPE, "review_source_state",
+              "source_state_rechecked", "[]", 1, NOW.isoformat(),
+              NOW.isoformat(), (NOW + timedelta(days=7)).isoformat())
+             for i in range(row_count)],
+        )
+        db.execute("PRAGMA user_version=1")
+    if os.name == "posix":
+        path.chmod(0o600)
+
+    if row_count > facts._MAX_ITEMS:
+        def forbidden_token(*_args, **_kwargs):
+            raise AssertionError("overflow migration generated a token")
+
+        monkeypatch.setattr(facts.secrets, "token_hex", forbidden_token)
+        with pytest.raises(facts.CaseDeclarationError, match="exceeds item limit"):
+            with facts._database(create=False):
+                pytest.fail("over-capacity legacy ledger was accepted")
+        with sqlite3.connect(path) as db:
+            assert db.execute("PRAGMA user_version").fetchone()[0] == 1
+            assert db.execute("SELECT COUNT(*) FROM declarations").fetchone()[0] == row_count
+            columns = [column[1] for column in db.execute("PRAGMA table_info(declarations)")]
+            assert "edit_token" not in columns  # No partial schema migration.
+    else:
+        with facts._database(create=False) as db:
+            assert db.execute("PRAGMA user_version").fetchone()[0] == 2
+            tokens = [row[0] for row in db.execute(
+                "SELECT edit_token FROM declarations"
+            ).fetchall()]
+            assert len(tokens) == facts._MAX_ITEMS
+            assert len(set(tokens)) == facts._MAX_ITEMS
+            assert all(len(token) == 32 for token in tokens)
+
+
+def test_as_of_read_never_displays_future_owner_approval_or_revision(local):
+    # The review is already active: the declaration and its later CAS edit
+    # must still not be represented as owner-approved at an earlier instant.
+    admitted = NOW - timedelta(hours=2)
+    reviewed(A, at=admitted)
+    reviewed(B, at=admitted)
+    independent = facts.save_case_declaration(
+        B, SCOPE, goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked",
+        now=NOW - timedelta(hours=1))
+    first = save()
+    earlier = facts.list_case_declarations(SCOPE, now=NOW - timedelta(minutes=30))
+    assert earlier["items"] == [independent]
+    assert {item["work_item_ref"] for item in
+            facts.list_case_declarations(SCOPE, now=NOW)["items"]} == {A, B}
+
+    revised = facts.save_case_declaration(
+        A, SCOPE, goal_code="verify_operation",
+        expected_outcome_code="operation_receipt_reviewed",
+        expected_revision=first["revision"],
+        expected_edit_token=first["edit_token"], now=NOW + timedelta(hours=1))
+    # There is no historical snapshot store. Suppress the revised A rather
+    # than falsely display its future revision as approved at this time.
+    mid = facts.list_case_declarations(SCOPE, now=NOW + timedelta(minutes=30))
+    assert mid["items"] == [independent]
+    latest = facts.list_case_declarations(SCOPE, now=NOW + timedelta(hours=1))
+    assert {item["work_item_ref"] for item in latest["items"]} == {A, B}
+    assert next(item for item in latest["items"] if item["work_item_ref"] == A) == revised
+
+
+def test_cas_rejects_backdated_owner_revision_without_mutation(local):
+    reviewed(A, at=NOW - timedelta(hours=2))
+    first = save()
+    with pytest.raises(facts.CaseDeclarationError, match="backdated"):
+        facts.save_case_declaration(
+            A, SCOPE, goal_code="verify_operation",
+            expected_outcome_code="operation_receipt_reviewed",
+            expected_revision=first["revision"],
+            expected_edit_token=first["edit_token"],
+            now=NOW - timedelta(minutes=1))
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [first]
+
+    revised = facts.save_case_declaration(
+        A, SCOPE, goal_code="verify_operation",
+        expected_outcome_code="operation_receipt_reviewed",
+        expected_revision=first["revision"],
+        expected_edit_token=first["edit_token"], now=NOW + timedelta(hours=1))
+    with pytest.raises(facts.CaseDeclarationError, match="backdated"):
+        facts.save_case_declaration(
+            A, SCOPE, goal_code="review_source_state",
+            expected_outcome_code="source_state_rechecked",
+            expected_revision=revised["revision"],
+            expected_edit_token=revised["edit_token"],
+            now=NOW + timedelta(minutes=30))
+    assert facts.list_case_declarations(SCOPE, now=NOW + timedelta(hours=1))["items"] == [revised]
+
+
+def test_dependent_approval_cannot_precede_prerequisite_or_revision(local):
+    admitted = NOW - timedelta(hours=2)
+    reviewed(A, at=admitted)
+    reviewed(B, at=admitted)
+    first = save()
+    with pytest.raises(facts.CaseDeclarationError, match="newer than approval"):
+        facts.save_case_declaration(
+            B, SCOPE, goal_code="review_source_state",
+            expected_outcome_code="source_state_rechecked",
+            depends_on_work_item_refs=[A], now=NOW - timedelta(minutes=1))
+    assert {item["work_item_ref"] for item in
+            facts.list_case_declarations(SCOPE, now=NOW)["items"]} == {A}
+
+    facts.save_case_declaration(
+        A, SCOPE, goal_code="verify_operation",
+        expected_outcome_code="operation_receipt_reviewed",
+        expected_revision=first["revision"],
+        expected_edit_token=first["edit_token"], now=NOW + timedelta(hours=1))
+    with pytest.raises(facts.CaseDeclarationError, match="newer than approval"):
+        facts.save_case_declaration(
+            B, SCOPE, goal_code="review_source_state",
+            expected_outcome_code="source_state_rechecked",
+            depends_on_work_item_refs=[A], now=NOW + timedelta(minutes=30))
+    assert {item["work_item_ref"] for item in
+            facts.list_case_declarations(SCOPE, now=NOW + timedelta(hours=1))["items"]} == {A}
+
+
+@pytest.mark.parametrize("invalid_edges", [
+    "{}", '""', "null", "42", '["not-an-opaque-ref"]',
+    json.dumps([A, A]), "{",
+])
+def test_corrupt_persisted_dependency_shape_cannot_launder_approval(local, invalid_edges):
+    # Simulate a damaged private auxiliary ledger; the normal writer never
+    # emits these values. B -> A must not become an independent declaration.
+    d = "owg:w:" + "d" * 32
+    for ref in (A, B, C, d):
+        reviewed(ref)
+    root = save()
+    dependent = save(B, depends_on_work_item_refs=[A])
+    save(C, depends_on_work_item_refs=[B])
+    independent = save(d)
+    with facts._database(create=False) as db:
+        db.execute("UPDATE declarations SET dependencies_json=? WHERE work_item_ref=?",
+                   (invalid_edges, B))
+
+    # Reads do not repair storage, but must withhold B and its dependent C.
+    visible = facts.list_case_declarations(SCOPE, now=NOW)["items"]
+    assert {item["work_item_ref"] for item in visible} == {A, d}
+    assert root in visible and independent in visible
+
+    # A later valid explicit edit prunes the corrupt row and its dependents
+    # atomically; it does not silently strip B's previously declared edge.
+    updated = save(d, expected_revision=independent["revision"],
+                   expected_edit_token=independent["edit_token"])
+    with facts._database(create=False) as db:
+        stored = {ref for (ref,) in db.execute(
+            "SELECT work_item_ref FROM declarations").fetchall()}
+    assert stored == {A, d}
+    assert updated["revision"] == independent["revision"] + 1
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        save(B, expected_revision=dependent["revision"],
+             expected_edit_token=dependent["edit_token"])
+
+
+def test_corrupt_persisted_dependency_cycle_is_not_owner_approval(local):
+    # The writer refuses cycles; this represents a damaged local ledger.
+    # A <- B <- C, then a corrupted A -> B closes a forbidden A <-> B cycle.
+    d = "owg:w:" + "d" * 32
+    for ref in (A, B, C, d):
+        reviewed(ref)
+    save()
+    save(B, depends_on_work_item_refs=[A])
+    save(C, depends_on_work_item_refs=[B])
+    independent = save(d)
+    with facts._database(create=False) as db:
+        db.execute("UPDATE declarations SET dependencies_json=? WHERE work_item_ref=?",
+                   (json.dumps([B]), A))
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [independent]
+
+    save(d, expected_revision=independent["revision"],
+         expected_edit_token=independent["edit_token"])
+    with facts._database(create=False) as db:
+        stored = {ref for (ref,) in db.execute(
+            "SELECT work_item_ref FROM declarations").fetchall()}
+    assert stored == {d}
+
+
+def test_corrupt_auxiliary_dependencies_do_not_block_review_deletion(local):
+    reviewed(A)
+    reviewed(B)
+    save()
+    save(B, depends_on_work_item_refs=[A])
+    with facts._database(create=False) as db:
+        db.execute("UPDATE declarations SET dependencies_json=? WHERE work_item_ref=?",
+                   ("{}", B))
+    # The primary review must still be removable. A corrupt auxiliary graph
+    # triggers the existing fail-closed whole-ledger erasure path.
+    assert reviews.remove_review_intention(A, now=NOW) is True
+    assert not facts._path().exists()
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == []
+
+@pytest.mark.parametrize(("column", "value"), [
+    ("created_at", "not-a-date"),
+    ("created_at", (NOW + timedelta(hours=1)).isoformat()),
+    ("created_at", (NOW - timedelta(days=8)).isoformat()),
+    ("updated_at", ""),
+    ("updated_at", (NOW + timedelta(hours=1)).isoformat()),
+    ("updated_at", (NOW - timedelta(seconds=1)).isoformat()),
+    ("updated_at", "2026-10-30T09:00:00Z"),
+    ("updated_at", "2026-10-30T10:00:00+01:00"),
+    ("expires_at", "invalid"),
+    ("expires_at", (NOW - timedelta(seconds=1)).isoformat()),
+    ("expires_at", (NOW + timedelta(days=30)).isoformat()),
+])
+def test_corrupt_stored_approval_clock_withholds_dependent_chain_and_prunes(
+    local, column, value,
+):
+    # Simulate damaged auxiliary SQLite state, never an authorized write.
+    # A <- B <- C must not be laundered into approved work if A's stored
+    # approval timestamp is malformed, backdated, future, or over-retained.
+    d = "owg:w:" + "d" * 32
+    for ref in (A, B, C, d):
+        reviewed(ref)
+    save()
+    save(B, depends_on_work_item_refs=[A])
+    save(C, depends_on_work_item_refs=[B])
+    independent = save(d)
+    with facts._database(create=False) as db:
+        db.execute(f"UPDATE declarations SET {column}=? WHERE work_item_ref=?",
+                   (value, A))
+
+    # Read is non-mutating, fail-closed, and keeps unrelated reviewed work.
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [independent]
+    with facts._database(create=False) as db:
+        assert db.execute("SELECT count(*) FROM declarations").fetchone()[0] == 4
+
+    # A subsequent authorized write erases the invalid prerequisite and
+    # dependent closure, without extending or re-approving anything.
+    updated = save(d, expected_revision=independent["revision"],
+                   expected_edit_token=independent["edit_token"])
+    assert updated["revision"] == independent["revision"] + 1
+    with facts._database(create=False) as db:
+        assert db.execute("SELECT work_item_ref FROM declarations").fetchall() == [(d,)]
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [updated]
+
+
+@pytest.mark.parametrize("legacy", [False, True], ids=["v2", "v1"])
+def test_oversized_sqlite_ledger_refused_before_open_and_explicitly_scrubbed(local, monkeypatch, legacy):
+    # The 50-row bound cannot prevent SQLite from materializing a corrupt
+    # multi-megabyte cell. Neither read nor CAS may open an oversized ledger;
+    # explicit review deletion must still scrub the entire auxiliary store.
+    reviewed(A)
+    path = facts._path()
+    oversized = " " * (facts._MAX_DATABASE_BYTES + 8192)
+    if legacy:
+        with sqlite3.connect(path) as db:
+            db.execute("""CREATE TABLE declarations (
+                work_item_ref TEXT PRIMARY KEY, scope_ref TEXT NOT NULL,
+                goal_code TEXT NOT NULL, expected_outcome_code TEXT NOT NULL,
+                dependencies_json TEXT NOT NULL, revision INTEGER NOT NULL,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL)""")
+            db.execute("INSERT INTO declarations VALUES (?,?,?,?,?,?,?,?,?)",
+                       (A, SCOPE, "review_source_state", "source_state_rechecked",
+                        oversized, 1, NOW.isoformat(), NOW.isoformat(),
+                        (NOW + timedelta(days=7)).isoformat()))
+            db.execute("PRAGMA user_version=1")
+    else:
+        save()
+        with sqlite3.connect(path) as db:
+            db.execute("UPDATE declarations SET dependencies_json=? WHERE work_item_ref=?",
+                       (oversized, A))
+    if os.name == "posix":
+        path.chmod(0o600)
+    assert path.stat().st_size > facts._MAX_DATABASE_BYTES
+    before = path.read_bytes()
+
+    def unexpected_sqlite_open(*_args, **_kwargs):
+        raise AssertionError("oversized ledger reached sqlite3.connect")
+
+    # Patch only during admission; the review subsystem must retain its
+    # existing independent JSON review queue and explicit scrub path.
+    with monkeypatch.context() as patch:
+        patch.setattr(facts.sqlite3, "connect", unexpected_sqlite_open)
+        with pytest.raises(facts.CaseDeclarationError, match="size limit"):
+            facts.list_case_declarations(SCOPE, now=NOW)
+        with pytest.raises(facts.CaseDeclarationError, match="size limit"):
+            save()
+    assert path.read_bytes() == before
+    if legacy:
+        with sqlite3.connect(path) as db:
+            assert db.execute("PRAGMA user_version").fetchone()[0] == 1
+
+    assert reviews.remove_review_intention(A, now=NOW)
+    assert not path.exists()
+    reviewed(A)
+    restored = save()
+    assert restored["revision"] == 1
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [restored]
+
+
+def test_oversized_persisted_clock_rejected_before_iso_parser(monkeypatch):
+    # The guard runs before datetime.fromisoformat even for a corrupt huge
+    # auxiliary timestamp. This does NOT bound SQLite cell materialization.
+    class NoParser:
+        @staticmethod
+        def fromisoformat(_value):
+            raise AssertionError("oversized stored timestamp reached ISO parser")
+
+    monkeypatch.setattr(facts, "datetime", NoParser)
+    oversized = "x" * (facts._MAX_STORED_TIMESTAMP_CHARS + 1)
+    valid = NOW.isoformat()
+    assert not facts._stored_temporal_valid(
+        oversized, valid, valid, now=NOW, days=7,
+        review=(NOW, NOW + timedelta(days=7)))
+    assert not facts._stored_temporal_valid(
+        valid, None, valid, now=NOW, days=7,
+        review=(NOW, NOW + timedelta(days=7)))
+
+
+@pytest.mark.parametrize("column", ["created_at", "updated_at", "expires_at"])
+def test_oversized_persisted_clock_never_approves_dependent_chain(local, column):
+    # A corrupt auxiliary clock must not authorize A or its B -> A, C -> B
+    # owner-declared chain; a separate reviewed D remains usable.
+    d = "owg:w:" + "d" * 32
+    for ref in (A, B, C, d):
+        reviewed(ref)
+    save()
+    save(B, depends_on_work_item_refs=[A])
+    save(C, depends_on_work_item_refs=[B])
+    independent = save(d)
+    oversized = NOW.isoformat() + ("0" * (256 * 1024))
+    with facts._database(create=False) as db:
+        assert db is not None
+        db.execute(f"UPDATE declarations SET {column}=? WHERE work_item_ref=?",
+                   (oversized, A))
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [independent]
+    updated = save(d, expected_revision=independent["revision"],
+                   expected_edit_token=independent["edit_token"])
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [updated]
+    with facts._database(create=False) as db:
+        assert db is not None
+        assert db.execute("SELECT work_item_ref FROM declarations").fetchall() == [(d,)]
+
+
+@pytest.mark.parametrize(("column", "bad_value"), [
+    ("goal_code", "claim_customer_paid"),
+    ("expected_outcome_code", "customer_outcome_verified"),
+    ("revision", 0),
+    ("revision", -1),
+    ("revision", 2_147_483_648),
+    ("revision", "1.5"),
+    ("edit_token", ""),
+    ("edit_token", "A" * 32),
+    ("scope_ref", "owg:scope:invalid"),
+    ("work_item_ref", "owg:w:invalid"),
+])
+def test_corrupt_stored_owner_metadata_suppresses_and_prunes_dependents(
+    local, column, bad_value,
+):
+    # Synthetic auxiliary-ledger corruption must never launder unsupported
+    # owner codes, versions, edit tokens or opaque identities into approval.
+    d = "owg:w:" + "d" * 32
+    e = "owg:w:" + "e" * 32
+    for ref in (A, B, C, d, e):
+        reviewed(ref)
+    save()
+    old_b = save(B, depends_on_work_item_refs=[A])
+    save(C, depends_on_work_item_refs=[B])
+    independent = save(d)
+    with facts._database(create=False) as db:
+        assert db is not None
+        db.execute(
+            f"UPDATE declarations SET {column}=? WHERE work_item_ref=?",
+            (bad_value, A),
+        )
+
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [independent]
+    fresh = save(e)  # Prunes A and its transitive dependent closure.
+    remaining = facts.list_case_declarations(SCOPE, now=NOW)["items"]
+    assert {row["work_item_ref"] for row in remaining} == {d, e}
+    assert independent in remaining and fresh in remaining
+    with facts._database(create=False) as db:
+        assert db is not None
+        assert db.execute("SELECT COUNT(*) FROM declarations").fetchone()[0] == 2
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        save(B, expected_revision=old_b["revision"],
+             expected_edit_token=old_b["edit_token"],
+             depends_on_work_item_refs=[A])
+
+@pytest.mark.parametrize("review_change", ["revoked", "replaced"])
+def test_list_rechecks_review_window_after_sql_fetch(local, monkeypatch, review_change):
+    # Deterministically model review revocation/replacement after the bounded
+    # SQLite SELECT but before the owner-approval projection is returned.
+    d = "owg:w:" + "d" * 32
+    admitted = NOW - timedelta(hours=1)
+    for ref in (A, B, C, d):
+        reviewed(ref, at=admitted)
+    save()
+    save(B, depends_on_work_item_refs=[A])
+    save(C, depends_on_work_item_refs=[B])
+    independent = save(d)
+    initial = facts._reviewed(NOW)
+    calls = 0
+
+    def review_changes_between_snapshots(at):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return initial
+        live = dict(initial)
+        if review_change == "revoked":
+            live.pop(A)
+        else:
+            # A fresh review does not reapprove the old A -> B -> C chain.
+            live[A] = (NOW, NOW + timedelta(days=7))
+        return live
+
+    monkeypatch.setattr(facts, "_reviewed", review_changes_between_snapshots)
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [independent]
+    assert calls == 2
+    # A read suppresses stale facts; it does not rewrite the ledger.
+    with facts._database(create=False) as db:
+        assert db.execute("SELECT COUNT(*) FROM declarations").fetchone()[0] == 4
+
+
+def test_list_rechecks_shortened_retention_after_sql_fetch(local, monkeypatch):
+    # A was valid under the original 7-day policy but not a concurrent
+    # reduction to one day. B is recent and must remain available.
+    early = NOW - timedelta(days=2)
+    reviewed(A, at=early)
+    facts.save_case_declaration(
+        A, SCOPE, goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked", now=early)
+    reviewed(B)
+    save(B)
+    calls = 0
+
+    def shortened_retention():
+        nonlocal calls
+        calls += 1
+        return 7 if calls == 1 else 1
+
+    monkeypatch.setattr(facts, "_retention_days", shortened_retention)
+    # Both rows were approved with seven-day deadlines. Under the stricter
+    # one-day policy even the recent row's stored deadline is over-retained,
+    # so neither approval may be presented or silently renewed.
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == []
+    assert calls == 2
+    with facts._database(create=False) as db:
+        assert db.execute("SELECT COUNT(*) FROM declarations").fetchone()[0] == 2
+
+
+def test_list_scrubs_when_retention_revoked_after_sql_fetch(local, monkeypatch):
+    reviewed(A)
+    save()
+    assert facts._path().exists()
+    calls = 0
+
+    def revoked_retention():
+        nonlocal calls
+        calls += 1
+        return 7 if calls == 1 else None
+
+    monkeypatch.setattr(facts, "_retention_days", revoked_retention)
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == []
+    assert calls == 2
+    assert not facts._path().exists()
+
+
+@pytest.mark.parametrize("competing_change", ["delete", "revise"])
+def test_save_returns_exact_transaction_snapshot_under_post_commit_race(
+    local, monkeypatch, competing_change,
+):
+    """A second writer after COMMIT cannot rewrite the first writer's response.
+
+    Intercept only the successful COMMIT boundary; the contender uses a
+    separate real SQLite connection, not a mocked _get or fabricated row.
+    The returned revision/token must belong to the first transaction even
+    when the stored row has already been deleted or revised.
+    """
+    reviewed(A)
+    first = save() if competing_change == "revise" else None
+    real_database = facts._database
+    commits = []
+
+    class PostCommitContender:
+        def __init__(self, db):
+            self.db = db
+
+        def execute(self, statement, *args):
+            result = self.db.execute(statement, *args)
+            if statement == "COMMIT":
+                commits.append(True)
+                with sqlite3.connect(facts._path()) as rival:
+                    if competing_change == "delete":
+                        rival.execute(
+                            "DELETE FROM declarations WHERE work_item_ref=?", (A,))
+                    else:
+                        rival.execute(
+                            "UPDATE declarations SET revision=revision+1,"
+                            "goal_code=? WHERE work_item_ref=?",
+                            ("verify_operation", A))
+            return result
+
+        def __getattr__(self, name):
+            return getattr(self.db, name)
+
+    @contextmanager
+    def racing_database(*, create):
+        with real_database(create=create) as db:
+            yield PostCommitContender(db) if db is not None else None
+
+    monkeypatch.setattr(facts, "_database", racing_database)
+    if first is None:
+        saved = save()
+        assert saved["revision"] == 1
+        assert saved["goal_code"] == "review_source_state"
+    else:
+        saved = facts.save_case_declaration(
+            A, SCOPE, goal_code="assess_declared_policy",
+            expected_outcome_code="human_review_recorded",
+            expected_revision=first["revision"],
+            expected_edit_token=first["edit_token"],
+            now=NOW + timedelta(minutes=1))
+        assert saved["revision"] == 2
+        assert saved["goal_code"] == "assess_declared_policy"
+        assert saved["edit_token"] == first["edit_token"]
+    assert len(commits) == 1
+
+    monkeypatch.setattr(facts, "_database", real_database)
+    stored = facts.list_case_declarations(
+        SCOPE, now=NOW + timedelta(minutes=1))["items"]
+    if competing_change == "delete":
+        assert stored == []
+    else:
+        assert len(stored) == 1
+        assert stored[0]["revision"] == 3
+        assert stored[0]["goal_code"] == "verify_operation"
+        assert stored[0]["revision"] != saved["revision"]
+
+
+@pytest.mark.parametrize("corruption", [
+    "prerequisite_revised_after_dependent",
+    "dependent_deadline_outlives_prerequisite",
+])
+def test_persisted_dependency_approval_window_fails_closed(local, corruption):
+    # Each row remains individually valid at the as-of time. Only the
+    # explicit owner-declared dependency edge becomes temporally impossible.
+    d = "owg:w:" + "d" * 32
+    early = NOW - timedelta(hours=2)
+    for ref in (A, B, C, d):
+        reviewed(ref, at=early if ref == A else early + timedelta(hours=1))
+    root = facts.save_case_declaration(
+        A, SCOPE, goal_code="review_source_state",
+        expected_outcome_code="source_state_rechecked",
+        now=NOW - timedelta(hours=1))
+    dependent = save(B, depends_on_work_item_refs=[A])
+    save(C, depends_on_work_item_refs=[B])
+    independent = save(d)
+    as_of = NOW + timedelta(minutes=30)
+    assert {item["work_item_ref"] for item in
+            facts.list_case_declarations(SCOPE, now=as_of)["items"]} == {A, B, C, d}
+
+    with facts._database(create=False) as db:
+        if corruption == "prerequisite_revised_after_dependent":
+            # A later owner approval cannot silently rebind an older B -> A.
+            db.execute("UPDATE declarations SET updated_at=? WHERE work_item_ref=?",
+                       ((NOW + timedelta(minutes=15)).isoformat(), A))
+        else:
+            # B's review itself allows this later deadline, but its declared
+            # prerequisite A expires earlier. No independent B approval.
+            db.execute("UPDATE declarations SET expires_at=? WHERE work_item_ref=?",
+                       ((datetime.fromisoformat(root["expires_at"]) +
+                         timedelta(minutes=30)).isoformat(), B))
+        a_row = facts._get(db, A)
+        b_row = facts._get(db, B)
+    reviewed_windows = facts._reviewed(as_of)
+    for row in (a_row, b_row):
+        assert facts._stored_temporal_valid(
+            row[6], row[7], row[8], now=as_of, days=7,
+            review=reviewed_windows[row[0]])
+    assert not facts._dependency_approval_window_valid(b_row, a_row)
+
+    # A and unrelated D survive; B and its transitive dependent C are
+    # withheld without mutating the private auxiliary store on read.
+    visible = facts.list_case_declarations(SCOPE, now=as_of)["items"]
+    assert {item["work_item_ref"] for item in visible} == {A, d}
+    assert independent in visible
+    with facts._database(create=False) as db:
+        assert db.execute("SELECT COUNT(*) FROM declarations").fetchone()[0] == 4
+
+    # A later explicit, reviewed write prunes only the invalid closure.
+    changed = facts.save_case_declaration(
+        d, SCOPE, goal_code="verify_operation",
+        expected_outcome_code="operation_receipt_reviewed",
+        expected_revision=independent["revision"],
+        expected_edit_token=independent["edit_token"], now=as_of)
+    assert changed["revision"] == 2
+    with facts._database(create=False) as db:
+        assert {r[0] for r in db.execute(
+            "SELECT work_item_ref FROM declarations")} == {A, d}
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        facts.save_case_declaration(
+            B, SCOPE, goal_code="review_source_state",
+            expected_outcome_code="source_state_rechecked",
+            depends_on_work_item_refs=[A],
+            expected_revision=dependent["revision"],
+            expected_edit_token=dependent["edit_token"], now=as_of)
+
+
+@pytest.mark.parametrize("scenario", ["new", "edit", "dependency"])
+def test_save_rolls_back_if_review_changes_after_write_before_commit(
+    local, monkeypatch, scenario,
+):
+    """The third review snapshot is taken after the row write, before COMMIT."""
+    reviewed(A)
+    previous = None
+    if scenario == "edit":
+        previous = save()
+    elif scenario == "dependency":
+        reviewed(B)
+        previous = save(A)
+
+    original = facts._reviewed
+    calls = 0
+
+    def revoke_on_final_snapshot(at):
+        nonlocal calls
+        calls += 1
+        snapshot = original(at)
+        if calls == 3:
+            # Simulate a separate review-store revocation after BEGIN's
+            # admission check but before the declaration COMMIT.
+            snapshot = dict(snapshot)
+            snapshot.pop(A)
+        return snapshot
+
+    monkeypatch.setattr(facts, "_reviewed", revoke_on_final_snapshot)
+    with pytest.raises(facts.CaseDeclarationError, match="before declaration commit"):
+        if scenario == "new":
+            save()
+        elif scenario == "edit":
+            facts.save_case_declaration(
+                A, SCOPE, goal_code="verify_operation",
+                expected_outcome_code="operation_receipt_reviewed",
+                expected_revision=previous["revision"],
+                expected_edit_token=previous["edit_token"],
+                now=NOW + timedelta(minutes=1))
+        else:
+            save(B, depends_on_work_item_refs=[A])
+    assert calls == 3
+    monkeypatch.setattr(facts, "_reviewed", original)
+
+    # The SQLite insert/update was rolled back, not merely hidden by the
+    # current review filter; unrelated existing approvals remain unchanged.
+    with facts._database(create=False) as db:
+        assert db is not None
+        stored = {row[0]: row for row in db.execute(
+            "SELECT work_item_ref,revision,goal_code FROM declarations")}
+    if scenario == "new":
+        assert stored == {}
+    else:
+        assert stored == {A: (A, 1, "review_source_state")}
+        assert facts.list_case_declarations(SCOPE, now=NOW + timedelta(minutes=1))["items"][0] == previous
+
+
+@pytest.mark.parametrize("scenario", ["new", "edit"])
+@pytest.mark.parametrize("changed_retention", [None, 1])
+def test_save_rolls_back_if_retention_changes_after_write_before_commit(
+    local, monkeypatch, scenario, changed_retention,
+):
+    reviewed(A)
+    previous = save() if scenario == "edit" else None
+    original = facts._retention_days
+    calls = 0
+
+    def policy_changes_on_final_check():
+        nonlocal calls
+        calls += 1
+        return changed_retention if calls == 3 else original()
+
+    monkeypatch.setattr(facts, "_retention_days", policy_changes_on_final_check)
+    with pytest.raises(facts.CaseDeclarationError, match="retention changed before declaration commit"):
+        if scenario == "new":
+            save()
+        else:
+            facts.save_case_declaration(
+                A, SCOPE, goal_code="verify_operation",
+                expected_outcome_code="operation_receipt_reviewed",
+                expected_revision=previous["revision"],
+                expected_edit_token=previous["edit_token"],
+                now=NOW + timedelta(minutes=1))
+    assert calls == 3
+    monkeypatch.setattr(facts, "_retention_days", original)
+
+    with facts._database(create=False) as db:
+        assert db is not None
+        stored = db.execute(
+            "SELECT work_item_ref,revision,goal_code FROM declarations"
+        ).fetchall()
+    assert stored == ([] if scenario == "new" else [(A, 1, "review_source_state")])
+
+
+def test_persisted_row_overflow_withheld_and_write_refused(local):
+    reviewed(A)
+    reviewed(B)
+    save()
+    # Damage/legacy rows bypass the normal 50-item writer cap.
+    with sqlite3.connect(facts._path()) as db:
+        row = db.execute("SELECT * FROM declarations WHERE work_item_ref=?", (A,)).fetchone()
+        for index in range(facts._MAX_ITEMS):
+            db.execute("INSERT INTO declarations VALUES (?,?,?,?,?,?,?,?,?,?)",
+                       ("owg:w:" + f"{index:032x}", *row[1:]))
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == []
+    with pytest.raises(facts.CaseDeclarationError, match="exceeds item limit"):
+        save(B)
+    with sqlite3.connect(facts._path()) as db:
+        assert db.execute("SELECT COUNT(*) FROM declarations").fetchone()[0] == facts._MAX_ITEMS + 1
+    # Explicit review deletion must scrub the corrupt auxiliary ledger.
+    assert reviews.remove_review_intention(A, now=NOW)
+    assert not facts._path().exists()
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == []
+
+
+def test_persisted_row_limit_allows_bounded_cleanup(local):
+    reviewed(A)
+    reviewed(B)
+    save()
+    with sqlite3.connect(facts._path()) as db:
+        row = db.execute("SELECT * FROM declarations WHERE work_item_ref=?", (A,)).fetchone()
+        for index in range(facts._MAX_ITEMS - 1):
+            db.execute("INSERT INTO declarations VALUES (?,?,?,?,?,?,?,?,?,?)",
+                       ("owg:w:" + f"{index:032x}", *row[1:]))
+    assert [item["work_item_ref"] for item in facts.list_case_declarations(SCOPE, now=NOW)["items"]] == [A]
+    save(B)
+    assert {item["work_item_ref"] for item in facts.list_case_declarations(SCOPE, now=NOW)["items"]} == {A, B}
+
+
+def test_persisted_dependency_size_cap_precedes_json_decoder(local, monkeypatch):
+    # Eight legitimate opaque dependencies fit comfortably below the cap.
+    refs = ["owg:w:" + f"{index:032x}" for index in range(8)]
+    assert len(json.dumps(refs)) < facts._MAX_STORED_DEPENDENCIES_CHARS
+    assert facts._stored_dependencies(json.dumps(refs), A) == refs
+
+    # A bounded legacy representation with whitespace remains decodable.
+    within = " " * (facts._MAX_STORED_DEPENDENCIES_CHARS - 2) + "[]"
+    beyond = " " * (facts._MAX_STORED_DEPENDENCIES_CHARS - 1) + "[]"
+    original_loads = facts.json.loads
+
+    def guarded_loads(value, *args, **kwargs):
+        assert value != beyond, "oversized stored JSON reached decoder"
+        return original_loads(value, *args, **kwargs)
+
+    monkeypatch.setattr(facts.json, "loads", guarded_loads)
+    assert facts._stored_dependencies(within, A) == []
+    assert facts._stored_dependencies(beyond, A) is None
+    assert facts._stored_dependencies(None, A) is None
+
+
+def test_oversized_auxiliary_edge_withholds_chain_then_prunes_on_save(local):
+    d = "owg:w:" + "d" * 32
+    for ref in (A, B, C, d):
+        reviewed(ref)
+    save()
+    dependent = save(B, depends_on_work_item_refs=[A])
+    save(C, depends_on_work_item_refs=[B])
+    independent = save(d)
+    oversized = " " * (facts._MAX_STORED_DEPENDENCIES_CHARS + 1) + "[]"
+    with facts._database(create=False) as db:
+        db.execute("UPDATE declarations SET dependencies_json=? WHERE work_item_ref=?",
+                   (oversized, B))
+    assert {item["work_item_ref"] for item in
+            facts.list_case_declarations(SCOPE, now=NOW)["items"]} == {A, d}
+
+    # A later authorized owner save removes damaged B and dependent C, not
+    # their edges; independent reviewed cases retain their original identity.
+    save(d, expected_revision=independent["revision"],
+         expected_edit_token=independent["edit_token"])
+    with facts._database(create=False) as db:
+        stored = {ref for (ref,) in db.execute(
+            "SELECT work_item_ref FROM declarations").fetchall()}
+    assert stored == {A, d}
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        save(B, expected_revision=dependent["revision"],
+             expected_edit_token=dependent["edit_token"])
+
+
+def test_oversized_auxiliary_edge_does_not_block_explicit_review_deletion(local):
+    reviewed(A)
+    reviewed(B)
+    save()
+    save(B, depends_on_work_item_refs=[A])
+    with facts._database(create=False) as db:
+        db.execute("UPDATE declarations SET dependencies_json=? WHERE work_item_ref=?",
+                   ("[" * (facts._MAX_STORED_DEPENDENCIES_CHARS + 1), B))
+    # The existing corrupt-ledger fallback must still permit explicit revoke.
+    assert reviews.remove_review_intention(A, now=NOW)
+    assert not facts._path().exists()
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == []
+
+
+def test_legacy_migration_does_not_materialize_unbounded_refs(local, monkeypatch):
+    # A damaged v1 auxiliary row can contain a huge native TEXT reference.
+    # Migration must enumerate bounded integer rowids, not load and rebind
+    # that untrusted TEXT cell for each incarnation-token UPDATE.
+    path = facts._path()
+    oversized_ref = "owg:w:" + "f" * (256 * 1024)
+    with sqlite3.connect(path) as db:
+        db.execute("""CREATE TABLE declarations (
+            work_item_ref TEXT PRIMARY KEY, scope_ref TEXT NOT NULL,
+            goal_code TEXT NOT NULL, expected_outcome_code TEXT NOT NULL,
+            dependencies_json TEXT NOT NULL, revision INTEGER NOT NULL,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL)""")
+        db.executemany(
+            "INSERT INTO declarations VALUES (?,?,?,?,?,?,?,?,?)",
+            [(ref, SCOPE, "review_source_state", "source_state_rechecked",
+              "[]", 1, NOW.isoformat(), NOW.isoformat(),
+              (NOW + timedelta(days=7)).isoformat())
+             for ref in (A, oversized_ref)],
+        )
+        db.execute("PRAGMA user_version=1")
+    if os.name == "posix":
+        path.chmod(0o600)
+
+    traced_sql = []
+    original_connect = sqlite3.connect
+
+    def traced_connect(*args, **kwargs):
+        connection = original_connect(*args, **kwargs)
+        connection.set_trace_callback(traced_sql.append)
+        return connection
+
+    monkeypatch.setattr(facts.sqlite3, "connect", traced_connect)
+    with facts._database(create=False) as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 2
+        count, unique_tokens = db.execute(
+            "SELECT COUNT(*),COUNT(DISTINCT edit_token) FROM declarations"
+        ).fetchone()
+        assert (count, unique_tokens) == (2, 2)
+        assert db.execute(
+            "SELECT MAX(length(work_item_ref)) FROM declarations"
+        ).fetchone()[0] == len(oversized_ref)
+
+    assert any("SELECT rowid FROM declarations LIMIT" in sql for sql in traced_sql)
+    assert not any("SELECT work_item_ref FROM declarations LIMIT" in sql
+                   for sql in traced_sql)
+    assert any("WHERE rowid=" in sql for sql in traced_sql)
+
+
+
+def test_corrupt_blob_ref_prunes_transitive_dependents_on_authorized_save(local):
+    # A damaged auxiliary SQLite row can have a BLOB work_item_ref despite
+    # TEXT affinity. Its former dependents must not survive as independent
+    # owner approvals, nor block an unrelated authorized save.
+    d = "owg:w:" + "d" * 32
+    for ref in (A, B, C, d):
+        reviewed(ref)
+    save(A)
+    save(B, depends_on_work_item_refs=[A])
+    dependent = save(C, depends_on_work_item_refs=[B])
+    independent = save(d)
+
+    damaged_ref = sqlite3.Binary(b"\x00damaged-ref\xff")
+    with sqlite3.connect(facts._path()) as db:
+        db.execute(
+            "UPDATE declarations SET work_item_ref=? WHERE work_item_ref=?",
+            (damaged_ref, B),
+        )
+        assert db.execute(
+            "SELECT typeof(work_item_ref) FROM declarations WHERE work_item_ref=?",
+            (damaged_ref,),
+        ).fetchone()[0] == "blob"
+
+    # Reads fail closed even before an authorized write prunes the invalid
+    # prerequisite and C -> B, while preserving unrelated A and D.
+    assert {item["work_item_ref"] for item in
+            facts.list_case_declarations(SCOPE, now=NOW)["items"]} == {A, d}
+    updated = save(d, expected_revision=independent["revision"],
+                   expected_edit_token=independent["edit_token"])
+    assert updated["revision"] == 2
+    with sqlite3.connect(facts._path()) as db:
+        assert {row[0] for row in db.execute(
+            "SELECT work_item_ref FROM declarations")} == {A, d}
+    with pytest.raises(facts.CaseDeclarationError, match="stale"):
+        save(C, expected_revision=1, expected_edit_token=dependent["edit_token"])
+
+
+def test_mixed_sqlite_storage_classes_do_not_abort_bounded_pruning(local):
+    reviewed(A)
+    reviewed(B)
+    original = save(A)
+    with sqlite3.connect(facts._path()) as db:
+        row = db.execute("SELECT * FROM declarations WHERE work_item_ref=?", (A,)).fetchone()
+        db.execute("INSERT INTO declarations VALUES (?,?,?,?,?,?,?,?,?,?)",
+                   (sqlite3.Binary(b"\xff\x00"), *row[1:]))
+        # SQLite TEXT affinity converts integer 42 to the invalid string '42'.
+        db.execute("INSERT INTO declarations VALUES (?,?,?,?,?,?,?,?,?,?)",
+                   (42, *row[1:]))
+        assert set(db.execute(
+            "SELECT typeof(work_item_ref) FROM declarations")) == {("text",), ("blob",)}
+    # Previously sorted(str, bytes) raised TypeError and rolled this save back.
+    save(B)
+    with sqlite3.connect(facts._path()) as db:
+        assert {row[0] for row in db.execute(
+            "SELECT work_item_ref FROM declarations")} == {A, B}
+    assert original in facts.list_case_declarations(SCOPE, now=NOW)["items"]
+
+
+def test_review_delete_with_blob_dependent_preserves_unrelated_declarations(local):
+    # A damaged BLOB work-item key may still contain a valid explicit edge
+    # to A. The closure then mixes bytes and str. Explicit review deletion
+    # must purge that closure without falling back to wiping independent D.
+    d = "owg:w:" + "d" * 32
+    for ref in (A, C, d):
+        reviewed(ref)
+    save(A)
+    save(C, depends_on_work_item_refs=[A])
+    independent = save(d)
+
+    corrupt_ref = sqlite3.Binary(b"\xff\x00")
+    with sqlite3.connect(facts._path()) as db:
+        original = db.execute(
+            "SELECT * FROM declarations WHERE work_item_ref=?", (A,)
+        ).fetchone()
+        db.execute(
+            "INSERT INTO declarations VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (corrupt_ref, *original[1:4], json.dumps([A]), *original[5:]),
+        )
+        assert db.execute(
+            "SELECT typeof(work_item_ref) FROM declarations WHERE work_item_ref=?",
+            (corrupt_ref,),
+        ).fetchone()[0] == "blob"
+
+    # The invalid BLOB is never approved; C remains dependent on A.
+    assert {item["work_item_ref"] for item in
+            facts.list_case_declarations(SCOPE, now=NOW)["items"]} == {A, C, d}
+    assert reviews.remove_review_intention(A, now=NOW) is True
+
+    # Previously sorted(str, bytes) raised TypeError, triggering a full
+    # auxiliary-ledger scrub and wrongly deleting unrelated reviewed D.
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [independent]
+    with sqlite3.connect(facts._path()) as db:
+        assert db.execute(
+            "SELECT work_item_ref FROM declarations"
+        ).fetchall() == [(d,)]
+    assert {item["work_item_ref"] for item in
+            reviews.list_review_intentions(now=NOW)["items"]} == {C, d}
+
+
+@pytest.mark.parametrize(
+    "ddl,table_name",
+    [
+        ("CREATE TABLE declarations (work_item_ref TEXT PRIMARY KEY, secret TEXT)", "declarations"),
+        ("CREATE TABLE unrelated (secret TEXT)", "unrelated"),
+        ("CREATE VIEW unrelated AS SELECT 'sentinel' AS secret", "unrelated"),
+    ],
+)
+def test_unversioned_existing_schema_is_never_stamped_as_v2(
+    local, ddl, table_name,
+):
+    reviewed(A)
+    path = facts._path()
+    with sqlite3.connect(path) as db:
+        db.execute(ddl)
+        if ddl.startswith("CREATE TABLE"):
+            db.execute(f"INSERT INTO {table_name} VALUES (" +
+                       ("?, ?" if table_name == "declarations" else "?") + ")",
+                       (A, "sentinel") if table_name == "declarations" else ("sentinel",))
+        before = db.execute(
+            "SELECT type,name,sql FROM sqlite_master "
+            "WHERE name NOT GLOB 'sqlite_*' ORDER BY type,name"
+        ).fetchall()
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 0
+    path.chmod(0o600)
+
+    with pytest.raises(facts.CaseDeclarationError, match="unversioned declaration store"):
+        save()
+    with sqlite3.connect(path) as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 0
+        assert db.execute(
+            "SELECT type,name,sql FROM sqlite_master "
+            "WHERE name NOT GLOB 'sqlite_*' ORDER BY type,name"
+        ).fetchall() == before
+        if ddl.startswith("CREATE TABLE"):
+            assert db.execute(
+                f"SELECT secret FROM {table_name}"
+            ).fetchone()[0] == "sentinel"
+    with pytest.raises(facts.CaseDeclarationError, match="unsupported or incomplete"):
+        facts.list_case_declarations(SCOPE, now=NOW)
+
+
+def test_empty_existing_version_zero_store_initializes_normally(local):
+    reviewed(A)
+    path = facts._path()
+    with sqlite3.connect(path) as db:
+        db.execute("PRAGMA user_version=0")
+    path.chmod(0o600)
+    item = save()
+    assert item["revision"] == 1
+    with sqlite3.connect(path) as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert db.execute(
+            "SELECT edit_token FROM declarations WHERE work_item_ref=?", (A,)
+        ).fetchone() == (item["edit_token"],)
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [item]
+
+
+@pytest.mark.parametrize(
+    "damage",
+    ["missing_primary_key", "missing_token", "extra_column",
+     "wrong_revision_type", "nullable_scope"],
+)
+def test_stamped_v2_schema_does_not_authorize_incompatible_case_identity(local, damage):
+    # A user_version marker alone is not proof of the fixed v2 schema.
+    # In particular, without a PRIMARY KEY, duplicate A rows make CAS
+    # ambiguous and could silently update multiple owner declarations.
+    reviewed(A)
+    ddl = """CREATE TABLE declarations (
+        work_item_ref TEXT PRIMARY KEY, scope_ref TEXT NOT NULL,
+        goal_code TEXT NOT NULL, expected_outcome_code TEXT NOT NULL,
+        dependencies_json TEXT NOT NULL, revision INTEGER NOT NULL,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL, edit_token TEXT NOT NULL)"""
+    if damage == "missing_primary_key":
+        ddl = ddl.replace("work_item_ref TEXT PRIMARY KEY", "work_item_ref TEXT")
+    elif damage == "missing_token":
+        ddl = ddl.replace(", edit_token TEXT NOT NULL", "")
+    elif damage == "extra_column":
+        ddl = ddl.replace("edit_token TEXT NOT NULL",
+                          "edit_token TEXT NOT NULL, unexpected TEXT")
+    elif damage == "wrong_revision_type":
+        ddl = ddl.replace("revision INTEGER NOT NULL", "revision TEXT NOT NULL")
+    elif damage == "nullable_scope":
+        ddl = ddl.replace("scope_ref TEXT NOT NULL", "scope_ref TEXT")
+
+    path = facts._path()
+    with sqlite3.connect(path) as db:
+        db.execute(ddl)
+        db.execute("PRAGMA user_version=2")
+        if damage == "missing_primary_key":
+            row = (A, SCOPE, "review_source_state", "source_state_rechecked",
+                   "[]", 1, NOW.isoformat(), NOW.isoformat(),
+                   (NOW + timedelta(days=7)).isoformat(), "f" * 32)
+            db.execute("INSERT INTO declarations VALUES (?,?,?,?,?,?,?,?,?,?)", row)
+            db.execute("INSERT INTO declarations VALUES (?,?,?,?,?,?,?,?,?,?)", row)
+            assert db.execute("SELECT COUNT(*) FROM declarations").fetchone()[0] == 2
+    if os.name == "posix":
+        path.chmod(0o600)
+
+    with pytest.raises(facts.CaseDeclarationError, match="incompatible versioned"):
+        facts.list_case_declarations(SCOPE, now=NOW)
+    with pytest.raises(facts.CaseDeclarationError, match="incompatible versioned"):
+        save()
+    # Neither the read nor the rejected save stamps/migrates a damaged v2
+    # store or deletes its rows; manual recovery must not grant approval.
+    with sqlite3.connect(path) as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert db.execute(
+            "SELECT sql FROM sqlite_master WHERE name='declarations'"
+        ).fetchone()[0] == ddl
+        assert db.execute("SELECT COUNT(*) FROM declarations").fetchone()[0] == (
+            2 if damage == "missing_primary_key" else 0
+        )
+
+
+@pytest.mark.parametrize(
+    "damage",
+    ["missing_primary_key", "missing_revision", "extra_column",
+     "wrong_revision_type", "nullable_scope", "view_instead_of_table"],
+)
+def test_incompatible_v1_schema_is_never_mutated_or_stamped_v2(
+    local, monkeypatch, damage,
+):
+    """Reject a false v1 marker before token generation or ALTER TABLE."""
+    reviewed(A)
+    ddl = """CREATE TABLE declarations (
+        work_item_ref TEXT PRIMARY KEY, scope_ref TEXT NOT NULL,
+        goal_code TEXT NOT NULL, expected_outcome_code TEXT NOT NULL,
+        dependencies_json TEXT NOT NULL, revision INTEGER NOT NULL,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL)"""
+    if damage == "missing_primary_key":
+        ddl = ddl.replace("work_item_ref TEXT PRIMARY KEY", "work_item_ref TEXT")
+    elif damage == "missing_revision":
+        ddl = ddl.replace(", revision INTEGER NOT NULL", "")
+    elif damage == "extra_column":
+        ddl = ddl.replace("expires_at TEXT NOT NULL)",
+                          "expires_at TEXT NOT NULL, foreign_field TEXT)")
+    elif damage == "wrong_revision_type":
+        ddl = ddl.replace("revision INTEGER NOT NULL", "revision TEXT NOT NULL")
+    elif damage == "nullable_scope":
+        ddl = ddl.replace("scope_ref TEXT NOT NULL", "scope_ref TEXT")
+    elif damage == "view_instead_of_table":
+        ddl = "CREATE VIEW declarations AS SELECT 'sentinel' AS work_item_ref"
+
+    path = facts._path()
+    with sqlite3.connect(path) as db:
+        db.execute(ddl)
+        db.execute("PRAGMA user_version=1")
+        if damage == "missing_primary_key":
+            row = (A, SCOPE, "review_source_state", "source_state_rechecked",
+                   "[]", 1, NOW.isoformat(), NOW.isoformat(),
+                   (NOW + timedelta(days=7)).isoformat())
+            db.execute("INSERT INTO declarations VALUES (?,?,?,?,?,?,?,?,?)", row)
+            db.execute("INSERT INTO declarations VALUES (?,?,?,?,?,?,?,?,?)", row)
+        before_schema = db.execute(
+            "SELECT type,name,sql FROM sqlite_master ORDER BY type,name"
+        ).fetchall()
+        before_count = (db.execute("SELECT COUNT(*) FROM declarations").fetchone()[0]
+                        if damage != "view_instead_of_table" else None)
+    if os.name == "posix":
+        path.chmod(0o600)
+
+    def no_token(*_args, **_kwargs):
+        raise AssertionError("invalid legacy schema generated an edit token")
+    monkeypatch.setattr(facts.secrets, "token_hex", no_token)
+
+    with pytest.raises(facts.CaseDeclarationError, match="incompatible legacy"):
+        facts.list_case_declarations(SCOPE, now=NOW)
+    with pytest.raises(facts.CaseDeclarationError, match="incompatible legacy"):
+        save()
+    with sqlite3.connect(path) as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert db.execute(
+            "SELECT type,name,sql FROM sqlite_master ORDER BY type,name"
+        ).fetchall() == before_schema
+        assert "edit_token" not in [
+            column[1] for column in db.execute("PRAGMA table_info(declarations)")
+        ]
+        if before_count is not None:
+            assert db.execute("SELECT COUNT(*) FROM declarations").fetchone()[0] == before_count
+
+
+@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("extra_ddl", [
+    "CREATE TRIGGER extra_insert AFTER INSERT ON declarations "
+    "BEGIN DELETE FROM declarations; END",
+    "CREATE TRIGGER extra_update AFTER UPDATE ON declarations "
+    "BEGIN DELETE FROM declarations; END",
+    "CREATE INDEX extra_scope_index ON declarations(scope_ref)",
+    "CREATE VIEW extra_view AS SELECT work_item_ref FROM declarations",
+    "CREATE TABLE extra_table (unrelated TEXT)",
+])
+def test_versioned_declarations_reject_foreign_schema_objects(
+    local, version, extra_ddl,
+):
+    """A matching table_info is insufficient if triggers can mutate approvals.
+
+    Version-one migration updates each row's incarnation token; a hidden
+    UPDATE trigger could erase the entire ledger. Version-two INSERT/UPDATE
+    triggers can likewise mutate owner facts outside the reviewed CAS intent.
+    Read/save must reject such schema before any migration or write.
+    """
+    reviewed(A)
+    reviewed(B)
+    path = facts._path()
+    v1_ddl = """CREATE TABLE declarations (
+        work_item_ref TEXT PRIMARY KEY, scope_ref TEXT NOT NULL,
+        goal_code TEXT NOT NULL, expected_outcome_code TEXT NOT NULL,
+        dependencies_json TEXT NOT NULL, revision INTEGER NOT NULL,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL)"""
+    ddl = (v1_ddl if version == 1 else
+           v1_ddl[:-1] + ", edit_token TEXT NOT NULL)")
+    with sqlite3.connect(path) as db:
+        db.execute(ddl)
+        row = (A, SCOPE, "review_source_state", "source_state_rechecked",
+               "[]", 1, NOW.isoformat(), NOW.isoformat(),
+               (NOW + timedelta(days=7)).isoformat())
+        if version == 2:
+            row += ("f" * 32,)
+        db.execute(
+            "INSERT INTO declarations VALUES (" + ",".join("?" for _ in row) + ")",
+            row,
+        )
+        db.execute(extra_ddl)
+        db.execute(f"PRAGMA user_version={version}")
+        before_schema = db.execute(
+            "SELECT type,name,sql FROM sqlite_master "
+            "WHERE name NOT GLOB 'sqlite_*' ORDER BY type,name"
+        ).fetchall()
+        before_rows = db.execute("SELECT * FROM declarations").fetchall()
+    if os.name == "posix":
+        path.chmod(0o600)
+
+    error = "incompatible legacy" if version == 1 else "incompatible versioned"
+    with pytest.raises(facts.CaseDeclarationError, match=error):
+        facts.list_case_declarations(SCOPE, now=NOW)
+    with pytest.raises(facts.CaseDeclarationError, match=error):
+        save(B)
+
+    # The rejected v1 migration never stamps v2 or executes an UPDATE
+    # trigger; rejected v2 never accepts foreign executable schema.
+    with sqlite3.connect(path) as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == version
+        assert db.execute(
+            "SELECT type,name,sql FROM sqlite_master "
+            "WHERE name NOT GLOB 'sqlite_*' ORDER BY type,name"
+        ).fetchall() == before_schema
+        assert db.execute("SELECT * FROM declarations").fetchall() == before_rows
+
+
+@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("generated_kind", ["VIRTUAL", "STORED"])
+def test_generated_columns_are_not_admitted_as_exact_schema(
+    local, monkeypatch, version, generated_kind,
+):
+    """table_info hides generated columns; they must not gain owner authority.
+
+    Both the legacy migration and current reads/writes must reject a table
+    whose *visible* columns exactly match the trusted ledger while table_xinfo
+    reveals an additional generated column. Rejection must be non-mutating.
+    """
+    reviewed(A)
+    reviewed(B)
+    path = facts._path()
+    base = """CREATE TABLE declarations (
+        work_item_ref TEXT PRIMARY KEY, scope_ref TEXT NOT NULL,
+        goal_code TEXT NOT NULL, expected_outcome_code TEXT NOT NULL,
+        dependencies_json TEXT NOT NULL, revision INTEGER NOT NULL,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL"""
+    if version == 2:
+        base += ", edit_token TEXT NOT NULL"
+    ddl = (base + ", shadow TEXT GENERATED ALWAYS AS "
+           "(substr(goal_code, 1, 1)) " + generated_kind + ")")
+    row = (A, SCOPE, "review_source_state", "source_state_rechecked",
+           "[]", 1, NOW.isoformat(), NOW.isoformat(),
+           (NOW + timedelta(days=7)).isoformat())
+    if version == 2:
+        row += ("f" * 32,)
+    with sqlite3.connect(path) as db:
+        db.execute(ddl)
+        columns = [r[1] for r in db.execute("PRAGMA table_info(declarations)")]
+        extended = db.execute("PRAGMA table_xinfo(declarations)").fetchall()
+        assert len(columns) == (9 if version == 1 else 10)
+        assert len(extended) == len(columns) + 1
+        assert extended[-1][1] == "shadow"
+        assert extended[-1][-1] in (2, 3)
+        db.execute(
+            "INSERT INTO declarations (" + ",".join(columns) + ") VALUES (" +
+            ",".join("?" for _ in row) + ")", row,
+        )
+        db.execute(f"PRAGMA user_version={version}")
+        before = db.execute("SELECT * FROM declarations").fetchall()
+    if os.name == "posix":
+        path.chmod(0o600)
+
+    def no_token(*_args, **_kwargs):
+        raise AssertionError("rejected schema generated an owner edit token")
+    monkeypatch.setattr(facts.secrets, "token_hex", no_token)
+    error = "incompatible legacy" if version == 1 else "incompatible versioned"
+    with pytest.raises(facts.CaseDeclarationError, match=error):
+        facts.list_case_declarations(SCOPE, now=NOW)
+    with pytest.raises(facts.CaseDeclarationError, match=error):
+        save(B)
+
+    with sqlite3.connect(path) as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == version
+        assert db.execute(
+            "SELECT sql FROM sqlite_master WHERE name='declarations'"
+        ).fetchone()[0] == ddl
+        assert db.execute("SELECT * FROM declarations").fetchall() == before
+        assert len(db.execute("PRAGMA table_xinfo(declarations)").fetchall()) == len(extended)
+
+
+@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("extra_constraint", [
+    ", UNIQUE(scope_ref)",
+    ", FOREIGN KEY(scope_ref) REFERENCES declarations(work_item_ref) ON DELETE CASCADE",
+])
+def test_versioned_declarations_reject_hidden_unique_and_foreign_key_constraints(
+    local, version, extra_constraint,
+):
+    """Extra autoindexes/FKs change owner-fact semantics without new named objects."""
+    reviewed(A)
+    reviewed(B)
+    path = facts._path()
+    base = """CREATE TABLE declarations (
+        work_item_ref TEXT PRIMARY KEY, scope_ref TEXT NOT NULL,
+        goal_code TEXT NOT NULL, expected_outcome_code TEXT NOT NULL,
+        dependencies_json TEXT NOT NULL, revision INTEGER NOT NULL,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL"""
+    if version == 2:
+        base += ", edit_token TEXT NOT NULL"
+    ddl = base + extra_constraint + ")"
+    row = (A, SCOPE, "review_source_state", "source_state_rechecked",
+           "[]", 1, NOW.isoformat(), NOW.isoformat(),
+           (NOW + timedelta(days=7)).isoformat())
+    if version == 2:
+        row += ("f" * 32,)
+    with sqlite3.connect(path) as db:
+        db.execute(ddl)
+        db.execute("INSERT INTO declarations VALUES (" +
+                   ",".join("?" for _ in row) + ")", row)
+        db.execute(f"PRAGMA user_version={version}")
+        # Both variants pass the previous exact-column and named-object guards.
+        assert len(db.execute("PRAGMA table_xinfo(declarations)").fetchall()) == (
+            9 if version == 1 else 10
+        )
+        assert db.execute(
+            "SELECT name FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'"
+        ).fetchall() == [("declarations",)]
+        if "UNIQUE" in extra_constraint:
+            assert len(db.execute("PRAGMA index_list(declarations)").fetchall()) == 2
+        else:
+            assert db.execute("PRAGMA foreign_key_list(declarations)").fetchall()
+        before_schema = db.execute(
+            "SELECT type,name,sql FROM sqlite_master ORDER BY type,name"
+        ).fetchall()
+        before_rows = db.execute("SELECT * FROM declarations").fetchall()
+    if os.name == "posix":
+        path.chmod(0o600)
+
+    error = "incompatible legacy" if version == 1 else "incompatible versioned"
+    with pytest.raises(facts.CaseDeclarationError, match=error):
+        facts.list_case_declarations(SCOPE, now=NOW)
+    with pytest.raises(facts.CaseDeclarationError, match=error):
+        save(B)
+    # No migration, hidden cascade, partial CAS or row deletion on rejection.
+    with sqlite3.connect(path) as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == version
+        assert db.execute(
+            "SELECT type,name,sql FROM sqlite_master ORDER BY type,name"
+        ).fetchall() == before_schema
+        assert db.execute("SELECT * FROM declarations").fetchall() == before_rows
+
+
+@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("semantic", [
+    "check", "scope_collate", "pk_collate", "pk_desc", "clean",
+])
+def test_versioned_declarations_reject_hidden_check_collation_and_pk_order(
+    local, monkeypatch, version, semantic,
+):
+    """Matching table_xinfo/index_list/FK lists do not prove exact owner semantics.
+
+    CHECK can veto owner-declared goals; nonbinary scope comparisons can join
+    unrelated opaque scopes; PK NOCASE or DESC changes exact key identity.
+    Neither v1 migration nor v2 reads/saves may adopt those foreign semantics.
+    """
+    reviewed(A)
+    reviewed(B)
+    path = facts._path()
+    base = """CREATE TABLE declarations (
+        work_item_ref TEXT PRIMARY KEY, scope_ref TEXT NOT NULL,
+        goal_code TEXT NOT NULL, expected_outcome_code TEXT NOT NULL,
+        dependencies_json TEXT NOT NULL, revision INTEGER NOT NULL,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL"""
+    if version == 2:
+        base += ", edit_token TEXT NOT NULL"
+    ddl = base + ")"
+    if semantic == "check":
+        ddl = base + ", CHECK(goal_code = 'review_source_state'))"
+    elif semantic == "scope_collate":
+        ddl = ddl.replace("scope_ref TEXT NOT NULL",
+                          "scope_ref TEXT NOT NULL COLLATE NOCASE")
+    elif semantic == "pk_collate":
+        ddl = ddl.replace("work_item_ref TEXT PRIMARY KEY",
+                          "work_item_ref TEXT PRIMARY KEY COLLATE NOCASE")
+    elif semantic == "pk_desc":
+        ddl = ddl.replace("work_item_ref TEXT PRIMARY KEY",
+                          "work_item_ref TEXT PRIMARY KEY DESC")
+    row = (A, SCOPE, "review_source_state", "source_state_rechecked",
+           "[]", 1, NOW.isoformat(), NOW.isoformat(),
+           (NOW + timedelta(days=7)).isoformat())
+    if version == 2:
+        row += ("f" * 32,)
+    with sqlite3.connect(path) as db:
+        db.execute(ddl)
+        db.execute("INSERT INTO declarations VALUES (" +
+                   ",".join("?" for _ in row) + ")", row)
+        db.execute(f"PRAGMA user_version={version}")
+        # All five shapes pass the earlier column, object and index-list
+        # checks; only the new DDL and index_xinfo admission distinguishes.
+        assert len(db.execute("PRAGMA table_xinfo(declarations)").fetchall()) == (
+            9 if version == 1 else 10
+        )
+        assert db.execute("PRAGMA index_list(declarations)").fetchall() == [
+            (0, "sqlite_autoindex_declarations_1", 1, "pk", 0)
+        ]
+        assert db.execute("PRAGMA foreign_key_list(declarations)").fetchall() == []
+        assert db.execute(
+            "SELECT name FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'"
+        ).fetchall() == [("declarations",)]
+        pk = db.execute(
+            "PRAGMA index_xinfo('sqlite_autoindex_declarations_1')"
+        ).fetchall()
+        if semantic == "pk_collate":
+            assert pk[0][4] == "NOCASE"
+        elif semantic == "pk_desc":
+            assert pk[0][3] == 1
+        else:
+            assert pk[0][3:5] == (0, "BINARY")
+        before_schema = db.execute(
+            "SELECT type,name,sql FROM sqlite_master ORDER BY type,name"
+        ).fetchall()
+        before_rows = db.execute("SELECT * FROM declarations").fetchall()
+    if os.name == "posix":
+        path.chmod(0o600)
+
+    if semantic == "clean":
+        assert [item["work_item_ref"] for item in
+                facts.list_case_declarations(SCOPE, now=NOW)["items"]] == [A]
+        assert save(B)["work_item_ref"] == B
+        return
+
+    def no_token(*_args, **_kwargs):
+        raise AssertionError("rejected schema generated an owner edit token")
+
+    monkeypatch.setattr(facts.secrets, "token_hex", no_token)
+    error = "incompatible legacy" if version == 1 else "incompatible versioned"
+    with pytest.raises(facts.CaseDeclarationError, match=error):
+        facts.list_case_declarations(SCOPE, now=NOW)
+    with pytest.raises(facts.CaseDeclarationError, match=error):
+        save(B)
+    with sqlite3.connect(path) as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == version
+        assert db.execute(
+            "SELECT type,name,sql FROM sqlite_master ORDER BY type,name"
+        ).fetchall() == before_schema
+        assert db.execute("SELECT * FROM declarations").fetchall() == before_rows
+
+
+@pytest.mark.parametrize("version,semantic", [
+    (1, "clean"), (1, "scope_default"), (1, "pk_replace"), (1, "pk_ignore"),
+    (2, "clean"), (2, "scope_default"), (2, "pk_replace"), (2, "pk_ignore"),
+    (2, "legacy_token_default"),
+])
+def test_versioned_declarations_reject_foreign_defaults_and_conflict_policies(
+    local, monkeypatch, version, semantic,
+):
+    """A matching xinfo/PK index must not bless foreign SQL write semantics.
+
+    The original writer has no defaults. The supported v1->v2 migration
+    alone leaves an edit_token DEFAULT '' after populating incarnation tokens.
+    Explicit PK conflict handlers are never generated by either writer.
+    """
+    reviewed(A)
+    reviewed(B)
+    path = facts._path()
+    ddl = """CREATE TABLE declarations (
+        work_item_ref TEXT PRIMARY KEY, scope_ref TEXT NOT NULL,
+        goal_code TEXT NOT NULL, expected_outcome_code TEXT NOT NULL,
+        dependencies_json TEXT NOT NULL, revision INTEGER NOT NULL,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL"""
+    if version == 2:
+        token = ("edit_token TEXT NOT NULL DEFAULT ''" if
+                 semantic == "legacy_token_default" else "edit_token TEXT NOT NULL")
+        ddl += ", " + token
+    ddl += ")"
+    if semantic == "scope_default":
+        ddl = ddl.replace(
+            "scope_ref TEXT NOT NULL",
+            "scope_ref TEXT NOT NULL DEFAULT 'owg:scope:unreviewed'",
+        )
+    elif semantic in ("pk_replace", "pk_ignore"):
+        ddl = ddl.replace(
+            "work_item_ref TEXT PRIMARY KEY",
+            "work_item_ref TEXT PRIMARY KEY ON CONFLICT " +
+            ("REPLACE" if semantic == "pk_replace" else "IGNORE"),
+        )
+    row = (A, SCOPE, "review_source_state", "source_state_rechecked",
+           "[]", 1, NOW.isoformat(), NOW.isoformat(),
+           (NOW + timedelta(days=7)).isoformat())
+    if version == 2:
+        row += ("f" * 32,)
+    with sqlite3.connect(path) as db:
+        db.execute(ddl)
+        db.execute("INSERT INTO declarations VALUES (" +
+                   ",".join("?" for _ in row) + ")", row)
+        db.execute(f"PRAGMA user_version={version}")
+        # These adversarial schemas have the same column identities, PK
+        # index and foreign-key list as the canonical writer.
+        assert len(db.execute("PRAGMA table_xinfo(declarations)").fetchall()) == (
+            9 if version == 1 else 10
+        )
+        assert db.execute("PRAGMA index_list(declarations)").fetchall() == [
+            (0, "sqlite_autoindex_declarations_1", 1, "pk", 0)
+        ]
+        assert db.execute(
+            "PRAGMA index_xinfo('sqlite_autoindex_declarations_1')"
+        ).fetchall() == [
+            (0, 0, "work_item_ref", 0, "BINARY", 1),
+            (1, -1, None, 0, "BINARY", 0),
+        ]
+        assert db.execute("PRAGMA foreign_key_list(declarations)").fetchall() == []
+        before_schema = db.execute(
+            "SELECT type,name,sql FROM sqlite_master ORDER BY type,name"
+        ).fetchall()
+        before_rows = db.execute("SELECT * FROM declarations").fetchall()
+    if os.name == "posix":
+        path.chmod(0o600)
+
+    if semantic in ("clean", "legacy_token_default"):
+        assert [item["work_item_ref"] for item in
+                facts.list_case_declarations(SCOPE, now=NOW)["items"]] == [A]
+        assert save(B)["work_item_ref"] == B
+        return
+
+    def no_token(*_args, **_kwargs):
+        raise AssertionError("rejected schema generated an owner edit token")
+
+    monkeypatch.setattr(facts.secrets, "token_hex", no_token)
+    error = "incompatible legacy" if version == 1 else "incompatible versioned"
+    with pytest.raises(facts.CaseDeclarationError, match=error):
+        facts.list_case_declarations(SCOPE, now=NOW)
+    with pytest.raises(facts.CaseDeclarationError, match=error):
+        save(B)
+    # No v1 migration, token generation, data rewrite or version change.
+    with sqlite3.connect(path) as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == version
+        assert db.execute(
+            "SELECT type,name,sql FROM sqlite_master ORDER BY type,name"
+        ).fetchall() == before_schema
+        assert db.execute("SELECT * FROM declarations").fetchall() == before_rows
+
+
+@pytest.mark.parametrize("kind", [
+    "journal_symlink", "journal_hardlink", "journal_directory",
+    "journal_permissions", "journal_oversized", "wal", "shm",
+])
+def test_untrusted_sqlite_sidecar_refused_before_open_and_clearable(
+    local, monkeypatch, kind,
+):
+    # A journal can be touched by SQLite before _database validates the
+    # stored schema or journal mode. Unsafe auxiliary paths must fail before
+    # sqlite3.connect; explicit review deletion must still scrub the ledger.
+    reviewed(A)
+    original = save()
+    path = facts._path()
+    before = path.read_bytes()
+    suffix = "-wal" if kind == "wal" else "-shm" if kind == "shm" else "-journal"
+    sidecar = path.with_name(path.name + suffix)
+    external = local.parent / (local.name + "-sidecar-target")
+    try:
+        if kind == "journal_symlink":
+            external.write_bytes(b"outside-owner-facts")
+            try:
+                sidecar.symlink_to(external)
+            except (OSError, NotImplementedError) as exc:
+                pytest.skip(f"symlinks unavailable: {exc}")
+        elif kind == "journal_hardlink":
+            external.write_bytes(b"outside-owner-facts")
+            try:
+                os.link(external, sidecar)
+            except (OSError, NotImplementedError) as exc:
+                pytest.skip(f"hard links unavailable: {exc}")
+        elif kind == "journal_directory":
+            sidecar.mkdir()
+            (sidecar / "unrelated").write_text("must-not-recurse")
+        elif kind == "journal_permissions":
+            if os.name != "posix":
+                pytest.skip("POSIX file mode required")
+            sidecar.write_bytes(b"synthetic-journal")
+            sidecar.chmod(0o644)
+        elif kind == "journal_oversized":
+            with sidecar.open("wb") as output:
+                output.truncate(2 * facts._MAX_DATABASE_BYTES + 1)
+            if os.name == "posix":
+                sidecar.chmod(0o600)
+        else:
+            sidecar.write_bytes(b"synthetic-stale-sidecar")
+            if os.name == "posix":
+                sidecar.chmod(0o600)
+
+        def forbidden_sqlite_open(*_args, **_kwargs):
+            raise AssertionError("untrusted SQLite sidecar reached sqlite3.connect")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(facts.sqlite3, "connect", forbidden_sqlite_open)
+            with pytest.raises(facts.CaseDeclarationError, match="sidecar|journal"):
+                facts.list_case_declarations(SCOPE, now=NOW)
+            with pytest.raises(facts.CaseDeclarationError, match="sidecar|journal"):
+                save(expected_revision=original["revision"],
+                     expected_edit_token=original["edit_token"])
+        assert path.read_bytes() == before
+        if kind in ("journal_symlink", "journal_hardlink"):
+            assert external.read_bytes() == b"outside-owner-facts"
+
+        # Even a non-empty hostile sidecar directory must not block review
+        # revocation. It remains untouched, and cannot be admitted later.
+        assert reviews.remove_review_intention(A, now=NOW)
+        assert not path.exists()
+        if kind == "journal_directory":
+            assert (sidecar / "unrelated").read_text() == "must-not-recurse"
+        else:
+            assert not sidecar.exists()
+        if kind in ("journal_symlink", "journal_hardlink"):
+            assert external.read_bytes() == b"outside-owner-facts"
+    finally:
+        if sidecar.is_dir() and not sidecar.is_symlink():
+            for child in sidecar.iterdir():
+                child.unlink()
+            sidecar.rmdir()
+        elif sidecar.exists() or sidecar.is_symlink():
+            sidecar.unlink()
+        if external.exists():
+            external.unlink()
+
+
+def test_trusted_active_delete_rollback_journal_still_allows_read(local):
+    # An ordinary in-progress SQLite DELETE-mode writer creates a private
+    # rollback journal. Do not reject it merely because it exists: readers
+    # can still inspect the last committed owner-approved snapshot.
+    reviewed(A)
+    item = save()
+    path = facts._path()
+    with sqlite3.connect(path) as writer:
+        writer.execute("BEGIN IMMEDIATE")
+        writer.execute(
+            "UPDATE declarations SET goal_code=? WHERE work_item_ref=?",
+            ("assess_declared_policy", A),
+        )
+        journal = path.with_name(path.name + "-journal")
+        assert journal.exists()
+        if os.name == "posix":
+            assert journal.stat().st_mode & 0o077 == 0
+        assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [item]
+        writer.rollback()
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [item]
+
+
+def test_versioned_wal_ledger_is_refused_before_read_or_cas(local):
+    # SQLite persists WAL mode in the database header, even after its last
+    # connection closes and temporary sidecars disappear. A foreign WAL-mode
+    # auxiliary ledger must not be admitted as an approved owner fact store.
+    reviewed(A)
+    first = save()
+    with sqlite3.connect(facts._path()) as raw:
+        assert raw.execute("PRAGMA journal_mode=WAL").fetchone()[0].lower() == "wal"
+        before = raw.execute(
+            "SELECT revision,edit_token FROM declarations WHERE work_item_ref=?",
+            (A,),
+        ).fetchone()
+        version = raw.execute("PRAGMA user_version").fetchone()[0]
+
+    with pytest.raises(facts.CaseDeclarationError, match="journal mode"):
+        facts.list_case_declarations(SCOPE, now=NOW)
+    with pytest.raises(facts.CaseDeclarationError, match="journal mode"):
+        save(expected_revision=first["revision"],
+             expected_edit_token=first["edit_token"])
+
+    with sqlite3.connect(facts._path()) as raw:
+        assert raw.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+        assert raw.execute("PRAGMA user_version").fetchone()[0] == version
+        assert raw.execute(
+            "SELECT revision,edit_token FROM declarations WHERE work_item_ref=?",
+            (A,),
+        ).fetchone() == before
+
+
+def test_explicit_clear_removes_known_sqlite_sidecars_without_following_links(local):
+    reviewed(A)
+    save()
+    path = facts._path()
+    sidecars = [path.with_name(path.name + suffix)
+                for suffix in ("-journal", "-wal", "-shm")]
+    for sidecar in sidecars:
+        sidecar.write_bytes(b"synthetic-stale-owner-fact")
+    facts.clear_case_declarations()
+    assert not path.exists()
+    assert all(not sidecar.exists() for sidecar in sidecars)
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == []
+    assert not path.exists()
+
+    if os.name == "posix":
+        # Removing a malicious sidecar symlink must unlink only the entry,
+        # never the external file it points at.
+        external = local / "external-keep"
+        external.write_bytes(b"not-a-declaration")
+        sidecars[1].symlink_to(external)
+        facts.clear_case_declarations()
+        assert not sidecars[1].is_symlink()
+        assert external.read_bytes() == b"not-a-declaration"
+
+
+def test_trusted_delete_journal_mode_remains_compatible(local):
+    reviewed(A)
+    item = save()
+    with sqlite3.connect(facts._path()) as raw:
+        assert raw.execute("PRAGMA journal_mode").fetchone()[0].lower() == "delete"
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [item]
+
+
+@pytest.mark.skipif(os.name != "posix" or not hasattr(os, "link"),
+                    reason="requires POSIX hard-link identity")
+def test_hardlinked_ledger_rejected_before_read_or_cas_write(local):
+    # A hard link is not a symlink. Without st_nlink validation, SQLite
+    # mutates the same inode through an unrelated path outside the private
+    # ledger directory even when the primary path has mode 0600.
+    reviewed(A)
+    initial = save()
+    path = facts._path()
+    alias = local.parent / (local.name + "-separate-owner-facts.sqlite3")
+    try:
+        os.link(path, alias)
+    except OSError as exc:
+        pytest.skip(f"filesystem does not support hard links: {exc}")
+    assert path.lstat().st_nlink == 2
+    original = alias.read_bytes()
+
+    with pytest.raises(facts.CaseDeclarationError, match="unsafe case declaration storage"):
+        facts.list_case_declarations(SCOPE, now=NOW)
+    with pytest.raises(facts.CaseDeclarationError, match="unsafe case declaration storage"):
+        save(expected_revision=initial["revision"],
+             expected_edit_token=initial["edit_token"])
+    assert alias.read_bytes() == original
+    assert path.read_bytes() == original
+
+    # Removing the foreign link restores the single-inode-name admission
+    # contract without migrating, resetting revisions or losing owner facts.
+    alias.unlink()
+    assert path.lstat().st_nlink == 1
+    assert facts.list_case_declarations(SCOPE, now=NOW)["items"] == [initial]
+    updated = save(expected_revision=initial["revision"],
+                   expected_edit_token=initial["edit_token"])
+    assert updated["revision"] == initial["revision"] + 1
+    assert updated["edit_token"] == initial["edit_token"]
