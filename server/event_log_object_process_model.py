@@ -149,7 +149,12 @@ def _arc_stats(log_id: str, types: list[str]) -> list[dict[str, Any]]:
 
 
 def discover(log_id: str, spec: Any = None) -> dict[str, Any]:
-    chosen = _parse(DiscoverSpec, spec or {})
+    chosen = _parse(DiscoverSpec, {} if spec is None else spec)
+    with workspace._LOCK:       # re-entrant: every type is read from the same log revision
+        return _discover(log_id, chosen)
+
+
+def _discover(log_id: str, chosen: DiscoverSpec) -> dict[str, Any]:
     present = [t["object_type"] for t in workspace.object_types(log_id)["object_types"]]
     if chosen.object_types:
         unknown = sorted(set(chosen.object_types) - set(present))
@@ -309,6 +314,11 @@ def _arc_check(log_id: str, parsed: Model) -> dict[str, Any]:
 
 def check(log_id: str, spec: Any) -> dict[str, Any]:
     parsed = _parse(CheckSpec, spec)
+    with workspace._LOCK:       # re-entrant: every type is read from the same log revision
+        return _check(log_id, parsed)
+
+
+def _check(log_id: str, parsed: CheckSpec) -> dict[str, Any]:
     present = {t["object_type"] for t in workspace.object_types(log_id)["object_types"]}
     for name in [t.object_type for t in parsed.model.types] + [a.object_type for a in parsed.model.arcs]:
         if name not in present:

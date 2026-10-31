@@ -168,7 +168,7 @@ def test_invalid_discovery_settings_are_refused():
     log = _ocel(_order_to_cash())
     for spec, message in (({"object_types": ["invoice"]}, "unknown object type"), ({"noise": 1}, "noise"),
                           ({"object_types": []}, "object_types"), ({"activities": 0}, "activities"),
-                          ({"other": 1}, "other")):
+                          ({"other": 1}, "other"), ([], "object"), (0, "object")):
         with pytest.raises(workspace.EventLogWorkspaceError, match=message):
             ocpm.discover(log, spec)
     with pytest.raises(workspace.EventLogWorkspaceError, match="max_variants"):
@@ -252,3 +252,18 @@ with TestClient(app) as client:
                 "WORKFLOW_OBSERVER_CONFIG": str(tmp_path / "config.json")})
     result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+
+def test_one_request_reads_every_type_from_the_same_revision(monkeypatch):
+    """An append waiting on the workspace lock cannot land between two types of one check."""
+    log = _ocel(_order_to_cash())
+    model = ocpm.discover(log)["model"]
+    real, seen = ocpm._lifecycles, []
+
+    def slow(log_id, type_model, max_variants):
+        seen.append(workspace._LOCK._is_owned())
+        return real(log_id, type_model, max_variants)
+    monkeypatch.setattr(ocpm, "_lifecycles", slow)
+    ocpm.check(log, {"model": model})
+    assert seen == [True, True, True]
+
