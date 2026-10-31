@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 from statistics import mean
 from typing import Any
@@ -227,12 +228,34 @@ def _summary(
 
 
 def aggregate(cases: list[dict[str, Any]], predictions: list[dict[str, Any]]) -> dict[str, Any]:
-    by_id = {str(row.get("case_id") or ""): row for row in predictions}
-    missing = [case["case_id"] for case in cases if case["case_id"] not in by_id]
+    # A preregistered score must be computed from exactly one prediction for
+    # each selected case. Silent last-row-wins duplicates or extra cases can
+    # otherwise change a score or mix development and holdout artifacts.
+    case_ids = [case.get("case_id") for case in cases]
+    if not case_ids or any(not isinstance(cid, str) or not cid for cid in case_ids):
+        raise ValueError("scoring cases require nonempty string case_id values")
+    if len(set(case_ids)) != len(case_ids):
+        raise ValueError("duplicate case_id in scoring cases")
+
+    by_id: dict[str, dict[str, Any]] = {}
+    for row in predictions:
+        if not isinstance(row, dict):
+            raise ValueError("each prediction must be an object")
+        cid = row.get("case_id")
+        if not isinstance(cid, str) or not cid:
+            raise ValueError("predictions require nonempty string case_id values")
+        if cid in by_id:
+            raise ValueError(f"duplicate prediction for case_id: {cid}")
+        by_id[cid] = row
+
+    unexpected = sorted(set(by_id) - set(case_ids))
+    if unexpected:
+        raise ValueError(f"unexpected predictions for {len(unexpected)} cases: {unexpected[:5]}")
+    missing = [cid for cid in case_ids if cid not in by_id]
     if missing:
         raise ValueError(f"missing predictions for {len(missing)} cases: {missing[:5]}")
 
-    rows = [score_case(case, by_id[case["case_id"]]) for case in cases]
+    rows = [score_case(case, by_id[cid]) for case, cid in zip(cases, case_ids)]
     by_prediction = {
         str(item.get("case_id") or ""): _uncertain(item)
         for item in predictions
@@ -346,13 +369,38 @@ def acceptance(report: dict[str, Any]) -> dict[str, Any]:
     }
 
 def _jsonl(path: Path) -> list[dict[str, Any]]:
-    rows = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if line.strip():
-            value = json.loads(line)
-            if not isinstance(value, dict):
-                raise ValueError(f"{path}: each line must be an object")
-            rows.append(value)
+    """Fail closed on ambiguous JSONL from independent prediction producers."""
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON object key: {key}")
+            result[key] = value
+        return result
+
+    def finite_float(token: str) -> float:
+        value = float(token)
+        if not math.isfinite(value):
+            raise ValueError("non-finite JSON number is not allowed")
+        return value
+
+    def reject_nonfinite(token: str) -> None:
+        raise ValueError(f"non-finite JSON constant is not allowed: {token}")
+
+    rows: list[dict[str, Any]] = []
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(
+                line, object_pairs_hook=unique_object,
+                parse_constant=reject_nonfinite, parse_float=finite_float,
+            )
+        except (ValueError, OverflowError) as exc:
+            raise ValueError(f"{path}: line {line_number}: {exc}") from exc
+        if not isinstance(value, dict):
+            raise ValueError(f"{path}: line {line_number}: prediction must be an object")
+        rows.append(value)
     return rows
 
 def main(argv: list[str] | None = None) -> int:
