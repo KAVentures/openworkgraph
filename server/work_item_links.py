@@ -396,6 +396,10 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
         if len(refs) == 1:
             anchor = next(row["event_id"] for row in tab_rows if row["ref"])
             for row in loose:
+                if union.find(anchor) == union.find(row["event_id"]):
+                    # This observation is already in the anchor component;
+                    # no new tab attachment is being considered or withheld.
+                    continue
                 original_root = pre_tab_root[row["event_id"]]
                 # A loose clipboard component already containing another
                 # record, or targeted by two different single-record tabs,
