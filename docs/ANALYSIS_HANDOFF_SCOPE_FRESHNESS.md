@@ -948,3 +948,24 @@ run and all-history disclosures; they verify the prompt-only copy path,
 zero export tickets/downloads on Copy, and no implicit AI transfer. These
 tests do not establish native Node/Chromium/WCAG/scale/packaging acceptance
 or a real consenting-user pilot. Coordination: [#326 claim 6548395286](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6548395286).
+
+
+## Redacted focus-example observation-time provenance
+
+The optional redacted focus examples are bounded samples, not a complete
+history. Each displayed sample now distinguishes a supplied, validated
+`observed_at` timestamp from a legacy sample without one. A timestamped
+sample is labeled **observed at** and rendered as a semantic `<time>` element
+with its original ISO-8601 offset-aware value. It is not silently converted
+to the viewer's local timezone. An absent or explicit-null timestamp is
+labeled **observation time not supplied**, never inferred from the overall
+first/last observation span or from neighboring examples.
+
+The existing fail-closed validator still rejects malformed or out-of-span
+sample timestamps and over-counted samples before opening the review. The
+display-only change does not alter canonical observations, request text,
+consent, export contents, ticket permissions, or agent execution. The
+synthetic Node mock-DOM regression covers UTC, offset-equivalent, absent and
+null sample timestamps, confirms no ticket/download on Copy, and preserves
+the request-only clipboard contract. It is not a real-browser accessibility
+audit, a live-provider validation, or a consenting-customer pilot.
