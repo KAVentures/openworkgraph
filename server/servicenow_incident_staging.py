@@ -11,7 +11,7 @@ import json
 import math
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlencode
@@ -38,8 +38,18 @@ class SelectedIncidents:
     sys_ids: tuple[str, ...]
     consented: bool = False
     grant_current: bool = False
+    # Exact constructor-time selection. This is an in-process consistency
+    # check, NOT a cryptographic or independently authenticated grant.
+    _bound_selection: tuple[str, str, tuple[str, ...], bool, bool] = field(
+        init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        SelectedIncidents._validate_fields(self)
+        object.__setattr__(self, "_bound_selection", (
+            self.host, self.tenant_scope, self.sys_ids,
+            self.consented, self.grant_current))
+
+    def _validate_fields(self) -> None:
         if type(self.host) is not str or not _HOST.fullmatch(self.host):
             raise StagingError("Unsupported ServiceNow instance host")
         if type(self.tenant_scope) is not str or not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", self.tenant_scope):
@@ -77,7 +87,17 @@ def _require_selected_scope(scope: SelectedIncidents) -> None:
     # Call the class methods directly: an instance can also shadow methods
     # after construction. This is a local input invariant, NOT a trusted
     # consent grant or protection against malicious in-process code/races.
-    SelectedIncidents.__post_init__(scope)
+    # Re-running __post_init__ here would re-bind a mutated but valid-looking
+    # tenant, host, selected ID or grant. Validate WITHOUT resetting the
+    # constructor-time binding, then reject any changed scope/authority fields.
+    try:
+        SelectedIncidents._validate_fields(scope)
+        current = (scope.host, scope.tenant_scope, scope.sys_ids,
+                   scope.consented, scope.grant_current)
+        if object.__getattribute__(scope, "_bound_selection") != current:
+            raise StagingError("Selected incident scope changed after authorization")
+    except (AttributeError, TypeError) as exc:
+        raise StagingError("Invalid selected incident scope binding") from exc
     SelectedIncidents.require_authority(scope)
 
 
