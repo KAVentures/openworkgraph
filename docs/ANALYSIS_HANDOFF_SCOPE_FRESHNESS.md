@@ -487,8 +487,9 @@ and in a returned export-ticket URL, an invalid rollover bound can compare
 equal to the requested instant.
 
 The dashboard now uses one strict clock-shape check (hours 00–23, minutes
-and seconds 00–59, timezone-aware ISO timestamps) in addition to existing
-calendar-date and selected-window checks. It rejects rollover instants in
+and seconds 00–59, timezone-aware ISO timestamps) **and shared real-calendar-day
+validation** in addition to selected-window checks. This also prevents an
+impossible ticket date such as `2026-02-30` from comparing equal to March 2. It rejects rollover instants in
 preview observations and daily chunks, treats a malformed lease as
 **unverified**, and refuses a ticket URL whose bounds only match because
 `Date.parse` rolled its clock forward. Valid `00:00:00`, fractional
@@ -497,7 +498,7 @@ The authenticated backend's permission and single-use ticket checks still
 apply independently; browser validation is not a source of authority.
 
 Synthetic mock-DOM regressions cover malformed observed and daily-plan
-instants, an expired-shape saved-history lease, and a ticket bound that
-`Date.parse` considers identical to the selected local midnight. They do
+instants, an expired-shape saved-history lease, and ticket bounds with rollover clocks or impossible calendar dates that
+`Date.parse` considers identical to a valid selected local midnight. They do
 not establish live-provider behavior, capture completeness, a real
 consenting-user pilot, commercial outcomes or competitor parity.
