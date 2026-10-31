@@ -75,25 +75,27 @@ def _field(event: dict[str, Any], name: str, pattern: re.Pattern[str]) -> str:
     return value if isinstance(value, str) and pattern.fullmatch(value) else ""
 
 
-def _contradictory_field_tokens(
-    event: dict[str, Any], name: str, pattern: re.Pattern[str],
-) -> set[str]:
-    """Return valid scoped tokens tainted by two inconsistent explicit claims.
+def _dual_field_disagreement(event: dict[str, Any], name: str) -> bool:
+    """Whether two explicitly supplied signal IDs contradict each other.
 
-    Both top-level and metadata-only IDs are accepted for legacy capture.
-    If both are present but disagree, neither can attest an unambiguous
-    tab/clipboard group, even when one claim is malformed. Veto every
-    syntactically valid token they named; never infer a missing token.
+    Never compare deep malformed JSON values: only matching literal strings
+    are trustworthy agreement. Absent legacy locations are not conflicts.
     """
     metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
     if name not in event or name not in metadata:
-        return set()
+        return False
     top, nested = event[name], metadata[name]
-    # Compare only bounded literal tokens; deep untrusted JSON equality can
-    # recurse or consume unbounded work and has no linking authority.
-    if isinstance(top, str) and isinstance(nested, str) and top == nested:
+    return not (isinstance(top, str) and isinstance(nested, str) and top == nested)
+
+
+def _contradictory_field_tokens(
+    event: dict[str, Any], name: str, pattern: re.Pattern[str],
+) -> set[str]:
+    """Valid tokens vetoed by inconsistent top-level/metadata signal claims."""
+    if not _dual_field_disagreement(event, name):
         return set()
-    return {value for value in (top, nested)
+    metadata = event["metadata"]
+    return {value for value in (event[name], metadata[name])
             if isinstance(value, str) and pattern.fullmatch(value)}
 
 
@@ -331,6 +333,10 @@ def _observations(events: list[dict[str, Any]]) -> tuple[
             "transfer": _field(event, "clipboard_transfer_id", _TRANSFER),
             "scope": _link_scope(event),
             "reference_tainted": False,
+            "ephemeral_claim_tainted": (
+                _dual_field_disagreement(event, "tab_context_id") or
+                _dual_field_disagreement(event, "clipboard_transfer_id")
+            ),
             "action_claim_malformed": malformed_action,
             "app": event["app"].strip().casefold()[:120] if isinstance(event.get("app"), str) else "",
             "action": "unknown" if malformed_action else _token(event.get("event_type")),
@@ -521,7 +527,8 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
                 candidates.append({"event_id": row["event_id"], "toward_event_id": previous["event_id"],
                                    "relation": "same_tab_unreferenced"})
     for index, row in enumerate(rows):
-        if row["reference_tainted"] or row["ref"] or row["tab"] or row["transfer"] or not row["app"]:
+        if (row["reference_tainted"] or row["ephemeral_claim_tainted"] or
+                row["ref"] or row["tab"] or row["transfer"] or not row["app"]):
             continue
         for neighbour in (rows[index - 1] if index else None, rows[index + 1] if index + 1 < len(rows) else None):
             if (row["scope"] is not None and neighbour is not None
