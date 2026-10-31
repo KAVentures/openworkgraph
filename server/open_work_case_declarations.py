@@ -175,7 +175,7 @@ def _database(*, create: bool) -> Iterator[sqlite3.Connection | None]:
                     )
                     if (legacy_table != ("table",) or
                         legacy_actual_columns != tuple((*column, 0) for column in legacy_expected_columns) or
-                        _unexpected_schema_object(db)):
+                        _unexpected_schema_object(db) or _unexpected_schema_constraints(db)):
                         raise CaseDeclarationError("incompatible legacy declaration schema")
                     # Legacy migration must honor the same global 50-row
                     # limit as v2 reads/writes. Check before ALTER/token
@@ -232,7 +232,7 @@ def _database(*, create: bool) -> Iterator[sqlite3.Connection | None]:
             for _index, name, declared_type, required, _default, primary, hidden in columns
         )
         if (table != ("table",) or actual_columns != tuple((*column, 0) for column in expected_columns) or
-            _unexpected_schema_object(db)):
+            _unexpected_schema_object(db) or _unexpected_schema_constraints(db)):
             raise CaseDeclarationError("incompatible versioned declaration schema")
         yield db
     finally:
@@ -251,6 +251,23 @@ def _unexpected_schema_object(db: sqlite3.Connection) -> bool:
         "SELECT 1 FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' "
         "AND NOT (type='table' AND name='declarations') LIMIT 1"
     ).fetchone() is not None
+
+
+def _unexpected_schema_constraints(db: sqlite3.Connection) -> bool:
+    """Reject hidden UNIQUE and FK semantics not present in the private ledger.
+
+    SQLite names implicit UNIQUE indexes sqlite_autoindex_*; checking only
+    sqlite_master user objects misses them. Foreign keys add no schema object
+    at all and may cascade owner-declared facts during an unrelated delete.
+    Both the original v1 table and the v2 writer have exactly one implicit
+    work_item_ref PRIMARY KEY index and no foreign keys.
+    """
+    indexes = db.execute("PRAGMA index_list(declarations)").fetchall()
+    foreign_keys = db.execute("PRAGMA foreign_key_list(declarations)").fetchall()
+    return (
+        indexes != [(0, "sqlite_autoindex_declarations_1", 1, "pk", 0)]
+        or bool(foreign_keys)
+    )
 
 
 def _reviewed(now: datetime) -> dict[str, tuple[datetime, datetime]]:
