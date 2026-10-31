@@ -270,13 +270,16 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
         # A single scoped token claiming three distinct records is not a
         # reliable copy/paste edge: token reuse or interleaved work is possible.
         # Keep independent same-record evidence but do not merge the fanout.
-        if len({row["ref"] for row in group if row["ref"]}) > 2:
+        referenced_records = {row["ref"] for row in group if row["ref"]}
+        if len(referenced_records) > 2:
             ambiguous_transfer_groups += 1
             continue
         # When the entire token group explicitly says copy/paste, a transfer
         # needs an observed copy BEFORE a compatible paste. Two copies, two
         # pastes, a reversed sequence, or a copy/paste confined to record A
         # with only a copy on B are not evidence of an A -> B transfer.
+        # For two referenced records, even a copy -> paste through a loose
+        # observation does not authorize joining a third, copy-only record.
         # Legacy generic capture actions remain unchanged: timestamps can
         # veto contradictory directional evidence, never create a link.
         if all(row["action"] in ("copy", "paste") for row in group):
@@ -287,7 +290,14 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
                     earlier_copies.setdefault(row["ref"], row["observed_at"])
                 elif any(
                     at < row["observed_at"] and
-                    (copy_ref != row["ref"] or not copy_ref or not row["ref"])
+                    (
+                        # With two distinct referenced records, an unreferenced
+                        # copy/paste cannot attest transfer to the *other*
+                        # record. Require the ordered pair to span both records.
+                        (bool(copy_ref) and bool(row["ref"]) and copy_ref != row["ref"])
+                        if len(referenced_records) == 2 else
+                        (copy_ref != row["ref"] or not copy_ref or not row["ref"])
+                    )
                     for copy_ref, at in earlier_copies.items()
                 ):
                     directional_pair = True
