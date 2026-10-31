@@ -305,7 +305,7 @@ def _observations(events: list[dict[str, Any]]) -> tuple[
             "action_claim_malformed": malformed_action,
             "app": event["app"].strip().casefold()[:120] if isinstance(event.get("app"), str) else "",
             "action": "unknown" if malformed_action else _token(event.get("event_type")),
-            "source": _token(event.get("source")),
+            "source": _token(event.get("source")) if isinstance(event.get("source"), str) else "unknown",
         })
     # A reference seen with conflicting identities never links anything,
     # including via weaker signals that would otherwise treat it as loose.
