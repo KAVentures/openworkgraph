@@ -1102,3 +1102,65 @@ def test_bounded_discarded_json_integers_stay_private_and_compatible(token):
     assert "nested_metric" not in json.dumps(staged)
     assert not staged["checkpoint_advanced"]
     assert staged["historical_completeness"] == "unknown"
+
+
+@pytest.mark.parametrize("mode", ["standalone", "planned", "batch", "replay", "planned_replay"])
+@pytest.mark.parametrize("alias, shadow", [
+    ("SYS_ID", B),
+    ("Sys_Updated_On", "2026-10-30 03:11:00"),
+    ("SYS_MOD_COUNT", "99"),
+    ("STATE", "closed"),
+    ("ſtate", "closed"),  # Unicode casefold also aliases the reserved field.
+])
+def test_reserved_incident_aliases_fail_closed_across_all_staging_paths(mode, alias, shadow):
+    from server.servicenow_incident_staging import (
+        reconcile_planned_replays, reconcile_replayed_pages,
+    )
+    selected = scope()
+    planned = plan_page(selected, limit=1)
+    ambiguous = page(item(A, **{alias: shadow}))
+    ordinary = page(item(A))
+    with pytest.raises(StagingError, match="Ambiguous provider incident field") as caught:
+        if mode == "standalone":
+            project_page(selected, ambiguous, limit=1)
+        elif mode == "planned":
+            project_planned_page(selected, ambiguous, plan=planned)
+        elif mode == "batch":
+            project_planned_pages(selected, [(planned, ambiguous)])
+        elif mode == "replay":
+            reconcile_replayed_pages(selected, ambiguous, ordinary, limit=1)
+        else:
+            reconcile_planned_replays(
+                selected, [(planned, ambiguous)], [(planned, ordinary)]
+            )
+    # Never echo provider-controlled identity/status aliases or their values.
+    assert alias not in str(caught.value)
+    assert shadow not in str(caught.value)
+
+
+def test_reserved_alias_rejected_even_without_canonical_field():
+    row = item(A)
+    del row["state"]
+    row["STATE"] = "2"
+    with pytest.raises(StagingError, match="Ambiguous provider incident field"):
+        project_page(scope(), page(row), limit=1)
+
+
+def test_unrelated_private_fields_remain_discarded_and_replay_compatible():
+    from server.servicenow_incident_staging import reconcile_planned_replays
+    selected = scope()
+    planned = plan_page(selected, limit=1)
+    private = page(item(A, short_description="secret", incident_state="shadow",
+                        sys_mod_counter="999", diagnostic={"Stateful": True}))
+    staged = project_planned_pages(selected, [(planned, private)])
+    assert staged["records"][0]["source_event_id"] == A + ":3"
+    assert staged["records"][0]["reported_state"] == "2"
+    assert "secret" not in json.dumps(staged)
+    assert "shadow" not in json.dumps(staged)
+    assert "999" not in json.dumps(staged)
+    replay = reconcile_planned_replays(
+        selected, [(planned, private)], [(planned, page(item(A)))]
+    )
+    assert replay["same_reported_revision_ids"] == [A]
+    assert replay["business_outcome_verified"] is False
+    assert replay["checkpoint_advanced"] is False
