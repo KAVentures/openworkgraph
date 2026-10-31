@@ -244,3 +244,24 @@ rejection and compatibility with unrelated discarded fields. This is only
 local response-shape integrity. It is **not** a verified ServiceNow response,
 provider ACL/tenant receipt, completeness claim, current consent grant at
 persistence time, permission to append/checkpoint, or real sandbox acceptance.
+
+
+## Unicode compatibility aliases of reserved fields
+
+The four reserved source-evidence keys (`sys_id`, `sys_updated_on`,
+`sys_mod_count`, `state`) must be spelled **exactly**. In addition to
+casefold-equivalent aliases, the offline projector now refuses an extra key
+whose Unicode **NFKC normalization followed by casefold** equals a reserved
+key. For example, fullwidth `ｓｙｓ＿ｉｄ` and mathematical styled
+`𝘴𝘵𝘢𝘵𝘦` cannot silently coexist with canonical keys while carrying
+contradictory provider identity or status evidence. This also rejects such an
+alias when the canonical key is missing. Unrelated private fields, including
+Unicode compatibility spellings that do not normalize to reserved names, are
+still accepted and discarded; neither their names nor values are returned.
+
+Synthetic regressions cover all four reserved fields and multiple compatibility
+spellings across standalone staging, exact-plan staging, bounded offset batches
+and both replay entrypoints. This protects only local source-field integrity:
+it does not authenticate the provider, assert completeness or source chronology,
+grant a current consent/tenant lease at persistence, authorize an event-log
+append/checkpoint, or constitute real ServiceNow sandbox acceptance.
