@@ -749,7 +749,7 @@ def summary(log_id: str, case_type: str | None = None, cohort: dict[str, Any] | 
         events, cases, activities, first, last = conn.execute(
             "SELECT count(*), count(DISTINCT case_id), count(DISTINCT activity), min(ts), max(ts) FROM ce").fetchone()
         durations = conn.execute("""SELECT quantile_cont(d, 0.5), quantile_cont(d, 0.9), avg(d) FROM (
-            SELECT date_diff('second', min(ts), max(ts)) AS d FROM ce GROUP BY case_id)""").fetchone()
+            SELECT epoch(max(ts) - min(ts)) AS d FROM ce GROUP BY case_id)""").fetchone()
         return {"events": events, "cases": cases, "activities": activities,
                 "first_event_at": first.isoformat() + "Z" if first else None,
                 "last_event_at": last.isoformat() + "Z" if last else None,
@@ -786,7 +786,7 @@ def variants(log_id: str, case_type: str | None = None, limit: int = 20,
     def run(conn):
         rows = conn.execute(f"""WITH v AS (
               SELECT case_id, string_agg(activity, '{_SEP}' ORDER BY ts, event_id) AS path,
-                     date_diff('second', min(ts), max(ts)) AS duration
+                     epoch(max(ts) - min(ts)) AS duration
               FROM ce GROUP BY case_id)
             SELECT path, count(*) AS cases, quantile_cont(duration, 0.5) AS median_duration
             FROM v GROUP BY path ORDER BY cases DESC, path LIMIT {limit}""").fetchall()
@@ -805,7 +805,7 @@ def directly_follows(log_id: str, case_type: str | None = None, limit: int = 200
               quantile_cont(gap, 0.5) AS median_gap FROM (
                 SELECT case_id, activity,
                   lead(activity) OVER w AS nxt,
-                  date_diff('second', ts, lead(ts) OVER w) AS gap
+                  epoch((lead(ts) OVER w) - ts) AS gap
                 FROM ce WINDOW w AS (PARTITION BY case_id ORDER BY ts, event_id))
             WHERE nxt IS NOT NULL GROUP BY 1, 2 ORDER BY n DESC, 1, 2 LIMIT {limit}""").fetchall()
         bounds = conn.execute("""SELECT kind, activity, count(*) FROM (
