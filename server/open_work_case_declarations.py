@@ -111,6 +111,33 @@ def _database(*, create: bool) -> Iterator[sqlite3.Connection | None]:
     # lstat is outside this local admission guard's guarantees.
     if info.st_size > _MAX_DATABASE_BYTES:
         raise CaseDeclarationError("case declaration storage exceeds size limit")
+    # SQLite may inspect a rollback journal or WAL/SHM sidecars during
+    # sqlite3.connect, *before* journal-mode and schema admission below.
+    # Do not let an unsafe sidecar path bypass the main file's no-link,
+    # private-permissions and bounded-size checks. WAL/SHM are never part
+    # of this DELETE-journal-only ledger and require explicit clear.
+    for suffix in ("-wal", "-shm"):
+        try:
+            Path(str(path) + suffix).lstat()
+        except FileNotFoundError:
+            continue
+        raise CaseDeclarationError("unsupported case declaration SQLite sidecar")
+    journal = Path(str(path) + "-journal")
+    try:
+        journal_info = journal.lstat()
+    except FileNotFoundError:
+        journal_info = None
+    if journal_info is not None:
+        if (not stat.S_ISREG(journal_info.st_mode) or journal.is_symlink() or
+            journal_info.st_nlink != 1):
+            raise CaseDeclarationError("unsafe case declaration journal path")
+        if os.name == "posix" and (journal_info.st_mode & 0o077):
+            raise CaseDeclarationError("case declaration journal permissions are too broad")
+        # A DELETE rollback journal for a <=2 MiB database can exceed the
+        # database size slightly due to page headers. Twice that bound
+        # permits ordinary crash recovery without accepting huge sidecars.
+        if journal_info.st_size > 2 * _MAX_DATABASE_BYTES:
+            raise CaseDeclarationError("case declaration journal exceeds size limit")
     # mode=rw avoids recreating a removed file during a read/revoke race.
     uri = "file:" + quote(str(path), safe="/:") + "?mode=rw"
     db = sqlite3.connect(uri, uri=True, timeout=5, isolation_level=None)
