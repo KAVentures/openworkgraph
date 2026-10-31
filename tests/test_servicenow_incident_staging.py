@@ -1308,3 +1308,100 @@ def test_original_scope_binding_remains_usable_for_offline_replay():
     assert reconcile_planned_replays(
         selected, [(planned, raw)], [(planned, raw)]
     )["same_reported_revision_ids"] == [A]
+
+
+@pytest.mark.parametrize("media_type", [
+    "application/json", "application/json; charset=utf-8",
+    "Application/JSON; charset=UTF-8", "application/json ; charset= utf-8",
+])
+def test_supplied_http_metadata_accepts_only_exact_selected_get(media_type):
+    from server.servicenow_incident_staging import project_supplied_http_response
+    selected = scope(sys_ids=(A,))
+    plan = plan_page(selected, limit=1)
+    raw = page(item(A, caller_id="private caller"))
+    staged = project_supplied_http_response(
+        selected, plan=plan, request_method="GET", request_url=plan["url"],
+        response_url=plan["url"], status=200, content_type=media_type,
+        redirect_count=0, body=raw,
+    )
+    assert staged["plan_bound"] is True
+    assert staged["supplied_http_metadata_checked"] is True
+    assert staged["authenticated_transport_receipt"] is False
+    assert staged["transport_grant_verified"] is False
+    assert staged["historical_completeness"] == "unknown"
+    assert staged["checkpoint_advanced"] is False
+    assert staged["not_an_authorization_to_append"] is True
+    assert "private caller" not in json.dumps(staged)
+
+
+@pytest.mark.parametrize("field,bad_value", [
+    ("request_method", "POST"),
+    ("request_method", "get"),
+    ("request_url", "https://attacker.invalid/incident"),
+    ("response_url", "https://attacker.invalid/incident"),
+    ("status", 301),
+    ("status", 401),
+    ("status", 403),
+    ("status", 429),
+    ("status", 500),
+    ("status", True),
+    ("status", 200.0),
+    ("redirect_count", 1),
+    ("redirect_count", True),
+    ("content_type", "text/html"),
+    ("content_type", "application/json, text/html"),
+    ("content_type", "application/json; charset=iso-8859-1"),
+    ("content_type", "application/json\\r\\nX-Secret: private"),
+    ("content_type", None),
+], ids=[
+    "write-method", "lowercase-method", "request-url", "final-url",
+    "redirect-status", "unauthorized", "forbidden", "rate-limited",
+    "server-error", "boolean-status", "float-status", "redirect-hop",
+    "boolean-redirect", "html", "mixed-media", "non-utf8",
+    "header-injection", "missing-media",
+])
+def test_supplied_http_metadata_refuses_untrusted_transport_claims(field, bad_value):
+    from server.servicenow_incident_staging import project_supplied_http_response
+    selected = scope(sys_ids=(A,))
+    plan = plan_page(selected, limit=1)
+    kwargs = {
+        "request_method": "GET", "request_url": plan["url"],
+        "response_url": plan["url"], "status": 200,
+        "content_type": "application/json", "redirect_count": 0,
+        "body": page(item(A, caller_id="private caller")),
+    }
+    kwargs[field] = bad_value
+    with pytest.raises(StagingError, match="Supplied HTTP") as caught:
+        project_supplied_http_response(selected, plan=plan, **kwargs)
+    assert "private caller" not in str(caught.value)
+    assert "attacker.invalid" not in str(caught.value)
+
+
+def test_supplied_http_metadata_does_not_bypass_plan_scope_or_source_validation():
+    from server.servicenow_incident_staging import project_supplied_http_response
+    selected = scope(sys_ids=(A,))
+    plan = plan_page(selected, limit=1, since="2026-10-30 03:00:00")
+
+    def invoke(current_scope, current_plan, body):
+        return project_supplied_http_response(
+            current_scope, plan=current_plan, request_method="GET",
+            request_url=plan["url"], response_url=plan["url"],
+            status=200, content_type="application/json",
+            redirect_count=0, body=body,
+        )
+
+    assert invoke(selected, plan, page(item(A)))["supplied_http_metadata_checked"]
+    with pytest.raises(StagingError, match="not currently authorized"):
+        invoke(scope(sys_ids=(A,), grant_current=False), plan, page(item(A)))
+    with pytest.raises(StagingError, match="does not match"):
+        invoke(scope(sys_ids=(A,), tenant_scope="other"), plan, page(item(A)))
+    altered = dict(plan)
+    altered["since"] = None
+    with pytest.raises(StagingError, match="does not match"):
+        invoke(selected, altered, page(item(A)))
+    with pytest.raises(StagingError, match="unselected"):
+        invoke(selected, plan, page(item(B)))
+    with pytest.raises(StagingError, match="older than requested"):
+        invoke(selected, plan, page(item(A, updated="2026-10-29 03:00:00")))
+    with pytest.raises(StagingError, match="Invalid bounded provider JSON"):
+        invoke(selected, plan, b'{"result":[')
