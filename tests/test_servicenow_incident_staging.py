@@ -1194,3 +1194,54 @@ def test_unrelated_compatibility_spelling_stays_private_and_is_not_rejected():
     assert replay["historical_completeness"] == "unknown"
     assert replay["business_outcome_verified"] is False
     assert replay["checkpoint_advanced"] is False
+
+
+@pytest.mark.parametrize("field,bad_value", [
+    ("host", "attacker.invalid"),
+    ("tenant_scope", "org1^ORtenant=other"),
+    ("sys_ids", [A]),
+    ("sys_ids", (A, A)),
+    ("consented", 1),
+    ("grant_current", "true"),
+], ids=["host", "tenant", "ids-list", "ids-duplicate", "consent-type", "grant-type"])
+def test_post_construction_scope_mutation_is_revalidated_at_every_entrypoint(field, bad_value):
+    """Even a frozen instance can be altered with object.__setattr__."""
+    from server.servicenow_incident_staging import (
+        reconcile_planned_replays, reconcile_replayed_pages,
+    )
+    selected = scope(sys_ids=(A,))
+    planned = plan_page(selected, limit=1)
+    raw = page(item(A))
+    object.__setattr__(selected, field, bad_value)
+    entrypoints = [
+        lambda: plan_page(selected, limit=1),
+        lambda: project_page(selected, raw, limit=1),
+        lambda: project_planned_page(selected, raw, plan=planned),
+        lambda: project_planned_pages(selected, [(planned, raw)]),
+        lambda: reconcile_replayed_pages(selected, raw, raw, limit=1),
+        lambda: reconcile_planned_replays(selected, [(planned, raw)], [(planned, raw)]),
+    ]
+    for entrypoint in entrypoints:
+        with pytest.raises(StagingError) as caught:
+            entrypoint()
+        assert "attacker.invalid" not in str(caught.value)
+        assert "org1^ORtenant=other" not in str(caught.value)
+
+
+def test_instance_method_shadowing_cannot_skip_scope_validation_or_revocation():
+    """Never dispatch validation/authority through a mutable instance attribute."""
+    denied = scope(sys_ids=(A,), consented=False)
+    object.__setattr__(denied, "require_authority", lambda: None)
+    with pytest.raises(StagingError, match="not currently authorized"):
+        plan_page(denied, limit=1)
+
+    malformed = scope(sys_ids=(A,))
+    object.__setattr__(malformed, "host", "attacker.invalid")
+    object.__setattr__(malformed, "__post_init__", lambda: None)
+    with pytest.raises(StagingError, match="Unsupported ServiceNow instance host"):
+        project_page(malformed, page(item(A)), limit=1)
+
+    # Ordinary, unchanged exact-scope instances retain the prior read contract.
+    authorized = scope(sys_ids=(A,))
+    planned = plan_page(authorized, limit=1)
+    assert project_planned_page(authorized, page(item(A)), plan=planned)["plan_bound"] is True
