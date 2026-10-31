@@ -119,6 +119,28 @@ def assess(mapping: Any) -> dict:
     create = _attributes(users["create_attributes"], "users.create_attributes", minimum=1)
     patch = _attributes(users["patch_attributes"], "users.patch_attributes", minimum=0, max_path=1024)
     group_match = _attributes(groups["match_attributes"], "groups.match_attributes", minimum=0)
+    # Different spellings of the same *supported* contact PATCH target must
+    # not pass as independent mappings. The shipped contact parser strips the
+    # exact core User URN, decodes JSON selector literals and compares selected
+    # values with casefold(). A raw-path duplicate check misses all three.
+    # Unsupported paths retain their ordinary explicit blocker below.
+    effective_contact_paths: set[tuple[str, ...]] = set()
+    for value in patch:
+        if not _supported_contact_patch_path(value):
+            continue
+        unqualified = _unqualified_contact_patch_path(value)
+        selector = _CONTACT_SELECTOR.fullmatch(unqualified)
+        if selector is None:
+            effective = ("field", unqualified.casefold())
+        else:
+            effective = (
+                "selector", selector.group(1).casefold(),
+                json.loads(selector.group(2)).casefold(),
+                (selector.group(3) or "").casefold(),
+            )
+        if effective in effective_contact_paths:
+            raise InvalidMapping("users.patch_attributes contains duplicate effective contact paths")
+        effective_contact_paths.add(effective)
     findings: list[dict[str, str]] = []
 
     def add(severity: str, code: str, path: str, message: str) -> None:
