@@ -948,6 +948,47 @@ test('explicit daily-plan coverage flags reconcile selected rows and 31-date tru
         assert.match(h.summary.textContent, /incomplete or malformed/i);
       }
     });
+  // A clipped 31st chunk can end before midnight. An event later on that
+  // SAME UTC day is not a 32nd distinct date, even when the omission flag,
+  // selected row totals and last-observation-after-chunk-end all agree.
+  await t.test('truncation requires a later distinct UTC date, not a later hour', async t2 => {
+    const clipped = chunks.map((chunk, i) => i === 30
+      ? {...chunk, until: utc(lastDay - day + 10 * 3600_000)}
+      : chunk);
+    const variants = [
+      ['later hour on 31st UTC day is not a 32nd date',
+        asOffset(lastDay - day + 12 * 3600_000, 5), false],
+      ['32nd UTC day remains valid with previous-day local offset label',
+        asOffset(lastDay + 3600_000, -5), true]
+    ];
+    for (const [name, lastObserved, accepted] of variants)
+      await t2.test(name, async () => {
+        const h = harness();
+        await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+        h.bars[0].controls.select.value = 'all';
+        h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+        await settle(); h.reply(h.reads[1], h.preview('all', 'selected-all')); await settle();
+        const opening = h.bars[0].controls.button.onclick();
+        await settle();
+        h.reply(h.reads[2], {...h.preview('all', 'clipped-last-date'),
+          canonical_rows: 32, retained_rows: 32,
+          first_observed_at: utc(firstDay + 3600_000),
+          last_observed_at: lastObserved,
+          event_types: {focus_span: 32}, sources: {desktop: 32},
+          analysis_plan: {date_chunks: clipped,
+            more_dates_not_listed: true, complete_history_claimed: false}});
+        await opening;
+        assert.equal(h.modals, accepted ? 1 : 0, name);
+        assert.equal(h.tickets.length, 0);
+        if (accepted) {
+          await h.modal['#analysisCopy'].onclick();
+          assert.deepEqual(h.copied, ['request-clipped-last-date']);
+        } else {
+          assert.deepEqual(h.copied, []);
+          assert.match(h.summary.textContent, /incomplete or malformed/i);
+        }
+      });
+  });
   await t.test('explicitly no omitted dates cannot hide all selected events', async () => {
     const h = harness();
     await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
