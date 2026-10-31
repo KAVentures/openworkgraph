@@ -352,3 +352,34 @@ records or prove that every valid-looking token is a real transfer. No time
 alone creates a link. The preregistered held-out F1 ≥ 0.90 and contamination
 ≤ 0.05 targets remain unverified, with no truth, split or scoring changes,
 model spend, provider calls, new permissions or business writes.
+
+
+## Mixed directional and generic clipboard observations
+
+A scoped transfer token may appear on a mix of explicit `copy`/`paste`
+events and generic capture events such as `browser_click`. Previously the
+direction veto ran only when **every** event was explicitly directional.
+Adding one generic event therefore allowed an otherwise contradictory
+A-copy/B-copy token, a paste-before-copy token, or an A-copy/A-paste token
+with unrelated B-click to merge distinct source records.
+
+Now **any** explicit `copy` or `paste` in the token group requires an
+observed, strictly ordered compatible copy-to-paste pair before the group
+can create a clipboard join. With two distinct referenced records, the
+pair must directly cross those records. A generic event cannot supply
+either missing endpoint or disable the direction veto. Groups with no
+explicit copy/paste actions preserve the historical nondirectional
+transfer-token behavior. A genuine A-copy -> B-paste remains linkable
+when an additional generic observation shares the token.
+
+Three synthetic regression functions exercise contradictory mixed groups
+in both input orders, independent same-record retention, and the positive
+mixed-but-direct cross-record pair. The existing public aggregate
+`inconsistent_clipboard_transfer_direction_groups` counts vetoed groups;
+private token values are not returned. The fix does **not** prove token
+authenticity, validate provider authorization or ensure that unrelated
+generic observations in an otherwise valid group belong to the same task.
+The preregistered held-out F1 >= 0.90 and contamination <= 0.05 remain
+unverified. No private holdout truth, scoring, thresholds, model/API spend,
+source privileges or business writes changed. Native repository CI and
+review are required before merging.
