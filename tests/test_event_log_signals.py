@@ -148,7 +148,7 @@ def test_signal_kpis_do_not_count_clock_second_boundaries_as_elapsed_time():
         "long,End,2024-01-01T00:01:02.100000Z,team",
     ]
     log = workspace.import_log(
-        BytesIO(("\\n".join(rows) + "\\n").encode()),
+        BytesIO(("\n".join(rows) + "\n").encode()),
         name="signal-second-boundaries-synthetic", source_format="csv",
         mapping={"case_column": "case", "activity_column": "activity",
                  "timestamp_column": "time", "resource_column": "who"},
