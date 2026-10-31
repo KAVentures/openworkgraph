@@ -25,6 +25,7 @@ def response(provider="stripe", kind="invoice", state="paid",
     return {
         "resource_ref": REF,
         "source_rows_scoped_to_exact_record": True,
+        "source_log_join_supported": True,
         "source_window": {"since": None, "until": None},
         "record_observed": True,
         "record_type": {"provider": provider, "kind": kind},
@@ -623,6 +624,67 @@ def test_matching_authenticated_source_read_method_keeps_provider_only_scope(
 ):
     data = response(provider=provider, kind=kind, state=state, operation=operation)
     assert data["source_evidence"]["verification_method"] == SOURCE_READ_METHOD[provider]
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["availability"] == "source_reported"
+    assert result["operation_verified"] is True
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+@pytest.mark.parametrize("untrusted_join", [None, False, 0, 1, "true", [], {}])
+def test_receipt_rejects_unsupported_or_malformed_source_log_join(
+    operation, provider, kind, state, untrusted_join,
+):
+    # A provider state cannot attest an operation for an unallowlisted
+    # observed provider/kind/host, even when the other receipt fields match.
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    data["source_log_join_supported"] = untrusted_join
+    calls = []
+    result = source_operation_receipt(
+        REF, operation, record_reader=reader(data, calls), now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "source_join_not_supported"
+    assert result["operation_verified"] is False
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert result["read_only"] is True
+    assert calls == [(REF, {
+        "since": None, "until": None, "include_source_status": True,
+    })]
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+def test_receipt_missing_source_log_join_is_unknown(
+    operation, provider, kind, state,
+):
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    del data["source_log_join_supported"]
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "source_join_not_supported"
+    assert result["operation_verified"] is False
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+def test_allowlisted_source_log_join_preserves_provider_only_receipt(
+    operation, provider, kind, state,
+):
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    assert data["source_log_join_supported"] is True
     result = source_operation_receipt(
         REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
     )
