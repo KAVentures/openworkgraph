@@ -173,8 +173,13 @@ def _database(*, create: bool) -> Iterator[sqlite3.Connection | None]:
                         for _index, name, declared_type, required, _default, primary, hidden
                         in legacy_columns
                     )
+                    # The v1 writer had no column defaults. A foreign
+                    # DEFAULT changes the admitted ledger's SQL contract even
+                    # when table_xinfo names/types and PK indexes match.
+                    legacy_defaults = tuple(column[4] for column in legacy_columns)
                     if (legacy_table != ("table",) or
                         legacy_actual_columns != tuple((*column, 0) for column in legacy_expected_columns) or
+                        legacy_defaults != (None,) * len(legacy_expected_columns) or
                         _unexpected_schema_object(db) or _unexpected_schema_constraints(db)):
                         raise CaseDeclarationError("incompatible legacy declaration schema")
                     # Legacy migration must honor the same global 50-row
@@ -231,7 +236,12 @@ def _database(*, create: bool) -> Iterator[sqlite3.Connection | None]:
             (name, declared_type.upper(), required, primary, hidden)
             for _index, name, declared_type, required, _default, primary, hidden in columns
         )
+        # A fresh v2 writer has no defaults. The supported v1 migration
+        # adds edit_token with DEFAULT '' before filling random incarnation
+        # tokens; that single legacy default is the only permitted exception.
+        defaults = tuple(column[4] for column in columns)
         if (table != ("table",) or actual_columns != tuple((*column, 0) for column in expected_columns) or
+            defaults[:9] != (None,) * 9 or defaults[9:] not in ((None,), ("''",)) or
             _unexpected_schema_object(db) or _unexpected_schema_constraints(db)):
             raise CaseDeclarationError("incompatible versioned declaration schema")
         yield db
@@ -273,15 +283,16 @@ def _unexpected_schema_constraints(db: sqlite3.Connection) -> bool:
     # CHECK clauses can change admitted owner facts without creating an index,
     # FK, trigger, extra column or any other schema object. COLLATE on a
     # non-indexed column (such as scope_ref) is similarly invisible to xinfo.
-    # The trusted v1/v2 writers emit neither keyword. Reject any occurrence
-    # conservatively, including ambiguous SQL text, rather than interpreting
-    # foreign schema as a trusted declaration ledger.
+    # The trusted v1/v2 writers emit none of these keywords. In particular,
+    # PRIMARY KEY ON CONFLICT REPLACE/IGNORE changes collision semantics
+    # while preserving the exact same index_xinfo and column shape. Reject
+    # even ambiguous/commented SQL rather than blessing foreign constraints.
     ddl = db.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='declarations'"
     ).fetchone()
     foreign_semantics = (
         ddl is None or not isinstance(ddl[0], str) or
-        re.search(r"\b(?:CHECK|COLLATE)\b", ddl[0], re.IGNORECASE) is not None
+        re.search(r"\b(?:CHECK|COLLATE|CONFLICT)\b", ddl[0], re.IGNORECASE) is not None
     )
     return (
         indexes != [(0, "sqlite_autoindex_declarations_1", 1, "pk", 0)]
