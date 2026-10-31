@@ -577,17 +577,19 @@ def test_receipt_requires_exact_authenticated_source_read_method(
 ):
     # A valid state, timestamp and provider label are insufficient without
     # provenance from the matching existing authenticated opt-in source path.
-    if untrusted_method == SOURCE_READ_METHOD[provider]:
-        pytest.skip("matching method is the separate positive control")
     data = response(provider=provider, kind=kind, state=state, operation=operation)
     data["source_evidence"]["verification_method"] = untrusted_method
     calls = []
     result = source_operation_receipt(
         REF, operation, record_reader=reader(data, calls), now=WHEN,
     )
-    assert result["availability"] == "unknown"
-    assert result["reason"] == "source_verification_provenance_conflict"
-    assert result["operation_verified"] is False
+    if untrusted_method == SOURCE_READ_METHOD[provider]:
+        assert result["availability"] == "source_reported"
+        assert result["operation_verified"] is True
+    else:
+        assert result["availability"] == "unknown"
+        assert result["reason"] == "source_verification_provenance_conflict"
+        assert result["operation_verified"] is False
     assert result["business_objective_verified"] is False
     assert result["customer_outcome_verified"] is False
     assert result["agent_caused_operation_verified"] is False
