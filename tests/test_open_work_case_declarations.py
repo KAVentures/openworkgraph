@@ -1931,3 +1931,66 @@ def test_generated_columns_are_not_admitted_as_exact_schema(
         ).fetchone()[0] == ddl
         assert db.execute("SELECT * FROM declarations").fetchall() == before
         assert len(db.execute("PRAGMA table_xinfo(declarations)").fetchall()) == len(extended)
+
+
+@pytest.mark.parametrize("version", [1, 2])
+@pytest.mark.parametrize("extra_constraint", [
+    ", UNIQUE(scope_ref)",
+    ", FOREIGN KEY(scope_ref) REFERENCES declarations(work_item_ref) ON DELETE CASCADE",
+])
+def test_versioned_declarations_reject_hidden_unique_and_foreign_key_constraints(
+    local, version, extra_constraint,
+):
+    """Extra autoindexes/FKs change owner-fact semantics without new named objects."""
+    reviewed(A)
+    reviewed(B)
+    path = facts._path()
+    base = """CREATE TABLE declarations (
+        work_item_ref TEXT PRIMARY KEY, scope_ref TEXT NOT NULL,
+        goal_code TEXT NOT NULL, expected_outcome_code TEXT NOT NULL,
+        dependencies_json TEXT NOT NULL, revision INTEGER NOT NULL,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL"""
+    if version == 2:
+        base += ", edit_token TEXT NOT NULL"
+    ddl = base + extra_constraint + ")"
+    row = (A, SCOPE, "review_source_state", "source_state_rechecked",
+           "[]", 1, NOW.isoformat(), NOW.isoformat(),
+           (NOW + timedelta(days=7)).isoformat())
+    if version == 2:
+        row += ("f" * 32,)
+    with sqlite3.connect(path) as db:
+        db.execute(ddl)
+        db.execute("INSERT INTO declarations VALUES (" +
+                   ",".join("?" for _ in row) + ")", row)
+        db.execute(f"PRAGMA user_version={version}")
+        # Both variants pass the previous exact-column and named-object guards.
+        assert len(db.execute("PRAGMA table_xinfo(declarations)").fetchall()) == (
+            9 if version == 1 else 10
+        )
+        assert db.execute(
+            "SELECT name FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'"
+        ).fetchall() == [("declarations",)]
+        if "UNIQUE" in extra_constraint:
+            assert len(db.execute("PRAGMA index_list(declarations)").fetchall()) == 2
+        else:
+            assert db.execute("PRAGMA foreign_key_list(declarations)").fetchall()
+        before_schema = db.execute(
+            "SELECT type,name,sql FROM sqlite_master ORDER BY type,name"
+        ).fetchall()
+        before_rows = db.execute("SELECT * FROM declarations").fetchall()
+    if os.name == "posix":
+        path.chmod(0o600)
+
+    error = "incompatible legacy" if version == 1 else "incompatible versioned"
+    with pytest.raises(facts.CaseDeclarationError, match=error):
+        facts.list_case_declarations(SCOPE, now=NOW)
+    with pytest.raises(facts.CaseDeclarationError, match=error):
+        save(B)
+    # No migration, hidden cascade, partial CAS or row deletion on rejection.
+    with sqlite3.connect(path) as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == version
+        assert db.execute(
+            "SELECT type,name,sql FROM sqlite_master ORDER BY type,name"
+        ).fetchall() == before_schema
+        assert db.execute("SELECT * FROM declarations").fetchall() == before_rows
