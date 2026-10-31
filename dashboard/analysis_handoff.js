@@ -360,6 +360,17 @@
     const workTextStatement = d.work_text?.included_in_activity_package === false
       ? 'Visible work text is not included in this activity package. Typed values and clipboard contents are not included.'
       : 'This preview does not confirm that visible work text, typed values or clipboard contents are excluded. Inspect the package before sharing it.';
+    // An omitted latest-work timestamp is not proof that no ordinary work was
+    // observed. The server may omit it for excluded apps or legacy previews.
+    // Health/gap rows are not ordinary work; neither absence proves inactivity.
+    const ordinaryRows = d.work_evidence?.ordinary_event_rows ??
+      (d.canonical_rows - (d.event_types.capture_gap || 0) -
+        (d.event_types.capture_health || 0));
+    const latestWorkStatement = d.work_evidence?.last_work_observed_at
+      ? `Latest work event: ${d.work_evidence.last_work_observed_at}.`
+      : ordinaryRows > 0
+        ? `Latest work event timestamp not supplied (${ordinaryRows} ordinary selected events); this does not imply no work occurred.`
+        : 'No ordinary work events recorded in this selection; this does not establish that no work occurred.';
     // A current recorder run is not the same as all retained history. Missing
     // daily-plan metadata means unknown coverage, not zero recorded events.
     const selectedPeriod = d.window.scope === 'range'
@@ -379,7 +390,7 @@
         <p>${esc(d.canonical_rows)} recorded events · ${esc(d.event_types.focus_span||0)} focus spans · ${esc(d.event_types.capture_gap||0)} unobserved-gap records.</p>
         <p>${esc(selectedPeriod)} Observed: ${esc(d.first_observed_at||'none')} to ${esc(d.last_observed_at||'none')}.</p>
         <p>Sources: ${esc(Object.entries(d.sources).map(([k,v])=>`${k}: ${v}`).join(', ')||'none')}. ${esc(workTextStatement)}</p>
-        <p>Latest work event: ${esc(d.work_evidence?.last_work_observed_at||'none in this period')}. Capture health and gaps are shown separately; they do not confirm the recorder is running.</p>
+        <p>${esc(latestWorkStatement)} Capture health and gaps are shown separately; they do not confirm the recorder is running.</p>
         <p>${esc(localRead)} Hosted AI availability must be checked separately: it only sees previously shared evidence. Preparing or downloading a local file does not grant AI history access.</p>
       </div>
       <details><summary>Analyze a large history in smaller parts</summary><p>Ask your AI to process one day at a time, follow every page, and keep track of what it has examined. Repeated-work maps are optional. The file download still contains the full selected period.</p>${dailyBreakdown}${d.analysis_plan?.more_dates_not_listed?'<p>Only the first 31 dates are listed. Continue through the remaining selected dates.</p>':''}</details>
