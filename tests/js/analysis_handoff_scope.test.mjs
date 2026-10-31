@@ -1742,3 +1742,65 @@ test('ticket impossible calendar day cannot alias a selected valid custom date',
   assert.equal(h.downloads, 0);
   assert.match(h.modal['#analysisActionStatus'].textContent, /ticket did not match/i);
 });
+
+
+test('explicit daily-plan endpoints must include observed evidence, not merely conserve counts', async t => {
+  const firstDay = dayLabel(-40);
+  const listedFirstDay = dayLabel(-39);
+  const lastDay = dayLabel(-7);
+  const chunks = Array.from({length: 31}, (_, i) => ({
+    since: dayLabel(-39 + i), until: dayLabel(-38 + i), event_rows: 1
+  }));
+  // The server lists the first 31 distinct UTC dates. An otherwise plausible
+  // 31-row page must not silently omit the earliest selected date.
+  for (const [name, first, accepted] of [
+    ['first selected day omitted despite 31 chunks', firstDay + 'T12:00:00Z', false],
+    ['first selected day included; 32nd date is genuinely unlisted',
+      listedFirstDay + 'T12:00:00Z', true]
+  ]) await t.test(name, async () => {
+    const h = await openAllRetainedPreview(d => ({
+      ...d, canonical_rows: 32, retained_rows: 32,
+      first_observed_at: first, last_observed_at: lastDay + 'T12:00:00Z',
+      event_types: {focus_span: 32}, sources: {desktop: 32},
+      analysis_plan: {date_chunks: chunks, more_dates_not_listed: true}
+    }));
+    assert.equal(h.modals, accepted ? 1 : 0, name);
+    assert.equal(h.tickets.length, 0);
+    if (accepted) {
+      await h.modal['#analysisCopy'].onclick();
+      assert.deepEqual(h.copied, ['request-rollover']);
+    } else {
+      assert.deepEqual(h.copied, []);
+      assert.match(h.summary.textContent, /incomplete or malformed/i);
+    }
+  });
+
+  const completeChunks = [
+    {since: dayLabel(-4), until: dayLabel(-3), event_rows: 1},
+    {since: dayLabel(-3), until: dayLabel(-2), event_rows: 1}
+  ];
+  for (const [name, last, flag, accepted] of [
+    ['explicit full plan omits the latest selected date',
+      dayLabel(-1) + 'T12:00:00Z', false, false],
+    ['explicit full plan includes the latest observed date',
+      dayLabel(-3) + 'T12:00:00Z', false, true],
+    ['legacy plan with absent coverage flag remains unverified but reviewable',
+      dayLabel(-1) + 'T12:00:00Z', undefined, true]
+  ]) await t.test(name, async () => {
+    const h = await openAllRetainedPreview(d => ({
+      ...d, first_observed_at: dayLabel(-4) + 'T12:00:00Z',
+      last_observed_at: last,
+      analysis_plan: {date_chunks: completeChunks,
+        ...(flag === undefined ? {} : {more_dates_not_listed: flag})}
+    }));
+    assert.equal(h.modals, accepted ? 1 : 0, name);
+    assert.equal(h.tickets.length, 0);
+    if (accepted) {
+      await h.modal['#analysisCopy'].onclick();
+      assert.deepEqual(h.copied, ['request-rollover']);
+    } else {
+      assert.deepEqual(h.copied, []);
+      assert.match(h.summary.textContent, /incomplete or malformed/i);
+    }
+  });
+});
