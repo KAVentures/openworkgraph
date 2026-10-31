@@ -888,3 +888,31 @@ count and genuinely zero focus examples, including copy-only behavior,
 no tickets/downloads, and escaped sample content. They do not replace native
 Node/Chromium/WCAG/scale/packaging CI, or realistic consenting-user review.
 Claim: [#326 comment 6547182775](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6547182775).
+
+
+### 2026-10-31 — Unicode line/paragraph separators and invisible format controls (Worker B)
+
+The local evidence review is a **display of untrusted source labels and
+redacted focus examples**, not a provider identity attestation. HTML escaping
+and the existing C0/C1/bidi protections do not visibly distinguish the
+Unicode LINE SEPARATOR (U+2028) and PARAGRAPH SEPARATOR (U+2029): one imported
+source name could appear as two lines of source counts. Invisible mathematical
+formatting characters U+2061–U+2064 and deprecated directional controls
+U+206A–U+206F could also conceal otherwise distinct source/sample names.
+
+The modal now displays these code points as explicit `[U+XXXX]` markers in
+both source and redacted sample labels. It continues to show at most eight
+reported source categories, bound each displayed label to 96 code points,
+HTML-escape the rendered result, and disclose omitted categories/events.
+**Canonical source keys, evidence counts, copyable AI request text, local
+export bytes, consent and permissions are unchanged.** This is not a
+complete Unicode confusable defense, verified source identity, evidence
+completeness proof, or authorization to run an agent.
+
+Deterministic synthetic Node/mock-DOM regressions exercise source labels
+containing line and paragraph separators, mathematical/deprecated invisible
+controls, ordinary labels, redacted focus examples, the exact selected
+focus-event count, and copy-only behavior without ticket/download. Native
+Node, Chromium, accessibility, cross-platform, scale and packaging CI
+remain independent acceptance gates; no real consenting-user pilot or
+commercial benefit is claimed. Coordination: [#326 claim 6547775463](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6547775463).
