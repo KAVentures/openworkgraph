@@ -286,3 +286,41 @@ rejection, or measure held-out F1 uplift. The preregistered assignment
 F1 >= 0.90 and contamination <= 0.05 targets remain unverified; no
 evaluation truth, split, scoring threshold, provider calls or model spend
 changed.
+
+
+## Contradictory explicit clipboard direction
+
+An opaque clipboard-transfer token can be reused even inside a single
+capture scope. Previously, two distinct records with the same token were
+automatically merged when their observed actions were **both copies**,
+**both pastes**, or a paste occurred before the only copy. Those events do
+not establish an observed copy-to-paste transfer.
+
+For token groups whose **every** event has an explicit `copy` or `paste`
+action, the linker now requires at least one copy **strictly earlier** than
+a compatible paste. For two referenced records, the copy/paste pair must
+span the records (or involve an unreferenced event). A copy/paste pair
+entirely inside record A cannot attach a copy-only record B. Contradictory
+groups retain independent exact-record links, but their transfer edge is
+withheld. Equal timestamps cannot establish direction. Chronology is
+**only a negative veto** for an already observed shared token, never
+positive time-only joining.
+
+The response adds only aggregate
+`inconsistent_clipboard_transfer_direction_groups` and the boolean
+`link_contract.explicit_clipboard_direction_conflicts_are_unmerged`;
+private token values, source locators, titles and clipboard contents are
+not returned. Existing groups with generic `browser_click` or other
+non-directional event types retain legacy behavior; this change does not
+authenticate clipboard transfers or guarantee that every two-record token
+represents one business case. Source-identity and exact-scope checks still
+apply, and multiplexed (>2 distinct records) tokens remain unmerged.
+
+Synthetic regressions cover copy/copy, paste/paste, paste-before-copy,
+same-record copy/paste with an unrelated second-record copy, equal-time
+ambiguity, ordered cross-record copy/paste, reversed input row order,
+privacy-minimized output and legacy non-directional compatibility.
+These tests do not establish real-user acceptance or improvement on
+preregistered held-out F1; the 0.90 F1 / 0.05 contamination gates remain
+unverified. No private truth, scoring, model/API calls, provider permissions,
+business writes or automatic execution were changed.
