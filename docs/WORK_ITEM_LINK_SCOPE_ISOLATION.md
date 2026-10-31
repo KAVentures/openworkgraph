@@ -256,3 +256,33 @@ The preregistered held-out assignment F1 >= 0.90 and contamination
 scoring, provider calls, model spend, new source privileges or business
 writes were introduced. Native repository tests and exact-head CI are
 required before merging.
+
+
+## Type-sensitive duplicate observation evidence
+
+Duplicate `event_id` claims must have **identical literal payloads**, not
+merely Python-equal values. Python considers `True == 1` and `1 == 1.0`
+true, including when those values occur in nested metadata dictionaries or
+lists. A conflicting duplicate could therefore bypass the previous
+first-row-wins conflict check, allowing its surviving record reference to
+anchor a same-record, tab or clipboard association.
+
+The duplicate preflight now compares literal JSON-shaped payloads
+structurally and type-sensitively, including nested dictionaries and lists.
+Dictionary key order is irrelevant; list order and scalar types are not.
+Non-finite floats, unsupported Python objects, cyclic or excessively large
+nested structures cannot establish identical duplicate evidence. The
+comparison has a 10,000-node work bound; uncertain duplicate IDs are
+withheld in **all** input orders before any linking. Ordinary unique
+observations and genuinely identical JSON duplicates retain their prior
+behavior. This is an integrity guard, not a new source identity, model,
+permission, or authorization signal.
+
+Synthetic regressions cover nested boolean/integer and integer/float
+collisions, reversed input order, positive nested idempotence, dictionary
+key order, non-JSON payloads and bounded/cyclic comparison. They do not
+authenticate source events, demonstrate real-customer interruption
+rejection, or measure held-out F1 uplift. The preregistered assignment
+F1 >= 0.90 and contamination <= 0.05 targets remain unverified; no
+evaluation truth, split, scoring threshold, provider calls or model spend
+changed.
