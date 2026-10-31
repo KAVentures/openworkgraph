@@ -1523,3 +1523,109 @@ def test_supplied_http_batch_inherits_offset_order_and_grant_guards(case):
         responses = tuple(responses)
     with pytest.raises(StagingError):
         project_supplied_http_pages(selected, responses)
+
+def test_supplied_http_replay_checks_both_reads_and_preserves_revision_semantics():
+    from server.servicenow_incident_staging import reconcile_supplied_http_replays
+    selected = scope(sys_ids=(A, B))
+    plan = plan_page(selected, limit=2)
+    before = [_supplied_http_page(plan, page(
+        item(A, private="never retain"),
+        item(B, updated="2026-10-30 03:11:00"),
+    ))]
+    after = [_supplied_http_page(plan, page(
+        item(A, mod="4", private="also private"),
+        item(B, updated="2026-10-30 03:11:00"),
+    ))]
+    result = reconcile_supplied_http_replays(selected, before, after)
+    assert result["higher_reported_revision_ids"] == [A]
+    assert result["same_reported_revision_ids"] == [B]
+    assert result["same_plans_checked"] is True
+    assert result["all_supplied_replay_pages_checked"] is True
+    assert result["supplied_http_metadata_checked"] is True
+    assert result["authenticated_transport_receipt"] is False
+    assert result["transport_grant_verified"] is False
+    assert result["historical_completeness"] == "unknown"
+    assert result["business_outcome_verified"] is False
+    assert result["checkpoint_advanced"] is False
+    assert result["not_an_authorization_to_append"] is True
+    assert "never retain" not in json.dumps(result)
+    assert "also private" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("side", ["earlier", "later"])
+@pytest.mark.parametrize("fault", [
+    "redirect", "status", "method", "foreign-url", "html", "bad-body",
+    "missing-metadata", "extra-metadata", "foreign-plan",
+])
+def test_supplied_http_replay_rejects_unchecked_page_on_either_side(side, fault):
+    from server.servicenow_incident_staging import reconcile_supplied_http_replays
+    selected = scope(sys_ids=(A, B))
+    first = plan_page(selected, offset=0, limit=1)
+    second = plan_page(selected, offset=1, limit=1)
+
+    def responses():
+        return [
+            _supplied_http_page(first, page(item(A))),
+            _supplied_http_page(second, page(item(
+                B, updated="2026-10-30 03:11:00", private="secret",
+            ))),
+        ]
+
+    before, after = responses(), responses()
+    target = before if side == "earlier" else after
+    changes = {
+        "redirect": ("redirect_count", 1),
+        "status": ("status", 403),
+        "method": ("request_method", "POST"),
+        "foreign-url": ("response_url", "https://attacker.invalid/"),
+        "html": ("content_type", "text/html"),
+        "bad-body": ("body", b'{"result":['),
+        "foreign-plan": ("plan", plan_page(
+            scope(sys_ids=(A, B), tenant_scope="other"), offset=1, limit=1,
+        )),
+    }
+    if fault in changes:
+        key, value = changes[fault]
+        target[1][key] = value
+    elif fault == "missing-metadata":
+        del target[1]["status"]
+    else:
+        target[1]["untrusted_extra"] = "secret"
+    with pytest.raises(StagingError) as caught:
+        reconcile_supplied_http_replays(selected, before, after)
+    assert "secret" not in str(caught.value)
+    assert "attacker.invalid" not in str(caught.value)
+
+
+def test_supplied_http_replay_refuses_changed_plans_and_revoked_grant():
+    from server.servicenow_incident_staging import reconcile_supplied_http_replays
+    selected = scope(sys_ids=(A, B))
+    first_plan = plan_page(selected, limit=2)
+    different_plan = plan_page(selected, limit=1)
+    before = [_supplied_http_page(first_plan, page(
+        item(A), item(B, updated="2026-10-30 03:11:00"),
+    ))]
+    after = [_supplied_http_page(different_plan, page(item(A)))]
+    with pytest.raises(StagingError, match="different selected-record plans"):
+        reconcile_supplied_http_replays(selected, before, after)
+    with pytest.raises(StagingError, match="not currently authorized"):
+        reconcile_supplied_http_replays(
+            scope(sys_ids=(A, B), grant_current=False), before, before,
+        )
+
+
+def test_supplied_http_replay_keeps_gaps_and_missing_records_unknown():
+    from server.servicenow_incident_staging import reconcile_supplied_http_replays
+    selected = scope(sys_ids=(A, B))
+    plan = plan_page(selected, limit=2)
+    before = [_supplied_http_page(plan, page(
+        item(A), item(B, updated="2026-10-30 03:11:00"),
+    ))]
+    after = [_supplied_http_page(plan, page(item(A, mod="7")))]
+    result = reconcile_supplied_http_replays(selected, before, after)
+    assert result["revision_gap_unknown_ids"] == [A]
+    assert result["missing_unknown_ids"] == [B]
+    assert result["higher_reported_revision_ids"] == []
+    assert result["business_outcome_verified"] is False
+    assert result["missing_means_deleted"] is False
+    assert result["checkpoint_advanced"] is False
