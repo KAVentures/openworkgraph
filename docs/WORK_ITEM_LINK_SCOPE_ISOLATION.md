@@ -485,3 +485,45 @@ contamination ≤ 0.05 gates remain unverified. Native pytest, cross-platform
 CI, review and current-main compatibility are required before merging.
 No private evaluation truth/splits/scoring, model/API spending, provider
 access, permissions or business writes were changed.
+
+
+## Single-record tabs cannot transitively bridge conflicting record components
+
+The single-record-tab heuristic is weaker than an explicit record reference:
+an unreferenced observation in tab A is not proof that a clipboard-linked
+component already associated with record B belongs to record A. Previously,
+the linker applied clipboard unions before tab unions but checked only the
+**individual tab rows** for record multiplicity. A tab containing A and a
+loose observation already joined to B could therefore merge A/B, even though
+no direct A/B transfer was observed. Likewise, two single-record tabs could
+each attach to different members of one generic clipboard-only loose component,
+fabricating an A/B join.
+
+After clipboard joining and **before** tab joining, the linker now records the
+current component roots, up to two distinct literal record references per
+component, and up to two different single-record-tab targets per loose
+component. A tab attachment is withheld if its loose component already
+contains a different record, or if two tabs target that component with
+different records. These checks are made against the fixed pre-tab components,
+so input order and whichever tab is processed first cannot pick a winning
+record. Independent exact-record joins and already supported direct clipboard
+transfers remain; an uncontested A tab may still attach a loose component
+without a foreign record or competing tab target.
+
+The additive public
+`ambiguous_tab_component_attachments_suppressed` count reports withheld
+**attachments**, not withheld events or proven incorrect business cases.
+`link_contract.competing_tab_component_records_are_unmerged` is true.
+Neither field exposes tenant/actor/device/session IDs, clipboard tokens, tab
+tokens, titles or clipboard contents. The count is not a quality score.
+
+Three synthetic regression functions cover a foreign B clipboard component
+in A's tab, two competing A/B tabs targeting the same generic loose
+component, and a positive uncontested A-tab case alongside an independent B
+tab, including reversed input order. This is a conservative false-join guard,
+not source authentication, full task reconstruction or measured holdout uplift.
+It may withhold genuine but insufficiently evidenced relationships.
+No time-only joins, source privileges, model/API spending, private evaluation
+truth or business writes were added. The preregistered held-out assignment
+F1 >= 0.90 and contamination <= 0.05 remain **unverified**. Native pytest,
+exact-head CI, review and current-main compatibility are still merge gates.
