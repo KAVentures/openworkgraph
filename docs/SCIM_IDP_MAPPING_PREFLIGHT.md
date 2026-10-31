@@ -77,6 +77,28 @@ With a customer-controlled test tenant and explicit authorization, inspect actua
 Relevant existing contracts: [Users](SCIM_USER_PROVISIONING.md), [names](SCIM_USER_NAMES.md), [search](SCIM_SEARCH.md), [Groups](SCIM_GROUPS.md), [client policy](SCIM_CLIENT_POLICY.md). Coordination: #458, #412, #326 Section B, #264 Stage 3.
 
 
+## Declared externalId matching lineage (offline only)
+
+When `users.match_attributes` declares `externalId` but
+`users.create_attributes` omits it, the preflight emits a **nonblocking**
+`externalid_match_not_created` caution. SCIM `externalId` is a
+**client-issued identifier scoped to its provisioning domain**, not a
+verified email, SSO subject, global person ID, or invitation/adoption grant.
+A declared create operation that omits it does not demonstrate how a later
+`externalId`-based lookup will find that newly created resource.
+
+This applies both to externalId-only matching and to mappings that also
+declare `userName`: the latter may have a separate stable-userName fallback,
+but the static declaration cannot establish that the IdP actually uses it.
+Declaring `externalId` on creation removes this *particular* caution; it
+does **not** prove that an IdP sends a stable value, that it is unique within
+the current provider, that subsequent matching works, or that tenant and
+provider boundaries are enforced. The server still refuses silent roster
+adoption and userName renaming. Test create → read → match → update,
+duplicate/foreign-provider IDs, offboarding, rehire, ETag conflicts and
+revoked credentials using explicitly authorized disposable identities.
+No client requests or provisioning are performed by this preflight.
+
 ## User creation activation mapping review (offline only)
 
 A declared User **create** mapping without `active` now receives the
