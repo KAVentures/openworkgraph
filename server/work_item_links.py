@@ -285,6 +285,11 @@ def _observations(events: list[dict[str, Any]]) -> tuple[
         stamp = _stamp(event.get("observed_at"))
         if stamp is None:
             continue
+        # A supplied nonstring action is not a trustworthy legacy generic
+        # clipboard event. Keep its record/tab evidence, but do not let the
+        # shared token authorize a cross-record transfer.
+        malformed_action = ("event_type" in event and
+                            not isinstance(event["event_type"], str))
         rows.append({
             "event_id": event_id, "observed_at": stamp, "ref": ref,
             "provider": match[1] if match else "", "kind": match[2] if match else "",
@@ -292,8 +297,9 @@ def _observations(events: list[dict[str, Any]]) -> tuple[
             "transfer": _field(event, "clipboard_transfer_id", _TRANSFER),
             "scope": _link_scope(event),
             "reference_tainted": False,
+            "action_claim_malformed": malformed_action,
             "app": event["app"].strip().casefold()[:120] if isinstance(event.get("app"), str) else "",
-            "action": _token(event.get("event_type")),
+            "action": "unknown" if malformed_action else _token(event.get("event_type")),
             "source": _token(event.get("source")),
         })
     # A reference seen with conflicting identities never links anything,
@@ -332,6 +338,11 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
         # Do not use missing/invalid identity as a wildcard.
         if row["scope"] is None:
             continue
+        if row["action_claim_malformed"] and row["transfer"]:
+            # An invalid explicit action cannot be treated as a generic
+            # legacy event that completes an otherwise unproven transfer.
+            # Veto only this exact scoped token, not record or tab evidence.
+            tainted_transfers.add((row["scope"], row["transfer"]))
         if row["reference_tainted"]:
             # Excluding a contradictory record claim from the token group is
             # insufficient: the remaining observations could appear to form a
