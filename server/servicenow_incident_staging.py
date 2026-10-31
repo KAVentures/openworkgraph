@@ -355,6 +355,7 @@ def _reconcile_projected(scope: SelectedIncidents, earlier: dict[str, Any],
     same: list[str] = []
     higher: list[str] = []
     timestamp_regression_unknown: list[str] = []
+    revision_gap_unknown: list[str] = []
     for incident_id in sorted(before.keys() & after.keys()):
         old = before[incident_id]
         new = after[incident_id]
@@ -373,8 +374,13 @@ def _reconcile_projected(scope: SelectedIncidents, earlier: dict[str, Any],
             # Clock/timezone truth is unknown, so withhold rather than infer
             # rollback, deletion, or a verified chronological update.
             timestamp_regression_unknown.append(incident_id)
+        elif new_revision > old_revision + 1:
+            # A non-adjacent reported counter leaves intermediate revisions
+            # unobserved. Do not label a gap as a clean adjacent advance or
+            # infer any historical statuses, actions or business outcomes.
+            revision_gap_unknown.append(incident_id)
         else:
-            # Equal-second updates are possible. A higher counter is only
+            # Equal-second adjacent updates are possible. A higher counter is
             # source-reported, not verified chronology or completion.
             higher.append(incident_id)
     return {
@@ -382,6 +388,7 @@ def _reconcile_projected(scope: SelectedIncidents, earlier: dict[str, Any],
         "same_reported_revision_ids": same,
         "higher_reported_revision_ids": higher,
         "timestamp_regression_unknown_ids": timestamp_regression_unknown,
+        "revision_gap_unknown_ids": revision_gap_unknown,
         "newly_observed_ids": sorted(after.keys() - before.keys()),
         "missing_unknown_ids": sorted(before.keys() - after.keys()),
         # Selected records absent from both pages are still unknown, not
