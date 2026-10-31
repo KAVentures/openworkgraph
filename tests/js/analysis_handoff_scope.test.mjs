@@ -2720,9 +2720,9 @@ test('prepared handoff distinguishes request-only copy from mutable local eviden
 test('preview range does not alias a submillisecond-shifted server window', async t => {
   for (const [name, mutate] of [
     ['start shifted by one microsecond', (since, until) =>
-      [since.replace(/\\.000Z$/, '.000001Z'), until]],
+      [since.replace(/\.000Z$/, '.000001Z'), until]],
     ['end shifted by one microsecond', (since, until) =>
-      [since, until.replace(/\\.000Z$/, '.000001Z')]]
+      [since, until.replace(/\.000Z$/, '.000001Z')]]
   ]) await t.test(name, async () => {
     const h = harness();
     await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
@@ -2756,8 +2756,8 @@ test('ticket bounds reject submillisecond changes but accept exact offset equiva
     const requested = new URLSearchParams(h.reads[1].url.split('?')[1]);
     h.reply(h.reads[1], {...h.preview('range', 'precise'),
       window: {scope: 'range',
-        since: requested.get('since').replace(/\\.000Z$/, '.000000Z'),
-        until: requested.get('until').replace(/\\.000Z$/, '.000000+00:00')}},
+        since: requested.get('since').replace(/\.000Z$/, '.000000Z'),
+        until: requested.get('until').replace(/\.000Z$/, '.000000+00:00')}},
       {preserveWindow: true});
     await opening;
     assert.equal(h.modals, 1);
@@ -2766,9 +2766,9 @@ test('ticket bounds reject submillisecond changes but accept exact offset equiva
     assert.equal(h.tickets.length, 1);
     const body = JSON.parse(h.tickets[0].options.body);
     const since = valid
-      ? asOffset(Date.parse(body.since), 2).replace(/\\.000\\+02:00$/, '.000000+02:00')
-      : body.since.replace(/\\.000Z$/, '.000001Z');
-    const until = body.until.replace(/\\.000Z$/, '.000000+00:00');
+      ? asOffset(Date.parse(body.since), 2).replace(/\.000\+02:00$/, '.000000+02:00')
+      : body.since.replace(/\.000Z$/, '.000001Z');
+    const until = body.until.replace(/\.000Z$/, '.000000+00:00');
     assert.equal(Date.parse(since), Date.parse(body.since));
     const params = new URLSearchParams({scope: 'range', include_raw: 'false',
       redact_names: 'true', ticket: 'synthetic-ticket', since, until});
