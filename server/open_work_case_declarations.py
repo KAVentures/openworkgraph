@@ -34,6 +34,10 @@ _MAX_STORED_DEPENDENCIES_CHARS = 1024  # canonical eight-edge JSON is <=336 char
 _MAX_STORED_TIMESTAMP_CHARS = 40  # canonical UTC writer timestamps are <=32 chars
 _TTL_DAYS = 7
 _MAX_REVISION = 2_147_483_647
+# The normal <=50-row ledger is tiny. Refuse an externally enlarged SQLite
+# database before SQLite can materialize arbitrary cells or allocate its cache.
+# This is an admission bound, not an atomic filesystem or source-grant fence.
+_MAX_DATABASE_BYTES = 2 * 1024 * 1024
 
 
 class CaseDeclarationError(ValueError):
@@ -100,6 +104,13 @@ def _database(*, create: bool) -> Iterator[sqlite3.Connection | None]:
         raise CaseDeclarationError("unsafe case declaration storage path")
     if os.name == "posix" and (info.st_mode & 0o077):
         raise CaseDeclarationError("case declaration storage permissions are too broad")
+    # A row-count limit and bounded Python parsers cannot prevent SQLite from
+    # loading a huge damaged TEXT/BLOB cell or database page. Check the main
+    # file's size before sqlite3.connect; never truncate it implicitly.
+    # As with the path/link checks, a concurrent filesystem replacement after
+    # lstat is outside this local admission guard's guarantees.
+    if info.st_size > _MAX_DATABASE_BYTES:
+        raise CaseDeclarationError("case declaration storage exceeds size limit")
     # mode=rw avoids recreating a removed file during a read/revoke race.
     uri = "file:" + quote(str(path), safe="/:") + "?mode=rw"
     db = sqlite3.connect(uri, uri=True, timeout=5, isolation_level=None)
