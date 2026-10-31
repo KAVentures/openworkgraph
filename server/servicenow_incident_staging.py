@@ -10,6 +10,7 @@ import hashlib
 import json
 import math
 import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -206,7 +207,8 @@ def project_page(scope: SelectedIncidents, raw: bytes, *, limit: int = 50,
         # ServiceNow field names are canonical and case-sensitive. A second
         # spelling of an identity/status field must not be silently discarded
         # as a private extra: it could contradict the staged source evidence.
-        if any(key not in _INCIDENT_FIELDS and key.casefold() in _INCIDENT_FIELDS
+        if any(key not in _INCIDENT_FIELDS and
+               unicodedata.normalize("NFKC", key).casefold() in _INCIDENT_FIELDS
                for key in item):
             raise StagingError("Ambiguous provider incident field")
         sys_id = item.get("sys_id")
