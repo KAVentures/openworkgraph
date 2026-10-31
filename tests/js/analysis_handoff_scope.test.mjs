@@ -2355,3 +2355,73 @@ test('range handoff accepts equivalent UTC offsets but rejects a changed instant
     assert.match(h.summary.textContent, /Preview period did not match/i);
   });
 });
+// Source-category counts can grow with imported or locally captured sources.
+// The review remains bounded, explicitly discloses omissions, and never treats
+// displayed source labels as verified provider identities.
+async function openSourceSummaryPreview(sources, count) {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const opening = h.bars[0].controls.button.onclick();
+  await settle();
+  h.reply(h.reads[1], {
+    ...h.preview('range', 'source-breakdown'),
+    canonical_rows: count, retained_rows: count,
+    event_types: {focus_span: count, capture_gap: 0},
+    sources
+  });
+  await opening;
+  return h;
+}
+
+test('many reported source categories disclose omitted category and event totals', async () => {
+  const sources = Object.fromEntries(Array.from({length: 12}, (_, i) =>
+    ['source-' + String(i + 1).padStart(2, '0'), 1]));
+  const h = await openSourceSummaryPreview(sources, 12);
+  assert.equal(h.modals, 1);
+  assert.match(h.modalHtml, /12 recorded events/);
+  assert.match(h.modalHtml, /Reported sources \(bounded preview; labels are not verified identities\)/);
+  assert.match(h.modalHtml, /source-01: 1/);
+  assert.match(h.modalHtml, /source-08: 1/);
+  assert.doesNotMatch(h.modalHtml, /source-09: 1/);
+  assert.doesNotMatch(h.modalHtml, /source-12: 1/);
+  assert.match(h.modalHtml,
+    /4 additional source categories \(4 selected events\) omitted from this preview/);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-source-breakdown']);
+  assert.equal(h.tickets.length, 0);
+});
+
+test('long or HTML-looking source labels are safely shortened without losing provenance warnings', async t => {
+  await t.test('HTML-looking long label', async () => {
+    const name = '<svg onload=alert(1)>' + 'A'.repeat(160);
+    const h = await openSourceSummaryPreview({[name]: 2}, 2);
+    assert.equal(h.modals, 1);
+    assert.match(h.modalHtml, /&lt;svg onload=alert\(1\)&gt;/);
+    assert.doesNotMatch(h.modalHtml, /<svg onload/);
+    assert.match(h.modalHtml, /… \[source label truncated\]/);
+    assert.doesNotMatch(h.modalHtml, /A{100}/);
+    assert.doesNotMatch(h.modalHtml, /additional source categories/);
+  });
+  await t.test('Unicode codepoint boundary', async () => {
+    const name = 'x'.repeat(95) + '🧩' + 'sensitive-suffix';
+    const h = await openSourceSummaryPreview({[name]: 2}, 2);
+    assert.equal(h.modals, 1);
+    assert.match(h.modalHtml, /🧩… \[source label truncated\]/);
+    assert.doesNotMatch(h.modalHtml, /sensitive-suffix/);
+  });
+});
+
+test('ordinary single-source and blank-source previews remain explicit and copy-only safe', async t => {
+  for (const [name, sources, expected] of [
+    ['ordinary', {desktop: 2}, 'desktop: 2'],
+    ['blank label', {'   ': 2}, '[blank source label]: 2']
+  ]) await t.test(name, async () => {
+    const h = await openSourceSummaryPreview(sources, 2);
+    assert.equal(h.modals, 1);
+    assert.ok(h.modalHtml.includes(expected));
+    assert.doesNotMatch(h.modalHtml, /additional source categories/);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-source-breakdown']);
+    assert.equal(h.tickets.length, 0);
+  });
+});
