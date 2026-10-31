@@ -311,3 +311,12 @@ request and again atomically before append/checkpoint, fence revocation, and
 authenticate the HTTPS request/response identity. None of those capabilities
 is implemented here. Fake-response tests are not real-provider acceptance,
 source completeness, customer outcomes, or permission to perform writes.
+
+
+## Supplied HTTP metadata gate (offline, no authenticated receipt)
+
+The optional pure `project_supplied_http_response(scope, plan=..., request_method=..., request_url=..., response_url=..., status=..., content_type=..., redirect_count=..., body=...)` contract validates **caller-supplied** fake/transport metadata before invoking the existing exact-plan projector. It refuses anything other than a literal `GET` for the planned URL, an identical final URL with zero redirects, an integer HTTP 200, and `application/json` with at most an explicit UTF-8 charset. It also rejects booleans/floats masquerading as status or redirect counts, mixed/HTML media types and unexpected source pages. Valid output carries `supplied_http_metadata_checked: true`, but **`authenticated_transport_receipt: false` and `transport_grant_verified: false`**; the historical completeness, timestamp and checkpoint flags remain unknown/false.
+
+This is intentionally **not an HTTP client, TLS validator, source receipt or proof that the supplied metadata matches a real response**. An untrusted caller can fabricate all of these fields. A future actual ServiceNow transport must separately enforce HTTPS certificate and origin verification, reject redirects before following them, authenticate its own exact request/response pairing, check the current provider account/tenant grant and consent, implement bounded retries/backoff, and fence revocation at atomic persistence time. A successful offline gate never authorizes append, checkpoint advancement, user provisioning, business completion or agent execution.
+
+Synthetic fake-transport tests cover accepted JSON media types, wrong request/final URLs, redirects, 301/401/403/429/500, type-confused status/redirect fields, HTML/non-UTF-8/header-injected media types, wrong tenant or revoked grant, changed plan watermark, unselected records, old source times and malformed JSON. No provider request or customer-controlled IdP/ServiceNow sandbox acceptance is performed.
