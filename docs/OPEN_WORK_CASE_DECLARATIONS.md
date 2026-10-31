@@ -436,3 +436,24 @@ backups, or atomically revoke another process's open SQLite handles; a
 concurrent writer could race the clear. A company deployment still requires
 coordinated cross-process source-grant and storage lifecycle fencing. No new
 provider access, network reads, execution or verified business outcomes follow.
+
+
+### Hard-link admission guard for the private SQLite ledger
+
+An existing declaration database must be a regular, non-symlink file with
+**exactly one filesystem hard link** before SQLite opens it. Mode `0600` and
+symlink checks alone cannot prevent a second pathname from referring to the
+same inode: an otherwise valid declaration save could mutate that other
+file's contents. Reads and CAS saves now reject multi-linked ledgers before
+SQLite access; they neither migrate nor repair them. A POSIX synthetic
+regression links an already valid ledger to a separate pathname, verifies
+both operations refuse it without changing bytes, then removes the extra
+link and verifies unchanged owner facts and normal exact-token CAS.
+
+This is a local admission check, **not** an atomic cross-process pathname
+fence: a process with sufficient local filesystem rights could replace or
+relink paths between `lstat` and SQLite open. Explicit clear unlinks the
+known ledger pathname and SQLite sidecars, not arbitrary unknown hard-link
+aliases elsewhere. Private-directory permissions and trusted local callers
+remain necessary; this is not malicious-host protection, a source grant,
+independent outcome verification or a customer acceptance result.
