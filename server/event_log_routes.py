@@ -18,6 +18,7 @@ from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
 from . import event_log_analytics as analytics
+from . import event_log_variant_coverage as variant_coverage
 from . import event_log_cases as case_pages
 from . import event_log_cohorts as cohorts
 from . import event_log_compliance as compliance
@@ -276,6 +277,15 @@ def event_log_variants(request: Request, log_id: str, case_type: str | None = Qu
                        limit: int = Query(default=20, ge=1, le=200), cohort: dict[str, Any] = Depends(_case_filter)):
     _require_dashboard(request)
     return _respond(workspace.variants, log_id, case_type, limit, cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/variant-coverage")
+def event_log_variant_coverage(request: Request, log_id: str,
+                               case_type: str | None = Query(default=None, max_length=200),
+                               limit: int = Query(default=20, ge=1, le=200),
+                               cohort: dict[str, Any] = Depends(_case_filter)):
+    _require_dashboard(request)
+    return _respond(variant_coverage.coverage, log_id, case_type, limit, cohort=cohort)
 
 
 @router.get("/v1/event-logs/{log_id}/directly-follows")
