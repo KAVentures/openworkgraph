@@ -21,22 +21,25 @@ Run **python scripts/scim_idp_mapping_preflight.py mapping.json** or pipe strict
 ## What is checked
 
 - User matching is limited to **userName** and **externalId**; email value selectors, name, extension and other matching selectors are **not** supported by the current baseline. Up to eight conjunction clauses exist in OWG's read-only matching API, but the tool validates field choices rather than generated filter syntax.
-- User create must include immutable stable work-email **userName**; supported descriptive create fields are displayName, externalId, active, name, six documented name children and the shipped whole-array `emails` contact metadata. User PATCH cannot rename userName. It accepts the bounded contact paths `emails`, `emails.value/type/display/primary`, `emails[type eq "literal"]`, `emails[value eq "literal"]` and a supported child after a single selector. These are **PATCH write paths**, not search filters or assertions that an address is verified. Unknown nested selectors, unsupported operators, extension/roles/password fields and create-time `emails.value` are blocked. This static tool does not validate actual array values, PATCH operation ordering, null/removal semantics or live client requests.
+- User create must include immutable stable work-email **userName**; supported descriptive create fields are displayName, externalId, active, name, six documented name children and the shipped whole-array `emails` contact metadata. User PATCH cannot rename userName. It accepts the bounded contact paths `emails`, `emails.value/type/display/primary`, `emails[type eq "literal"]`, `emails[value eq "literal"]` and a supported child after a single selector. These are **PATCH write paths**, not search filters or assertions that an address is verified. The exact core User schema prefix `urn:ietf:params:scim:schemas:core:2.0:User:` is also accepted **only** on contact PATCH paths, matching the shipped contact parser; this does not authorize schema-qualified User matching/creation, generic attribute paths, or foreign Group/extension URNs. Unknown nested selectors, unsupported operators, extension/roles/password fields and create-time `emails.value` are blocked. This static tool does not validate actual array values, PATCH operation ordering, null/removal semantics or live client requests.
 - Normal writes require exact If-Match ETags. Only standalone User PATCH may omit it **after explicit administrator approval**; the tool flags the potential overwrite race even when approved. Unversioned PUT, DELETE, Bulk and Group writes are not accepted as compatible.
 - Groups are independently enabled and have only displayName/externalId matching. **Entra Group matching by displayName is blocked by default.** Optional `provider_policy.unique_group_names: true` declares that the separate [Group naming policy](SCIM_GROUP_NAME_POLICY.md) has been enabled and verified in the actual provider. The CLI does not configure or inspect that policy; it warns that this is an unverified declaration and still requires live testing. Old mapping files without this flag retain their previous behavior. The server constraint requires uniform worker upgrades and does not change existing exact matching-filter semantics or grant OWG permissions.
 
 The contact-email array **shipped in #480** (resolving #470) and is documented in [SCIM_USER_EMAILS.md](SCIM_USER_EMAILS.md). This preflight now recognizes its bounded write-path shapes but **continues blocking all email-based matching**, including `emails[type eq "work"].value` in `users.match_attributes`. Provider contacts are unverified descriptive metadata, never roster email, SSO, actor, invitation routing, automatic employee adoption or login authority. A value-based PATCH selector receives a caution because it depends on current stored contact data. Do not put real addresses or customer information in a mapping declaration; reports intentionally omit attribute values. **Upgrade all serving workers before enabling contact mappings**; mixed-version workers and downgrade with contacts are unsupported.
 
-Selector declarations use the shipped unqualified PATCH grammar: literal ASCII
+Contact selector declarations use the shipped unqualified **or exact core User-qualified** PATCH grammar: literal ASCII
 spaces around `eq`, at most 64 decoded characters for a type literal and 320 for
-a value literal. Structural names are case-insensitive; quoted JSON strings are
+a value literal. The prefix is recognized case-insensitively without changing
+quoted selector bytes. Other schema prefixes, extra colons, qualified matching
+and create declarations remain unsupported. A clean static result for a
+qualified contact path is not evidence that any real IdP sends that path. Structural names are case-insensitive; quoted JSON strings are
 parsed unchanged before comparison. For example, the invalid JSON escape
 `\U0041` must not become the valid `\u0041` through case folding. A decoded NUL
 is refused, while an escaped literal backslash followed by `u0000` remains
 ordinary literal text. C1 controls and U+FFFE/U+FFFF are refused in raw paths
 and decoded literals, matching the shipped identity validation; U+FFFD remains
 ordinary literal text. Differential tests compare these cases, Unicode lengths,
-and separators with the actual shipped PATCH parser. The matching-attribute
+separators and qualified/foreign URNs with the actual shipped PATCH parser. The matching-attribute
 counts remain separate from selector match objects, including on CLI requests
 with nonempty PATCH declarations.
 
