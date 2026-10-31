@@ -132,15 +132,23 @@
     const conserved = count(d?.canonical_rows) && count(d?.retained_rows) &&
       d.canonical_rows <= d.retained_rows && partitionCounts &&
       plannedRows !== null && plannedRows <= d.canonical_rows;
-    // The local preview never verifies complete capture. An omission marker
-    // must also leave at least one selected row outside the listed dates;
-    // otherwise the UI would present contradictory coverage evidence.
-    const planCoverageValid = d?.analysis_plan == null || (
-      (d.analysis_plan.complete_history_claimed == null ||
-        d.analysis_plan.complete_history_claimed === false) &&
-      (d.analysis_plan.more_dates_not_listed !== true ||
-        (Array.isArray(d.analysis_plan.date_chunks) &&
-          plannedRows !== null && plannedRows < d.canonical_rows)));
+    // A daily plan is not a proof of complete capture. But when the backend
+    // explicitly says all selected UTC dates were listed, the listed rows
+    // must account for every selected event. A truncated plan must contain
+    // the first 31 UTC dates and leave a later observed date unlisted.
+    // Legacy previews without a coverage flag remain conservatively usable.
+    const plan = d?.analysis_plan;
+    const listed = plan?.date_chunks;
+    const coverageFlag = plan?.more_dates_not_listed;
+    const planCoverageValid = plan == null || (
+      (plan.complete_history_claimed == null ||
+        plan.complete_history_claimed === false) &&
+      (coverageFlag !== false ||
+        (Array.isArray(listed) && plannedRows === d.canonical_rows)) &&
+      (coverageFlag !== true ||
+        (Array.isArray(listed) && listed.length === 31 &&
+          plannedRows !== null && plannedRows < d.canonical_rows &&
+          instant(last) && Date.parse(last) >= Date.parse(listed[30].until))));
     // Work and capture-health counts describe the same selected evidence,
     // not a second independent estimate. Legacy previews may omit this block.
     // The server samples at most six selected focus spans. Never show context
