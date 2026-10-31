@@ -23,6 +23,7 @@ MAX_JSON_INTEGER_DIGITS = 128
 _ID = re.compile(r"[0-9a-f]{32}\Z")
 _HOST = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.service-now\.com\Z")
 _UPDATED = re.compile(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\Z")
+_INCIDENT_FIELDS = frozenset({"sys_id", "sys_updated_on", "sys_mod_count", "state"})
 
 
 class StagingError(ValueError):
@@ -202,6 +203,12 @@ def project_page(scope: SelectedIncidents, raw: bytes, *, limit: int = 50,
     for item in body["result"]:
         if type(item) is not dict:
             raise StagingError("Invalid incident record")
+        # ServiceNow field names are canonical and case-sensitive. A second
+        # spelling of an identity/status field must not be silently discarded
+        # as a private extra: it could contradict the staged source evidence.
+        if any(key not in _INCIDENT_FIELDS and key.casefold() in _INCIDENT_FIELDS
+               for key in item):
+            raise StagingError("Ambiguous provider incident field")
         sys_id = item.get("sys_id")
         if type(sys_id) is not str or not _ID.fullmatch(sys_id) or sys_id not in selected:
             raise StagingError("Provider returned an unselected or invalid incident")
