@@ -101,6 +101,16 @@ def _database(*, create: bool) -> Iterator[sqlite3.Connection | None]:
         db.execute("PRAGMA busy_timeout=5000")
         db.execute("PRAGMA synchronous=FULL")
         db.execute("PRAGMA foreign_keys=ON")
+        # This private ledger is written with SQLite's DELETE journal mode.
+        # A pre-existing WAL-mode file can leave owner-declared facts in
+        # -wal/-shm sidecars that the normal review-clear lifecycle would
+        # otherwise overlook. Reject it before reading, migrating or writing
+        # any declaration; never silently convert an untrusted store.
+        journal_mode = db.execute("PRAGMA journal_mode").fetchone()
+        if (journal_mode is None or
+            not isinstance(journal_mode[0], str) or
+            journal_mode[0].lower() != "delete"):
+            raise CaseDeclarationError("unsupported case declaration journal mode")
         version = db.execute("PRAGMA user_version").fetchone()[0]
         if version == 0 and create:
             db.execute("BEGIN IMMEDIATE")
@@ -791,8 +801,13 @@ def purge_case_declaration(work_item_ref: str) -> None:
 def clear_case_declarations() -> None:
     """Erase local declarations on source replacement/disconnect or session-only history."""
     path = _path()
-    # Do not follow symlinks. SQLite uses DELETE journals, never WAL.
-    for candidate in (path, Path(str(path) + "-journal")):
+    # Unlink the entry itself, never follow a symlink. The trusted writer
+    # admits DELETE journaling only, but a pre-existing/externally changed
+    # SQLite file may have WAL or SHM sidecars containing old owner facts.
+    # Explicit clear must remove all known SQLite sidecar names as well.
+    # This is not an atomic fence against other processes holding the DB.
+    for candidate in (path, *(Path(str(path) + suffix)
+                             for suffix in ("-journal", "-wal", "-shm"))):
         try:
             candidate.unlink()
         except FileNotFoundError:
