@@ -201,3 +201,25 @@ selected-ID or tenant scoping, source permission, retention, transport, or
 the strict no-write/no-checkpoint behavior. `historical_completeness` remains
 `unknown`; source chronology, authenticated provider receipts, real sandbox
 acceptance and business outcomes remain unverified.
+
+
+## Bounded discarded JSON integer tokens
+
+The offline response decoder now caps **each JSON integer token** at 128 decimal
+digits (excluding an optional minus sign) **before** converting it into a Python
+integer. Provider responses may contain irrelevant private or diagnostic numeric
+fields, but they are still parsed before minimization. Without a token bound,
+the built-in JSON integer parser may allocate large arbitrary-precision values
+or hit interpreter-dependent integer-string limits on otherwise byte-bounded
+responses. This is a conservative input-resource limit, not a provider schema
+assertion. Supported incident identity, modification count, timestamp and state
+remain strictly string-typed; normal small integers in discarded fields are
+accepted but never returned.
+
+Synthetic tests exercise positive/negative oversized integers in standalone,
+plan-bound, offset-batch and both replay paths; boundary-sized integers and
+zero remain compatible. Generic errors do not echo the private numeric token.
+The 256 KiB response, tree-depth/node, consent/tenant and no-write bounds remain
+unchanged. This does not verify HTTP origin, provider ACLs, completeness,
+historical changes, current persistence-time authorization or real ServiceNow
+acceptance.
