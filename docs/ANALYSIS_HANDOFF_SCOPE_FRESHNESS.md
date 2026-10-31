@@ -996,3 +996,31 @@ after explicit click. These tests are not a live provider acceptance, a
 real consenting-user pilot, a complete audit of every timestamp in the
 package, or a substitute for exact-head Node/Chromium/accessibility/scale/
 packaging CI. Coordination: [#326 claim 6549753527](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6549753527).
+
+
+## Exact observed chronology and redacted sample containment (Worker B, 2026-11-01)
+
+The selected preview's **first and last observed timestamps**, optional
+**redacted focus-example observation times**, and optional **last ordinary
+work timestamp** must agree at their full supplied fractional-second
+precision. A one-microsecond reversal or an example just outside the observed
+span must not be accepted because `Date.parse` rounds both values into the
+same millisecond. The same rule applies to the inclusive start of a current
+recorder-run window and to strictly ordered selected-range bounds.
+
+The existing exact-offset-aware comparison is reused: UTC whole seconds
+are compared first, then all decimal fractional digits, treating trailing
+zeros as insignificant. Malformed timestamps fail closed. This prevents a
+preview from presenting unsupported temporal provenance or enabling
+Copy/Download after inconsistent evidence was returned. It does **not**
+verify the completeness of captured work, freeze a snapshot, authenticate
+the underlying observation source, or grant an export or AI permission.
+
+Synthetic mock-DOM tests exercise reversed microsecond observations,
+examples just before/after their observed span, a latest-work timestamp
+outside that span, current-run starts one microsecond before/after the first
+observation, and a valid microsecond-ordered sample. The negative cases
+assert no handoff modal, clipboard copy, ticket or download; the positive
+case remains copy-only. These tests do not replace exact-head native
+Node/Chromium/accessibility/scale/packaging checks or consenting-user pilots.
+Coordination: [#326 claim 6550343337](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6550343337).
