@@ -335,7 +335,7 @@ def project_supplied_http_response(
         raise StagingError("Supplied HTTP response is not a successful GET")
     if (type(content_type) is not str or len(content_type) > 80
             or re.fullmatch(
-                r"application/json(?:[ \\t]*;[ \\t]*charset=[ \\t]*utf-8)?",
+                r"application/json(?:[ ]*;[ ]*charset=[ ]*utf-8)?",
                 content_type, re.IGNORECASE,
             ) is None):
         raise StagingError("Supplied HTTP response is not UTF-8 JSON")
