@@ -338,6 +338,12 @@ def reconcile_replayed_pages(scope: SelectedIncidents, earlier_raw: bytes,
     _require_selected_scope(scope)
     earlier = project_page(scope, earlier_raw, limit=limit, since=since)
     later = project_page(scope, later_raw, limit=limit, since=since)
+    # Standalone staging deduplicates identical rows for legacy callers, but
+    # a replay comparison must not silently hide offset-consuming duplicates:
+    # one repeated selected ID can displace another incident from a page.
+    if (earlier["returned_rows"] != earlier["distinct_selected_rows"]
+            or later["returned_rows"] != later["distinct_selected_rows"]):
+        raise StagingError("Duplicate incident row in replay page")
     return _reconcile_projected(scope, earlier, later)
 
 
