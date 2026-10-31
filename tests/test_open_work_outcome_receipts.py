@@ -166,3 +166,67 @@ def test_history_guard_applies_to_receipts_too():
         "resource_ref": REF, "expected_operation": "stripe_invoice_paid",
         "since": "2026-10-19T09:00:00+00:00",
     })]
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), [
+    ("github_pr_merged", "github", "pull_request", "merged"),
+    ("stripe_invoice_paid", "stripe", "invoice", "paid"),
+    ("stripe_refund_processor_succeeded", "stripe", "refund", "succeeded"),
+    ("jira_issue_resolved", "jira", "issue", "done"),
+])
+def test_receipt_requires_independent_matching_source_provider_identity(
+    operation, provider, kind, state,
+):
+    # The observed record type alone cannot authorize a source receipt.
+    # All four provider operation families must reject a separately supplied
+    # source_evidence identity conflict, even when state/detail say verified.
+    for bad_provider in ("other_provider", None, False, {"name": provider}):
+        data = response(provider=provider, kind=kind, state=state, operation=operation)
+        data["source_evidence"]["provider"] = bad_provider
+        calls = []
+        result = source_operation_receipt(
+            REF, operation, record_reader=reader(data, calls), now=WHEN,
+        )
+        assert result["availability"] == "unknown"
+        assert result["reason"] == "provider_receipt_identity_conflict"
+        assert result["operation_verified"] is False
+        assert result["business_objective_verified"] is False
+        assert result["customer_outcome_verified"] is False
+        assert result["agent_execution_authorized"] is False
+        assert len(calls) == 1
+        assert calls[0][1]["include_source_status"] is True
+        assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state", "wrong_kind"), [
+    ("github_pr_merged", "github", "pull_request", "merged", "issue"),
+    ("stripe_invoice_paid", "stripe", "invoice", "paid", "refund"),
+    ("stripe_refund_processor_succeeded", "stripe", "refund", "succeeded", "invoice"),
+    ("jira_issue_resolved", "jira", "issue", "done", "pull_request"),
+])
+def test_receipt_rejects_conflicting_optional_source_object_kind(
+    operation, provider, kind, state, wrong_kind,
+):
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    data["source_evidence"]["object_type"] = wrong_kind
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "provider_receipt_identity_conflict"
+    assert result["operation_verified"] is False
+
+    # Source adapters differ: Stripe's older receipt has no object_type,
+    # while Jira/GitHub include it. Both valid forms remain compatible.
+    data["source_evidence"]["object_type"] = kind
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["operation_verified"] is True
+    del data["source_evidence"]["object_type"]
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["operation_verified"] is True
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
