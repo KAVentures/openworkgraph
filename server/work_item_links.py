@@ -28,6 +28,7 @@ outcomes. No titles, UI labels, URLs or clipboard contents are read or returned.
 """
 from __future__ import annotations
 
+from bisect import bisect_right
 from collections import defaultdict
 import math
 import re
@@ -456,10 +457,19 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
                     continue
                 join([anchor, row["event_id"]], "same_tab_single_record")
         elif len(refs) > 1:
+            # Candidate-only, never a merge. Both lists inherit the global
+            # (UTC timestamp, event_id) order. Index referenced timestamps
+            # once rather than scanning the entire tab for every loose row:
+            # O(n log n) rather than O(n^2) on long interleaved tabs.
+            # bisect_right preserves the old <= behavior for exact ties,
+            # including references ordered after a loose event by event_id.
+            referenced = [row for row in tab_rows if row["ref"]]
+            reference_times = [row["observed_at"] for row in referenced]
             for row in loose:
-                earlier = [other for other in tab_rows if other["ref"] and other["observed_at"] <= row["observed_at"]]
-                if earlier:
-                    candidates.append({"event_id": row["event_id"], "toward_event_id": earlier[-1]["event_id"],
+                position = bisect_right(reference_times, row["observed_at"])
+                if position:
+                    candidates.append({"event_id": row["event_id"],
+                                       "toward_event_id": referenced[position - 1]["event_id"],
                                        "relation": "same_tab_multiplexed"})
         elif len(loose) >= 2:
             for previous, row in zip(loose, loose[1:]):
