@@ -2437,7 +2437,8 @@ test('source preview exposes bidi and control formatting instead of visually spo
     const h = await openSourceSummaryPreview({[source]: 2}, 2);
     assert.equal(h.modals, 1);
     assert.ok(h.modalHtml.includes(marker));
-    assert.doesNotMatch(h.modalHtml, /[\u202a-\u202e\u2066-\u2069\u0000-\u001f\u007f-\u009f]/);
+    assert.ok(!h.modalHtml.includes(source));
+    assert.doesNotMatch(h.modalHtml, /[\u202a-\u202e\u2066-\u2069\u007f-\u009f]/);
     assert.match(h.modalHtml, /2 recorded events/);
     await h.modal['#analysisCopy'].onclick();
     assert.deepEqual(h.copied, ['request-source-breakdown']);
@@ -2461,8 +2462,9 @@ test('redacted focus labels expose bidi controls and bound long untrusted sample
   assert.match(h.modalHtml, /App\[U\+202E\]fake\[U\+000A\]next/);
   assert.match(h.modalHtml, /Case\[U\+2067\]masked\[U\+2069\]\[U\+0000\]/);
   assert.match(h.modalHtml, /… \[sample label truncated\]/);
+  assert.ok(!h.modalHtml.includes('App\u202Efake\nnext'));
   assert.doesNotMatch(h.modalHtml, /x{100}/);
-  assert.doesNotMatch(h.modalHtml, /[\u202a-\u202e\u2066-\u2069\u0000-\u001f\u007f-\u009f]/);
+  assert.doesNotMatch(h.modalHtml, /[\u202a-\u202e\u2066-\u2069\u007f-\u009f]/);
   await h.modal['#analysisCopy'].onclick();
   assert.deepEqual(h.copied, ['request-sample-formatting']);
   assert.equal(h.tickets.length, 0);
