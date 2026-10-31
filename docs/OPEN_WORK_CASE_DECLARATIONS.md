@@ -201,3 +201,8 @@ parsing**, not SQLite's prior materialization of an oversized TEXT cell,
 filesystem growth, atomic cross-process source revocation, or real provider
 and customer-outcome validation. No routes, agent permissions or source reads
 are added.
+
+
+### Damaged SQLite reference storage classes
+
+SQLite's `TEXT` affinity does not prevent a damaged auxiliary row from holding a `BLOB` work-item key; numeric values may also be stored as invalid text. These keys are never valid `owg:w:` identities and cannot become owner-approved declarations. Transactional pruning deletes ineligible rows without sorting mixed Python `str`/`bytes` keys, so one corrupt BLOB cannot abort a separate authorized save. Explicit dependent declarations referencing a missing or corrupted prerequisite are pruned transitively, not silently reclassified as independent obligations. Synthetic regression tests exercise both BLOB and numeric-derived invalid keys, dependent withholding and unaffected declarations. This does **not** make the SQLite database tamper-resistant, prevent prior cell materialization, or provide cross-process source-revocation fencing; no provider/customer outcomes are verified.
