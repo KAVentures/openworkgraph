@@ -20,8 +20,12 @@ Positive retained-record evidence is now admitted only when both
 `record_observed` and `record_identity_complete_within_retained_window` are
 literal JSON booleans `true`. Values such as `1`, `"true"`, missing/null,
 arrays or objects fail closed as `availability=unknown` using the existing
-record-not-observed or incomplete-identity reason. The existing conservative
-source-event truncation check remains in place. These assertions are about
+record-not-observed or incomplete-identity reason. The source-event truncation assertion now also requires literal JSON
+boolean `false`: missing, null, numeric zero, empty string, or any other
+malformed `source_event_limit_reached` value means retained-history
+completeness is **unknown**, never a verified operation. This does not prove
+that the underlying source has no older events outside the permitted retained
+window; it only guards the explicitly bounded exact-record read. These assertions are about
 observed evidence integrity, **not** source/tenant authorization; the trusted
 record reader and existing consent boundary remain responsible for that.
 
@@ -35,7 +39,8 @@ customer received the intended outcome, or that a business objective was met.
 `tests/test_open_work_outcome_receipts.py` contains synthetic conflicting
 provider and object-kind fixtures for GitHub PRs, Jira issues, Stripe invoices,
 and Stripe refunds, including positive compatibility controls, 64 malformed-positive-flag
-provider/field/value combinations, four valid controls, and privacy
+provider/field/value combinations, 44 malformed truncation-flag cases, four
+missing-truncation cases, positive compatibility controls, and privacy
 assertions. These are deterministic fake-reader tests, **not** authorized
 real-provider checks, live tenant isolation proofs, commercial ROI, or
 customer-outcome validation. No new network requests or source privileges are
