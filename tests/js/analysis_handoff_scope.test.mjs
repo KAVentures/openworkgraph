@@ -2177,3 +2177,69 @@ test('explicit all-history and fixed custom periods remain valid after midnight'
     assert.equal(h.tickets.length, 0);
   });
 });
+
+
+test('zero-event handoffs do not offer or promise a downloadable chronology', async t => {
+  for (const retained of [0, 2]) await t.test('retained=' + retained, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], {
+      ...h.preview('range', 'zero-events'), canonical_rows: 0, retained_rows: retained,
+      first_observed_at: null, last_observed_at: null,
+      event_types: {}, sources: {}, redacted_examples: [],
+      work_evidence: {ordinary_event_rows: 0, health_event_rows: 0,
+        last_work_observed_at: null}
+    });
+    await opening;
+    assert.equal(h.modals, 1);
+    assert.equal(h.modal['#analysisDownload'].disabled, true);
+    assert.equal(h.modal['#analysisDetailed'].disabled, true);
+    assert.match(h.modalHtml, /id="analysisDetailed" type="checkbox" disabled/);
+    assert.match(h.modalHtml, /No recorded events in the selected period/);
+    assert.match(h.modalHtml, /only the explanatory request can be copied/);
+    assert.match(h.modalHtml, /There is no recorded-event package to download/);
+    assert.doesNotMatch(h.modalHtml, /The file download still contains the full selected period/);
+    await h.modal['#analysisCopy'].onclick();
+    assert.equal(h.copied.length, 1);
+    assert.match(h.copied[0], /Evidence limitation: No recorded events/);
+    // A synthetic DOM can mutate disabled inputs; the action guard still
+    // refuses to issue a ticket for an empty selected period.
+    h.modal['#analysisDetailed'].checked = true;
+    await h.modal['#analysisDownload'].onclick();
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+  });
+});
+
+test('ordinary and health-only selected rows retain explicit diagnostic exports', async t => {
+  for (const kind of ['ordinary', 'health-only']) await t.test(kind, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    const d = h.preview('range', kind);
+    if (kind === 'health-only') {
+      d.event_types = {capture_gap: 1, capture_health: 1};
+      d.work_evidence = {ordinary_event_rows: 0, health_event_rows: 2,
+        last_work_observed_at: null};
+    }
+    h.reply(h.reads[1], d);
+    await opening;
+    assert.equal(h.modals, 1);
+    assert.equal(h.modal['#analysisDetailed'].disabled, false);
+    assert.equal(h.modal['#analysisDownload'].disabled, false);
+    assert.match(h.modalHtml, /The file download still contains the full selected period/);
+    assert.doesNotMatch(h.modalHtml, /An evidence package is unavailable/);
+    h.modal['#analysisDetailed'].checked = true;
+    const downloading = h.modal['#analysisDownload'].onclick();
+    await settle();
+    assert.equal(h.tickets.length, 1);
+    assert.equal(JSON.parse(h.tickets[0].options.body).include_raw, true);
+    h.reply(h.tickets[0], {});
+    await downloading;
+    assert.equal(h.downloads, 1);
+    assert.equal(h.modal['#analysisDetailed'].disabled, false);
+  });
+});
