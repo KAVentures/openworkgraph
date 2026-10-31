@@ -556,3 +556,23 @@ complete two-day plan whose last observation falls outside its final chunk,
 its valid counterpart, and the legacy omitted-flag case. These tests exercise
 synthetic responses only: they do not prove capture completeness, real
 consenting-user usability, live provider state, competitor parity or ROI.
+
+
+## Explicit daily-plan dates require observed rows
+
+The local preview's daily plan is constructed from UTC dates that have at least
+one selected recorded event. A server response with an explicit
+`more_dates_not_listed` boolean cannot therefore claim an empty
+(`event_rows: 0`) daily chunk, even if the other chunks' counts add up to
+`canonical_rows` and the first/last observed timestamps fall inside the
+displayed range. The handoff now refuses such contradictory coverage
+envelopes before opening Copy or Download. This also rejects fabricated
+zero-count dates in an explicitly complete zero-event plan.
+
+Legacy previews **without** an omission flag retain support for optional
+zero-row date chunks; legitimate zero-event previews with an empty explicit
+date plan remain copy-only. Synthetic mock-DOM regression cases exercise
+complete, truncated, empty and legacy plans, including positive-count
+compatibility. This is a client-side consistency check against the current
+server contract, **not** independent proof of complete capture, source
+verification, user consent, real-world pilot success or competitor parity.
