@@ -538,6 +538,25 @@ def test_replay_reconciliation_distinguishes_equal_higher_and_missing_unknown():
     assert "discard me" not in json.dumps(out)
 
 
+@pytest.mark.parametrize("duplicate_side", ["earlier", "later"])
+def test_unplanned_replay_refuses_duplicate_rows_that_hide_selected_incidents(duplicate_side):
+    from server.servicenow_incident_staging import reconcile_replayed_pages
+    selected = scope(sys_ids=(A, B))
+    duplicate = page(item(A), item(A, caller_id="private value"))
+    unique = page(item(A), item(B, updated="2026-10-30 03:11:00"))
+    # The standalone API intentionally retains legacy identical-row dedupe.
+    staged = project_page(selected, duplicate, limit=2)
+    assert staged["returned_rows"] == 2
+    assert staged["distinct_selected_rows"] == 1
+    assert staged["unobserved_selected_ids"] == [B]
+    earlier, later = ((duplicate, unique) if duplicate_side == "earlier"
+                      else (unique, duplicate))
+    with pytest.raises(StagingError, match="Duplicate incident row in replay page") as caught:
+        reconcile_replayed_pages(selected, earlier, later, limit=2)
+    assert "private value" not in str(caught.value)
+
+
+
 @pytest.mark.parametrize("later", [
     item(A, mod="2"),
     item(A, state="6"),
