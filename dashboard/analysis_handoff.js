@@ -38,13 +38,16 @@
     return {scope:'range',since:a.toISOString(),until:b.toISOString()};
   }
   // Relative calendar selections can change at local midnight without a DOM
-  // event. The generation counter alone cannot keep a prepared handoff fresh.
-  // Exact local selection instants are compared, not labels or elapsed time.
+  // event. Compare UTC instants, not their serialized strings: the backend
+  // echoes +00:00 while the local date picker emits equivalent Z timestamps.
   function selectionStillMatches(chosen) {
     try {
       const now = selection();
-      return now.scope === chosen.scope && (now.scope !== 'range' ||
-        (now.since === chosen.since && now.until === chosen.until));
+      if (now.scope !== chosen?.scope) return false;
+      if (now.scope !== 'range') return true;
+      return strictClockInstant(chosen.since) && strictClockInstant(chosen.until) &&
+        Date.parse(now.since) === Date.parse(chosen.since) &&
+        Date.parse(now.until) === Date.parse(chosen.until);
     } catch (_) { return false; }
   }
   window.owgEvidenceSelection = selection;
