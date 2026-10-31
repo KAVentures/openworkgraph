@@ -288,7 +288,7 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
             for row in group:  # rows are already ordered by observed UTC time
                 if row["action"] == "copy":
                     earlier_copies.setdefault(row["ref"], row["observed_at"])
-                elif any(
+                elif row["action"] == "paste" and any(
                     at < row["observed_at"] and
                     (
                         # With two distinct referenced records, an unreferenced
