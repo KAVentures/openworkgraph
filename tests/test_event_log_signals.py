@@ -132,6 +132,62 @@ def test_saved_signals_use_fractional_seconds_for_kpis_sla_and_case_evidence():
     assert again["sla"]["changed_since_last_evaluation"] is False
 
 
+
+def test_signal_kpis_do_not_count_clock_second_boundaries_as_elapsed_time():
+    """Synthetic boundary crossings: date_diff(second) overstates both durations.
+
+    00:00:00.900 -> 00:00:01.100 is 0.2s (not 1s), and
+    00:01:00.900 -> 00:01:02.100 is 1.2s (not 2s).
+    Integer-second SLA and case predicates remain strict.
+    """
+    rows = [
+        "case,activity,time,who",
+        "short,Start,2024-01-01T00:00:00.900000Z,team",
+        "short,End,2024-01-01T00:00:01.100000Z,team",
+        "long,Start,2024-01-01T00:01:00.900000Z,team",
+        "long,End,2024-01-01T00:01:02.100000Z,team",
+    ]
+    log = workspace.import_log(
+        BytesIO(("\\n".join(rows) + "\\n").encode()),
+        name="signal-second-boundaries-synthetic", source_format="csv",
+        mapping={"case_column": "case", "activity_column": "activity",
+                 "timestamp_column": "time", "resource_column": "who"},
+    )["log_id"]
+    signals.add_rule(log, _rule("median above", kind="kpi",
+                                metric="median_throughput_seconds", operator="above",
+                                threshold=0.8))
+    signals.add_rule(log, _rule("median below", kind="kpi",
+                                metric="median_throughput_seconds", operator="below",
+                                threshold=0.8))
+    signals.add_rule(log, _rule("p90 above", kind="kpi",
+                                metric="p90_throughput_seconds", operator="above",
+                                threshold=1.5))
+    signals.add_rule(log, _rule("sla", kind="kpi", metric="sla_breach_rate",
+                                operator="above", threshold=0.49, sla_seconds=1))
+    signals.add_rule(log, _rule("over one", kind="cases", condition="duration_over",
+                                seconds=1))
+    signals.add_rule(log, _rule("over two", kind="cases", condition="duration_over",
+                                seconds=2))
+    result = signals.evaluate(log)
+    by_name = {item["name"]: item for item in result["signals"]}
+    assert result["triggered"] == 3
+    assert by_name["median above"]["value"] == pytest.approx(0.7)
+    assert by_name["median above"]["triggered"] is False
+    assert by_name["median below"]["value"] == pytest.approx(0.7)
+    assert by_name["median below"]["triggered"] is True
+    assert by_name["p90 above"]["value"] == pytest.approx(1.1)
+    assert by_name["p90 above"]["triggered"] is False
+    assert by_name["sla"]["value"] == pytest.approx(0.5)
+    assert by_name["sla"]["triggered"] is True
+    assert by_name["over one"]["matching_cases"] == 1
+    assert [item["case_id"] for item in by_name["over one"]["evidence_cases"]] == ["long"]
+    assert by_name["over one"]["evidence_cases"][0]["duration_seconds"] == pytest.approx(1.2)
+    assert by_name["over two"]["matching_cases"] == 0
+    assert by_name["over two"]["triggered"] is False
+    assert result["signals_execute_actions"] is False
+    assert result["execution_authorized"] is False
+
+
 @pytest.mark.parametrize("spec,message", [
     (_rule("x", kind="kpi", metric="sla_breach_rate", operator="above", threshold=0.1), "sla_seconds"),
     (_rule("x", kind="kpi", metric="rework_rate", operator="above", threshold=5), "fractions"),
