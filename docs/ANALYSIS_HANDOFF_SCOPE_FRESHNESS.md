@@ -473,3 +473,31 @@ malformed capture flags and container types, a verified false with successful
 copy, and legacy missing/empty/null metadata with a visible uncertainty
 warning. These synthetic tests do not prove real-package contents, live-provider
 behavior, consenting-user acceptance or competitor parity.
+
+
+## Rejecting ISO clock rollover in evidence and ticket provenance
+
+JavaScript's built-in `Date.parse` accepts an apparent ISO instant such as
+`2026-10-31T24:00:00Z` and normalizes it to midnight **on the following
+date**. Checking only that the original `YYYY-MM-DD` is a valid calendar
+date therefore did not protect the handoff from a time label that silently
+changes days. In a date plan, that can misidentify the UTC day of a purported
+observed step; in a saved-history lease, it can overstate a malformed grant;
+and in a returned export-ticket URL, an invalid rollover bound can compare
+equal to the requested instant.
+
+The dashboard now uses one strict clock-shape check (hours 00–23, minutes
+and seconds 00–59, timezone-aware ISO timestamps) in addition to existing
+calendar-date and selected-window checks. It rejects rollover instants in
+preview observations and daily chunks, treats a malformed lease as
+**unverified**, and refuses a ticket URL whose bounds only match because
+`Date.parse` rolled its clock forward. Valid `00:00:00`, fractional
+seconds and equivalent UTC-offset representations remain supported.
+The authenticated backend's permission and single-use ticket checks still
+apply independently; browser validation is not a source of authority.
+
+Synthetic mock-DOM regressions cover malformed observed and daily-plan
+instants, an expired-shape saved-history lease, and a ticket bound that
+`Date.parse` considers identical to the selected local midnight. They do
+not establish live-provider behavior, capture completeness, a real
+consenting-user pilot, commercial outcomes or competitor parity.
