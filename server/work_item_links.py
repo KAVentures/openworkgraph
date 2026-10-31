@@ -249,22 +249,37 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
     by_ref: dict[str, list[str]] = defaultdict(list)
     by_transfer: dict[tuple[tuple[str, str, str, str], str], list[dict[str, Any]]] = defaultdict(list)
     by_tab: dict[tuple[tuple[str, str, str, str], str], list[dict[str, Any]]] = defaultdict(list)
+    tainted_transfers: set[tuple[tuple[str, str, str, str], str]] = set()
+    tainted_tabs: set[tuple[tuple[str, str, str, str], str]] = set()
     for row in rows:
         if row["ref"]:
             by_ref[row["ref"]].append(row["event_id"])
         # Opaque IDs are not globally unique: two tenants, people, devices or
         # capture sessions can legitimately reuse the same tab/transfer token.
         # Do not use missing/invalid identity as a wildcard.
-        if row["scope"] is not None and not row["reference_tainted"]:
+        if row["scope"] is None:
+            continue
+        if row["reference_tainted"]:
+            # Excluding a contradictory record claim from the token group is
+            # insufficient: the remaining observations could appear to form a
+            # single-record tab or a clean two-record clipboard transfer.
+            # Veto only this exact scoped token, never independent record links.
             if row["transfer"]:
-                by_transfer[(row["scope"], row["transfer"])].append(row)
+                tainted_transfers.add((row["scope"], row["transfer"]))
             if row["tab"]:
-                by_tab[(row["scope"], row["tab"])].append(row)
+                tainted_tabs.add((row["scope"], row["tab"]))
+            continue
+        if row["transfer"]:
+            by_transfer[(row["scope"], row["transfer"])].append(row)
+        if row["tab"]:
+            by_tab[(row["scope"], row["tab"])].append(row)
     for group in by_ref.values():
         join(group, "same_record")
     ambiguous_transfer_groups = 0
     inconsistent_transfer_direction_groups = 0
-    for group in by_transfer.values():
+    for token_key, group in by_transfer.items():
+        if token_key in tainted_transfers:
+            continue
         if len(group) < 2:
             continue
         # A single scoped token claiming three distinct records is not a
@@ -319,7 +334,9 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
             join([row["event_id"] for row in group], "clipboard_transfer")
 
     candidates: list[dict[str, Any]] = []
-    for tab_rows in by_tab.values():
+    for token_key, tab_rows in by_tab.items():
+        if token_key in tainted_tabs:
+            continue
         refs = {row["ref"] for row in tab_rows if row["ref"]}
         loose = [row for row in tab_rows if not row["ref"]]
         if len(refs) == 1:
