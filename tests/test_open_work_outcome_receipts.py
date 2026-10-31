@@ -286,3 +286,75 @@ def test_literal_true_record_evidence_preserves_valid_provider_receipts(
     assert result["operation_verified"] is True
     assert result["customer_outcome_verified"] is False
     assert result["agent_execution_authorized"] is False
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), [
+    ("github_pr_merged", "github", "pull_request", "merged"),
+    ("stripe_invoice_paid", "stripe", "invoice", "paid"),
+    ("stripe_refund_processor_succeeded", "stripe", "refund", "succeeded"),
+    ("jira_issue_resolved", "jira", "issue", "done"),
+])
+@pytest.mark.parametrize("malformed", [
+    None, 0, 1, "false", "true", "", "0", -1, [], {}, True,
+])
+def test_receipt_requires_literal_false_history_truncation_flag(
+    operation, provider, kind, state, malformed,
+):
+    # Even falsey 0, empty text, and null are not affirmative proof that
+    # the exact record history was fully retained and checked for conflicts.
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    data["source_event_limit_reached"] = malformed
+    calls = []
+    result = source_operation_receipt(
+        REF, operation, record_reader=reader(data, calls), now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "incomplete_or_conflicting_record_identity"
+    assert result["operation_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["business_objective_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert len(calls) == 1
+    assert calls[0][1]["include_source_status"] is True
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), [
+    ("github_pr_merged", "github", "pull_request", "merged"),
+    ("stripe_invoice_paid", "stripe", "invoice", "paid"),
+    ("stripe_refund_processor_succeeded", "stripe", "refund", "succeeded"),
+    ("jira_issue_resolved", "jira", "issue", "done"),
+])
+def test_receipt_missing_history_truncation_flag_is_unknown(
+    operation, provider, kind, state,
+):
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    del data["source_event_limit_reached"]
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "incomplete_or_conflicting_record_identity"
+    assert result["operation_verified"] is False
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), [
+    ("github_pr_merged", "github", "pull_request", "merged"),
+    ("stripe_invoice_paid", "stripe", "invoice", "paid"),
+    ("stripe_refund_processor_succeeded", "stripe", "refund", "succeeded"),
+    ("jira_issue_resolved", "jira", "issue", "done"),
+])
+def test_literal_false_history_truncation_flag_preserves_valid_receipt(
+    operation, provider, kind, state,
+):
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    assert data["source_event_limit_reached"] is False
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["availability"] == "source_reported"
+    assert result["operation_verified"] is True
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_execution_authorized"] is False
