@@ -169,17 +169,41 @@ interpret the damaged auxiliary graph.
 Three synthetic regressions cover valid eight-edge writer output and the
 1,024/1,025-character boundary with a decoder tripwire; transitive withholding
 and authorized transactional pruning; and explicit review deletion with an
-oversized malformed payload. This caps **JSON decoding work**, not the memory
-required for SQLite to return a corrupted oversized cell or arbitrary local
-database tampering. No provider authorization, business status, customer
+oversized malformed payload. This caps **JSON decoding work**; the separate 2 MiB main-file admission
+limit rejects larger SQLite ledgers before opening them, but does not bound
+all SQLite allocations or arbitrary local database tampering. No provider authorization, business status, customer
 outcome, source receipt or agent execution permission is inferred.
 
+
+## Main SQLite ledger size admission (2 MiB)
+
+The internal-only declaration ledger admits a maximum **2 MiB main SQLite
+file** before calling `sqlite3.connect`, for both existing v1 migration
+candidates and v2 read/CAS operations. The trusted writer stores at most 50
+small fixed-code rows; a corrupted auxiliary database with a multi-megabyte
+TEXT/BLOB cell can otherwise force SQLite to allocate and materialize that
+cell before the Python row-count, timestamp and JSON guards run. Oversized
+files fail closed with `CaseDeclarationError`, without truncating, migrating,
+reading, or writing them. The existing explicit human-review deletion path
+still catches the error and erases the entire auxiliary ledger rather than
+leaving an undeleted owner approval. Fresh authorized declarations can then
+be created normally after a new human review.
+
+Two synthetic real-SQLite regressions exercise oversized v1 and v2 stores,
+tripwire that no SQLite connection is opened on read/CAS, verify original
+bytes and v1 schema version remain unchanged, and verify explicit review
+deletion followed by a fresh authorized declaration. This is an **admission
+bound**, not a global memory quota, a guarantee about unknown sidecar files,
+or an atomic defense against another process replacing the file after
+`lstat`. The existing single-link, private-permission, DELETE-journal and
+schema checks still apply. No provider source status, verified customer
+outcome or agent authority follows from a successfully opened ledger.
 
 ## Bounded legacy-v1 migration identifiers
 
 The original v1 ledger is an ordinary SQLite rowid table with a `TEXT PRIMARY KEY` opaque work-item reference. Its v2 incarnation-token upgrade first fetches at most 51 **integer rowids** (50 allowed plus an overflow sentinel) and updates tokens by `rowid`. It does not materialize or rebind arbitrarily large native `work_item_ref` TEXT values from a damaged legacy database merely to perform migration. More than 50 legacy rows still fail closed before any schema alteration or token generation; an exactly 50-row valid ledger remains supported. A synthetic malformed 256-KiB reference regression inspects the migration SQL and verifies both surviving rows receive distinct tokens without changing their original references.
 
-This bounds migration *identifier enumeration*, not SQLite file size, page-cache allocation, later full-row reads, or a malicious local database. The normal reader still validates opaque reference syntax and excludes malformed rows; it does not turn a malformed ref into a verified business fact. No new source authority, tenant-wide revocation guarantee or independently verified outcome follows from this change.
+This bounds migration *identifier enumeration*. The separate 2 MiB main-file admission cap bounds the size of a ledger opened by SQLite, not all SQLite page-cache allocations, concurrent filesystem replacement or malicious local tampering. The normal reader still validates opaque reference syntax and excludes malformed rows; it does not turn a malformed ref into a verified business fact. No new source authority, tenant-wide revocation guarantee or independently verified outcome follows from this change.
 
 
 ## Persisted approval timestamp parser bound
@@ -196,10 +220,10 @@ clock into a new approval or source-confirmed outcome.
 
 Synthetic regressions verify a parser tripwire on oversized/non-text values,
 plus 256-KiB corruption of each of the three timestamp columns, read-time
-withholding, and transactional pruning. This only bounds **Python timestamp
-parsing**, not SQLite's prior materialization of an oversized TEXT cell,
-filesystem growth, atomic cross-process source revocation, or real provider
-and customer-outcome validation. No routes, agent permissions or source reads
+withholding, and transactional pruning. This bounds **Python timestamp parsing**; the separate 2 MiB main-file
+admission cap rejects larger SQLite ledgers before opening them, but still
+permits SQLite to materialize cells inside that limit. Neither guard proves
+atomic cross-process source revocation or real provider/customer outcomes. No routes, agent permissions or source reads
 are added.
 
 
