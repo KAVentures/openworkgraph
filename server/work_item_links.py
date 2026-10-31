@@ -533,6 +533,7 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
         for neighbour in (rows[index - 1] if index else None, rows[index + 1] if index + 1 < len(rows) else None):
             if (row["scope"] is not None and neighbour is not None
                     and not neighbour["reference_tainted"]
+                    and not neighbour["ephemeral_claim_tainted"]
                     and neighbour["scope"] == row["scope"] and neighbour["app"] == row["app"]):
                 candidates.append({"event_id": row["event_id"], "toward_event_id": neighbour["event_id"],
                                    "relation": "surface_continuity"})
