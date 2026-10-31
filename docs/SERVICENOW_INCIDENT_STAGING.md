@@ -286,3 +286,28 @@ these checks. Real enterprise reads still require separately verified current
 provider/tenant/consent authority, exact HTTPS request/response identity,
 revocation fences and atomic persistence-time checks. No transport, checkpoint,
 source append, permission expansion or real ServiceNow acceptance was added.
+
+
+## Constructor-time selected-scope binding (offline only)
+
+Rechecking the *shape* of a frozen `SelectedIncidents` instance is insufficient:
+`object.__setattr__` can replace a previously consented host, local tenant,
+selected incident ID, or revoked consent/grant with another syntactically valid
+value. The instance could then appear to carry the original read authority to
+an entirely different selected scope. The offline scope now stores its exact
+constructor-time host, tenant, ordered selected IDs and consent/grant flags,
+and every planning, staging and replay entrypoint compares current values to
+that binding **without rebinding them**. Missing bindings and post-construction
+substitutions are rejected, even when every replacement field is individually
+valid. Class-level validation prevents instance-method shadowing from skipping
+the check. Unmodified scopes retain their existing read-only behavior.
+
+This is **local defensive consistency**, not a secure authorization token.
+Untrusted code running in the same Python process can forge or tamper with
+private instance fields, and concurrent mutation cannot be ruled out by an
+object snapshot. A real ServiceNow transport and persistence layer must verify
+the current externally held tenant/provider grant and consent at the actual
+request and again atomically before append/checkpoint, fence revocation, and
+authenticate the HTTPS request/response identity. None of those capabilities
+is implemented here. Fake-response tests are not real-provider acceptance,
+source completeness, customer outcomes, or permission to perform writes.
