@@ -604,3 +604,29 @@ Copy and makes no export-ticket request. These are synthetic UI consistency
 checks, not proof of live source completeness, customer consent, competitor
 parity or business outcomes. Native cross-platform/browser/accessibility/
 scale/packaging CI is still required before merge.
+
+## Latest-work timestamp: unknown is not none
+
+The handoff's previous fallback rendered `Latest work event: none in this period`
+when the optional `work_evidence.last_work_observed_at` was missing.
+That is misleading for selected ordinary events from excluded apps, or for
+older preview responses that omit work metadata: those events may exist even
+though no latest-work timestamp was supplied.
+
+The modal now distinguishes a supplied and validated latest-work timestamp,
+a missing timestamp **despite selected ordinary events**, and a selection
+containing **no recorded ordinary work events** (including health-only and
+zero-event selections). For older previews, the ordinary count is derived
+only from the validated canonical event count minus capture-health/gap
+partitions. Missing metadata never becomes a claim that no work occurred;
+absence of ordinary recorded events is not proof of inactivity. Capture
+health/gap rows still do not establish that the recorder is running.
+
+Five deterministic synthetic mock-DOM subtests cover a supplied timestamp,
+missing timestamp with explicit ordinary counts, omitted legacy metadata,
+health-only evidence, and zero selected events. They check visible wording,
+copy-only behavior and unchanged download availability. No backend
+permission, consent, export, source receipt or agent execution behavior
+changes. These tests are not real consenting-user acceptance or evidence of
+capture completeness, business outcomes, ROI or competitor parity. Native
+Node/browser/accessibility/scale/packaging checks remain merge gates.
