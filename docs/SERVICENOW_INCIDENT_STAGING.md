@@ -223,3 +223,24 @@ The 256 KiB response, tree-depth/node, consent/tenant and no-write bounds remain
 unchanged. This does not verify HTTP origin, provider ACLs, completeness,
 historical changes, current persistence-time authorization or real ServiceNow
 acceptance.
+
+
+## Ambiguous reserved incident field aliases
+
+The offline Table API projector requires canonical, case-sensitive incident keys:
+`sys_id`, `sys_updated_on`, `sys_mod_count`, and `state`. Previously a
+second spelling such as `SYS_ID` or `State` was silently discarded as an
+unselected/private extra while the canonical key supplied the staged identity
+or status. That could hide contradictory source evidence. It now **rejects**
+casefold-equivalent aliases of these four reserved keys, whether or not the
+canonical spelling is also present. The error is generic and does not echo
+provider-supplied fields or values. Exact canonical fields and unrelated
+private extras remain compatible; extras are still never retained in staged
+snapshots.
+
+Synthetic tests cover ASCII and Unicode casefold aliases across standalone,
+plan-bound, offset-batch and both replay paths, missing-canonical-field
+rejection and compatibility with unrelated discarded fields. This is only
+local response-shape integrity. It is **not** a verified ServiceNow response,
+provider ACL/tenant receipt, completeness claim, current consent grant at
+persistence time, permission to append/checkpoint, or real sandbox acceptance.
