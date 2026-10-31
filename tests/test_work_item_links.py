@@ -1408,3 +1408,61 @@ def test_multiplexed_tab_index_large_interleaved_capture_is_candidate_only_and_b
     assert all(item["cross_record_join"] is False
                and item["link_basis"] == {"same_record": 599} for item in result["items"])
     assert "long-tab" not in json.dumps(result)
+
+
+def test_explicit_nonstring_action_cannot_authorize_generic_clipboard_cross_record_join():
+    # A boolean is stringified by the shared legacy _token helper into "true".
+    # It must not be treated as an observed generic action on a shared token.
+    for invalid in (True, False, 1, None, {"action": "paste"}, ["copy"]):
+        first = _scoped(_event(1, A, transfer="claimed-transfer"))
+        second = _scoped(_event(2, B, transfer="claimed-transfer"))
+        second["event_type"] = invalid
+        result = linked_work_items([
+            first, second, _scoped(_event(3, A)), _scoped(_event(4, B)),
+        ])
+        assert set(_items(result)) == {("e01", "e03"), ("e02", "e04")}, repr(invalid)
+        assert all(not item["cross_record_join"] for item in result["items"])
+        assert result["candidate_links"] == []
+        assert _items(result)[("e02", "e04")]["observed_steps"][0]["action"] == "unknown"
+        assert "claimed-transfer" not in json.dumps(result)
+
+
+def test_malformed_action_vetoes_only_exact_scoped_transfer_not_record_or_tab():
+    first = _scoped(_event(1, A, tab="single-record-tab", transfer="shared", action="copy"))
+    second = _scoped(_event(2, B, transfer="shared", action="paste"))
+    malformed = _scoped(_event(3, tab="single-record-tab", transfer="shared"))
+    malformed["event_type"] = {"not": "an observed action"}
+    result = linked_work_items([
+        first, second, malformed, _scoped(_event(4, A)), _scoped(_event(5, B)),
+    ])
+    assert set(_items(result)) == {("e01", "e03", "e04"), ("e02", "e05")}
+    assert _items(result)[("e01", "e03", "e04")]["link_basis"] == {
+        "same_record": 1, "same_tab_single_record": 1,
+    }
+    assert all(not item["cross_record_join"] for item in result["items"])
+    assert result["candidate_links"] == []
+
+    # A corrupt token in another capture scope does not veto a valid
+    # observed transfer here; the token itself is not globally unique.
+    other = _scoped(_event(6, transfer="shared"), org="tenant-b")
+    other["event_type"] = True
+    valid = linked_work_items([first, second, other])
+    assert set(_items(valid)) == {("e01", "e02")}
+    assert valid["unlinked_observation_count"] == 1
+
+
+def test_legacy_absent_and_literal_unknown_actions_remain_compatible():
+    first = _scoped(_event(1, A, transfer="legacy"))
+    del first["event_type"]
+    second = _scoped(_event(2, B, transfer="legacy", action="browser_click"))
+    for ordered in ([first, second], [second, first]):
+        result = linked_work_items(ordered)
+        assert set(_items(result)) == {("e01", "e02")}
+        assert _items(result)[("e01", "e02")]["link_basis"] == {"clipboard_transfer": 1}
+
+    direct = linked_work_items([
+        _scoped(_event(1, A, transfer="direct", action="copy")),
+        _scoped(_event(2, B, transfer="direct", action="paste")),
+    ])
+    assert set(_items(direct)) == {("e01", "e02")}
+    assert _items(direct)[("e01", "e02")]["cross_record_join"] is True
