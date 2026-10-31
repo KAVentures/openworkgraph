@@ -181,6 +181,39 @@ def test_kpis_throughput_rework_sla_and_declared_automation():
         analytics.kpis(log_id, sla_seconds=0)
 
 
+
+def test_subsecond_kpi_and_root_cause_duration_thresholds():
+    """Elapsed seconds, not whole-second boundaries, govern strict > thresholds.
+
+    Synthetic import regression only: not provider or customer acceptance.
+    """
+    rows = [
+        "case,activity,time,who",
+        "a,Start,2024-01-01T00:00:00Z,team",
+        "a,End,2024-01-01T00:00:00.500000Z,team",
+        "b,Start,2024-01-01T00:01:00Z,team",
+        "b,End,2024-01-01T00:01:01.000000Z,team",
+        "c,Start,2024-01-01T00:02:00Z,team",
+        "c,End,2024-01-01T00:02:01.500000Z,team",
+        "d,Start,2024-01-01T00:03:00Z,team",
+        "d,End,2024-01-01T00:03:02.750000Z,team",
+    ]
+    log_id = _log("\\n".join(rows))
+    result = analytics.kpis(log_id, sla_seconds=1)
+    assert result["cases"] == 4
+    throughput = result["throughput_seconds"]
+    assert throughput["p50"] == pytest.approx(1.25)
+    assert throughput["p90"] == pytest.approx(2.375)
+    assert throughput["p95"] == pytest.approx(2.5625)
+    assert throughput["mean"] == pytest.approx(1.4375)
+    assert result["sla"] == {"seconds": 1, "breached_cases": 2, "breach_rate": 0.5}
+    assert result["completed_per_week"] == [
+        {"week_starting": "2024-01-01", "cases": 4, "median_throughput_seconds": pytest.approx(1.25)}
+    ]
+    assert analytics.root_cause(log_id, "duration_over", threshold_seconds=1)["outcome_cases"] == 2
+    assert analytics.root_cause(log_id, "duration_over", threshold_seconds=2)["outcome_cases"] == 1
+
+
 def test_newcombe_interval_matches_published_example():
     # Newcombe (1998), Statistics in Medicine 17:873, method 10: 56/70 vs 48/80.
     d, low, high = analytics.risk_difference(56, 70, 48, 80)
