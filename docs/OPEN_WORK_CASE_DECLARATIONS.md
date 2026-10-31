@@ -328,8 +328,9 @@ version changes or row mutation. Existing clean v1 migration and v2 operation
 tests remain the compatibility baseline.
 
 This is **schema-shape** validation, not a full SQL-DDL equivalence proof:
-arbitrary CHECK constraints, malicious concurrent filesystem writes, and
-cross-process source-grant revocation remain outside this guard. No new
+additional CHECK/collation guards are described below; malicious concurrent
+filesystem writes and cross-process source-grant revocation remain outside
+this guard. No new
 provider reads, agent rights, background execution, or business outcome
 verification are implied.
 
@@ -354,7 +355,33 @@ schema and version. Existing clean v1 migration and fresh-v2 tests remain
 required for compatibility.
 
 This is bounded structural admission, **not** a complete SQL DDL equivalence
-proof (for example, arbitrary CHECK constraints and collations remain outside
-this guard), database tamper resistance, atomic source-grant revocation,
-provider/customer outcome verification or execution authority. The store
-remains internal-only, local, and disabled by default.
+proof. CHECK/collation/PK-order guards are described below; database tamper
+resistance, atomic source-grant revocation, provider/customer outcome
+verification and execution authority remain unproven. The store remains
+internal-only, local, and disabled by default.
+
+## CHECK, collation and primary-key order admission
+
+SQLite can accept a versioned declaration table with exactly the expected
+columns, one implicit PK index, no foreign keys and no extra schema objects,
+yet still change the meaning of owner approvals. An added table-level
+`CHECK(goal_code = 'review_source_state')` can veto other legitimate declared
+goals; `scope_ref TEXT COLLATE NOCASE` changes opaque scope comparisons without
+changing `PRAGMA index_list`; `work_item_ref TEXT PRIMARY KEY COLLATE NOCASE`
+or `PRIMARY KEY DESC` changes exact key identity/order while keeping the same
+index-list entry.
+
+Both v1 pre-migration and v2 read/write admission now reject `CHECK` or
+`COLLATE` keywords in the declaration table DDL (conservatively, including
+ambiguous SQL text) and require the single implicit PK's `PRAGMA index_xinfo`
+to match the writer's **ascending BINARY** `work_item_ref` plus rowid suffix.
+Eight synthetic SQLite rejection cases cover v1/v2 × CHECK, non-key collation,
+PK collation and descending PK; two clean v1/v2 compatibility cases still
+admit valid schemas. Rejection preserves existing schema, rows and version
+without token generation, migration or partial CAS.
+
+These are narrow guards for the private writer's known schema, not a general
+SQL parser or a cryptographic database integrity proof. Other foreign DDL
+semantics, concurrent filesystem mutation and cross-process source-grant
+revocation remain separate risks. The ledger still does not verify provider
+status, customer outcomes or agent authorization.
