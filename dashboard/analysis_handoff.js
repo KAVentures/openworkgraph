@@ -156,6 +156,11 @@
       (plan.complete_history_claimed == null ||
         plan.complete_history_claimed === false) &&
       explicitEndpointsValid &&
+      // Server daily chunks are built from dates with observed events. A
+      // claimed complete/truncated list cannot contain invented empty days;
+      // retain zero-row chunks only for legacy plans without a coverage flag.
+      (coverageFlag == null ||
+        (Array.isArray(listed) && listed.every(chunk => chunk.event_rows > 0))) &&
       (coverageFlag !== false ||
         (Array.isArray(listed) && plannedRows === d.canonical_rows)) &&
       (coverageFlag !== true ||
