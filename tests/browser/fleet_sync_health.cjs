@@ -69,11 +69,23 @@ const {spawn}=require('node:child_process'),{tmpdir}=require('node:os'),path=req
   assert.match(text,/700 waiting, 0 rejected/);assert.match(text,/9 waiting, 1 rejected/);
   // Recorder badges are unaffected: these devices sent no recorder heartbeat.
   assert.equal(await page.locator('#ppl .pill').filter({hasText:/^Recorder status unknown$/}).count(),4);
+  const beforeExpiry=await page.evaluate(()=>Date.now());
   await page.clock.fastForward(121000);
   assert.equal(await page.locator('#ppl .pill').filter({hasText:'Sync status needs refresh'}).count(),3);
   assert.equal(await page.locator('#ppl .pill').filter({hasText:'Recorder status needs refresh'}).count(),0);
   await page.locator('#fleetFilter').selectOption('problems');
   assert.match(await page.locator('#fleetSummary').textContent(),/^0 of 4/,'expired problems leave the reported-problems filter');
+  await page.clock.setSystemTime(beforeExpiry);
+  await page.locator('#fleetSearch').fill('owned-');
+  assert.match(await page.locator('#fleetSummary').textContent(),/^0 of 4/,'clock rollback cannot revive expired problem claims');
+  await page.locator('#fleetFilter').selectOption('all');
+  assert.equal(await page.locator('#fleetRows .pill').filter({hasText:/^Sync reported current$/}).count(),0);
+  assert.equal(await page.locator('#fleetRows .pill').filter({hasText:/^Sync errors reported$/}).count(),0);
+  // A new authenticated fetch can establish fresh claims again.
+  const freshAgain=page.waitForResponse(r=>r.url().endsWith('/v1/admin/people/acme'));
+  await page.locator('#fleetRefresh').click();await freshAgain;
+  await page.locator('#fleetFilter').selectOption('problems');
+  await page.waitForFunction(()=>document.querySelector('#fleetSummary').textContent.startsWith('2 of 4'));
   const after=await api('GET','/v1/admin/people/acme');
   assert(after.employees[0].devices.every(d=>d.events===0));
   assert.deepEqual(errors,[]);

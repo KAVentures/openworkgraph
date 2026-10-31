@@ -14,7 +14,9 @@ Employee labels come from the roster; unlinked labels remain self-reported.
 
 Refresh status fetches the current roster and invitations. Status filters age
 while the page is open: expired problems leave the reported-problems filter and
-become unknown. Missing or stale reports are not evidence that a computer is
+become unknown. Expiry is latched for each fetched snapshot and bounded by a
+monotonic timer; turning the browser clock backward cannot revive expired
+claims. A new authenticated refresh can establish fresh status. Missing or stale reports are not evidence that a computer is
 stopped or unhealthy. Recorder and sync claims stay separate, as described in
 [FLEET_RECORDER_STATUS.md](FLEET_RECORDER_STATUS.md) and
 [FLEET_SYNC_HEALTH.md](FLEET_SYNC_HEALTH.md). No evidence-content search is added.
