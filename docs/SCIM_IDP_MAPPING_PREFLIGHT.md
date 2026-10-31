@@ -119,3 +119,22 @@ revocation, audit and backup/restore. Inspect actual source-scoped results;
 synthetic mapping validation is not live Entra/Okta conformance or permission
 to provision identities. No provisioning, provider requests or identity
 mutations are performed by this preflight.
+
+
+## Structural Unicode alias rejection (offline parser parity)
+
+The preflight now mirrors the shipped SCIM parser's Unicode `lower()`
+normalization for plain attribute names and the optional core User URN
+prefix. Python's broader `casefold()` can turn `uſerName` into
+`username`, or `paramſ` into `params`, even though the actual OWG
+User attribute parser and contact-prefix stripper do **not** accept those
+spellings. Such declarations now remain unsupported blockers rather than
+producing a misleading clean static result. Ordinary ASCII case variants
+and Unicode **inside quoted contact selector values** retain their existing
+behavior. Synthetic differential regressions compare these decisions with
+the shipped User key parser and contact PATCH path parser.
+
+This closes a static false-positive compatibility gap only. It does not
+validate IdP-generated payloads, enable new mappings, alter actual SCIM
+requests, or certify Entra/Okta compatibility. Strict server-side identity,
+provider, tenant, ETag and revocation rules are unchanged.
