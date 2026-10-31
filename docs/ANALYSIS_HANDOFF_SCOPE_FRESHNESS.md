@@ -857,3 +857,34 @@ omission label, zero-width/default-ignorable names, unchanged ordinary labels
 and no unintended ticket/export on Copy. They do not replace native Node,
 Chromium, WCAG, cross-platform, scale or packaging checks, or a consenting
 real-user pilot. Claim: [#326 comment 6546499009](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6546499009).
+
+
+### 2026-10-31 — redacted sample omission is not zero focus evidence (Worker B)
+
+The Prepare for AI modal formerly displayed **"No focus spans in this
+selection"** whenever the `redacted_examples` array was empty, even if the
+selected preview counted positive `event_types.focus_span`. The optional,
+bounded sample list may be empty because examples were not supplied; it does
+not negate the independently counted focus-span events. The review now
+distinguishes:
+
+- **Positive focus count, no samples:** disclose the exact selected
+  focus-span count and explicitly state that no redacted examples were
+  supplied; absence of examples does not establish absence of observed focus.
+- **Positive count, one or more samples:** show both the number of supplied
+  redacted examples and the selected focus-span event count; do not present
+  samples as proof of complete context capture.
+- **Zero focus count:** state only that no focus-span events were recorded
+  *in the selection*, not that the person was inactive or that capture was
+  complete.
+
+The displayed examples remain bounded, text-escaped, and explicitly
+best-effort redacted. This is a **display-only** evidence-omission correction:
+no changes to selected event counts, source identity, privacy/consent,
+retention, export, request text, agent execution or provider reads.
+
+Four synthetic mock-DOM regression subcases cover omitted, partial, full-
+count and genuinely zero focus examples, including copy-only behavior,
+no tickets/downloads, and escaped sample content. They do not replace native
+Node/Chromium/WCAG/scale/packaging CI, or realistic consenting-user review.
+Claim: [#326 comment 6547182775](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6547182775).
