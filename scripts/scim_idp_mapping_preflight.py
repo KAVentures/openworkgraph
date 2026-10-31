@@ -194,8 +194,15 @@ def _reject_duplicates(pairs: list[tuple[str, Any]]) -> dict:
 def _bounded_tree(value: Any, depth: int = 0) -> None:
     if depth > 32:
         raise InvalidMapping("Mapping JSON nesting exceeds 32 levels")
-    if type(value) is dict:
-        for child in value.values():
+    if type(value) is str:
+        # Python's JSON decoder permits lone UTF-16 surrogate escapes. They
+        # are not Unicode scalar values and must not survive strict preflight,
+        # including in fields the mapping schema will otherwise discard.
+        if any(0xD800 <= ord(char) <= 0xDFFF for char in value):
+            raise InvalidMapping("Mapping JSON contains an unpaired Unicode surrogate")
+    elif type(value) is dict:
+        for key, child in value.items():
+            _bounded_tree(key, depth)
             _bounded_tree(child, depth + 1)
     elif type(value) is list:
         for child in value:
@@ -218,7 +225,13 @@ def _finite_json_float(token: str) -> float:
 
 
 def load_text(text: str) -> Any:
-    if len(text.encode("utf-8")) > MAX_BYTES:
+    try:
+        encoded_size = len(text.encode("utf-8"))
+    except UnicodeError as exc:
+        # Direct Python callers must get the same generic validation error as
+        # CLI callers, not a raw UnicodeEncodeError with their input attached.
+        raise InvalidMapping("Mapping is not bounded, strict JSON") from exc
+    if encoded_size > MAX_BYTES:
         raise InvalidMapping("Mapping exceeds the 32 KiB input limit")
     try:
         parsed = json.loads(text, object_pairs_hook=_reject_duplicates,
