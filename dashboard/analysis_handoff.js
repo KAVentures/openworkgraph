@@ -142,9 +142,20 @@
     const plan = d?.analysis_plan;
     const listed = plan?.date_chunks;
     const coverageFlag = plan?.more_dates_not_listed;
+    // Explicit UTC-day plans are ordered from the earliest selected event.
+    // A conserved row total alone cannot prove that the displayed dates
+    // contain the first/last observed event. The end bound is exclusive.
+    const containsInstant = (chunk, value) => chunk && instant(value) &&
+      Date.parse(chunk.since) <= Date.parse(value) &&
+      Date.parse(value) < Date.parse(chunk.until);
+    const explicitEndpointsValid = coverageFlag == null || d.canonical_rows === 0 ||
+      (Array.isArray(listed) && listed.length > 0 &&
+        containsInstant(listed[0], first) &&
+        (coverageFlag !== false || containsInstant(listed[listed.length - 1], last)));
     const planCoverageValid = plan == null || (
       (plan.complete_history_claimed == null ||
         plan.complete_history_claimed === false) &&
+      explicitEndpointsValid &&
       (coverageFlag !== false ||
         (Array.isArray(listed) && plannedRows === d.canonical_rows)) &&
       (coverageFlag !== true ||
