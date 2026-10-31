@@ -806,3 +806,30 @@ The displayed subset is not a source-completeness claim; it is a deliberately
 bounded review aid. Native browser, accessibility, cross-platform and
 packaging checks remain required, as do real consenting-user acceptance and
 provider/source verification before claiming competitor parity.
+
+## Visually ambiguous evidence labels in the review modal
+
+Imported source category names and redacted focus app/window-title labels are
+**untrusted display text**, not provider-authenticated identities. HTML escaping
+alone does not reveal Unicode bidirectional overrides, isolates, directional
+marks, or embedded control characters that could reorder or conceal the
+surrounding evidence count or title. The review now prints those code points as
+visible `[U+XXXX]` markers (C0/C1/DEL, U+061C, U+200E/U+200F,
+U+202A–U+202E, and U+2066–U+2069). This is a *display-only* transformation:
+source keys, selected counts, event evidence, exports, consent and copyable
+server request text remain unchanged.
+
+The source preview still displays at most eight categories, with 96 Unicode
+code points per visible label and an explicit truncation marker. Redacted focus
+app/title examples now use the same 96-codepoint display bound and identify
+truncation as a **sample label** limit. The UI does not claim that a shortened
+or control-marked label is the complete original, nor that it is a verified
+provider identity. Ordinary right-to-left script, emoji and HTML-like text
+remain visible (HTML-like text stays escaped). This does not establish
+complete Unicode confusable detection or sanitization of downloaded files;
+users must inspect files before sharing them.
+
+Synthetic mock-DOM regression cases cover a bidi override, directional
+isolate, embedded newline, C1 control, bounded focus example, ordinary Arabic
+text and HTML-like text. They do not replace native Node, Chromium,
+accessibility, cross-platform, scale or real consenting-user acceptance.
