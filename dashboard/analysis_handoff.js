@@ -34,9 +34,22 @@
     return Number.isFinite(seconds)
       ? [seconds, fraction ? fraction[1].replace(/0+$/, '') : ''] : null;
   }
-  function sameExactInstant(a, b) {
+  // Date.parse cannot order observations within the same millisecond.
+  // Compare exact UTC whole seconds, then fractional digits with implicit
+  // trailing zeros. Invalid instants return NaN so no ordering can pass.
+  function compareExactInstants(a, b) {
     const left = exactInstantParts(a), right = exactInstantParts(b);
-    return !!left && !!right && left[0] === right[0] && left[1] === right[1];
+    if (!left || !right) return NaN;
+    if (left[0] !== right[0]) return left[0] < right[0] ? -1 : 1;
+    const x = left[1], y = right[1];
+    for (let i = 0; i < Math.max(x.length, y.length); i++) {
+      const digitX = x.charAt(i) || '0', digitY = y.charAt(i) || '0';
+      if (digitX !== digitY) return digitX < digitY ? -1 : 1;
+    }
+    return 0;
+  }
+  function sameExactInstant(a, b) {
+    return compareExactInstants(a, b) === 0;
   }
   function selection() {
     if (period === 'current' || period === 'all') return {scope: period};
@@ -91,17 +104,17 @@
       (bounds.scope === 'current' && windowEnd === null &&
         (windowStart === null || Number.isFinite(windowStart))) ||
       (bounds.scope === 'range' && Number.isFinite(windowStart) &&
-        Number.isFinite(windowEnd) && windowStart < windowEnd));
+        Number.isFinite(windowEnd) && compareExactInstants(bounds.since, bounds.until) < 0));
     const first = d?.first_observed_at, last = d?.last_observed_at;
     const observed = (d?.canonical_rows === 0 && first == null && last == null) ||
       (d?.canonical_rows > 0 && instant(first) && instant(last) &&
-        Date.parse(first) <= Date.parse(last));
+        compareExactInstants(first, last) <= 0);
     // Observed events must belong to the selected window; the range end is
     // exclusive. Compare instants, not textual timezone representations.
     const observedWithinWindow = (first == null && last == null) ||
       (instant(first) && instant(last) &&
-        (windowStart === null || Date.parse(first) >= windowStart) &&
-        (windowEnd === null || Date.parse(last) < windowEnd));
+        (windowStart === null || compareExactInstants(first, bounds.since) >= 0) &&
+        (windowEnd === null || compareExactInstants(last, bounds.until) < 0));
     const chunks = d?.analysis_plan == null ||
       (object(d.analysis_plan) &&
         // The server uses a positive bounded page size and reports whether
@@ -215,8 +228,8 @@
         (sample.window_title == null || typeof sample.window_title === 'string') &&
         (sample.observed_at == null ||
           (instant(sample.observed_at) && instant(first) && instant(last) &&
-           Date.parse(first) <= Date.parse(sample.observed_at) &&
-           Date.parse(sample.observed_at) <= Date.parse(last))));
+           compareExactInstants(first, sample.observed_at) <= 0 &&
+           compareExactInstants(sample.observed_at, last) <= 0)));
     // The modal must not promise text exclusion when a supplied preview
     // explicitly contradicts the local export's privacy contract. Legacy
     // previews without this optional attestation remain usable, but uncertain.
@@ -241,8 +254,8 @@
         typeof work.recorder_liveness_verified === 'boolean') &&
       (lastWork == null || (d?.canonical_rows > healthRows &&
         instant(lastWork) && instant(first) && instant(last) &&
-        Date.parse(first) <= Date.parse(lastWork) &&
-        Date.parse(lastWork) <= Date.parse(last))));
+        compareExactInstants(first, lastWork) <= 0 &&
+        compareExactInstants(lastWork, last) <= 0)));
     if (!object(d) || !conserved || typeof d.request_text !== 'string' || !d.request_text.trim() ||
         !count(d.canonical_rows) || !count(d.retained_rows) ||
         !counts(d.event_types) || !counts(d.sources) ||
