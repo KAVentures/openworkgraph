@@ -115,6 +115,48 @@ def test_conformance_fitness_uses_the_selected_reference_path_length(monkeypatch
     ]
 
 
+
+def test_conformance_activity_diagnostics_count_cases_not_repeated_moves(monkeypatch):
+    """Synthetic repeated moves must not inflate case prevalence beyond 100%."""
+    assert analytics._align(["A"], ["A", "A", "A"])[1].count(("model", "A")) == 2
+    assert analytics._align(["B", "B", "B"], ["B"])[1].count(("log", "B")) == 2
+
+    class TwoVariants:
+        def execute(self, sql):
+            self.is_count = "count(DISTINCT case_id)" in sql
+            return self
+
+        def fetchone(self):
+            assert self.is_count
+            return (5,)
+
+        def fetchall(self):
+            assert not self.is_count
+            return [("B\x1fB\x1fB", 3, 2), ("A", 2, 2)]
+
+    monkeypatch.setattr(workspace, "_query", lambda log_id, case_type, fn: fn(TwoVariants()))
+    model = {"format": "openworkgraph.reference-model.v1",
+             "paths": [["A", "A", "A"], ["B"]]}
+    result = analytics.conformance("synthetic-repeated-moves", model)
+
+    assert result["cases"] == result["aligned_cases"] == 5
+    assert result["fitness"] == 0.5
+    assert result["fitting_cases"] == 0
+    assert result["skipped_model_activities"] == [
+        {"activity": "A", "cases": 2, "share_of_aligned_cases": 0.4}
+    ]
+    assert result["extra_observed_activities"] == [
+        {"activity": "B", "cases": 3, "share_of_aligned_cases": 0.6}
+    ]
+    assert result["deviating_variants"][0]["cases"] == 3
+    assert result["deviating_variants"][0]["deviations"] == [
+        {"move": "extra", "activity": "B"}, {"move": "extra", "activity": "B"}
+    ]
+    assert result["deviating_variants"][1]["deviations"] == [
+        {"move": "skipped", "activity": "A"}, {"move": "skipped", "activity": "A"}
+    ]
+
+
 def test_conformance_variant_cap_discloses_omitted_cases_separately_from_long_traces():
     """Fitness only covers aligned cases; the two omission reasons partition the rest."""
     model = {"format": "openworkgraph.reference-model.v1", "paths": [["C"]]}
