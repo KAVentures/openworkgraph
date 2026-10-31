@@ -2564,3 +2564,50 @@ test('redacted example omissions never erase counted focus evidence', async t =>
     assert.equal(h.downloads, 0);
   });
 });
+
+
+test('Unicode line separators and invisible format controls cannot spoof source-count rows', async t => {
+  for (const [name, source, expected] of [
+    ['line separator', 'desktop\u2028Salesforce: 999', 'desktop[U+2028]Salesforce[U+003A] 999: 2'],
+    ['paragraph separator', 'desktop\u2029other: 999', 'desktop[U+2029]other[U+003A] 999: 2'],
+    ['invisible mathematical controls', 'desk\u2061top\u2064', 'desk[U+2061]top[U+2064]: 2'],
+    ['deprecated directional controls', 'desk\u206Atop\u206F', 'desk[U+206A]top[U+206F]: 2'],
+    ['ordinary source remains unchanged', 'desktop', 'desktop: 2']
+  ]) await t.test(name, async () => {
+    const h = await openSourceSummaryPreview({[source]: 2}, 2);
+    assert.equal(h.modals, 1);
+    assert.ok(h.modalHtml.includes(expected));
+    if (source !== 'desktop') {
+      assert.ok(!h.modalHtml.includes(source));
+      assert.doesNotMatch(h.modalHtml, /[\u2028\u2029\u2061-\u2064\u206a-\u206f]/i);
+    }
+    assert.match(h.modalHtml, /labels are not verified identities/);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-source-breakdown']);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+  });
+});
+
+test('Unicode separators and invisible formatting in redacted focus samples stay visible as markers', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const opening = h.bars[0].controls.button.onclick();
+  await settle();
+  h.reply(h.reads[1], {...h.preview('range', 'sample-unicode-separators'),
+    redacted_examples: [{
+      app: 'Editor\u2028fake\u2062',
+      window_title: 'Case\u2029hidden\u206B'
+    }]
+  });
+  await opening;
+  assert.equal(h.modals, 1);
+  assert.match(h.modalHtml, /Editor\[U\+2028\]fake\[U\+2062\]/);
+  assert.match(h.modalHtml, /Case\[U\+2029\]hidden\[U\+206B\]/);
+  assert.doesNotMatch(h.modalHtml, /[\u2028\u2029\u2061-\u2064\u206a-\u206f]/i);
+  assert.match(h.modalHtml, /1 redacted context example\(s\) supplied; 2 selected focus-span events counted/);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-sample-unicode-separators']);
+  assert.equal(h.tickets.length, 0);
+  assert.equal(h.downloads, 0);
+});
