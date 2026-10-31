@@ -656,3 +656,56 @@ def test_ascii_case_insensitive_core_prefix_and_unicode_selector_literal_still_w
     assert report["status"] == "requires_live_validation"
     assert "unsupported_attribute" not in codes(report)
     assert "Straße" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("client", ["okta", "other"])
+def test_non_entra_group_displayname_without_unique_policy_warns_not_blocks(client):
+    report = assess(mapping(
+        client=client,
+        groups={"enabled": True, "match_attributes": ["displayName"]},
+    ))
+    assert report["status"] == "requires_live_validation"
+    assert "group_displayname_collision_risk" in codes(report)
+    assert "entra_group_name_uniqueness" not in codes(report)
+    assert "groups_not_certified" in codes(report)
+    assert "live_validation_required" in codes(report)
+
+
+@pytest.mark.parametrize("client", ["entra", "okta", "other"])
+def test_group_displayname_policy_declaration_only_removes_collision_finding(client):
+    report = assess(mapping(
+        client=client,
+        groups={"enabled": True, "match_attributes": ["displayName"]},
+        provider_policy={
+            "allow_unversioned_user_patch": False,
+            "unique_group_names": True,
+        },
+    ))
+    assert report["status"] == "requires_live_validation"
+    assert "group_displayname_collision_risk" not in codes(report)
+    assert "entra_group_name_uniqueness" not in codes(report)
+    assert "declared_group_name_policy" in codes(report)
+    assert "groups_not_certified" in codes(report)
+    assert "live_validation_required" in codes(report)
+
+
+@pytest.mark.parametrize("client", ["entra", "okta", "other"])
+def test_group_externalid_matching_does_not_infer_displayname_collision(client):
+    report = assess(mapping(
+        client=client,
+        groups={"enabled": True, "match_attributes": ["externalId"]},
+    ))
+    assert report["status"] == "requires_live_validation"
+    assert "group_displayname_collision_risk" not in codes(report)
+    assert "entra_group_name_uniqueness" not in codes(report)
+    assert "groups_not_certified" in codes(report)
+
+
+def test_entra_group_displayname_still_blocks_without_unique_policy():
+    report = assess(mapping(
+        client="entra",
+        groups={"enabled": True, "match_attributes": ["displayName", "externalId"]},
+    ))
+    assert report["status"] == "blocked"
+    assert "entra_group_name_uniqueness" in codes(report)
+    assert "group_displayname_collision_risk" not in codes(report)
