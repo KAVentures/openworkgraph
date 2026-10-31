@@ -25,6 +25,7 @@ USER_CREATE = frozenset({
 })
 USER_PATCH = USER_CREATE - {"username"}
 GROUP_MATCH = frozenset({"displayname", "externalid"})
+_CORE_USER_PREFIX = "urn:ietf:params:scim:schemas:core:2.0:User:"
 
 
 # The shipped contact array is descriptive only. These are PATCH path shapes,
@@ -36,7 +37,19 @@ _CONTACT_SELECTOR = re.compile(
 )
 
 
+def _unqualified_contact_patch_path(path: str) -> str:
+    """Mirror the shipped contact parser\'s exact core User URN stripping.
+
+    Only PATCH contact paths are normalized; never reinterpret matching or
+    create declarations, or casefold a quoted selector literal.
+    """
+    if path[:len(_CORE_USER_PREFIX)].casefold() == _CORE_USER_PREFIX.casefold():
+        return path[len(_CORE_USER_PREFIX):]
+    return path
+
+
 def _supported_contact_patch_path(path: str) -> bool:
+    path = _unqualified_contact_patch_path(path)
     if path == "emails" or path in {"emails." + child for child in _CONTACT_CHILDREN}:
         return True
     match = _CONTACT_SELECTOR.fullmatch(path)
@@ -121,11 +134,14 @@ def assess(mapping: Any) -> dict:
             if value not in supported and not (path == "users.patch_attributes" and _supported_contact_patch_path(value)):
                 add("blocker", "unsupported_attribute", f"{path}[{index}]",
                     "This attribute or selector is not supported for this operation")
+    # The shipped contact PATCH parser accepts the exact core User schema URN
+    # as a prefix. Keep cautions consistent with accepted qualified paths.
+    contact_patch_paths = [_unqualified_contact_patch_path(value) for value in patch]
     if any((contact_match := _CONTACT_SELECTOR.fullmatch(value)) is not None
-           and contact_match.group(1).casefold() == "value" for value in patch):
+           and contact_match.group(1).casefold() == "value" for value in contact_patch_paths):
         add("caution", "contact_value_selector", "users.patch_attributes",
             "A contact-value selector is data-dependent and is not an identity match or verification")
-    if "emails" in create or any(value.casefold().startswith("emails") for value in patch):
+    if "emails" in create or any(value.casefold().startswith("emails") for value in contact_patch_paths):
         add("caution", "unverified_contact_metadata", "users",
             "Contact arrays are descriptive only; matching, login and adoption still use stable userName/externalId")
     if "username" not in create:
