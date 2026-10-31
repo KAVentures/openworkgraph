@@ -630,3 +630,23 @@ permission, consent, export, source receipt or agent execution behavior
 changes. These tests are not real consenting-user acceptance or evidence of
 capture completeness, business outcomes, ROI or competitor parity. Native
 Node/browser/accessibility/scale/packaging checks remain merge gates.
+
+## Empty selected evidence is not verified inactivity
+
+The period summary is also a provenance claim. When the authenticated preview
+reports zero selected canonical events, it must not say "No activity in this
+selection": an observation gap, consent choice, recorder outage or incomplete
+retention can all produce an empty selection despite actual work. If the
+backend reports other retained rows, the summary says only that this selected
+period has no recorded events and that retained evidence exists. If it reports
+zero retained rows, the summary says only that no retained events were
+reported. **Neither branch infers inactivity, a disabled/enabled recorder,
+complete capture or consent state.** The existing validated positive-event
+summary is unchanged.
+
+Two deterministic mock-DOM subtests cover zero selected events with and
+without other retained evidence. They verify both initial refresh and
+user-initiated Prepare for AI, copy-only review, disabled Download and no
+export-ticket request. These are synthetic UI contract tests, not proof of
+complete capture, real consenting-user acceptance or competitor parity.
+Native Node/browser/accessibility/scale/packaging checks remain required.
