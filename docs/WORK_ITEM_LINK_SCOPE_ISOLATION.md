@@ -418,3 +418,38 @@ The preregistered F1 >= 0.90 and contamination <= 0.05 targets remain
 unverified. No private evaluation truth, split, scoring threshold,
 provider call, model/API spend or business write changed. Native
 repository CI and review are still required before merging.
+
+
+## Tainted record claims veto their exact ephemeral token
+
+A row with a contradictory or malformed explicit record reference was already
+excluded from tab/clipboard linking. However, simply removing it could make a
+multiplexed tab appear to contain **one** valid record, so a loose observation
+was automatically attached to that record. Similarly, an apparently valid
+A-copy -> B-paste pair could still merge A and B despite a tainted third
+record claim sharing the exact clipboard token. Excluding the tainted row
+alone did not make either remaining inference safe.
+
+The linker now treats a tainted, timestamp-valid observation as a **veto**
+on the corresponding exact (organization, actor, device, session, token)
+tab or transfer group. It never uses the tainted observation as a join
+endpoint, and it does not convert the tainted record into a loose event.
+Independent exact-record grouping and different tokens or scopes are
+unaffected. A malformed/missing scope cannot poison a known scoped group,
+and an invalid event ID or timestamp is not admitted as an observation.
+No new public token, tenant, record label or private content is exposed.
+
+Three deterministic synthetic regression functions cover (1) a formerly
+single-record tab with a tainted competing claim, (2) an otherwise valid
+direct copy/paste pair with a tainted third claim, both in reversed input
+order, and (3) noninterference across every scope dimension and different
+token values. They preserve independent same-record joins. The veto is
+deliberately conservative and may withhold legitimate links when source
+claims are inconsistent; it is not evidence that a source record or
+clipboard action was authenticated.
+
+No preregistered truth, family split, scoring, model/API budget, source
+permissions, or business state changed. Held-out assignment F1 >= 0.90
+and contamination <= 0.05 remain **unverified**, and synthetic regression
+coverage is not a real-user pilot or real-provider acceptance. Native
+repository pytest and exact-head CI remain required before merge.
