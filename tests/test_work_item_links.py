@@ -1050,3 +1050,66 @@ def test_duplicate_id_invalid_timestamp_cannot_poison_unrelated_token():
         assert set(_items(result)) == {("e02", "e03")}
         assert result["unlinked_observation_count"] == 0
         assert result["candidate_links"] == []
+
+
+def test_single_record_tab_does_not_bridge_foreign_clipboard_record_component():
+    # The tab only names A, but its loose event was already attached to B
+    # through an independent scoped B-copy -> loose-paste transfer. Attaching
+    # the loose component to A would fabricate a cross-record A/B case.
+    events = [
+        _scoped(_event(1, A, tab="tab-bridge-a")),
+        _scoped(_event(2, B, transfer="transfer-bridge", action="copy")),
+        _scoped(_event(3, tab="tab-bridge-a", transfer="transfer-bridge", action="paste")),
+        _scoped(_event(4, A)),
+    ]
+    for ordered in (events, list(reversed(events))):
+        result = linked_work_items(ordered)
+        assert set(_items(result)) == {("e01", "e04"), ("e02", "e03")}
+        assert _items(result)[("e01", "e04")]["link_basis"] == {"same_record": 1}
+        assert _items(result)[("e02", "e03")]["link_basis"] == {"clipboard_transfer": 1}
+        assert result["ambiguous_tab_component_attachments_suppressed"] == 1
+        assert result["link_contract"]["competing_tab_component_records_are_unmerged"] is True
+        assert result["candidate_links"] == []
+        for private_token in ("tab-bridge-a", "transfer-bridge", "tenant-a", "actor-a"):
+            assert private_token not in json.dumps(result)
+
+
+def test_two_single_record_tabs_cannot_bridge_through_shared_loose_transfer_component():
+    # A generic clipboard token connects two loose observations, each in a
+    # different single-record tab. Neither tab can claim the whole component:
+    # accepting both would merge A and B, and accepting the first would make
+    # tab iteration order choose an arbitrary owner.
+    events = [
+        _scoped(_event(1, A, tab="tab-for-a")),
+        _scoped(_event(2, B, tab="tab-for-b")),
+        _scoped(_event(3, tab="tab-for-a", transfer="shared-loose-token")),
+        _scoped(_event(4, tab="tab-for-b", transfer="shared-loose-token")),
+        _scoped(_event(5, A)),
+        _scoped(_event(6, B)),
+    ]
+    for ordered in (events, list(reversed(events))):
+        result = linked_work_items(ordered)
+        assert set(_items(result)) == {("e01", "e05"), ("e02", "e06"), ("e03", "e04")}
+        assert _items(result)[("e03", "e04")]["link_basis"] == {"clipboard_transfer": 1}
+        assert result["ambiguous_tab_component_attachments_suppressed"] == 2
+        assert result["unlinked_observation_count"] == 0
+        assert result["candidate_links"] == []
+
+
+def test_uncontested_single_record_tab_still_attaches_loose_transfer_component():
+    # A loose clipboard component targeted by exactly one single-record tab
+    # is still attachable; an independent tab for B is unaffected.
+    events = [
+        _scoped(_event(1, A, tab="tab-for-a")),
+        _scoped(_event(2, tab="tab-for-a", transfer="generic-loose-token")),
+        _scoped(_event(3, transfer="generic-loose-token")),
+        _scoped(_event(4, A)),
+        _scoped(_event(5, B, tab="tab-for-b")),
+        _scoped(_event(6, tab="tab-for-b")),
+    ]
+    for ordered in (events, list(reversed(events))):
+        result = linked_work_items(ordered)
+        assert set(_items(result)) == {("e01", "e02", "e03", "e04"), ("e05", "e06")}
+        assert result["ambiguous_tab_component_attachments_suppressed"] == 0
+        assert result["candidate_links"] == []
+        assert result["link_contract"]["time_alone_never_links"] is True
