@@ -60,6 +60,12 @@ def source_operation_receipt(
     if (graph.get("resource_ref") != resource_ref or
         graph.get("source_rows_scoped_to_exact_record") is not True):
         return _unknown(resource_ref, expected_operation, "record_reference_scope_conflict")
+    # A cached graph for a broader or different retained-history window
+    # cannot attest the caller's currently permitted selection. The normal
+    # record_graph echoes these exact arguments, including None boundaries.
+    # Do not echo an unexpected window: it may contain sensitive context.
+    if graph.get("source_window") != {"since": since, "until": until}:
+        return _unknown(resource_ref, expected_operation, "source_window_scope_conflict")
     if graph.get("record_observed") is not True:
         return _unknown(resource_ref, expected_operation, "record_not_observed_in_permitted_window")
     # These are positive evidence assertions, not merely truthy metadata.
