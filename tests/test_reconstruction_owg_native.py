@@ -91,3 +91,102 @@ def test_deleted_evidence_never_reappears_in_lanes():
         published = {event_id for lane in prediction["workflows"] for event_id in lane["event_ids"]}
         assert not published & deleted, case["case_id"]
         assert not deleted & set(prediction["unassigned_event_ids"]), case["case_id"]
+
+
+# Adapter-integrity checks: the production record-lane API intentionally
+# returns no event IDs. These tests exercise the evaluator's private projection
+# without changing the preregistered corpus, scorer, holdout or release floors.
+def _lane_projection_event(event_id, ref, observed_at, *, provider="github"):
+    return {
+        "event_id": event_id,
+        "observed_at": observed_at,
+        "event_type": "browser_click",
+        "organization_id": "tenant-a",
+        "metadata": {"resource_reference": {
+            "resource_ref": ref,
+            "provider": provider,
+            "resource_kind": "issue",
+            "host": "github.com",
+        }},
+    }
+
+
+def _lane_projection_case(source, presented=None):
+    return {
+        "case_id": "synthetic-lane-projection",
+        "source_events": source,
+        "presented_evidence": source if presented is None else presented,
+    }
+
+
+def test_lane_projection_excludes_invalid_timestamp_and_unpresented_source_rows():
+    ref = "owg:r:" + "a" * 32
+    valid_1 = _lane_projection_event("valid1", ref, "2026-10-20T10:00:00Z")
+    invalid = _lane_projection_event("badtime", ref, "not-a-timestamp")
+    valid_2 = _lane_projection_event("valid2", ref, "2026-10-20T10:01:00Z")
+    source_only = _lane_projection_event("hidden", ref, "2026-10-20T10:02:00Z")
+    result = predict_record_lanes(_lane_projection_case(
+        [valid_1, invalid, valid_2, source_only],
+        [valid_1, invalid, valid_2],
+    ))
+    assert [lane["event_ids"] for lane in result["workflows"]] == [["valid1", "valid2"]]
+    assert result["unassigned_event_ids"] == ["badtime"]
+    assert "hidden" not in str(result)
+
+
+def test_lane_projection_uses_first_admitted_duplicate_not_earliest_duplicate():
+    ref = "owg:r:" + "a" * 32
+    first = _lane_projection_event("dup", ref, "2026-10-20T10:02:00Z")
+    other = _lane_projection_event("other", ref, "2026-10-20T10:01:00Z")
+    conflicting_later_row = _lane_projection_event("dup", ref, "2026-10-20T10:00:00Z")
+    for source in ([first, other, conflicting_later_row],
+                   [first, conflicting_later_row, other]):
+        result = predict_record_lanes(_lane_projection_case(source))
+        assert [lane["ordered_event_ids"] for lane in result["workflows"]] == [
+            ["other", "dup"]
+        ]
+        assert result["unassigned_event_ids"] == []
+
+
+def test_lane_projection_withholds_reused_event_id_across_distinct_source_records():
+    a, b = "owg:r:" + "a" * 32, "owg:r:" + "b" * 32
+    source = [
+        _lane_projection_event("reused", a, "2026-10-20T10:00:00Z"),
+        _lane_projection_event("a2", a, "2026-10-20T10:02:00Z"),
+        _lane_projection_event("reused", b, "2026-10-20T10:01:00Z"),
+        _lane_projection_event("b2", b, "2026-10-20T10:03:00Z"),
+    ]
+    for rows in (source, list(reversed(source))):
+        result = predict_record_lanes(_lane_projection_case(rows))
+        assert {tuple(lane["event_ids"]) for lane in result["workflows"]} == {
+            ("a2",), ("b2",)
+        }
+        assert result["unassigned_event_ids"].count("reused") == 2
+        assert sum("reused" in lane["event_ids"] for lane in result["workflows"]) == 0
+
+
+def test_lane_projection_refuses_coerced_nonstring_event_id_but_preserves_valid_rows():
+    ref = "owg:r:" + "a" * 32
+    source = [
+        _lane_projection_event(17, ref, "2026-10-20T10:00:00Z"),
+        _lane_projection_event("valid1", ref, "2026-10-20T10:01:00Z"),
+        _lane_projection_event("valid2", ref, "2026-10-20T10:02:00Z"),
+    ]
+    result = predict_record_lanes(_lane_projection_case(source))
+    assert [lane["event_ids"] for lane in result["workflows"]] == [["valid1", "valid2"]]
+    assert result["unassigned_event_ids"] == ["17"]
+
+
+def test_lane_projection_preserves_offset_order_and_shipped_identity_conflict_veto():
+    ref = "owg:r:" + "a" * 32
+    first = _lane_projection_event("first", ref, "2026-10-20T11:00:00+01:00")
+    second = _lane_projection_event("second", ref, "2026-10-20T10:01:00Z")
+    result = predict_record_lanes(_lane_projection_case([second, first]))
+    assert [lane["ordered_event_ids"] for lane in result["workflows"]] == [
+        ["first", "second"]
+    ]
+    conflicting = _lane_projection_event("other-provider", ref,
+                                          "2026-10-20T10:02:00Z", provider="jira")
+    vetoed = predict_record_lanes(_lane_projection_case([first, second, conflicting]))
+    assert vetoed["workflows"] == []
+    assert set(vetoed["unassigned_event_ids"]) == {"first", "second", "other-provider"}
