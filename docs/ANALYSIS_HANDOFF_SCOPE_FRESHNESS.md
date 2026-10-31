@@ -969,3 +969,30 @@ synthetic Node mock-DOM regression covers UTC, offset-equivalent, absent and
 null sample timestamps, confirms no ticket/download on Copy, and preserves
 the request-only clipboard contract. It is not a real-browser accessibility
 audit, a live-provider validation, or a consenting-customer pilot.
+
+
+## Exact fractional-second scope identity (Worker B, 2026-10-31)
+
+The browser previously compared the requested period with the preview's echoed
+bounds and export-ticket URL using `Date.parse` equality. JavaScript
+`Date.parse` keeps only millisecond precision: a returned
+`2026-10-31T00:00:00.000001Z` bound can compare equal to the requested
+`2026-10-31T00:00:00.000Z`. That is not an exact period match, and a
+ticket response must not silently widen or narrow the user's chosen evidence.
+
+The local handoff now compares **the exact UTC whole second and normalized
+decimal fractional second**, after strict calendar/clock validation. This
+accepts equivalent representations (`Z` versus `+00:00`, offset-aware
+representations of the same instant, `.000` versus `.000000`) while
+rejecting a one-microsecond difference. The comparison applies to preview
+scope echoes, stale-selection checks and export-ticket URL bounds. It does
+not relax server-side authenticated ticket authorization, change evidence
+rows or export content, or add any provider, AI, upload or write capability.
+
+Deterministic synthetic mock-DOM regressions cover one-microsecond changes
+to either preview boundary, a shifted ticket bound that must not download,
+and an exact six-digit fractional/UTC-offset ticket that remains downloadable
+after explicit click. These tests are not a live provider acceptance, a
+real consenting-user pilot, a complete audit of every timestamp in the
+package, or a substitute for exact-head Node/Chromium/accessibility/scale/
+packaging CI. Coordination: [#326 claim 6549753527](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6549753527).
