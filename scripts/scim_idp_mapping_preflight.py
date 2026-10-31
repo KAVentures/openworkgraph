@@ -224,9 +224,16 @@ def assess(mapping: Any) -> dict:
         if not group_match:
             add("blocker", "missing_group_match", "groups.match_attributes",
                 "Enabled Groups require an explicit matching attribute")
-        if root["client"] == "entra" and "displayname" in group_match and not policy.get("unique_group_names", False):
-            add("blocker", "entra_group_name_uniqueness", "groups.match_attributes",
-                "Declare and verify the provider's unique Group name policy before Entra displayName matching")
+        if "displayname" in group_match and not policy.get("unique_group_names", False):
+            if root["client"] == "entra":
+                add("blocker", "entra_group_name_uniqueness", "groups.match_attributes",
+                    "Declare and verify the provider's unique Group name policy before Entra displayName matching")
+            else:
+                # Not a general SCIM requirement: other clients may match by
+                # exact name, but the declaration cannot rule out collisions.
+                # Warn rather than claim an unverified policy or block rollout.
+                add("caution", "group_displayname_collision_risk", "groups.match_attributes",
+                    "Group displayName matching may be ambiguous without a verified provider-scoped uniqueness policy")
         if policy.get("unique_group_names", False):
             add("caution", "declared_group_name_policy", "provider_policy.unique_group_names",
                 "This declaration does not enable or verify the server policy; check current provider revision and worker versions")
