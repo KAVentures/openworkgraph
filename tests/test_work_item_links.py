@@ -736,3 +736,57 @@ def test_explicit_clipboard_equal_timestamp_does_not_infer_direction():
     result = linked_work_items([copy_event, paste_event])
     assert result["items"] == []
     assert result["inconsistent_clipboard_transfer_direction_groups"] == 1
+
+
+def test_unreferenced_direction_pair_cannot_attach_copy_only_second_record():
+    # A copy -> loose paste is a genuine directional pair, but it does not
+    # prove that an unrelated B copy belongs to the same business case.
+    # All rows share one exact capture scope and an opaque transfer token.
+    for events in (
+        [
+            _scoped(_event(1, A, transfer="loose-bridge", action="copy")),
+            _scoped(_event(2, transfer="loose-bridge", action="paste")),
+            _scoped(_event(3, B, transfer="loose-bridge", action="copy")),
+        ],
+        [
+            _scoped(_event(1, transfer="loose-bridge", action="copy")),
+            _scoped(_event(2, A, transfer="loose-bridge", action="paste")),
+            _scoped(_event(3, B, transfer="loose-bridge", action="copy")),
+        ],
+    ):
+        for ordered in (events, list(reversed(events))):
+            result = linked_work_items(ordered)
+            assert result["items"] == []
+            assert result["candidate_links"] == []
+            assert result["unlinked_observation_count"] == 3
+            assert result["inconsistent_clipboard_transfer_direction_groups"] == 1
+            assert "loose-bridge" not in json.dumps(result)
+
+
+def test_direct_cross_record_pair_remains_valid_with_loose_observation():
+    # A real A copy -> B paste still supports a two-record join; an additional
+    # unreferenced row does not erase independently observed direction.
+    events = [
+        _scoped(_event(1, A, transfer="direct-pair", action="copy")),
+        _scoped(_event(2, B, transfer="direct-pair", action="paste")),
+        _scoped(_event(3, transfer="direct-pair", action="paste")),
+    ]
+    for ordered in (events, list(reversed(events))):
+        result = linked_work_items(ordered)
+        assert set(_items(result)) == {("e01", "e02", "e03")}
+        assert _items(result)[("e01", "e02", "e03")]["cross_record_join"] is True
+        assert result["inconsistent_clipboard_transfer_direction_groups"] == 0
+
+
+def test_one_record_to_unreferenced_paste_keeps_legacy_directional_link():
+    # Without a competing second record, explicit A copy -> loose paste
+    # retains its previous observed-transfer membership.
+    events = [
+        _scoped(_event(1, A, transfer="one-record", action="copy")),
+        _scoped(_event(2, transfer="one-record", action="paste")),
+    ]
+    for ordered in (events, list(reversed(events))):
+        result = linked_work_items(ordered)
+        assert set(_items(result)) == {("e01", "e02")}
+        assert _items(result)[("e01", "e02")]["link_basis"] == {"clipboard_transfer": 1}
+        assert result["inconsistent_clipboard_transfer_direction_groups"] == 0
