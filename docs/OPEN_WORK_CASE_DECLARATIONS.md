@@ -481,3 +481,35 @@ known ledger pathname and SQLite sidecars, not arbitrary unknown hard-link
 aliases elsewhere. Private-directory permissions and trusted local callers
 remain necessary; this is not malicious-host protection, a source grant,
 independent outcome verification or a customer acceptance result.
+
+
+## Pre-connect SQLite sidecar admission (synthetic)
+
+SQLite can inspect a rollback journal or WAL/SHM sidecar while opening the
+private declaration database, **before** the subsequent journal-mode and
+schema checks run. Checking only the main `.sqlite3` path therefore does not
+establish safe local storage admission. The internal ledger now refuses
+preexisting `-wal` and `-shm` sidecars before `sqlite3.connect`, since this
+ledger supports **DELETE** journal mode only. An existing `-journal` rollback
+file may be needed for ordinary in-progress DELETE-mode writes or recovery;
+it is admitted only if it is a regular, non-symlink, single-hard-link file,
+private on POSIX, and at most **4 MiB** (twice the 2 MiB main-file bound to
+allow rollback page overhead). The ledger neither repairs nor silently
+converts rejected sidecars. Explicit review/source/retention clear continues
+to unlink the main database and known regular or symlink sidecar paths
+without following symlinks. An unexpected sidecar **directory**, including a
+non-empty one, is not traversed or deleted, but cannot prevent deletion of
+the human review or removal of the main ledger; future admission remains
+blocked until the foreign directory is removed.
+
+Seven synthetic rejection variants cover journal symlinks, hard links,
+directories, broad POSIX permissions, oversized rollback journals, and
+WAL/SHM sidecars; the regression uses an SQLite-open tripwire to require
+rejection **before** any SQLite access. An additional actual-SQLite
+compatibility test holds a normal DELETE-mode write transaction with its
+private rollback journal present while a second reader retrieves the last
+committed declaration. These are filesystem/SQLite contract tests, **not**
+proof against a malicious local process racing path checks, tampering with
+a valid-looking journal, or retaining open handles after revocation.
+The file checks are not an atomic cross-process fence; real provider,
+tenant and customer-outcome validation remain outstanding.
