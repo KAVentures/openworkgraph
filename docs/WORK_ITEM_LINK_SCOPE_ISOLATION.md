@@ -121,3 +121,30 @@ regressions cover malformed event IDs, malformed app labels and positive
 literal-string compatibility. They are not held-out performance evidence:
 preregistered F1 >= 0.90 and contamination <= 0.05 remain unverified, and no
 private evaluation truth, split or scoring threshold was changed.
+
+
+## Literal record-source and organization identity
+
+Exact-record linking also needs type-safe *source* identity. The shared
+record-lane parser supports legacy values by converting provider, kind, host
+and organization fields to strings. In this multi-signal linker, however,
+a non-string value such as boolean `True` or integer `7` is not evidence
+that the provider, host or tenant was literally named `"true"` or `"7"`.
+Such conversion could merge unrelated records sharing an opaque reference.
+
+Before invoking the existing normalized-record identity parser, the linker
+now requires literal string `resource_ref`, `provider` and
+`resource_kind` values. Optional `host` and `organization_id` may be
+absent or null for legacy observations, but **when supplied as values** they
+must be strings. A malformed explicit record claim is tainted: its opaque
+reference group is suppressed, and it cannot be reattached through a tab,
+clipboard-transfer ID or weak app-continuity candidate. This is conservative
+withholding, not proof that any source is genuine. The shared record-lane
+module, REST/MCP contracts and source-provider permissions are unchanged.
+
+Synthetic regressions cover boolean provider/kind, integer host/organization,
+a single malformed claim alongside valid claims and shared weak signals,
+valid literal strings including `"true"` and `"7"`, and missing optional
+legacy host/organization. No hidden truth, model, real-provider or business
+write is involved. The preregistered F1 and contamination targets remain
+unverified until an independent held-out run.
