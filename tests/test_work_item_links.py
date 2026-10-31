@@ -1,6 +1,7 @@
 """Multi-signal work-item links with explicit uncertainty (roadmap #326 A1)."""
 from __future__ import annotations
 
+import copy
 import json
 
 from evals.reconstruction.fixtures import load_cases
@@ -612,3 +613,54 @@ def test_same_token_in_other_capture_scope_is_not_a_third_record():
     assert set(_items(result)) == {("e01", "e02")}
     assert result["unlinked_observation_count"] == 1
     assert result["ambiguous_clipboard_transfer_groups"] == 0
+
+
+def test_duplicate_event_id_rejects_type_coerced_nested_payload_claims():
+    # Python dict equality equates bool/int and int/float values, even deep
+    # inside metadata. Such conflicting observation claims cannot be
+    # resolved by first-row-wins dedupe or linked to another record event.
+    for left, right in ((True, 1), (False, 0), (1, 1.0), (0, 0.0)):
+        first = _scoped(_event(1, A, tab="shared-tab", transfer="shared-transfer"))
+        duplicate = copy.deepcopy(first)
+        first["metadata"]["target"]["flags"] = [{"observed": left}]
+        duplicate["metadata"]["target"]["flags"] = [{"observed": right}]
+        assert first == duplicate  # Documents the unsafe Python equality.
+        independent = _scoped(_event(2, A, tab="shared-tab", transfer="shared-transfer"))
+        for order in ((first, duplicate), (duplicate, first)):
+            result = linked_work_items([*order, independent])
+            assert result["items"] == [], (left, right)
+            assert result["candidate_links"] == [], (left, right)
+            assert result["unlinked_observation_count"] == 1, (left, right)
+
+
+def test_exact_nested_duplicate_payload_remains_idempotent_regardless_of_key_order():
+    first = _scoped(_event(1, A))
+    first["metadata"]["target"]["flags"] = [{"observed": True}, {"count": 1.0}]
+    duplicate = copy.deepcopy(first)
+    duplicate["metadata"] = dict(reversed(list(duplicate["metadata"].items())))
+    independent = _scoped(_event(2, A))
+    baseline = linked_work_items([first, independent])
+    assert set(_items(baseline)) == {("e01", "e02")}
+    assert linked_work_items([first, duplicate, independent]) == baseline
+    assert linked_work_items([duplicate, first, independent]) == baseline
+
+
+def test_duplicate_payload_comparison_is_bounded_and_rejects_non_json_values():
+    # Duplicate equality must not traverse arbitrarily large/cyclic metadata
+    # or grant first-row authority to an unsupported Python object.
+    for payload in (list(range(10_050)), {"non_json_set": {1, 2}}):
+        first = _scoped(_event(1, A))
+        first["metadata"]["target"]["payload"] = payload
+        duplicate = copy.deepcopy(first)
+        independent = _scoped(_event(2, A))
+        assert first == duplicate
+        result = linked_work_items([first, duplicate, independent])
+        assert result["items"] == []
+        assert result["unlinked_observation_count"] == 1
+
+    first = _scoped(_event(1, A))
+    first["metadata"]["self_reference"] = first["metadata"]
+    duplicate = copy.deepcopy(first)
+    result = linked_work_items([first, duplicate, _scoped(_event(2, A))])
+    assert result["items"] == []
+    assert result["unlinked_observation_count"] == 1
