@@ -895,3 +895,65 @@ def test_legacy_nondirectional_two_record_token_keeps_prior_membership():
         result = linked_work_items(ordered)
         assert set(_items(result)) == {("e01", "e02", "e03")}
         assert _items(result)[("e01", "e02", "e03")]["link_basis"] == {"clipboard_transfer": 2}
+
+
+def test_tainted_record_in_scoped_tab_vetoes_loose_single_record_attachment():
+    # An invalid explicit record claim in the same tab is evidence of
+    # ambiguity, not an invisible row that makes the tab look single-record.
+    events = [
+        _scoped(_event(1, A, tab="shared-tainted-tab")),
+        _scoped(_event(2, tab="shared-tainted-tab")),
+        _scoped(_event(3, C, tab="shared-tainted-tab", provider="INVALID PROVIDER")),
+        _scoped(_event(4, A, tab="shared-tainted-tab")),
+    ]
+    for ordered in (events, list(reversed(events))):
+        result = linked_work_items(ordered)
+        assert set(_items(result)) == {("e01", "e04")}
+        assert _items(result)[("e01", "e04")]["link_basis"] == {"same_record": 1}
+        assert result["unlinked_observation_count"] == 2
+        assert result["candidate_links"] == []
+        assert "shared-tainted-tab" not in json.dumps(result)
+
+
+def test_tainted_record_in_scoped_transfer_vetoes_otherwise_valid_pair():
+    # A valid A-copy -> B-paste does not overcome a contradictory explicit
+    # record claim sharing its exact scoped clipboard token.
+    events = [
+        _scoped(_event(1, A, transfer="shared-tainted-transfer", action="copy")),
+        _scoped(_event(2, B, transfer="shared-tainted-transfer", action="paste")),
+        _scoped(_event(3, C, transfer="shared-tainted-transfer",
+                       provider="INVALID PROVIDER", action="browser_click")),
+        _scoped(_event(4, A)),
+    ]
+    for ordered in (events, list(reversed(events))):
+        result = linked_work_items(ordered)
+        assert set(_items(result)) == {("e01", "e04")}
+        assert _items(result)[("e01", "e04")]["link_basis"] == {"same_record": 1}
+        assert result["unlinked_observation_count"] == 2
+        assert result["candidate_links"] == []
+        assert "shared-tainted-transfer" not in json.dumps(result)
+
+
+def test_tainted_ephemeral_token_veto_is_exactly_scoped_and_token_local():
+    # Reused token values in a different tenant/session, or an unrelated
+    # token in the same scope, must not suppress independently valid links.
+    for signal in ("tab", "transfer"):
+        for dimension in ("organization_id", "actor_id", "device_id", "session_id"):
+            options = {signal: "reused-token"}
+            first = _scoped(_event(1, A, action="copy", **options))
+            second = _scoped(_event(2, B if signal == "transfer" else None,
+                                    action="paste", **options))
+            tainted = _scoped(_event(3, C, provider="INVALID PROVIDER", **options))
+            tainted[dimension] = "other-scope"
+            result = linked_work_items([first, second, tainted])
+            assert set(_items(result)) == {("e01", "e02")}, (signal, dimension)
+            assert result["unlinked_observation_count"] == 1
+
+        first = _scoped(_event(1, A, action="copy", **{signal: "good-token"}))
+        second = _scoped(_event(2, B if signal == "transfer" else None,
+                                action="paste", **{signal: "good-token"}))
+        tainted = _scoped(_event(3, C, provider="INVALID PROVIDER",
+                                 **{signal: "other-token"}))
+        result = linked_work_items([first, second, tainted])
+        assert set(_items(result)) == {("e01", "e02")}, signal
+        assert result["unlinked_observation_count"] == 1
