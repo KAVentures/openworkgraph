@@ -135,6 +135,17 @@ function harness(auth = Promise.resolve(true), clipboardWrite = null, clockDate 
     reply, preview};
 }
 
+function assertCopyEvidenceWarning(copied, base, healthOnly = false) {
+  assert.equal(copied.length, 1);
+  assert.ok(copied[0].startsWith(base + '\n\nEvidence limitation:'));
+  assert.match(copied[0], healthOnly
+    ? /only capture-health or gap records, not ordinary work events/
+    : /No recorded events in this local preview's selected period/);
+  assert.match(copied[0], /Do not infer a workflow, business completion, time savings, or ROI/);
+  assert.match(copied[0], /otherwise report insufficient evidence/);
+}
+
+
 test('superseded prepare never opens a modal using a newer period response', async () => {
   const h = harness();
   await settle();
@@ -670,7 +681,7 @@ test('valid empty evidence and absent optional plan retain safe copy-only handof
   await h.modal['#analysisDownload'].onclick();
   assert.equal(h.tickets.length, 0);
   await h.modal['#analysisCopy'].onclick();
-  assert.deepEqual(h.copied, ['request-empty']);
+  assertCopyEvidenceWarning(h.copied, 'request-empty');
 });
 
 test('nonzero observed evidence requires real chronological ISO timestamps', async t => {
@@ -1225,7 +1236,9 @@ test('valid redacted focus examples preserve offset and legacy compatibility', a
     h.reply(h.reads[1], d); await open;
     assert.equal(h.modals, 1);
     await h.modal['#analysisCopy'].onclick();
-    assert.deepEqual(h.copied, ['request-reviewed']);
+    if (name === 'health-only without focus examples')
+      assertCopyEvidenceWarning(h.copied, 'request-reviewed', true);
+    else assert.deepEqual(h.copied, ['request-reviewed']);
     assert.equal(h.tickets.length, 0);
   });
 });
@@ -1281,7 +1294,7 @@ test('health-only evidence with unknown work timestamp remains reviewable', asyn
   await open;
   assert.equal(h.modals, 1);
   await h.modal['#analysisCopy'].onclick();
-  assert.deepEqual(h.copied, ['request-health-only']);
+  assertCopyEvidenceWarning(h.copied, 'request-health-only', true);
   assert.equal(h.tickets.length, 0);
 });
 
@@ -1882,7 +1895,9 @@ test('explicit daily coverage refuses invented empty dates without breaking lega
     assert.equal(h.tickets.length, 0, name);
     if (accepted) {
       await h.modal['#analysisCopy'].onclick();
-      assert.deepEqual(h.copied, ['request-daily-coverage']);
+      if (variant.canonical_rows === 0)
+        assertCopyEvidenceWarning(h.copied, 'request-daily-coverage');
+      else assert.deepEqual(h.copied, ['request-daily-coverage']);
       assert.equal(h.modal['#analysisDownload'].disabled, variant.canonical_rows === 0);
     } else {
       assert.deepEqual(h.copied, []);
@@ -1997,7 +2012,10 @@ test('latest-work disclosure distinguishes known, missing and health-only eviden
     assert.match(h.modalHtml, /do not confirm the recorder is running/, name);
     assert.equal(h.modal['#analysisDownload'].disabled, patch.canonical_rows === 0, name);
     await h.modal['#analysisCopy'].onclick();
-    assert.deepEqual(h.copied, ['request-' + name], name);
+    if (name === 'health-only selected evidence' || name === 'zero selected events')
+      assertCopyEvidenceWarning(h.copied, 'request-' + name,
+        name === 'health-only selected evidence');
+    else assert.deepEqual(h.copied, ['request-' + name], name);
     assert.equal(h.tickets.length, 0, name);
   });
 });
@@ -2034,7 +2052,7 @@ test('zero recorded events never become a claim of inactivity or recorder consen
     assert.match(h.modalHtml, /No ordinary work events recorded in this selection; this does not establish that no work occurred/, name);
     assert.equal(h.modal['#analysisDownload'].disabled, true, name);
     await h.modal['#analysisCopy'].onclick();
-    assert.deepEqual(h.copied, ['request-' + name], name);
+    assertCopyEvidenceWarning(h.copied, 'request-' + name);
     assert.equal(h.tickets.length, 0, name);
     assert.equal(h.downloads, 0, name);
   });
