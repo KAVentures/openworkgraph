@@ -738,3 +738,21 @@ python -m pytest -q tests/test_work_item_links.py tests/test_reconstruction_owg_
 Synthetic regression coverage does not demonstrate real-tenant or held-out
 assignment F1 improvement. The target F1 >= 0.90 and contamination <= 0.05
 remain unverified pending preregistered evaluation.
+
+
+## Literal observed-source provenance
+
+The linked-item projection exposes only bounded normalized source tokens, not
+raw labels or provider payloads. The shared token normalizer can stringify a
+non-string JSON value: for example, a malformed `source: true` or
+`source: false` previously surfaced as `true` or `false` in
+`observed_steps[].source`, making a coercion look like observed provenance.
+
+The linker now accepts **literal source strings only** for this projection;
+missing, null, boolean, numeric, list and object values produce `unknown`.
+Valid literal strings retain the existing bounded lowercase token contract.
+This does not invent a source, verify a provider, remove independent record
+membership, change a link basis, or authorize an agent action. Synthetic
+regressions cover malformed and valid source claims and preserve exact-record
+linking. The preregistered held-out accuracy gates remain unverified; this is
+an evidence-integrity change, not a measured F1 improvement.
