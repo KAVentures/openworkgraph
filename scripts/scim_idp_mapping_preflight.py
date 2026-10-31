@@ -41,9 +41,10 @@ def _unqualified_contact_patch_path(path: str) -> str:
     """Mirror the shipped contact parser's exact core User URN stripping.
 
     Only PATCH contact paths are normalized; never reinterpret matching or
-    create declarations, or casefold a quoted selector literal.
+    create declarations, or casefold a quoted selector literal. Mirror the
+    shipped parser's lower(), not Unicode casefold(), for URN structure.
     """
-    if path[:len(_CORE_USER_PREFIX)].casefold() == _CORE_USER_PREFIX.casefold():
+    if path[:len(_CORE_USER_PREFIX)].lower() == _CORE_USER_PREFIX.lower():
         return path[len(_CORE_USER_PREFIX):]
     return path
 
@@ -90,8 +91,10 @@ def _attributes(value: Any, path: str, *, minimum: int, max_path: int = 128) -> 
             raise InvalidMapping(f"{path} contains an invalid path")
         # Structural names are case-insensitive. Quoted selector literals must
         # reach the JSON parser unchanged: casefolding can turn an invalid
-        # uppercase JSON escape into a valid lowercase escape.
-        folded.append(item if "[" in item else item.casefold())
+        # uppercase JSON escape into a valid lowercase escape. Match the
+        # shipped attribute parser's lower(), not Unicode casefold(), so
+        # long-s Unicode names cannot impersonate ASCII SCIM attributes.
+        folded.append(item if "[" in item else item.lower())
     if len({item.casefold() for item in folded}) != len(folded):
         raise InvalidMapping(f"{path} contains duplicate paths")
     return folded
