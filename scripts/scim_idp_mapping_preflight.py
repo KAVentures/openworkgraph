@@ -193,6 +193,13 @@ def assess(mapping: Any) -> dict:
     if "username" not in create:
         add("blocker", "missing_stable_username", "users.create_attributes",
             "User creation requires the stable work-email userName")
+    if "active" not in create:
+        # Shipped SCIM User creation starts a new roster employee active unless
+        # the actual request carries literal active=False. A declared mapping
+        # without this attribute cannot demonstrate disabled-user creation.
+        # Warn, rather than reject a separately validated provider lifecycle.
+        add("caution", "creation_active_not_declared", "users.create_attributes",
+            "Declared User create mapping omits active; OWG creates users active unless the request explicitly sends false")
     if "username" in patch:
         add("blocker", "immutable_username", "users.patch_attributes",
             "OWG does not support changing the stable userName/evidence actor")
