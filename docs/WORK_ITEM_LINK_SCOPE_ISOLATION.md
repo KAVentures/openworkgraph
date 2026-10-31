@@ -384,3 +384,37 @@ The preregistered held-out F1 >= 0.90 and contamination <= 0.05 remain
 unverified. No private holdout truth, scoring, thresholds, model/API spend,
 source privileges or business writes changed. Native repository CI and
 review are required before merging.
+
+
+## Loose observations cannot hitchhike on a direct cross-record transfer
+
+A valid exact-scoped A-copy -> B-paste proves an ordered transfer between
+**A and B**; it does **not** prove that every unreferenced event carrying
+the same opaque clipboard token belongs to that case. Previously the linker
+verified the direct pair but then unioned the **entire token group**,
+including unrelated loose `browser_click`, `copy` and `paste` rows.
+A reused token could therefore contaminate an otherwise valid A/B case.
+
+For a token with **exactly two distinct valid referenced records and any
+explicit copy/paste action**, the existing strict direct cross-record
+direction test must pass first. Only observations with those validated
+record references then receive the clipboard-transfer join. Unreferenced
+rows stay separate unless **independent evidence** supports them (for
+example, an exact-scoped tab containing only one observed record). Same
+record evidence remains intact, and input order cannot change the outcome.
+
+The restriction does **not** change the one-record-to-loose observed
+copy/paste contract or legacy all-generic transfer groups, where the
+pre-existing weaker semantics are retained for compatibility. It adds no
+time-only joins, semantic inference, source privileges, authorization,
+task-completion assertions or new public/private token fields.
+
+Synthetic regressions exercise loose generic/copy/paste rows in both
+input orders, an independently evidenced single-record tab join, repeated
+same-record observations, and all-generic legacy behavior. This is a
+conservative contamination guard, not proof of authentic clipboard
+provenance or a measured improvement in held-out reconstruction F1.
+The preregistered F1 >= 0.90 and contamination <= 0.05 targets remain
+unverified. No private evaluation truth, split, scoring threshold,
+provider call, model/API spend or business write changed. Native
+repository CI and review are still required before merging.
