@@ -193,3 +193,25 @@ revocation, audit and worker-version consistency. These are required
 live gates, not performed by this static preflight or its synthetic
 regressions. No identity, credential, consent or permission changes are
 made by the warning.
+
+
+## Unicode contact PATCH structure versus shipped dispatch (offline only)
+
+The shipped User PATCH handler first routes contact paths through
+`scim_user_emails.owns()`, which recognizes the exact core User-qualified
+prefix and lowercases the remaining path. The contact path regex itself uses
+Unicode case-insensitive matching, which is broader: for example it can match
+`emailſ[type eq "work"].value` as though the long-s were ASCII `s`, even
+though the dispatcher does **not** own that path. It can also match
+`emails[type eq "work"].prımary` or `diſplay` as a child, while downstream
+canonical field validation does not recognize those spellings. The preflight
+now refuses these structural aliases rather than incorrectly reporting a
+compatible PATCH mapping. It retains ordinary ASCII case-insensitive
+`EMAILS[TYPE EQ "work"].PRIMARY` and core User-qualified contact paths,
+and never changes quoted selector literal bytes or their matching semantics.
+
+Synthetic differential checks exercise the shipped ownership predicate,
+contact path parser and canonical field set. These checks only reduce false
+static compatibility claims; they do not exercise a live IdP request,
+validate a complete PATCH transaction, grant contact identity authority,
+change provisioning permissions or establish customer rollout readiness.
