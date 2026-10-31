@@ -401,3 +401,21 @@ UTC-midnight end, six invalid page-size shapes, false/string window-respect
 flags, and positive current/legacy metadata. It does **not** replace native
 Node, browser, accessibility, scale or packaging CI, or consenting-user
 competitor-style acceptance.
+
+## One displayed daily step per UTC date
+
+The server emits at most one date-plan chunk per observed UTC calendar date.
+Chronological, non-overlapping intervals alone do not enforce that invariant:
+two adjacent sub-day fragments can both pass the older checks and appear as
+two separate daily analysis steps for the same date. The handoff now compares
+the **UTC calendar date of each chunk start** to the previous one and rejects
+repeated dates, including offset-equivalent labels and zero-count fragments.
+This does not prohibit a legitimate clipped partial day or an interval ending
+exactly at the next UTC midnight. It is a displayed-plan consistency check,
+not proof that the recorded events cover every part of that day.
+
+Synthetic tests cover non-overlapping same-day splits, UTC-offset-equivalent
+splits, and a zero-row second fragment. The 31/32-chunk boundary fixture now
+uses **distinct UTC dates in an all-retained-history selection** instead of
+31 one-second fragments of a single day. These are fake local responses, not
+real-user usability research, live-source validation or verified outcomes.
