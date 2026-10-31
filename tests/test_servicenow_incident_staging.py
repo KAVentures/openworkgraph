@@ -1245,3 +1245,66 @@ def test_instance_method_shadowing_cannot_skip_scope_validation_or_revocation():
     authorized = scope(sys_ids=(A,))
     planned = plan_page(authorized, limit=1)
     assert project_planned_page(authorized, page(item(A)), plan=planned)["plan_bound"] is True
+
+
+
+@pytest.mark.parametrize("field,initial,substitute", [
+    ("host", {}, "another.service-now.com"),
+    ("tenant_scope", {}, "other-tenant"),
+    ("sys_ids", {}, (B,)),
+    ("consented", {"consented": False}, True),
+    ("grant_current", {"grant_current": False}, True),
+], ids=["valid-host", "valid-tenant", "valid-selection", "grant-consent",
+        "revoked-grant"])
+def test_valid_shaped_scope_substitution_never_reuses_original_authority(
+        field, initial, substitute):
+    """A valid-looking replacement must not inherit constructor-time authority."""
+    from server.servicenow_incident_staging import (
+        reconcile_planned_replays, reconcile_replayed_pages,
+    )
+    selected = scope(sys_ids=(A,), **initial)
+    # Plan metadata is deliberately from a separately authorized original.
+    original = scope(sys_ids=(A,))
+    planned = plan_page(original, limit=1)
+    raw = page(item(A))
+    object.__setattr__(selected, field, substitute)
+    entrypoints = [
+        lambda: plan_page(selected, limit=1),
+        lambda: project_page(selected, raw, limit=1),
+        lambda: project_planned_page(selected, raw, plan=planned),
+        lambda: project_planned_pages(selected, [(planned, raw)]),
+        lambda: reconcile_replayed_pages(selected, raw, raw, limit=1),
+        lambda: reconcile_planned_replays(
+            selected, [(planned, raw)], [(planned, raw)]),
+    ]
+    for entrypoint in entrypoints:
+        with pytest.raises(StagingError) as caught:
+            entrypoint()
+        assert "another.service-now.com" not in str(caught.value)
+        assert "other-tenant" not in str(caught.value)
+
+
+def test_missing_constructor_binding_fails_closed_and_cannot_be_rebound_by_shadow():
+    selected = scope(sys_ids=(A,))
+    del selected.__dict__["_bound_selection"]
+    object.__setattr__(selected, "_validate_fields", lambda: None)
+    with pytest.raises(StagingError, match="Invalid selected incident scope binding"):
+        plan_page(selected, limit=1)
+
+
+def test_original_scope_binding_remains_usable_for_offline_replay():
+    from server.servicenow_incident_staging import (
+        reconcile_planned_replays, reconcile_replayed_pages,
+    )
+    selected = scope(sys_ids=(A,))
+    planned = plan_page(selected, limit=1)
+    raw = page(item(A))
+    assert project_page(selected, raw, limit=1)["distinct_selected_rows"] == 1
+    assert project_planned_page(selected, raw, plan=planned)["plan_bound"] is True
+    assert project_planned_pages(
+        selected, [(planned, raw)])["plan_sequence_checked"] is True
+    assert reconcile_replayed_pages(
+        selected, raw, raw, limit=1)["same_reported_revision_ids"] == [A]
+    assert reconcile_planned_replays(
+        selected, [(planned, raw)], [(planned, raw)]
+    )["same_reported_revision_ids"] == [A]
