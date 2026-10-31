@@ -482,8 +482,11 @@
       : focusSpanCount
         ? `No redacted context examples were supplied, although ${focusSpanCount} selected focus-span events are counted. Missing examples do not mean no focus was observed.`
         : 'No focus-span events recorded in this selection; this does not prove inactivity or complete capture.';
+    // A sample with no observation timestamp must not look as though its
+    // provenance time was verified. Keep the supplied offset-aware instant
+    // verbatim rather than silently converting it to the viewer's timezone.
     const focusExampleItems = focusExampleCount
-      ? d.redacted_examples.map(x=>`<li>${esc(visibleEvidenceLabel(x.app == null ? 'Unknown app' : x.app, 'sample'))} · ${esc(visibleEvidenceLabel(x.window_title||'Untitled activity', 'sample'))}</li>`).join('')
+      ? d.redacted_examples.map(x=>`<li>${esc(visibleEvidenceLabel(x.app == null ? 'Unknown app' : x.app, 'sample'))} · ${esc(visibleEvidenceLabel(x.window_title||'Untitled activity', 'sample'))} · ${x.observed_at == null ? 'observation time not supplied' : `observed at <time datetime="${esc(x.observed_at)}">${esc(x.observed_at)}</time>`}</li>`).join('')
       : '<li>No redacted context examples supplied.</li>';
     window.openModal?.('Prepare for AI','Discover opportunities from recorded work',`
       <p>No workflow description or repeated pattern is required. Your AI will interpret the evidence; this panel does not run a model.</p>
