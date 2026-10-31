@@ -1111,6 +1111,11 @@ def test_bounded_discarded_json_integers_stay_private_and_compatible(token):
     ("SYS_MOD_COUNT", "99"),
     ("STATE", "closed"),
     ("ſtate", "closed"),  # Unicode casefold also aliases the reserved field.
+    ("ｓｙｓ＿ｉｄ", B),  # NFKC fullwidth compatibility spelling.
+    ("ｓｙｓ＿ｕｐｄａｔｅｄ＿ｏｎ", "2026-10-30 03:11:00"),
+    ("ｓｙｓ＿ｍｏｄ＿ｃｏｕｎｔ", "99"),
+    ("ｓｔａｔｅ", "closed"),
+    ("𝘴𝘵𝘢𝘵𝘦", "closed"),  # NFKC mathematical styled letters.
 ])
 def test_reserved_incident_aliases_fail_closed_across_all_staging_paths(mode, alias, shadow):
     from server.servicenow_incident_staging import (
@@ -1162,5 +1167,30 @@ def test_unrelated_private_fields_remain_discarded_and_replay_compatible():
         selected, [(planned, private)], [(planned, page(item(A)))]
     )
     assert replay["same_reported_revision_ids"] == [A]
+    assert replay["business_outcome_verified"] is False
+    assert replay["checkpoint_advanced"] is False
+
+
+
+def test_compatibility_alias_without_canonical_field_fails_closed():
+    row = item(A)
+    del row["sys_id"]
+    row["ｓｙｓ＿ｉｄ"] = A
+    with pytest.raises(StagingError, match="Ambiguous provider incident field"):
+        project_page(scope(), page(row), limit=1)
+
+
+def test_unrelated_compatibility_spelling_stays_private_and_is_not_rejected():
+    from server.servicenow_incident_staging import reconcile_replayed_pages
+    selected = scope()
+    raw = page(item(A, **{"ｐｒｉｖａｔｅ": "sensitive",
+                          "𝘯𝘰𝘵𝘦": "private text"}))
+    staged = project_page(selected, raw, limit=1)
+    assert staged["records"][0]["source_case_id"] == A
+    assert "sensitive" not in json.dumps(staged)
+    assert "private text" not in json.dumps(staged)
+    replay = reconcile_replayed_pages(selected, raw, page(item(A)), limit=1)
+    assert replay["same_reported_revision_ids"] == [A]
+    assert replay["historical_completeness"] == "unknown"
     assert replay["business_outcome_verified"] is False
     assert replay["checkpoint_advanced"] is False
