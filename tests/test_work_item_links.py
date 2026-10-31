@@ -1215,3 +1215,55 @@ def test_invalid_timestamp_valid_claim_is_not_membership_or_ephemeral_veto():
     assert result["ambiguous_clipboard_transfer_groups"] == 0
     assert result["inconsistent_clipboard_transfer_direction_groups"] == 0
     assert "e03" not in json.dumps(result)
+
+
+def test_explicit_whitespace_or_control_host_and_tenant_cannot_anchor_exact_record():
+    # Both matching malformed claims used to look like the same exact record:
+    # whitespace host normalized to missing host; tenant controls persisted.
+    invalid_claims = (
+        ("host", "   "), ("host", "\t"), ("host", "work.atlassian.net\n"),
+        ("host", "work.atlassian.net\x7f"), ("host", "\u2003"),
+        ("organization_id", "   "), ("organization_id", "\t"),
+        ("organization_id", "tenant-a\n"), ("organization_id", "tenant-a\x7f"),
+        ("organization_id", "\u2003"),
+    )
+    for field, invalid in invalid_claims:
+        first, second = _scoped(_event(1, A)), _scoped(_event(2, A))
+        for row in (first, second):
+            if field == "host":
+                row["metadata"]["resource_reference"]["host"] = invalid
+            else:
+                row[field] = invalid
+        result = linked_work_items([first, second, _event(3, B), _event(4, B)])
+        assert set(_items(result)) == {("e03", "e04")}, (field, repr(invalid))
+        assert result["conflicting_reference_groups_suppressed"] == 1
+        assert result["candidate_links"] == []
+
+
+def test_one_malformed_optional_identity_vetoes_otherwise_valid_record_group():
+    for field, invalid in (("host", " \t "), ("organization_id", "tenant\x00bad")):
+        first, second, third = (_scoped(_event(n, A, tab="shared-tab"))
+                                for n in (1, 2, 3))
+        if field == "host":
+            second["metadata"]["resource_reference"]["host"] = invalid
+        else:
+            second[field] = invalid
+        # A corrupted explicit identity cannot be ignored to let the two
+        # otherwise valid A rows join, including by a shared tab.
+        result = linked_work_items([first, second, third, _event(4, B), _event(5, B)])
+        assert set(_items(result)) == {("e04", "e05")}, field
+        assert result["candidate_links"] == [], field
+        assert result["conflicting_reference_groups_suppressed"] == 1
+
+
+def test_absent_null_empty_optional_identity_and_valid_literals_remain_supported():
+    # Do not turn a conservative identity guard into a legacy schema break.
+    for host, org in ((None, None), ("", ""), ("work.atlassian.net", "tenant-a")):
+        first, second = _event(1, A), _event(2, A)
+        for row in (first, second):
+            row["metadata"]["resource_reference"]["host"] = host
+            row["organization_id"] = org
+        result = linked_work_items([first, second])
+        assert set(_items(result)) == {("e01", "e02")}, (host, org)
+        assert _items(result)[("e01", "e02")]["link_basis"] == {"same_record": 1}
+        assert result["conflicting_reference_groups_suppressed"] == 0
