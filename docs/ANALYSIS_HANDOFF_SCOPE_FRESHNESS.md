@@ -576,3 +576,31 @@ complete, truncated, empty and legacy plans, including positive-count
 compatibility. This is a client-side consistency check against the current
 server contract, **not** independent proof of complete capture, source
 verification, user consent, real-world pilot success or competitor parity.
+
+
+## Scope-specific wording and unknown daily coverage
+
+The review modal must not call a `current` recorder-run selection "all
+available history" when the server omits the optional run-start timestamp.
+It now distinguishes three **server-echoed** scopes without inferring extra
+coverage: an explicitly bounded `range` (exclusive UTC end), a `current`
+recorder run (with the returned start or "start not supplied"), and `all`
+retained history (unbounded date selection). The displayed wording is escaped
+before insertion into modal HTML. It does not broaden the request, change
+source permissions, or establish that recording was continuous.
+
+The daily breakdown is optional metadata, **not** an independent completeness
+receipt. When `analysis_plan.date_chunks` is absent, the modal says no daily
+breakdown was provided and coverage is unknown. An explicitly empty list says
+no daily chunks were listed, not that there were zero events or complete
+recording. Existing validated positive date chunks and the 31-date truncation
+notice retain their behavior. The canonical selected-event count remains
+visible independently of the optional plan.
+
+Deterministic mock-DOM regressions exercise current-run scope with and without
+a supplied start, unbounded all-history scope, an absent plan and an empty
+plan while selected events exist. Each positive case retains user-initiated
+Copy and makes no export-ticket request. These are synthetic UI consistency
+checks, not proof of live source completeness, customer consent, competitor
+parity or business outcomes. Native cross-platform/browser/accessibility/
+scale/packaging CI is still required before merge.
