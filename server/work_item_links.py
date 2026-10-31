@@ -122,16 +122,31 @@ def _observations(events: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], i
     conflicts: set[str] = set()
     invalid_claim_events: set[str] = set()
     rows: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    # First-row-wins dedupe is unsafe for reused event IDs: a later row may
+    # contradict the first row's record, scope or timestamp. Suppress every
+    # occurrence of a conflicted ID before building any reference groups.
+    # Exact duplicate payloads remain idempotent (including nested metadata).
+    unique_events: dict[str, dict[str, Any]] = {}
+    conflicting_event_ids: set[str] = set()
     for event in events:
         if not isinstance(event, dict):
             continue
         raw_event_id = event.get("event_id")
         event_id = raw_event_id if isinstance(raw_event_id, str) else ""
-        stamp = _stamp(event.get("observed_at"))
-        if not _EVENT_ID.fullmatch(event_id) or event_id in seen or stamp is None:
+        if not _EVENT_ID.fullmatch(event_id):
             continue
-        seen.add(event_id)
+        previous = unique_events.get(event_id)
+        if previous is not None:
+            if event != previous:
+                conflicting_event_ids.add(event_id)
+        else:
+            unique_events[event_id] = event
+    for event_id, event in unique_events.items():
+        if event_id in conflicting_event_ids:
+            continue
+        stamp = _stamp(event.get("observed_at"))
+        if stamp is None:
+            continue
         match = _identity(event) if _literal_record_claim(event) else None
         ref = ""
         if match:
