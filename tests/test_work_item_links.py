@@ -1665,3 +1665,17 @@ def test_matching_dual_and_single_location_tokens_remain_valid_and_scoped():
         result = linked_work_items([first, second, other])
         assert set(_items(result)) == {("e01", "e02")}, signal
         assert result["unlinked_observation_count"] == 1
+
+
+def test_contradictory_ephemeral_claim_cannot_be_app_continuity_neighbor():
+    # A malformed dual tab/transfer identity is not a credible continuity
+    # neighbor even when it sits directly between two same-app observations.
+    for signal in ("tab", "transfer"):
+        conflicting = _scoped(_event(2, **{signal: "metadata-token"}))
+        conflicting["tab_context_id" if signal == "tab" else "clipboard_transfer_id"] = "other-token"
+        rows = [_scoped(_event(1)), conflicting, _scoped(_event(3))]
+        for ordered in (rows, list(reversed(rows))):
+            result = linked_work_items(ordered)
+            assert result["items"] == []
+            assert result["candidate_links"] == []
+            assert result["unlinked_observation_count"] == 3
