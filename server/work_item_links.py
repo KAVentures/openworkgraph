@@ -164,13 +164,18 @@ def _same_observation_payload(first: Any, second: Any) -> bool:
         if type(left) is not type(right):
             return False
         if type(left) is dict:
+            # A single wide JSON object can enqueue far more than the node
+            # budget before the next loop iteration. Account for all pending
+            # children *before* materializing the comparison worklist.
             if (len(left) != len(right) or
+                    checked + len(pending) + len(left) > _MAX_DUPLICATE_PAYLOAD_NODES or
                     any(type(key) is not str for key in left) or
                     left.keys() != right.keys()):
                 return False
             pending.extend((left[key], right[key]) for key in left)
         elif type(left) is list:
-            if len(left) != len(right):
+            if (len(left) != len(right) or
+                    checked + len(pending) + len(left) > _MAX_DUPLICATE_PAYLOAD_NODES):
                 return False
             pending.extend(zip(left, right))
         elif type(left) is float:
