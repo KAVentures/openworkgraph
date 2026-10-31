@@ -150,7 +150,11 @@
       (coverageFlag !== true ||
         (Array.isArray(listed) && listed.length === 31 &&
           plannedRows !== null && plannedRows < d.canonical_rows &&
-          instant(last) && Date.parse(last) >= Date.parse(listed[30].until))));
+          // The omission flag means a 32nd DISTINCT UTC date, not merely
+          // an observation after a clipped 31st-day interval.
+          instant(last) &&
+          Math.floor(Date.parse(last) / 86400000) >
+            Math.floor(Date.parse(listed[30].since) / 86400000))));
     // Work and capture-health counts describe the same selected evidence,
     // not a second independent estimate. Legacy previews may omit this block.
     // The server samples at most six selected focus spans. Never show context
