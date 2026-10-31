@@ -884,14 +884,14 @@ test('partition and planned-row inconsistencies refuse the handoff before any co
   });
 });
 
-test('a valid partial date plan conserves counts without claiming complete coverage', async () => {
+test('a legacy partial date plan without explicit coverage metadata remains usable', async () => {
   const h = harness();
   await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
   const open = h.bars[0].controls.button.onclick();
   await settle(); h.reply(h.reads[1], {...h.preview('range', 'partial-plan'),
     analysis_plan: {date_chunks: [
       {since: dayLabel(0), until: dayLabel(1), event_rows: 1}
-    ], more_dates_not_listed: true}});
+    ]}});
   await open;
   assert.equal(h.modals, 1);
   assert.equal(h.modal['#analysisCopy'].disabled, false);
@@ -899,6 +899,66 @@ test('a valid partial date plan conserves counts without claiming complete cover
   await h.modal['#analysisCopy'].onclick();
   assert.deepEqual(h.copied, ['request-partial-plan']);
   assert.equal(h.tickets.length, 0);
+});
+
+test('explicit daily-plan coverage flags reconcile selected rows and 31-date truncation', async t => {
+  const day = 86400_000;
+  const lastDay = Math.floor(Date.parse(observedStart) / day) * day;
+  const firstDay = lastDay - 31 * day;
+  const chunks = Array.from({length: 31}, (_, i) => ({
+    since: utc(firstDay + i * day),
+    until: utc(firstDay + (i + 1) * day),
+    event_rows: 1
+  }));
+  const cases = [
+    ['valid 31-day prefix with a later 32nd observed day', true, 31,
+      utc(lastDay + 3600_000), true],
+    ['explicit no-omission claim with an unlisted selected row', false, 31,
+      utc(lastDay + 3600_000), false],
+    ['truncation claim with only 30 listed days', true, 30,
+      utc(lastDay + 3600_000), false],
+    ['truncation claim without a later observed day', true, 31,
+      utc(lastDay - day + 3600_000), false]
+  ];
+  for (const [name, flag, count, lastObserved, accepted] of cases)
+    await t.test(name, async () => {
+      const h = harness();
+      await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+      h.bars[0].controls.select.value = 'all';
+      h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+      await settle(); h.reply(h.reads[1], h.preview('all', 'selected-all')); await settle();
+      const opening = h.bars[0].controls.button.onclick();
+      await settle();
+      h.reply(h.reads[2], {...h.preview('all', 'coverage-reconciled'),
+        canonical_rows: 32, retained_rows: 32,
+        first_observed_at: utc(firstDay + 3600_000),
+        last_observed_at: lastObserved,
+        event_types: {focus_span: 32}, sources: {desktop: 32},
+        analysis_plan: {date_chunks: chunks.slice(0, count),
+          more_dates_not_listed: flag, complete_history_claimed: false}});
+      await opening;
+      assert.equal(h.modals, accepted ? 1 : 0, name);
+      assert.equal(h.tickets.length, 0);
+      if (accepted) {
+        await h.modal['#analysisCopy'].onclick();
+        assert.deepEqual(h.copied, ['request-coverage-reconciled']);
+        assert.match(h.modalHtml, /Only the first 31 dates are listed/);
+      } else {
+        assert.deepEqual(h.copied, []);
+        assert.match(h.summary.textContent, /incomplete or malformed/i);
+      }
+    });
+  await t.test('explicitly no omitted dates cannot hide all selected events', async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle(); h.reply(h.reads[1], {...h.preview('range', 'empty-list'),
+      analysis_plan: {date_chunks: [], more_dates_not_listed: false}});
+    await opening;
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+  });
 });
 
 test('work evidence totals, capture-health partition and liveness metadata fail closed', async () => {
@@ -1063,7 +1123,8 @@ test('calendar-covering, boundary and zero-count optional chunks preserve safe h
     const opening = h.bars[0].controls.button.onclick();
     await settle();
     h.reply(h.reads[1], {...h.preview('range', 'observed-intersection'),
-      analysis_plan: {date_chunks: [chunk], more_dates_not_listed: chunk.event_rows < 2}});
+      analysis_plan: {date_chunks: [chunk],
+        ...(chunk.event_rows === 2 ? {more_dates_not_listed: false} : {})}});
     await opening;
     assert.equal(h.modals, 1, 'valid/partial plan should remain usable');
     await h.modal['#analysisCopy'].onclick();
@@ -1273,9 +1334,14 @@ test('handoff refuses unsupported completeness and contradictory omission claims
       complete_history_claimed: false};}, false],
     ['omission flag without a listed plan', d => {d.analysis_plan = {
       more_dates_not_listed: true, complete_history_claimed: false};}, false],
-    ['partial selected history with honest omission', d => {d.analysis_plan = {
+    ['one-day plan cannot claim 31-date truncation', d => {d.analysis_plan = {
       date_chunks: [partialDay], more_dates_not_listed: true,
-      complete_history_claimed: false};}, true],
+      complete_history_claimed: false};}, false],
+    ['explicitly complete listing cannot omit selected rows', d => {d.analysis_plan = {
+      date_chunks: [partialDay], more_dates_not_listed: false,
+      complete_history_claimed: false};}, false],
+    ['legacy partial listing without coverage flag remains reviewable', d => {d.analysis_plan = {
+      date_chunks: [partialDay], complete_history_claimed: false};}, true],
     ['legacy absent coverage flags', d => {d.analysis_plan = {
       date_chunks: [selectedDay]};}, true],
     ['explicitly unverified full listed plan', d => {d.analysis_plan = {
