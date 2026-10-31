@@ -664,3 +664,75 @@ def test_duplicate_payload_comparison_is_bounded_and_rejects_non_json_values():
     result = linked_work_items([first, duplicate, _scoped(_event(2, A))])
     assert result["items"] == []
     assert result["unlinked_observation_count"] == 1
+
+
+def test_explicit_clipboard_direction_conflicts_do_not_join_two_records():
+    # Same opaque token alone is not a copy -> paste edge when the captured
+    # actions contradict transfer direction. Order of input rows cannot
+    # choose a different work-item membership.
+    for first_action, second_action in (
+        ("copy", "copy"), ("paste", "paste"), ("paste", "copy"),
+    ):
+        events = [
+            _scoped(_event(1, A, transfer="reused-direction", action=first_action)),
+            _scoped(_event(2, B, transfer="reused-direction", action=second_action)),
+        ]
+        for order in (events, list(reversed(events))):
+            result = linked_work_items(order)
+            assert result["items"] == [], (first_action, second_action)
+            assert result["candidate_links"] == []
+            assert result["unlinked_observation_count"] == 2
+            assert result["inconsistent_clipboard_transfer_direction_groups"] == 1
+            assert result["ambiguous_clipboard_transfer_groups"] == 0
+            assert result["link_contract"]["explicit_clipboard_direction_conflicts_are_unmerged"] is True
+            assert "reused-direction" not in json.dumps(result)
+
+
+def test_explicit_copy_paste_on_one_record_does_not_attach_copy_only_second_record():
+    # An ordered copy -> paste wholly inside record A cannot prove a
+    # cross-record transfer to B when B only has a copy observation.
+    events = [
+        _scoped(_event(1, A, transfer="same-record-only", action="copy")),
+        _scoped(_event(2, A, transfer="same-record-only", action="paste")),
+        _scoped(_event(3, B, transfer="same-record-only", action="copy")),
+    ]
+    result = linked_work_items(events)
+    assert set(_items(result)) == {("e01", "e02")}
+    assert _items(result)[("e01", "e02")]["link_basis"] == {"same_record": 1}
+    assert result["unlinked_observation_count"] == 1
+    assert result["inconsistent_clipboard_transfer_direction_groups"] == 1
+
+
+def test_ordered_explicit_copy_to_other_record_still_joins():
+    events = [
+        _scoped(_event(1, A, transfer="real-direction", action="copy")),
+        _scoped(_event(2, B, transfer="real-direction", action="paste")),
+    ]
+    for order in (events, list(reversed(events))):
+        result = linked_work_items(order)
+        assert set(_items(result)) == {("e01", "e02")}
+        assert _items(result)[("e01", "e02")]["link_basis"] == {"clipboard_transfer": 1}
+        assert result["inconsistent_clipboard_transfer_direction_groups"] == 0
+
+
+def test_direction_veto_preserves_legacy_nondirectional_capture():
+    # Existing non-directional capture rows do not assert copy/paste order.
+    # Preserve their historical linking contract instead of inventing a
+    # direction from timestamps or browser-click actions.
+    events = [
+        _scoped(_event(1, A, transfer="legacy-generic")),
+        _scoped(_event(2, B, transfer="legacy-generic")),
+    ]
+    result = linked_work_items(events)
+    assert set(_items(result)) == {("e01", "e02")}
+    assert _items(result)[("e01", "e02")]["link_basis"] == {"clipboard_transfer": 1}
+    assert result["inconsistent_clipboard_transfer_direction_groups"] == 0
+
+
+def test_explicit_clipboard_equal_timestamp_does_not_infer_direction():
+    copy_event = _scoped(_event(1, A, transfer="equal-time", action="copy"))
+    paste_event = _scoped(_event(2, B, transfer="equal-time", action="paste"))
+    paste_event["observed_at"] = copy_event["observed_at"]
+    result = linked_work_items([copy_event, paste_event])
+    assert result["items"] == []
+    assert result["inconsistent_clipboard_transfer_direction_groups"] == 1
