@@ -198,7 +198,7 @@ def test_subsecond_kpi_and_root_cause_duration_thresholds():
         "d,Start,2024-01-01T00:03:00Z,team",
         "d,End,2024-01-01T00:03:02.750000Z,team",
     ]
-    log_id = _log("\\n".join(rows))
+    log_id = _log("\n".join(rows))
     result = analytics.kpis(log_id, sla_seconds=1)
     assert result["cases"] == 4
     throughput = result["throughput_seconds"]
