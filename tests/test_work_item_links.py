@@ -1119,7 +1119,7 @@ def test_whitespace_and_control_scope_values_never_anchor_ephemeral_joins():
     # These are present but malformed identity claims, not legacy omissions.
     # A repeated malformed tenant/actor/device/session must not manufacture a
     # shared clipboard, tab, or even a candidate same-app association.
-    invalid_values = ("   ", "\\t", "\\x00", "\\x7f", "\\u2003")
+    invalid_values = ("   ", "\${seq}", "\${seq}", "\${seq}", "\${seq}")
     for dimension in ("organization_id", "actor_id", "device_id", "session_id"):
         for invalid in invalid_values:
             for signal in ("transfer", "tab", "surface"):
@@ -1168,7 +1168,7 @@ def test_bad_ephemeral_actor_device_session_does_not_erase_exact_record_link():
     # by a malformed tab/clipboard scope. Keep that distinction explicit.
     for dimension in ("actor_id", "device_id", "session_id"):
         first, second = _scoped(_event(1, A)), _scoped(_event(2, A))
-        first[dimension] = second[dimension] = "\\x00"
+        first[dimension] = second[dimension] = "\${seq}"
         result = linked_work_items([first, second])
         assert set(_items(result)) == {("e01", "e02")}
         assert _items(result)[("e01", "e02")]["link_basis"] == {"same_record": 1}
