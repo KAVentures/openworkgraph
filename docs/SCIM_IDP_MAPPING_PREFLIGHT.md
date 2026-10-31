@@ -160,3 +160,36 @@ policy/revision, uniformly upgraded workers, existing active-name collisions,
 real IdP filter behavior and tenant/provider isolation. No Group identity,
 membership, login or permission is granted by a clean static report. These
 synthetic mapping checks do not establish live Okta/Entra interoperability.
+
+
+## ETag mapping with declared missing-If-Match allowance (offline only)
+
+A declaration can say `users.write_mode: "etag"` while also saying
+`provider_policy.allow_unversioned_user_patch: true`. These statements
+are not mutually exclusive: the client may normally send `If-Match`,
+while the **separately configured server policy** can still accept a
+standalone User PATCH with the header **absent**. The shipped policy is
+strict by default, is provider-scoped and administrator-controlled, and
+does not relax supplied stale/empty/wildcard versions, PUT, DELETE,
+Groups, Bulk or direct callers. See [SCIM_CLIENT_POLICY.md](SCIM_CLIENT_POLICY.md).
+
+The offline preflight now emits the **nonblocking** caution
+`etag_mode_with_unversioned_patch_policy` when these two declarations
+coexist. It does not assert that the actual provider policy is enabled,
+that the IdP ever omits `If-Match`, or that a particular request was
+accepted. If the declaration intends strict ETag-only behavior, set the
+declared allowance to false **and independently verify** the current
+provider's stored policy and revision through the authorized admin
+controls. A JSON declaration does not disable a previously enabled
+server policy.
+
+Before rollout, with explicit authorization and a disposable identity,
+test a supplied correct ETag, a stale ETag, an absent header, and
+disable/revoke races against the **current provider revision**. Check
+that a missing header is rejected under strict policy and accepted only
+where an administrator explicitly enabled the bounded standalone User
+PATCH exception. Inspect tenant/provider isolation, offboarding
+revocation, audit and worker-version consistency. These are required
+live gates, not performed by this static preflight or its synthetic
+regressions. No identity, credential, consent or permission changes are
+made by the warning.
