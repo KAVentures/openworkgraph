@@ -18,7 +18,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from server.record_case_lanes import record_case_lanes
+from server.record_case_lanes import _EVENT_ID, _identity, _stamp, record_case_lanes
 from server.work_item_links import link_observations
 
 from .fixtures import load_cases
@@ -31,25 +31,68 @@ def _ref(event: dict[str, Any]) -> str:
     return str(ref.get("resource_ref") or "").lower()
 
 
+def _admitted_visible_lane_members(
+    events: list[dict[str, Any]], published: set[str], visible_ids: set[str],
+) -> dict[str, list[str]]:
+    """Project only source rows actually admitted by the shipped lane engine.
+
+    `record_case_lanes` intentionally exposes no event IDs. Reconstruct the
+    evaluator-only ID mapping using its exact identity, UTC timestamp and
+    first-valid-(ref, event_id) admission rules, rather than matching every
+    raw row by reference. Do not attribute one reused event ID to an arbitrary
+    lane: a duplicate across distinct admitted references is unassignable.
+    Nonliteral/malformed IDs and source-only rows cannot be scored as visible
+    evidence, even if the source lane's aggregate count includes them.
+    """
+    admitted: set[tuple[str, str]] = set()
+    owners: dict[str, set[str]] = {}
+    rows: dict[str, list[tuple[str, str]]] = {ref: [] for ref in published}
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        match = _identity(event)
+        stamp = _stamp(event.get("observed_at"))
+        raw_id = event.get("event_id")
+        if (match is None or stamp is None or not isinstance(raw_id, str)
+                or not _EVENT_ID.fullmatch(raw_id)):
+            continue
+        ref = match[0]
+        key = (ref, raw_id)
+        if key in admitted:
+            continue
+        admitted.add(key)
+        owners.setdefault(raw_id, set()).add(ref)
+        if ref in published and raw_id in visible_ids:
+            rows[ref].append((stamp, raw_id))
+    return {
+        ref: [event_id for _, event_id in sorted(values)
+              if len(owners[event_id]) == 1]
+        for ref, values in rows.items()
+    }
+
+
 def predict_record_lanes(case: dict[str, Any]) -> dict[str, Any]:
     events = list(case.get("source_events") or case["presented_evidence"])
     lanes = record_case_lanes(events, max_lanes=30)["lanes"]
     published = {lane["resource_ref"] for lane in lanes}
-    members: dict[str, list[str]] = {ref: [] for ref in sorted(published)}
-    seen: set[str] = set()
-    for event in sorted(events, key=lambda e: (str(e.get("observed_at")), str(e.get("event_id")))):
-        event_id, ref = str(event.get("event_id") or ""), _ref(event)
-        if ref in members and event_id and event_id not in seen:
-            members[ref].append(event_id)
-            seen.add(event_id)
+    presented = case["presented_evidence"]
+    visible_ids = {
+        event["event_id"] for event in presented
+        if isinstance(event, dict) and isinstance(event.get("event_id"), str)
+        and _EVENT_ID.fullmatch(event["event_id"])
+    }
+    members = _admitted_visible_lane_members(events, published, visible_ids)
+    seen = {event_id for ids in members.values() for event_id in ids}
     workflows = [{
         "prediction_id": f"lane_{index}",
         "event_ids": ids,
         "ordered_event_ids": ids,
         "automation_relevant_event_ids": ids,
         "ui_mechanic_event_ids": [],
-    } for index, ids in enumerate(members.values(), start=1) if ids]
-    all_ids = [str(e["event_id"]) for e in case["presented_evidence"]]
+    } for index, ids in enumerate(
+        (members[ref] for ref in sorted(published)), start=1
+    ) if ids]
+    all_ids = [str(e["event_id"]) for e in presented]
     return {
         "case_id": case["case_id"],
         "workflows": workflows,
