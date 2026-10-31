@@ -76,7 +76,6 @@ def conformance(log_id: str, model: Any, case_type: str | None = None,
                 max_variants: int = 500) -> dict[str, Any]:
     paths = parse_reference_model(model)
     max_variants = max(1, min(int(max_variants), MAX_ALIGNED_VARIANTS))
-    shortest = min(len(p) for p in paths)
 
     def run(conn):
         total_cases = conn.execute("SELECT count(DISTINCT case_id) FROM ce").fetchone()[0]
@@ -103,7 +102,9 @@ def conformance(log_id: str, model: Any, case_type: str | None = None,
                 cost, moves = _align(trace, path)
                 if best_cost is None or cost < best_cost:
                     best_cost, best_moves, best_path = cost, moves, index
-            fitness = 1 - best_cost / (len(trace) + shortest)
+            # Normalize against the path actually selected by minimum edit cost.
+            # The shortest *other* reference path must not depress this score.
+            fitness = 1 - best_cost / (len(trace) + len(paths[best_path]))
             aligned_cases += cases
             fitness_sum += fitness * cases
             fitting_cases += cases if best_cost == 0 else 0
