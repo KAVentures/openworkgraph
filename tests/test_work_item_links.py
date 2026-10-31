@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+from datetime import datetime, timedelta, timezone
 import json
 
 from evals.reconstruction.fixtures import load_cases
@@ -1324,3 +1325,86 @@ def test_identical_duplicate_id_stays_idempotent_with_exact_record():
     result = linked_work_items([first, copy.deepcopy(first), _event(2, A)])
     assert set(_items(result)) == {("e01", "e02")}
     assert result["conflicting_reference_groups_suppressed"] == 0
+
+
+def test_multiplexed_tab_index_preserves_equal_timestamp_ties_and_no_prior_candidate():
+    # The historical <= search chooses the last referenced event at a tied
+    # timestamp, even when its event ID sorts after the loose observation.
+    rows = [
+        _scoped(_event(1, A, tab="shared-multiplexed")),
+        _scoped(_event(2, B, tab="shared-multiplexed")),
+        _scoped(_event(3, tab="shared-multiplexed")),
+        _scoped(_event(4, A, tab="shared-multiplexed")),
+        _scoped(_event(5, tab="shared-multiplexed")),
+        _scoped(_event(6, tab="shared-multiplexed")),
+    ]
+    rows[2]["observed_at"] = rows[3]["observed_at"] = rows[1]["observed_at"]
+    rows[4]["observed_at"] = "2026-10-20T10:05:00+00:00"
+    rows[5]["observed_at"] = "2026-10-20T10:00:00+00:00"
+    for ordered in (rows, list(reversed(rows))):
+        result = linked_work_items(ordered)
+        assert [(c["event_id"], c["toward_event_id"]) for c in result["candidate_links"]] == [
+            ("e03", "e04"), ("e05", "e04"),
+        ]
+        assert all(c["relation"] == "same_tab_multiplexed"
+                   and c["merged"] is False
+                   and c["association_status"] == "ambiguous"
+                   for c in result["candidate_links"])
+        assert set(_items(result)) == {("e01", "e04")}
+        assert result["unlinked_observation_count"] == 4
+        assert result["link_contract"]["time_alone_never_links"] is True
+
+
+def test_multiplexed_tab_index_does_not_cross_tenant_scopes_with_reused_tab_token():
+    # Same tab token in two organizations is not shared evidence. Use distinct
+    # record identities to keep the separate source claims unconflicted.
+    d = "owg:r:" + "d" * 32
+    rows = [
+        _scoped(_event(1, A, tab="reused-multiplexed")),
+        _scoped(_event(2, B, tab="reused-multiplexed")),
+        _scoped(_event(3, tab="reused-multiplexed")),
+        _scoped(_event(4, tab="reused-multiplexed")),
+        _scoped(_event(5, C, tab="reused-multiplexed"), org="tenant-b"),
+        _scoped(_event(6, d, tab="reused-multiplexed"), org="tenant-b"),
+        _scoped(_event(7, tab="reused-multiplexed"), org="tenant-b"),
+        _scoped(_event(8, tab="reused-multiplexed"), org="tenant-b"),
+    ]
+    for ordered in (rows, list(reversed(rows))):
+        result = linked_work_items(ordered)
+        assert [(c["event_id"], c["toward_event_id"]) for c in result["candidate_links"]] == [
+            ("e03", "e02"), ("e04", "e02"), ("e07", "e06"), ("e08", "e06"),
+        ]
+        assert result["items"] == []
+        assert result["unlinked_observation_count"] == 8
+        assert "tenant-a" not in json.dumps(result)
+        assert "tenant-b" not in json.dumps(result)
+
+
+def test_multiplexed_tab_index_large_interleaved_capture_is_candidate_only_and_bounded():
+    # Thousands of observations in one tab used to require a full scan of
+    # all tab rows for every loose event. No timing threshold or private
+    # holdout is involved: verify exact counts and bounded public preview.
+    start = datetime(2026, 10, 20, 10, tzinfo=timezone.utc)
+    rows = []
+    for n in range(1200):
+        ref = _scoped(_event(1, A if n % 2 == 0 else B, tab="long-tab"))
+        ref["event_id"] = f"ref{n:04d}"
+        ref["observed_at"] = (start + timedelta(seconds=2 * n)).isoformat()
+        loose = _scoped(_event(2, tab="long-tab"))
+        loose["event_id"] = f"loose{n:04d}"
+        loose["observed_at"] = (start + timedelta(seconds=2 * n + 1)).isoformat()
+        rows.extend((ref, loose))
+    result = linked_work_items(list(reversed(rows)))
+    assert result["total_items"] == 2
+    assert result["total_candidate_links"] == 1200
+    assert len(result["candidate_links"]) == 50
+    assert result["unlinked_observation_count"] == 1200
+    assert result["candidate_links"][0]["event_id"] == "loose0000"
+    assert result["candidate_links"][0]["toward_event_id"] == "ref0000"
+    assert result["candidate_links"][-1]["event_id"] == "loose0049"
+    assert result["candidate_links"][-1]["toward_event_id"] == "ref0049"
+    assert all(c["relation"] == "same_tab_multiplexed" and c["merged"] is False
+               for c in result["candidate_links"])
+    assert all(item["cross_record_join"] is False
+               and item["link_basis"] == {"same_record": 599} for item in result["items"])
+    assert "long-tab" not in json.dumps(result)
