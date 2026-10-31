@@ -1173,3 +1173,45 @@ def test_bad_ephemeral_actor_device_session_does_not_erase_exact_record_link():
         assert set(_items(result)) == {("e01", "e02")}
         assert _items(result)[("e01", "e02")]["link_basis"] == {"same_record": 1}
         assert result["candidate_links"] == []
+
+
+def test_invalid_timestamp_cannot_hide_conflicting_exact_record_identity():
+    """Bad time drops the observation, not its contradictory source claim."""
+    bad_time = _event(3, A, provider="github")
+    bad_time["observed_at"] = "not-a-timestamp"
+    result = linked_work_items([
+        _event(1, A), _event(2, B), bad_time, _event(4, A), _event(5, B),
+    ])
+    assert set(_items(result)) == {("e02", "e05")}
+    assert result["conflicting_reference_groups_suppressed"] == 1
+    assert result["unlinked_observation_count"] == 2
+    assert result["candidate_links"] == []
+
+
+def test_invalid_timestamp_malformed_claim_cannot_hide_exact_ref_conflict():
+    """An explicit malformed provider claim still vetoes its literal ref."""
+    bad_time = _event(3, A)
+    bad_time["metadata"]["resource_reference"]["provider"] = False
+    bad_time["observed_at"] = "invalid"
+    result = linked_work_items([
+        _event(1, A), _event(2, B), bad_time, _event(4, A), _event(5, B),
+    ])
+    assert set(_items(result)) == {("e02", "e05")}
+    assert result["conflicting_reference_groups_suppressed"] == 1
+
+
+def test_invalid_timestamp_valid_claim_is_not_membership_or_ephemeral_veto():
+    """A same-identity bad-time row neither joins nor poisons valid transfers."""
+    bad_time = _event(3, A, transfer="valid-transfer", action="copy")
+    bad_time["observed_at"] = "not-a-timestamp"
+    result = linked_work_items([
+        _event(1, A, transfer="valid-transfer", action="copy"),
+        _event(2, B, transfer="valid-transfer", action="paste"),
+        bad_time,
+        _event(4, C), _event(5, C),
+    ])
+    assert set(_items(result)) == {("e01", "e02"), ("e04", "e05")}
+    assert result["conflicting_reference_groups_suppressed"] == 0
+    assert result["ambiguous_clipboard_transfer_groups"] == 0
+    assert result["inconsistent_clipboard_transfer_direction_groups"] == 0
+    assert "e03" not in json.dumps(result)
