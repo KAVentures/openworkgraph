@@ -194,3 +194,30 @@ positive absent-key behavior. This is conservative evidence hygiene,
 not authentication of source records, evidence of business completion,
 or a measured improvement in held-out F1. It introduces no provider
 calls, new permissions, model spending, or changes to evaluation truth.
+
+
+## Explicitly malformed ephemeral scope versus absent legacy scope
+
+The four ephemeral-link scope dimensions have two distinct states: a field
+**absent** in a legacy observation means its unknown component is represented
+by the existing empty sentinel; a field **present with null or an empty
+string** is an invalid identity claim and cannot participate in a tab,
+clipboard-transfer or same-app continuity link. Previously, the implementation
+coalesced both states and could link a malformed/null-scoped observation to a
+legacy unscoped observation using a reused opaque tab or transfer token.
+
+This is a conservative fail-closed distinction. Two genuinely legacy
+observations with the same missing scope components can still use the existing
+ephemeral evidence; an observation with an explicitly null/empty component
+cannot use those weak signals. Exact normalized record-reference linking is
+separate and retains its existing source/tenant conflict checks, even when a
+local ephemeral-scope component is unusable. No missing value authorizes
+cross-tenant access.
+
+The synthetic regressions exercise all four dimensions, both null and empty
+values, reversed input order, tab and clipboard links, weak surface candidates,
+positive legacy-missing controls, and independent same-record positive controls.
+They do **not** measure a held-out F1 uplift, authenticate identity, or prove
+interruption rejection on real customers. The preregistered family holdout,
+assignment F1 >= 0.90 and contamination <= 0.05 gates remain unchanged and
+unverified; no private truth or evaluation scoring has been modified.
