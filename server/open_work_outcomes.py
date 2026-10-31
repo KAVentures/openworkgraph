@@ -62,6 +62,15 @@ def source_operation_receipt(
     source = graph.get("source_evidence")
     if not isinstance(source, dict) or source.get("availability") != "source_reported" or source.get("source_state_reported") is not True:
         return _unknown(resource_ref, expected_operation, "authoritative_provider_status_unavailable")
+    # Record identity and the independently refreshed source receipt are two
+    # separate pieces of evidence. Do not promote a mixed-provider receipt
+    # (or a receipt for a different object kind) into an operation success.
+    # Older Stripe receipts omit object_type; their exact record kind is
+    # already established above by the retained record graph. When a source
+    # supplies object_type, it must agree rather than being silently ignored.
+    if (source.get("provider") != provider or
+        ("object_type" in source and source["object_type"] != kind)):
+        return _unknown(resource_ref, expected_operation, "provider_receipt_identity_conflict")
     stamp = source.get("verified_at")
     try:
         when = datetime.fromisoformat(str(stamp or "").replace("Z", "+00:00"))
