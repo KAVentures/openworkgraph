@@ -70,6 +70,51 @@ identity authority. Verify operation ordering and no-match behavior with a
 customer-authorized IdP test before rollout; the static report never echoes
 declared selector values or email addresses.
 
+## Optional Group creation mapping and externalId lineage (offline only)
+
+When Groups are enabled, the mapping may now include an **optional**
+`groups.create_attributes` array, for example:
+
+```json
+"groups": {
+  "enabled": true,
+  "match_attributes": ["externalId"],
+  "create_attributes": ["displayName", "externalId", "members"]
+}
+```
+
+The array describes **declared IdP mapping outputs**, not actual emitted
+requests, authenticated identity, SCIM permissions or an enabled OWG
+connector. The shipped `gateway/scim_groups.py` Group create endpoint
+**requires `displayName`** and optionally accepts `externalId` and
+direct-User `members` metadata. Other Group creation fields, including
+roles, scopes and nested membership paths, are unsupported. A declared
+creation mapping missing `displayName` is a **blocker**
+(`missing_group_create_displayname`). If matching declares `externalId`
+but the declared creation mapping omits it, the tool emits a **nonblocking**
+`group_externalid_match_not_created` caution: the later provider-scoped
+correlation cannot be demonstrated by this declaration. The preflight does
+not infer that matching by `displayName` is safe or unique.
+
+For **older mapping files** with enabled Groups but no
+`groups.create_attributes` field, the tool emits a **nonblocking**
+`group_create_mapping_not_declared` caution rather than inventing a
+creation contract. Adding an empty array is **not** equivalent to omitting
+the declaration: it explicitly fails the required displayName check.
+Any Group creation declaration while `groups.enabled=false` is blocked,
+even an empty array, to avoid contradictory rollout settings. Existing
+Group name-uniqueness, ETag, disabled-by-default, provider/tenant and
+consent rules are unchanged; Group members never grant OWG access.
+
+A clean declared mapping is still not proof that Entra/Okta sends
+`externalId` consistently, uses the same provider-scoped value on later
+filtering, sends `displayName` on creation, handles duplicate names, or
+respects offboarding and ETags. With authorization and disposable IdP
+identities, verify create → read → match → PATCH/PUT with current/stale
+versions, cross-provider collisions, deleted/revoked providers, direct
+member scope and backup/restore before company rollout. The preflight
+performs **no** live provider calls, identity mutations or business writes.
+
 ## Required acceptance after a clean static result
 
 With a customer-controlled test tenant and explicit authorization, inspect actual generated SCIM requests against ServiceProviderConfig, Schemas and ResourceTypes; test matching filters, create/read/PUT/PATCH/deactivate/delete, Group identity if enabled, ETag/428/412 behavior, provider isolation, revoked-token refusal, employee offboarding/rehire, restore/downgrade and consent boundaries. Validate uniform worker versions before enabling optional mappings. Record failures and timestamps; synthetic CI or this local mapping file is **not** an Entra/Okta certificate, production pilot, customer outcome or business ROI evidence.
