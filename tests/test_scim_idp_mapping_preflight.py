@@ -603,3 +603,56 @@ def test_missing_create_active_is_independent_of_patch_and_username_blockers():
     assert {"creation_active_not_declared", "deactivation_patch_not_declared",
             "missing_stable_username"} <= codes(report)
     assert "unsupported_attribute" not in codes(report)
+
+
+@pytest.mark.parametrize("attribute", ["uſerName", "diſplayName"])
+def test_unicode_casefold_alias_does_not_claim_supported_user_attribute(attribute):
+    # Python casefold() converts long-s to ASCII s, but shipped SCIM _keys()
+    # deliberately uses lower(), so these names cannot be provisioned.
+    from gateway import scim_provisioning as scim
+
+    assert attribute.casefold() in {"username", "displayname"}
+    assert attribute.lower() not in {"username", "displayname"}
+    with pytest.raises(scim.Error):
+        scim._keys({attribute: "example"}, {"username", "displayname"})
+
+    users = mapping()["users"]
+    users["create_attributes"] = ["userName", "active", attribute]
+    report = assess(mapping(users=users))
+    assert report["status"] == "blocked"
+    assert "unsupported_attribute" in codes(report)
+    assert attribute not in json.dumps(report)
+
+
+@pytest.mark.parametrize("prefix", [
+    "urn:ietf:paramſ:scim:schemas:core:2.0:User:",
+    "urn:ietf:params:scim:ſchemas:core:2.0:User:",
+])
+def test_unicode_casefold_alias_does_not_claim_supported_core_user_prefix(prefix):
+    # The shipped _unqualified() uses lower(), not casefold(); the fake
+    # core prefix must never be treated as a supported contact write.
+    from gateway import scim_provisioning as scim
+    from gateway.scim_user_emails import _path
+
+    path = prefix + 'emails[type eq "work"].value'
+    with pytest.raises(scim.Error):
+        _path(path)
+    users = mapping()["users"]
+    users["patch_attributes"] = [path, "active"]
+    report = assess(mapping(users=users))
+    assert report["status"] == "blocked"
+    assert "unsupported_attribute" in codes(report)
+    assert path not in json.dumps(report)
+
+
+def test_ascii_case_insensitive_core_prefix_and_unicode_selector_literal_still_work():
+    from gateway.scim_user_emails import _path
+
+    path = 'URN:IETF:PARAMS:SCIM:SCHEMAS:CORE:2.0:USER:emails[type eq "Straße"].value'
+    assert _path(path) == ("type", "Straße", "value")
+    users = mapping()["users"]
+    users["patch_attributes"] = [path, "active"]
+    report = assess(mapping(users=users))
+    assert report["status"] == "requires_live_validation"
+    assert "unsupported_attribute" not in codes(report)
+    assert "Straße" not in json.dumps(report)
