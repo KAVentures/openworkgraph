@@ -2068,7 +2068,7 @@ test('copyable AI request discloses absent ordinary evidence without inventing w
       assert.match(request, /This is not proof of inactivity or complete capture|Health and gap records are not workflow steps/, name);
       assert.match(request, /Do not infer a workflow, business completion, time savings, or ROI/, name);
       assert.match(request, /other currently authorized evidence.*disclose its source and limits; otherwise report insufficient evidence/, name);
-      assert.ok(request.startsWith('request-reviewed\\n\\nEvidence limitation:'), name);
+      assert.ok(request.startsWith('request-reviewed\n\nEvidence limitation:'), name);
     } else {
       assert.equal(request, 'request-reviewed', name);
     }
