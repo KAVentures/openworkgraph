@@ -147,7 +147,8 @@ def _database(*, create: bool) -> Iterator[sqlite3.Connection | None]:
                 if db.execute("PRAGMA user_version").fetchone()[0] == 1:
                     # A version marker is not proof of the old declaration
                     # schema. Validate the complete v1 identity contract
-                    # *before* ALTER or token generation; otherwise an
+                    # *before* ALTER or token generation, including generated/hidden
+                    # columns that PRAGMA table_info silently omits; otherwise an
                     # incompatible v1 table can be mutated/stamped as v2
                     # before the later v2 shape check rejects it.
                     legacy_expected_columns = (
@@ -165,15 +166,15 @@ def _database(*, create: bool) -> Iterator[sqlite3.Connection | None]:
                         "SELECT type FROM sqlite_master WHERE name='declarations'"
                     ).fetchone()
                     legacy_columns = db.execute(
-                        "PRAGMA table_info(declarations)"
+                        "PRAGMA table_xinfo(declarations)"
                     ).fetchall()
                     legacy_actual_columns = tuple(
-                        (name, declared_type.upper(), required, primary)
-                        for _index, name, declared_type, required, _default, primary
+                        (name, declared_type.upper(), required, primary, hidden)
+                        for _index, name, declared_type, required, _default, primary, hidden
                         in legacy_columns
                     )
                     if (legacy_table != ("table",) or
-                        legacy_actual_columns != legacy_expected_columns or
+                        legacy_actual_columns != tuple((*column, 0) for column in legacy_expected_columns) or
                         _unexpected_schema_object(db)):
                         raise CaseDeclarationError("incompatible legacy declaration schema")
                     # Legacy migration must honor the same global 50-row
@@ -207,7 +208,8 @@ def _database(*, create: bool) -> Iterator[sqlite3.Connection | None]:
         # user_version is only a marker, not proof of a compatible ledger.
         # In particular, a missing PRIMARY KEY would permit duplicate
         # work_item_ref rows, making exact CAS and owner approval ambiguous.
-        # Check the fixed v2 contract before any read or mutation. Both a
+        # Check the fixed v2 contract before any read or mutation, including
+        # generated/hidden columns omitted by PRAGMA table_info. Both a
         # fresh v2 table and the supported v1 migration have this shape.
         expected_columns = (
             ("work_item_ref", "TEXT", 0, 1),
@@ -224,12 +226,12 @@ def _database(*, create: bool) -> Iterator[sqlite3.Connection | None]:
         table = db.execute(
             "SELECT type FROM sqlite_master WHERE name='declarations'"
         ).fetchone()
-        columns = db.execute("PRAGMA table_info(declarations)").fetchall()
+        columns = db.execute("PRAGMA table_xinfo(declarations)").fetchall()
         actual_columns = tuple(
-            (name, declared_type.upper(), required, primary)
-            for _index, name, declared_type, required, _default, primary in columns
+            (name, declared_type.upper(), required, primary, hidden)
+            for _index, name, declared_type, required, _default, primary, hidden in columns
         )
-        if (table != ("table",) or actual_columns != expected_columns or
+        if (table != ("table",) or actual_columns != tuple((*column, 0) for column in expected_columns) or
             _unexpected_schema_object(db)):
             raise CaseDeclarationError("incompatible versioned declaration schema")
         yield db
