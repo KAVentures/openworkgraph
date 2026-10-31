@@ -511,3 +511,55 @@ def test_missing_reference_key_still_supports_legitimate_ephemeral_evidence():
     assert result["items"] == []
     assert {c["relation"] for c in result["candidate_links"]} == {"surface_continuity"}
     assert all(c["merged"] is False for c in result["candidate_links"])
+
+
+
+def test_explicit_null_or_empty_scope_cannot_alias_absent_legacy_identity():
+    # Legacy missing dimensions are a stable unknown identity, not a wildcard
+    # for malformed *present* values. Check each dimension independently.
+    for dimension in ("organization_id", "actor_id", "device_id", "session_id"):
+        for invalid in (None, ""):
+            for signal in ("tab", "transfer"):
+                opts = {signal: "reused-legacy-token"}
+                anchor = _event(1, A, **opts)
+                malformed = _event(2, B if signal == "transfer" else None, **opts)
+                malformed[dimension] = invalid
+                for events in ([anchor, malformed], [malformed, anchor]):
+                    result = linked_work_items(events)
+                    assert result["items"] == [], (dimension, invalid, signal)
+                    assert result["candidate_links"] == [], (dimension, invalid, signal)
+                    assert result["unlinked_observation_count"] == 2
+
+                # Both fields genuinely absent: preserve the historical
+                # same-scope legacy transfer/tab behavior.
+                legacy = linked_work_items([anchor, _event(2, B if signal == "transfer" else None, **opts)])
+                assert set(_items(legacy)) == {("e01", "e02")}, (dimension, signal)
+
+
+def test_explicit_null_or_empty_scope_cannot_create_surface_candidates():
+    for dimension in ("organization_id", "actor_id", "device_id", "session_id"):
+        for invalid in (None, ""):
+            first = _event(1, app="Excel")
+            second = _event(2, app="Excel")
+            second[dimension] = invalid
+            result = linked_work_items([first, second])
+            assert result["items"] == []
+            assert result["candidate_links"] == [], (dimension, invalid)
+            assert result["unlinked_observation_count"] == 2
+
+    legacy = linked_work_items([_event(1, app="Excel"), _event(2, app="Excel")])
+    assert {c["relation"] for c in legacy["candidate_links"]} == {"surface_continuity"}
+    assert all(c["merged"] is False for c in legacy["candidate_links"])
+
+
+def test_malformed_ephemeral_scope_does_not_remove_exact_record_evidence():
+    # Exact normalized source references are a separate signal. Invalid local
+    # ephemeral scope prevents tab/transfer joins, not valid same-record links.
+    for dimension in ("organization_id", "actor_id", "device_id", "session_id"):
+        for invalid in (None, ""):
+            first, second = _event(1, A), _event(2, A)
+            first[dimension] = invalid
+            second[dimension] = invalid
+            result = linked_work_items([first, second])
+            assert set(_items(result)) == {("e01", "e02")}, (dimension, invalid)
+            assert _items(result)[("e01", "e02")]["link_basis"] == {"same_record": 1}
