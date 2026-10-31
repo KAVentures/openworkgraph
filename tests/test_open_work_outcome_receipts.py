@@ -15,6 +15,8 @@ WHEN = datetime(2026, 10, 19, 10, 0, tzinfo=timezone.utc)
 def response(provider="stripe", kind="invoice", state="paid",
              operation="stripe_invoice_paid", verified=True):
     return {
+        "resource_ref": REF,
+        "source_rows_scoped_to_exact_record": True,
         "record_observed": True,
         "record_type": {"provider": provider, "kind": kind},
         "record_identity_complete_within_retained_window": True,
@@ -357,4 +359,90 @@ def test_literal_false_history_truncation_flag_preserves_valid_receipt(
     assert result["availability"] == "source_reported"
     assert result["operation_verified"] is True
     assert result["customer_outcome_verified"] is False
+    assert result["agent_execution_authorized"] is False
+
+
+_OPERATION_FAMILIES = [
+    ("github_pr_merged", "github", "pull_request", "merged"),
+    ("stripe_invoice_paid", "stripe", "invoice", "paid"),
+    ("stripe_refund_processor_succeeded", "stripe", "refund", "succeeded"),
+    ("jira_issue_resolved", "jira", "issue", "done"),
+]
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+@pytest.mark.parametrize("wrong_ref", [
+    "owg:r:" + "b" * 32, None, 7, {}, REF.upper(),
+])
+def test_receipt_rejects_wrong_record_reference_even_with_valid_provider_state(
+    operation, provider, kind, state, wrong_ref,
+):
+    # Cached or injected evidence for a different exact record is never
+    # proof of the requested record, even with matching provider/state.
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    data["resource_ref"] = wrong_ref
+    calls = []
+    result = source_operation_receipt(
+        REF, operation, record_reader=reader(data, calls), now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "record_reference_scope_conflict"
+    assert result["operation_verified"] is False
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert result["resource_ref"] == REF
+    assert len(calls) == 1
+    assert calls[0][1]["include_source_status"] is True
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+    if isinstance(wrong_ref, str):\n        assert wrong_ref not in str(result)
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+@pytest.mark.parametrize("malformed", [None, False, 0, 1, "true", [], {}])
+def test_receipt_requires_literal_true_exact_record_query_scope(
+    operation, provider, kind, state, malformed,
+):
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    data["source_rows_scoped_to_exact_record"] = malformed
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "record_reference_scope_conflict"
+    assert result["operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+@pytest.mark.parametrize("missing", ["resource_ref", "source_rows_scoped_to_exact_record"])
+def test_receipt_missing_exact_record_provenance_is_unknown(
+    operation, provider, kind, state, missing,
+):
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    del data[missing]
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "record_reference_scope_conflict"
+    assert result["operation_verified"] is False
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+def test_exact_record_provenance_preserves_valid_source_receipt(
+    operation, provider, kind, state,
+):
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    assert data["resource_ref"] == REF
+    assert data["source_rows_scoped_to_exact_record"] is True
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["availability"] == "source_reported"
+    assert result["operation_verified"] is True
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
     assert result["agent_execution_authorized"] is False
