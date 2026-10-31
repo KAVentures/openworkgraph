@@ -56,6 +56,20 @@ current contact values, no-match behavior or whether a real provider sends
 such requests. Invalid mappings receive generic errors without echoing contact
 values or addresses.
 
+The preflight also emits a **non-blocking** `overlapping_contact_patch_paths`
+caution when supported declarations may write overlapping contact data: whole
+`emails` plus any nested path, a field affecting all contacts plus a selector
+for the same child (or an entire selected contact), or an entire selected
+contact plus a child path for the same decoded/casefolded selector. These are
+not necessarily duplicate targets: the shipped PATCH parser accepts each
+operation, but the result may depend on actual client operation order and
+current stored contact data. The warning does **not** infer that different
+selector values or different selector kinds identify the same contact. It
+does not block legitimate mappings, change provider permissions or grant
+identity authority. Verify operation ordering and no-match behavior with a
+customer-authorized IdP test before rollout; the static report never echoes
+declared selector values or email addresses.
+
 ## Required acceptance after a clean static result
 
 With a customer-controlled test tenant and explicit authorization, inspect actual generated SCIM requests against ServiceProviderConfig, Schemas and ResourceTypes; test matching filters, create/read/PUT/PATCH/deactivate/delete, Group identity if enabled, ETag/428/412 behavior, provider isolation, revoked-token refusal, employee offboarding/rehire, restore/downgrade and consent boundaries. Validate uniform worker versions before enabling optional mappings. Record failures and timestamps; synthetic CI or this local mapping file is **not** an Entra/Okta certificate, production pilot, customer outcome or business ROI evidence.
