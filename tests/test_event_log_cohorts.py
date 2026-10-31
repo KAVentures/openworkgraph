@@ -72,6 +72,50 @@ def test_attribute_cohorts_use_case_object_attributes():
     assert analytics.kpis(log_id, "order", cohort={"attribute": "region = US"})["cases"] == 15
 
 
+
+def test_benchmark_preserves_fractional_seconds_and_strict_sla_boundary():
+    """A 1.5s case breaches a 1s SLA; exactly 1.0s does not.
+
+    date_diff('second', ...) truncated elapsed time and silently classified
+    the 1.5s case as on time. This is synthetic, not provider acceptance.
+    """
+    rows = [
+        "case,activity,time,who",
+        "a1,Start,2024-01-01T00:00:00Z,team_a",
+        "a1,End,2024-01-01T00:00:00.500000Z,team_a",
+        "a2,Start,2024-01-01T00:01:00Z,team_a",
+        "a2,End,2024-01-01T00:01:01Z,team_a",
+        "a3,Start,2024-01-01T00:02:00Z,team_a",
+        "a3,End,2024-01-01T00:02:01.500000Z,team_a",
+        "b1,Start,2024-01-01T00:03:00Z,team_b",
+        "b1,End,2024-01-01T00:03:01.250000Z,team_b",
+        "b2,Start,2024-01-01T00:04:00Z,team_b",
+        "b2,End,2024-01-01T00:04:02.750000Z,team_b",
+    ]
+    log_id = workspace.import_log(
+        BytesIO(("\\n".join(rows) + "\\n").encode()),
+        name="fractional-duration-synthetic", source_format="csv", mapping=MAPPING,
+    )["log_id"]
+    result = cohorts.benchmark(
+        log_id, [{"resource": "team_a"}, {"resource": "team_b"}], sla_seconds=1,
+    )
+    first, second = result["cohorts"]
+    assert (first["cases"], second["cases"]) == (3, 2)
+    assert first["throughput_seconds"]["p50"] == pytest.approx(1.0)
+    assert first["throughput_seconds"]["p90"] == pytest.approx(1.4)
+    assert second["throughput_seconds"]["p50"] == pytest.approx(2.0)
+    assert second["throughput_seconds"]["p90"] == pytest.approx(2.6)
+    assert (first["sla_breached_cases"], second["sla_breached_cases"]) == (1, 2)
+    assert first["sla_breach_rate"] == round(1 / 3, 6)
+    assert second["sla_breach_rate"] == 1.0
+    gap = result["differences_second_minus_first"]["median_throughput_seconds"]
+    assert gap["difference"] == pytest.approx(1.0)
+    assert gap["sampled_median_throughput_seconds_first"] == pytest.approx(1.0)
+    assert gap["sampled_median_throughput_seconds_second"] == pytest.approx(2.0)
+    assert result["overlapping_cases"] == 0
+    assert result["causal_claims"] is False
+
+
 def test_benchmark_compares_two_cohorts_with_intervals():
     log_id = _log()
     result = cohorts.benchmark(log_id, [{"label": "bob", "resource": "bob"}, {"label": "ann", "resource": "ann"}],
