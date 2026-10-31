@@ -759,3 +759,23 @@ server response authoritative or override the export-ticket's independent
 scope/privacy checks. Synthetic regressions cover equivalent offsets with
 copy and detailed download, plus a changed-instant refusal. Native browser,
 accessibility, packaged and cross-platform CI remain required.
+
+## Redacted sample-label provenance and safe rendering
+
+The six-at-most focus-span context examples are *selected, redacted
+observations*, not arbitrary JSON labels. Before the handoff opens, the
+browser refuses an example whose `app` or `window_title` is an object,
+array or number, or whose supplied `app` is blank/whitespace-only. This
+prevents misleading `[object Object]` or numeric pseudo-app names from
+being presented as observed evidence. A missing/null app is displayed
+explicitly as **Unknown app**; a missing/null title remains **Untitled
+activity**. Ordinary text labels, optional legacy timestamps and safe
+HTML-escaped labels continue to work. These labels are not an identity
+attestation, proof of workflow completeness, or authorization to act.
+
+The deterministic mock-DOM tests cover eight malformed app/title cases,
+three valid/missing/HTML-looking label cases, no modal or export on
+malformed evidence, safe escaping, and an unchanged user-initiated
+copy-only request for valid previews. Native browser/accessibility and
+full CI are still required; these synthetic cases do not substitute for
+consenting-user pilot evidence.
