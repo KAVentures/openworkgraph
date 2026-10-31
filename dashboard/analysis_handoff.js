@@ -422,20 +422,22 @@
         <p>${esc(latestWorkStatement)} Capture health and gaps are shown separately; they do not confirm the recorder is running.</p>
         <p>${esc(localRead)} Hosted AI availability must be checked separately: it only sees previously shared evidence. Preparing or downloading a local file does not grant AI history access.</p>
       </div>
-      <details><summary>Analyze a large history in smaller parts</summary><p>Ask your AI to process one day at a time, follow every page, and keep track of what it has examined. Repeated-work maps are optional. The file download still contains the full selected period.</p>${dailyBreakdown}${d.analysis_plan?.more_dates_not_listed?'<p>Only the first 31 dates are listed. Continue through the remaining selected dates.</p>':''}</details>
-      <details><summary>Preview redacted context examples</summary><ul>${d.redacted_examples.map(x=>`<li>${esc(x.app)} · ${esc(x.window_title||'Untitled activity')}</li>`).join('')||'<li>No focus spans in this selection.</li>'}</ul><p>Filtering is best effort; inspect the downloaded package before sharing it.</p></details>
-      <label style="display:flex;gap:8px;margin:12px 0"><input id="analysisDetailed" type="checkbox">Include detailed chronological evidence (raw local event rows, more labels and context)</label>
+      <details><summary>Analyze a large history in smaller parts</summary><p>Ask your AI to process one day at a time, follow every page, and keep track of what it has examined. Repeated-work maps are optional. ${d.canonical_rows?'The file download still contains the full selected period.':'No evidence package is available for this zero-event selection; only the explanatory request can be copied.'}</p>${dailyBreakdown}${d.analysis_plan?.more_dates_not_listed?'<p>Only the first 31 dates are listed. Continue through the remaining selected dates.</p>':''}</details>
+      <details><summary>Preview redacted context examples</summary><ul>${d.redacted_examples.map(x=>`<li>${esc(x.app)} · ${esc(x.window_title||'Untitled activity')}</li>`).join('')||'<li>No focus spans in this selection.</li>'}</ul><p>Filtering is best effort; inspect any downloaded package before sharing it.</p></details>
+      <label style="display:flex;gap:8px;margin:12px 0"><input id="analysisDetailed" type="checkbox" ${d.canonical_rows?'':'disabled'}>Include detailed chronological evidence (raw local event rows, more labels and context)</label>
       <p>Name redaction is best effort, not anonymization. Even summary exports may contain sensitive titles, URLs or metadata; detailed chronology adds raw local evidence that may contain more sensitive content. Inspect the file before sharing it. Gaps and foreground time are not measured lost work or savings.</p>
+      ${d.canonical_rows?'':'<p class="muted">No recorded events in the selected period. An evidence package is unavailable; you can still copy the explanatory request. This does not establish inactivity or complete capture.</p>'}
       <div class="modal-actions"><button type="button" id="analysisDownload" ${d.canonical_rows?'':'disabled'}>Download AI evidence package</button><button type="button" class="secondary" id="analysisCopy">Copy request for my AI</button></div>
       <details style="margin-top:12px"><summary>Read the request</summary><pre style="white-space:pre-wrap" id="analysisRequest"></pre></details>
-      <div class="muted" id="analysisActionStatus" role="status">Nothing has been sent to an AI. Downloads work with any capable AI, without an OWG cloud account.</div>`);
+      <div class="muted" id="analysisActionStatus" role="status">Nothing has been sent to an AI. ${d.canonical_rows?'Downloads work with any capable AI, without an OWG cloud account.':'There is no recorded-event package to download for this selection.'}</div>`);
     const requestNode=$('#analysisRequest'), statusNode=$('#analysisActionStatus');
     const copyNode=$('#analysisCopy'), downloadNode=$('#analysisDownload'), detailedNode=$('#analysisDetailed');
     requestNode.textContent=request;
     copyNode.disabled=false;
     downloadNode.disabled=!d.canonical_rows;
     detailedNode.checked=false;
-    detailedNode.disabled=false;
+    // With no selected rows there is no downloadable chronology to configure.
+    detailedNode.disabled=!d.canonical_rows;
     activeHandoff={seq,copy:copyNode,download:downloadNode,detailed:detailedNode,status:statusNode};
     const current=()=>seq===generation && selectionStillMatches(chosen);
     const expired=()=>{
