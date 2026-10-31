@@ -281,3 +281,41 @@ def test_finite_exponents_and_normal_mapping_remain_compatible():
         "finite": [1e308, -1e-308, 0.5],
     }
     assert assess(load_text(json.dumps(mapping())))["status"] == "requires_live_validation"
+
+
+@pytest.mark.parametrize("payload", [
+    r'"\ud800"',
+    r'"\udfff"',
+    r'{"unused":["\ud800"]}',
+    r'{"unused":{"\udfff":"value"}}',
+    r'{"unused":{"nested":{"key":"\ud83d"}}}',
+], ids=["lone-high", "lone-low", "nested-value", "nested-key", "deep-value"])
+def test_unpaired_surrogate_escapes_are_refused_even_in_unused_fields(payload):
+    with pytest.raises(InvalidMapping):
+        load_text(payload)
+
+
+@pytest.mark.parametrize("text", [
+    chr(0xD800),
+    '{"unused":"' + chr(0xDFFF) + '"}',
+], ids=["raw-high", "raw-low-in-object"])
+def test_direct_load_text_normalizes_unencodable_unicode_to_invalid_mapping(text):
+    with pytest.raises(InvalidMapping):
+        load_text(text)
+
+
+def test_valid_supplementary_unicode_surrogate_pair_is_preserved():
+    assert load_text(r'{"unused":"\ud83d\ude80"}') == {"unused": "\U0001f680"}
+    assert load_text('{"unused":"\U0001f680"}') == {"unused": "\U0001f680"}
+
+
+def test_cli_surrogate_rejection_is_generic_and_does_not_echo_input():
+    invalid = subprocess.run(
+        [sys.executable, str(SCRIPT), "-"],
+        input=br'{"unused":"\ud800"}',
+        capture_output=True,
+    )
+    assert invalid.returncode == 1
+    assert json.loads(invalid.stdout)["status"] == "invalid_input"
+    assert b"unused" not in invalid.stdout + invalid.stderr
+    assert b"ud800" not in invalid.stdout + invalid.stderr
