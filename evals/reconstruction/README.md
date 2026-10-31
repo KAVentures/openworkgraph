@@ -144,12 +144,24 @@ answer key, with no model involved:
     python -m evals.reconstruction.owg_native --split holdout
 
 Lanes publish no event IDs; for scoring only, each published lane is projected
-back to the events carrying its opaque reference. A lane means "same record",
-never "same task", so a record shared by several true workflows is reported as
-contamination rather than hidden. `tests/test_reconstruction_owg_native.py`
-holds regression floors on all and holdout cases and requires that lanes never
-merge different records, fail closed when references are missing, and never
-republish deleted evidence.
+back to **admitted, visible** events carrying its opaque reference. The adapter
+uses the shipped record-lane identity and UTC timestamp admission rules, retains
+the first valid occurrence of a repeated (record, event ID), and does not score
+invalid timestamps, nonliteral/malformed event IDs or source-only rows absent
+from `presented_evidence`. A reused event ID admitted under two distinct
+records is withheld from both rather than assigned to an arbitrary lane.
+Source rows without a usable literal event ID may still contribute to the
+shipped lane's aggregate count but cannot be assigned to a visible event ID
+in this evaluation. This is a measurement-integrity correction, **not** a
+change to production record grouping, synthetic truth, family split, scoring
+formula, thresholds or a demonstrated improvement in held-out F1.
+
+A lane means "same record", never "same task", so a record shared by several
+true workflows is reported as contamination rather than hidden.
+`tests/test_reconstruction_owg_native.py` holds regression floors on all and
+holdout cases and adds adversarial projection checks for invalid timestamps,
+duplicate IDs, cross-record collisions, source-only rows, offset ordering and
+conflicting source identity.
 
 ### Multi-signal linked items
 
