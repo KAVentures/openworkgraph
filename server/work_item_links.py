@@ -223,9 +223,9 @@ def _observations(events: list[dict[str, Any]]) -> tuple[
     for event_id, event in unique_events.items():
         if event_id in conflicting_event_ids:
             continue
-        stamp = _stamp(event.get("observed_at"))
-        if stamp is None:
-            continue
+        # An invalid observation time removes membership, not the source
+        # identity claim. A contradictory provider/tenant assertion must not
+        # disappear merely because its timestamp cannot be ordered.
         match = _identity(event) if _literal_record_claim(event) else None
         ref = ""
         if match:
@@ -244,6 +244,12 @@ def _observations(events: list[dict[str, Any]]) -> tuple[
                 invalid_claim_events.add(event_id)
             if _RESOURCE.fullmatch(claimed_ref):
                 conflicts.add(claimed_ref)
+        # Invalid timestamps never become linked observations or scoped
+        # clipboard/tab vetoes; only their literal source-identity claims can
+        # invalidate a conflicting exact-reference group.
+        stamp = _stamp(event.get("observed_at"))
+        if stamp is None:
+            continue
         rows.append({
             "event_id": event_id, "observed_at": stamp, "ref": ref,
             "provider": match[1] if match else "", "kind": match[2] if match else "",
