@@ -51,10 +51,21 @@ def _unqualified_contact_patch_path(path: str) -> str:
 
 def _supported_contact_patch_path(path: str) -> bool:
     path = _unqualified_contact_patch_path(path)
-    if path == "emails" or path in {"emails." + child for child in _CONTACT_CHILDREN}:
+    # The shipped PATCH dispatcher first calls scim_user_emails.owns(),
+    # which uses lower(), not the regex engine's broader Unicode IGNORECASE.
+    # For example, re.I matches emailſ as emails, but the dispatcher does not.
+    lowered = path.lower()
+    if not (lowered == "emails" or lowered.startswith(("emails.", "emails["))):
+        return False
+    if lowered == "emails" or lowered in {"emails." + child for child in _CONTACT_CHILDREN}:
         return True
     match = _CONTACT_SELECTOR.fullmatch(path)
     if match is None:
+        return False
+    # re.I also matches Unicode confusables in selector/child structure.
+    # Shipped _path() lowercases these groups, and downstream field validation
+    # only recognizes the literal supported keys. Do not certify those aliases.
+    if match.group(1).lower() not in {"type", "value"} or (match.group(3) and match.group(3).lower() not in _CONTACT_CHILDREN):
         return False
     try:
         literal = json.loads(match.group(2))
