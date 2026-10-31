@@ -467,3 +467,47 @@ def test_exact_duplicate_event_id_is_idempotent_and_unrelated_groups_survive_col
     result = linked_work_items([first, conflicting, second, third, fourth])
     assert set(_items(result)) == {("e03", "e04")}
     assert result["unlinked_observation_count"] == 1
+
+
+def test_explicit_null_record_claim_is_not_loose_tab_or_transfer_evidence():
+    # An explicit null is a malformed reference claim, not evidence that the
+    # observation was genuinely unreferenced. It must not rejoin record B.
+    for signal in ("tab", "transfer"):
+        options = {signal: "shared-opaque"}
+        null_claim = _scoped(_event(1, app="Excel", **options))
+        null_claim["metadata"]["resource_reference"] = None
+        anchored = _scoped(_event(2, B, app="Excel", **options))
+        for events in ([null_claim, anchored], [anchored, null_claim]):
+            result = linked_work_items(events)
+            assert result["items"] == [], signal
+            assert result["candidate_links"] == [], signal
+            assert result["unlinked_observation_count"] == 2, signal
+
+
+def test_explicit_null_reference_cannot_become_surface_continuity_candidate():
+    null_claim = _scoped(_event(1, app="Excel"))
+    null_claim["metadata"]["resource_reference"] = None
+    ordinary = _scoped(_event(2, app="Excel"))
+    result = linked_work_items([null_claim, ordinary])
+    assert result["items"] == []
+    assert result["candidate_links"] == []
+    assert result["unlinked_observation_count"] == 2
+
+
+def test_missing_reference_key_still_supports_legitimate_ephemeral_evidence():
+    # Absence is not the same as an explicitly rejected null claim.
+    for signal in ("tab", "transfer"):
+        options = {signal: "shared-opaque"}
+        loose = _scoped(_event(1, app="Excel", **options))
+        anchored = _scoped(_event(2, B, app="Excel", **options))
+        result = linked_work_items([loose, anchored])
+        assert set(_items(result)) == {("e01", "e02")}, signal
+        basis = "same_tab_single_record" if signal == "tab" else "clipboard_transfer"
+        assert _items(result)[("e01", "e02")]["link_basis"] == {basis: 1}
+
+    first = _scoped(_event(1, app="Excel"))
+    second = _scoped(_event(2, app="Excel"))
+    result = linked_work_items([first, second])
+    assert result["items"] == []
+    assert {c["relation"] for c in result["candidate_links"]} == {"surface_continuity"}
+    assert all(c["merged"] is False for c in result["candidate_links"])
