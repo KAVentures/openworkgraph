@@ -29,6 +29,7 @@ outcomes. No titles, UI labels, URLs or clipboard contents are read or returned.
 from __future__ import annotations
 
 from collections import defaultdict
+import math
 import re
 from typing import Any
 
@@ -39,6 +40,7 @@ _TAB = re.compile(r"^[A-Za-z0-9:._-]{1,160}$")
 _MAX_ITEMS = 50
 _MAX_EVENT_IDS = 50
 _MAX_CANDIDATES = 50
+_MAX_DUPLICATE_PAYLOAD_NODES = 10_000
 _CONFIDENCE = {"same_record": 0.95, "clipboard_transfer": 0.85, "same_tab_single_record": 0.7}
 _CANDIDATE_CONFIDENCE = {"same_tab_multiplexed": 0.4, "same_tab_unreferenced": 0.35, "surface_continuity": 0.3}
 
@@ -120,6 +122,45 @@ def _link_scope(event: dict[str, Any]) -> tuple[str, str, str, str] | None:
     return tuple(values)  # type: ignore[return-value]
 
 
+def _same_observation_payload(first: Any, second: Any) -> bool:
+    """Compare duplicate event claims without Python's bool/int coercion.
+
+    Dict/list nesting is checked iteratively with a fixed work bound. Only
+    literal JSON-shaped values are admissible as an *identical* payload:
+    `True == 1` and `1 == 1.0` must not choose a first-row-wins record,
+    tenant or weak-link claim. Unsupported/cyclic/overlarge payloads fail
+    closed rather than granting duplicate evidence authority.
+    """
+    pending: list[tuple[Any, Any]] = [(first, second)]
+    checked = 0
+    while pending:
+        checked += 1
+        if checked > _MAX_DUPLICATE_PAYLOAD_NODES:
+            return False
+        left, right = pending.pop()
+        if type(left) is not type(right):
+            return False
+        if type(left) is dict:
+            if (len(left) != len(right) or
+                    any(type(key) is not str for key in left) or
+                    left.keys() != right.keys()):
+                return False
+            pending.extend((left[key], right[key]) for key in left)
+        elif type(left) is list:
+            if len(left) != len(right):
+                return False
+            pending.extend(zip(left, right))
+        elif type(left) is float:
+            if not math.isfinite(left) or not math.isfinite(right) or left != right:
+                return False
+        elif type(left) in (str, int, bool, type(None)):
+            if left != right:
+                return False
+        else:
+            return False
+    return True
+
+
 def _observations(events: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
     """Validated, de-duplicated, chronologically ordered observations."""
     identities: dict[str, tuple[str, str, str, str]] = {}
@@ -141,7 +182,7 @@ def _observations(events: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], i
             continue
         previous = unique_events.get(event_id)
         if previous is not None:
-            if event != previous:
+            if not _same_observation_payload(event, previous):
                 conflicting_event_ids.add(event_id)
         else:
             unique_events[event_id] = event
