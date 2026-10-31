@@ -1331,7 +1331,26 @@
             const r=await (await api(logPath('simulate'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(scenario)})).json();
             const line=(name,x)=>{const c=x.cycle_time_seconds||{};return [name,duration(c.p50),duration(c.p90),duration(c.mean),x.completed_per_day===null?'—':Number(x.completed_per_day).toFixed(1)];};
             const change=r.median_cycle_time_change_seconds;
+            const report={format:'openworkgraph.simulation-report.v1',generated_at:new Date().toISOString(),
+              interpretation:'Modelled outcomes under stated assumptions; not measured savings or execution approval.',
+              submitted_scenario:scenario,analysis:r};
+            const exports=exportButtons('owgEventLogSimulation',()=>report,()=>{
+              const data=[['section','run','metric','value','unit']];
+              for(const [name,result] of [['baseline',r.baseline],['scenario',r.result]]){
+                for(const metric of ['p50','p90','mean'])data.push(['cycle_time',name,metric,result.cycle_time_seconds?.[metric],'seconds']);
+                data.push(['throughput',name,'completed_per_day',result.completed_per_day,'cases/day']);
+                data.push(['stability',name,'unstable',Boolean(result.unstable),'boolean']);
+                for(const activity of result.activities||[])for(const metric of ['resources','minutes','utilization','mean_wait_seconds','p90_wait_seconds'])
+                  data.push(['activity',name,activity.activity+' / '+metric,activity[metric],metric==='minutes'?'minutes':metric.endsWith('_seconds')?'seconds':metric==='utilization'?'fraction':'resources']);
+              }
+              for(const assumption of r.assumptions||[])data.push(['assumption','both',assumption,'','']);
+              data.push(['interpretation','both',report.interpretation,'','']);
+              return data;
+            });
+            exports.enable(true);
             out.replaceChildren(
+              exports.node,
+              el('div','Downloads include activity labels, log metadata, declared schedules and model assumptions. Review them before sharing. JSON contains the complete run; CSV summarizes metrics in their stated units.','muted'),
               ...(r.result.unstable?[el('div','Warning: at least one activity has more work arriving than its resources can handle, so its queue keeps growing. Times below depend on how many cases you simulate.','note')]:[]),
               table(['Run','Median cycle time','90th percentile','Mean','Completed per day'],[line('Simulated baseline',r.baseline),line(r.scenario.label||'Scenario',r.result)]),
               el('div',change===null?'':'Median cycle time change: '+(change>=0?'+':'−')+duration(Math.abs(change))+'.','muted'),
