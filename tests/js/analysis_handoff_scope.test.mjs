@@ -2510,3 +2510,57 @@ test('invisible source separators are disclosed while ordinary source labels rem
     assert.equal(h.tickets.length, 0);
   });
 });
+
+
+test('redacted example omissions never erase counted focus evidence', async t => {
+  const cases = [
+    {
+      name: 'two focus events but no samples supplied',
+      mutate: d => d,
+      expected: /No redacted context examples were supplied, although 2 selected focus-span events are counted/,
+      warning: false
+    },
+    {
+      name: 'one redacted sample does not claim complete coverage',
+      mutate: d => ({...d, redacted_examples: [{app: 'Editor', window_title: '<redacted>'}]}),
+      expected: /1 redacted context example\(s\) supplied; 2 selected focus-span events counted/,
+      warning: false
+    },
+    {
+      name: 'two redacted samples still do not certify capture completeness',
+      mutate: d => ({...d, redacted_examples: [
+        {app: 'Editor', window_title: 'First'},
+        {app: 'Browser', window_title: 'Second'}
+      ]}),
+      expected: /2 redacted context example\(s\) supplied; 2 selected focus-span events counted/,
+      warning: false
+    },
+    {
+      name: 'health-only selection truthfully has zero focus events',
+      mutate: d => ({...d, event_types: {capture_gap: 2}, redacted_examples: []}),
+      expected: /No focus-span events recorded in this selection; this does not prove inactivity or complete capture/,
+      warning: true
+    }
+  ];
+  for (const {name, mutate, expected, warning} of cases) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], mutate(h.preview('range', 'focus-omission')));
+    await opening;
+    assert.equal(h.modals, 1);
+    assert.match(h.modalHtml, expected);
+    assert.doesNotMatch(h.modalHtml, /No focus spans in this selection/);
+    if (name.includes('one redacted sample')) {
+      assert.match(h.modalHtml, /Editor · &lt;redacted&gt;/);
+      assert.doesNotMatch(h.modalHtml, /<redacted>/);
+    }
+    assert.match(h.modalHtml, /Examples are a bounded sample|Missing examples do not mean no focus was observed|does not prove inactivity or complete capture/);
+    await h.modal['#analysisCopy'].onclick();
+    if (warning) assertCopyEvidenceWarning(h.copied, 'request-focus-omission', true);
+    else assert.deepEqual(h.copied, ['request-focus-omission']);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+  });
+});
