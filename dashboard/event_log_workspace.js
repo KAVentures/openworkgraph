@@ -369,6 +369,7 @@
     results.appendChild(signalSection((activities.activities||[]).map(a=>a.activity)));
     results.appendChild(predictionSection((activities.activities||[]).map(a=>a.activity)));
     results.appendChild(complianceSection((activities.activities||[]).map(a=>a.activity)));
+    results.appendChild(domainPackSection());
     status('');
   }
 
@@ -771,6 +772,103 @@
           el('div',r.interpretation,'muted'));
       }catch(error){if(current(t))out.replaceChildren(el('div',error.message,'muted'));}
       finally{if(current(t))check.disabled=false;}
+    };
+    return box;
+  }
+
+  // Domain pack mapping: role -> chosen log name, leaving out roles mapped to nothing.
+  function packMapping(roles,values){
+    const out={object_types:{},activities:{}};
+    for(const kind of ['object_types','activities'])for(const r of roles[kind]){const v=values[kind][r.role];if(v)out[kind][r.role]=v;}
+    return out;
+  }
+  // A starting guess: the installed mapping, else a log name equal to the role's label (ignoring case).
+  function packGuess(role,names,installed){
+    if(installed&&names.includes(installed))return installed;
+    return names.find(n=>n.trim().toLowerCase()===role.label.toLowerCase())||'';
+  }
+  // Plain rows for a domain pack report.
+  function packReportRows(r){
+    const value=(m,x)=>x===null||x===undefined?'—':m.unit==='seconds'?duration(x):Number(x).toLocaleString(undefined,{maximumFractionDigits:2});
+    return {
+      metrics:r.metrics.map(m=>[m.name,m.case_type,Number(m.cases).toLocaleString(),value(m,m.median),value(m,m.p90),Number(m.coverage.cases_with_value??m.cases).toLocaleString()+' of '+Number(m.cases).toLocaleString()]),
+      compliance:r.compliance.flatMap(g=>g.results.map(x=>[g.case_type,x.description,Number(x.activated_cases).toLocaleString(),Number(x.violating_cases).toLocaleString(),Number(x.unknown_cases||0).toLocaleString()])),
+      objectRules:(r.object_rules?r.object_rules.results:[]).map(x=>[x.description,x.complete===false?'—':Number(x.activated).toLocaleString(),x.complete===false?'Unknown':Number(x.violating).toLocaleString()]),
+      model:r.object_model?Number(r.object_model.summary.fitting_objects).toLocaleString()+' of '+Number(r.object_model.summary.replayed_objects).toLocaleString()+' objects fit the reference lifecycles; '+Number(r.object_model.summary.fitting_events).toLocaleString()+' of '+Number(r.object_model.summary.events_checked).toLocaleString()+' events match its arcs.':'No reference lifecycle applies with this mapping.',
+      notApplicable:r.not_applicable.map(n=>n.section.replace(/_/g,' ')+' '+(n.index+1)+' (needs '+n.unmapped_role.replace(/_/g,' ')+')')};
+  }
+
+  function domainPackSection(){
+    const box=section('Domain packs');box.id='owgDomainPacks';
+    box.appendChild(el('div','Apply ready-made definitions for a well-known process to this log: case metrics, compliance and object rules and a reference object model. Map each role to the names your log uses; the pack states its assumptions and is not validated against your source system.','muted'));
+    const status=el('div',null,'muted');status.id='owgDomainPackStatus';status.setAttribute('role','status');
+    const form=el('div');form.id='owgDomainPackForm';
+    const out=el('div');out.id='owgDomainPackReport';
+    const setup=button('Set up a domain pack','secondary');setup.id='owgDomainPackSetup';
+    box.append(setup,form,status,out);
+    const generation=state.generation,logId=state.logId,base='/v1/event-logs/'+encodeURIComponent(logId)+'/domain-packs';
+    let turn=0;const current=t=>generation===state.generation&&box.isConnected&&t===turn;
+    const post=(url,body)=>api(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    setup.onclick=async()=>{
+      const t=++turn;setup.disabled=true;status.textContent='Loading…';
+      try{
+        const [catalog,installs]=await Promise.all([getJSON('/v1/event-log-domain-packs'),getJSON(base)]);
+        if(!current(t))return;
+        const pack=catalog.packs[0],installed=installs.installs.find(i=>i.pack_id===pack.pack_id);
+        const choices={object_types:{},activities:{}},inputs={};
+        const rows=[];
+        for(const [kind,names] of [['object_types',installs.log_object_types],['activities',installs.log_activities]])for(const r of pack[kind]){
+          const s=select('owgDomainPackRole-'+r.role,[['',r.required?'Choose (required)':'Not in this log'],...names.map(n=>[n,n])]);
+          s.value=packGuess(r,names,installed&&installed.mapping[kind][r.role]);s.setAttribute('aria-label',r.label+(r.required?' (required)':' (optional)'));
+          s.onchange=()=>{choices[kind][r.role]=s.value;};choices[kind][r.role]=s.value;
+          rows.push([kind==='object_types'?'Object type':'Activity',r.label+(r.required?'':' (optional)'),s]);
+        }
+        const params=pack.parameters.map(p=>{const i=input('owgDomainPackParam-'+p.name,'number');i.min=String(p.min);i.max=String(p.max);i.value=String(installed?installed.parameters[p.name]:p.default);inputs[p.name]=i;return field(p.label,i);});
+        const install=button(installed?'Install '+pack.latest_version+(installed.version===pack.latest_version?' again':' (upgrade from '+installed.version+')'):'Install '+pack.title+' '+pack.latest_version);install.id='owgDomainPackInstall';
+        const run=button('Run pack report','secondary');run.id='owgDomainPackRun';run.disabled=!installed;
+        const remove=button('Uninstall','secondary');remove.id='owgDomainPackUninstall';remove.disabled=!installed;
+        const paramRow=el('div',null,'row');paramRow.style.alignItems='end';paramRow.append(...params);
+        const actions=el('div',null,'row');actions.append(install,run,remove);
+        const assumptions=el('ul');assumptions.className='muted';pack.assumptions.forEach(a=>assumptions.appendChild(el('li',a)));
+        form.replaceChildren(el('h4',pack.title+' '+pack.latest_version),el('div',pack.description,'muted'),table(['Kind','Role','Name in this log'],rows),paramRow,actions,el('h4','Assumptions'),assumptions);
+        status.textContent=(installed?'Installed: '+installed.version+' on '+String(installed.installed_at).slice(0,10)+'.':'Not installed on this log.')+(installs.names_truncated?' Only the 1,000 most frequent object types and activities are offered.':'');
+        install.onclick=async()=>{
+          const t2=++turn;install.disabled=true;
+          try{
+            const parameters={};for(const [k,i] of Object.entries(inputs))parameters[k]=Number(i.value);
+            const r=await (await post(base+'/'+pack.pack_id,{version:pack.latest_version,mapping:packMapping(pack,choices),parameters})).json();
+            if(!current(t2))return;
+            run.disabled=remove.disabled=false;
+            status.textContent=({installed:'Installed',upgraded:'Upgraded from '+r.previous_version+' to',reconfigured:'Reinstalled'}[r.change])+' '+r.version+'. '+r.metric_ids.length+' case metrics were added to this log’s metric library.'+(r.not_applicable.length?' '+r.not_applicable.length+' definitions do not apply without their optional roles.':'');
+          }catch(error){if(current(t2))status.textContent=error.message;}
+          finally{if(current(t2))install.disabled=false;}
+        };
+        run.onclick=async()=>{
+          const t2=++turn;run.disabled=true;out.replaceChildren(el('div','Running…','muted'));
+          try{
+            const r=await getJSON(base+'/'+pack.pack_id+'/report');
+            if(!current(t2))return;
+            const v=packReportRows(r);
+            out.replaceChildren(el('div',r.pack.title+' '+r.pack.version+' applied through your mapping.','muted'),
+              el('h4','Case metrics'),table(['Metric','Object type','Cases','Median','90th percentile','With a value'],v.metrics),
+              el('h4','Compliance rules'),table(['Object type','Rule','Applies to','Violating','Unknown'],v.compliance),
+              ...(v.objectRules.length?[el('h4','Object rules'),table(['Rule','Applies to','Violating'],v.objectRules)]:[]),
+              el('h4','Reference object model'),el('div',v.model,'note'),
+              ...(v.notApplicable.length?[el('div','Not applicable with this mapping: '+v.notApplicable.join(', ')+'.','muted')]:[]),
+              el('div',r.interpretation,'muted'));
+          }catch(error){if(current(t2))out.replaceChildren(el('div',error.message,'muted'));}
+          finally{if(current(t2))run.disabled=false;}
+        };
+        remove.onclick=async()=>{
+          const t2=++turn;remove.disabled=true;
+          try{
+            const r=await (await api(base+'/'+pack.pack_id,{method:'DELETE'})).json();
+            if(!current(t2))return;
+            run.disabled=true;out.replaceChildren();status.textContent='Uninstalled '+r.version+'; '+r.metrics_removed+' pack case metrics were removed.';
+          }catch(error){if(current(t2)){status.textContent=error.message;remove.disabled=false;}}
+        };
+      }catch(error){if(current(t))status.textContent=error.message;}
+      finally{if(current(t))setup.disabled=false;}
     };
     return box;
   }
@@ -2517,6 +2615,6 @@
     return box;
   }
 
-  window.__owgEventLogModel={objectModelArcs,objectModelText,visitRows,simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
+  window.__owgEventLogModel={packMapping,packGuess,packReportRows,objectModelArcs,objectModelText,visitRows,simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();

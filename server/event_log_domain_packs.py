@@ -37,6 +37,7 @@ from . import event_log_workspace as workspace
 FORMAT = "openworkgraph.domain-pack.v1"
 INSTALL_FORMAT = "openworkgraph.domain-pack-install.v1"
 MAX_HISTORY = 20
+MAX_NAMES = 1000          # object types and activities offered for mapping
 Name = Annotated[str, Field(min_length=1, max_length=200)]
 
 _O2C_ROLES_TYPES = [
@@ -286,17 +287,18 @@ def _parse_install(pack_id: str, spec: Any) -> tuple[dict[str, Any], InstallSpec
         raise workspace.EventLogWorkspaceError(
             "domain pack install: " + ".".join(str(p) for p in first["loc"]) + " " + first["msg"]) from None
     pack = _pack(pack_id, parsed.version)
-    for kind, roles in (("object_types", pack["object_types"]), ("activities", pack["activities"])):
+    for kind, roles, noun in (("object_types", pack["object_types"], "object type"),
+                              ("activities", pack["activities"], "activity")):
         known = {r["role"] for r in roles}
         given = getattr(parsed.mapping, kind)
         stray = sorted(set(given) - known)
         if stray:
-            raise workspace.EventLogWorkspaceError(f"the pack has no {kind[:-1].replace('_', ' ')} role {stray[0]}")
+            raise workspace.EventLogWorkspaceError(f"the pack has no {noun} role {stray[0]}")
         absent = [r["role"] for r in roles if r["required"] and r["role"] not in given]
         if absent:
             raise workspace.EventLogWorkspaceError(f"map the required role {absent[0]} to a name in this log")
         if len(set(given.values())) != len(given):
-            raise workspace.EventLogWorkspaceError(f"two {kind.replace('_', ' ')} roles are mapped to the same name")
+            raise workspace.EventLogWorkspaceError(f"two {noun} roles are mapped to the same name")
     params = {p["name"]: float(p["default"]) for p in pack["parameters"]}
     for name, value in parsed.parameters.items():
         spec_ = next((p for p in pack["parameters"] if p["name"] == name), None)
@@ -374,6 +376,11 @@ def installed(log_id: str) -> dict[str, Any]:
             workspace._check_log(conn, log_id)
             rows = conn.execute("SELECT definition FROM domain_pack_installs WHERE log_id = ? ORDER BY pack_id",
                                 [log_id]).fetchall()
+            # The names a mapping can choose from, most frequent first.
+            types = [r[0] for r in conn.execute("""SELECT object_type FROM objects WHERE log_id = ?
+                GROUP BY 1 ORDER BY count(*) DESC, 1 LIMIT ?""", [log_id, MAX_NAMES + 1]).fetchall()]
+            activities = [r[0] for r in conn.execute("""SELECT activity FROM events WHERE log_id = ?
+                GROUP BY 1 ORDER BY count(*) DESC, 1 LIMIT ?""", [log_id, MAX_NAMES + 1]).fetchall()]
         finally:
             conn.close()
     installs = [json.loads(d) for (d,) in rows]
@@ -381,7 +388,8 @@ def installed(log_id: str) -> dict[str, Any]:
         record["latest_version"] = _pack(record["pack_id"])["version"] if record["pack_id"] in PACKS else None
         record["upgrade_available"] = bool(record["latest_version"]) and \
             _version_key(record["latest_version"]) > _version_key(record["version"])
-    return {"installs": installs}
+    return {"installs": installs, "log_object_types": types[:MAX_NAMES], "log_activities": activities[:MAX_NAMES],
+            "names_truncated": len(types) > MAX_NAMES or len(activities) > MAX_NAMES}
 
 
 def uninstall(log_id: str, pack_id: str) -> dict[str, Any]:
