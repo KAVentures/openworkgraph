@@ -439,11 +439,12 @@ unaffected. A malformed/missing scope cannot poison a known scoped group,
 and an invalid event ID or timestamp is not admitted as an observation.
 No new public token, tenant, record label or private content is exposed.
 
-Three deterministic synthetic regression functions cover (1) a formerly
+Four deterministic synthetic regression functions cover (1) a formerly
 single-record tab with a tainted competing claim, (2) an otherwise valid
 direct copy/paste pair with a tainted third claim, both in reversed input
-order, and (3) noninterference across every scope dimension and different
-token values. They preserve independent same-record joins. The veto is
+order, (3) noninterference across every scope dimension and different
+token values, and (4) two individually well-formed but contradictory
+provider identities on the same opaque record reference. They preserve independent same-record joins. The veto is
 deliberately conservative and may withhold legitimate links when source
 claims are inconsistent; it is not evidence that a source record or
 clipboard action was authenticated.
