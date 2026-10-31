@@ -1408,3 +1408,118 @@ def test_supplied_http_metadata_does_not_bypass_plan_scope_or_source_validation(
         invoke(selected, plan, page(item(A, updated="2026-10-29 03:00:00")))
     with pytest.raises(StagingError, match="Invalid bounded provider JSON"):
         invoke(selected, plan, b'{"result":[')
+
+
+def _supplied_http_page(plan, raw):
+    return {
+        "plan": plan, "request_method": "GET",
+        "request_url": plan["url"], "response_url": plan["url"],
+        "status": 200, "content_type": "application/json",
+        "redirect_count": 0, "body": raw,
+    }
+
+
+def test_supplied_http_batch_checks_each_page_without_claiming_transport():
+    from server.servicenow_incident_staging import project_supplied_http_pages
+    selected = scope(sys_ids=(A, B))
+    first = plan_page(selected, offset=0, limit=1)
+    second = plan_page(selected, offset=1, limit=1)
+    responses = [
+        _supplied_http_page(first, page(item(A, caller_id="private caller"))),
+        _supplied_http_page(second, page(item(
+            B, updated="2026-10-30 03:11:00", short_description="private summary",
+        ))),
+    ]
+    staged = project_supplied_http_pages(selected, responses)
+    assert staged["all_supplied_pages_checked"] is True
+    assert staged["supplied_http_metadata_checked"] is True
+    assert staged["plan_sequence_checked"] is True
+    assert staged["pages_checked"] == 2
+    assert staged["distinct_selected_rows"] == staged["returned_rows"] == 2
+    assert {r["source_case_id"] for r in staged["records"]} == {A, B}
+    assert staged["authenticated_transport_receipt"] is False
+    assert staged["transport_grant_verified"] is False
+    assert staged["historical_completeness"] == "unknown"
+    assert staged["checkpoint_advanced"] is False
+    assert staged["not_an_authorization_to_append"] is True
+    assert "private caller" not in json.dumps(staged)
+    assert "private summary" not in json.dumps(staged)
+
+
+@pytest.mark.parametrize("mutation", [
+    "second-redirect", "second-status", "second-url", "second-method",
+    "second-media", "second-tenant-plan", "second-missing-key",
+    "second-extra-key", "second-nondict", "second-bad-json",
+], ids=[
+    "redirect", "http-401", "foreign-final-url", "write-method",
+    "html", "cross-tenant-plan", "missing-metadata",
+    "extra-metadata", "invalid-envelope", "malformed-body",
+])
+def test_supplied_http_batch_refuses_corrupt_second_response(mutation):
+    from server.servicenow_incident_staging import project_supplied_http_pages
+    selected = scope(sys_ids=(A, B))
+    first = plan_page(selected, offset=0, limit=1)
+    second = plan_page(selected, offset=1, limit=1)
+    responses = [
+        _supplied_http_page(first, page(item(A))),
+        _supplied_http_page(second, page(item(
+            B, updated="2026-10-30 03:11:00", private="discard",
+        ))),
+    ]
+    field_changes = {
+        "second-redirect": ("redirect_count", 1),
+        "second-status": ("status", 401),
+        "second-url": ("response_url", "https://attacker.invalid/"),
+        "second-method": ("request_method", "POST"),
+        "second-media": ("content_type", "text/html"),
+        "second-tenant-plan": ("plan", plan_page(
+            scope(sys_ids=(A, B), tenant_scope="other"), offset=1, limit=1,
+        )),
+        "second-bad-json": ("body", b'{"result":['),
+    }
+    if mutation in field_changes:
+        key, value = field_changes[mutation]
+        responses[1][key] = value
+    elif mutation == "second-missing-key":
+        del responses[1]["status"]
+    elif mutation == "second-extra-key":
+        responses[1]["untrusted_header"] = "private"
+    else:
+        responses[1] = "private"
+    with pytest.raises(StagingError) as caught:
+        project_supplied_http_pages(selected, responses)
+    assert "private" not in str(caught.value)
+    assert "attacker.invalid" not in str(caught.value)
+
+
+@pytest.mark.parametrize("case", [
+    "duplicate-offset", "cross-page-regression", "short-first",
+    "revoked", "empty-batch", "overlong-batch", "wrong-container",
+])
+def test_supplied_http_batch_inherits_offset_order_and_grant_guards(case):
+    from server.servicenow_incident_staging import project_supplied_http_pages
+    selected = scope(sys_ids=(A, B))
+    first = plan_page(selected, offset=0, limit=1)
+    second = plan_page(selected, offset=1, limit=1)
+    responses = [
+        _supplied_http_page(first, page(item(A))),
+        _supplied_http_page(second, page(item(
+            B, updated="2026-10-30 03:11:00",
+        ))),
+    ]
+    if case == "duplicate-offset":
+        responses[1]["body"] = page(item(A))
+    elif case == "cross-page-regression":
+        responses[1]["body"] = page(item(B, updated="2026-10-30 03:09:00"))
+    elif case == "short-first":
+        responses[0]["body"] = page()
+    elif case == "revoked":
+        selected = scope(sys_ids=(A, B), grant_current=False)
+    elif case == "empty-batch":
+        responses = []
+    elif case == "overlong-batch":
+        responses = responses * 5
+    else:
+        responses = tuple(responses)
+    with pytest.raises(StagingError):
+        project_supplied_http_pages(selected, responses)
