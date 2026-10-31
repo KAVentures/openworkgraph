@@ -332,3 +332,29 @@ arbitrary CHECK constraints, malicious concurrent filesystem writes, and
 cross-process source-grant revocation remain outside this guard. No new
 provider reads, agent rights, background execution, or business outcome
 verification are implied.
+
+
+## Hidden UNIQUE and foreign-key schema constraints
+
+A versioned SQLite table can have exactly the expected columns, types and
+primary key while still changing owner-declaration behavior. A table-level
+`UNIQUE(scope_ref)` creates an extra **implicit** `sqlite_autoindex_*` that
+was previously excluded from the user-defined schema-object check. A foreign
+key, including `ON DELETE CASCADE`, creates no additional schema object at
+all. Either can make otherwise valid owner saves fail or delete unrelated
+approved declarations without a reviewed dependency change.
+
+Both v1 migration and v2 read/write admission now require the exact one
+implicit `work_item_ref` primary-key index reported by
+`PRAGMA index_list(declarations)`, with no additional UNIQUE indexes, and
+an empty `PRAGMA foreign_key_list(declarations)`. Four parameterized
+synthetic SQLite regressions cover v1/v2 × extra UNIQUE/foreign-key schema,
+verifying rejection before migration or mutation and preservation of rows,
+schema and version. Existing clean v1 migration and fresh-v2 tests remain
+required for compatibility.
+
+This is bounded structural admission, **not** a complete SQL DDL equivalence
+proof (for example, arbitrary CHECK constraints and collations remain outside
+this guard), database tamper resistance, atomic source-grant revocation,
+provider/customer outcome verification or execution authority. The store
+remains internal-only, local, and disabled by default.
