@@ -173,3 +173,31 @@ This field is a **local omission disclosure**, not a claim that ServiceNow delet
 `reconcile_replayed_pages` now **rejects a supplied replay read with repeated selected incident rows**, even when their minimized revision, state and timestamp are identical. An offset-limited response with `A, A` can displace selected incident `B`; silently deduplicating the replay could then make a missing observation appear to be a clean before/after difference. Both earlier and later supplied pages are checked after strict source projection, before any replay classification. The error is generic and does not echo private provider values.
 
 This deliberately differs from legacy single-page `project_page`, which still deduplicates identical rows and reports `returned_rows` versus `distinct_selected_rows` and `unobserved_selected_ids`. Planned offset batches already rejected duplicates; they remain unchanged. Valid unique-row standalone replay still classifies exact source-reported revisions, with missing records and business outcomes explicitly unknown. Synthetic tests cover duplicate rows in either replay side and preservation of standalone behavior. This is **offline consistency only**: no HTTP authentication, complete snapshot, source-time verification, grant-at-append check, persistence, checkpoint, provider sandbox or business write is supplied.
+
+## Unobserved intermediate source revisions
+
+Both offline replay comparisons now report `revision_gap_unknown_ids` for an
+incident observed in **both** selected reads when its later source-reported
+`sys_mod_count` exceeds the earlier counter by **more than one**. Such IDs
+are excluded from `higher_reported_revision_ids`, which now describes only
+adjacent (+1) reported counter advances. A gap may indicate intervening
+source modifications that were not captured; it **does not** prove how many
+business events occurred, what statuses existed, who acted, or whether any
+business outcome completed. Even a gap with an equal provider-local timestamp
+is withheld, because the timestamp has only second-level precision.
+
+A counter regression still fails closed. When a higher counter also has an
+earlier provider-local `sys_updated_on`, the existing
+`timestamp_regression_unknown_ids` classification takes precedence over
+the gap bucket: contradictory source-time evidence must not be normalized
+away. An incident newly observed only in the later read has no earlier
+counter baseline and remains `newly_observed_ids`, not an inferred gap.
+Unchanged counters with contradictory status/time still fail closed.
+
+Synthetic fake-response regressions exercise equal-second and later-second
+gaps, adjacent updates, contradictory time, and newly observed high counters
+through **both** standalone and exact-plan replay. The change does not alter
+selected-ID or tenant scoping, source permission, retention, transport, or
+the strict no-write/no-checkpoint behavior. `historical_completeness` remains
+`unknown`; source chronology, authenticated provider receipts, real sandbox
+acceptance and business outcomes remain unverified.
