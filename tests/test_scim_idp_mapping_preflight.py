@@ -709,3 +709,58 @@ def test_entra_group_displayname_still_blocks_without_unique_policy():
     assert report["status"] == "blocked"
     assert "entra_group_name_uniqueness" in codes(report)
     assert "group_displayname_collision_risk" not in codes(report)
+
+
+@pytest.mark.parametrize("client", ["entra", "okta", "other"])
+@pytest.mark.parametrize("allow_missing_version", [False, True])
+def test_etag_mapping_with_permissive_declared_policy_requires_review(
+    client, allow_missing_version,
+):
+    # A client that normally supplies If-Match does not disable a separately
+    # approved server-side exception for standalone User PATCH.
+    report = assess(mapping(
+        client=client,
+        provider_policy={"allow_unversioned_user_patch": allow_missing_version},
+    ))
+    assert report["status"] == "requires_live_validation"
+    expected = "etag_mode_with_unversioned_patch_policy"
+    assert (expected in codes(report)) is allow_missing_version
+    assert "unversioned_patch_overwrite" not in codes(report)
+    assert "missing_patch_policy" not in codes(report)
+    assert "live_validation_required" in codes(report)
+    if allow_missing_version:
+        findings = [item for item in report["findings"] if item["code"] == expected]
+        assert len(findings) == 1
+        assert findings[0]["severity"] == "caution"
+        assert findings[0]["path"] == "provider_policy.allow_unversioned_user_patch"
+        assert "current provider policy" in findings[0]["message"]
+    assert "private@example.invalid" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("approved", [False, True])
+def test_declared_unversioned_mode_preserves_existing_policy_gate(approved):
+    users = mapping()["users"]
+    users["write_mode"] = "unversioned_user_patch"
+    report = assess(mapping(
+        users=users, provider_policy={"allow_unversioned_user_patch": approved},
+    ))
+    assert "etag_mode_with_unversioned_patch_policy" not in codes(report)
+    if approved:
+        assert report["status"] == "requires_live_validation"
+        assert "unversioned_patch_overwrite" in codes(report)
+        assert "missing_patch_policy" not in codes(report)
+    else:
+        assert report["status"] == "blocked"
+        assert "missing_patch_policy" in codes(report)
+        assert "unversioned_patch_overwrite" not in codes(report)
+
+
+def test_unsupported_write_mode_is_still_blocked_with_permissive_policy():
+    users = mapping()["users"]
+    users["write_mode"] = "unversioned_put"
+    report = assess(mapping(
+        users=users, provider_policy={"allow_unversioned_user_patch": True},
+    ))
+    assert report["status"] == "blocked"
+    assert "unsupported_write_mode" in codes(report)
+    assert "etag_mode_with_unversioned_patch_policy" not in codes(report)
