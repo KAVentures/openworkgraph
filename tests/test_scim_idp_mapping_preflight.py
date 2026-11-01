@@ -1917,7 +1917,8 @@ def test_pathless_contact_object_overlap_respects_supported_write_shapes(
 # Different selector kinds can identify the SAME stored contact:
 # {"type": "work", "value": "private@example.test"} satisfies both.
 # This is a data-dependent caution, not a claim that any real IdP emits
-# either request, and distinct literal selectors of one kind stay separate.
+# either request. Distinct literals of one kind stay separate only when
+# neither operation can change the field used by that selector.
 @pytest.mark.parametrize("client", ["entra", "okta", "other"])
 @pytest.mark.parametrize("declaration_mode", ["legacy", "operations", "mixed"])
 @pytest.mark.parametrize("first,second,overlap", [
@@ -1932,7 +1933,7 @@ def test_pathless_contact_object_overlap_respects_supported_write_shapes(
     ('emails[type eq "work"].value',
      'emails[type eq "work"].primary', False),
 ], ids=["type-and-value-same-child", "type-and-value-different-children",
-        "different-types", "different-values", "same-selector-distinct-children"])
+        "different-types", "different-values-key-write", "same-selector-distinct-children"])
 def test_mixed_contact_selector_kinds_are_potentially_overlapping(
         client, declaration_mode, first, second, overlap):
     from gateway.scim_user_emails import _path
