@@ -3475,3 +3475,55 @@ test('complete and legacy UTC date plans do not invent omitted rows or paginatio
     assert.equal(h.downloads, 0);
   });
 });
+
+
+test('non-paginated review does not promise full export coverage or AI pages', async t => {
+  for (const kind of ['ordinary', 'health-only']) await t.test(kind, async () => {
+    const healthOnly = kind === 'health-only';
+    const h = await openAllRetainedPreview(d => ({
+      ...d,
+      event_types: healthOnly ? {capture_health: 2} : {focus_span: 2},
+      work_evidence: {ordinary_event_rows: healthOnly ? 0 : 2,
+        health_event_rows: healthOnly ? 2 : 0}
+    }));
+    assert.equal(h.modals, 1);
+    assert.doesNotMatch(h.modalHtml, /follow every page|file download still contains the full selected period/i);
+    if (healthOnly) {
+      assert.match(h.modalHtml, /Review capture-health diagnostic dates/);
+      assert.match(h.modalHtml, /An optional diagnostic download requests the selected period again, subject to current consent, retention and access/);
+      assert.match(h.modalHtml, /not a verified workflow or guaranteed complete capture/);
+      assert.doesNotMatch(h.modalHtml, /ask an AI to review one date at a time/i);
+    } else {
+      assert.match(h.modalHtml, /bounded list of observed UTC dates, not a paginated chronology/);
+      assert.match(h.modalHtml, /may ask an AI to review one date at a time/);
+      assert.match(h.modalHtml, /disclose gaps and unknown coverage/);
+      assert.match(h.modalHtml, /A download requests the selected period again, subject to current consent, retention and access/);
+      assert.match(h.modalHtml, /Without detailed chronology selected, it is a summary package rather than raw event rows/);
+    }
+    await h.modal['#analysisCopy'].onclick();
+    if (healthOnly) assertCopyEvidenceWarning(h.copied, 'request-rollover', true);
+    else assert.deepEqual(h.copied, ['request-rollover']);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+  });
+});
+
+test('zero-event review never implies pagination, export coverage or available download', async () => {
+  const h = await openAllRetainedPreview(d => ({
+    ...d,
+    canonical_rows: 0, retained_rows: 3,
+    first_observed_at: null, last_observed_at: null,
+    event_types: {}, sources: {}, redacted_examples: [],
+    work_evidence: {ordinary_event_rows: 0, health_event_rows: 0},
+    analysis_plan: {date_chunks: [], more_dates_not_listed: false}
+  }));
+  assert.equal(h.modals, 1);
+  assert.match(h.modalHtml, /No evidence package is available for this zero-event selection/);
+  assert.match(h.modalHtml, /Evidence download unavailable/);
+  assert.doesNotMatch(h.modalHtml, /follow every page|download requests the selected period again/i);
+  assert.equal(h.modal['#analysisDownload'].disabled, true);
+  await h.modal['#analysisCopy'].onclick();
+  assertCopyEvidenceWarning(h.copied, 'request-rollover');
+  assert.equal(h.tickets.length, 0);
+  assert.equal(h.downloads, 0);
+});
