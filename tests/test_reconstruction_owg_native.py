@@ -161,7 +161,7 @@ def test_lane_projection_withholds_reused_event_id_across_distinct_source_record
         assert {tuple(lane["event_ids"]) for lane in result["workflows"]} == {
             ("a2",), ("b2",)
         }
-        assert result["unassigned_event_ids"].count("reused") == 2
+        assert result["unassigned_event_ids"] == ["reused"]
         assert sum("reused" in lane["event_ids"] for lane in result["workflows"]) == 0
 
 
@@ -174,7 +174,8 @@ def test_lane_projection_refuses_coerced_nonstring_event_id_but_preserves_valid_
     ]
     result = predict_record_lanes(_lane_projection_case(source))
     assert [lane["event_ids"] for lane in result["workflows"]] == [["valid1", "valid2"]]
-    assert result["unassigned_event_ids"] == ["17"]
+    assert result["unassigned_event_ids"] == []
+    assert "17" not in str(result)  # numeric IDs never become scored strings
 
 
 def test_lane_projection_preserves_offset_order_and_shipped_identity_conflict_veto():
@@ -249,7 +250,7 @@ def test_lane_projection_withholds_visible_id_reused_under_two_source_identities
     for rows in ([*visible, conflicting], [conflicting, *visible]):
         result = predict_record_lanes(_lane_projection_case(source, rows))
         assert [lane["event_ids"] for lane in result["workflows"]] == [["second"]]
-        assert result["unassigned_event_ids"].count("shared") == 2
+        assert result["unassigned_event_ids"] == ["shared"]
         assert "shared" not in str(result["workflows"])
 
 
