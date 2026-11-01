@@ -72,7 +72,7 @@
                       (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) : [];
     const digest = r.transform && r.transform.transform_sha256;
     return {batch:label(batch),created_at:typeof r.created_at === 'string' &&
-      /^\\d{4}-\\d\\d-\\d\\dT/.test(r.created_at) ? r.created_at.slice(0,32) : 'Unknown',
+      /^\d{4}-\d\d-\d\dT/.test(r.created_at) ? r.created_at.slice(0,32) : 'Unknown',
       transform:typeof digest === 'string' && /^[a-f0-9]{64}$/.test(digest) ?
         digest.slice(0,12) : 'Unknown',
       accepted:count(data.accepted),rejected:count(data.rejected),
