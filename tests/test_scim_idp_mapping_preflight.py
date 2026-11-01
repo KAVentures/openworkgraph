@@ -1135,3 +1135,57 @@ def test_group_patch_cli_import_and_selector_grammar_smoke(path, supported):
     assert ("unsupported_attribute" not in codes(report)) is supported
     assert ("group_member_selector_remove_only" in codes(report)) is supported
     assert "usr_A" not in completed.stdout
+
+
+@pytest.mark.parametrize("groups,expected_optional,status", [
+    ({"enabled": False, "match_attributes": []}, {}, "requires_live_validation"),
+    ({"enabled": True, "match_attributes": ["externalId"]}, {}, "requires_live_validation"),
+    ({"enabled": True, "match_attributes": ["externalId"],
+      "create_attributes": [], "patch_attributes": []},
+     {"group_create": 0, "group_patch": 0}, "blocked"),
+    ({"enabled": True, "match_attributes": ["externalId"],
+      "create_attributes": ["displayName"], "patch_attributes": ["members"]},
+     {"group_create": 1, "group_patch": 1}, "requires_live_validation"),
+    ({"enabled": True, "match_attributes": ["externalId"],
+      "create_attributes": ["displayName", "externalId", "members"],
+      "patch_attributes": ["displayName", 'members[value eq "opaque_secret_934"]']},
+     {"group_create": 3, "group_patch": 2}, "requires_live_validation"),
+    ({"enabled": False, "match_attributes": [],
+      "create_attributes": [], "patch_attributes": []},
+     {"group_create": 0, "group_patch": 0}, "blocked"),
+    ({"enabled": True, "match_attributes": ["externalId"],
+      "create_attributes": ["displayName", "roles"],
+      "patch_attributes": ["unknown_opaque_secret_934"]},
+     {"group_create": 2, "group_patch": 1}, "blocked"),
+])
+def test_checked_group_counts_distinguish_absent_empty_and_declared_without_certification(
+        groups, expected_optional, status):
+    report = assess(mapping(groups=groups))
+    assert report["status"] == status
+    assert report["scope"] == "offline_declared_mapping_only"
+    assert report["checked"] == {
+        "user_matching": 2, "user_create": 4,
+        "user_patch": 2, "group_matching": len(groups["match_attributes"]),
+        **expected_optional,
+    }
+    assert "live_validation_required" in codes(report)
+    assert "opaque_secret_934" not in json.dumps(report)
+
+
+def test_checked_optional_group_counts_cli_parity_without_exposing_member_id():
+    groups = {"enabled": True, "match_attributes": ["externalId"],
+              "create_attributes": ["displayName", "members"],
+              "patch_attributes": ["members", 'members[value eq "opaque_secret_934"]']}
+    declared = mapping(groups=groups)
+    expected = assess(declared)
+    completed = subprocess.run(
+        [sys.executable, str(SCRIPT), "-"],
+        input=json.dumps(declared), capture_output=True, text=True, check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    report = json.loads(completed.stdout)
+    assert report == expected
+    assert report["checked"]["group_create"] == 2
+    assert report["checked"]["group_patch"] == 2
+    assert "overlapping_group_member_patch_paths" in codes(report)
+    assert "opaque_secret_934" not in completed.stdout + completed.stderr
