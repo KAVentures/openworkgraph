@@ -1296,3 +1296,23 @@ Two synthetic mock-DOM regressions check selected < retained and selected =
 retained, including no invented completeness claim and request-only Copy.
 They do not establish real-user acceptance, recorder completeness, verified
 business outcomes or competitor parity.
+
+## Recorder-liveness evidence cannot be asserted by a preview
+
+The local `server/analysis_handoff.py` preview reports
+`work_evidence.recorder_liveness_verified: false`. Observed event counts,
+capture-health rows and gaps do **not** establish that a recorder is currently
+running or that all work was captured. A returned preview with an affirmative
+`true` liveness flag contradicts this evidence contract and now fails
+validation before opening the review modal or enabling Copy/Download. The
+legacy absent/null flag and explicit `false` remain reviewable with the
+existing unverified-recorder warning; this is not a new consent or recording
+status check.
+
+Synthetic mock-DOM regression cases cover affirmative liveness on both ordinary
+work and capture-health-only selections, plus explicit false, absent and null
+legacy metadata. They verify that rejected previews trigger no clipboard,
+export-ticket or download operation. These checks do **not** prove live capture,
+source identity, consenting-user acceptance, or competitor parity. The backend,
+retained events, permission decisions, export contents and AI execution are
+unchanged.
