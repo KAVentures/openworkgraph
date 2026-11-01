@@ -118,10 +118,16 @@ for the same child (or an entire selected contact), or an entire selected
 contact plus a child path for the same decoded/casefolded selector. These are
 not necessarily duplicate targets: the shipped PATCH parser accepts each
 operation, but the result may depend on actual client operation order and
-current stored contact data. The warning does **not** infer that different
-selector values or different selector kinds identify the same contact. It
-does not block legitimate mappings, change provider permissions or grant
-identity authority. Verify operation ordering and no-match behavior with a
+current stored contact data. Two selectors using **different fields** (for example,
+`emails[type eq "work"]` and `emails[value eq "private@example.test"]`)
+may also resolve to the **same** stored contact, even though their selector
+literals differ. The preflight now cautions about that possibility across
+legacy, operation-level and mixed declarations. This does **not** assert that
+either selector matches a real contact or that the IdP sends both operations.
+Distinct literals of the **same** selector field remain separate unless
+another overlap rule applies; distinct child fields on one exact selector
+also remain separate. The caution does not block legitimate mappings,
+change provider permissions or grant identity authority. Verify operation ordering and no-match behavior with a
 customer-authorized IdP test before rollout; the static report never echoes
 declared selector values or email addresses.
 
