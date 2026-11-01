@@ -36,6 +36,7 @@ from typing import Any
 
 from .record_case_lanes import _EVENT_ID, _RESOURCE, _identity, _stamp, _token
 from .reconstruction_segments import observed_activity_segments
+from .reconstruction_switches import observed_work_switches
 
 _TRANSFER = re.compile(r"^[A-Za-z0-9:._-]{1,120}$")
 _TAB = re.compile(r"^[A-Za-z0-9:._-]{1,160}$")
@@ -592,6 +593,7 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             "task_identity_inferred": False,
             "business_outcome_verified": False,
         })
+    switches = observed_work_switches(linked["rows"], item_of)
     candidates: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
     for candidate in linked["candidates"]:
@@ -615,6 +617,7 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
         "format": "openworkgraph.linked-work-items.v1",
         "items": items,
         "total_items": len(groups),
+        **switches,
         "candidate_links": candidates[:_MAX_CANDIDATES],
         "total_candidate_links": len(candidates),
         "unlinked_observation_count": unlinked,
@@ -629,6 +632,9 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             "activity_segments_are_observed_episodes_not_tasks": True,
             "interruption_requires_same_scope_foreign_record": True,
             "clock_gaps_alone_do_not_split_activity_segments": True,
+            "observed_switches_require_same_scope_literal_record_endpoints": True,
+            "observed_switches_are_not_task_handoffs": True,
+            "unattributed_intervening_evidence_is_not_direct_adjacency": True,
             "ephemeral_signals_scope": "exact_organization_actor_device_session",
             "missing_scope_is_wildcard": False,
             "multiplexed_clipboard_transfer_is_unmerged": True,
