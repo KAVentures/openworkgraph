@@ -1152,7 +1152,212 @@ def create_case_declaration_batch(
     }
 
 
+
+def revise_case_declaration_batch(
+    scope_ref: str, items: list[dict[str, Any]],
+    expected_invalidated_work_item_refs: list[str], *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Atomically reapprove an existing bounded DAG with explicit cascade CAS.
+
+    Every selected node must have a current revision/incarnation and review.
+    An affected descendant survives ONLY when it is itself included for a
+    fresh owner revision; all other affected descendants must be explicitly
+    acknowledged by opaque reference before this transaction can erase them.
+    No provider read, source-status inference or execution authorization.
+    """
+    _check_ref(scope_ref, _SCOPE, "source scope")
+    if not isinstance(items, list) or not 1 <= len(items) <= 4:
+        raise CaseDeclarationError("invalid bounded revision batch")
+    if (not isinstance(expected_invalidated_work_item_refs, list) or
+        len(expected_invalidated_work_item_refs) > _MAX_ITEMS):
+        raise CaseDeclarationError("invalid expected cascade")
+    for ref in expected_invalidated_work_item_refs:
+        _check_ref(ref, _REF, "expected invalidated case")
+    if len(set(expected_invalidated_work_item_refs)) != len(expected_invalidated_work_item_refs):
+        raise CaseDeclarationError("duplicate expected invalidation")
+
+    required = {
+        "work_item_ref", "goal_code", "expected_outcome_code",
+        "depends_on_work_item_refs", "expected_revision", "expected_edit_token",
+    }
+    by_ref: dict[str, dict[str, Any]] = {}
+    required_reviews: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict) or set(item) != required:
+            raise CaseDeclarationError("invalid exact revision batch fields")
+        ref = item["work_item_ref"]
+        _check_ref(ref, _REF, "work item reference")
+        if ref in by_ref:
+            raise CaseDeclarationError("duplicate revision batch case")
+        if (not isinstance(item["goal_code"], str) or
+            item["goal_code"] not in _GOALS or
+            not isinstance(item["expected_outcome_code"], str) or
+            item["expected_outcome_code"] not in _EXPECTED or
+            type(item["expected_revision"]) is not int or
+            not 1 <= item["expected_revision"] < _MAX_REVISION or
+            not isinstance(item["expected_edit_token"], str) or
+            not _EDIT_TOKEN.fullmatch(item["expected_edit_token"])):
+            raise CaseDeclarationError("stale or invalid batch owner revision")
+        deps = item["depends_on_work_item_refs"]
+        if not isinstance(deps, list) or len(deps) > _MAX_DEPENDENCIES:
+            raise CaseDeclarationError("invalid bounded revision dependencies")
+        for dep in deps:
+            _check_ref(dep, _REF, "dependency")
+        if ref in deps or len(set(deps)) != len(deps):
+            raise CaseDeclarationError("duplicate or self-referential dependency")
+        by_ref[ref] = {**item, "depends_on_work_item_refs": list(deps)}
+        required_reviews.update((ref, *deps))
+    if set(expected_invalidated_work_item_refs) & set(by_ref):
+        raise CaseDeclarationError("reapproved case cannot also be invalidated")
+
+    current = _current(now)
+    days = _retention_days()
+    if days is None:
+        raise CaseDeclarationError("durable revisions require retained human history")
+    reviewed = _reviewed(current)
+    if any(ref not in reviewed for ref in required_reviews):
+        raise CaseDeclarationError("case or dependency lacks current local review")
+
+    with _database(create=False) as db:
+        if db is None:
+            raise CaseDeclarationError("stale revision batch")
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            live_reviewed = _reviewed(current)
+            if any(live_reviewed.get(ref) != reviewed[ref]
+                   for ref in required_reviews):
+                raise CaseDeclarationError("batch review changed before revision")
+            live_days = _retention_days()
+            if live_days is None:
+                raise CaseDeclarationError("batch retention revoked")
+            days = min(days, live_days)
+            _prune(db, current, days, live_reviewed)
+
+            rows = db.execute(
+                "SELECT work_item_ref,scope_ref,goal_code,expected_outcome_code,"
+                "dependencies_json,revision,created_at,updated_at,expires_at,edit_token "
+                "FROM declarations LIMIT ?", (_MAX_ITEMS + 1,),
+            ).fetchall()
+            if len(rows) > _MAX_ITEMS:
+                raise CaseDeclarationError("local declaration limit exceeded")
+            row_by_ref = {row[0]: row for row in rows}
+            for ref, item in by_ref.items():
+                row = row_by_ref.get(ref)
+                if (row is None or row[1] != scope_ref or
+                    row[5] != item["expected_revision"] or
+                    row[9] != item["expected_edit_token"]):
+                    raise CaseDeclarationError("stale revision batch CAS or source scope")
+            for ref in required_reviews:
+                row = row_by_ref.get(ref)
+                if row is None or row[1] != scope_ref:
+                    raise CaseDeclarationError("missing or foreign revision prerequisite")
+
+            # Old approvals downstream of ANY changed node cannot silently
+            # survive. The caller must name the exact omitted set; a newly
+            # discovered dependent makes this whole write fail before erasure.
+            affected: set[str] = set()
+            for ref in by_ref:
+                affected.update(_dependent_closure(db, ref))
+            invalidated = affected - set(by_ref)
+            if invalidated != set(expected_invalidated_work_item_refs):
+                raise CaseDeclarationError("stale expected invalidation set")
+            if any(row_by_ref[ref][1] != scope_ref for ref in invalidated):
+                raise CaseDeclarationError("foreign scope dependent cannot be invalidated")
+
+            retained = set(row_by_ref) - invalidated
+            edges: dict[str, list[str]] = {}
+            for ref in retained:
+                deps = (by_ref[ref]["depends_on_work_item_refs"] if ref in by_ref
+                        else _stored_dependencies(row_by_ref[ref][4], ref))
+                if deps is None or any(
+                    dep not in retained or row_by_ref[dep][1] != row_by_ref[ref][1]
+                    for dep in deps
+                ):
+                    raise CaseDeclarationError("stale or foreign dependency in revised graph")
+                edges[ref] = deps
+            # Validate the WHOLE final graph, not only submitted edges:
+            # a new edge can close a cycle through an unchanged ancestor.
+            pending = set(retained)
+            ordered: list[str] = []
+            while pending:
+                ready = sorted(ref for ref in pending
+                               if all(dep not in pending for dep in edges[ref]))
+                if not ready:
+                    raise CaseDeclarationError("cyclic revised owner dependency graph")
+                ordered.extend(ready)
+                pending.difference_update(ready)
+
+            for ref in sorted(invalidated):
+                db.execute("DELETE FROM declarations WHERE work_item_ref=?", (ref,))
+            saved: dict[str, dict[str, Any]] = {}
+            for ref in ordered:
+                if ref not in by_ref:
+                    continue
+                old = row_by_ref[ref]
+                deps = edges[ref]
+                dependency_expiries: list[datetime] = []
+                for dep in deps:
+                    prerequisite = _get(db, dep)
+                    if prerequisite is None or prerequisite[1] != scope_ref:
+                        raise CaseDeclarationError("revised dependency disappeared")
+                    if datetime.fromisoformat(prerequisite[7]) > current:
+                        raise CaseDeclarationError("dependency approval newer than revision")
+                    dependency_expiries.append(datetime.fromisoformat(prerequisite[8]))
+                created = datetime.fromisoformat(old[6])
+                updated = datetime.fromisoformat(old[7])
+                if created > current or updated > current:
+                    raise CaseDeclarationError("backdated batch owner revision")
+                expires = min(
+                    datetime.fromisoformat(old[8]),
+                    created + timedelta(days=days),
+                    live_reviewed[ref][1], *dependency_expiries,
+                )
+                if expires <= current:
+                    raise CaseDeclarationError("revised approval expired")
+                item = by_ref[ref]
+                db.execute(
+                    "UPDATE declarations SET goal_code=?,expected_outcome_code=?,"
+                    "dependencies_json=?,revision=?,updated_at=?,expires_at=? "
+                    "WHERE work_item_ref=?",
+                    (item["goal_code"], item["expected_outcome_code"],
+                     json.dumps(deps), old[5] + 1, current.isoformat(),
+                     expires.isoformat(), ref),
+                )
+                row = _get(db, ref)
+                if row is None:
+                    raise CaseDeclarationError("reapproved declaration unavailable")
+                saved[ref] = _public(row)
+
+            final_reviewed = _reviewed(current)
+            if any(final_reviewed.get(ref) != live_reviewed[ref]
+                   for ref in required_reviews):
+                raise CaseDeclarationError("batch review changed before commit")
+            if _retention_days() != live_days:
+                raise CaseDeclarationError("batch retention changed before commit")
+            db.execute("COMMIT")
+        except Exception:
+            db.execute("ROLLBACK")
+            raise
+
+    return {
+        "format": "openworkgraph.local-case-declaration-batch-revision.v1",
+        "reapproved_count": len(by_ref),
+        "items": [saved[ref] for ref in ordered if ref in saved],
+        "invalidated_declaration_count": len(invalidated),
+        "invalidated_work_item_refs": sorted(invalidated),
+        "atomic_local_commit": True,
+        "source_read_performed": False,
+        "source_write_performed": False,
+        "business_obligation_verified": False,
+        "expected_outcome_verified": False,
+        "customer_outcome_verified": False,
+        "agent_execution_authorized": False,
+        "not_synced": True,
+    }
+
 __all__ = ["CaseDeclarationError", "save_case_declaration",
-           "create_case_declaration_batch", "list_case_declarations",
+           "create_case_declaration_batch", "revise_case_declaration_batch",
+           "list_case_declarations",
            "delete_case_declaration", "purge_case_declaration",
            "clear_case_declarations"]
