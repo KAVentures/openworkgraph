@@ -402,6 +402,55 @@ async def get_local_reviewed_case_portfolio_status(request: Request, response: R
 
 
 
+
+@router.post("/v1/open-work/declarations/batch-revision-impact")
+async def preview_local_case_declaration_batch_revision(request: Request, response: Response):
+    """Advisory multi-root cascade preview; the later write rechecks under lock."""
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {"cases"})
+    cases = payload["cases"]
+    if not isinstance(cases, list) or not 1 <= len(cases) <= 4:
+        raise HTTPException(422, "1 to 4 exact case versions required")
+    required = {"work_item_ref", "expected_revision", "expected_edit_token"}
+    if any(not isinstance(case, dict) or set(case) != required for case in cases):
+        raise HTTPException(422, "exact case version fields required")
+    try:
+        snapshot = await asyncio.to_thread(list_case_declarations, scope)
+        selected: set[str] = set()
+        affected: set[str] = set()
+        for case in cases:
+            impact = project_declared_case_change_impact(
+                snapshot,
+                work_item_ref=case["work_item_ref"],
+                expected_revision=case["expected_revision"],
+                expected_edit_token=case["expected_edit_token"],
+                operation="revise",
+            )
+            if case["work_item_ref"] in selected:
+                raise CaseDeclarationError("duplicate case in batch preview")
+            selected.add(case["work_item_ref"])
+            affected.update(impact["affected_case_refs"])
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "format": "openworkgraph.local-case-batch-revision-impact.v1",
+        "reapproved_case_refs": sorted(selected),
+        "expected_invalidated_work_item_refs": sorted(affected - selected),
+        "invalidated_declaration_count": len(affected - selected),
+        "advisory_snapshot_only": True,
+        "requires_separate_confirmed_cas_write": True,
+        "mutation_performed": False,
+        "source_read_performed": False,
+        "source_inventory_complete": False,
+        "customer_outcome_verified": False,
+        "agent_execution_authorized": False,
+        "not_synced": True,
+    }
+
+
 @router.post("/v1/open-work/declarations/batch-revision")
 async def revise_local_case_declaration_batch(request: Request, response: Response):
     """Explicit all-or-none reapproval of a reviewed DAG, including cascade."""

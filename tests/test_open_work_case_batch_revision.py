@@ -228,3 +228,65 @@ def test_mid_transaction_retention_change_rolls_back(local, monkeypatch):
     assert response.status_code in (403, 409), response.text
     monkeypatch.setattr(declarations, "_retention_days", original)
     assert current(client, headers) == old
+
+
+def test_preview_union_feeds_confirmed_cas_revision(local):
+    client, headers = TestClient(app), auth()
+    old = seeded(client, headers)
+    preview = client.post(BASE + "/batch-revision-impact", headers=headers, json={
+        "cases": [
+            {key: old[ref][key] for key in ("work_item_ref", "revision", "edit_token")}
+            for ref in (B, A)
+        ],
+    })
+    # The preview API uses explicit expected_* names, not GET response names.
+    assert preview.status_code == 422, preview.text
+    versions = [
+        {
+            "work_item_ref": ref,
+            "expected_revision": old[ref]["revision"],
+            "expected_edit_token": old[ref]["edit_token"],
+        }
+        for ref in (B, A)
+    ]
+    preview = client.post(BASE + "/batch-revision-impact", headers=headers, json={
+        "cases": versions,
+    })
+    assert preview.status_code == 200, preview.text
+    body = preview.json()
+    assert body["expected_invalidated_work_item_refs"] == [C]
+    assert body["reapproved_case_refs"] == [A, B]
+    assert body["mutation_performed"] is False
+    assert body["source_read_performed"] is False
+    assert current(client, headers) == old
+    committed = client.post(REVISE, headers=headers, json=payload(
+        [revised(old[B]), revised(old[A])],
+        body["expected_invalidated_work_item_refs"],
+    ))
+    assert committed.status_code == 200, committed.text
+    assert set(current(client, headers)) == {A, B, D}
+    stale = client.post(BASE + "/batch-revision-impact", headers=headers, json={
+        "cases": versions,
+    })
+    assert stale.status_code == 409
+
+
+def test_preview_rejects_duplicate_versions_and_source_revocation(local):
+    client, headers = TestClient(app), auth()
+    old = seeded(client, headers)
+    version = {
+        "work_item_ref": A, "expected_revision": old[A]["revision"],
+        "expected_edit_token": old[A]["edit_token"],
+    }
+    assert client.post(BASE + "/batch-revision-impact", headers=headers, json={
+        "cases": [version, version],
+    }).status_code == 422
+    assert client.post(BASE + "/batch-revision-impact", json={
+        "cases": [version],
+    }).status_code == 401
+    local["id"] = None
+    assert client.post(BASE + "/batch-revision-impact", headers=headers, json={
+        "cases": [version],
+    }).status_code == 403
+    local["id"] = "acct_12345678"
+    assert current(client, headers) == old
