@@ -266,6 +266,56 @@ const path=require('node:path');
    assert.equal(evidenceReads,readsBeforeDownload,'local JSON export must not fetch evidence');
    assert(!JSON.stringify(manifest).includes('Read record'),'step labels must not leak into portable plan');
    assert(!JSON.stringify(manifest).includes('Reviewed synthetic example'),'private group labels must not leak');
+   // Local synthetic rehearsal is an interactive, non-executing test of the
+   // analyst's proposed normal/exception criteria, never a source test.
+   const rehearsalRun=page.locator('#owgExplorerSyntheticRun');
+   const rehearsalDownload=page.locator('#owgExplorerSyntheticDownload');
+   const inventedNormal=page.locator('#owgExplorerSyntheticObserved');
+   const inventedException=page.locator('#owgExplorerSyntheticException');
+   const rehearsalStatus=page.locator('#owgExplorerSyntheticStatus');
+   assert.equal(await rehearsalRun.isDisabled(),false);
+   assert.equal(await rehearsalDownload.isDisabled(),true);
+   const readsBeforeRehearsal=evidenceReads;
+   await rehearsalRun.click();
+   assert.match(await rehearsalStatus.textContent(),/SYNTHETIC ABSTAIN/);
+   assert.equal(await rehearsalDownload.isDisabled(),false);
+   await inventedNormal.fill(manifest.human_proposed_untrusted_criteria.normal_case_expected);
+   assert.equal(await rehearsalDownload.isDisabled(),true,'editing synthetic input invalidates the prior receipt');
+   assert.equal(await acknowledge.isChecked(),false,'synthetic input change requires new acknowledgement');
+   await inventedException.selectOption('abstain');
+   await acknowledge.check();
+   await rehearsalRun.click();
+   assert.match(await rehearsalStatus.textContent(),/SYNTHETIC PASS/);
+   assert.match(await rehearsalStatus.textContent(),/No real shadow test/);
+   await audit(page,'#owgWorkflowExplorer','Synthetic-only rehearsal with grade');
+   const receiptPending=page.waitForEvent('download');
+   await rehearsalDownload.click();
+   const receiptArtifact=await receiptPending;
+   assert.equal(receiptArtifact.suggestedFilename(),'owg-synthetic-shadow-rehearsal.json');
+   const receipt=JSON.parse(await fs.readFile(await receiptArtifact.path(),'utf8'));
+   assert.equal(receipt.schema,'openworkgraph.synthetic_shadow_rehearsal.v1');
+   assert.equal(receipt.kind,'local_synthetic_rehearsal_not_source_validation');
+   assert.equal(receipt.synthetic_grade,'PASS');
+   assert.equal(receipt.real_shadow_test_status,'not_run');
+   assert.equal(receipt.execution_permitted,false);
+   assert.equal(receipt.source_identity_verified,false);
+   assert.equal(receipt.plan.validation.status,'not_run');
+   assert.equal(receipt.plan.reviewed_group.revision,4);
+   assert.deepEqual(receipt.plan.selected_evidence.execution_ids,['execution:synthetic_ref']);
+   assert(!JSON.stringify(receipt).includes('Reviewed synthetic example'));
+   await inventedNormal.fill('Invented mismatched result');
+   assert.equal(await rehearsalDownload.isDisabled(),true);
+   await acknowledge.check();
+   await rehearsalRun.click();
+   assert.match(await rehearsalStatus.textContent(),/SYNTHETIC FAIL/);
+   await inventedException.selectOption('unknown');
+   assert.equal(await rehearsalDownload.isDisabled(),true);
+   await acknowledge.check();
+   await rehearsalRun.click();
+   assert.match(await rehearsalStatus.textContent(),/SYNTHETIC ABSTAIN/);
+   assert.equal(evidenceReads,readsBeforeRehearsal,'rehearsal and receipt cannot fetch evidence');
+   assert.equal(writes,0,'synthetic rehearsal cannot write to workflow APIs');
+
    // Reopen the downloaded local plan after a fresh browser load. Nothing
    // carries forward automatically: a reviewed group and fresh selected-ref
    // inspection are required before importing any proposed criteria.
