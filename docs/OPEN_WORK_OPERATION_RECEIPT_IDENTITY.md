@@ -554,3 +554,35 @@ validation. The verifier still makes at most its one already-authorized read;
 no new permissions, source adapters, background sync, business writes or
 agent execution paths are added. Tenant/actor consent, revocation and
 retention remain enforced by the existing trusted reader and adapters.
+
+
+## Cross-provider and nested disclaimer consistency (2026-11-01)
+
+A provider-specific source adapter normally emits one of two negative-scope
+disclaimers: GitHub/Jira use `not_a_claim_of_business_success`, and Stripe
+uses `not_a_claim_of_customer_bank_settlement`. Both are **limitations**,
+not positive assertions of a business outcome. An injected or cached receipt
+could previously negate the *other* known disclaimer, or place a contradictory
+disclaimer inside `verified_operational_outcome`, while the verifier checked
+only the provider's expected top-level disclaimer and admitted a provider
+operation.
+
+The existing verifier now checks **both** known disclaimer names wherever
+they are explicitly supplied, at the top-level `source_evidence` and in its
+optional nested operation detail. Each supplied value must be the literal
+Boolean `true`; false, null, numbers, strings or structured values return
+`availability=unknown / reason=provider_receipt_scope_conflict`. Missing
+optional fields remain compatible with existing GitHub/Jira/Stripe adapters.
+The authenticated source-read method, retained exact-record identity,
+history-window, consent, source freshness and operation checks remain
+mandatory. No contradiction or private provider field is echoed.
+
+The four provider-operation families have 112 synthetic negative
+parameterizations (both disclaimer names, both levels, seven malformed or
+contradictory values) and 32 absent/literal-true compatibility controls.
+These tests are committed fake-reader contracts, **not** native CI results,
+real tenant/provider validation, revocation-race evidence, customer outcome
+verification or measured commercial uplift. A verified provider operation
+still does not establish business-objective completion, agent causality or
+execution authorization. No new source privileges, network reads, background
+sync, endpoints, UI, agent execution or business writes are introduced.
