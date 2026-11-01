@@ -194,3 +194,24 @@ No provider adapter, OAuth grant, source read, endpoint, agent execution,
 or business write is introduced. This is a **post-read consistency check**,
 not live Jira tenant validation, a cryptographic provider attestation, an
 agent-causality claim, or evidence of customer/business completion.
+
+
+## Jira resolution scope consistency
+
+The existing opt-in Jira source adapter labels its verified issue-resolution
+detail with `scope=jira_issue_only_not_customer_acknowledgement_or_refund`.
+The operation verifier now requires **that exact string** alongside the
+previously checked resolved status, timezone-aware resolution timestamp,
+verified flag, kind and authenticated read method. Missing, malformed or
+conflicting scopes (including a Stripe processor scope) return
+`availability=unknown / reason=provider_receipt_scope_conflict`, with no
+private receipt fields echoed. This is conservative post-read consistency:
+the scope label is not cryptographic authorization or proof of customer
+acknowledgement, a refund, agent causality, or a completed business objective.
+
+The synthetic Jira fake-reader regression set adds 12 malformed/wrong scope
+cases, one missing-field case and one valid issue-only control. The shared
+production-shaped Jira fixture now includes the adapter's actual scope, so
+previously valid Jira resolution tests remain realistic. No provider adapter,
+source permissions, REST/MCP contract, background reads or business writes
+change. Native pytest and real-tenant/provider acceptance must still run.
