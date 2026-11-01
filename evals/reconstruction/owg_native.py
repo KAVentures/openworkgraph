@@ -49,7 +49,18 @@ def _visible_lane_identities(
         event_id = event.get("event_id")
         if not isinstance(event_id, str) or not _EVENT_ID.fullmatch(event_id):
             continue
-        match = _identity(event)
+        # The shipped source engine normalizes raw identity components with
+        # str(...), but an AI-presented boolean/numeric claim is not the same
+        # literal observation as a source string. Check visible types before
+        # applying the engine's case-insensitive identity normalization.
+        metadata = event.get("metadata")
+        reference = (metadata.get("resource_reference")
+                     if isinstance(metadata, dict) else None)
+        literal_reference = isinstance(reference, dict) and all(
+            key not in reference or isinstance(reference[key], str)
+            for key in ("resource_ref", "provider", "resource_kind", "host")
+        )
+        match = _identity(event) if literal_reference else None
         stamp = _stamp(event.get("observed_at"))
         visible = match[:4] if match and stamp is not None else None
         if event_id not in identities:
