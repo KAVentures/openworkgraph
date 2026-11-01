@@ -1514,6 +1514,14 @@ Download refuses before the ticket request and announces the reason in the
 existing accessible status region. Copy request and summary-only download
 remain usable without the detailed-data acknowledgement.
 
+The privacy warning is shown **before** the detailed-chronology choice and
+acknowledgement, not after a user can already select them. Both checkbox inputs
+reference the warning with `aria-describedby="analysisSensitiveWarning"` so
+assistive technology has a programmatic description of the additional raw-data
+risk. The visible warning remains present for sighted users. A deterministic
+actual-template regression checks this reading order and the associations;
+it is not a substitute for a real Chromium/keyboard/screen-reader audit.
+
 The acknowledgement starts unchecked and disabled until detailed chronology
 is selected, is cleared whenever the detail choice changes, and is reset on
 every new prepared handoff. Period changes disable
