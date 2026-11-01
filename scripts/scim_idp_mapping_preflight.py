@@ -338,6 +338,13 @@ def assess(mapping: Any) -> dict:
             if "members" in group_patch or selectors:
                 add("caution", "group_member_patch_ids_unverified", "groups.patch_attributes",
                     "Group PATCH members require current provider-scoped OWG User IDs; static paths do not verify resolution")
+            if "members" in group_patch and selectors:
+                # Whole-member updates and selector removals can touch the
+                # same provider-scoped membership set. Both are valid paths,
+                # but an IdP may emit them in an order that changes the result.
+                # Never include the opaque selector ID in diagnostics.
+                add("caution", "overlapping_group_member_patch_paths", "groups.patch_attributes",
+                    "Whole-members and member-selector PATCH paths overlap; verify actual operation order and ETags")
         if not group_match:
             add("blocker", "missing_group_match", "groups.match_attributes",
                 "Enabled Groups require an explicit matching attribute")
