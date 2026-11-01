@@ -249,6 +249,39 @@ def test_transport_failure_is_unverified_and_does_not_echo_credentials(
     assert SESSION not in output
 
 
+def test_incomplete_success_receipt_is_unverified(setup_journal, capsys):
+    data = setup_journal
+
+    class FakeResponse:
+        status = 200
+        headers = {"Content-Type": "application/json"}
+        def __init__(self, url, payload):
+            self.url, self.payload = url, payload
+        def geturl(self):
+            return self.url
+        def read(self, size):
+            return json.dumps(self.payload, default=str).encode()[:size]
+        def __enter__(self):
+            return self
+        def __exit__(self, *_):
+            return False
+
+    class Incomplete:
+        def open(self, req, timeout):
+            if req.get_method() == "GET":
+                return FakeResponse(req.full_url, workspace.list_logs())
+            return FakeResponse(req.full_url, {
+                "log": {"log_id": data[3]}, "batch": 1,
+                "added_events": 0, "duplicate_events_skipped": 0,
+                "rejected_events": 0,
+            })
+
+    assert main(args(data), opener=Incomplete()) == 3
+    report = json.loads(capsys.readouterr().out)
+    assert report["status"] == "unverified"
+    assert report["possible_local_append"] is True
+
+
 def test_corrupted_journal_row_refused_before_http(setup_journal, capsys):
     data = setup_journal
     with sqlite3.connect(data[2]) as db:
