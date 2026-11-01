@@ -1093,3 +1093,31 @@ cross-platform/Chromium/WCAG/scale/packaging acceptance, a real consenting
 pilot, or proof of competitor parity.
 
 Coordination: [#326 claim 6551469704](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6551469704).
+
+
+## Exact observation provenance in the period summary (Worker B, 2026-11-01)
+
+The compact period summary previously rendered the first and last observed
+timestamps **only** with JavaScript `Date.toLocaleString()`. That formatting
+is helpful for a quick local-time overview, but drops fractional seconds and
+the source-reported timezone offset. Two events separated by one microsecond
+can consequently appear to have the same observation time, even though the
+preview's validation correctly distinguishes them.
+
+The summary now retains its localized overview **and** displays the two
+original validated ISO timestamps verbatim, explicitly labeled as reported
+source times with their offsets preserved. The timestamps are already
+validated as strict offset-aware instants before display; the change does not
+claim their source identity is authenticated or that capture is complete.
+It does not rewrite canonical events, normalize away source offsets, freeze
+the preview, change export contents, or authorize an AI to read local data.
+
+Deterministic synthetic Node mock-DOM regressions cover distinct events one
+microsecond apart in the same displayed local second, an equivalent
+`+02:00` source offset preserved verbatim, and a zero-event preview that
+continues to state uncertainty rather than invent observation times. They
+also assert that Copy remains request-only, without an export ticket,
+download or model invocation. These are not native browser/WCAG, real
+consenting-customer, provider-validation or competitor-parity results.
+
+Coordination: [#326 claim 6552128864](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6552128864).
