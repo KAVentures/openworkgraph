@@ -571,3 +571,73 @@ def test_native_predictions_do_not_invent_or_duplicate_presented_event_ids():
         assigned = [event_id for w in result["workflows"] for event_id in w["event_ids"]]
         assert len(assigned) == len(set(assigned))
         assert not set(assigned) & {"True", "123", "None", "contains space"}
+
+
+
+def test_linked_projection_rejects_type_coerced_record_identity_claims():
+    from copy import deepcopy
+
+    # The shipped linker normalizes provider/kind/host values with str(...).
+    # An identical malformed source and visible claim must not manufacture
+    # valid same-record or cross-record clipboard authority in the evaluator.
+    for field, value in (
+        ("provider", True), ("provider", None),
+        ("resource_kind", True), ("host", 123), ("host", False),
+        ("resource_reference", True),
+    ):
+        source = deepcopy(_linked_eval_rows())
+        for row in source[:2]:
+            if field == "resource_reference":
+                row["metadata"]["resource_reference"] = value
+            else:
+                row["metadata"]["resource_reference"][field] = value
+        result = predict_linked_items(_linked_eval_case(source, source))
+        assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
+            frozenset({"b1", "b2", "b3"})
+        }, (field, value)
+        assert {"a1", "a2"} <= set(result["unassigned_event_ids"])
+
+    # Literal identity values, even when case-normalized by the production
+    # engine, remain usable; no synthetic score is claimed from this control.
+    source = deepcopy(_linked_eval_rows())
+    for row in source[:2]:
+        row["metadata"]["resource_reference"]["provider"] = "GITHUB"
+        row["metadata"]["resource_reference"]["host"] = "GITHUB.COM"
+    result = predict_linked_items(_linked_eval_case(source, source))
+    assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
+        frozenset({"a1", "a2", "b1", "b2", "b3"})
+    }
+
+
+def test_linked_projection_rejects_nonliteral_app_surface_candidates():
+    from copy import deepcopy
+
+    a, b = "owg:r:" + "a" * 32, "owg:r:" + "b" * 32
+    for malformed in (True, 123, {"label": "Browser"}):
+        source = [
+            _linked_eval_event("loose1", a, "2026-10-20T10:00:00Z"),
+            _linked_eval_event("loose2", b, "2026-10-20T10:00:10Z"),
+        ]
+        for row in source:
+            row["metadata"].pop("resource_reference")
+            row["app"] = malformed
+        result = predict_linked_items(
+            _linked_eval_case(source, source), accept_candidates=True
+        )
+        assert result["workflows"] == [], malformed
+        assert result["unassigned_event_ids"] == ["loose1", "loose2"]
+
+    # Valid same-app continuity remains explicitly ambiguous in normal mode
+    # and is joined only by the opt-in candidate-accepting diagnostic.
+    source = [
+        _linked_eval_event("loose1", a, "2026-10-20T10:00:00Z"),
+        _linked_eval_event("loose2", b, "2026-10-20T10:00:10Z"),
+    ]
+    for row in source:
+        row["metadata"].pop("resource_reference")
+        row["app"] = "Browser"
+    case = _linked_eval_case(source, source)
+    assert predict_linked_items(case)["workflows"] == []
+    assert [w["event_ids"] for w in predict_linked_items(
+        case, accept_candidates=True
+    )["workflows"]] == [["loose1", "loose2"]]
