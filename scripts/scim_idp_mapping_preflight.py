@@ -145,7 +145,7 @@ def assess(mapping: Any) -> dict:
         raise InvalidMapping("client must be entra, okta or other")
     users = _object(root["users"], "users", {
         "match_attributes", "create_attributes", "patch_attributes", "write_mode",
-    })
+    }, {"patch_operations"})
     groups = _object(root["groups"], "groups", {"enabled", "match_attributes"},
                      {"create_attributes", "patch_attributes", "patch_operations"})
     policy = _object(root["provider_policy"], "provider_policy", {"allow_unversioned_user_patch"},
@@ -190,6 +190,38 @@ def assess(mapping: Any) -> dict:
                 minimum=1, max_path=1024, check_duplicates=False,
             )[0]
             group_patch_ops.append((verb.lower(), declared_path, item.get("value_present")))
+    # Optional operation-level User PATCH declarations capture request shapes
+    # that a path-only mapping cannot distinguish (notably Okta's pathless
+    # replace-active example). They contain names/flags, never payload values.
+    user_patch_ops = None
+    if "patch_operations" in users:
+        raw_ops = users["patch_operations"]
+        if type(raw_ops) is not list or len(raw_ops) > MAX_ATTRIBUTES:
+            raise InvalidMapping("users.patch_operations must be a bounded list")
+        user_patch_ops = []
+        for index, raw_op in enumerate(raw_ops):
+            item = _object(raw_op, f"users.patch_operations[{index}]",
+                           {"op", "path"}, {"value_present", "value_attributes"})
+            if "value_present" in item and type(item["value_present"]) is not bool:
+                raise InvalidMapping("users.patch_operations value_present must be a boolean")
+            verb = item["op"]
+            if type(verb) is not str or re.fullmatch(r"[A-Za-z]{1,16}", verb) is None:
+                raise InvalidMapping("users.patch_operations contains an invalid verb")
+            raw_path = item["path"]
+            if type(raw_path) is not str:
+                raise InvalidMapping("users.patch_operations contains an invalid path")
+            declared_path = (_attributes(
+                [raw_path], f"users.patch_operations[{index}].path",
+                minimum=1, max_path=1024, check_duplicates=False,
+            )[0] if raw_path else "")
+            if declared_path and "value_attributes" in item:
+                raise InvalidMapping("users.patch_operations value_attributes requires an empty path")
+            fields = (_attributes(
+                item["value_attributes"], f"users.patch_operations[{index}].value_attributes",
+                minimum=0,
+            ) if "value_attributes" in item else None)
+            user_patch_ops.append((verb.lower(), declared_path,
+                                   item.get("value_present"), fields))
     if group_patch is not None:
         # Group member IDs are opaque, case-sensitive SCIM User resource IDs.
         # The shipped Group PATCH selector decodes JSON and compares the
@@ -237,6 +269,54 @@ def assess(mapping: Any) -> dict:
     def add(severity: str, code: str, path: str, message: str) -> None:
         findings.append({"severity": severity, "code": code, "path": path, "message": message})
 
+    if user_patch_ops is not None:
+        # The shipped User PATCH handler accepts pathless add/replace with an
+        # object-valued value, but not pathless remove. A declared list is not
+        # evidence of the actual HTTP envelope, ETag or object payload.
+        pathless_fields = frozenset({"displayname", "externalid", "active", "name", "emails"})
+        for index, (verb, declared_path, value_present, fields) in enumerate(user_patch_ops):
+            location = f"users.patch_operations[{index}]"
+            if verb not in {"add", "replace", "remove"}:
+                add("blocker", "unsupported_user_patch_verb", location + ".op",
+                    "Declared User PATCH operation uses an unsupported verb")
+                continue
+            if not declared_path:
+                if verb == "remove":
+                    add("blocker", "user_pathless_remove_forbidden", location + ".op",
+                        "Shipped User PATCH requires a path for remove")
+                    continue
+                if fields is None:
+                    add("caution", "user_pathless_fields_undeclared",
+                        location + ".value_attributes",
+                        "Pathless User PATCH object fields were not declared; verify the emitted object")
+                else:
+                    for field_index, field in enumerate(fields):
+                        if field not in pathless_fields:
+                            add("blocker", "unsupported_user_pathless_field",
+                                location + f".value_attributes[{field_index}]",
+                                "Pathless User PATCH object contains an unsupported or immutable field")
+                    if not fields:
+                        add("caution", "user_pathless_empty_object",
+                            location + ".value_attributes",
+                            "Declared pathless User PATCH object contains no fields")
+            elif (declared_path not in USER_PATCH
+                  and not _supported_contact_patch_path(declared_path)):
+                add("blocker", "unsupported_user_patch_path", location + ".path",
+                    "Declared User PATCH operation uses an unsupported path")
+            elif verb == "remove" and declared_path not in {"displayname", "externalid"} and not (
+                    declared_path == "name" or declared_path.startswith("name.")
+                    or _supported_contact_patch_path(declared_path)):
+                add("blocker", "unsupported_user_patch_remove", location + ".op",
+                    "This User attribute cannot be removed by the shipped PATCH handler")
+            if verb in {"add", "replace"}:
+                if value_present is False:
+                    add("blocker", "user_patch_required_value_missing",
+                        location + ".value_present",
+                        "Declared User add/replace omits the required value property")
+                elif value_present is None:
+                    add("caution", "user_patch_value_presence_undeclared",
+                        location + ".value_present",
+                        "User add/replace value-property presence is unknown; verify actual IdP payload")
     declared_paths = [
         ("users.match_attributes", match, USER_MATCH),
         ("users.create_attributes", create, USER_CREATE),
@@ -465,6 +545,8 @@ def assess(mapping: Any) -> dict:
         checked["group_patch"] = len(group_patch)
     if group_patch_ops is not None:
         checked["group_patch_operations"] = len(group_patch_ops)
+    if user_patch_ops is not None:
+        checked["user_patch_operations"] = len(user_patch_ops)
     return {
         "status": "blocked" if blocked else "requires_live_validation",
         "scope": "offline_declared_mapping_only",
