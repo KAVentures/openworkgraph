@@ -1248,13 +1248,13 @@ test('malformed redacted sample labels cannot masquerade as observed app or titl
   });
 });
 
-test('valid redacted sample text is escaped and missing labels stay explicitly unknown', async t => {
+test('valid redacted sample text is escaped and missing labels stay explicitly unreported', async t => {
   const cases = [
     ['HTML-looking labels', {app: '<script>alert(1)</script>',
       window_title: '<img src=x onerror=1>'}, '&lt;script&gt;', '&lt;img src=x onerror=1&gt;'],
     ['null app and title', {app: null, window_title: null},
-      'Unknown app', 'Untitled activity'],
-    ['legacy missing app and title', {}, 'Unknown app', 'Untitled activity']
+      'app not supplied', 'title not supplied'],
+    ['legacy missing app and title', {}, 'app not supplied', 'title not supplied']
   ];
   for (const [name, sample, expectedApp, expectedTitle] of cases)
     await t.test(name, async () => {
@@ -1273,6 +1273,37 @@ test('valid redacted sample text is escaped and missing labels stay explicitly u
       assert.deepEqual(h.copied, ['request-valid-label']);
       assert.equal(h.tickets.length, 0);
     });
+});
+
+test('focus example review separates absent labels, literal fallback strings and blank titles', async t => {
+  const cases = [
+    ['absent metadata', {}, /<li>app not supplied · title not supplied · observed at/],
+    ['explicit null metadata', {app: null, window_title: null},
+      /<li>app not supplied · title not supplied · observed at/],
+    ['literal fallback-looking labels', {app: 'Unknown app', window_title: 'Untitled activity'},
+      /<li>reported app: Unknown app · reported title: Untitled activity · observed at/],
+    ['explicit empty title', {app: 'Editor', window_title: ''},
+      /<li>reported app: Editor · reported title: \[empty title label\] · observed at/],
+    ['whitespace-only title', {app: 'Editor', window_title: '   '},
+      /<li>reported app: Editor · reported title: \[whitespace-only title label\] · observed at/],
+    ['literal missing-label-looking title', {app: 'Editor', window_title: 'title not supplied'},
+      /<li>reported app: Editor · reported title: title not supplied · observed at/]
+  ];
+  for (const [name, sample, expected] of cases) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick(); await settle();
+    h.reply(h.reads[1], {...h.preview('range', 'focus-provenance'),
+      redacted_examples: [{...sample, observed_at: observedStart}]});
+    await opening;
+    assert.equal(h.modals, 1);
+    assert.match(h.modalHtml, expected);
+    assert.doesNotMatch(h.modalHtml, /<li>Unknown app · Untitled activity/);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-focus-provenance']);
+    assert.equal(h.tickets.length, 0, 'Copy must not request an export ticket');
+    assert.equal(h.downloads, 0, 'Copy must not download evidence');
+  });
 });
 
 test('valid redacted focus examples preserve offset and legacy compatibility', async t => {
@@ -2657,7 +2688,7 @@ test('redacted example omissions never erase counted focus evidence', async t =>
     assert.match(h.modalHtml, expected);
     assert.doesNotMatch(h.modalHtml, /No focus spans in this selection/);
     if (name.includes('one redacted sample')) {
-      assert.match(h.modalHtml, /Editor · &lt;redacted&gt;/);
+      assert.match(h.modalHtml, /reported app: Editor · reported title: &lt;redacted&gt;/);
       assert.doesNotMatch(h.modalHtml, /<redacted>/);
     }
     assert.match(h.modalHtml, /Examples are a bounded sample|Missing examples do not mean no focus was observed|does not prove inactivity or complete capture/);
