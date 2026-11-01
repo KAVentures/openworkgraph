@@ -483,6 +483,49 @@ def test_root_cause_direct_integer_boundaries_and_limit_clamp(monkeypatch):
         analytics.root_cause("synthetic", "duration_over")
 
 
+
+@pytest.mark.parametrize(("outcome", "kwargs"), [
+    ("rework", {}),
+    ("duration_over", {"threshold_seconds": 1}),
+    ("contains_activity", {}),
+    ("ends_with", {}),
+])
+@pytest.mark.parametrize("activity", [
+    [], {}, ["Review"], {"name": "Review"}, 0, False, 1.5,
+    ("Review",), {"Review"}, "x" * 201,
+])
+def test_root_cause_direct_activity_rejects_invalid_metadata_before_query(
+        outcome, kwargs, activity, monkeypatch):
+    """Unused activity is still returned in outcome metadata, so it must be typed and bounded."""
+    monkeypatch.setattr(workspace, "_query", lambda *args: pytest.fail("invalid activity reached saved-log query"))
+    with pytest.raises(workspace.EventLogWorkspaceError, match="activity must be a string"):
+        analytics.root_cause("unused-synthetic-log", outcome, activity=activity, **kwargs)
+
+
+@pytest.mark.parametrize(("outcome", "kwargs", "activity"), [
+    ("rework", {}, None),
+    ("rework", {}, ""),
+    ("rework", {}, " Review "),
+    ("duration_over", {"threshold_seconds": 1}, ""),
+    ("duration_over", {"threshold_seconds": 1}, "x" * 200),
+    ("contains_activity", {}, "Review"),
+    ("ends_with", {}, "x" * 200),
+])
+def test_root_cause_direct_activity_preserves_valid_optional_strings(
+        outcome, kwargs, activity, monkeypatch):
+    """Do not change existing literal names or the empty unused-activity REST contract."""
+    monkeypatch.setattr(workspace, "_query", lambda *args: "validated-without-database")
+    assert analytics.root_cause("unused-synthetic-log", outcome, activity=activity, **kwargs) == "validated-without-database"
+
+
+@pytest.mark.parametrize("outcome", ["contains_activity", "ends_with"])
+def test_root_cause_target_activity_still_requires_nonempty_string(outcome, monkeypatch):
+    monkeypatch.setattr(workspace, "_query", lambda *args: pytest.fail("missing target reached saved-log query"))
+    with pytest.raises(workspace.EventLogWorkspaceError, match="activity is required"):
+        analytics.root_cause("unused-synthetic-log", outcome, activity="")
+
+
+
 def test_root_cause_uses_object_attributes_from_ocel():
     objects, events = [], []
     for i in range(40):
