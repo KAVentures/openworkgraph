@@ -313,6 +313,9 @@ const path=require('node:path');
    await acknowledge.check();
    await rehearsalRun.click();
    assert.match(await rehearsalStatus.textContent(),/SYNTHETIC ABSTAIN/);
+   await stop.fill('Changed synthetic stop rule after rehearsal');
+   assert.equal(await rehearsalDownload.isDisabled(),true,'editing proposed stop rule invalidates synthetic receipt');
+   assert.equal(await acknowledge.isChecked(),false);
    assert.equal(evidenceReads,readsBeforeRehearsal,'rehearsal and receipt cannot fetch evidence');
    assert.equal(writes,0,'synthetic rehearsal cannot write to workflow APIs');
 
@@ -346,6 +349,10 @@ const path=require('node:path');
    });
    assert.equal(await downloadPlan.isDisabled(),true,'browser reload cannot restore prior acknowledgement');
    const readsBeforeImport=evidenceReads;
+   await upload(receipt);
+   await importMessage.filter({hasText:/Not an unexecuted OWG shadow-plan v1 proposal/}).waitFor();
+   assert.equal(await page.locator('#owgExplorerPlan_expected').inputValue(),'',
+     'a synthetic receipt cannot be imported as an executable or approved plan');
    await upload('{invalid');
    await importMessage.filter({hasText:/invalid JSON/}).waitFor();
    await upload({...manifest,execution_permitted:true});
