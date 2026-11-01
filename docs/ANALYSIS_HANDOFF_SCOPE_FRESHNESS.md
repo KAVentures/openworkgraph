@@ -1208,3 +1208,38 @@ export ticket or download. These checks are not real-browser/WCAG, real-provider
 consenting-user pilot, verified business outcome or competitor-parity evidence.
 
 Coordination: [#326 claim 6553708598](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6553708598).
+
+
+## Colliding rendered source labels are not source identity (Worker B, 2026-11-01)
+
+A bounded source review can conceal an important distinction even when every
+selected-event count is valid. Separate **literal** source-map keys can become
+the same *displayed* label: for example, two long names that share the first
+96 Unicode code points, a source name with a bidi override versus a literal
+`[U+202E]` sequence, or two different blank/whitespace-only keys. Without
+an explicit distinction, a reviewer could mistake two reported categories for
+one verified application/provider and overinterpret a workflow map.
+
+The Prepare for AI source summary now adds
+`[distinct reported category 1/2]`, `[distinct reported category 2/2]`
+(and corresponding ordinals) **only when two or more of the eight visible
+categories have the same rendered label**. The ordinals follow the existing
+descending selected-event-count and literal-key tie ordering. They distinguish
+displayed categories, **not authenticated provider identities**. Raw labels
+are never copied into these ordinals, normalized, merged or rewritten.
+
+The eight-category limit, safe display escaping, exact omitted category and
+selected-event totals, ordinary/diagnostic evidence grading, and user-controlled
+request-only Copy and local evidence download remain unchanged. If a colliding
+category is outside the eight visible entries, the omitted-category disclosure
+still applies; this preview does not promise to enumerate every literal label.
+The downloaded file must be inspected separately before sharing, and a
+reported source category alone cannot establish a true business workflow.
+
+Three deterministic synthetic mock-DOM regressions cover shared truncated
+prefixes, bidi-control/literal-codepoint collisions, and blank versus
+whitespace-only labels. Each also checks Copy triggers no export ticket or
+download. These are not actual Chromium/WCAG, real consenting-user pilot,
+verified source-identity, business-outcome or competitor-parity results.
+
+Coordination: [#326 claim 6554231894](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6554231894).
