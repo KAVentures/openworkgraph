@@ -725,3 +725,71 @@ source tests are **not** live restricted-Stripe account acceptance, real
 tenant revocation guarantees, customer-outcome adjudication or held-out
 A/B/C commercial-benefit evidence. All exact-head native CI gates must pass
 before this draft can merge.
+
+
+## Explicit dependency-chain source status (bounded local REST)
+
+A dashboard-session holder can now request
+`POST /v1/open-work/declarations/dependency-status` for a currently reviewed,
+source-account-scoped owner declaration. This is a **functional source recheck**
+of the selected case and a bounded prefix of its transitive, owner-declared
+prerequisites. It reuses the existing private SQLite declaration ledger, DAG
+projection, and explicitly opted-in `stripe_open_work_case_context` reader.
+It does not introduce a source connector, additional Stripe permission, a
+background poll, an AI grant, or a business write.
+
+The exact JSON body contains `work_item_ref`, `expected_revision`,
+`expected_edit_token`, `confirm_source_scan: true`, `max_pages` (literal
+integer 1–3), and `max_cases` (literal integer 1–4). The current revision
+and incarnation token come from the authenticated declaration list. Example:
+
+```json
+{
+  "work_item_ref": "owg:w:dddddddddddddddddddddddddddddddd",
+  "expected_revision": 1,
+  "expected_edit_token": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "confirm_source_scan": true,
+  "max_pages": 2,
+  "max_cases": 4
+}
+```
+
+Before any provider call, the server requires the existing local dashboard
+session, current local Stripe source scope, current owner review and exact
+declaration revision/incarnation; it also validates the complete bounded
+dependency DAG. It checks scope and exact target/prerequisite versions and
+reviews **after each individual source read** and again before responding.
+Revocation, account replacement or changed prerequisite approval returns a
+privacy-safe conflict and stops further reads. These rechecks are not an
+atomic cross-process source-grant lease; a provider read already in flight
+cannot be rolled back.
+
+The response `openworkgraph.local-reviewed-dependency-status.v1` contains
+prerequisite-first `case_statuses`, with the requested target **always
+included**, owner-declared goal/outcome codes and revisions, separately
+source-reported `open` or `unknown` status, source verification timestamp,
+bounded inventory coverage, and at most eight retained OWG reference/count
+summaries per scanned case. For a four-case A → B → C → D chain,
+`max_cases: 2` scans A and D, explicitly reports two **unscanned**
+prerequisites, and does not pretend B or C is verified. A complete scanned
+prefix is **not** a complete source inventory.
+
+Each case uses a separate, sequential 1–3-page source scan (at most four
+scans per explicit request), not a transactionally consistent provider
+snapshot. Different cases may have different `verified_at` values. Source
+outages, partial inventory, missing open invoices and absent retained
+observations are `unknown`, never evidence of payment, successful customer
+outcome, or a business obligation. Owner-declared dependencies are not
+source-confirmed relationships. The endpoint does not include native Stripe
+IDs, customer text, invoice amounts, raw event timelines, source account,
+credentials, or edit tokens. No-store caching applies to success.
+
+`tests/test_open_work_dependency_dossier.py` exercises real local
+FastAPI/SQLite review/declaration creation and bounded source-check routes
+with a **fake** existing Stripe reader: A → B → C → D, explicit scan counts,
+unknown source states, missing consent/stale CAS/auth denial with zero reads,
+source replacement, review revocation, prerequisite mutation during scanning,
+and source-data minimization. This is not real Stripe/tenant acceptance,
+customer-outcome adjudication or a held-out A/B/C commercial benefit trial.
+Exact-head cross-platform CI and real consenting account acceptance remain
+required before production claims or merging the draft.
