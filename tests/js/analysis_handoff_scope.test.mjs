@@ -3707,7 +3707,8 @@ test('detailed-evidence acknowledgement is disabled on stale scope and never car
   await settle(); h.reply(h.reads[2], h.preview('all', 'new-period')); await settle();
   const next = h.bars[0].controls.button.onclick();
   await settle(); h.reply(h.reads[3], h.preview('all', 'fresh')); await next;
-  assert.equal(h.modal['#analysisReviewedDetailed'].disabled, false);
+  assert.equal(h.modal['#analysisReviewedDetailed'].disabled, true,
+    'fresh summary-only review cannot pre-acknowledge raw chronology');
   assert.equal(h.modal['#analysisReviewedDetailed'].checked, false);
   assert.equal(h.modal['#analysisDetailed'].checked, false);
   h.modal['#analysisDetailed'].checked = true;
