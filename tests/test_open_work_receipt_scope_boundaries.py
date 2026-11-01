@@ -577,3 +577,84 @@ def test_absent_or_literal_false_authority_assertions_preserve_provider_only(
         assert receipt[key] is False
     assert receipt["read_only"] is True
     assert "PRIVATE_NEVER_RETURN" not in str(receipt)
+
+
+# All known negative-scope disclaimers constrain every receipt, regardless of
+# which provider normally emits them or whether a cache nests them in detail.
+# These are synthetic source-reader contracts, not real provider attestations.
+_KNOWN_SCOPE_DISCLAIMERS = (
+    "not_a_claim_of_business_success",
+    "not_a_claim_of_customer_bank_settlement",
+)
+
+
+def _scope_assertion_level(graph, operation, level):
+    source = graph["source_evidence"]
+    if level == "source":
+        return source
+    # Production GitHub omits nested operation detail; a valid optional
+    # detail must be supplied to test contradictions at that level.
+    return source.setdefault(
+        "verified_operational_outcome",
+        {"kind": operation, "verified": True},
+    )
+
+
+@pytest.mark.parametrize("operation,provider,kind,state,_expected_flag", OPERATIONS)
+@pytest.mark.parametrize("level", ["source", "detail"])
+@pytest.mark.parametrize("disclaimer", _KNOWN_SCOPE_DISCLAIMERS)
+@pytest.mark.parametrize("contradiction", [False, None, 0, 1, "false", [], {}])
+def test_all_known_scope_disclaimers_fail_closed_at_both_receipt_levels(
+    operation, provider, kind, state, _expected_flag, level,
+    disclaimer, contradiction,
+):
+    graph = _graph(operation, provider, kind, state)
+    _scope_assertion_level(graph, operation, level)[disclaimer] = contradiction
+    calls = []
+
+    def read(ref, **kwargs):
+        calls.append((ref, kwargs))
+        return graph
+
+    receipt = source_operation_receipt(
+        REF, operation, record_reader=read, now=WHEN,
+    )
+    assert receipt["availability"] == "unknown"
+    assert receipt["reason"] == "provider_receipt_scope_conflict"
+    assert receipt["operation_verified"] is False
+    assert receipt["business_objective_verified"] is False
+    assert receipt["customer_outcome_verified"] is False
+    assert receipt["agent_caused_operation_verified"] is False
+    assert receipt["agent_execution_authorized"] is False
+    assert receipt["read_only"] is True
+    assert receipt["resource_ref"] == REF
+    assert "PRIVATE_NEVER_RETURN" not in str(receipt)
+    assert calls == [(REF, {
+        "since": None, "until": None, "include_source_status": True,
+        "required_source_provider_kind": (provider, kind),
+    })]
+
+
+@pytest.mark.parametrize("operation,provider,kind,state,_expected_flag", OPERATIONS)
+@pytest.mark.parametrize("level", ["source", "detail"])
+@pytest.mark.parametrize("disclaimer", _KNOWN_SCOPE_DISCLAIMERS)
+@pytest.mark.parametrize("present", [False, True])
+def test_absent_or_true_known_scope_disclaimers_keep_provider_only_receipt(
+    operation, provider, kind, state, _expected_flag, level,
+    disclaimer, present,
+):
+    graph = _graph(operation, provider, kind, state)
+    assertions = _scope_assertion_level(graph, operation, level)
+    if present:
+        assertions[disclaimer] = True
+    receipt = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: graph, now=WHEN,
+    )
+    assert receipt["availability"] == "source_reported"
+    assert receipt["operation_verified"] is True
+    assert receipt["business_objective_verified"] is False
+    assert receipt["customer_outcome_verified"] is False
+    assert receipt["agent_caused_operation_verified"] is False
+    assert receipt["agent_execution_authorized"] is False
+    assert receipt["read_only"] is True
+    assert "PRIVATE_NEVER_RETURN" not in str(receipt)
