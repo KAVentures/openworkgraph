@@ -192,6 +192,22 @@ malformed or oversized duplicate claims. Rich-evidence top-level tab/transfer fi
 metadata, not independent source claims. An unpresented source-only copy/paste
 row must not bridge two visible records or create a candidate link.
 
+**Negative evidence is retained as a veto, not a positive edge.** A hidden
+source observation with a valid literal ID, UTC timestamp and exact
+organization/actor/device/session scope can contradict a proposed clipboard
+transfer or single-record tab inference. The evaluator therefore removes that
+matching scoped weak token from *copies* of admitted visible rows before
+linking. For example, two visible records sharing a transfer ID must not merge
+if a third, unpresented source record also claimed the same scoped transfer:
+the original three-record source group is ambiguous. A hidden second record
+in the same tab likewise invalidates a single-record-tab join. Independent
+same-record observations remain eligible. Hidden rows never become workflow
+members, candidates or positive bridges; source and visible evidence are not
+mutated. Tokens reused under another tenant, actor, device or session cannot
+veto this scope. This is a deliberately conservative synthetic evaluation
+boundary; it does not attest that hidden evidence was accessible to a live
+agent, nor change the production linker or prove held-out improvement.
+
 An explicit `source_events: []` (or null) is authoritative: if source
 evidence has been revoked/deleted, neither the record-lane nor linked-item
 evaluation may fall back to a stale `presented_evidence` snapshot and
