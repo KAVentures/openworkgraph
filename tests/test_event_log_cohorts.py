@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+import inspect
 import json
 import os
 from pathlib import Path
@@ -202,6 +203,28 @@ def test_benchmark_reports_overlap_and_refuses_bad_input():
         with pytest.raises(workspace.EventLogWorkspaceError):
             cohorts.benchmark(log_id, [{}, {}], sla_seconds=sla)
 
+
+
+@pytest.mark.parametrize("value", [
+    1.5, 5.0, float("nan"), float("inf"), float("-inf"),
+    "5", "invalid", None, True, False, [], {},
+])
+def test_benchmark_direct_limit_rejects_nonintegers_before_query(value, monkeypatch):
+    """Invalid internal display caps fail closed without reading a saved log."""
+    monkeypatch.setattr(workspace, "_query", lambda *args: pytest.fail("invalid limit reached query"))
+    with pytest.raises(workspace.EventLogWorkspaceError, match="limit must be an integer"):
+        cohorts.benchmark("unused-synthetic-log", [{}, {}], limit=value)
+
+
+def test_benchmark_direct_integer_limit_preserves_existing_clamp(monkeypatch):
+    """Inspect the actual query closure to verify both bound values without DuckDB."""
+    def capture_limit(log_id, case_type, run):
+        assert log_id == "unused-synthetic-log"
+        return inspect.getclosurevars(run).nonlocals["limit"]
+
+    monkeypatch.setattr(workspace, "_query", capture_limit)
+    for requested, applied in ((-10, 1), (0, 1), (1, 1), (15, 15), (50, 50), (51, 50), (10 ** 10, 50)):
+        assert cohorts.benchmark("unused-synthetic-log", [{}, {}], limit=requested) == applied
 
 
 def test_identical_cohorts_disclose_independent_interval_limit_without_directional_claim():
