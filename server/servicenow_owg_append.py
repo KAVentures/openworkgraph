@@ -142,12 +142,13 @@ def verify_local_target(log_id: str, port: int, namespace: str,
 
 
 def append_local(log_id: str, port: int, body: bytes, namespace: str,
-                 session: str, *, opener=None) -> dict:
+                 session: str, expected_events: int, *, opener=None) -> dict:
     if not _LOG.fullmatch(log_id) or type(port) is not int or not 1 <= port <= 65535:
         raise AppendError("Invalid local event-log target")
     if not re.fullmatch(r"snow_[0-9a-f]{32}", namespace, re.ASCII):
         raise AppendError("Invalid selected-source namespace")
-    if type(body) is not bytes or not 1 <= len(body) <= MAX_UPLOAD_BYTES:
+    if (type(body) is not bytes or not 1 <= len(body) <= MAX_UPLOAD_BYTES
+            or type(expected_events) is not int or not 1 <= expected_events <= MAX_EVENTS):
         raise AppendError("Invalid local append payload")
     session = _session(session)
     query = parse.urlencode({
@@ -188,7 +189,9 @@ def append_local(log_id: str, port: int, body: bytes, namespace: str,
             or any(type(result.get(key)) is not int or result[key] < 0
                    for key in ("batch", "added_events", "duplicate_events_skipped",
                                "rejected_events"))
-            or result["batch"] < 1):
+            or result["batch"] < 1
+            or sum(result[key] for key in ("added_events", "duplicate_events_skipped",
+                                           "rejected_events")) != expected_events):
         raise AppendError("Local OWG append result unverified")
     return {key: result[key] for key in (
         "batch", "added_events", "duplicate_events_skipped", "rejected_events",
@@ -233,7 +236,7 @@ def main(argv: list[str] | None = None, *, opener=None) -> int:
         _check_grant(args.grant_file, scope)
         attempted = True
         result = append_local(
-            args.log_id, args.port, body, namespace, session, opener=opener,
+            args.log_id, args.port, body, namespace, session, count, opener=opener,
         )
         _check_grant(args.grant_file, scope)
         print(json.dumps({
