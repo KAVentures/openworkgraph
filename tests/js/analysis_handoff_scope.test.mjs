@@ -40,7 +40,7 @@ function harness(auth = Promise.resolve(true), clipboardWrite = null, clockDate 
   const reads = [], tickets = [], copied = [], toasts = [], summaries = [], bars = [];
   let downloads = 0, modals = 0, modalHtml = '', modalTitle = '', modalSubtitle = '';
   const modal = Object.fromEntries(['#analysisRequest', '#analysisCopy', '#analysisDownload',
-    '#analysisDetailed', '#analysisActionStatus'].map(key => [key, {textContent: '', checked: false}]));
+    '#analysisDetailed', '#analysisReviewedDetailed', '#analysisActionStatus'].map(key => [key, {textContent: '', checked: false}]));
   function element(tag) {
     return {
       tagName: tag.toUpperCase(), value: '', textContent: '', hidden: false, attributes: {},
@@ -338,6 +338,7 @@ test('detailed-evidence choice is frozen and accurately reported for a pending t
   const open = h.bars[0].controls.button.onclick();
   await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await open;
   h.modal['#analysisDetailed'].checked = true;
+  h.modal['#analysisReviewedDetailed'].checked = true;
   const download = h.modal['#analysisDownload'].onclick();
   await settle();
   assert.equal(h.tickets.length, 1);
@@ -359,6 +360,7 @@ test('stale pending download never re-enables detailed-evidence option', async (
   const open = h.bars[0].controls.button.onclick();
   await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await open;
   h.modal['#analysisDetailed'].checked = true;
+  h.modal['#analysisReviewedDetailed'].checked = true;
   const download = h.modal['#analysisDownload'].onclick();
   await settle();
   h.bars[0].controls.select.value = 'all';
@@ -527,6 +529,7 @@ test('ticket token disagreement fails closed, while UTC-equivalent detailed expo
   const open = h.bars[0].controls.button.onclick();
   await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await open;
   h.modal['#analysisDetailed'].checked = true;
+  h.modal['#analysisReviewedDetailed'].checked = true;
   const first = h.modal['#analysisDownload'].onclick();
   await settle();
   const body = JSON.parse(h.tickets[0].options.body);
@@ -1626,6 +1629,7 @@ test('selected-range AI history grant shows exact bounds, expiry and export dist
   assert.match(h.modalHtml, /Name redaction is best effort, not anonymization/);
   assert.match(h.modalHtml, /detailed chronology adds raw local evidence/);
   h.modal['#analysisDetailed'].checked = true;
+  h.modal['#analysisReviewedDetailed'].checked = true;
   const downloading = h.modal['#analysisDownload'].onclick();
   await settle();
   assert.equal(JSON.parse(h.tickets[0].options.body).include_raw, true);
@@ -2477,6 +2481,7 @@ test('ordinary and health-only selected rows retain explicit diagnostic exports'
     assert.match(h.modalHtml, /(?:An optional diagnostic download|A download) requests the selected period again, subject to current consent, retention and access/);
     assert.doesNotMatch(h.modalHtml, /An evidence package is unavailable/);
     h.modal['#analysisDetailed'].checked = true;
+    h.modal['#analysisReviewedDetailed'].checked = true;
     const downloading = h.modal['#analysisDownload'].onclick();
     await settle();
     assert.equal(h.tickets.length, 1);
@@ -3629,4 +3634,76 @@ test('mixed legacy evidence still carries diagnostic provenance into copied agen
   assert.match(h.copied[0], /Capture completeness is unverified/);
   assert.equal(h.tickets.length, 0);
   assert.equal(h.downloads, 0);
+});
+
+test('detailed chronology requires explicit period-local acknowledgement before ticket creation', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const opening = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await opening;
+  const detailed = h.modal['#analysisDetailed'];
+  const reviewed = h.modal['#analysisReviewedDetailed'];
+  assert.match(h.modalHtml, /id="analysisReviewedDetailed" type="checkbox"/);
+  assert.match(h.modalHtml, /This does not authorize sharing or AI access/);
+  assert.equal(reviewed.checked, false);
+  detailed.checked = true;
+  detailed.onchange();
+  await h.modal['#analysisDownload'].onclick();
+  assert.equal(h.tickets.length, 0, 'unreviewed raw evidence must not request a ticket');
+  assert.equal(h.downloads, 0);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /Detailed chronology was not requested/);
+  assert.equal(h.modal['#analysisDownload'].disabled, false);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-reviewed'], 'copy is a separate, non-export action');
+  reviewed.checked = true;
+  const accepted = h.modal['#analysisDownload'].onclick();
+  await settle();
+  assert.equal(h.tickets.length, 1);
+  assert.equal(JSON.parse(h.tickets[0].options.body).include_raw, true);
+  assert.equal(reviewed.disabled, true);
+  h.reply(h.tickets[0], {});
+  await accepted;
+  assert.equal(h.downloads, 1);
+  assert.equal(reviewed.disabled, false);
+  detailed.checked = false;
+  detailed.onchange();
+  detailed.checked = true;
+  detailed.onchange();
+  assert.equal(reviewed.checked, false, 'changing detail choice revokes the local acknowledgement');
+  await h.modal['#analysisDownload'].onclick();
+  assert.equal(h.tickets.length, 1);
+  detailed.checked = false;
+  detailed.onchange();
+  const summary = h.modal['#analysisDownload'].onclick();
+  await settle();
+  assert.equal(h.tickets.length, 2, 'summary download does not require raw-data acknowledgement');
+  assert.equal(JSON.parse(h.tickets[1].options.body).include_raw, false);
+  h.reply(h.tickets[1], {});
+  await summary;
+  assert.equal(h.downloads, 2);
+});
+
+test('detailed-evidence acknowledgement is disabled on stale scope and never carries to new review', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const opening = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'old')); await opening;
+  h.modal['#analysisDetailed'].checked = true;
+  h.modal['#analysisReviewedDetailed'].checked = true;
+  h.bars[0].controls.select.value = 'all';
+  h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+  assert.equal(h.modal['#analysisReviewedDetailed'].disabled, true);
+  await h.modal['#analysisDownload'].onclick();
+  assert.equal(h.tickets.length, 0);
+  assert.equal(h.downloads, 0);
+  await settle(); h.reply(h.reads[2], h.preview('all', 'new-period')); await settle();
+  const next = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[3], h.preview('all', 'fresh')); await next;
+  assert.equal(h.modal['#analysisReviewedDetailed'].disabled, false);
+  assert.equal(h.modal['#analysisReviewedDetailed'].checked, false);
+  assert.equal(h.modal['#analysisDetailed'].checked, false);
+  h.modal['#analysisDetailed'].checked = true;
+  await h.modal['#analysisDownload'].onclick();
+  assert.equal(h.tickets.length, 0, 'old acknowledgement must not permit a new-period ticket');
+  assert.match(h.modal['#analysisActionStatus'].textContent, /check the detailed-evidence acknowledgement/);
 });
