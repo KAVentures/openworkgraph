@@ -410,20 +410,28 @@ def assess(mapping: Any) -> dict:
         # contacts, even when their literal values differ. Preserve the
         # case-insensitive effective-target checks above, but caution rather
         # than reject this data-dependent cross-selector overlap.
-        selector_fields = {key[1] for key in keys if key[0] == "selector"}
+        selectors = [key for key in keys if key[0] == "selector"]
+        selector_fields = {key[1] for key in selectors}
         if {"type", "value"} <= selector_fields:
             return True
         for child in _CONTACT_CHILDREN:
             if (("field", "emails." + child) in keys and any(
-                    key[0] == "selector" and key[3] in ("", child)
-                    for key in keys)):
+                    key[3] in ("", child) for key in selectors)):
                 return True
+        # Each shipped PATCH operation reselects contacts against the updated
+        # array. A write to the *selector field* can invalidate a later
+        # selector, even when the two paths update different child fields.
+        # This applies to global emails.type/value updates and to distinct
+        # literal selectors of the same kind (e.g. work -> home).
+        if any(("field", "emails." + key[1]) in keys for key in selectors):
+            return True
+        if len(selectors) > 1 and any(key[3] == key[1] for key in selectors):
+            return True
         selected_children: dict[tuple[str, str], set[str]] = {}
-        for key in keys:
-            if key[0] == "selector":
-                selected_children.setdefault((key[1], key[2]), set()).add(key[3])
-        return any("" in children and len(children) > 1
-                   for children in selected_children.values())
+        for key in selectors:
+            selected_children.setdefault((key[1], key[2]), set()).add(key[3])
+        return any(("" in children or field in children) and len(children) > 1
+                   for (field, _), children in selected_children.items())
 
     legacy_contact_overlap = overlapping_contact_paths(effective_contact_paths)
     contact_overlap = overlapping_contact_paths(
