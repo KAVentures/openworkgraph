@@ -342,3 +342,31 @@ and missing members, offboard/rehire, revocation, rollback/restore and mixed
 worker versions. Never infer Group PATCH support from Group create attributes.
 No live provider call, provisioning, identity mutation or business write is
 performed by this offline preflight.
+
+
+## Group PATCH selector identity and duplicate review (offline only)
+
+Group PATCH member selectors such as `members[value eq "usr_123"]` address
+an **opaque OWG SCIM User resource ID**. The shipped Group handler compares
+the decoded JSON selector value **exactly** (case-sensitive), not as a
+case-insensitive username, email, SSO subject or `externalId`. The preflight
+therefore keeps `usr_A` and `usr_a` as different *declared selector values*;
+neither is evidence that the User exists or belongs to the current provider.
+
+The static mapping now refuses duplicate **effective** Group PATCH paths.
+For example, `members[value eq "usr_123"]` and
+`MEMBERS[VALUE EQ "u\\u0073r_123"]` decode to the same target even
+though their source spelling differs. Plain paths such as `members` and
+`MEMBERS` also remain duplicates. Selector structure is ASCII
+case-insensitive; the decoded opaque member value is not folded. Duplicate
+errors never echo the selector's ID or other supplied values. Unsupported
+selectors remain blockers, not a way to bypass duplicate checking.
+
+This is a declaration-level ambiguity check only. The shipped Group PATCH
+still permits **remove only** for member selectors, requires the exact
+current Group `If-Match`, resolves direct members within the current
+provisioning provider and employee generation, and does not grant OWG
+permissions. Verify emitted PATCH verbs, stale ETags, duplicate operations,
+cross-provider IDs, revocation, offboarding/rehire and backup/restore with
+authorized disposable identities before company rollout. No real IdP
+requests or provisioning are performed by the preflight.
