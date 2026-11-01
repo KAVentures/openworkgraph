@@ -269,3 +269,34 @@ and equivalent UTC/+02:00 timestamps. No new network calls, background
 polling, grants, credentials, source adapters, execution or business writes.
 These are **post-read timestamp-consistency tests**, not live Jira validation,
 cryptographic time attestation, tenant authorization or business-outcome proof.
+
+
+## Pre-read operation-family isolation
+
+A caller can ask to verify a Stripe invoice even when the opaque retained
+record actually belongs to a Jira issue or a GitHub PR. Previously, the
+operation verifier requested `record_graph(include_source_status=True)`
+and checked the returned `record_type` **after** the graph could already
+have refreshed the unrelated provider. Returning `unknown` afterward
+does not undo that unnecessary provider read.
+
+The existing `record_graph` source-type preflight now also accepts an
+optional `required_source_provider_kind` pair. The operation verifier
+passes its allowlisted expected provider and object kind **before** the
+source adapter dispatch. A mismatch yields the existing
+`selected_source_type_not_observed` source unknown, with **zero provider
+adapter calls**. The outer operation receipt remains privacy-safe unknown
+and never grants customer/business/agent success or execution authority.
+The older exact `required_source_type` tuple remains supported; all other
+callers have unchanged defaults. No source provider, tenant, or host is
+authorized by the new pair: existing exact-host allowlists, tenant checks,
+opt-in and credential validation still govern every permitted adapter read.
+
+Synthetic tests exercise 16 observed-versus-requested combinations across
+GitHub PR, Jira issue, Stripe invoice and Stripe refund, including same-
+provider wrong-kind cases; four matching controls still make one fake
+source read, while 12 mismatches make none. Additional fake-graph tests
+assert the operation verifier passes the pair and preserves all
+non-execution flags. This is not real provider, revocation-race, tenant
+or customer-outcome acceptance. It does not add background polling,
+business writes, credentials, source grants or new REST/MCP fields.
