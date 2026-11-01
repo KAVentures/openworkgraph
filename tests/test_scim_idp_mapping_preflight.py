@@ -1018,7 +1018,7 @@ def test_group_patch_mapping_absence_does_not_imply_supported_or_unsupported_upd
 @pytest.mark.parametrize("client", ["entra", "okta", "other"])
 @pytest.mark.parametrize("patch_paths,overlap", [
     (["members", 'members[value eq "usr_A"]'], True),
-    (["MEMBERS", r'MEMBERS[VALUE EQ "u\\u0073r_A"]'], True),
+    (["MEMBERS", r'MEMBERS[VALUE EQ "u\u0073r_A"]'], True),
     (["members"], False),
     (['members[value eq "usr_A"]'], False),
     (['members[value eq "usr_A"]', 'members[value eq "usr_a"]'], False),
