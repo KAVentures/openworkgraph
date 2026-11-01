@@ -3361,3 +3361,48 @@ test('equal selected and retained counts still do not claim complete capture', a
   assert.equal(h.tickets.length, 0);
   assert.equal(h.downloads, 0);
 });
+
+
+test('AI saved-history grant disclosure checks supplied grant provenance without widening access', async t => {
+  const now = Date.now();
+  const futureExpiry = new Date(now + 86_400_000).toISOString();
+  const validPast = new Date(now - 60_000).toISOString().replace(/Z$/, '001+00:00');
+  const cases = [
+    ['malformed supplied grant time', {granted_at: 'yesterday', expires_at: futureExpiry}, false],
+    ['future supplied grant time', {
+      granted_at: new Date(now + 60_000).toISOString(), expires_at: futureExpiry}, false],
+    ['future fractional grant time', {
+      granted_at: new Date(now + 60_000).toISOString().replace(/Z$/, '000001Z'),
+      expires_at: futureExpiry}, false],
+    ['grant later than expiration', {
+      granted_at: new Date(now + 120_000).toISOString(),
+      expires_at: new Date(now + 60_000).toISOString()}, false],
+    ['valid past offset and microsecond grant', {
+      granted_at: validPast, expires_at: futureExpiry}, true],
+    ['valid indefinite grant', {granted_at: validPast, expires_at: null}, true],
+    ['legacy absent grant timestamp', {expires_at: futureExpiry}, true],
+    ['legacy null grant timestamp', {granted_at: null, expires_at: futureExpiry}, true]
+  ];
+  for (const [name, metadata, verified] of cases) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], {...h.preview('range', 'grant-provenance'),
+      local_ai_enabled: true,
+      local_ai_history_access: {mode: 'all_saved', ...metadata}});
+    await opening;
+    assert.equal(h.modals, 1);
+    if (verified) {
+      assert.match(h.modalHtml, /Local saved-history grant: all saved work/);
+      assert.match(h.modalHtml, /snapshot only; current consent still applies/);
+    } else {
+      assert.match(h.modalHtml, /permission could not be verified from this preview/);
+      assert.doesNotMatch(h.modalHtml, /Local saved-history grant:/);
+    }
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-grant-provenance']);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+  });
+});
