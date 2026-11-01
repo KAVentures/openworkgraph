@@ -37,6 +37,7 @@ from typing import Any
 from .record_case_lanes import _EVENT_ID, _RESOURCE, _identity, _stamp, _token
 from .reconstruction_segments import observed_activity_segments
 from .reconstruction_switches import observed_work_switches
+from .reconstruction_surfaces import observed_surface_runs
 
 _TRANSFER = re.compile(r"^[A-Za-z0-9:._-]{1,120}$")
 _TAB = re.compile(r"^[A-Za-z0-9:._-]{1,160}$")
@@ -574,6 +575,7 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
         refs = sorted({rows[i]["ref"] for i in ids if rows[i]["ref"]})
         basis = dict(sorted(bases[linked["root"](ids[0])].items()))
         segments = observed_activity_segments(linked["rows"], ids)
+        surfaces = observed_surface_runs(linked["rows"], ids)
         items.append({
             "item_id": item_id,
             "event_ids": ids[:_MAX_EVENT_IDS],
@@ -586,6 +588,7 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             "observed_steps": [{"observed_at": rows[i]["observed_at"], "action": rows[i]["action"],
                                 "source": rows[i]["source"]} for i in ids[:24]],
             **segments,
+            **surfaces,
             "link_basis": basis,
             "cross_record_join": len(refs) > 1,
             "confidence": min(_CONFIDENCE[name] for name in basis) if basis else _CONFIDENCE["same_record"],
@@ -632,6 +635,9 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             "activity_segments_are_observed_episodes_not_tasks": True,
             "interruption_requires_same_scope_foreign_record": True,
             "clock_gaps_alone_do_not_split_activity_segments": True,
+            "observed_surface_runs_are_not_task_memberships": True,
+            "unknown_surfaces_are_not_other_app": True,
+            "surface_transitions_require_verified_same_capture_scope": True,
             "observed_switches_require_same_scope_literal_record_endpoints": True,
             "observed_switches_are_not_task_handoffs": True,
             "unattributed_intervening_evidence_is_not_direct_adjacency": True,
