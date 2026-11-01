@@ -344,11 +344,24 @@ def assess(mapping: Any) -> dict:
     # The shipped contact PATCH parser accepts the exact core User schema URN
     # as a prefix. Keep cautions consistent with accepted qualified paths.
     contact_patch_paths = [_unqualified_contact_patch_path(value) for value in patch]
+    # Operation-level declarations are independent of the legacy path list.
+    # A client declaring contact writes only in patch_operations must still
+    # receive the same descriptive-only and value-selector cautions. Do not
+    # include opaque selector literals in any finding or infer actual writes.
+    contact_operation_paths = [
+        _unqualified_contact_patch_path(path)
+        for _, path, _, _ in (user_patch_ops or [])
+        if path and _supported_contact_patch_path(path)
+    ]
+    declared_contact_paths = contact_patch_paths + contact_operation_paths
     if any((contact_match := _CONTACT_SELECTOR.fullmatch(value)) is not None
-           and contact_match.group(1).casefold() == "value" for value in contact_patch_paths):
+           and contact_match.group(1).casefold() == "value" for value in declared_contact_paths):
         add("caution", "contact_value_selector", "users.patch_attributes",
             "A contact-value selector is data-dependent and is not an identity match or verification")
-    if "emails" in create or any(value.casefold().startswith("emails") for value in contact_patch_paths):
+    if ("emails" in create
+            or any(value.casefold().startswith("emails") for value in declared_contact_paths)
+            or any(fields is not None and "emails" in fields
+                   for _, _, _, fields in (user_patch_ops or []))):
         add("caution", "unverified_contact_metadata", "users",
             "Contact arrays are descriptive only; matching, login and adoption still use stable userName/externalId")
     # Different *supported* PATCH targets can overlap without being identical:
