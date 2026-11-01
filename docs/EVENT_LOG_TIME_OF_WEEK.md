@@ -142,3 +142,50 @@ revocation and export behavior. Synthetic regressions exercise DST, event
 counts versus distinct cases, activity filters, attribute/zone SQL parameter
 ordering, UTC compatibility and saved definitions. Native CI and real
 consenting source acceptance remain separate gates.
+
+## Compare activity or case attributes against all 168 weekday-hour buckets
+
+The typed analysis builder allows **two dimensions** per query. To compare an
+activity against a whole week of hourly bins without requesting a third
+dimension, select one **composite weekday-hour dimension** and one business
+dimension. This is a single, sortable text key in the form
+`1 Monday 00` through `7 Sunday 23`; it is not a timestamp, time interval,
+calendar, staffing measure, or proof of complete observation.
+
+| Level | UTC composite | Explicit IANA-local composite |
+| --- | --- | --- |
+| Events | `weekday_hour_utc` | `weekday_hour_local` |
+| Cases, first observed event | `start_weekday_hour_utc` | `start_weekday_hour_local` |
+| Cases, last observed event | `end_weekday_hour_utc` | `end_weekday_hour_local` |
+
+For example, compare observed activity mix across local hours:
+
+```json
+{
+  "level": "events",
+  "dimensions": ["weekday_hour_local", "activity"],
+  "time_zone": "Europe/Stockholm",
+  "measures": [{"fn": "count"}, {"fn": "cases"}, {"fn": "share"}],
+  "order": "dimensions",
+  "limit": 500
+}
+```
+
+The 500-row limit is unchanged. With many activities, 168 × activity
+combinations can exceed it: `rows_truncated` must be checked, and a narrower
+`activity_in` filter or cohort is needed for an exhaustive view. `share`
+describes the proportion of **selected observed events**, not the fraction of
+time spent working or cases completed. The second dimension can instead be a
+declared `attribute:<name>` (or a case dimension such as `first_activity`).
+
+A fall daylight-saving fold combines two real UTC hours in one local bucket;
+a spring gap has no local 02 hour. The source instants remain UTC, the zone is
+explicitly validated and bound as a SQL parameter, and the original UTC
+dimensions retain their semantics. Composite local dimensions are saveable
+with their zone. No source sync, employee rating, business-hours inference,
+hidden completeness assumption, or additional authorization is introduced.
+
+Synthetic tests cover activity × bucket counts, distinct cases and shares,
+DST fold/gap, case start/completion × first/last activity, save/reload,
+wrong-level dimensions and missing/irrelevant zone refusal. Native CI and
+consenting real-source acceptance remain separate requirements.
