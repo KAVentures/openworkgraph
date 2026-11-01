@@ -1514,8 +1514,9 @@ Download refuses before the ticket request and announces the reason in the
 existing accessible status region. Copy request and summary-only download
 remain usable without the detailed-data acknowledgement.
 
-The acknowledgement starts unchecked, is cleared whenever the detail choice
-changes, and is reset on every new prepared handoff. Period changes disable
+The acknowledgement starts unchecked and disabled until detailed chronology
+is selected, is cleared whenever the detail choice changes, and is reset on
+every new prepared handoff. Period changes disable
 the stale checkbox and both actions; a pending download also disables the
 checkbox so its meaning cannot be changed mid-request. The export ticket still
 uses the frozen detail flag, redaction and period and must pass existing
