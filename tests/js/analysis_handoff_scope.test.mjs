@@ -463,7 +463,7 @@ test('pending Download blocks Copy without replacing ticket progress', async () 
   assert.equal(h.modal['#analysisDownload'].disabled, false);
   await h.modal['#analysisCopy'].onclick();
   assert.deepEqual(h.copied, ['request-reviewed']);
-  assert.match(h.modal['#analysisActionStatus'].textContent, /request copied/i);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /Only the prepared request text was copied\. No evidence file was attached or sent/);
 });
 
 test('period change during pending Copy keeps both actions disabled after completion', async () => {
@@ -571,7 +571,7 @@ test('repeated Copy clicks issue one pending clipboard write and announce local 
   pendingClipboard.resolve();
   await Promise.all([first, second]);
   assert.equal(h.modal['#analysisCopy'].disabled, false);
-  assert.match(h.modal['#analysisActionStatus'].textContent, /request copied/i);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /Only the prepared request text was copied\. No evidence file was attached or sent/);
   assert.equal(h.tickets.length, 0);
 });
 
@@ -598,7 +598,7 @@ test('clipboard rejection allows deliberate single-flight retry for current scop
   attempts[1].resolve();
   await Promise.all([retry, duplicate]);
   assert.equal(h.modal['#analysisCopy'].disabled, false);
-  assert.match(h.modal['#analysisActionStatus'].textContent, /request copied/i);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /Only the prepared request text was copied\. No evidence file was attached or sent/);
   assert.equal(h.tickets.length, 0);
 });
 
@@ -965,7 +965,7 @@ test('explicit daily-plan coverage flags reconcile selected rows and 31-date tru
       if (accepted) {
         await h.modal['#analysisCopy'].onclick();
         assert.deepEqual(h.copied, ['request-coverage-reconciled']);
-        assert.match(h.modalHtml, /Only the first 31 dates are listed/);
+        assert.match(h.modalHtml, /Only the first 31 observed UTC dates are listed/);
       } else {
         assert.deepEqual(h.copied, []);
         assert.match(h.summary.textContent, /incomplete or malformed/i);
