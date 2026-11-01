@@ -239,6 +239,7 @@ def record_graph(
     _raw_events: list[dict[str, Any]] | None = None,
     source_reader: Callable[[str], dict[str, Any]] | None = None,
     required_source_type: tuple[str, str, str] | None = None,
+    required_source_provider_kind: tuple[str, str] | None = None,
 ) -> dict[str, Any]:
     """Read the per-record OWG evidence timeline; optionally join live source data.
 
@@ -295,7 +296,14 @@ def record_graph(
     } for row in matched[:_MAX_TIMELINE]]
     source = _source_unknown("source_refresh_not_requested")
     if include_source_status:
-        if required_source_type is not None and identity != required_source_type:
+        # A caller verifying a specific operation must not refresh a *different*
+        # provider merely to discover the mismatch after the source read.
+        # This is an additive restriction; exact host/tenant opt-in checks in
+        # each existing adapter still apply before any authorized read.
+        if (required_source_provider_kind is not None and
+                (identity is None or identity[:2] != required_source_provider_kind)):
+            source = _source_unknown("selected_source_type_not_observed")
+        elif required_source_type is not None and identity != required_source_type:
             source = _source_unknown('selected_source_type_not_observed')
         elif truncated:
             # A hidden older observation could contradict the apparent record
