@@ -150,6 +150,14 @@ the first valid occurrence of a repeated (record, event ID), and does not score
 invalid timestamps, nonliteral/malformed event IDs or source-only rows absent
 from `presented_evidence`. A reused event ID admitted under two distinct
 records is withheld from both rather than assigned to an arbitrary lane.
+A matching ID alone is insufficient: the visible event must also carry a
+single consistent normalized (opaque reference, provider, resource kind, host)
+identity matching the admitted source row. Missing, malformed, contradictory
+or cross-provider visible identity is withheld, not silently replaced with
+source-only provenance. Repeated identical visible identities are allowed.
+The rich evidence format intentionally omits organization identity, so the
+adapter cannot independently verify a tenant from the presented row; the
+production lane's source-side organization/identity checks still apply.
 Source rows without a usable literal event ID may still contribute to the
 shipped lane's aggregate count but cannot be assigned to a visible event ID
 in this evaluation. This is a measurement-integrity correction, **not** a
@@ -160,8 +168,9 @@ A lane means "same record", never "same task", so a record shared by several
 true workflows is reported as contamination rather than hidden.
 `tests/test_reconstruction_owg_native.py` holds regression floors on all and
 holdout cases and adds adversarial projection checks for invalid timestamps,
-duplicate IDs, cross-record collisions, source-only rows, offset ordering and
-conflicting source identity.
+duplicate IDs, cross-record collisions, source-only rows, offset ordering,
+conflicting source identity, source-versus-visible provenance mismatches,
+contradictory visible IDs, and normalized positive controls.
 
 ### Multi-signal linked items
 
