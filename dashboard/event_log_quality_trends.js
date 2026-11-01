@@ -36,8 +36,35 @@
     const keys = ['batch','metric','count','denominator','rate','change','comparison'];
     return [keys.map(csvCell).join(','),...rows(trends).map(r => keys.map(k => csvCell(r[k])).join(','))].join('\r\n') + '\r\n';
   }
+  const MAX_REASONS = 12;
+  function detail(reports, batch) {
+    if (!Number.isSafeInteger(batch) || batch < 0 || !Array.isArray(reports)) return null;
+    const r = reports.find(x => x && x.batch === batch);
+    if (!r) return null;
+    const data = r.rows && typeof r.rows === 'object' ? r.rows : {};
+    const reasons = data.rejected_by_reason && typeof data.rejected_by_reason === 'object' &&
+      !Array.isArray(data.rejected_by_reason) ? data.rejected_by_reason : null;
+    const all = reasons ? Object.entries(reasons)
+      .filter(([name]) => typeof name === 'string')
+      .map(([name,n]) => ({name:name.slice(0,160),count:count(n)}))
+      .sort((a,b) => (Number(b.count === 'Unknown' ? -1 : b.count) -
+                      Number(a.count === 'Unknown' ? -1 : a.count)) ||
+                      (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)) : [];
+    const digest = r.transform && r.transform.transform_sha256;
+    return {batch:label(batch),created_at:typeof r.created_at === 'string' &&
+      /^\\d{4}-\\d\\d-\\d\\dT/.test(r.created_at) ? r.created_at.slice(0,32) : 'Unknown',
+      transform:typeof digest === 'string' && /^[a-f0-9]{64}$/.test(digest) ?
+        digest.slice(0,12) : 'Unknown',
+      accepted:count(data.accepted),rejected:count(data.rejected),
+      skipped:batch === 0 ? '0' : count(data.duplicates_skipped_on_append),
+      reasons:all.slice(0,MAX_REASONS),omitted:Math.max(0,all.length-MAX_REASONS),
+      reason_status:reasons ? (data.reason_counts_can_overlap ?
+        'Reason counts may overlap; do not sum them as unique rejected rows.' :
+        'Reason counts describe recorded categories, not raw source rows.') :
+        'Rejection reasons were not recorded for this batch.'};
+  }
   if (typeof module !== 'undefined' && module.exports)
-    module.exports = {rows,csv,csvCell,count,rate,change,status,MAX_VISIBLE};
+    module.exports = {rows,csv,csvCell,count,rate,change,status,detail,MAX_VISIBLE,MAX_REASONS};
   if (typeof document === 'undefined') return;
   const element = (tag,text) => {const e=document.createElement(tag);if(text!==undefined)e.textContent=text;return e;};
   const logId = () => document.getElementById('owgEventLogPick')?.value || '';
@@ -54,14 +81,41 @@
     message.id='owgQualityTrendsStatus';message.className='muted';
     message.setAttribute('role','status');message.setAttribute('aria-live','polite');
     const output=element('div');output.id='owgQualityTrendsTable';
-    panel.append(element('h4','Import/append quality trends'),intro,run,download,message,output);
+    const drill=element('section');drill.id='owgQualityBatchDrilldown';
+    const drillLabel=element('label','Inspect rejection reasons for batch: ');
+    drillLabel.htmlFor='owgQualityBatchSelect';
+    const drillSelect=element('select');drillSelect.id='owgQualityBatchSelect';drillSelect.disabled=true;
+    drillLabel.appendChild(drillSelect);
+    const drillOutput=element('div');drillOutput.id='owgQualityBatchDetails';
+    drill.append(element('h4','Batch rejection diagnostics'),drillLabel,drillOutput);
+    panel.append(element('h4','Import/append quality trends'),intro,run,download,message,output,drill);
     quality.appendChild(panel);
-    const selected=logId();let ticket=0,loaded=null;
+    const selected=logId();let ticket=0,loaded=null,loadedReports=[];
     const current=(id,n)=>panel.isConnected && logId()===id && ticket===n;
+    function showDetail() {
+      drillOutput.replaceChildren();
+      if (!loaded || logId()!==selected) return;
+      const d=detail(loadedReports,Number(drillSelect.value));
+      if (!d) {drillOutput.appendChild(element('p','No saved rejection diagnostics for this batch.'));return;}
+      const summary=element('p','Batch '+d.batch+' · Reported '+d.created_at+
+        ' · Transform SHA-256 prefix '+d.transform+' · Accepted '+d.accepted+
+        ' · Rejected '+d.rejected+' · Skipped duplicates '+d.skipped+'.');
+      const note=element('p',d.reason_status);note.className='muted';
+      drillOutput.append(summary,note);
+      if (!d.reasons.length) return;
+      const table=element('table'),head=element('thead'),tr=element('tr');
+      for(const heading of ['Rejection category','Count']){const th=element('th',heading);th.scope='col';tr.appendChild(th);}
+      head.appendChild(tr);const body=element('tbody');
+      for(const reason of d.reasons){const row=element('tr');row.append(element('td',reason.name),element('td',reason.count));body.appendChild(row);}
+      table.append(head,body);const wrap=element('div');wrap.className='table-wrap';wrap.appendChild(table);
+      drillOutput.appendChild(wrap);
+      if(d.omitted)drillOutput.appendChild(element('p',d.omitted+' additional categories omitted (latest '+MAX_REASONS+' shown by count).'));
+    }
+    drillSelect.addEventListener('change',showDetail);
     run.addEventListener('click',async()=>{
       const id=logId();
       if(!id || id!==selected){message.textContent='Select and analyse a log again.';return;}
-      const n=++ticket;loaded=null;download.disabled=true;run.disabled=true;output.replaceChildren();
+      const n=++ticket;loaded=null;loadedReports=[];download.disabled=true;run.disabled=true;output.replaceChildren();drillSelect.disabled=true;drillSelect.replaceChildren();drillOutput.replaceChildren();
       message.textContent='Reading local batch reports…';
       try{
         // Dashboard bootstrap injects the local session; no AI bearer or external URL.
@@ -72,6 +126,11 @@
         const trends=data && data.batch_trends;
         if(!trends || !Array.isArray(trends.batches))throw new Error('Server does not provide batch trends yet.');
         loaded=trends;
+        loadedReports=Array.isArray(data.reports)?data.reports:[];
+        const available=trends.batches.slice(-MAX_VISIBLE).filter(b=>Number.isSafeInteger(b.batch)&&b.batch>=0);
+        for(const batch of available){const option=element('option',label(batch.batch));option.value=String(batch.batch);drillSelect.appendChild(option);}
+        drillSelect.disabled=!available.length;
+        if(available.length){drillSelect.value=String(available[available.length-1].batch);showDetail();}
         const shown=rows(trends),missing=Array.isArray(trends.batches_without_report)?trends.batches_without_report.length:0;
         message.textContent=trends.batches.length+' reports; '+missing+' missing; '+
           (trends.batches.length>MAX_VISIBLE?'latest '+MAX_VISIBLE+' shown. ':'')+
