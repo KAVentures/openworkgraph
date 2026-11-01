@@ -2474,7 +2474,7 @@ test('ordinary and health-only selected rows retain explicit diagnostic exports'
     assert.equal(h.modals, 1);
     assert.equal(h.modal['#analysisDetailed'].disabled, false);
     assert.equal(h.modal['#analysisDownload'].disabled, false);
-    assert.match(h.modalHtml, /The file download still contains the full selected period/);
+    assert.match(h.modalHtml, /(?:An optional diagnostic download|A download) requests the selected period again, subject to current consent, retention and access/);
     assert.doesNotMatch(h.modalHtml, /An evidence package is unavailable/);
     h.modal['#analysisDetailed'].checked = true;
     const downloading = h.modal['#analysisDownload'].onclick();
@@ -3163,8 +3163,8 @@ test('handoff grades no evidence, health diagnostics and unverified ordinary wor
       if (name === 'ordinary observations') {
         assert.match(h.modalHtml, /An AI may help review observations after you explicitly share evidence/);
         assert.match(h.modalHtml, /Analyze a large history in smaller parts/);
-        assert.match(h.modalHtml, /Ask your AI to process one day at a time/);
-        assert.match(h.modalHtml, /The file download still contains the full selected period/);
+        assert.match(h.modalHtml, /may ask an AI to review one date at a time/);
+        assert.match(h.modalHtml, /(?:An optional diagnostic download|A download) requests the selected period again, subject to current consent, retention and access/);
       } else {
         assert.match(h.modalHtml, /Do not infer a workflow from missing observations or capture-health diagnostics/);
         assert.doesNotMatch(h.modalHtml, /An AI may help review observations/);
@@ -3173,7 +3173,7 @@ test('handoff grades no evidence, health diagnostics and unverified ordinary wor
         if (name === 'health-only diagnostics') {
           assert.match(h.modalHtml, /Review capture-health diagnostic dates/);
           assert.match(h.modalHtml, /capture-health\/gap diagnostics only, not workflow steps/);
-          assert.match(h.modalHtml, /optional diagnostic download contains the full selected period/);
+          assert.match(h.modalHtml, /An optional diagnostic download requests the selected period again, subject to current consent, retention and access/);
         } else {
           assert.match(h.modalHtml, /Review missing date coverage/);
           assert.match(h.modalHtml, /No recorded events are available to analyze/);
@@ -3565,9 +3565,35 @@ test('mixed daily event totals cannot be mistaken for dated workflow observation
       }
       await h.modal['#analysisCopy'].onclick();
       if (diagnosticOnly) assertCopyEvidenceWarning(h.copied, 'request-rollover', true);
-      else assert.deepEqual(h.copied, ['request-rollover']);
+      else if (mixed) {
+        assert.equal(h.copied.length, 1);
+        assert.match(h.copied[0], /^request-rollover\n\nEvidence limitation: This selected local period contains 2 ordinary work observations and 2 capture-health\/gap records/);
+        assert.match(h.copied[0], /UTC daily totals are untyped: a listed date may contain only diagnostics, not workflow steps/);
+        assert.match(h.copied[0], /Inspect event-level evidence and source provenance before inferring any workflow/);
+        assert.match(h.copied[0], /do not treat diagnostic records as work, or claim verified business completion, savings, or ROI/);
+        assert.match(h.copied[0], /Capture completeness is unverified/);
+      } else assert.deepEqual(h.copied, ['request-rollover']);
       assert.equal(h.tickets.length, 0);
       assert.equal(h.downloads, 0);
     });
   }
+});
+
+
+test('mixed legacy evidence still carries diagnostic provenance into copied agent request', async () => {
+  const h = await openAllRetainedPreview(d => ({
+    ...d, canonical_rows: 3, retained_rows: 3,
+    event_types: {focus_span: 1, capture_health: 2},
+    sources: {desktop: 3}, work_evidence: undefined, analysis_plan: undefined
+  }));
+  assert.equal(h.modals, 1);
+  assert.match(h.modalHtml, /Mixed selected evidence: 1 ordinary work observations and 2 capture-health\/gap records/);
+  assert.match(h.modalHtml, /No daily breakdown was provided; date coverage is unknown/);
+  await h.modal['#analysisCopy'].onclick();
+  assert.equal(h.copied.length, 1);
+  assert.match(h.copied[0], /^request-rollover\n\nEvidence limitation: This selected local period contains 1 ordinary work observations and 2 capture-health\/gap records/);
+  assert.match(h.copied[0], /UTC daily totals are untyped/);
+  assert.match(h.copied[0], /Capture completeness is unverified/);
+  assert.equal(h.tickets.length, 0);
+  assert.equal(h.downloads, 0);
 });
