@@ -157,7 +157,12 @@ def test_group_create_members_require_live_provider_scoped_user_id_resolution(
     assert "group_externalid_match_not_created" not in codes(report)
     assert "groups_not_certified" in codes(report)
     assert report["scope"] == "offline_declared_mapping_only"
-    assert "members" not in json.dumps(report)
+    findings = [item for item in report["findings"]
+                if item["code"] == "group_member_id_resolution_unverified"]
+    assert len(findings) == int(members_declared)
+    if findings:
+        assert findings[0]["severity"] == "caution"
+        assert findings[0]["path"] == "groups.create_attributes"
 
 
 def test_group_member_id_caution_requires_enabled_declared_group_creation():
