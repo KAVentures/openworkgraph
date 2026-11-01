@@ -491,3 +491,34 @@ parameterizations requiring zero fake-reader calls and 20 valid
 timezone-aware-window controls that preserve read-only, provider-only receipts.
 These are committed regression cases, not evidence of native pytest execution
 or live customer/provider acceptance.
+
+
+## Legacy provider outcome flag consistency (2026-11-01)
+
+The existing authenticated source adapters expose a historical field named
+`verified_business_outcome`, whose meaning differs by provider. GitHub PR
+merge and Jira issue resolution adapters set it to literal `false`, because
+their operational state does not prove business success. Stripe sets it to
+literal `true` for an invoice paid or refund processor-succeeded receipt,
+**only** for the processor-defined operation; it does **not** prove customer
+bank settlement, an agent's causal contribution, or the intended business
+objective. The stable output of `source_operation_receipt` continues to
+report `business_objective_verified=false`,
+`customer_outcome_verified=false` and
+`agent_caused_operation_verified=false` for **all** providers.
+
+A source/cache reader that **explicitly** supplies this legacy field with
+the opposite Boolean or a non-Boolean value now yields
+`availability=unknown`, `reason=provider_receipt_scope_conflict` and
+`operation_verified=false`. The optional field may be absent for existing
+older test/cache shapes; absence does not add any authority, and the
+existing authenticated verification method, exact record, provider/kind,
+freshness, operation detail and provider-scope guards still apply.
+
+Forty synthetic, four-operation fake-reader parameterizations cover
+28 malformed values, four opposite Boolean contradictions, and eight
+matching/absent controls. The tests assert no private customer fields
+are copied into receipts and no business/customer/agent authorization is
+granted. These are committed regression contracts, not executed native
+pytest, live provider/tenant validation, or evidence of commercial uplift.
+No new source read, permission, background sync or business write is added.
