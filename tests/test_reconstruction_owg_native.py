@@ -12,7 +12,7 @@ from collections import defaultdict
 from evals.reconstruction.ablations import ablate_event
 from evals.reconstruction.baselines import score_baselines
 from evals.reconstruction.fixtures import load_cases
-from evals.reconstruction.owg_native import _ref, predict_record_lanes, score_record_lanes
+from evals.reconstruction.owg_native import _ref, predict_linked_items, predict_record_lanes, score_record_lanes
 from evals.reconstruction.prepare import split_cases
 
 
@@ -326,3 +326,108 @@ def test_lane_projection_accepts_offset_equivalent_instant_and_first_admitted_du
     result = predict_record_lanes(_lane_projection_case(source, only_later))
     assert [lane["event_ids"] for lane in result["workflows"]] == [["second"]]
     assert result["unassigned_event_ids"] == ["first"]
+
+
+# Linked-item evaluation admission: source-only evidence must not act as a
+# bridge between otherwise distinct visible items. The production linker
+# remains unchanged and retains its original scope/isolation safeguards.
+def _linked_eval_event(event_id, ref, at, *, action="click", transfer=None):
+    row = _lane_projection_event(event_id, ref, at)
+    row.update({
+        "actor_id": "human", "device_id": "device:one",
+        "session_id": "session:one", "app": "Google Chrome",
+        "source": "browser_extension", "event_type": action,
+    })
+    if transfer is not None:
+        row["metadata"]["clipboard_transfer_id"] = transfer
+        row["metadata"]["clipboard_source_observed"] = True
+    return row
+
+
+def _linked_eval_rows():
+    a, b = "owg:r:" + "a" * 32, "owg:r:" + "b" * 32
+    return [
+        _linked_eval_event("a1", a, "2026-10-20T10:00:00Z",
+                           action="copy", transfer="xfer-1"),
+        _linked_eval_event("a2", a, "2026-10-20T10:00:10Z"),
+        _linked_eval_event("b1", b, "2026-10-20T10:00:20Z",
+                           action="paste", transfer="xfer-1"),
+        _linked_eval_event("b2", b, "2026-10-20T10:00:30Z"),
+        _linked_eval_event("b3", b, "2026-10-20T10:00:40Z"),
+    ]
+
+
+def _linked_eval_case(source, visible):
+    from shared.evidence import rich_evidence_row
+    return _lane_projection_case(
+        source, [rich_evidence_row(event, include_identity=False) for event in visible]
+    )
+
+
+def test_linked_projection_source_only_paste_cannot_bridge_visible_records():
+    source = _linked_eval_rows()
+    visible = [row for row in source if row["event_id"] != "b1"]
+    for accepting_candidates in (False, True):
+        result = predict_linked_items(
+            _linked_eval_case(source, visible), accept_candidates=accepting_candidates
+        )
+        assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
+            frozenset({"a1", "a2"}), frozenset({"b2", "b3"})
+        }
+        assert "b1" not in str(result)
+
+
+def test_linked_projection_preserves_visible_authorized_transfer_and_offset_instant():
+    from copy import deepcopy
+    source = _linked_eval_rows()
+    visible = deepcopy(source)
+    visible[2]["observed_at"] = "2026-10-20T11:00:20+01:00"
+    result = predict_linked_items(_linked_eval_case(source, visible))
+    assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
+        frozenset({"a1", "a2", "b1", "b2", "b3"})
+    }
+    assert result["unassigned_event_ids"] == []
+
+
+def test_linked_projection_rejects_changed_visible_link_authority_and_time():
+    from copy import deepcopy
+    source = _linked_eval_rows()
+    for corruption in ("token", "timestamp", "app", "session", "source", "ref"):
+        visible = deepcopy(source)
+        paste = visible[2]
+        if corruption == "token":
+            paste["metadata"]["clipboard_transfer_id"] = "another-transfer"
+        elif corruption == "timestamp":
+            paste["observed_at"] = "2026-10-20T10:00:20.000001Z"
+        elif corruption == "app":
+            paste["app"] = "Another app"
+        elif corruption == "session":
+            paste["session_id"] = "session:other"
+        elif corruption == "source":
+            paste["source"] = "desktop_sensor"
+        else:
+            paste["metadata"]["resource_reference"]["resource_ref"] = (
+                "owg:r:" + "c" * 32
+            )
+        result = predict_linked_items(_linked_eval_case(source, visible))
+        assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
+            frozenset({"a1", "a2"}), frozenset({"b2", "b3"})
+        }, corruption
+        assert result["unassigned_event_ids"] == ["b1"], corruption
+
+
+def test_linked_projection_withholds_conflicting_duplicate_source_or_visible_ids():
+    from copy import deepcopy
+    source = _linked_eval_rows()
+    conflicting_source = deepcopy(source[2])
+    conflicting_source["actor_id"] = "other-actor"
+    visible = deepcopy(source)
+    for mutated_source, mutated_visible in (
+        ([*source, conflicting_source], visible),
+        (source, [*visible, {**deepcopy(visible[2]), "observed_at": "2026-10-20T10:00:21Z"}]),
+    ):
+        result = predict_linked_items(_linked_eval_case(mutated_source, mutated_visible))
+        assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
+            frozenset({"a1", "a2"}), frozenset({"b2", "b3"})
+        }
+        assert "b1" not in str(result["workflows"])
