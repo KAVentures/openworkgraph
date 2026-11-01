@@ -204,9 +204,15 @@ in the same tab likewise invalidates a single-record-tab join. Independent
 same-record observations remain eligible. Hidden rows never become workflow
 members, candidates or positive bridges; source and visible evidence are not
 mutated. Tokens reused under another tenant, actor, device or session cannot
-veto this scope. This is a deliberately conservative synthetic evaluation
-boundary; it does not attest that hidden evidence was accessible to a live
-agent, nor change the production linker or prove held-out improvement.
+veto this scope. The candidate-accepting diagnostic also refuses newly
+exposed same-app candidates touching a vetoed observation, so removing a
+contradicted tab does not quietly reattach the observation by another weak
+signal. This is a deliberately conservative synthetic evaluation boundary;
+it does not attest that hidden evidence was accessible to a live agent, nor
+change the production linker or prove held-out improvement. The currently
+merged linker still globally keys some ephemeral tokens; separate draft #500
+proposes production tenant/actor/device/session isolation and is not assumed
+merged by these evaluator tests.
 
 An explicit `source_events: []` (or null) is authoritative: if source
 evidence has been revoked/deleted, neither the record-lane nor linked-item
@@ -217,10 +223,11 @@ scenario, including diagnostic candidate-acceptance mode. Only an *absent*
 Synthetic tests exercise both cases; they do not establish end-to-end
 revocation propagation, live source deletion or held-out reconstruction quality.
 
-The filter retains the original authorized source rows for the linker's own
-organization/actor/device/session checks. These identities are deliberately
-absent from the rich evidence and cannot be independently verified from its
-projection. This is an **evaluation admission boundary**, not a new capture,
+The filter retains the original authorized source rows, including their
+organization/actor/device/session claims. Those identities are deliberately
+absent from rich evidence and cannot be independently verified from its
+projection. The evaluator-only negative-evidence veto scopes its own checks;
+it is not a substitute for the production linker isolation work in #500. This is an **evaluation admission boundary**, not a new capture,
 privacy, source-authentication or production-linking engine. It never upgrades
 ambiguous candidates into verified membership; the accepting-candidates mode
 remains an explicitly unsafe diagnostic upper bound.
