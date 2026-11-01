@@ -12,7 +12,7 @@ from collections import defaultdict
 from evals.reconstruction.ablations import ablate_event
 from evals.reconstruction.baselines import score_baselines
 from evals.reconstruction.fixtures import load_cases
-from evals.reconstruction.owg_native import _ref, predict_linked_items, predict_record_lanes, score_record_lanes
+from evals.reconstruction.owg_native import _canonical_eval_json, _ref, predict_linked_items, predict_record_lanes, score_record_lanes
 from evals.reconstruction.prepare import split_cases
 
 
@@ -554,6 +554,69 @@ def test_linked_projection_duplicate_replay_is_idempotent_when_byte_equivalent()
     assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
         frozenset({"a1", "a2", "b1", "b2", "b3"})
     }
+
+
+def test_linked_duplicate_canonicalization_has_pre_serialization_limits():
+    """A large or non-JSON claim cannot become a trusted identical replay."""
+    from copy import deepcopy
+
+    assert _canonical_eval_json({"b": [1, True, None], "a": "ok"}) == (
+        _canonical_eval_json({"a": "ok", "b": [1, True, None]})
+    )
+    assert _canonical_eval_json({"value": True}) != _canonical_eval_json({"value": 1})
+    assert _canonical_eval_json({"value": 1}) != _canonical_eval_json({"value": 1.0})
+    assert _canonical_eval_json({"payload": [0] * 10_001}) is None
+    assert _canonical_eval_json({"payload": "x" * 65_537}) is None
+    assert _canonical_eval_json({1: "coerced-key"}) is None
+    assert _canonical_eval_json({"value": float("nan")}) is None
+    assert _canonical_eval_json({"value": float("inf")}) is None
+    assert _canonical_eval_json({"value": 1 << 10_001}) is None
+    assert _canonical_eval_json({"value": (1, 2)}) is None
+
+    cyclic = []
+    cyclic.append(cyclic)
+    assert _canonical_eval_json(cyclic) is None
+    shared = {"value": "same object"}
+    assert _canonical_eval_json({"left": shared, "right": shared}) is None
+    # Two distinct but equal JSON objects are fine; only repeated Python
+    # container identity is non-JSON evidence provenance.
+    assert _canonical_eval_json({"left": {"v": 1}, "right": {"v": 1}}) is not None
+
+    # A source replay with a repeated in-memory container or a >10k-node
+    # payload is not trustworthy merely because json.dumps could serialize it.
+    for kind in ("oversized", "aliased"):
+        source = deepcopy(_linked_eval_rows())
+        if kind == "oversized":
+            source[2]["metadata"]["unrelated_audit"] = [0] * 10_001
+        else:
+            alias = {"field": "value"}
+            source[2]["metadata"]["audit_left"] = alias
+            source[2]["metadata"]["audit_right"] = alias
+        replay = deepcopy(source[2])
+        result = predict_linked_items(_linked_eval_case([*source, replay], source))
+        assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
+            frozenset({"a1", "a2"}), frozenset({"b2", "b3"})
+        }, kind
+        assert result["unassigned_event_ids"] == ["b1"], kind
+
+
+def test_linked_duplicate_bounded_preflight_preserves_normal_json_replay():
+    """Normal independent JSON objects and exact replays retain linking."""
+    from copy import deepcopy
+
+    source = deepcopy(_linked_eval_rows())
+    source[2]["metadata"]["audit_left"] = {"v": 1}
+    source[2]["metadata"]["audit_right"] = {"v": 1}
+    replay = deepcopy(source[2])
+    for accepting_candidates in (False, True):
+        result = predict_linked_items(
+            _linked_eval_case([*source, replay], source),
+            accept_candidates=accepting_candidates,
+        )
+        assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
+            frozenset({"a1", "a2", "b1", "b2", "b3"})
+        }
+        assert result["unassigned_event_ids"] == []
 
 
 def test_linked_projection_refuses_bool_integer_equality_as_transfer_provenance():
