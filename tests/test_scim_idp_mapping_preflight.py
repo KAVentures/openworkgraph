@@ -1709,3 +1709,76 @@ def test_operation_only_contact_cautions_do_not_weaken_existing_blockers():
     report = assess(mapping(users=users))
     assert report["status"] == "blocked"
     assert {"missing_stable_username", "unverified_contact_metadata"} <= codes(report)
+
+
+# Deactivation evidence must consider the optional operation-level declaration,
+# not just legacy patch_attributes. This is static metadata, not a live request.
+@pytest.mark.parametrize("client", ["entra", "okta", "other"])
+@pytest.mark.parametrize("operation,missing,blocker", [
+    ({"op": "replace", "path": "active", "value_present": True}, False, None),
+    ({"op": "add", "path": "ACTIVE", "value_present": True}, False, None),
+    ({"op": "replace", "path": "", "value_present": True,
+      "value_attributes": ["active"]}, False, None),
+    ({"op": "replace", "path": "", "value_attributes": ["ACTIVE"]}, False, None),
+    ({"op": "replace", "path": "", "value_present": True,
+      "value_attributes": ["displayName"]}, True, None),
+    ({"op": "replace", "path": "", "value_present": True}, True, None),
+    ({"op": "replace", "path": "active", "value_present": False},
+     True, "user_patch_required_value_missing"),
+    ({"op": "remove", "path": "active"}, True, "unsupported_user_patch_remove"),
+    ({"op": "remove", "path": "displayName"}, True, None),
+])
+def test_operation_level_deactivation_declaration_does_not_trigger_false_missing_warning(
+        client, operation, missing, blocker):
+    users = mapping()["users"]
+    users["patch_attributes"] = []
+    users["patch_operations"] = [operation]
+    report = assess(mapping(client=client, users=users))
+    assert ("deactivation_patch_not_declared" in codes(report)) is missing
+    assert (blocker in codes(report)) if blocker else (
+        not any(f["severity"] == "blocker" for f in report["findings"]))
+    assert report["status"] == ("blocked" if blocker else "requires_live_validation")
+    assert report["checked"]["user_patch"] == 0
+    assert report["checked"]["user_patch_operations"] == 1
+    assert "live_validation_required" in codes(report)
+
+
+@pytest.mark.parametrize("legacy_active,operation_active,expected_missing", [
+    (False, False, True),
+    (True, False, False),
+    (False, True, False),
+    (True, True, False),
+])
+def test_deactivation_warning_preserves_legacy_and_combined_declarations(
+        legacy_active, operation_active, expected_missing):
+    users = mapping()["users"]
+    users["patch_attributes"] = ["active"] if legacy_active else []
+    if operation_active:
+        users["patch_operations"] = [
+            {"op": "replace", "path": "", "value_present": True,
+             "value_attributes": ["active"]}
+        ]
+    report = assess(mapping(users=users))
+    assert ("deactivation_patch_not_declared" in codes(report)) is expected_missing
+    assert report["status"] == "requires_live_validation"
+
+
+def test_pathless_deactivation_cli_does_not_claim_missing_active_or_live_success(tmp_path):
+    users = mapping()["users"]
+    users["patch_attributes"] = []
+    users["patch_operations"] = [
+        {"op": "replace", "path": "", "value_present": True,
+         "value_attributes": ["active"]}
+    ]
+    path = tmp_path / "pathless-active.json"
+    path.write_text(json.dumps(mapping(client="okta", users=users)), encoding="utf-8")
+    completed = subprocess.run([sys.executable, str(SCRIPT), str(path)],
+                               capture_output=True, text=True)
+    assert completed.returncode == 0
+    report = json.loads(completed.stdout)
+    assert report["status"] == "requires_live_validation"
+    assert "deactivation_patch_not_declared" not in codes(report)
+    assert "live_validation_required" in codes(report)
+    assert report["checked"]["user_patch"] == 0
+    assert report["checked"]["user_patch_operations"] == 1
+    assert "PRIVATE" not in completed.stdout + completed.stderr
