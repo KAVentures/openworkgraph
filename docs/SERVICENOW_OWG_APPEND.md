@@ -27,6 +27,37 @@ authenticated, transactional event-log append API.
    requires both the selected target and an exact repeated confirmation,
    plus two independent explicit consent flags.
 
+## First import: preserve the source scope
+
+The target must already contain **exactly one** source-keyed namespace and
+case namespace matching this journal's host, tenant, selected IDs and timezone.
+This is an intentional cross-tenant safety gate: the CLI reads the authenticated
+local event-log list and refuses to append to a different tenant/selection,
+a legacy unkeyed log or a multi-provider log. It does not silently create or
+choose another destination.
+
+For the first Event logs CSV import, select columns case_id, activity,
+timestamp and source_event_id (event ID). Set **both** the source namespace
+and case namespace to the following deterministic local value (replace the
+sample scope with the exact scope used for the journal):
+
+~~~sh
+python - <<'PY'
+from server.servicenow_incident_staging import SelectedIncidents
+from server.servicenow_incident_journal import _scope_digest
+scope = SelectedIncidents(
+    host="example.service-now.com", tenant_scope="selected-team",
+    sys_ids=("0123456789abcdef0123456789abcdef",),
+    consented=True, grant_current=True,
+)
+print("snow_" + _scope_digest(scope, "UTC")[:32])
+PY
+~~~
+
+The digest is a local scope key, **not** proof of provider tenant identity.
+Do not share a target log across unrelated tenant selections. A wrong target
+is refused before POST even if the operator repeats its ID.
+
 Example, with a private owner-only journal directory and local OWG listening
 on literal IPv4 loopback port 8765:
 
