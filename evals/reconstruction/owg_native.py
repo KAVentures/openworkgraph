@@ -108,7 +108,10 @@ def _admitted_visible_lane_members(
 
 
 def predict_record_lanes(case: dict[str, Any]) -> dict[str, Any]:
-    events = list(case.get("source_events") or case["presented_evidence"])
+    # An explicitly empty source is authoritative (revocation/deletion). Only an
+    # absent source key denotes a legacy presented-only evaluation case.
+    events = list((case["source_events"] if "source_events" in case
+                   else case["presented_evidence"]) or [])
     lanes = record_case_lanes(events, max_lanes=30)["lanes"]
     published = {lane["resource_ref"] for lane in lanes}
     presented = case["presented_evidence"]
@@ -190,7 +193,10 @@ def _visible_linked_source_events(case: dict[str, Any]) -> list[dict[str, Any]]:
         if isinstance(event_id, str) and _EVENT_ID.fullmatch(event_id):
             visible.setdefault(event_id, []).append(_linked_projection(event))
 
-    source = list(case.get("source_events") or case["presented_evidence"])
+    # Do not resurrect deleted source observations from a stale visible snapshot.
+    # Legacy cases without a source_events key still use presented evidence.
+    source = list((case["source_events"] if "source_events" in case
+                   else case["presented_evidence"]) or [])
     by_id: dict[str, list[dict[str, Any]]] = {}
     for event in source:
         if not isinstance(event, dict):
