@@ -3282,6 +3282,36 @@ test('equal-count source labels use deterministic literal-name tie ordering', as
 });
 
 
+test('large source maps preserve exact top-eight ranking, literal keys and omitted totals', async t => {
+  // A large import may have thousands of low-volume source labels. Its local
+  // review must not sort/render them all or lose a late dominant category.
+  // JSON source maps can contain own "__proto__" and "constructor" keys.
+  const noise = Array.from({length: 2048}, (_, i) =>
+    ['noise-' + String(i).padStart(4, '0'), 1]);
+  const entries = [...noise,
+    ['zz-top', 50], ['aa-runner', 10], ['constructor', 3], ['__proto__', 2]];
+  const total = 2048 + 50 + 10 + 3 + 2;
+  for (const [name, ordered] of [
+    ['late dominant categories', entries],
+    ['reversed import order', [...entries].reverse()]
+  ]) await t.test(name, async () => {
+    const sources = Object.fromEntries(ordered);
+    assert.equal(Object.hasOwn(sources, '__proto__'), true);
+    const h = await openSourceSummaryPreview(sources, total);
+    assert.equal(h.modals, 1);
+    assert.match(h.modalHtml,
+      /zz-top: 50, aa-runner: 10, constructor: 3, __proto__: 2, noise-0000: 1, noise-0001: 1, noise-0002: 1, noise-0003: 1/);
+    assert.doesNotMatch(h.modalHtml, /noise-0004: 1|noise-2047: 1/);
+    assert.match(h.modalHtml,
+      /2044 additional source categories \(2044 selected events\) omitted from this preview/);
+    assert.match(h.modalHtml, /labels are not verified identities/);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-source-breakdown']);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+  });
+});
+
 test('distinct long source labels remain distinguishable after the 96-codepoint preview bound', async () => {
   const prefix = 'long-'.padEnd(96, 'x');
   const sources = {[prefix + '-first']: 3, [prefix + '-second']: 2};
