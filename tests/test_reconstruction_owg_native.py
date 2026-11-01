@@ -902,11 +902,7 @@ def test_lane_projection_rejects_two_visible_instants_for_one_event_id_in_any_or
                       [first, conflict, second, deepcopy(first)]):
         result = predict_record_lanes(_lane_projection_case(source, presented))
         assert [lane["event_ids"] for lane in result["workflows"]] == [["second"]]
-        assert result["unassigned_event_ids"] == [
-            event_id for event_id in dict.fromkeys(
-                row["event_id"] for row in presented
-            ) if event_id == "first"
-        ]
+        assert result["unassigned_event_ids"] == ["first"]
         assert "first" not in str(result["workflows"])
 
 
