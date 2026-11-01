@@ -189,30 +189,13 @@ reused IDs with conflicting source or visible claims, and source-only rows are
 withheld. Exact duplicate source JSON claims remain idempotent; bounded
 canonical JSON comparisons distinguish booleans from integers and refuse
 malformed or oversized duplicate claims. Rich-evidence top-level tab/transfer fields are convenience copies of
-metadata, not independent source claims. An unpresented source-only copy/paste
-row must not bridge two visible records or create a candidate link.
-
-**Negative evidence is retained as a veto, not a positive edge.** A hidden
-source observation with a valid literal ID, UTC timestamp and exact
-organization/actor/device/session scope can contradict a proposed clipboard
-transfer or single-record tab inference. The evaluator therefore removes that
-matching scoped weak token from *copies* of admitted visible rows before
-linking. For example, two visible records sharing a transfer ID must not merge
-if a third, unpresented source record also claimed the same scoped transfer:
-the original three-record source group is ambiguous. A hidden second record
-in the same tab likewise invalidates a single-record-tab join. Independent
-same-record observations remain eligible. Hidden rows never become workflow
-members, candidates or positive bridges; source and visible evidence are not
-mutated. Tokens reused under another tenant, actor, device or session cannot
-veto this scope. The candidate-accepting diagnostic also refuses newly
-exposed same-app candidates touching a vetoed observation, so removing a
-contradicted tab does not quietly reattach the observation by another weak
-signal. This is a deliberately conservative synthetic evaluation boundary;
-it does not attest that hidden evidence was accessible to a live agent, nor
-change the production linker or prove held-out improvement. The currently
-merged linker still globally keys some ephemeral tokens; separate draft #500
-proposes production tenant/actor/device/session isolation and is not assumed
-merged by these evaluator tests.
+metadata, not independent source claims. Both locations, when present,
+now require **literal, pattern-valid matching strings**: Python equality
+(`True == 1`) and the current linker's coercion of booleans/numbers into
+opaque-looking token strings cannot establish a transfer or tab link.
+Malformed metadata-only claims are withheld too; valid legacy metadata-only
+strings remain accepted. An unpresented source-only copy/paste row must not
+bridge two visible records or create a candidate link.
 
 An explicit `source_events: []` (or null) is authoritative: if source
 evidence has been revoked/deleted, neither the record-lane nor linked-item
@@ -223,18 +206,22 @@ scenario, including diagnostic candidate-acceptance mode. Only an *absent*
 Synthetic tests exercise both cases; they do not establish end-to-end
 revocation propagation, live source deletion or held-out reconstruction quality.
 
-The filter retains the original authorized source rows, including their
-organization/actor/device/session claims. Those identities are deliberately
-absent from rich evidence and cannot be independently verified from its
-projection. The evaluator-only negative-evidence veto scopes its own checks;
-it is not a substitute for the production linker isolation work in #500. This is an **evaluation admission boundary**, not a new capture,
+The filter retains the original authorized source rows for the linker's own
+organization/actor/device/session checks. These identities are deliberately
+absent from the rich evidence and cannot be independently verified from its
+projection. This is an **evaluation admission boundary**, not a new capture,
 privacy, source-authentication or production-linking engine. It never upgrades
 ambiguous candidates into verified membership; the accepting-candidates mode
 remains an explicitly unsafe diagnostic upper bound.
 
 Synthetic regressions cover hidden transfer bridges, changed visible
-provenance, exact UTC offsets, duplicate IDs, and legitimate visible transfer
-linking. They do not replace preregistered held-out scoring, real consenting
+provenance, exact UTC offsets, duplicate IDs, malformed dual-location and
+metadata-only transfer tokens, and legitimate literal visible transfer linking.
+Both OWG-native scoring projections also enumerate only **unique literal,
+pattern-valid presented event IDs**: booleans, numbers, missing IDs, invalid
+strings and repeated visible IDs cannot become fabricated unassigned scoring
+items. Such invalid rows never gain workflow membership. This affects only
+the evaluator's input hygiene, not the corpus truth or production linker. They do not replace preregistered held-out scoring, real consenting
 pilots or native CI. No assignment F1 ≥ 0.90 or contamination ≤ 0.05
 achievement is asserted.
 
