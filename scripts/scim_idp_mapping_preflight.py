@@ -405,6 +405,14 @@ def assess(mapping: Any) -> dict:
     def overlapping_contact_paths(keys: set[tuple[str, ...]]) -> bool:
         if ("field", "emails") in keys and len(keys) > 1:
             return True
+        # One stored contact can satisfy both a type selector and a value
+        # selector. Distinct selector fields are not evidence of distinct
+        # contacts, even when their literal values differ. Preserve the
+        # case-insensitive effective-target checks above, but caution rather
+        # than reject this data-dependent cross-selector overlap.
+        selector_fields = {key[1] for key in keys if key[0] == "selector"}
+        if {"type", "value"} <= selector_fields:
+            return True
         for child in _CONTACT_CHILDREN:
             if (("field", "emails." + child) in keys and any(
                     key[0] == "selector" and key[3] in ("", child)
