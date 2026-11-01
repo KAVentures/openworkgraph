@@ -141,7 +141,9 @@ def test_lane_projection_uses_first_admitted_duplicate_not_earliest_duplicate():
     conflicting_later_row = _lane_projection_event("dup", ref, "2026-10-20T10:00:00Z")
     for source in ([first, other, conflicting_later_row],
                    [first, conflicting_later_row, other]):
-        result = predict_record_lanes(_lane_projection_case(source))
+        # Source duplicate suppression does not make the later row visible.
+        # The presented event ID must identify one unambiguous UTC instant.
+        result = predict_record_lanes(_lane_projection_case(source, [first, other]))
         assert [lane["ordered_event_ids"] for lane in result["workflows"]] == [
             ["other", "dup"]
         ]
@@ -356,7 +358,7 @@ def test_lane_projection_accepts_offset_equivalent_instant_and_first_admitted_du
 
     # The source engine keeps the first valid duplicate; later duplicate
     # timestamps do not override its admitted instant.
-    visible = deepcopy(source)
+    visible = deepcopy(source[:2])
     visible[0]["observed_at"] = "2026-10-20T11:00:00.000001+01:00"
     result = predict_record_lanes(_lane_projection_case(source, visible))
     assert [lane["ordered_event_ids"] for lane in result["workflows"]] == [
@@ -883,3 +885,53 @@ def test_linked_projection_first_nonliteral_and_invalid_replays_keep_admission_o
             ["17", "anchor"]
         ]
         assert result["unassigned_event_ids"] == []
+
+
+def test_lane_projection_rejects_two_visible_instants_for_one_event_id_in_any_order():
+    """A duplicate visible ID cannot denote two distinct observed events."""
+    from copy import deepcopy
+
+    ref = "owg:r:" + "a" * 32
+    first = _lane_projection_event("first", ref, "2026-10-20T10:00:00.000001Z")
+    second = _lane_projection_event("second", ref, "2026-10-20T10:01:00Z")
+    conflict = deepcopy(first)
+    conflict["observed_at"] = "2026-10-20T10:00:00.000002Z"
+    source = [first, second]
+    for presented in ([first, second, conflict],
+                      [conflict, second, first],
+                      [first, conflict, second, deepcopy(first)]):
+        result = predict_record_lanes(_lane_projection_case(source, presented))
+        assert [lane["event_ids"] for lane in result["workflows"]] == [["second"]]
+        assert result["unassigned_event_ids"] == [
+            event_id for event_id in dict.fromkeys(
+                row["event_id"] for row in presented
+            ) if event_id == "first"
+        ]
+        assert "first" not in str(result["workflows"])
+
+
+def test_lane_projection_accepts_equivalent_offset_replays_but_not_invalid_replays():
+    """Exact UTC identity is independent of timezone representation."""
+    from copy import deepcopy
+
+    ref = "owg:r:" + "a" * 32
+    first = _lane_projection_event("first", ref, "2026-10-20T10:00:00.000001Z")
+    second = _lane_projection_event("second", ref, "2026-10-20T10:01:00Z")
+    source_later_duplicate = deepcopy(first)
+    source_later_duplicate["observed_at"] = "2026-10-20T10:03:00Z"
+    source = [first, second, source_later_duplicate]
+    offset = deepcopy(first)
+    offset["observed_at"] = "2026-10-20T11:00:00.000001+01:00"
+    for presented in ([first, second, offset], [offset, second, first]):
+        result = predict_record_lanes(_lane_projection_case(source, presented))
+        assert [w["ordered_event_ids"] for w in result["workflows"]] == [
+            ["first", "second"]
+        ]
+        assert result["unassigned_event_ids"] == []
+
+    invalid = deepcopy(first)
+    invalid["observed_at"] = "not-a-timestamp"
+    for presented in ([first, second, invalid], [invalid, second, first]):
+        result = predict_record_lanes(_lane_projection_case(source, presented))
+        assert [w["event_ids"] for w in result["workflows"]] == [["second"]]
+        assert result["unassigned_event_ids"] == ["first"]
