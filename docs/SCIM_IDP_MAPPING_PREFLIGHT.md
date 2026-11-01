@@ -301,3 +301,44 @@ contact path parser and canonical field set. These checks only reduce false
 static compatibility claims; they do not exercise a live IdP request,
 validate a complete PATCH transaction, grant contact identity authority,
 change provisioning permissions or establish customer rollout readiness.
+
+
+## Optional Group PATCH declaration (offline only)
+
+An enabled Group mapping can optionally declare \`groups.patch_attributes\`, for example
+\`["displayName", "externalId", "members", "members[value eq \"opaque-user-id\"]"]\`.
+This declaration is **not** an executable PATCH request and does not specify
+actual verbs, ETags, credentials or IdP behavior. Older mapping files without
+the field remain valid and receive no implied Group PATCH certification.
+An explicit Group PATCH declaration while \`groups.enabled=false\` is blocked,
+even if its attribute list is empty.
+
+The static preflight accepts only the shipped Group PATCH path subset:
+\`displayName\`, \`externalId\`, \`members\` and the literal
+\`members[value eq "opaque-user-id"]\` selector. Structural matching follows
+the shipped ASCII syntax and exact spaces, allowing ASCII case variations but
+not Unicode lookalikes, alternate selectors, nested child fields, schema URNs
+or arbitrary extensions. Selector literals must be bounded, nonempty Unicode
+scalar strings without controls. Rejected paths appear only as generic
+indexed \`unsupported_attribute\` findings; raw IDs or selector values never
+appear in reports. These conservative static constraints do not change or
+certify the server's runtime parser.
+
+**Crucially, the shipped Group selector path is supported only with the
+\`remove\` verb.** A declared selector therefore produces the nonblocking
+\`group_member_selector_remove_only\` caution: the preflight cannot establish
+that the IdP emits removal rather than add/replace, or that a matching member
+is still present. Any declared member PATCH target also produces
+\`group_member_patch_ids_unverified\`: Group members use the current
+provider's OWG SCIM User resource IDs, not emails, usernames, external IDs or
+SSO subjects. A valid path is never proof of correct identity resolution,
+tenant isolation, current provider authorization or Group membership success.
+Group membership is metadata and **does not grant OWG permissions**.
+
+For actual authorized acceptance, capture disposable IdP-generated Group
+PATCH requests and check exact verbs/paths, current and stale If-Match
+responses (428/412), direct User ID resolution, provider isolation, duplicate
+and missing members, offboard/rehire, revocation, rollback/restore and mixed
+worker versions. Never infer Group PATCH support from Group create attributes.
+No live provider call, provisioning, identity mutation or business write is
+performed by this offline preflight.
