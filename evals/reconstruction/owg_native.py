@@ -150,8 +150,9 @@ def _canonical_eval_json(value: Any) -> str | None:
 def _linked_projection(event: dict[str, Any]) -> str | None:
     """Visible, link-authorizing fields of one observation, not hidden identity.
 
-    Rich evidence omits actor/device/organization, so those stay authoritative
-    only in the original source row and the production linker's scope checks.
+    Rich evidence omits actor/device/organization. Source rows retain them,
+    but the current main linker does not yet isolate ephemeral tokens by scope
+    (see separate draft #500); this evaluator cannot authenticate visible scope.
     Metadata comparisons intentionally retain literal malformed claims: an
     unseen or changed tab/transfer/reference cannot acquire link authority.
     """
@@ -201,7 +202,7 @@ def _eval_ephemeral_scope(event: dict[str, Any]) -> tuple[str, str, str, str] | 
 
 def _veto_hidden_source_ephemeral_links(
     source: list[dict[str, Any]], admitted: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], set[str]]:
     """Hidden source rows can DISPROVE a weak link, never create one.
 
     A source-only third record sharing a scoped clipboard transfer makes the
@@ -235,8 +236,9 @@ def _veto_hidden_source_ephemeral_links(
                     vetoes[field].add((scope, claim))
 
     if not any(vetoes.values()):
-        return admitted
+        return admitted, set()
     safe: list[dict[str, Any]] = []
+    blocked_ids: set[str] = set()
     for event in admitted:
         scope = _eval_ephemeral_scope(event)
         metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
@@ -252,6 +254,7 @@ def _veto_hidden_source_ephemeral_links(
         if not blocked:
             safe.append(event)
             continue
+        blocked_ids.add(event["event_id"])
         # No mutation of the source/corpus. Never strip record references,
         # scope, action, timestamp, or provenance to bypass source checks.
         copy = dict(event)
@@ -261,10 +264,12 @@ def _veto_hidden_source_ephemeral_links(
             copy_meta.pop(field, None)
         copy["metadata"] = copy_meta
         safe.append(copy)
-    return safe
+    return safe, blocked_ids
 
 
-def _visible_linked_source_events(case: dict[str, Any]) -> list[dict[str, Any]]:
+def _visible_linked_source_events(
+    case: dict[str, Any],
+) -> tuple[list[dict[str, Any]], set[str]]:
     """Keep only unambiguous source observations actually presented for scoring.
 
     Filtering happens BEFORE linking: a source-only event must neither appear
@@ -312,13 +317,19 @@ def _visible_linked_source_events(case: dict[str, Any]) -> list[dict[str, Any]]:
 def predict_linked_items(case: dict[str, Any], *, accept_candidates: bool = False) -> dict[str, Any]:
     """Merged multi-signal items. Accepting the ambiguous candidate links is a
     diagnostic upper bound only: OWG itself never merges them."""
-    events = _visible_linked_source_events(case)
+    events, weak_link_veto_ids = _visible_linked_source_events(case)
     linked = link_observations(events)
     members = list(linked["members"].values())
     if accept_candidates:
         parent = {event_id: index for index, ids in enumerate(members) for event_id in ids}
         merged: dict[int, set[int]] = {index: {index} for index in range(len(members))}
         for candidate in linked["candidates"]:
+            # Stripping a contradicted tab/transfer may expose an unrelated
+            # same-app continuity candidate. Never let diagnostic candidate
+            # acceptance undo a source-only negative-evidence veto.
+            if (candidate["event_id"] in weak_link_veto_ids or
+                    candidate["toward_event_id"] in weak_link_veto_ids):
+                continue
             a, b = parent[candidate["event_id"]], parent[candidate["toward_event_id"]]
             if merged[a] is not merged[b]:
                 union = merged[a] | merged[b]
