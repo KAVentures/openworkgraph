@@ -190,3 +190,87 @@ def test_lane_projection_preserves_offset_order_and_shipped_identity_conflict_ve
     vetoed = predict_record_lanes(_lane_projection_case([first, second, conflicting]))
     assert vetoed["workflows"] == []
     assert set(vetoed["unassigned_event_ids"]) == {"first", "second", "other-provider"}
+
+
+def test_lane_projection_requires_visible_record_identity_not_just_matching_id():
+    from copy import deepcopy
+
+    a, b = "owg:r:" + "a" * 32, "owg:r:" + "b" * 32
+    source = [
+        _lane_projection_event("first", a, "2026-10-20T10:00:00Z"),
+        _lane_projection_event("second", a, "2026-10-20T10:01:00Z"),
+    ]
+    # The source says A, but the actual presented evidence says B. Reusing
+    # the same event ID cannot turn a source-only A observation into visible A.
+    visible = deepcopy(source)
+    visible[0]["metadata"]["resource_reference"]["resource_ref"] = b
+    result = predict_record_lanes(_lane_projection_case(source, visible))
+    assert [lane["event_ids"] for lane in result["workflows"]] == [["second"]]
+    assert result["unassigned_event_ids"] == ["first"]
+
+
+def test_lane_projection_withholds_conflicting_or_missing_visible_provenance():
+    from copy import deepcopy
+
+    ref = "owg:r:" + "a" * 32
+    source = [
+        _lane_projection_event("first", ref, "2026-10-20T10:00:00Z"),
+        _lane_projection_event("second", ref, "2026-10-20T10:01:00Z"),
+    ]
+    for corruption in ("provider", "kind", "host", "missing", "malformed"):
+        visible = deepcopy(source)
+        identity = visible[0]["metadata"]["resource_reference"]
+        if corruption == "provider":
+            identity["provider"] = "jira"
+        elif corruption == "kind":
+            identity["resource_kind"] = "pull_request"
+        elif corruption == "host":
+            identity["host"] = "another.example"
+        elif corruption == "missing":
+            visible[0]["metadata"] = {}
+        else:
+            visible[0]["metadata"] = {"resource_reference": True}
+        result = predict_record_lanes(_lane_projection_case(source, visible))
+        assert [lane["event_ids"] for lane in result["workflows"]] == [["second"]], corruption
+        assert result["unassigned_event_ids"] == ["first"], corruption
+
+
+def test_lane_projection_withholds_visible_id_reused_under_two_source_identities():
+    from copy import deepcopy
+
+    a, b = "owg:r:" + "a" * 32, "owg:r:" + "b" * 32
+    source = [
+        _lane_projection_event("shared", a, "2026-10-20T10:00:00Z"),
+        _lane_projection_event("second", a, "2026-10-20T10:01:00Z"),
+    ]
+    visible = deepcopy(source)
+    conflicting = deepcopy(visible[0])
+    conflicting["metadata"]["resource_reference"]["resource_ref"] = b
+    for rows in ([*visible, conflicting], [conflicting, *visible]):
+        result = predict_record_lanes(_lane_projection_case(source, rows))
+        assert [lane["event_ids"] for lane in result["workflows"]] == [["second"]]
+        assert result["unassigned_event_ids"].count("shared") == 2
+        assert "shared" not in str(result["workflows"])
+
+
+def test_lane_projection_accepts_normalized_visible_identity_without_tenant_leak():
+    from copy import deepcopy
+
+    ref = "owg:r:" + "a" * 32
+    source = [
+        _lane_projection_event("first", ref, "2026-10-20T10:00:00Z"),
+        _lane_projection_event("second", ref, "2026-10-20T10:01:00Z"),
+    ]
+    visible = deepcopy(source)
+    for row in visible:
+        row.pop("organization_id")  # rich_evidence_row(include_identity=False)
+        identity = row["metadata"]["resource_reference"]
+        identity["resource_ref"] = ref.upper()
+        identity["provider"] = "GITHUB"
+        identity["resource_kind"] = "ISSUE"
+        identity["host"] = "GITHUB.COM"
+    result = predict_record_lanes(_lane_projection_case(source, visible))
+    assert [lane["ordered_event_ids"] for lane in result["workflows"]] == [
+        ["first", "second"]
+    ]
+    assert result["unassigned_event_ids"] == []
