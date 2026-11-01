@@ -340,3 +340,23 @@ live-provider/tenant acceptance, cryptographic source attestation,
 revocation-race fencing, customer outcomes, or measured commercial uplift.
 No new source permissions, network operations, background polling,
 REST/MCP fields, agent execution, or business writes are added.
+
+
+## Explicit contradictory GitHub operation details
+
+The existing GitHub CLI adapter confirms the provider's current PR merge state
+without a nested `verified_operational_outcome` object. That absent detail is
+still supported. If a separately authorized reader/cache **does** supply that
+optional object, its `verified` flag must be the literal Boolean `true`
+and its `kind` must be `github_pr_merged`. An explicit false/malformed
+flag or different operation kind now yields
+`unknown/provider_operation_not_independently_verified`, rather than
+silently ignoring conflicting source evidence. A matching optional object
+does not expand the provider-only scope: customer outcome, business objective,
+agent causality and execution authorization remain false.
+
+Twelve synthetic fake-reader parameterizations cover ten contradictory
+optional details, the current production no-detail shape and a matching
+detail. These are deterministic contract regressions, **not** proof of
+live GitHub provider acceptance, customer completion or commercial uplift.
+No new source grants, background reads, writes, or agent permissions.
