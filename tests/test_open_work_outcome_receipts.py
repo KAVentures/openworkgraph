@@ -1,7 +1,7 @@
 """Independent provider operation receipts: never agent-self-reported success."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -1018,3 +1018,50 @@ def test_jira_resolution_accepts_explicit_source_time_without_customer_claim(
     assert result["customer_outcome_verified"] is False
     assert result["agent_caused_operation_verified"] is False
     assert result["agent_execution_authorized"] is False
+
+
+@pytest.mark.parametrize(("read_ahead_seconds", "resolution_ahead_seconds", "valid"), [
+    (299, 598, False),  # each source-relative skew passes; local event is +598s
+    (300, 600, False),  # previously two +300s allowances compounded
+    (299, 301, False),  # just beyond the local clock's +300s allowance
+    (0, 301, False),    # existing source-relative bound must still hold
+    (-100, 201, False), # local skew passes but source-relative +301s fails
+    (299, 300, True),   # exact local boundary, +1s after the source read
+    (0, 300, True),     # exact +300s source and local boundaries
+    (-100, 200, True),  # exact +300s source-relative boundary
+    (300, 299, True),   # source clock ahead, resolution before source read
+])
+@pytest.mark.parametrize("zone", [
+    pytest.param(timezone.utc, id="utc"),
+    pytest.param(timezone(timedelta(hours=2)), id="offset-plus-2"),
+])
+def test_jira_resolution_clock_skew_cannot_compound(
+    read_ahead_seconds, resolution_ahead_seconds, valid, zone,
+):
+    # A source read up to +300s ahead of the local clock must not grant an
+    # *additional* +300s for an alleged future Jira resolution event.
+    data = response(provider="jira", kind="issue", state="done",
+                    operation="jira_issue_resolved")
+    data["source_evidence"]["verified_at"] = (
+        WHEN + timedelta(seconds=read_ahead_seconds)
+    ).astimezone(zone).isoformat()
+    data["source_evidence"]["verified_operational_outcome"]["source_timestamp"] = (
+        WHEN + timedelta(seconds=resolution_ahead_seconds)
+    ).astimezone(zone).isoformat()
+    calls = []
+    result = source_operation_receipt(
+        REF, "jira_issue_resolved", record_reader=reader(data, calls), now=WHEN,
+    )
+    assert result["availability"] == ("source_reported" if valid else "unknown")
+    assert result["operation_verified"] is valid
+    if not valid:
+        assert result["reason"] == "provider_resolution_detail_conflict"
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert result["read_only"] is True
+    assert calls == [(REF, {
+        "since": None, "until": None, "include_source_status": True,
+    })]
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
