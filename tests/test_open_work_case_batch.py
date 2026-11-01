@@ -114,6 +114,7 @@ def test_existing_approved_prerequisite_and_all_or_none_stale_create(local):
     [_item(A, [A])],
     [_item(A, [B]), _item(B, [C]), _item(C, [A])],
     [{**_item(A), "expected_revision": True}],
+    [{**_item(A), "goal_code": ["not", "a", "code"]}],
     [{**_item(A), "expected_edit_token": "0" * 32}],
 ])
 def test_invalid_batch_never_partially_creates(local, items):
@@ -178,3 +179,15 @@ def test_retention_changed_before_commit_rolls_back(local, monkeypatch):
     assert result.status_code in (403, 409), result.text
     monkeypatch.setattr(declarations, "_retention_days", original)
     assert client.get(BASE, headers=auth).json()["items"] == []
+
+
+def test_cross_account_prerequisite_cannot_be_rebound(local):
+    client, auth = TestClient(app), _auth()
+    first = client.post(BATCH, headers=auth, json=_batch(_item(A)))
+    assert first.status_code == 200, first.text
+    local["id"] = "acct_87654321"
+    rejected = client.post(BATCH, headers=auth, json=_batch(_item(B, [A])))
+    assert rejected.status_code in (409, 422), rejected.text
+    assert client.get(BASE, headers=auth).json()["items"] == []
+    local["id"] = "acct_12345678"
+    assert {row["work_item_ref"] for row in client.get(BASE, headers=auth).json()["items"]} == {A}
