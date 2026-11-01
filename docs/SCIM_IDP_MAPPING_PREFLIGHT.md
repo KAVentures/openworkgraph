@@ -128,7 +128,10 @@ declared selector values or email addresses.
 The overlap caution now considers **both** legacy `users.patch_attributes`
 and optional `users.patch_operations[].path`, even when the legacy list is
 empty. It also considers a whole-array path in one declaration and a selector
-or child path in the other. Only supported, parsed contact paths contribute:
+or child path in the other. A supported pathless User add/replace operation
+declaring `value_attributes: ["emails"]` is treated as a possible whole-array
+contact write; pathless remove or an explicitly missing `value` is not.
+Only supported, parsed contact paths and valid declared pathless shapes contribute:
 an unsupported path remains a blocker, not a fabricated overlap. Equivalent
 paths repeated across the two declaration formats do not by themselves imply
 two distinct targets. The caution retains its legacy
