@@ -1064,3 +1064,27 @@ def test_group_patch_unsupported_paths_still_block_after_effective_dedupe():
     assert report["status"] == "blocked"
     assert "unsupported_attribute" in codes(report)
     assert "usr_123" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("path,supported", [
+    ('members[value eq "usr_A"]', True),
+    ('MEMBERS[VALUE EQ "usr_A"]', True),
+    (r'members[value eq "u\u0073r_A"]', True),
+    ('members[value ne "usr_A"]', False),
+    ('members[value eq "usr_A"].value', False),
+])
+def test_group_patch_cli_import_and_selector_grammar_smoke(path, supported):
+    """Exercise the actual CLI import: malformed regexes fail before assess()."""
+    groups = {"enabled": True, "match_attributes": ["externalId"],
+              "create_attributes": ["displayName"],
+              "patch_attributes": [path]}
+    completed = subprocess.run(
+        [sys.executable, str(SCRIPT), "-"],
+        input=json.dumps(mapping(groups=groups)),
+        capture_output=True, text=True, check=False,
+    )
+    assert completed.returncode == (0 if supported else 2), completed.stderr
+    report = json.loads(completed.stdout)
+    assert ("unsupported_attribute" not in codes(report)) is supported
+    assert ("group_member_selector_remove_only" in codes(report)) is supported
+    assert "usr_A" not in completed.stdout
