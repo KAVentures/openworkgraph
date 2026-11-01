@@ -1121,3 +1121,36 @@ download or model invocation. These are not native browser/WCAG, real
 consenting-customer, provider-validation or competitor-parity results.
 
 Coordination: [#326 claim 6552128864](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6552128864).
+
+
+## Explicit evidence sufficiency in the AI handoff review (Worker B, 2026-11-01)
+
+The local preview is **not** a workflow-confirmation or business-outcome
+verification engine. The modal now distinguishes three review states using only
+validated selected event counts:
+
+- **No recorded events:** insufficient for workflow review; capture coverage
+  and consent status are unverified. No evidence download is offered, but the
+  explanatory request remains copyable.
+- **Capture-health/gap records only:** insufficient for workflow review. The
+  existing explicit download remains available, but its button calls the file
+  a **capture-health diagnostic package**, not an AI workflow evidence package.
+  The data and export permissions are unchanged. The modal does not invite
+  workflow discovery from diagnostic rows.
+- **Ordinary work observations present:** observations can be reviewed, but no
+  workflow, business completion, automation opportunity, or ROI is verified.
+  Human review is required before confirmation or handoff decisions.
+
+For insufficient evidence, the modal subtitle is a neutral limitations review
+rather than an invitation to discover opportunities. The initial status also
+identifies health-only downloads as diagnostics. This is a **display-only
+classification**, not a new evidence source, model judgment, permission,
+confirmation, execution or guarantee of completeness. It does not disable
+explicit diagnostic exports or weaken backend export-ticket checks.
+
+A deterministic synthetic mock-DOM test covers all three states, the modal
+subtitle, evidence grade, download label and availability, and Copy's
+request-only behavior without tickets or downloads. Real browser, accessibility,
+consenting-user and live-provider acceptance remain separate gates.
+
+Coordination: [#326 claim 6552672223](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6552672223).
