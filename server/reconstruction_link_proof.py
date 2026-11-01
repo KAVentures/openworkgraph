@@ -19,19 +19,26 @@ def directional_transfer_witness(rows: list[dict[str, Any]]) -> tuple[str, str] 
     A generic action, a loose endpoint, a time gap or a same-record pair is
     never evidence of a directional cross-record transfer.
     """
-    earliest_copies: dict[str, dict[str, Any]] = {}
+    pending: dict[str, Any] | None = None
     for row in rows:
         ref = row["ref"]
-        if not ref or row["reference_tainted"]:
+        if row["action"] not in ("copy", "paste"):
             continue
+        # A second, different source copy before the paste makes the token
+        # ambiguous: choosing either one would invent the transfer's origin.
+        # An explicit loose copy/paste is also not a trustworthy endpoint.
+        if not ref or row["reference_tainted"] or row["scope"] is None:
+            return None
         if row["action"] == "copy":
-            earliest_copies.setdefault(ref, row)
-        elif row["action"] == "paste":
-            for copy_ref, copy in earliest_copies.items():
-                if (copy_ref != ref and copy["scope"] is not None
-                        and copy["scope"] == row["scope"]
-                        and copy["observed_at"] < row["observed_at"]):
-                    return copy["event_id"], row["event_id"]
+            if pending is not None and pending["ref"] != ref:
+                return None
+            if pending is None:
+                pending = row
+        elif pending is not None:
+            if (pending["ref"] == ref or pending["scope"] != row["scope"]
+                    or pending["observed_at"] >= row["observed_at"]):
+                return None
+            return pending["event_id"], row["event_id"]
     return None
 
 
