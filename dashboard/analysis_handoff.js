@@ -325,9 +325,23 @@
     // Literal-name ties make the same source map reproducible across import order.
     const ranked = Object.entries(sources).sort((a, b) =>
       b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
-    for (const [name, count] of ranked) {
-      if (shown.length < 8) shown.push(`${name.trim() ? visibleEvidenceLabel(name, 'source') : '[blank source label]'}: ${count}`);
-      else { omittedCategories++; omittedEvents += count; }
+    // Two distinct reported source keys can render identically after the
+    // 96-codepoint bound or control-character escaping. A reviewer must not
+    // mistake those separate categories for a single verified source.
+    const visible = ranked.slice(0, 8).map(([name]) =>
+      name.trim() ? visibleEvidenceLabel(name, 'source') : '[blank source label]');
+    const occurrences = new Map(), ordinals = new Map();
+    for (const label of visible)
+      occurrences.set(label, (occurrences.get(label) || 0) + 1);
+    for (let i = 0; i < ranked.length; i++) {
+      const count = ranked[i][1];
+      if (i < visible.length) {
+        const label = visible[i], total = occurrences.get(label);
+        const ordinal = (ordinals.get(label) || 0) + 1;
+        ordinals.set(label, ordinal);
+        const distinct = total > 1 ? ` [distinct reported category ${ordinal}/${total}]` : '';
+        shown.push(`${label}${distinct}: ${count}`);
+      } else { omittedCategories++; omittedEvents += count; }
     }
     return (shown.join(', ') || 'none') + (omittedCategories
       ? `; ${omittedCategories} additional source categories (${omittedEvents} selected events) omitted from this preview`
