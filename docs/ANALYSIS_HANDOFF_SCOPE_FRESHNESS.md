@@ -1141,8 +1141,10 @@ validated selected event counts:
   workflow, business completion, automation opportunity, or ROI is verified.
   Human review is required before confirmation or handoff decisions.
 
-For insufficient evidence, the modal subtitle is a neutral limitations review
-rather than an invitation to discover opportunities. The initial status also
+For insufficient evidence, the modal subtitle and introduction are neutral
+limitations guidance rather than an invitation to discover opportunities or
+infer workflows from diagnostics. When ordinary observations exist, the
+introduction still requires explicit user sharing before AI review. The initial status also
 identifies health-only downloads as diagnostics. This is a **display-only
 classification**, not a new evidence source, model judgment, permission,
 confirmation, execution or guarantee of completeness. It does not disable
