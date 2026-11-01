@@ -479,7 +479,7 @@
         ? "\n\nEvidence limitation: No recorded events in this local preview's selected period. This is not proof of inactivity or complete capture. Do not infer a workflow, business completion, time savings, or ROI from absent ordinary work evidence. If other currently authorized evidence is available, evaluate it separately and disclose its source and limits; otherwise report insufficient evidence."
         : "\n\nEvidence limitation: This local preview contains only capture-health or gap records, not ordinary work events for the selected period. Health and gap records are not workflow steps. Do not infer a workflow, business completion, time savings, or ROI from absent ordinary work evidence. If other currently authorized evidence is available, evaluate it separately and disclose its source and limits; otherwise report insufficient evidence."
       : diagnosticRows > 0
-        ? `\n\nEvidence limitation: This selected local period contains ${ordinaryRows} ordinary work observations and ${diagnosticRows} capture-health/gap records. UTC daily totals are untyped: a listed date may contain only diagnostics, not workflow steps. Inspect event-level evidence and source provenance before inferring any workflow; do not treat diagnostic records as work, or claim verified business completion, savings, or ROI. Capture completeness is unverified.`
+        ? `\n\nEvidence limitation: This selected local period contains ${ordinaryRows} ordinary work ${ordinaryRows === 1 ? 'observation' : 'observations'} and ${diagnosticRows} capture-health/gap ${diagnosticRows === 1 ? 'record' : 'records'}. UTC daily totals are untyped: a listed date may contain only diagnostics, not workflow steps. Inspect event-level evidence and source provenance before inferring any workflow; do not treat diagnostic records as work, or claim verified business completion, savings, or ROI. Capture completeness is unverified.`
         : '';
     // Evidence availability is not workflow confirmation. Capture-health and
     // gap records can be downloaded for diagnostics, but cannot substantiate
@@ -579,7 +579,7 @@
     // types. A mixed selection can contain health-only dates; never turn a
     // date total into a claimed observed workflow step.
     const dateTypeNotice = ordinaryRows > 0 && diagnosticRows > 0
-      ? `<p class="muted">Mixed selected evidence: ${esc(ordinaryRows)} ordinary work observations and ${esc(diagnosticRows)} capture-health/gap records. Daily totals do not distinguish their event types; a listed date may contain diagnostics only. Inspect event-level evidence before treating any date as workflow evidence.</p>`
+      ? `<p class="muted">Mixed selected evidence: ${esc(ordinaryRows)} ordinary work ${ordinaryRows === 1 ? 'observation' : 'observations'} and ${esc(diagnosticRows)} capture-health/gap ${diagnosticRows === 1 ? 'record' : 'records'}. Daily totals do not distinguish their event types; a listed date may contain diagnostics only. Inspect event-level evidence before treating any date as workflow evidence.</p>`
       : '';
     const dailyChunks = d.analysis_plan?.date_chunks;
     // A truncated date plan is a bounded review sample, not a paginated UI.
