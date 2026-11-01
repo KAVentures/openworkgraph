@@ -192,6 +192,15 @@ malformed or oversized duplicate claims. Rich-evidence top-level tab/transfer fi
 metadata, not independent source claims. An unpresented source-only copy/paste
 row must not bridge two visible records or create a candidate link.
 
+An explicit `source_events: []` (or null) is authoritative: if source
+evidence has been revoked/deleted, neither the record-lane nor linked-item
+evaluation may fall back to a stale `presented_evidence` snapshot and
+resurrect membership. All still-presented IDs remain unassigned in that
+scenario, including diagnostic candidate-acceptance mode. Only an *absent*
+`source_events` key retains backward-compatible presented-only evaluation.
+Synthetic tests exercise both cases; they do not establish end-to-end
+revocation propagation, live source deletion or held-out reconstruction quality.
+
 The filter retains the original authorized source rows for the linker's own
 organization/actor/device/session checks. These identities are deliberately
 absent from the rich evidence and cannot be independently verified from its
