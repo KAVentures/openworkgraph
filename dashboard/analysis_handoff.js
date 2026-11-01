@@ -439,6 +439,7 @@
       activeHandoff.copy.disabled=true;
       activeHandoff.download.disabled=true;
       activeHandoff.detailed.disabled=true;
+      activeHandoff.reviewedDetailed.disabled=true;
       activeHandoff.status.textContent=staleScope+' Nothing was copied or downloaded by this change.';
       activeHandoff=null;
     }
@@ -658,6 +659,7 @@
       <details><summary>${esc(dateCoverageTitle)}</summary><p>${esc(dateCoverageIntro)} ${esc(dateCoverageDownload)}</p>${dateTypeNotice}${dailyBreakdown}${omittedDateNotice}</details>
       <details><summary>Preview redacted context examples</summary><p>${esc(focusExampleSummary)}</p><ul>${focusExampleItems}</ul><p>Filtering is best effort; inspect any downloaded package before sharing it.</p></details>
       <label style="display:flex;gap:8px;margin:12px 0"><input id="analysisDetailed" type="checkbox" ${d.canonical_rows?'':'disabled'}>Include detailed chronological evidence (raw local event rows, more labels and context)</label>
+      <label style="display:flex;gap:8px;margin:12px 0"><input id="analysisReviewedDetailed" type="checkbox" ${d.canonical_rows?'':'disabled'}>I have reviewed the sensitive-data warning and explicitly choose detailed evidence for this selected period. This does not authorize sharing or AI access.</label>
       <p>Copy request copies only the prepared request text. Download saves a separate local evidence file; an AI will not receive that file unless you inspect and attach or share it yourself.</p>
       <p>Name redaction is best effort, not anonymization. Even summary exports may contain sensitive titles, URLs or metadata; detailed chronology adds raw local evidence that may contain more sensitive content. Inspect the file before sharing it. Gaps and foreground time are not measured lost work or savings.</p>
       ${d.canonical_rows?'':'<p class="muted">No recorded events in the selected period. An evidence package is unavailable; you can still copy the explanatory request. This does not establish inactivity or complete capture.</p>'}
@@ -666,19 +668,27 @@
       <div class="muted" id="analysisActionStatus" role="status">Nothing has been sent to an AI. ${d.canonical_rows?(diagnosticOnly?'Only capture-health/gap diagnostics are available; no workflow is verified.':'Downloads work with any capable AI, without an OWG cloud account.'):'There is no recorded-event package to download for this selection.'}</div>`);
     const requestNode=$('#analysisRequest'), statusNode=$('#analysisActionStatus');
     const copyNode=$('#analysisCopy'), downloadNode=$('#analysisDownload'), detailedNode=$('#analysisDetailed');
+    const reviewedDetailedNode=$('#analysisReviewedDetailed');
     requestNode.textContent=request;
     copyNode.disabled=false;
     downloadNode.disabled=!d.canonical_rows;
     detailedNode.checked=false;
+    reviewedDetailedNode.checked=false;
+    // A previous acknowledgement never follows a changed detail choice or a
+    // newly prepared period. This is local review, not an access grant.
+    detailedNode.onchange=()=>{reviewedDetailedNode.checked=false;};
     // With no selected rows there is no downloadable chronology to configure.
     detailedNode.disabled=!d.canonical_rows;
-    activeHandoff={seq,copy:copyNode,download:downloadNode,detailed:detailedNode,status:statusNode};
+    reviewedDetailedNode.disabled=!d.canonical_rows;
+    activeHandoff={seq,copy:copyNode,download:downloadNode,detailed:detailedNode,
+      reviewedDetailed:reviewedDetailedNode,status:statusNode};
     const current=()=>seq===generation && selectionStillMatches(chosen);
     const expired=()=>{
       if(current())return false;
       copyNode.disabled=true;
       downloadNode.disabled=true;
       detailedNode.disabled=true;
+      reviewedDetailedNode.disabled=true;
       statusNode.textContent=staleScope+' Nothing was copied or downloaded by this action.';
       return true;
     };
@@ -717,10 +727,18 @@
       // Freeze the exact option shown to the user before the async ticket read.
       // A later checkbox change cannot rewrite an already-issued request.
       const includeDetailed=!!detailedNode.checked;
+      // Detailed chronology may expose sensitive raw labels/context. A review
+      // acknowledgement is required before even requesting an export ticket;
+      // the checkbox never overrides backend consent or redaction.
+      if(includeDetailed && !reviewedDetailedNode.checked){
+        statusNode.textContent='Detailed chronology was not requested. Review the sensitive-data warning and check the detailed-evidence acknowledgement before downloading.';
+        return;
+      }
       actionInFlight=true;
       copyNode.disabled=true;
       downloadNode.disabled=true;
       detailedNode.disabled=true;
+      reviewedDetailedNode.disabled=true;
       statusNode.textContent=includeDetailed
         ? 'Preparing the redacted evidence package with detailed chronological evidence locally…'
         : 'Preparing the redacted evidence package without detailed chronological evidence locally…';
@@ -737,6 +755,7 @@
           copyNode.disabled=false;
           downloadNode.disabled=!d.canonical_rows;
           detailedNode.disabled=false;
+          reviewedDetailedNode.disabled=false;
         }
       }
     };
