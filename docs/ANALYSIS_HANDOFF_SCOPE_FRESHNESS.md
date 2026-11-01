@@ -1024,3 +1024,40 @@ assert no handoff modal, clipboard copy, ticket or download; the positive
 case remains copy-only. These tests do not replace exact-head native
 Node/Chromium/accessibility/scale/packaging checks or consenting-user pilots.
 Coordination: [#326 claim 6550343337](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6550343337).
+
+
+## Exact UTC daily-plan boundaries (Worker B, 2026-11-01)
+
+The optional `analysis_plan.date_chunks` list describes selected-event counts
+by UTC date. A positive-count chunk is evidence metadata, not proof of a
+complete activity history. Even after exact observation-span validation, the
+reviewer previously compared chunk start/end, selected-period clipping,
+first/last event containment and next-midnight ceilings using JavaScript
+`Date.parse`, which truncates fractional seconds to milliseconds.
+
+This permitted a chunk to start **one microsecond after the first observed
+event**, start **one microsecond after the last observed event**, extend
+**one microsecond beyond the selected range**, or cross UTC midnight by one
+microsecond while still appearing consistent with its declared coverage.
+Conversely, a valid exact microsecond span could be rejected as empty because
+its start and end both truncated to the same millisecond.
+
+The review now uses the existing strict, offset-aware exact-instant comparator
+for those daily-chunk relationships. Date-only chunk labels mean UTC midnight;
+full ISO timestamps retain their original fractional precision and offset.
+The 31-date limit, UTC-day uniqueness, count conservation, explicit
+complete/truncated coverage flags and local-only Copy/Download rules remain
+unchanged. A contradictory preview is withheld **before** either action,
+rather than silently repairing or rewriting the underlying evidence.
+
+Two deterministic synthetic mock-DOM test functions exercise six negative and
+positive cases: a one-microsecond omitted first event, a positive chunk after
+the last event, a post-midnight spill, an exact microsecond interval expressed
+with an equivalent +02:00 offset, a chunk extending beyond the requested
+period, and a correctly clipped UTC-equivalent end. These are **offline
+synthetic** assertions, not native cross-platform/Chromium/WCAG/scale/
+packaging acceptance or a consenting-user pilot. They do not verify
+underlying source authenticity, provider completeness, snapshot immutability,
+commercial ROI, or competitor parity.
+
+Coordination: [#326 claim 6550924281](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6550924281).
