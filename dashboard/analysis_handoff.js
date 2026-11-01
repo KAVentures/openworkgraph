@@ -51,6 +51,15 @@
   function sameExactInstant(a, b) {
     return compareExactInstants(a, b) === 0;
   }
+  // Lease bounds are provenance disclosures, not authorization. Date.toISOString
+  // rounds away microseconds; retain the entire supplied fractional instant
+  // while normalizing its UTC offset for a truthful, readable snapshot.
+  function canonicalUtcInstant(value) {
+    const parts = exactInstantParts(value);
+    if (!parts) return null;
+    const utcSecond = new Date(parts[0]).toISOString();
+    return utcSecond.slice(0, -4) + '.' + parts[1].padEnd(3, '0') + 'Z';
+  }
   function selection() {
     if (period === 'current' || period === 'all') return {scope: period};
     const now = new Date(), a = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -451,18 +460,14 @@
     const access=d.local_ai_history_access;
     // This is a snapshot of local AI history consent, not an export grant.
     // Do not turn malformed lease metadata into an apparent permission.
-    const leaseInstant=value=>{
-      if(!strictClockInstant(value)) return null;
-      const parts=value.slice(0,10).split('-').map(Number);
-      const day=new Date(0);day.setUTCFullYear(parts[0],parts[1]-1,parts[2]);
-      if(day.getUTCFullYear()!==parts[0] || day.getUTCMonth()!==parts[1]-1 ||
-         day.getUTCDate()!==parts[2] || !Number.isFinite(Date.parse(value)))return null;
-      return new Date(value).toISOString();
-    };
     const leaseObject=access!==null && typeof access==='object' && !Array.isArray(access);
-    const leaseExpiry=leaseInstant(access?.expires_at);
+    const leaseExpiry=canonicalUtcInstant(access?.expires_at);
+    // The local clock is millisecond-resolution, but a lease expiring one
+    // microsecond after that instant is still future-dated. Do not round it
+    // into an apparently expired grant or overstate its actual expiry time.
     const expiryValid=access?.expires_at==null ||
-      (leaseExpiry!==null && Date.parse(leaseExpiry)>Date.now());
+      (leaseExpiry!==null && compareExactInstants(
+        access.expires_at, new Date().toISOString()) > 0);
     let localRead='Local AI saved-history permission could not be verified from this preview; check current settings before using an AI.';
     if(d.local_ai_enabled===false) localRead='Local AI access is off.';
     else if(d.local_ai_enabled===true && leaseObject && expiryValid){
@@ -472,8 +477,8 @@
       else if(access.mode==='all_saved')
         localRead='Local saved-history grant: all saved work (snapshot only; current consent still applies).'+until;
       else if(access.mode==='selected_range'){
-        const since=leaseInstant(access.since), end=leaseInstant(access.until);
-        if(since && end && Date.parse(since)<Date.parse(end))
+        const since=canonicalUtcInstant(access.since), end=canonicalUtcInstant(access.until);
+        if(since && end && compareExactInstants(access.since, access.until) < 0)
           localRead='Local saved-history grant: '+since+' to '+end+
             ' (end exclusive; snapshot only, may not cover this selected work period).'+until;
       }
