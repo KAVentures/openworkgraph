@@ -163,6 +163,14 @@ def kpis(log_id: str, case_type: str | None = None, sla_seconds: int | None = No
          automation_resources: list[str] | None = None, cohort: dict[str, Any] | None = None) -> dict[str, Any]:
     from .event_log_cohorts import describe, parse_cohort, restrict
     chosen = parse_cohort(cohort)
+    # The HTTP route passes a list of literal resource names. Direct Python
+    # callers must not interpret a string as a list of characters, silently
+    # coerce non-string names, or leak TypeError for unhashable entries.
+    if automation_resources is not None and (
+        not isinstance(automation_resources, list)
+        or any(not isinstance(r, str) for r in automation_resources)
+    ):
+        raise EventLogWorkspaceError("automation_resources must be a list of strings")
     automation = list(dict.fromkeys(r for r in (automation_resources or []) if r))
     if len(automation) > MAX_AUTOMATION_RESOURCES or any(len(r) > 200 for r in automation):
         raise EventLogWorkspaceError("too many or too long automation resource names")
