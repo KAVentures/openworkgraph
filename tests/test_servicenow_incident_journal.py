@@ -5,11 +5,8 @@ All source HTTP is fake; no customer instance, credentials or source writes.
 from __future__ import annotations
 
 import csv
-import io
 import json
 import os
-from pathlib import Path
-import sqlite3
 
 import pytest
 
