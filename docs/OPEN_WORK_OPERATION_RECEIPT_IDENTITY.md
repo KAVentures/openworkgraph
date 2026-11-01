@@ -245,3 +245,27 @@ grant was current, that consent or revocation was fenced, or that an agent
 caused a verified customer/business outcome. No new source read, permission,
 route, background action, credential, retention behavior or execution
 authority is introduced.
+
+## Jira non-compounding clock-skew boundary
+
+The existing source-read freshness contract permits an authenticated
+`verified_at` timestamp at most five minutes ahead of the evaluation clock,
+to accommodate clock skew. Jira's separately verified resolution timestamp
+previously had its own independent five-minute allowance relative to
+`verified_at`. Combining those allowances could classify a purported
+resolution nearly **ten minutes in the future** as verified.
+
+A Jira resolution is now admitted only if its timestamp is at most 300 seconds
+after **both** the source read's `verified_at` and the local evaluation clock.
+This retains the existing source-read freshness and resolution detail checks,
+accepts the exact +300-second boundary, and treats an excessively future-dated
+resolution as `unknown/provider_resolution_detail_conflict`. It never treats
+the Jira issue resolution as customer acknowledgement, agent causality, or a
+completed business objective.
+
+Eighteen synthetic fake-reader cases cover compound +598/+600-second future
+claims, just-outside and exact-boundary controls, negative read-clock skew,
+and equivalent UTC/+02:00 timestamps. No new network calls, background
+polling, grants, credentials, source adapters, execution or business writes.
+These are **post-read timestamp-consistency tests**, not live Jira validation,
+cryptographic time attestation, tenant authorization or business-outcome proof.
