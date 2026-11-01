@@ -221,3 +221,19 @@ def test_provider_exception_is_unknown_not_customer_completion(local, monkeypatc
     assert body["case_statuses"][1]["source_reported_status"]["state"] == "unknown"
     assert body["customer_outcome_verified"] is False
     assert "private provider failure" not in response.text
+
+
+def test_conflicting_first_source_receipt_stops_remaining_scans(local, monkeypatch):
+    client, auth = TestClient(app), _auth()
+    saved = _chain(client, auth)
+    calls = []
+    def scan(ref, **kwargs):
+        calls.append(ref)
+        bad = _reported(ref)
+        bad["source_evidence"]["source_state"] = "paid"
+        return bad
+    monkeypatch.setattr(routes, "stripe_open_work_case_context", scan)
+    response = client.post(ENDPOINT, headers=auth, json=_request(D, saved))
+    assert response.status_code == 422, response.text
+    assert calls == [A]
+    assert "in_PRIVATE" not in response.text
