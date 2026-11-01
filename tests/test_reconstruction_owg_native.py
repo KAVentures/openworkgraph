@@ -739,3 +739,53 @@ def test_linked_projection_respects_first_normalized_source_id_admission():
         assert [w["event_ids"] for w in result["workflows"]] == [
             [literal, "anchor"]
         ], nonliteral
+
+
+def test_linked_projection_ignores_invalid_timestamp_duplicates_before_and_after_valid_source():
+    """Production skips invalid timestamps before first-ID admission.
+
+    An invalid duplicate must not veto a valid observed transfer merely
+    because its record, scope, or clipboard claim conflicts with the first
+    timestamp-valid source observation. This checks evaluator parity only.
+    """
+    from copy import deepcopy
+
+    source = _linked_eval_rows()
+    invalid = deepcopy(source[2])
+    invalid["observed_at"] = "not-a-timestamp"
+    invalid["actor_id"] = "other-actor"
+    invalid["metadata"]["resource_reference"]["provider"] = "other-provider"
+    invalid["metadata"]["clipboard_transfer_id"] = "other-transfer"
+    for insertion in (2, 3):
+        with_invalid = deepcopy(source)
+        with_invalid.insert(insertion, deepcopy(invalid))
+        for accepting_candidates in (False, True):
+            result = predict_linked_items(
+                _linked_eval_case(with_invalid, source),
+                accept_candidates=accepting_candidates,
+            )
+            assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
+                frozenset({"a1", "a2", "b1", "b2", "b3"})
+            }, (insertion, accepting_candidates)
+            assert result["unassigned_event_ids"] == []
+
+
+def test_linked_projection_valid_conflicting_duplicate_still_vetoes_transfer():
+    """Skipping malformed timestamps must not weaken valid duplicate vetoes."""
+    from copy import deepcopy
+
+    source = _linked_eval_rows()
+    conflict = deepcopy(source[2])
+    conflict["actor_id"] = "other-actor"
+    for insertion in (2, 3):
+        with_conflict = deepcopy(source)
+        with_conflict.insert(insertion, deepcopy(conflict))
+        for accepting_candidates in (False, True):
+            result = predict_linked_items(
+                _linked_eval_case(with_conflict, source),
+                accept_candidates=accepting_candidates,
+            )
+            assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
+                frozenset({"a1", "a2"}), frozenset({"b2", "b3"})
+            }, (insertion, accepting_candidates)
+            assert result["unassigned_event_ids"] == ["b1"]
