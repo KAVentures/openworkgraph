@@ -35,6 +35,7 @@ import re
 from typing import Any
 
 from .record_case_lanes import _EVENT_ID, _RESOURCE, _identity, _stamp, _token
+from .reconstruction_segments import observed_activity_segments
 
 _TRANSFER = re.compile(r"^[A-Za-z0-9:._-]{1,120}$")
 _TAB = re.compile(r"^[A-Za-z0-9:._-]{1,160}$")
@@ -571,6 +572,7 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             item_of[event_id] = item_id
         refs = sorted({rows[i]["ref"] for i in ids if rows[i]["ref"]})
         basis = dict(sorted(bases[linked["root"](ids[0])].items()))
+        segments = observed_activity_segments(linked["rows"], ids)
         items.append({
             "item_id": item_id,
             "event_ids": ids[:_MAX_EVENT_IDS],
@@ -582,6 +584,7 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             "last_observed_at": rows[ids[-1]]["observed_at"],
             "observed_steps": [{"observed_at": rows[i]["observed_at"], "action": rows[i]["action"],
                                 "source": rows[i]["source"]} for i in ids[:24]],
+            **segments,
             "link_basis": basis,
             "cross_record_join": len(refs) > 1,
             "confidence": min(_CONFIDENCE[name] for name in basis) if basis else _CONFIDENCE["same_record"],
@@ -623,6 +626,9 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             "merged_bases": sorted(_CONFIDENCE),
             "candidate_only_bases": sorted(_CANDIDATE_CONFIDENCE),
             "time_alone_never_links": True,
+            "activity_segments_are_observed_episodes_not_tasks": True,
+            "interruption_requires_same_scope_foreign_record": True,
+            "clock_gaps_alone_do_not_split_activity_segments": True,
             "ephemeral_signals_scope": "exact_organization_actor_device_session",
             "missing_scope_is_wildcard": False,
             "multiplexed_clipboard_transfer_is_unmerged": True,
