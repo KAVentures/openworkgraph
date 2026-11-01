@@ -459,3 +459,51 @@ def test_linked_projection_refuses_bool_integer_equality_as_transfer_provenance(
     assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
         frozenset({"a1", "a2"}), frozenset({"b2", "b3"})
     }
+
+
+def test_record_lane_projection_never_resurrects_explicitly_revoked_source():
+    # A stale visible/export snapshot is not permission to rebuild source lanes
+    # after the authoritative source list was deleted or revoked.
+    ref = "owg:r:" + "a" * 32
+    rows = [
+        _lane_projection_event("first", ref, "2026-10-20T10:00:00Z"),
+        _lane_projection_event("second", ref, "2026-10-20T10:01:00Z"),
+    ]
+    for revoked in ([], None):
+        case = _lane_projection_case(rows)
+        case["source_events"] = revoked
+        result = predict_record_lanes(case)
+        assert result["workflows"] == []
+        assert result["unassigned_event_ids"] == ["first", "second"]
+
+    # Backward compatibility: only ABSENCE of source_events means the caller
+    # supplied a legacy presented-only case, not an explicit revocation.
+    legacy = _lane_projection_case(rows)
+    del legacy["source_events"]
+    result = predict_record_lanes(legacy)
+    assert [lane["event_ids"] for lane in result["workflows"]] == [
+        ["first", "second"]
+    ]
+
+
+def test_linked_projection_never_reconstructs_revoked_source_even_in_candidate_mode():
+    source = _linked_eval_rows()
+    case = _linked_eval_case(source, source)
+    visible_ids = [row["event_id"] for row in case["presented_evidence"]]
+    for revoked in ([], None):
+        for accepting_candidates in (False, True):
+            revoked_case = {**case, "source_events": revoked}
+            result = predict_linked_items(
+                revoked_case, accept_candidates=accepting_candidates
+            )
+            assert result["workflows"] == []
+            assert result["unassigned_event_ids"] == visible_ids
+
+    # A missing source key is the old presented-only contract, and must still
+    # retain independently visible same-record evidence and transfer links.
+    legacy = {key: value for key, value in case.items() if key != "source_events"}
+    result = predict_linked_items(legacy)
+    assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
+        frozenset(visible_ids)
+    }
+    assert result["unassigned_event_ids"] == []
