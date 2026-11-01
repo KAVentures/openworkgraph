@@ -185,6 +185,17 @@ const path=require('node:path');
    assert.equal(await copyShadow.isDisabled(),true,'reviewed group alone does not prove current source support');
    await page.route('**/v1/workflow-evidence?*',route=>route.fulfill({
      status:200,contentType:'application/json',
+     body:JSON.stringify({selector:{execution_ids:['execution:other_ref'],selected_execution_count:1},
+       structural_alignment:{high_support_steps:[]},provenance:{source_limit_reached:false}})
+   }));
+   await page.getByRole('button',{name:'Review selected examples',exact:true}).click();
+   await page.locator('#owgExplorerEvidence h4').waitFor();
+   await page.getByRole('button',{name:'Review safe agent handoff',exact:true}).click();
+   await page.locator('#owgExplorerHandoffConfirmed').check();
+   assert.equal(await copyShadow.isDisabled(),true,'a successful HTTP response with unrelated refs is not inspected support');
+   await page.unroute('**/v1/workflow-evidence?*');
+   await page.route('**/v1/workflow-evidence?*',route=>route.fulfill({
+     status:200,contentType:'application/json',
      body:JSON.stringify({selector:{execution_ids:['execution:synthetic_ref'],selected_execution_count:1},
        structural_alignment:{high_support_steps:[]},provenance:{source_limit_reached:false}})
    }));
