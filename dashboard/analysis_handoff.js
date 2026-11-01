@@ -522,6 +522,22 @@
       : d.window.scope === 'all'
         ? 'All retained history can change as events arrive, are deleted, or become inaccessible. The downloaded file may differ from this preview; review it before sharing.'
         : 'The selected date bounds are fixed, but retained events and access can change. The downloaded file may differ from this preview; review it before sharing.';
+    // Daily plans are useful for workflow review only when ordinary work was
+    // observed. Health-only dates are diagnostics; zero rows cannot support
+    // instructions to an AI to discover repeated work or automation.
+    const dateCoverageTitle = ordinaryRows > 0
+      ? 'Analyze a large history in smaller parts'
+      : diagnosticOnly ? 'Review capture-health diagnostic dates' : 'Review missing date coverage';
+    const dateCoverageIntro = ordinaryRows > 0
+      ? 'Ask your AI to process one day at a time, follow every page, and keep track of what it has examined. Repeated-work maps are optional.'
+      : diagnosticOnly
+        ? 'The listed dates contain capture-health/gap diagnostics only, not workflow steps. They cannot substantiate repeated-work maps or automation opportunities.'
+        : 'No recorded events are available to analyze. Missing dates do not establish inactivity, complete capture or current consent.';
+    const dateCoverageDownload = d.canonical_rows
+      ? diagnosticOnly
+        ? 'The optional diagnostic download contains the full selected period; inspect it locally before sharing.'
+        : 'The file download still contains the full selected period.'
+      : 'No evidence package is available for this zero-event selection; only the explanatory request can be copied.';
     const dailyChunks = d.analysis_plan?.date_chunks;
     const dailyBreakdown = !Array.isArray(dailyChunks)
       ? '<p>No daily breakdown was provided; date coverage is unknown.</p>'
@@ -554,7 +570,7 @@
         <p>${esc(latestWorkStatement)} Capture health and gaps are shown separately; they do not confirm the recorder is running.</p>
         <p>${esc(localRead)} Hosted AI availability must be checked separately: it only sees previously shared evidence. Preparing or downloading a local file does not grant AI history access.</p>
       </div>
-      <details><summary>Analyze a large history in smaller parts</summary><p>Ask your AI to process one day at a time, follow every page, and keep track of what it has examined. Repeated-work maps are optional. ${d.canonical_rows?'The file download still contains the full selected period.':'No evidence package is available for this zero-event selection; only the explanatory request can be copied.'}</p>${dailyBreakdown}${d.analysis_plan?.more_dates_not_listed?'<p>Only the first 31 dates are listed. Continue through the remaining selected dates.</p>':''}</details>
+      <details><summary>${esc(dateCoverageTitle)}</summary><p>${esc(dateCoverageIntro)} ${esc(dateCoverageDownload)}</p>${dailyBreakdown}${d.analysis_plan?.more_dates_not_listed?'<p>Only the first 31 dates are listed. Continue through the remaining selected dates.</p>':''}</details>
       <details><summary>Preview redacted context examples</summary><p>${esc(focusExampleSummary)}</p><ul>${focusExampleItems}</ul><p>Filtering is best effort; inspect any downloaded package before sharing it.</p></details>
       <label style="display:flex;gap:8px;margin:12px 0"><input id="analysisDetailed" type="checkbox" ${d.canonical_rows?'':'disabled'}>Include detailed chronological evidence (raw local event rows, more labels and context)</label>
       <p>Copy request copies only the prepared request text. Download saves a separate local evidence file; an AI will not receive that file unless you inspect and attach or share it yourself.</p>
