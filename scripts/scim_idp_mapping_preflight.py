@@ -309,7 +309,8 @@ def assess(mapping: Any) -> dict:
                     "Declared Group members require current provider-scoped OWG User IDs; verify IdP member-value resolution with disposable Users")
         if group_patch is not None:
             selectors = [value for value in group_patch
-                         if _GROUP_MEMBER_SELECTOR.fullmatch(value) is not None]
+                         if (_GROUP_MEMBER_SELECTOR.fullmatch(value) is not None
+                             and _supported_group_patch_path(value))]
             if selectors:
                 add("caution", "group_member_selector_remove_only", "groups.patch_attributes",
                     "Shipped Group member selectors support removal only; verify actual PATCH verbs and current ETags")
