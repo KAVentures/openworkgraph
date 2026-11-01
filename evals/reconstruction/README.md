@@ -240,6 +240,20 @@ scenario, including diagnostic candidate-acceptance mode. Only an *absent*
 Synthetic tests exercise both cases; they do not establish end-to-end
 revocation propagation, live source deletion or held-out reconstruction quality.
 
+Visible exact-record lane evidence now has a **single-instant event-ID rule**.
+An event ID can be admitted to a source-record lane only if every presented
+occurrence has the same normalized UTC observation instant and the same public
+resource identity. Equivalent timezone offsets (including fractional seconds)
+are valid replays. A second distinct instant, malformed timestamp or changed
+identity permanently withholds that ID, even if one visible occurrence matches
+the first source-admitted row. Source-only duplicate rows remain governed by
+the shipped first-valid admission behavior: a later suppressed source duplicate
+does not by itself make a uniquely presented event ambiguous. This prevents a
+reused visible ID from lending one event's evidence to a different instant or
+record, without changing production grouping or inventing a time-only join.
+Synthetic regression tests exercise both orders, malformed late replays and
+offset-equivalent duplicates; they are not a held-out score or native CI proof.
+
 Duplicate replay admission is now bounded by **unique literal event IDs** rather
 than the number of repeated visible/source observations. For each ID, the
 evaluator retains one first-valid source row, one first visible projection and
