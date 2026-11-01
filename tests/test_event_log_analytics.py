@@ -392,6 +392,47 @@ def test_root_cause_outcome_kinds_and_validation():
             analytics.root_cause(log_id, **kwargs)
 
 
+@pytest.mark.parametrize("value", [
+    0, -1, 10 ** 9 + 1, 1.5, 5.0, float("nan"),
+    float("inf"), float("-inf"), "5", "bad", True, False, [], {},
+])
+@pytest.mark.parametrize("outcome", ["duration_over", "rework"])
+def test_root_cause_direct_threshold_rejects_invalid_values_before_query(
+        value, outcome, monkeypatch):
+    """Even a threshold unused by rework must not be silently coerced."""
+    monkeypatch.setattr(workspace, "_query", lambda *args: pytest.fail("invalid threshold reached query"))
+    with pytest.raises(workspace.EventLogWorkspaceError, match="threshold_seconds must be an integer"):
+        analytics.root_cause("unused-synthetic-log", outcome, threshold_seconds=value)
+
+
+@pytest.mark.parametrize("value", [
+    1.5, 5.0, float("nan"), float("inf"), float("-inf"),
+    "5", "bad", None, True, False, [], {},
+])
+def test_root_cause_direct_limit_rejects_nonintegers_before_query(value, monkeypatch):
+    monkeypatch.setattr(workspace, "_query", lambda *args: pytest.fail("invalid limit reached query"))
+    with pytest.raises(workspace.EventLogWorkspaceError, match="limit must be an integer"):
+        analytics.root_cause("unused-synthetic-log", "rework", limit=value)
+
+
+def test_root_cause_direct_integer_boundaries_and_limit_clamp(monkeypatch):
+    """Preserve historical integer clamping, and accept REST threshold bounds."""
+    calls = []
+    def checked_query(log_id, case_type, fn):
+        calls.append((log_id, case_type, fn))
+        return "validated-without-database"
+    monkeypatch.setattr(workspace, "_query", checked_query)
+    for threshold in (1, 10 ** 9):
+        for limit in (-10, 0, 1, 30, 100, 101, 10 ** 10):
+            assert analytics.root_cause("synthetic", "duration_over",
+                                        threshold_seconds=threshold, limit=limit) == "validated-without-database"
+    assert analytics.root_cause("synthetic", "rework") == "validated-without-database"
+    assert analytics.root_cause("synthetic", "rework", threshold_seconds=1) == "validated-without-database"
+    assert len(calls) == 16
+    with pytest.raises(workspace.EventLogWorkspaceError, match="required for a duration outcome"):
+        analytics.root_cause("synthetic", "duration_over")
+
+
 def test_root_cause_uses_object_attributes_from_ocel():
     objects, events = [], []
     for i in range(40):
