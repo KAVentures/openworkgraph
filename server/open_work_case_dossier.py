@@ -172,7 +172,8 @@ def compose_reviewed_case_dossier(
             })
     else:
         raw_reason = source_context.get("reason")
-        reason = raw_reason if raw_reason in _UNKNOWN_REASONS else "source_unavailable"
+        reason = (raw_reason if isinstance(raw_reason, str) and
+                  raw_reason in _UNKNOWN_REASONS else "source_unavailable")
     return {
         "format": "openworkgraph.local-reviewed-case-dossier.v1",
         **admitted,
