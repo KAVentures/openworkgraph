@@ -247,3 +247,31 @@ def test_conflicting_scan_identity_and_provider_claims_are_rejected(local, monke
                         lambda ref, **kwargs: _reported(A))
     assert client.post(DOSSIER, headers=owner,
                        json=_request(C, saved[C])).status_code == 422
+
+
+@pytest.mark.parametrize("failure", [ValueError("private provider failure"), OSError("private path")])
+def test_source_reader_failure_returns_unknown_without_private_details(local, monkeypatch, failure):
+    client, owner = TestClient(app), _owner()
+    saved = _chain(client, owner)
+    def scan(_ref, **_options):
+        raise failure
+    monkeypatch.setattr(routes, "stripe_open_work_case_context", scan)
+    response = client.post(DOSSIER, headers=owner, json=_request(C, saved[C]))
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["source_reported_status"]["availability"] == "unknown"
+    assert result["source_reported_status"]["reason"] == "source_unavailable"
+    assert result["customer_outcome_verified"] is False
+    assert "private" not in response.text
+
+
+def test_malformed_unknown_reason_is_minimized(local, monkeypatch):
+    client, owner = TestClient(app), _owner()
+    saved = _chain(client, owner)
+    def scan(ref, **_options):
+        return _unknown(ref, ["private", "untrusted"])
+    monkeypatch.setattr(routes, "stripe_open_work_case_context", scan)
+    response = client.post(DOSSIER, headers=owner, json=_request(C, saved[C]))
+    assert response.status_code == 200, response.text
+    assert response.json()["source_reported_status"]["reason"] == "source_unavailable"
+    assert "private" not in response.text
