@@ -12,7 +12,7 @@ from collections import defaultdict
 from evals.reconstruction.ablations import ablate_event
 from evals.reconstruction.baselines import score_baselines
 from evals.reconstruction.fixtures import load_cases
-from evals.reconstruction.owg_native import _canonical_eval_json, _ref, predict_linked_items, predict_record_lanes, score_record_lanes
+from evals.reconstruction.owg_native import _canonical_eval_json, _linked_projection, _visible_linked_source_events, _ref, predict_linked_items, predict_record_lanes, score_record_lanes
 from evals.reconstruction.prepare import split_cases
 
 
@@ -408,6 +408,43 @@ def _linked_eval_case(source, visible):
     return _lane_projection_case(
         source, [rich_evidence_row(event, include_identity=False) for event in visible]
     )
+
+
+def test_linked_projection_json_native_shape_retains_real_members_and_rejects_conflicts():
+    """Strict duplicate JSON validation must not reject our own projections."""
+    from copy import deepcopy
+
+    source = _linked_eval_rows()
+    case = _linked_eval_case(source, source)
+    assert _canonical_eval_json(("not", "json")) is None
+    assert all(_linked_projection(row) is not None
+               for row in case["presented_evidence"])
+    assert [row["event_id"] for row in _visible_linked_source_events(case)] == [
+        "a1", "a2", "b1", "b2", "b3"
+    ]
+    for accepting_candidates in (False, True):
+        result = predict_linked_items(case, accept_candidates=accepting_candidates)
+        assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
+            frozenset({"a1", "a2", "b1", "b2", "b3"})
+        }
+        assert result["unassigned_event_ids"] == []
+
+    # A conflicting duplicate source identity still vetoes the bridge,
+    # rather than allowing an apparently successful transfer.
+    conflict = deepcopy(source[2])
+    conflict["actor_id"] = "another-actor"
+    conflicted = _linked_eval_case([*source, conflict], source)
+    assert [row["event_id"] for row in _visible_linked_source_events(conflicted)] == [
+        "a1", "a2", "b2", "b3"
+    ]
+    for accepting_candidates in (False, True):
+        result = predict_linked_items(
+            conflicted, accept_candidates=accepting_candidates
+        )
+        assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
+            frozenset({"a1", "a2"}), frozenset({"b2", "b3"})
+        }
+        assert result["unassigned_event_ids"] == ["b1"]
 
 
 def test_linked_projection_source_only_paste_cannot_bridge_visible_records():
