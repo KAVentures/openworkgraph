@@ -83,7 +83,8 @@ def test_duplicate_equal_rows_dedupe_but_conflicting_same_revision_refused():
     b'{"result":[],"result":[]}', b'{"result":NaN}', b'{"result":{}}',
     b'{"result":[null]}', b'{"result":[]}' + b" " * MAX_BYTES,
     b'{"result":[' + b"[" * 1500,
-])
+], ids=["duplicate-key", "nonfinite", "wrong-shape", "null-row",
+        "oversized-body", "deeply-nested"])
 def test_malformed_and_oversized_provider_responses_fail_closed(raw):
     with pytest.raises(StagingError):
         project_page(scope(), raw)
