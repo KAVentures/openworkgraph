@@ -166,8 +166,14 @@ def kpis(log_id: str, case_type: str | None = None, sla_seconds: int | None = No
     automation = list(dict.fromkeys(r for r in (automation_resources or []) if r))
     if len(automation) > MAX_AUTOMATION_RESOURCES or any(len(r) > 200 for r in automation):
         raise EventLogWorkspaceError("too many or too long automation resource names")
-    if sla_seconds is not None and not 0 < int(sla_seconds) <= 10 ** 9:
-        raise EventLogWorkspaceError("sla_seconds must be a positive number of seconds")
+    # The REST route enforces an integer SLA, but direct integrations must not
+    # silently truncate fractional seconds, coerce strings/bools, or leak raw
+    # Python conversion errors before the saved-log query.
+    if sla_seconds is not None and (
+        not isinstance(sla_seconds, int) or isinstance(sla_seconds, bool)
+        or not 1 <= sla_seconds <= 10 ** 9
+    ):
+        raise EventLogWorkspaceError("sla_seconds must be an integer between 1 and 1000000000")
 
     def run(conn):
         restrict(conn, chosen, log_id)
