@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -174,14 +175,68 @@ def predict_record_lanes(case: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_MAX_EVAL_JSON_NODES = 10_000
+_MAX_EVAL_JSON_CHARS = 65_536
+
+
 def _canonical_eval_json(value: Any) -> str | None:
-    """Bounded, type-preserving JSON comparison for evaluator evidence claims."""
+    """Bound duplicate claims before encoding; never coerce non-JSON keys.
+
+    A post-serialization length check alone permits unbounded temporary
+    allocations and silently converts numeric object keys to strings. Walk
+    only JSON-shaped data with a fixed node/string budget, rejecting repeated
+    container objects (including cycles), unsupported types and nonfinite
+    numbers. This is evaluator-only, conservative evidence admission.
+    """
+    pending = [value]
+    seen_containers: set[int] = set()
+    nodes = 0
+    raw_chars = 0
+    while pending:
+        node = pending.pop()
+        nodes += 1
+        if nodes > _MAX_EVAL_JSON_NODES:
+            return None
+        if type(node) is dict:
+            marker = id(node)
+            if marker in seen_containers:
+                return None
+            seen_containers.add(marker)
+            if nodes + len(pending) + 2 * len(node) > _MAX_EVAL_JSON_NODES:
+                return None
+            for key, item in node.items():
+                if type(key) is not str:
+                    return None
+                raw_chars += len(key)
+                pending.append(item)
+        elif type(node) is list:
+            marker = id(node)
+            if marker in seen_containers:
+                return None
+            seen_containers.add(marker)
+            if nodes + len(pending) + len(node) > _MAX_EVAL_JSON_NODES:
+                return None
+            pending.extend(node)
+        elif type(node) is str:
+            raw_chars += len(node)
+        elif type(node) is float:
+            if not math.isfinite(node):
+                return None
+        elif type(node) is int:
+            # A huge integer can exhaust the decimal conversion budget even
+            # when it occupies only one node.
+            if node.bit_length() > 10_000:
+                return None
+        elif type(node) not in (bool, type(None)):
+            return None
+        if raw_chars > _MAX_EVAL_JSON_CHARS:
+            return None
     try:
         encoded = json.dumps(value, sort_keys=True, separators=(",", ":"),
                              ensure_ascii=True, allow_nan=False)
     except (TypeError, ValueError, OverflowError, RecursionError):
         return None
-    return encoded if len(encoded) <= 65536 else None
+    return encoded if len(encoded) <= _MAX_EVAL_JSON_CHARS else None
 
 
 def _linked_projection(event: dict[str, Any]) -> str | None:
