@@ -3090,6 +3090,12 @@ test('handoff grades no evidence, health diagnostics and unverified ordinary wor
       assert.match(h.modalSubtitle, subtitle);
       assert.match(h.modalHtml, grade);
       assert.match(h.modalHtml, downloadLabel);
+      if (name === 'ordinary observations') {
+        assert.match(h.modalHtml, /An AI may help review observations after you explicitly share evidence/);
+      } else {
+        assert.match(h.modalHtml, /Do not infer a workflow from missing observations or capture-health diagnostics/);
+        assert.doesNotMatch(h.modalHtml, /An AI may help review observations/);
+      }
       assert.doesNotMatch(h.modalHtml, /Discover opportunities from recorded work/);
       assert.match(h.modalHtml, /Selected local evidence preview — not sent to an AI/);
       assert.equal(h.modal['#analysisDownload'].disabled, name === 'no recorded events');
