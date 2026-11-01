@@ -57,13 +57,22 @@ def compose_portfolio_status(
         or not 1 <= len(admitted) <= _MAX_SELECTED
         or len(admitted) != len(contexts)):
         raise CaseDeclarationError("invalid bounded portfolio projection")
+    selected_refs = {item["work_item_ref"] for item in admitted}
+    if len(selected_refs) != len(admitted):
+        raise CaseDeclarationError("duplicate selected portfolio case")
     statuses = []
     for item, context in zip(admitted, contexts):
+        unscanned = sum(
+            prerequisite["work_item_ref"] not in selected_refs
+            for prerequisite in item["declared_prerequisites"]
+        )
         minimized = compose_reviewed_case_dossier(item, context)
         statuses.append({
             "work_item_ref": item["work_item_ref"],
             "owner_declaration": item["owner_declaration"],
             "declared_prerequisite_count": item["declared_prerequisite_count"],
+            "unscanned_prerequisite_count": unscanned,
+            "all_declared_prerequisites_selected": unscanned == 0,
             # Only selected cases are scanned. A prerequisite that also appears
             # as another selected case is not a claim of atomic provider state.
             "prerequisite_status_not_implicitly_verified": True,
