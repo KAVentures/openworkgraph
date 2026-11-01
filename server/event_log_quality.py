@@ -284,9 +284,12 @@ def quality(log_id: str) -> dict[str, Any]:
                                if info.get('source_identity') else {})
         finally:
             conn.close()
+    from . import event_log_quality_trends as quality_trends
     present = {r["batch"] for r in reports}
+    missing_reports = [b for b in batches if b not in present]
     # Logs imported before reports existed, or whose report could not be written, have none.
-    return {"log": info, "reports": reports, "batches_without_report": [b for b in batches if b not in present],
+    return {"log": info, "reports": reports, "batches_without_report": missing_reports,
+            "batch_trends": quality_trends.build(reports, missing_reports),
             "current": {"content_sha256": digest, "content_sha256_v2": digest_v2,
                         "diagnostics": current, **identity_digest, **relationship_metadata,
                         "completeness": {"historical_completeness": "unknown", "note": COMPLETENESS_NOTE}},
