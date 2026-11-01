@@ -41,6 +41,7 @@ from .reconstruction_switches import observed_work_switches
 from .reconstruction_surfaces import observed_surface_runs
 from .reconstruction_transfer_episodes import disjoint_directional_transfer_episodes
 from .reconstruction_link_proof import directional_transfer_witness, observed_record_link_evidence
+from .reconstruction_tab_focus import bracketed_multiplexed_tab_focus
 
 _TRANSFER = re.compile(r"^[A-Za-z0-9:._-]{1,120}$")
 _TAB = re.compile(r"^[A-Za-z0-9:._-]{1,160}$")
@@ -48,7 +49,7 @@ _MAX_ITEMS = 50
 _MAX_EVENT_IDS = 50
 _MAX_CANDIDATES = 50
 _MAX_DUPLICATE_PAYLOAD_NODES = 10_000
-_CONFIDENCE = {"same_record": 0.95, "clipboard_transfer": 0.85, "same_tab_single_record": 0.7}
+_CONFIDENCE = {"same_record": 0.95, "clipboard_transfer": 0.85, "same_tab_single_record": 0.7, "same_tab_bracketed_record": 0.72}
 _CANDIDATE_CONFIDENCE = {"same_tab_multiplexed": 0.4, "same_tab_unreferenced": 0.35, "surface_continuity": 0.3}
 
 
@@ -524,6 +525,20 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
                 if len(targets) < 2:
                     targets.add(sole_ref)
 
+    # A multiplexed tab can still contain a strictly observed A -> loose -> A
+    # focus span. Compute all proposed targets against frozen post-transfer
+    # components *before* tab joins, so a competing single-record tab or
+    # second focus claim cannot win merely through iteration order.
+    multiplexed_tabs = {
+        key for key, tab_rows in by_tab.items()
+        if key not in tainted_tabs and len({r["ref"] for r in tab_rows if r["ref"]}) > 1
+    }
+    focus_proposals = bracketed_multiplexed_tab_focus(rows, multiplexed_tabs)
+    for _anchor, loose_id, focus_ref in focus_proposals:
+        targets = tab_targets[pre_tab_root[loose_id]]
+        if len(targets) < 2:
+            targets.add(focus_ref)
+
     candidates: list[dict[str, Any]] = []
     tab_component_conflicts = 0
     for token_key, tab_rows in by_tab.items():
@@ -567,6 +582,20 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
             for previous, row in zip(loose, loose[1:]):
                 candidates.append({"event_id": row["event_id"], "toward_event_id": previous["event_id"],
                                    "relation": "same_tab_unreferenced"})
+    bracketed_tab_focus_links = 0
+    bracketed_tab_focus_conflicts = 0
+    for anchor_id, loose_id, focus_ref in focus_proposals:
+        loose_root = pre_tab_root[loose_id]
+        anchor_root = pre_tab_root[anchor_id]
+        if (component_refs.get(loose_root, set()) - {focus_ref}
+                or component_refs.get(anchor_root, set()) - {focus_ref}
+                or len(tab_targets.get(loose_root, set())) > 1):
+            bracketed_tab_focus_conflicts += 1
+            continue
+        if union.find(anchor_id) != union.find(loose_id):
+            join([anchor_id, loose_id], "same_tab_bracketed_record")
+            bracketed_tab_focus_links += 1
+
     for index, row in enumerate(rows):
         if (row["reference_tainted"] or row["ephemeral_claim_tainted"] or
                 row["ref"] or row["tab"] or row["transfer"] or not row["app"]):
@@ -587,7 +616,9 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
             "recovered_transfer_groups": recovered_transfer_groups,
             "recovered_transfer_episodes": recovered_transfer_episodes,
             "inconsistent_transfer_direction_groups": inconsistent_transfer_direction_groups,
-            "tab_component_conflicts": tab_component_conflicts}
+            "tab_component_conflicts": tab_component_conflicts,
+            "bracketed_tab_focus_links": bracketed_tab_focus_links,
+            "bracketed_tab_focus_conflicts": bracketed_tab_focus_conflicts}
 
 
 def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> dict[str, Any]:
@@ -677,6 +708,8 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
         "recovered_disjoint_clipboard_transfer_episodes": linked["recovered_transfer_episodes"],
         "inconsistent_clipboard_transfer_direction_groups": linked["inconsistent_transfer_direction_groups"],
         "ambiguous_tab_component_attachments_suppressed": linked["tab_component_conflicts"],
+        "observed_bracketed_tab_focus_links": linked["bracketed_tab_focus_links"],
+        "ambiguous_bracketed_tab_focus_attachments_suppressed": linked["bracketed_tab_focus_conflicts"],
         "link_contract": {
             "merged_bases": sorted(_CONFIDENCE),
             "candidate_only_bases": sorted(_CANDIDATE_CONFIDENCE),
@@ -703,6 +736,9 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             "reused_clipboard_token_only_links_disjoint_explicit_episodes": True,
             "explicit_clipboard_direction_conflicts_are_unmerged": True,
             "competing_tab_component_records_are_unmerged": True,
+            "multiplexed_tab_focus_requires_global_two_sided_same_record_evidence": True,
+            "multiplexed_tab_focus_requires_complete_capture_scope": True,
+            "multiplexed_tab_focus_never_uses_elapsed_time_as_link_evidence": True,
             "labels_titles_urls_and_clipboard_contents_read": False,
             "linked_items_are_tasks": False,
             "ask_when_ambiguous": True,
