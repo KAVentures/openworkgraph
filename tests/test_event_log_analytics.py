@@ -307,6 +307,33 @@ def test_kpi_direct_sla_accepts_exact_integer_bounds_and_none(monkeypatch):
         assert analytics.kpis("unused-synthetic-log", sla_seconds=value) == "validated-without-database"
 
 
+
+@pytest.mark.parametrize("bad", [
+    "bot", b"bot", 17, True, {"bot": True}, ("bot",),
+    ["bot", None], ["bot", 17], ["bot", []], [["bot"]], [False], [b"bot"],
+])
+def test_kpi_direct_automation_resources_rejects_malformed_names_before_query(bad, monkeypatch):
+    """Malformed direct-call resources must not become characters or Python exceptions."""
+    monkeypatch.setattr(workspace, "_query", lambda *args: pytest.fail("invalid resources reached query"))
+    with pytest.raises(workspace.EventLogWorkspaceError, match="automation_resources must be a list of strings"):
+        analytics.kpis("unused-synthetic-log", automation_resources=bad)
+
+
+def test_kpi_direct_automation_resources_preserves_valid_literal_names(monkeypatch):
+    """REST-shaped lists, duplicates, empty names and whitespace retain their query path."""
+    calls = []
+    def checked_query(log_id, case_type, fn):
+        calls.append((log_id, case_type, fn))
+        return "validated-without-database"
+    monkeypatch.setattr(workspace, "_query", checked_query)
+    for resources in (None, [], ["bot"], ["", "bot", "bot"],
+                      [" bot ", "bot", " bot "], ["x" * 200],
+                      [f"resource-{i}" for i in range(50)]):
+        assert analytics.kpis("synthetic", automation_resources=resources) == "validated-without-database"
+    assert len(calls) == 7
+
+
+
 def test_kpis_throughput_rework_sla_and_declared_automation():
     log_id = _log()
     result = analytics.kpis(log_id, sla_seconds=4 * 3600, automation_resources=["bot"])
