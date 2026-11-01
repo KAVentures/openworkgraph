@@ -835,9 +835,10 @@ snapshot or an atomic cross-process revocation fence.
 `openworkgraph.local-reviewed-case-portfolio.v1` returns selected opaque
 case refs, owner-declared goal/expected-outcome codes, prerequisite counts,
 separate source-reported `open` or `unknown` states and timestamps, and
-bounded retained OWG reference/count summaries. Unselected prerequisites
-remain unscanned; the response explicitly marks them as **not implicitly
-verified**. No native IDs, customer data, amounts, raw timeline, account
+bounded retained OWG reference/count summaries. Each case explicitly reports
+`unscanned_prerequisite_count` and `all_declared_prerequisites_selected`;
+prerequisites not selected remain unscanned, and even selected ones are
+**not implicitly source-verified as business dependencies**. No native IDs, customer data, amounts, raw timeline, account
 scope or edit tokens are returned. No result is persisted, automatically
 refreshed or exposed to an agent. Provider `open` does not prove a
 business obligation; `unknown` does not mean paid or completed. Expected
