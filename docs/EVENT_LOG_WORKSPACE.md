@@ -460,6 +460,27 @@ order), so a case returning for a later step is not overtaken by newer arrivals;
 re-entrant routes are checked against an independent first-come, first-served reference. The
 dashboard's simulation form defines one shared pool.
 
+#### Priority classes
+
+A scenario can serve some cases first. For example:
+
+```json
+{"priorities": [{"name": "urgent", "share": 0.3, "rank": 0}, {"name": "standard", "share": 0.7, "rank": 1}]}
+```
+
+- **Classes:** 2 to 5 classes, with shares adding up to 1 and ranks from 0 to 9, of which at least two differ.
+  Each simulated case belongs to one class, drawn from a random number of its own, so adding classes never
+  changes any case's arrival or route.
+- **Queueing:** every queue, including shared pools, serves the lowest rank first and first come, first served
+  within a rank. Priority is non-preemptive: work in progress is never interrupted.
+- **Baseline:** the measured baseline keeps one first-come, first-served queue.
+- **Results:** a row per class with its share, rank, median and 90th-percentile cycle time and mean wait per
+  step. The assumptions say that the scenario models priorities.
+- **Check:** one server at load 0.8 with 30% urgent cases is compared with Cobham's non-preemptive formulas
+  (urgent cases wait 0.84 h, the others 4.21 h). The overall mean wait stays at the first-come, first-served
+  3.2 h, because reordering a work-conserving queue keeps it.
+- **Dashboard:** the simulation form takes classes as `urgent 30% 0, standard 70% 1`.
+
 #### Seasonal arrivals
 
 Without a pattern, cases arrive at a steady rate around the clock. An `arrival_pattern` makes the rate

@@ -1194,6 +1194,17 @@
   }
 
   // One shared resource pool from form values, or null when no pool is named; throws a readable error.
+  // Priority classes from "urgent 30% 0, standard 70% 1": name, share and rank (0 served first); empty is none.
+  function simPriorities(text){
+    const items=String(text||'').split(',').map(x=>x.trim()).filter(Boolean);
+    if(!items.length)return null;
+    if(items.length<2)throw new Error('Enter at least two priority classes, such as "urgent 30% 0, standard 70% 1".');
+    return items.map(item=>{
+      const m=/^(.+?)\s+(\d+(?:\.\d+)?)%\s+(\d)$/.exec(item);
+      if(!m)throw new Error('Write each priority class as a name, a share in percent and a rank from 0 to 9, such as "urgent 30% 0".');
+      return {name:m[1].trim(),share:Math.round(Number(m[2])*1e4)/1e6,rank:Number(m[3])};
+    });
+  }
   function simPool(values){
     const name=String(values.name||'').trim();
     if(!name)return null;
@@ -1356,7 +1367,8 @@
         const poolSize=input('owgEventLogSimPoolResources','number');poolSize.min='1';poolSize.step='1';poolSize.value='2';
         const poolActivities=select('owgEventLogSimPoolActivities',Object.keys(cal.activities||{}).map(a=>[a,a]));poolActivities.multiple=true;poolActivities.size=3;
         const poolRow=el('div',null,'row');poolRow.style.alignItems='end';
-        poolRow.append(field('Shared pool in the scenario (optional)',poolName),field('People in the pool',poolSize),field('Activities the pool does',poolActivities));
+        const priorityText=input('owgEventLogSimPriorities','text','e.g. urgent 30% 0, standard 70% 1');priorityText.maxLength=300;
+        poolRow.append(field('Shared pool in the scenario (optional)',poolName),field('People in the pool',poolSize),field('Activities the pool does',poolActivities),field('Priority classes in the scenario (optional; rank 0 is served first)',priorityText));
         const run=button('Run simulation','secondary');run.id='owgEventLogSimRun';
         const routeKind=select('owgEventLogSimRouting',ROUTINGS);
         const pathsField=field('Routing: weighted lines or JSON for exact labels and weights',paths);
@@ -1372,6 +1384,8 @@
             if(routeKind.value==='transitions'){scenario.routing='transitions';delete scenario.paths;}
             const pool=simPool({name:poolName.value,resources:poolSize.value,activities:[...poolActivities.selectedOptions].map(o=>o.value)});
             if(pool)scenario.pools=pool;
+            const classes=simPriorities(priorityText.value);
+            if(classes)scenario.priorities=classes;
             const calValues={days:days.value,from:from.value,to:to.value,timezone:zone.value,holidays:holidays.value};
             const calendar=simCalendar(calValues);
             const pattern=simArrivals({mode:arrivalMode.value,timezone:zone.value,hourly:hourly.value,daily:daily.value});
@@ -1408,6 +1422,7 @@
               ...(r.scenario.arrival_pattern?[el('div','Arrivals: '+arrivalText(r.scenario.arrival_pattern)+'. The arrival rate you set stays the long-run average.','muted')]:[]),
               ...(r.baseline_calendar||r.scenario.calendar?[el('div','Working time: baseline '+calendarText(r.baseline_calendar)+'; scenario '+calendarText(r.scenario.calendar)+'. Utilization is measured against working time.','muted')]:[]),
               table(['Activity','Resources','Minutes','Utilization','Mean wait','90th percentile wait'],r.result.activities.map(a=>[a.activity+(a.pool?' ('+a.pool+')':''),a.resources,a.minutes,pct(a.utilization),duration(a.mean_wait_seconds),duration(a.p90_wait_seconds)])),
+              ...(r.result.priority_classes?[table(['Priority class','Share','Rank','Median cycle time','90th percentile','Mean wait per step'],r.result.priority_classes.map(c=>[c.name,pct(c.share),c.rank,duration(c.cycle_time_seconds.p50),duration(c.cycle_time_seconds.p90),duration(c.mean_wait_seconds_per_step)]))]:[]),
               ...(r.result.pools?[table(['Shared pool','People','Activities','Utilization','Mean wait','90th percentile wait'],r.result.pools.map(p=>[p.pool,p.resources,p.activities.join(', '),pct(p.utilization),duration(p.mean_wait_seconds),duration(p.p90_wait_seconds)]))]:[]),
               (()=>{const list=el('ul');list.className='muted';r.assumptions.forEach(x=>list.appendChild(el('li',x)));return list;})());
           }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
@@ -2517,6 +2532,6 @@
     return box;
   }
 
-  window.__owgEventLogModel={objectModelArcs,objectModelText,visitRows,simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
+  window.__owgEventLogModel={simPriorities,objectModelArcs,objectModelText,visitRows,simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();

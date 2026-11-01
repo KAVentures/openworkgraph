@@ -436,6 +436,14 @@ const path=require('node:path');
    await page.getByRole('cell',{name:'Check, Approve',exact:true}).waitFor();
    const badPool=await page.evaluate(()=>{try{window.__owgEventLogModel.simPool({name:'Team',resources:'2',activities:['Check']});return 'accepted';}catch(e){return e.message;}});
    assert.match(badPool,/at least two activities/);
+   // Priority classes in the scenario: urgent cases are served first; the baseline stays first come, first served.
+   await page.locator('#owgEventLogSimPriorities').fill('urgent 30% 0, standard 70% 1');
+   const [rankedResponse]=await Promise.all([page.waitForResponse(r=>r.url().includes('/simulate')),page.locator('#owgEventLogSimRun').click()]);
+   const ranked=await rankedResponse.json();
+   assert.deepEqual(ranked.scenario.priorities,[{name:'urgent',share:0.3,rank:0},{name:'standard',share:0.7,rank:1}]);
+   assert.equal(ranked.baseline.priority_classes,undefined);assert.equal(ranked.result.priority_classes.length,2);
+   await page.getByRole('cell',{name:'urgent',exact:true}).waitFor();
+   await page.locator('#owgEventLogSimPriorities').fill('');
    // Seasonal arrivals for both runs: weekday office hours entered as weights, then measured from this log.
    await page.locator('#owgEventLogSimDays').selectOption('');
    assert.equal(await page.locator('#owgEventLogSimHourly').isVisible(),false,'weight fields appear only for entered weights');
