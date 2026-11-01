@@ -2448,7 +2448,7 @@ test('zero-event handoffs do not offer or promise a downloadable chronology', as
     assert.equal(h.modals, 1);
     assert.equal(h.modal['#analysisDownload'].disabled, true);
     assert.equal(h.modal['#analysisDetailed'].disabled, true);
-    assert.match(h.modalHtml, /id="analysisDetailed" type="checkbox" disabled/);
+    assert.match(h.modalHtml, /id="analysisDetailed" type="checkbox" aria-describedby="analysisSensitiveWarning" disabled/);
     assert.match(h.modalHtml, /No recorded events in the selected period/);
     assert.match(h.modalHtml, /only the explanatory request can be copied/);
     assert.match(h.modalHtml, /There is no recorded-event package to download/);
