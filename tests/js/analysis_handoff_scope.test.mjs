@@ -3641,6 +3641,29 @@ test('mixed legacy evidence still carries diagnostic provenance into copied agen
   assert.equal(h.downloads, 0);
 });
 
+test('sensitive-data warning precedes raw choice and is associated with both checkboxes', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const opening = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await opening;
+
+  const html = h.modalHtml;
+  const warning = html.indexOf('<p id="analysisSensitiveWarning">');
+  const choice = html.indexOf('id="analysisDetailed"');
+  const acknowledgement = html.indexOf('id="analysisReviewedDetailed"');
+  assert.ok(warning >= 0 && warning < choice && choice < acknowledgement,
+    'readable privacy warning must precede both high-risk controls');
+  assert.match(html, /id="analysisSensitiveWarning">Name redaction is best effort, not anonymization/);
+  assert.match(html, /id="analysisDetailed" type="checkbox" aria-describedby="analysisSensitiveWarning"/);
+  assert.match(html, /id="analysisReviewedDetailed" type="checkbox" aria-describedby="analysisSensitiveWarning"/);
+
+  h.modal['#analysisDetailed'].checked = true;
+  h.modal['#analysisDetailed'].onchange();
+  await h.modal['#analysisDownload'].onclick();
+  assert.equal(h.tickets.length, 0, 'an accessible warning never substitutes for explicit acknowledgement');
+  assert.equal(h.downloads, 0);
+});
+
 test('detailed chronology requires explicit period-local acknowledgement before ticket creation', async () => {
   const h = harness();
   await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
