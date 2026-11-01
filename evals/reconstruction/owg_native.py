@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from server.record_case_lanes import _EVENT_ID, _identity, _stamp, record_case_lanes
-from server.work_item_links import _TAB, _TRANSFER, link_observations
+from server.work_item_links import _TAB, _TRANSFER, _same_observation_payload, link_observations
 
 from .fixtures import load_cases
 from .scoring import aggregate
@@ -278,43 +278,29 @@ def _visible_linked_source_events(case: dict[str, Any]) -> list[dict[str, Any]]:
     # source list merely to iterate it.
     source = (case["source_events"] if "source_events" in case
               else case["presented_evidence"]) or []
-    # Production reserves the first normalized ID with a valid timestamp,
-    # including numeric/boolean IDs. A later literal duplicate cannot replace
-    # an earlier nonliteral admission. Invalid timestamps reserve no slot.
-    first_admitted_literal: dict[str, bool] = {}
-    first_literal_rows: dict[str, dict[str, Any]] = {}
-    first_claims: dict[str, str | None] = {}
-    conflicting_literals: set[str] = set()
+    # Mirror the production linker's _observations admission order: only a
+    # literal, regex-valid event ID enters the duplicate table. In particular,
+    # a numeric 17 never reserves the later literal "17" ID. Duplicate payload
+    # conflicts are evaluated BEFORE timestamp validity; an invalid-time replay
+    # can contradict a valid source event and must not disappear from the veto.
+    # Use the same bounded, type-sensitive comparison as the shipped linker.
+    unique_source: dict[str, dict[str, Any]] = {}
+    conflicting_ids: set[str] = set()
     for event in source:
         if not isinstance(event, dict):
             continue
-        raw_id = event.get("event_id")
-        source_id = str(raw_id or "")
-        if not _EVENT_ID.fullmatch(source_id):
+        event_id = event.get("event_id")
+        if not isinstance(event_id, str) or not _EVENT_ID.fullmatch(event_id):
             continue
-        if _stamp(event.get("observed_at")) is None:
-            continue
-        if source_id not in first_admitted_literal:
-            first_admitted_literal[source_id] = isinstance(raw_id, str)
-        if not isinstance(raw_id, str):
-            continue
-        if raw_id not in first_literal_rows:
-            first_literal_rows[raw_id] = event
-            continue
-        # Compare complete source JSON claims only when a valid literal replay
-        # exists. Canonicalization is bounded and type-preserving; a malformed
-        # or oversized duplicate is never allowed to replace the first row.
-        if raw_id not in first_claims:
-            first_claims[raw_id] = _canonical_eval_json(first_literal_rows[raw_id])
-        claim = first_claims[raw_id]
-        if claim is None or _canonical_eval_json(event) != claim:
-            conflicting_literals.add(raw_id)
+        prior = unique_source.get(event_id)
+        if prior is None:
+            unique_source[event_id] = event
+        elif not _same_observation_payload(prior, event):
+            conflicting_ids.add(event_id)
 
     admitted: list[dict[str, Any]] = []
-    for event_id, first in first_literal_rows.items():
-        if not first_admitted_literal.get(event_id, False):
-            continue
-        if event_id in conflicting_literals:
+    for event_id, first in unique_source.items():
+        if event_id in conflicting_ids:
             continue
         projection = _linked_projection(first)
         if projection is not None and visible.get(event_id) == projection:
