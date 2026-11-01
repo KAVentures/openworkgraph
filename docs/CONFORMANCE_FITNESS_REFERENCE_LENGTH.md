@@ -33,6 +33,23 @@ diagnostic counts and shares without changing alignment costs, fitness,
 reference-path selection or the response schema. These are **synthetic
 contract tests**, not native multi-platform test results.
 
+## Direct-call variant cap validation
+
+The authenticated REST route already declares `max_variants` as an integer
+between 1 and `MAX_ALIGNED_VARIANTS`. Direct Python integrations previously
+called `int(max_variants)` before applying the historical cap. This silently
+truncated fractional values, accepted booleans and numeric strings, and could
+raise raw `TypeError`, `ValueError` or `OverflowError` for missing, malformed
+or nonfinite inputs.
+
+Direct `conformance()` calls now require a genuine Python integer (not a
+boolean) and raise `EventLogWorkspaceError` for other types **before any
+saved-log query**. The existing direct integer clamp (including values outside
+the REST range) remains unchanged, as do REST parameter validation and
+response fields. Synthetic mocked-query regressions cover malformed values,
+both clamp endpoints, and the resulting SQL variant limit; they do not
+replace native DuckDB, HTTP, cross-platform or real-customer acceptance.
+
 This correction can change historical displayed conformance scores for
 multi-path models; previously stored raw events and reference paths are
 unchanged. Fitness is descriptive similarity to a *user-declared* model,
