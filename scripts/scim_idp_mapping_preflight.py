@@ -331,6 +331,12 @@ def assess(mapping: Any) -> dict:
     if not groups["enabled"] and group_patch_ops is not None:
         add("blocker", "disabled_groups_with_patch_operations", "groups.patch_operations",
             "Group PATCH operations are declared although Group provisioning is disabled")
+    # The shipped Group PATCH endpoint accepts 1–20 operations *per request*.
+    # This optional list may instead describe alternatives across requests,
+    # so >20 declarations warrant a caution, not an unsupported-mapping block.
+    if group_patch_ops is not None and len(group_patch_ops) > 20:
+        add("caution", "group_patch_single_request_limit", "groups.patch_operations",
+            "The Group endpoint permits at most 20 operations per PATCH request; verify how the IdP batches declared operations")
     if group_patch_ops is not None:
         for index, (verb, declared_path, value_present) in enumerate(group_patch_ops):
             location = f"groups.patch_operations[{index}]"
