@@ -487,7 +487,16 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
                 continue
             join(list(pair), "clipboard_transfer")
         else:
-            join([row["event_id"] for row in group], "clipboard_transfer")
+            if len(referenced_records) == 2:
+                # For legacy generic-only tokens, establish the two-record
+                # witness edge before attaching loose observations. Otherwise
+                # a loose-first capture would produce only loose-to-record
+                # union edges and conceal the actual weak A/B association.
+                referenced = [row["event_id"] for row in group if row["ref"]]
+                loose = [row["event_id"] for row in group if not row["ref"]]
+                join(referenced + loose, "clipboard_transfer")
+            else:
+                join([row["event_id"] for row in group], "clipboard_transfer")
 
     # A tab containing only record A cannot safely absorb a loose event
     # already attached (via clipboard) to record B. Nor may two single-record
