@@ -999,11 +999,6 @@ def clear_case_declarations() -> None:
             pass
 
 
-__all__ = ["CaseDeclarationError", "save_case_declaration",
-           "list_case_declarations", "delete_case_declaration",
-           "purge_case_declaration", "clear_case_declarations"]
-
-
 def create_case_declaration_batch(
     scope_ref: str, items: list[dict[str, Any]], *,
     now: datetime | None = None,
@@ -1032,7 +1027,9 @@ def create_case_declaration_batch(
         _check_ref(ref, _REF, "work item reference")
         if ref in by_ref:
             raise CaseDeclarationError("duplicate batch declaration")
-        if (item["goal_code"] not in _GOALS or
+        if (not isinstance(item["goal_code"], str) or
+            not isinstance(item["expected_outcome_code"], str) or
+            item["goal_code"] not in _GOALS or
             item["expected_outcome_code"] not in _EXPECTED or
             type(item["expected_revision"]) is not int or
             item["expected_revision"] != 0 or
@@ -1153,3 +1150,9 @@ def create_case_declaration_batch(
         "agent_execution_authorized": False,
         "not_synced": True,
     }
+
+
+__all__ = ["CaseDeclarationError", "save_case_declaration",
+           "create_case_declaration_batch", "list_case_declarations",
+           "delete_case_declaration", "purge_case_declaration",
+           "clear_case_declarations"]
