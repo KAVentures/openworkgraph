@@ -1461,3 +1461,121 @@ def test_group_patch_request_cap_cli_reports_static_caution_without_values(
     else:
         assert payload["status"] == "invalid_input"
         assert payload["findings"][0]["code"] == "invalid_input"
+
+
+# User PATCH operation declarations model emitted verb/path/value-key shapes,
+# including the pathless replace-active form in public Okta documentation.
+# These are synthetic declarations, never real provider traffic.
+@pytest.mark.parametrize("client", ["entra", "okta", "other"])
+@pytest.mark.parametrize("verb", ["add", "replace"])
+def test_user_pathless_patch_object_fields_are_reviewable(client, verb):
+    users = mapping()["users"]
+    users["patch_operations"] = [{
+        "op": verb, "path": "", "value_present": True,
+        "value_attributes": ["active", "displayName", "name", "emails"],
+    }]
+    report = assess(mapping(client=client, users=users))
+    assert report["status"] == "requires_live_validation"
+    assert report["checked"]["user_patch_operations"] == 1
+    assert "unsupported_user_pathless_field" not in codes(report)
+    assert "user_patch_value_presence_undeclared" not in codes(report)
+    assert "user_pathless_fields_undeclared" not in codes(report)
+    assert "live_validation_required" in codes(report)
+
+
+@pytest.mark.parametrize("client", ["entra", "okta", "other"])
+@pytest.mark.parametrize("operation,expected", [
+    ({"op": "replace", "path": ""}, "user_pathless_fields_undeclared"),
+    ({"op": "replace", "path": "", "value_present": False,
+      "value_attributes": ["active"]}, "user_patch_required_value_missing"),
+    ({"op": "remove", "path": ""}, "user_pathless_remove_forbidden"),
+    ({"op": "remove", "path": "active"}, "unsupported_user_patch_remove"),
+    ({"op": "add", "path": "roles", "value_present": True}, "unsupported_user_patch_path"),
+    ({"op": "replace", "path": "", "value_present": True,
+      "value_attributes": ["userName"]}, "unsupported_user_pathless_field"),
+    ({"op": "upsert", "path": "active"}, "unsupported_user_patch_verb"),
+    ({"op": "replace", "path": "", "value_present": True,
+      "value_attributes": []}, "user_pathless_empty_object"),
+])
+def test_user_patch_operation_unsupported_or_unknown_shapes(client, operation, expected):
+    users = mapping()["users"]
+    users["patch_operations"] = [operation]
+    report = assess(mapping(client=client, users=users))
+    assert expected in codes(report)
+    if expected.startswith(("unsupported", "user_pathless_remove",
+                            "user_patch_required")):
+        assert report["status"] == "blocked"
+    else:
+        assert report["status"] == "requires_live_validation"
+
+
+@pytest.mark.parametrize("path,verb", [
+    ("active", "replace"),
+    ("displayName", "remove"),
+    ("externalId", "remove"),
+    ("name", "remove"),
+    ("name.givenName", "remove"),
+    ("emails", "remove"),
+    ('emails[type eq "work"].value', "replace"),
+    ("urn:ietf:params:scim:schemas:core:2.0:User:emails", "replace"),
+])
+def test_supported_user_patch_operation_paths_do_not_get_false_blockers(path, verb):
+    users = mapping()["users"]
+    users["patch_operations"] = [{"op": verb, "path": path, "value_present": True}]
+    report = assess(mapping(users=users))
+    assert report["status"] == "requires_live_validation"
+    assert not any(item["severity"] == "blocker" for item in report["findings"])
+
+
+@pytest.mark.parametrize("invalid", [
+    None, {}, "replace", [None], [{"op": "replace"}],
+    [{"op": "replace", "path": None}],
+    [{"op": "replace", "path": "active", "value_present": 1}],
+    [{"op": "replace", "path": "active", "value_attributes": ["active"]}],
+    [{"op": "replace", "path": "", "value_attributes": ["active", "ACTIVE"]}],
+    [{"op": "replace", "path": "", "value_attributes": "active"}],
+    [{"op": "replace", "path": "", "value_attributes": ["active"]} for _ in range(33)],
+])
+def test_user_patch_operation_invalid_metadata_fails_closed_without_echo(invalid):
+    users = mapping()["users"]
+    users["patch_operations"] = invalid
+    with pytest.raises(InvalidMapping) as error:
+        assess(mapping(users=users))
+    assert "usr_PRIVATE" not in str(error.value)
+
+
+def test_user_patch_operation_legacy_absence_differs_from_explicit_empty():
+    legacy = assess(mapping())
+    assert "user_patch_operations" not in legacy["checked"]
+    users = mapping()["users"]
+    users["patch_operations"] = []
+    report = assess(mapping(users=users))
+    assert report["checked"]["user_patch_operations"] == 0
+    assert report["status"] == "requires_live_validation"
+    for key in ("user_matching", "user_create", "user_patch", "group_matching"):
+        assert report["checked"][key] == legacy["checked"][key]
+
+
+@pytest.mark.parametrize("path,fields,exit_code,expected", [
+    ("", ["active"], 0, None),
+    ("", ["userName"], 2, "unsupported_user_pathless_field"),
+    ("active", None, 0, None),
+    ("roles", None, 2, "unsupported_user_patch_path"),
+])
+def test_user_patch_operation_cli_reports_only_generic_shape_metadata(
+        tmp_path, path, fields, exit_code, expected):
+    users = mapping()["users"]
+    operation = {"op": "replace", "path": path, "value_present": True}
+    if fields is not None:
+        operation["value_attributes"] = fields
+    users["patch_operations"] = [operation]
+    file = tmp_path / "user-patch-shape.json"
+    file.write_text(json.dumps(mapping(users=users)), encoding="utf-8")
+    completed = subprocess.run([sys.executable, str(SCRIPT), str(file)],
+                               capture_output=True, text=True)
+    assert completed.returncode == exit_code
+    report = json.loads(completed.stdout)
+    assert report["checked"]["user_patch_operations"] == 1
+    assert (expected in codes(report)) if expected else (
+        not any(item["severity"] == "blocker" for item in report["findings"]))
+    assert "usr_PRIVATE" not in completed.stdout + completed.stderr
