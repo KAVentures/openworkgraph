@@ -266,6 +266,70 @@ const path=require('node:path');
    assert.equal(evidenceReads,readsBeforeDownload,'local JSON export must not fetch evidence');
    assert(!JSON.stringify(manifest).includes('Read record'),'step labels must not leak into portable plan');
    assert(!JSON.stringify(manifest).includes('Reviewed synthetic example'),'private group labels must not leak');
+   // Reopen the downloaded local plan after a fresh browser load. Nothing
+   // carries forward automatically: a reviewed group and fresh selected-ref
+   // inspection are required before importing any proposed criteria.
+   const savedPlanBytes=await fs.readFile(await artifact.path());
+   await page.reload();
+   await page.locator('[role=tab][data-tab=overview]').click();
+   await page.evaluate(()=>{
+     window.owgWorkflowExplorer.showReviewedGroup({
+       label:'Reviewed synthetic example',workflow_id:'reviewed_test',revision:4,
+       bundle:{
+         selector:{execution_ids:['execution:synthetic_ref'],selected_execution_count:1},
+         structural_alignment:{structural_sequence_variants:[{exact_variants:[{
+           readable_steps:['Read record','Check outcome'],structural_steps:['action:read','action:check'],
+           execution_count:1,execution_ids:['execution:synthetic_ref']
+         }]}]}
+       }
+     });
+   });
+   await page.locator('#owgExplorerDetail svg g[role=button]').first().click();
+   await page.getByRole('button',{name:'Review selected examples',exact:true}).click();
+   await page.locator('#owgExplorerEvidence h4').waitFor();
+   await page.getByRole('button',{name:'Review safe agent handoff',exact:true}).click();
+   const imported=page.locator('#owgExplorerPlanImport');
+   const importMessage=page.locator('#owgExplorerPlanImportStatus');
+   const upload=(value)=>imported.setInputFiles({
+     name:'shadow-plan.json',mimeType:'application/json',
+     buffer:Buffer.isBuffer(value)?value:Buffer.from(typeof value==='string'?value:JSON.stringify(value))
+   });
+   assert.equal(await downloadPlan.isDisabled(),true,'browser reload cannot restore prior acknowledgement');
+   const readsBeforeImport=evidenceReads;
+   await upload('{invalid');
+   await importMessage.filter({hasText:/invalid JSON/}).waitFor();
+   await upload({...manifest,execution_permitted:true});
+   await importMessage.filter({hasText:/Plan refused/}).waitFor();
+   await upload({...manifest,validation:{...manifest.validation,status:'passed'}});
+   await importMessage.filter({hasText:/Plan refused/}).waitFor();
+   await upload({...manifest,reviewed_group:{...manifest.reviewed_group,revision:5}});
+   await importMessage.filter({hasText:/review identity/}).waitFor();
+   await upload({...manifest,selected_evidence:{...manifest.selected_evidence,execution_ids:['execution:wrong']}});
+   await importMessage.filter({hasText:/execution references differ/}).waitFor();
+   await upload({...manifest,selected_evidence:{...manifest.selected_evidence,window_utc:{since:'2000-01-01T00:00:00Z'}}});
+   await importMessage.filter({hasText:/period differs/}).waitFor();
+   await upload(Buffer.alloc(32769,65));
+   await importMessage.filter({hasText:/32 KiB/}).waitFor();
+   assert.equal(await page.locator('#owgExplorerPlan_expected').inputValue(),'',
+     'refused plans must not populate criteria');
+   await upload(savedPlanBytes);
+   await importMessage.filter({hasText:/restored locally/}).waitFor();
+   assert.equal(await page.locator('#owgExplorerPlan_expected').inputValue(),
+     manifest.human_proposed_untrusted_criteria.normal_case_expected);
+   assert.equal(await page.locator('#owgExplorerPlan_exception').inputValue(),
+     manifest.human_proposed_untrusted_criteria.exception_case);
+   assert.equal(await page.locator('#owgExplorerPlan_stop').inputValue(),
+     manifest.human_proposed_untrusted_criteria.fail_or_abstain_rule);
+   assert.equal(await page.locator('#owgExplorerHandoffConfirmed').isChecked(),false,
+     'import must never carry forward an approval');
+   assert.equal(await downloadPlan.isDisabled(),true);
+   assert.equal(evidenceReads,readsBeforeImport,'file import must make no evidence/network request');
+   await audit(page,'#owgWorkflowExplorer','Reopened unconfirmed local shadow plan');
+   await page.locator('#owgExplorerHandoffConfirmed').check();
+   assert.equal(await downloadPlan.isDisabled(),false,'new human confirmation can enable local download');
+   await page.locator('#owgExplorerPlan_expected').fill('Changed after import');
+   assert.equal(await downloadPlan.isDisabled(),true,'editing imported criteria revokes approval');
+   await audit(page,'#owgWorkflowExplorer','Edited reopened shadow plan');
    await audit(page,'#owgWorkflowExplorer','Confirmed shadow-plan handoff');
    await page.unroute('**/v1/workflow-evidence?*');
    await period.selectOption('7');
