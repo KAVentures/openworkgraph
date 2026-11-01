@@ -1782,3 +1782,106 @@ def test_pathless_deactivation_cli_does_not_claim_missing_active_or_live_success
     assert report["checked"]["user_patch"] == 0
     assert report["checked"]["user_patch_operations"] == 1
     assert "PRIVATE" not in completed.stdout + completed.stderr
+
+
+# Optional operation-level contact paths must receive the same overlap
+# caution as the legacy list, including cross-format declarations. All
+# values are synthetic and never become verified contact/identity evidence.
+@pytest.mark.parametrize("client", ["entra", "okta", "other"])
+@pytest.mark.parametrize("paths,overlap", [
+    (["emails", 'emails[type eq "work"].value'], True),
+    (["emails.value", 'emails[type eq "work"].value'], True),
+    (['emails[type eq "work"]', 'emails[type eq "work"].primary'], True),
+    (['emails[type eq "work"].value', 'emails[type eq "work"].primary'], False),
+    (['emails[type eq "work"]', 'emails[type eq "home"].value'], False),
+    (['emails[type eq "work"]', 'emails[value eq "work"].value'], False),
+    (["emails"], False),
+    (["emails", 'urn:ietf:params:scim:schemas:core:2.0:User:emails[type eq "work"].value'], True),
+], ids=["whole-plus-selector", "all-value-plus-selector", "selected-whole-plus-child",
+        "distinct-children", "distinct-values", "distinct-selector-kinds",
+        "single-path", "core-qualified-selector"])
+def test_contact_overlap_in_operation_only_declarations(client, paths, overlap):
+    users = mapping()["users"]
+    users["patch_attributes"] = []
+    users["patch_operations"] = [
+        {"op": "remove", "path": path} for path in paths
+    ]
+    report = assess(mapping(client=client, users=users))
+    assert report["status"] == "requires_live_validation"
+    findings = [item for item in report["findings"]
+                if item["code"] == "overlapping_contact_patch_paths"]
+    assert bool(findings) is overlap
+    if overlap:
+        assert len(findings) == 1
+        assert findings[0]["severity"] == "caution"
+        assert findings[0]["path"] == "users.patch_operations"
+    assert report["checked"]["user_patch"] == 0
+    assert report["checked"]["user_patch_operations"] == len(paths)
+    assert "live_validation_required" in codes(report)
+    assert 'type eq' not in json.dumps(report)
+
+
+@pytest.mark.parametrize("legacy,operations,overlap,location", [
+    (["emails"], ['emails[type eq "work"].value'], True, "users.patch_operations"),
+    (['emails[type eq "work"].value'], ["emails"], True, "users.patch_operations"),
+    (["emails", 'emails[type eq "work"].value'], [], True, "users.patch_attributes"),
+    (['emails[type eq "work"].value'], ['emails[type eq "work"].value'],
+     False, None),
+    (["emails"], ["displayName"], False, None),
+])
+def test_contact_overlap_across_legacy_and_operation_declarations(
+        legacy, operations, overlap, location):
+    users = mapping()["users"]
+    users["patch_attributes"] = legacy
+    users["patch_operations"] = [
+        {"op": "remove" if path != "displayName" else "replace",
+         "path": path, **({"value_present": True} if path == "displayName" else {})}
+        for path in operations
+    ]
+    report = assess(mapping(users=users))
+    assert report["status"] == "requires_live_validation"
+    findings = [item for item in report["findings"]
+                if item["code"] == "overlapping_contact_patch_paths"]
+    assert bool(findings) is overlap
+    if overlap:
+        assert len(findings) == 1
+        assert findings[0]["path"] == location
+    assert report["checked"]["user_patch"] == len(legacy)
+    assert report["checked"]["user_patch_operations"] == len(operations)
+
+
+def test_operation_contact_overlap_cli_is_private_and_preserves_blockers():
+    secret = "synthetic-SECRET-contact"
+    users = mapping()["users"]
+    users["create_attributes"] = ["active"]  # Existing security gate stays blocked.
+    users["patch_attributes"] = []
+    users["patch_operations"] = [
+        {"op": "replace", "path": "emails", "value_present": True},
+        {"op": "remove", "path": f'emails[value eq "{secret}"].value'},
+    ]
+    completed = subprocess.run(
+        [sys.executable, str(SCRIPT), "-"],
+        input=json.dumps(mapping(client="okta", users=users)),
+        capture_output=True, text=True, check=False,
+    )
+    assert completed.returncode == 2, completed.stderr
+    report = json.loads(completed.stdout)
+    assert report["status"] == "blocked"
+    assert {"missing_stable_username", "overlapping_contact_patch_paths",
+            "contact_value_selector", "unverified_contact_metadata",
+            "live_validation_required"} <= codes(report)
+    assert secret not in completed.stdout + completed.stderr
+    assert "emails[value" not in completed.stdout + completed.stderr
+
+
+def test_unsupported_contact_operation_does_not_create_false_overlap():
+    users = mapping()["users"]
+    users["patch_attributes"] = ["emails"]
+    users["patch_operations"] = [
+        {"op": "remove", "path": 'emails[unknown eq "synthetic-secret"]'},
+    ]
+    report = assess(mapping(users=users))
+    assert report["status"] == "blocked"
+    assert "unsupported_user_patch_path" in codes(report)
+    assert "overlapping_contact_patch_paths" not in codes(report)
+    assert "synthetic-secret" not in json.dumps(report)
