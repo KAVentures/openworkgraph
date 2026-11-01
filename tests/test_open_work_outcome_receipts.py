@@ -33,6 +33,7 @@ def response(provider="stripe", kind="invoice", state="paid",
         detail.update(
             status="resolved" if verified else "unverified",
             source_timestamp=WHEN.isoformat() if verified else None,
+            scope="jira_issue_only_not_customer_acknowledgement_or_refund",
         )
     return {
         "resource_ref": REF,
@@ -834,6 +835,69 @@ def test_jira_consistent_resolution_detail_keeps_provider_only_success(resolutio
     )
     assert result["availability"] == "source_reported"
     assert result["operation_verified"] is True
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize("bad_scope", [
+    None, False, 0, 1, "true", "", [], {},
+    "stripe_processor_only",
+    "jira_issue_only",
+    "jira_issue_only_not_customer_acknowledgement_or_refund ",
+    "jira_issue_only_not_customer_acknowledgement_or_refund\\nPRIVATE_NATIVE_ID",
+])
+def test_jira_verified_resolution_requires_exact_provider_defined_scope(bad_scope):
+    data = response(provider="jira", kind="issue", state="done",
+                    operation="jira_issue_resolved")
+    data["source_evidence"]["verified_operational_outcome"]["scope"] = bad_scope
+    calls = []
+    result = source_operation_receipt(
+        REF, "jira_issue_resolved", record_reader=reader(data, calls), now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "provider_receipt_scope_conflict"
+    assert result["operation_verified"] is False
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert calls == [(REF, {
+        "since": None, "until": None, "include_source_status": True,
+    })]
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+    assert "PRIVATE_NATIVE_ID" not in str(result)
+
+
+def test_jira_missing_provider_defined_resolution_scope_is_unknown():
+    data = response(provider="jira", kind="issue", state="done",
+                    operation="jira_issue_resolved")
+    del data["source_evidence"]["verified_operational_outcome"]["scope"]
+    result = source_operation_receipt(
+        REF, "jira_issue_resolved", record_reader=lambda *_a, **_kw: data,
+        now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "provider_receipt_scope_conflict"
+    assert result["operation_verified"] is False
+    assert result["customer_outcome_verified"] is False
+
+
+def test_jira_exact_issue_only_scope_preserves_resolution_not_customer_success():
+    data = response(provider="jira", kind="issue", state="done",
+                    operation="jira_issue_resolved")
+    assert data["source_evidence"]["verified_operational_outcome"]["scope"] == (
+        "jira_issue_only_not_customer_acknowledgement_or_refund"
+    )
+    result = source_operation_receipt(
+        REF, "jira_issue_resolved", record_reader=lambda *_a, **_kw: data,
+        now=WHEN,
+    )
+    assert result["availability"] == "source_reported"
+    assert result["operation_verified"] is True
+    assert result["verification_scope"] == "authenticated_source_provider_operational_state"
     assert result["business_objective_verified"] is False
     assert result["customer_outcome_verified"] is False
     assert result["agent_caused_operation_verified"] is False
