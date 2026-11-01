@@ -522,3 +522,35 @@ are copied into receipts and no business/customer/agent authorization is
 granted. These are committed regression contracts, not executed native
 pytest, live provider/tenant validation, or evidence of commercial uplift.
 No new source read, permission, background sync or business write is added.
+
+
+## Optional business/customer/agent authority assertion conflicts
+
+The operation verifier already returns literal false for
+`business_objective_verified`, `customer_outcome_verified`,
+`agent_caused_operation_verified`, and `agent_execution_authorized`.
+These are **not** provider status fields, and neither a successful provider
+operation nor an observed workflow grants any of those authorities.
+
+An injected/cached `source_evidence` receipt or nested
+`verified_operational_outcome` detail may include those optional assertions.
+If any is explicitly present, it must be the literal Boolean `false`.
+Contradictory `true`, truthy numerics, strings, null or structured values
+return privacy-safe `availability=unknown` with
+`reason=provider_receipt_scope_conflict`, never a verified operation. No
+private source values or conflicting customer/agent claims are echoed.
+Omitted fields remain compatible with the current authenticated GitHub,
+Jira and Stripe adapters. Explicit literal false remains valid.
+
+This guard is distinct from the older provider-specific
+`verified_business_outcome` field: Stripe's legacy true means successful
+**processor operation**, not customer bank settlement or a verified business
+objective. Existing handling of that legacy field remains unchanged.
+Synthetic fake-reader regression parameterizations cover four operation
+families, both receipt nesting levels, four authority flags, five conflicting
+values (160 negative cases), and 16 absent/false positive controls.
+These are committed contract tests, **not** live-provider or customer-outcome
+validation. The verifier still makes at most its one already-authorized read;
+no new permissions, source adapters, background sync, business writes or
+agent execution paths are added. Tenant/actor consent, revocation and
+retention remain enforced by the existing trusted reader and adapters.
