@@ -1475,3 +1475,30 @@ promising complete downloads or nonexistent date pagination were corrected to
 match the current conservative interface wording. These deterministic fixtures
 are **not** native browser/WCAG, multi-team pilot, provider validation,
 competitor parity or measured ROI evidence.
+
+
+## Bounded source-category ranking for large selected histories (2026-11-01)
+
+The Prepare for AI review displays **at most eight** reported source categories.
+It ranks by selected-event count descending and then by literal source label
+ascending, independent of import insertion order. The former implementation
+materialized and fully sorted every reported category even though only eight
+could be shown. The reviewer now retains a sorted top-eight while scanning
+the source map once, with bounded ranking memory and no full-category sort.
+It still reports exact omitted category and selected-event totals, distinguishes
+rendered-label collisions, and handles own literal `__proto__` and
+`constructor` source keys without treating them as inherited identities.
+Source labels remain unverified, and omitted categories cannot be individually
+inspected in this bounded panel. Canonical events and exported evidence are
+unchanged.
+
+Synthetic Node regression `large source maps preserve exact top-eight ranking,
+literal keys and omitted totals` uses 2,048 low-volume categories and four
+late high-volume or special-key categories, in forward and reversed import
+order. It checks deterministic top-eight selection, 2,044 omitted categories
+and events, and Copy without an export ticket, download, upload or model call.
+This is not a real consenting-user pilot, provider-verified source identity,
+competitor parity, commercial ROI, or a substitute for native browser,
+accessibility, packaging and large-install CI acceptance.
+
+Coordination: [#326 claim 6559758447](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6559758447).
