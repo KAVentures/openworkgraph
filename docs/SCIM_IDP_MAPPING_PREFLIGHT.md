@@ -25,6 +25,61 @@ Run **python scripts/scim_idp_mapping_preflight.py mapping.json** or pipe strict
 - Normal writes require exact If-Match ETags. Only standalone User PATCH may omit it **after explicit administrator approval**; the tool flags the potential overwrite race even when approved. Unversioned PUT, DELETE, Bulk and Group writes are not accepted as compatible.
 - Groups are independently enabled and have only displayName/externalId matching. **Entra Group matching by displayName is blocked by default.** Optional `provider_policy.unique_group_names: true` declares that the separate [Group naming policy](SCIM_GROUP_NAME_POLICY.md) has been enabled and verified in the actual provider. The CLI does not configure or inspect that policy; it warns that this is an unverified declaration and still requires live testing. Old mapping files without this flag retain their previous behavior. The server constraint requires uniform worker upgrades and does not change existing exact matching-filter semantics or grant OWG permissions.
 
+## Optional User PATCH operation shapes (offline only)
+
+The optional `users.patch_operations` array describes the IdP's **declared**
+User PATCH verbs, paths and value-property presence, rather than just the
+legacy `users.patch_attributes` names. For example, a pathless Okta-style
+replace-active declaration is:
+
+```json
+{
+  "users": {
+    "patch_operations": [
+      {"op": "replace", "path": "", "value_present": true,
+       "value_attributes": ["active"]}
+    ]
+  }
+}
+```
+
+This is an **illustrative partial `users` object**, not a complete mapping
+file. The existing required `users` keys remain mandatory. The actual shipped
+User PATCH handler permits **pathless `add`/`replace` only with an
+object-valued `value`**, and refuses pathless `remove`. A declared empty
+`path` is therefore meaningful and permitted only in this optional
+operation list. `value_attributes` is an optional bounded list of *top-level
+object field names*, allowed **only for pathless operations**. It supports
+`active`, `displayName`, `externalId`, `name` and `emails` as declared
+fields. A pathless `name.givenName` is **not** a top-level object key;
+`name` must carry its own nested object. An immutable `userName` change
+is not certified by this tool. Values, addresses, subjects, employee IDs,
+tokens, raw objects and credentials are never accepted as metadata.
+
+The preflight blocks unsupported verbs, pathless removal, unsupported paths
+or pathless object fields, removal of `active` or other non-removable User
+attributes, and a declared missing `value` property on add/replace.
+A missing `value_present` flag instead produces a nonblocking
+`user_patch_value_presence_undeclared` caution; omitted pathless
+`value_attributes` produces `user_pathless_fields_undeclared`.
+An explicitly empty pathless object-field list is flagged as a possible
+no-op, not treated as evidence of offboarding. Supported `remove` paths
+include `displayName`, `externalId`, the shipped `name` paths and bounded
+contact PATCH paths. These checks do **not** inspect the actual payload
+value types, current provider policy, mutation order, ETag, tenant, revocation,
+or IdP request headers. In particular, a declared `active` field does not
+prove that a real IdP sends `false` during offboarding.
+
+The list is bounded to 32 **declared possible operations** and is independent
+of `users.patch_attributes`. An absent list is unknown; an explicitly
+empty list reports `checked.user_patch_operations: 0`, not an actual
+successful empty HTTP PATCH. The shipped endpoint requires 1–20 operations
+per request. The four legacy `checked` fields and all existing mappings
+remain compatible. Actual client behavior must be verified in an explicitly
+authorized disposable Entra/Okta tenant, including pathless deactivation,
+current/missing/stale If-Match behavior, provider isolation and device/session
+revocation. No synthetic mapping result certifies customer rollout.
+
 The contact-email array **shipped in #480** (resolving #470) and is documented in [SCIM_USER_EMAILS.md](SCIM_USER_EMAILS.md). This preflight now recognizes its bounded write-path shapes but **continues blocking all email-based matching**, including `emails[type eq "work"].value` in `users.match_attributes`. Provider contacts are unverified descriptive metadata, never roster email, SSO, actor, invitation routing, automatic employee adoption or login authority. A value-based PATCH selector receives a caution because it depends on current stored contact data. Do not put real addresses or customer information in a mapping declaration; reports intentionally omit attribute values. **Upgrade all serving workers before enabling contact mappings**; mixed-version workers and downgrade with contacts are unsupported.
 
 Contact selector declarations use the shipped unqualified **or exact core User-qualified** PATCH grammar: literal ASCII
