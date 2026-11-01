@@ -392,3 +392,33 @@ permissions. Verify emitted PATCH verbs, stale ETags, duplicate operations,
 cross-provider IDs, revocation, offboarding/rehire and backup/restore with
 authorized disposable identities before company rollout. No real IdP
 requests or provisioning are performed by the preflight.
+
+
+## Declared Group coverage counts (offline report only)
+
+The JSON report's `checked` object retains its original four counts:
+`user_matching`, `user_create`, `user_patch`, and `group_matching`.
+When optional `groups.create_attributes` or `groups.patch_attributes`
+is **present**, the report additionally includes `group_create` or
+`group_patch` with the corresponding number of declared paths. This
+distinguishes an **omitted** mapping (no key; unknown/not reviewed) from
+an **explicit empty** mapping (key present with count zero), as well as
+a populated mapping. The keys are additive; old mapping files and their
+four legacy count fields retain their existing output shape.
+
+These counts describe only the bounded **local declarations** that the
+preflight examined. They are not counts of accepted operations, validated
+attributes, executed provisioning requests, verified Group members,
+successful matching, or customer/IdP coverage. Even a nonzero count can
+include unsupported paths reported separately as blockers. A disabled
+Group with an explicitly declared empty mapping still receives its
+existing contradiction blocker. The report never echoes Group member IDs,
+contact values, provider secrets, or raw selector paths. Existing
+`status`, `scope`, finding codes, and the required live-validation
+gate remain unchanged.
+
+Synthetic acceptance covers absent/empty/populated/disabled/unsupported
+Group declarations and actual offline CLI JSON parity. It does **not**
+exercise Entra, Okta, SCIM server mutations, tenant credentials, live
+provider state, revocation or backup/restore. Those require the separately
+authorized disposable-tenant acceptance procedures above.
