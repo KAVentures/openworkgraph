@@ -343,6 +343,20 @@ SSO subjects. A valid path is never proof of correct identity resolution,
 tenant isolation, current provider authorization or Group membership success.
 Group membership is metadata and **does not grant OWG permissions**.
 
+If the optional Group PATCH declaration contains both the whole-array `members`
+path and at least one **supported** `members[value eq "..."]` selector, the
+preflight emits a **nonblocking** `overlapping_group_member_patch_paths`
+caution. A whole-members replace/add/remove and a selector removal can affect
+the same provider-scoped membership set; the final result may depend on the
+actual IdP's emitted PATCH verbs, operation ordering and current ETag. The
+preflight does not infer that both declarations are sent in the same request,
+that any member exists, or that the IdP uses a particular order. Whole-only,
+selector-only, distinct selectors and unsupported selectors do not trigger
+this overlap warning. Unsupported selectors retain their separate blocker;
+disabled Groups retain their existing blocker. Reports never echo selector
+IDs. This is a mapping-review warning, **not** a server behavior or privilege
+change.
+
 For actual authorized acceptance, capture disposable IdP-generated Group
 PATCH requests and check exact verbs/paths, current and stale If-Match
 responses (428/412), direct User ID resolution, provider isolation, duplicate
