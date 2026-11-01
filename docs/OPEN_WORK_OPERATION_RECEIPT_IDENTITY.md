@@ -393,3 +393,22 @@ provider/kind pre-read scoping, read-only operation and false
 business/customer/agent authority. These tests do not establish live
 provider acceptance, tenant isolation under real grants, independent
 customer outcomes, or held-out commercial uplift.
+
+
+## Integer source-receipt age policy
+
+The existing optional `max_age_seconds` override is an **integer-seconds**
+policy bounded to 1–3600 (default 900). It now rejects Python booleans,
+fractional floats, strings, nulls, nonfinite values and out-of-range integers
+with a controlled `ValueError` **before** invoking `record_graph` or any
+injected provider reader. There is no implicit rounding or coercion of the
+freshness policy, no wider default window, and no additional source read.
+The existing +300-second future clock-skew allowance is unchanged.
+
+Synthetic fake-reader regressions cover 52 invalid policy/provider pairs
+(with zero source reads) and 24 exact-boundary provider cases at 1, 900 and
+3600 seconds, including the first stale second. All successful results remain
+provider-operational-state-only; business/customer outcomes and agent
+execution authority remain false. These are deterministic contract cases,
+not native cross-platform CI, live tenant/provider acceptance, or evidence
+of commercial benefit.
