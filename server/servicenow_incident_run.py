@@ -62,6 +62,7 @@ def main(argv: list[str] | None = None, *, provider_opener=None,
     args = parser.parse_args(argv)
 
     journal_done = False
+    journal_attempted = False
     possible_append = False
     try:
         if not (args.consent_selected_read and args.consent_local_journal_read
@@ -106,6 +107,9 @@ def main(argv: list[str] | None = None, *, provider_opener=None,
         ]
         if args.since is not None:
             journal_args.extend(("--since", args.since))
+        # A journal commit can succeed even if its later CSV publication fails.
+        # Report that uncertainty rather than claiming no local state changed.
+        journal_attempted = True
         source_code, source_report = _child(
             journal_main, journal_args, opener=provider_opener,
         )
@@ -175,7 +179,7 @@ def main(argv: list[str] | None = None, *, provider_opener=None,
         print(json.dumps({
             "format": "openworkgraph.servicenow-selected-run.v1",
             "status": "append_unverified" if possible_append else "refused",
-            "journal_may_have_changed": journal_done,
+            "journal_may_have_changed": journal_attempted,
             "possible_local_append": possible_append,
             "reason": "Inspect local append history before retrying"
                       if possible_append else
