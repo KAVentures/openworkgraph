@@ -27,6 +27,7 @@ from .local_source_credentials import _metadata_path, _read_metadata
 from .open_work_case_declarations import (
     CaseDeclarationError, delete_case_declaration,
     list_case_declarations, save_case_declaration, clear_case_declarations,
+    create_case_declaration_batch,
 )
 
 router = APIRouter()
@@ -394,6 +395,30 @@ async def get_local_reviewed_case_portfolio_status(request: Request, response: R
     try:
         result = compose_portfolio_status(admitted, contexts)
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/v1/open-work/declarations/batch")
+async def create_local_case_declaration_batch(request: Request, response: Response):
+    """Explicit all-or-none local creation of a reviewed owner-declared DAG.
+
+    Same source-derived scope, review/retention admission and private SQLite
+    ledger as individual declarations. No provider IO or execution grant.
+    """
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {"confirm_batch_create", "items"})
+    if payload["confirm_batch_create"] is not True:
+        raise HTTPException(403, "explicit batch owner declaration confirmation required")
+    await _recheck_source(scope)
+    try:
+        result = await asyncio.to_thread(
+            create_case_declaration_batch, scope, payload["items"],
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError) as exc:
         raise _safe_error(exc) from None
     await _recheck_source(scope)
     response.headers["Cache-Control"] = "no-store"
