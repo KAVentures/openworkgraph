@@ -1444,3 +1444,34 @@ commercial ROI or competitor parity. No backend, event classification, consent,
 export payload, AI execution or business write changes.
 
 Coordination: [#326 claim 6558368521](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6558368521).
+
+
+## Mixed ordinary-work and capture-health evidence survives request-only Copy
+
+A mixed selected period can include both ordinary observations and capture-health
+or gap diagnostics. The daily UTC date plan is **not partitioned by event type**;
+a listed day with a positive count may contain only diagnostics. A warning in the
+local modal is insufficient if the user copies only the agent-neutral request
+into another AI: that downstream reader would lose the caveat. For a validated
+mixed preview, **Copy request** now appends the selected ordinary and diagnostic
+counts, warns that daily totals are untyped, requires event-level source review,
+and prohibits treating diagnostic rows as workflow steps or claiming verified
+completion, savings or ROI. It does not attach events or confer access.
+
+Ordinary-only previews preserve the original request verbatim. Diagnostic-only
+and zero-event previews retain their stronger insufficient-evidence warning.
+Legacy previews without the optional `work_evidence` block use the already
+validated event-type partition; a missing daily plan is still unknown coverage.
+The warning describes only this selected local preview, not source completeness,
+recorder liveness, permission or real-world outcomes. The exported file is a
+separate, fresh, consent-checked read and is never sent by Copy.
+
+Regression: `node --test tests/js/analysis_handoff_scope.test.mjs` now checks
+that the actual copied request carries mixed 2+2 counts and the event-level
+warning, including a legacy 1+2 preview without daily chunks; ordinary-only,
+health-only and zero-event cases retain their existing copy semantics. The
+synthetic DOM verifies no ticket/download on Copy. Earlier stale test assertions
+promising complete downloads or nonexistent date pagination were corrected to
+match the current conservative interface wording. These deterministic fixtures
+are **not** native browser/WCAG, multi-team pilot, provider validation,
+competitor parity or measured ROI evidence.
