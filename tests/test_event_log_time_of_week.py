@@ -302,3 +302,103 @@ def test_event_local_zone_is_required_and_cannot_change_utc_event_dimensions():
     ]:
         with pytest.raises(workspace.EventLogWorkspaceError):
             query.parse(spec)
+
+
+def test_composite_utc_event_bucket_can_be_grouped_by_activity():
+    # Two dimensions suffice to compare activities across all 168 hourly bins.
+    log = _import([
+        ("a", "Approve", "2024-01-01T00:30:00Z"),
+        ("a", "Approve", "2024-01-01T00:45:00Z"),
+        ("b", "Approve", "2024-01-01T00:50:00Z"),
+        ("c", "Review", "2024-01-01T00:55:00Z"),
+        ("c", "Review", "2024-01-02T01:30:00Z"),
+    ])
+    spec = {
+        "level": "events", "dimensions": ["activity", "weekday_hour_utc"],
+        "measures": [{"fn": "count"}, {"fn": "cases"}, {"fn": "share"}],
+        "order": "dimensions", "limit": 168,
+    }
+    result = query.run(log, spec)
+    assert result["rows"] == [
+        ["Approve", "1 Monday 00", 3, 2, 0.6],
+        ["Review", "1 Monday 00", 1, 1, 0.2],
+        ["Review", "2 Tuesday 01", 1, 1, 0.2],
+    ]
+    assert result["matching"] == {"rows": 5, "cases": 3}
+    assert result["rows_truncated"] is False
+
+
+def test_composite_local_event_bucket_combines_dst_fold_and_preserves_activity():
+    log = _import([
+        ("a", "Seen", "2024-03-31T00:30:00Z"),
+        ("b", "Seen", "2024-03-31T01:30:00Z"),
+        ("c", "Seen", "2024-10-27T00:30:00Z"),
+        ("d", "Seen", "2024-10-27T01:30:00Z"),
+        ("e", "Other", "2024-10-27T01:45:00Z"),
+    ])
+    spec = {
+        "level": "events", "dimensions": ["weekday_hour_local", "activity"],
+        "time_zone": "Europe/Stockholm",
+        "measures": [{"fn": "count"}, {"fn": "cases"}],
+        "order": "dimensions", "limit": 168,
+    }
+    result = query.run(log, spec)
+    assert result["rows"] == [
+        ["7 Sunday 01", "Seen", 1, 1],
+        ["7 Sunday 02", "Other", 1, 1],
+        ["7 Sunday 02", "Seen", 2, 2],
+        ["7 Sunday 03", "Seen", 1, 1],
+    ]
+    saved = query.save(log, {"name": "Observed local activity by hour", "spec": spec})
+    reloaded = query.list_saved(log)["analyses"][0]
+    assert reloaded["analysis_id"] == saved["analysis_id"]
+    assert query.run(log, reloaded["spec"])["rows"] == result["rows"]
+
+
+def test_composite_case_intake_and_completion_local_bins_with_second_dimension():
+    log = _import([
+        ("a", "Intake", "2024-01-07T23:30:00Z"),
+        ("a", "Done", "2024-01-08T01:30:00Z"),
+        ("b", "Review", "2024-01-08T00:30:00Z"),
+        ("b", "Done", "2024-01-08T01:40:00Z"),
+    ])
+    result = query.run(log, {
+        "level": "cases",
+        "dimensions": ["start_weekday_hour_local", "first_activity"],
+        "time_zone": "Europe/Stockholm",
+        "measures": [{"fn": "count"}], "order": "dimensions",
+    })
+    assert result["rows"] == [
+        ["1 Monday 00", "Intake", 1],
+        ["1 Monday 01", "Review", 1],
+    ]
+    completion = query.run(log, {
+        "level": "cases",
+        "dimensions": ["end_weekday_hour_local", "last_activity"],
+        "time_zone": "Europe/Stockholm",
+        "measures": [{"fn": "count"}], "order": "dimensions",
+    })
+    assert completion["rows"] == [["1 Monday 02", "Done", 2]]
+    utc = query.run(log, {
+        "level": "cases",
+        "dimensions": ["start_weekday_hour_utc", "first_activity"],
+        "measures": [{"fn": "count"}], "order": "dimensions",
+    })
+    assert utc["rows"] == [
+        ["1 Monday 00", "Review", 1],
+        ["7 Sunday 23", "Intake", 1],
+    ]
+
+
+def test_composite_time_buckets_reject_implicit_zone_and_cross_level_scope():
+    invalid = [
+        {"level": "events", "dimensions": ["weekday_hour_local"]},
+        {"level": "cases", "dimensions": ["start_weekday_hour_local"]},
+        {"level": "events", "dimensions": ["weekday_hour_utc"], "time_zone": "Europe/Stockholm"},
+        {"level": "cases", "dimensions": ["start_weekday_hour_utc"], "time_zone": "Europe/Stockholm"},
+        {"level": "events", "dimensions": ["start_weekday_hour_local"], "time_zone": "Europe/Stockholm"},
+        {"level": "cases", "dimensions": ["weekday_hour_local"], "time_zone": "Europe/Stockholm"},
+    ]
+    for spec in invalid:
+        with pytest.raises(workspace.EventLogWorkspaceError):
+            query.parse({**spec, "measures": [{"fn": "count"}]})
