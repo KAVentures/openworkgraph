@@ -3207,3 +3207,48 @@ test('equal-count source labels use deterministic literal-name tie ordering', as
   assert.deepEqual(h.copied, ['request-source-breakdown']);
   assert.equal(h.tickets.length, 0);
 });
+
+
+test('distinct long source labels remain distinguishable after the 96-codepoint preview bound', async () => {
+  const prefix = 'long-'.padEnd(96, 'x');
+  const sources = {[prefix + '-first']: 3, [prefix + '-second']: 2};
+  const h = await openSourceSummaryPreview(sources, 5);
+  const visible = prefix + '… [source label truncated]';
+  assert.equal(h.modals, 1);
+  assert.ok(h.modalHtml.includes(visible + ' [distinct reported category 1/2]: 3'));
+  assert.ok(h.modalHtml.includes(visible + ' [distinct reported category 2/2]: 2'));
+  assert.doesNotMatch(h.modalHtml, /-first|-second/,
+    'bounded preview must not leak hidden suffixes');
+  assert.match(h.modalHtml, /labels are not verified identities/);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-source-breakdown']);
+  assert.equal(h.tickets.length, 0);
+  assert.equal(h.downloads, 0);
+});
+
+test('escaped bidi control and literal codepoint text are distinct reported source categories', async () => {
+  const rendered = 'team[U+202E]ops';
+  const sources = {'team\u202Eops': 2, [rendered]: 2};
+  const h = await openSourceSummaryPreview(sources, 4);
+  assert.equal(h.modals, 1);
+  assert.ok(h.modalHtml.includes(rendered + ' [distinct reported category 1/2]: 2'));
+  assert.ok(h.modalHtml.includes(rendered + ' [distinct reported category 2/2]: 2'));
+  assert.doesNotMatch(h.modalHtml, /\u202E/, 'raw bidi override must not enter rendered HTML');
+  assert.doesNotMatch(h.modalHtml, /additional source categories/);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-source-breakdown']);
+  assert.equal(h.tickets.length, 0);
+  assert.equal(h.downloads, 0);
+});
+
+test('distinct empty and whitespace-only source keys do not collapse in review', async () => {
+  const h = await openSourceSummaryPreview({'': 2, '   ': 1}, 3);
+  assert.equal(h.modals, 1);
+  assert.ok(h.modalHtml.includes('[blank source label] [distinct reported category 1/2]: 2'));
+  assert.ok(h.modalHtml.includes('[blank source label] [distinct reported category 2/2]: 1'));
+  assert.match(h.modalHtml, /labels are not verified identities/);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-source-breakdown']);
+  assert.equal(h.tickets.length, 0);
+  assert.equal(h.downloads, 0);
+});
