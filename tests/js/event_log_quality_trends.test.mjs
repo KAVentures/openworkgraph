@@ -136,6 +136,12 @@ test('on-demand local read renders counts as text and rejects stale log response
   assert.match(details.children[0].textContent,/Rejected 2/);
   assert.match(details.children[1].textContent,/recorded categories/);
   assert.equal(details.children[2].children[0].children[1].children[0].children[0].textContent,'=unsafe');
+  picker.value='log_other';
+  picker.listeners.change();
+  assert.equal(details.children.length,0);
+  assert.equal(select.disabled,true);
+  assert.equal(download.disabled,true);
+  assert.equal(output.children.length,0);
 });
 
 test('batch drill-down shows bounded, counts-only rejection categories with overlap warning', () => {
