@@ -382,6 +382,15 @@ def assess(mapping: Any) -> dict:
     # of the two) can overwrite overlapping contact data just as a legacy-only
     # mapping can. Normalize supported paths only, without exposing literals.
     operation_contact_keys: set[tuple[str, ...]] = set()
+    # Pathless add/replace can carry an object with an `emails` member.
+    # That is a whole-array contact write even without a literal PATCH path.
+    # A pathless remove or explicitly missing value is already unsupported
+    # and must not manufacture a valid contact target for overlap analysis.
+    if any(not path and verb in {"add", "replace"}
+           and value_present is not False and fields is not None
+           and "emails" in fields
+           for verb, path, value_present, fields in (user_patch_ops or [])):
+        operation_contact_keys.add(("field", "emails"))
     for path in contact_operation_paths:
         selector = _CONTACT_SELECTOR.fullmatch(path)
         if selector is None:
