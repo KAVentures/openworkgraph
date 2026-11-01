@@ -140,6 +140,12 @@ def source_operation_receipt(
         if provider == "stripe" and detail.get("scope") != "stripe_processor_only":
             return _unknown(resource_ref, expected_operation, "provider_receipt_scope_conflict")
         if provider == "jira":
+            # The adapter's independently verified resolution is scoped to
+            # this Jira issue, never to customer acknowledgement or refund.
+            # A missing or conflicting scope must not acquire authority from
+            # the otherwise plausible status and timestamp fields.
+            if detail.get("scope") != "jira_issue_only_not_customer_acknowledgement_or_refund":
+                return _unknown(resource_ref, expected_operation, "provider_receipt_scope_conflict")
             # The existing Jira adapter reports a verified resolution only
             # with BOTH a resolved detail status and a timezone-aware source
             # resolution timestamp. A contradictory or incomplete detail
