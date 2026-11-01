@@ -955,7 +955,7 @@ def test_ascii_case_contact_selector_remains_supported_by_shipped_dispatch(path)
     ["externalId", "members"],
     ['members[value eq "usr_123"]'],
     ['MEMBERS[VALUE EQ "usr_123"]'],
-    ['members[value eq "u\\u0073r_123"]'],
+    ['members[value eq "u\u0073r_123"]'],
 ])
 def test_optional_group_patch_mapping_accepts_only_shipped_static_paths(client, patch_paths):
     groups = {"enabled": True, "match_attributes": ["externalId"],
@@ -1044,8 +1044,8 @@ def test_group_patch_member_selectors_keep_opaque_user_ids_case_sensitive(client
 
 @pytest.mark.parametrize("paths", [
     ['members[value eq "usr_123"]', 'MEMBERS[VALUE EQ "usr_123"]'],
-    ['members[value eq "usr_123"]', r'members[value eq "u\\u0073r_123"]'],
-    [r'members[value eq "u\\u0073r_123"]', 'members[value eq "usr_123"]'],
+    ['members[value eq "usr_123"]', r'members[value eq "u\u0073r_123"]'],
+    [r'members[value eq "u\u0073r_123"]', 'members[value eq "usr_123"]'],
     ["members", "MEMBERS"],
 ])
 def test_group_patch_effective_duplicate_is_refused_without_echo(paths):
