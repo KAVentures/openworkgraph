@@ -216,6 +216,21 @@ valid replay still fails closed. Synthetic regressions check both source orders
 and the candidate-accepting diagnostic. These are evaluator-only parity and
 provenance checks, not a change to production deduplication or a held-out
 score claim.
+**Evaluator duplicate-claim preflight (2026-11-01):** The source replay
+canonicalizer now validates JSON shape *before* calling `json.dumps`, rather
+than allocating an arbitrarily large serialized string and checking its size
+afterward. It caps traversed nodes at 10,000 and the serialized result at
+65,536 characters, with an early raw-string budget. Non-string object keys,
+nonfinite floats, unsupported Python objects, oversized integers, cycles and
+reused in-memory container identities are withheld. Distinct but structurally
+equal JSON containers, key-order variations and ordinary literal JSON replays
+remain admissible. A rejected duplicate withholds that event ID from
+evaluator-only linking, including the candidate-accepting diagnostic; it does
+not authorize a time-only join. These are synthetic provenance and resource
+bounds, not production-linker validation, a held-out accuracy result or
+customer-scale performance proof. The separate unmerged #500 production-linker
+draft must not be treated as current `main` behavior.
+
 Rich-evidence top-level tab/transfer fields are convenience copies of
 metadata, not independent source claims. Both locations, when present,
 now require **literal, pattern-valid matching strings**: Python equality
