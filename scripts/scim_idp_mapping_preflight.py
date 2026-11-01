@@ -264,6 +264,14 @@ def assess(mapping: Any) -> dict:
             if "externalid" in group_match and "externalid" not in group_create:
                 add("caution", "group_externalid_match_not_created", "groups.create_attributes",
                     "Group matching declares externalId but Group creation omits it; verify provider-scoped correlation")
+            if "members" in group_create:
+                # Group members[].value is an OWG User resource ID returned
+                # from this provider's SCIM Users endpoint, never an email,
+                # externalId, OIDC subject, or authority to grant access.
+                # A declared IdP field cannot establish how it resolves IDs.
+                add("caution", "group_member_id_resolution_unverified",
+                    "groups.create_attributes",
+                    "Declared Group members require current provider-scoped OWG User IDs; verify IdP member-value resolution with disposable Users")
         if not group_match:
             add("blocker", "missing_group_match", "groups.match_attributes",
                 "Enabled Groups require an explicit matching attribute")
