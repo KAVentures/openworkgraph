@@ -489,3 +489,91 @@ def test_matching_or_absent_legacy_business_outcome_remains_provider_only(
     assert result["agent_execution_authorized"] is False
     assert result["read_only"] is True
     assert "PRIVATE_NEVER_RETURN" not in str(result)
+
+
+# The provider operation receipt is never authority for business completion,
+# customer acknowledgement, agent causality or permission to execute. Optional
+# injected/cached assertions at either nesting level must not contradict that
+# contract even when the provider's operational state is otherwise valid.
+_AUTHORITY_FIELDS = (
+    "business_objective_verified",
+    "customer_outcome_verified",
+    "agent_caused_operation_verified",
+    "agent_execution_authorized",
+)
+
+
+def _with_optional_operation_detail(graph, operation, provider):
+    # The current GitHub adapter omits a nested operation detail; an injected
+    # cache may supply a valid one. The other provider fixtures already have
+    # their production-shaped details.
+    if provider == "github":
+        graph["source_evidence"]["verified_operational_outcome"] = {
+            "kind": operation, "verified": True,
+        }
+    return graph
+
+
+@pytest.mark.parametrize("operation,provider,kind,state,scope_flag", OPERATIONS)
+@pytest.mark.parametrize("level", ["source", "detail"])
+@pytest.mark.parametrize("field", _AUTHORITY_FIELDS)
+@pytest.mark.parametrize(
+    "contradiction", [True, 1, "false", None, {}],
+    ids=["true", "numeric-one", "string-false", "null", "object"],
+)
+def test_explicit_customer_business_or_agent_authority_conflict_fails_closed(
+    operation, provider, kind, state, scope_flag, level, field, contradiction,
+):
+    graph = _with_optional_operation_detail(
+        _graph(operation, provider, kind, state), operation, provider,
+    )
+    source = graph["source_evidence"]
+    target = source if level == "source" else source["verified_operational_outcome"]
+    target[field] = contradiction
+    calls = []
+
+    def read(ref, **kwargs):
+        calls.append((ref, kwargs))
+        return graph
+
+    receipt = source_operation_receipt(
+        REF, operation, record_reader=read, now=WHEN,
+    )
+    assert receipt["availability"] == "unknown"
+    assert receipt["reason"] == "provider_receipt_scope_conflict"
+    assert receipt["operation_verified"] is False
+    for key in _AUTHORITY_FIELDS:
+        assert receipt[key] is False
+    assert receipt["read_only"] is True
+    assert "PRIVATE_NEVER_RETURN" not in str(receipt)
+    assert calls == [(REF, {
+        "since": None, "until": None, "include_source_status": True,
+        "required_source_provider_kind": (provider, kind),
+    })]
+
+
+@pytest.mark.parametrize("operation,provider,kind,state,scope_flag", OPERATIONS)
+@pytest.mark.parametrize("level", ["source", "detail"])
+@pytest.mark.parametrize("explicit_false", [False, True])
+def test_absent_or_literal_false_authority_assertions_preserve_provider_only(
+    operation, provider, kind, state, scope_flag, level, explicit_false,
+):
+    graph = _with_optional_operation_detail(
+        _graph(operation, provider, kind, state), operation, provider,
+    )
+    source = graph["source_evidence"]
+    target = source if level == "source" else source["verified_operational_outcome"]
+    if explicit_false:
+        target.update({key: False for key in _AUTHORITY_FIELDS})
+    receipt = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: graph, now=WHEN,
+    )
+    assert receipt["availability"] == "source_reported"
+    assert receipt["operation_verified"] is True
+    assert receipt["verification_scope"] == (
+        "authenticated_source_provider_operational_state"
+    )
+    for key in _AUTHORITY_FIELDS:
+        assert receipt[key] is False
+    assert receipt["read_only"] is True
+    assert "PRIVATE_NEVER_RETURN" not in str(receipt)
