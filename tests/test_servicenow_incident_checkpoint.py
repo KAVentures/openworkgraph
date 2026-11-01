@@ -257,3 +257,37 @@ def test_post_append_checkpoint_failure_reports_unverified(environment, capsys, 
         assert len(posts) == 1
     assert not (environment[0] / "checkpoint.json").exists()
     assert workspace.summary(environment[2])["events"] == 2
+
+
+@pytest.mark.parametrize("latest, expected", [
+    ("2026-03-31T12:00:00+00:00", "2026-03-29 14:00:00"),
+    ("2026-10-27T12:00:00+00:00", "2026-10-25 13:00:00"),
+])
+def test_overlap_uses_utc_subtraction_then_declared_local_dst(latest, expected):
+    from zoneinfo import ZoneInfo
+    from server.servicenow_incident_checkpoint import _since
+    state = {"initial_since": "2026-03-01 00:00:00",
+             "latest_source_utc": latest}
+    assert _since(state, ZoneInfo("Europe/Stockholm")) == expected
+    state["initial_since"] = "2026-11-01 00:00:00"
+    assert _since(state, ZoneInfo("Europe/Stockholm")) == state["initial_since"]
+
+
+def test_missing_required_child_counts_never_commits_checkpoint(environment, capsys, monkeypatch):
+    import server.servicenow_incident_checkpoint as module
+    provider = Provider()
+
+    def incomplete_receipt(_args, **_kwargs):
+        print(json.dumps({"format": "openworkgraph.servicenow-selected-run.v1",
+                          "status": "completed", "local_owg_append_performed": True,
+                          "source_writes_performed": False, "checkpoint_advanced": False,
+                          "historical_completeness": "unknown", "rejected_events": 0}))
+        return 0
+
+    monkeypatch.setattr(module, "run_main", incomplete_receipt)
+    assert main(cli(environment, 8765, first=True), provider_opener=provider,
+                now_fn=lambda: NOW) == 3
+    report = json.loads(capsys.readouterr().out)
+    assert report["status"] == "append_unverified"
+    assert not (environment[0] / "checkpoint.json").exists()
+    assert provider.calls == 0
