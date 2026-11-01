@@ -34,6 +34,13 @@ const path=require('node:path');
   const packs=page.locator('#owgDomainPacks');await packs.waitFor();
   await page.locator('#owgDomainPackSetup').click();
   await page.locator('#owgDomainPackStatus').filter({hasText:'Not installed on this log.'}).waitFor();
+  // Both packs are offered; switching shows the other pack's roles and switching back restores this one.
+  assert.deepEqual(await page.locator('#owgDomainPackChoice option').allTextContents(),['Order to cash','Procure to pay']);
+  await page.locator('#owgDomainPackChoice').selectOption('procure_to_pay');
+  await page.locator('#owgDomainPackRole-purchase_order').waitFor();
+  assert.equal(await page.locator('#owgDomainPackRole-order').count(),0);
+  await page.locator('#owgDomainPackChoice').selectOption('order_to_cash');
+  await page.locator('#owgDomainPackRole-order').waitFor();
   // No log name equals a role label here, so nothing is preselected; map every role explicitly.
   assert.equal(await page.locator('#owgDomainPackRole-order').inputValue(),'');
   for(const kind of ['object_types','activities'])for(const [role,name] of Object.entries(mapping[kind]))
@@ -67,7 +74,7 @@ const path=require('node:path');
   await page.locator('#owgDomainPackStatus').filter({hasText:'Uninstalled 1.0.0; 4 pack case metrics were removed.'}).waitFor();
   assert.equal(await page.locator('#owgDomainPackRun').isDisabled(),true);
   assert.deepEqual(errors,[]);
-  console.log('Domain pack browser passed: order-to-cash roles mapped to a log\'s own names, install, report with planted deviations, parameter change and reinstall, WCAG and 390 px width, uninstall.');
+  console.log('Domain pack browser passed: order-to-cash roles mapped to a log\'s own names, install, report with planted deviations, parameter change and reinstall, WCAG and 390 px width, uninstall, and switching between the order-to-cash and procure-to-pay packs.');
  }finally{
   if(browser)await browser.close();server.kill('SIGTERM');
   await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);

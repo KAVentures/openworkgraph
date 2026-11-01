@@ -214,7 +214,7 @@ def test_invalid_installs_are_refused(change, message):
 
 def test_unknown_packs_are_refused():
     with pytest.raises(workspace.EventLogWorkspaceError, match="unknown domain pack"):
-        packs.definitions("procure_to_pay")
+        packs.definitions("hire_to_retire")
 
 
 def test_real_http_routes_require_a_dashboard_session(tmp_path):

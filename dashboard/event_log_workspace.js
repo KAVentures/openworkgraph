@@ -814,59 +814,68 @@
       try{
         const [catalog,installs]=await Promise.all([getJSON('/v1/event-log-domain-packs'),getJSON(base)]);
         if(!current(t))return;
-        const pack=catalog.packs[0],installed=installs.installs.find(i=>i.pack_id===pack.pack_id);
-        const choices={object_types:{},activities:{}},inputs={};
-        const rows=[];
-        for(const [kind,names] of [['object_types',installs.log_object_types],['activities',installs.log_activities]])for(const r of pack[kind]){
-          const s=select('owgDomainPackRole-'+r.role,[['',r.required?'Choose (required)':'Not in this log'],...names.map(n=>[n,n])]);
-          s.value=packGuess(r,names,installed&&installed.mapping[kind][r.role]);s.setAttribute('aria-label',r.label+(r.required?' (required)':' (optional)'));
-          s.onchange=()=>{choices[kind][r.role]=s.value;};choices[kind][r.role]=s.value;
-          rows.push([kind==='object_types'?'Object type':'Activity',r.label+(r.required?'':' (optional)'),s]);
-        }
-        const params=pack.parameters.map(p=>{const i=input('owgDomainPackParam-'+p.name,'number');i.min=String(p.min);i.max=String(p.max);i.value=String(installed?installed.parameters[p.name]:p.default);inputs[p.name]=i;return field(p.label,i);});
-        const install=button(installed?'Install '+pack.latest_version+(installed.version===pack.latest_version?' again':' (upgrade from '+installed.version+')'):'Install '+pack.title+' '+pack.latest_version);install.id='owgDomainPackInstall';
-        const run=button('Run pack report','secondary');run.id='owgDomainPackRun';run.disabled=!installed;
-        const remove=button('Uninstall','secondary');remove.id='owgDomainPackUninstall';remove.disabled=!installed;
-        const paramRow=el('div',null,'row');paramRow.style.alignItems='end';paramRow.append(...params);
-        const actions=el('div',null,'row');actions.append(install,run,remove);
-        const assumptions=el('ul');assumptions.className='muted';pack.assumptions.forEach(a=>assumptions.appendChild(el('li',a)));
-        form.replaceChildren(el('h4',pack.title+' '+pack.latest_version),el('div',pack.description,'muted'),table(['Kind','Role','Name in this log'],rows),paramRow,actions,el('h4','Assumptions'),assumptions);
-        status.textContent=(installed?'Installed: '+installed.version+' on '+String(installed.installed_at).slice(0,10)+'.':'Not installed on this log.')+(installs.names_truncated?' Only the 1,000 most frequent object types and activities are offered.':'');
-        install.onclick=async()=>{
-          const t2=++turn;install.disabled=true;
-          try{
-            const parameters={};for(const [k,i] of Object.entries(inputs))parameters[k]=Number(i.value);
-            const r=await (await post(base+'/'+pack.pack_id,{version:pack.latest_version,mapping:packMapping(pack,choices),parameters})).json();
-            if(!current(t2))return;
-            run.disabled=remove.disabled=false;
-            status.textContent=({installed:'Installed',upgraded:'Upgraded from '+r.previous_version+' to',reconfigured:'Reinstalled'}[r.change])+' '+r.version+'. '+r.metric_ids.length+' case metrics were added to this log’s metric library.'+(r.not_applicable.length?' '+r.not_applicable.length+' definitions do not apply without their optional roles.':'');
-          }catch(error){if(current(t2))status.textContent=error.message;}
-          finally{if(current(t2))install.disabled=false;}
-        };
-        run.onclick=async()=>{
-          const t2=++turn;run.disabled=true;out.replaceChildren(el('div','Running…','muted'));
-          try{
-            const r=await getJSON(base+'/'+pack.pack_id+'/report');
-            if(!current(t2))return;
-            const v=packReportRows(r);
-            out.replaceChildren(el('div',r.pack.title+' '+r.pack.version+' applied through your mapping.','muted'),
-              el('h4','Case metrics'),table(['Metric','Object type','Cases','Median','90th percentile','With a value'],v.metrics),
-              el('h4','Compliance rules'),table(['Object type','Rule','Applies to','Violating','Unknown'],v.compliance),
-              ...(v.objectRules.length?[el('h4','Object rules'),table(['Rule','Applies to','Violating'],v.objectRules)]:[]),
-              el('h4','Reference object model'),el('div',v.model,'note'),
-              ...(v.notApplicable.length?[el('div','Not applicable with this mapping: '+v.notApplicable.join(', ')+'.','muted')]:[]),
-              el('div',r.interpretation,'muted'));
-          }catch(error){if(current(t2))out.replaceChildren(el('div',error.message,'muted'));}
-          finally{if(current(t2))run.disabled=false;}
-        };
-        remove.onclick=async()=>{
-          const t2=++turn;remove.disabled=true;
-          try{
-            const r=await (await api(base+'/'+pack.pack_id,{method:'DELETE'})).json();
-            if(!current(t2))return;
+        const chooser=select('owgDomainPackChoice',catalog.packs.map(p=>[p.pack_id,p.title]));
+        const preferred=catalog.packs.find(p=>installs.installs.some(i=>i.pack_id===p.pack_id));if(preferred)chooser.value=preferred.pack_id;
+        const show=()=>{
+          const pack=catalog.packs.find(p=>p.pack_id===chooser.value),installed=installs.installs.find(i=>i.pack_id===pack.pack_id);
+          const choices={object_types:{},activities:{}},inputs={};
+          const rows=[];
+          for(const [kind,names] of [['object_types',installs.log_object_types],['activities',installs.log_activities]])for(const r of pack[kind]){
+            const s=select('owgDomainPackRole-'+r.role,[['',r.required?'Choose (required)':'Not in this log'],...names.map(n=>[n,n])]);
+            s.value=packGuess(r,names,installed&&installed.mapping[kind][r.role]);s.setAttribute('aria-label',r.label+(r.required?' (required)':' (optional)'));
+            s.onchange=()=>{choices[kind][r.role]=s.value;};choices[kind][r.role]=s.value;
+            rows.push([kind==='object_types'?'Object type':'Activity',r.label+(r.required?'':' (optional)'),s]);
+          }
+          const params=pack.parameters.map(p=>{const i=input('owgDomainPackParam-'+p.name,'number');i.min=String(p.min);i.max=String(p.max);i.value=String(installed?installed.parameters[p.name]:p.default);inputs[p.name]=i;return field(p.label,i);});
+          const install=button(installed?'Install '+pack.latest_version+(installed.version===pack.latest_version?' again':' (upgrade from '+installed.version+')'):'Install '+pack.title+' '+pack.latest_version);install.id='owgDomainPackInstall';
+          const run=button('Run pack report','secondary');run.id='owgDomainPackRun';run.disabled=!installed;
+          const remove=button('Uninstall','secondary');remove.id='owgDomainPackUninstall';remove.disabled=!installed;
+          const paramRow=el('div',null,'row');paramRow.style.alignItems='end';paramRow.append(...params);
+          const actions=el('div',null,'row');actions.append(install,run,remove);
+          const assumptions=el('ul');assumptions.className='muted';pack.assumptions.forEach(a=>assumptions.appendChild(el('li',a)));
+          form.replaceChildren(field('Domain pack',chooser),el('h4',pack.title+' '+pack.latest_version),el('div',pack.description,'muted'),table(['Kind','Role','Name in this log'],rows),paramRow,actions,el('h4','Assumptions'),assumptions);
+          status.textContent=(installed?'Installed: '+installed.version+' on '+String(installed.installed_at).slice(0,10)+'.':'Not installed on this log.')+(installs.names_truncated?' Only the 1,000 most frequent object types and activities are offered.':'');
+          install.onclick=async()=>{
+            const t2=++turn;install.disabled=true;
+            try{
+              const parameters={};for(const [k,i] of Object.entries(inputs))parameters[k]=Number(i.value);
+              const r=await (await post(base+'/'+pack.pack_id,{version:pack.latest_version,mapping:packMapping(pack,choices),parameters})).json();
+              if(!current(t2))return;
+              run.disabled=remove.disabled=false;
+            installs.installs=[...installs.installs.filter(i=>i.pack_id!==pack.pack_id),r];
+              status.textContent=({installed:'Installed',upgraded:'Upgraded from '+r.previous_version+' to',reconfigured:'Reinstalled'}[r.change])+' '+r.version+'. '+r.metric_ids.length+' case metrics were added to this log’s metric library.'+(r.not_applicable.length?' '+r.not_applicable.length+' definitions do not apply without their optional roles.':'');
+            }catch(error){if(current(t2))status.textContent=error.message;}
+            finally{if(current(t2))install.disabled=false;}
+          };
+          run.onclick=async()=>{
+            const t2=++turn;run.disabled=true;out.replaceChildren(el('div','Running…','muted'));
+            try{
+              const r=await getJSON(base+'/'+pack.pack_id+'/report');
+              if(!current(t2))return;
+              const v=packReportRows(r);
+              out.replaceChildren(el('div',r.pack.title+' '+r.pack.version+' applied through your mapping.','muted'),
+                el('h4','Case metrics'),table(['Metric','Object type','Cases','Median','90th percentile','With a value'],v.metrics),
+                el('h4','Compliance rules'),table(['Object type','Rule','Applies to','Violating','Unknown'],v.compliance),
+                ...(v.objectRules.length?[el('h4','Object rules'),table(['Rule','Applies to','Violating'],v.objectRules)]:[]),
+                el('h4','Reference object model'),el('div',v.model,'note'),
+                ...(v.notApplicable.length?[el('div','Not applicable with this mapping: '+v.notApplicable.join(', ')+'.','muted')]:[]),
+                el('div',r.interpretation,'muted'));
+            }catch(error){if(current(t2))out.replaceChildren(el('div',error.message,'muted'));}
+            finally{if(current(t2))run.disabled=false;}
+          };
+          remove.onclick=async()=>{
+            const t2=++turn;remove.disabled=true;
+            try{
+              const r=await (await api(base+'/'+pack.pack_id,{method:'DELETE'})).json();
+              if(!current(t2))return;
+              installs.installs=installs.installs.filter(i=>i.pack_id!==pack.pack_id);
             run.disabled=true;out.replaceChildren();status.textContent='Uninstalled '+r.version+'; '+r.metrics_removed+' pack case metrics were removed.';
-          }catch(error){if(current(t2)){status.textContent=error.message;remove.disabled=false;}}
+            }catch(error){if(current(t2)){status.textContent=error.message;remove.disabled=false;}}
+          };
         };
+        // Switching packs drops any answer still on its way for the previous one.
+        chooser.onchange=()=>{turn++;out.replaceChildren();show();};
+        show();
       }catch(error){if(current(t))status.textContent=error.message;}
       finally{if(current(t))setup.disabled=false;}
     };
