@@ -1502,3 +1502,29 @@ competitor parity, commercial ROI, or a substitute for native browser,
 accessibility, packaging and large-install CI acceptance.
 
 Coordination: [#326 claim 6559758447](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6559758447).
+
+## Explicit review before detailed chronology (Worker B)
+
+The **Include detailed chronological evidence** option exposes more raw local event
+rows, titles, URLs and context than the default summary package. Selecting it
+does **not** immediately authorize an export ticket. The user must separately
+check **I have reviewed the sensitive-data warning and explicitly choose
+detailed evidence for this selected period**. Without that local acknowledgement,
+Download refuses before the ticket request and announces the reason in the
+existing accessible status region. Copy request and summary-only download
+remain usable without the detailed-data acknowledgement.
+
+The acknowledgement starts unchecked, is cleared whenever the detail choice
+changes, and is reset on every new prepared handoff. Period changes disable
+the stale checkbox and both actions; a pending download also disables the
+checkbox so its meaning cannot be changed mid-request. The export ticket still
+uses the frozen detail flag, redaction and period and must pass existing
+server-side consent, authentication, retention and ticket validation. Checking
+the box does **not** grant permission, confirm that redaction is anonymization,
+share data with an AI, validate a workflow, or authorize a business write.
+
+Synthetic mock-DOM regressions cover unacknowledged detailed-ticket refusal,
+copy/summary backward compatibility, acknowledgement before detailed ticket,
+pending disabled state, detail-toggle reset and stale/new-period reset.
+These are not real consenting-customer pilot evidence or native Chromium,
+accessibility, scale, cross-platform or packaging acceptance.
