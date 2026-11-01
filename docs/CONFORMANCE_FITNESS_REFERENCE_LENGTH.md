@@ -59,3 +59,9 @@ capture, provider call, tenant access, upload, persistence, new permission,
 REST/MCP endpoint or dashboard behavior. Native CI, including cross-platform
 pytest, browser, process collaboration, scale, accessibility, starter and
 packaging, must pass on the exact PR head before merging.
+
+## Related R6 KPI input validation
+
+The same analytics module exposes `kpis(..., sla_seconds=...)` to direct Python callers. Its authenticated REST endpoint already parses `sla_seconds` as an integer from 1 through 1,000,000,000. Direct calls now enforce that same inclusive bound and require a genuine Python integer (not a boolean), rejecting fractional values, numeric strings, nonfinite values and malformed types with `EventLogWorkspaceError` **before querying a saved log**. Omitting the SLA (`None`) remains valid. Existing valid integer thresholds, KPI results, REST/MCP/dashboard response shapes, consent and tenant controls are unchanged.
+
+Parameterized synthetic tests cover invalid inputs and both inclusive bounds without a database. They are not native CI, real-provider acceptance, or consenting-customer validation.
