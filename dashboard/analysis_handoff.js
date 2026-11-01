@@ -321,30 +321,45 @@
   }
   function sourceSummary(sources) {
     const shown = [];
-    let omittedCategories = 0, omittedEvents = 0;
-    // Source-map insertion order is not evidence importance: a long tail of
-    // empty/rare labels must not hide the largest observed source in a bounded
-    // review. Counts are already validated as a conserved safe-integer partition.
-    // Literal-name ties make the same source map reproducible across import order.
-    const ranked = Object.entries(sources).sort((a, b) =>
-      b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    // Source-map insertion order is not evidence importance. The review shows
+    // only eight labels, so a full Object.entries(...).sort(...) needlessly
+    // materializes and sorts every category in a large consenting import.
+    // Keep a sorted top-eight while scanning own literal keys once. This also
+    // handles own "__proto__"/"constructor" labels without inherited entries.
+    // Counts were already validated as a conserved safe-integer partition.
+    const ranked = [];
+    let categoryCount = 0, eventCount = 0;
+    for (const name in sources) {
+      if (!Object.prototype.hasOwnProperty.call(sources, name)) continue;
+      const count = sources[name];
+      categoryCount++;
+      eventCount += count;
+      let i = 0;
+      while (i < ranked.length &&
+        (ranked[i][1] > count ||
+          (ranked[i][1] === count && ranked[i][0] < name))) i++;
+      if (i < 8) {
+        ranked.splice(i, 0, [name, count]);
+        if (ranked.length > 8) ranked.pop();
+      }
+    }
+    const omittedCategories = categoryCount - ranked.length;
+    const omittedEvents = eventCount -
+      ranked.reduce((sum, [, count]) => sum + count, 0);
     // Two distinct reported source keys can render identically after the
     // 96-codepoint bound or control-character escaping. A reviewer must not
     // mistake those separate categories for a single verified source.
-    const visible = ranked.slice(0, 8).map(([name]) =>
+    const visible = ranked.map(([name]) =>
       name.trim() ? visibleEvidenceLabel(name, 'source') : '[blank source label]');
     const occurrences = new Map(), ordinals = new Map();
     for (const label of visible)
       occurrences.set(label, (occurrences.get(label) || 0) + 1);
     for (let i = 0; i < ranked.length; i++) {
-      const count = ranked[i][1];
-      if (i < visible.length) {
-        const label = visible[i], total = occurrences.get(label);
-        const ordinal = (ordinals.get(label) || 0) + 1;
-        ordinals.set(label, ordinal);
-        const distinct = total > 1 ? ` [distinct reported category ${ordinal}/${total}]` : '';
-        shown.push(`${label}${distinct}: ${count}`);
-      } else { omittedCategories++; omittedEvents += count; }
+      const label = visible[i], total = occurrences.get(label);
+      const ordinal = (ordinals.get(label) || 0) + 1;
+      ordinals.set(label, ordinal);
+      const distinct = total > 1 ? ` [distinct reported category ${ordinal}/${total}]` : '';
+      shown.push(`${label}${distinct}: ${ranked[i][1]}`);
     }
     return (shown.join(', ') || 'none') + (omittedCategories
       ? `; ${omittedCategories} additional source categories (${omittedEvents} selected events) omitted from this preview`
