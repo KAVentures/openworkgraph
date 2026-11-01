@@ -40,6 +40,7 @@ from .reconstruction_record_path import observed_record_path, record_path_index
 from .reconstruction_switches import observed_work_switches
 from .reconstruction_surfaces import observed_surface_runs
 from .reconstruction_transfer_episodes import disjoint_directional_transfer_episodes
+from .reconstruction_link_proof import directional_transfer_witness, observed_record_link_evidence
 
 _TRANSFER = re.compile(r"^[A-Za-z0-9:._-]{1,120}$")
 _TAB = re.compile(r"^[A-Za-z0-9:._-]{1,160}$")
@@ -477,7 +478,14 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
         if len(referenced_records) == 2 and any(
             row["action"] in ("copy", "paste") for row in group
         ):
-            join([row["event_id"] for row in group if row["ref"]], "clipboard_transfer")
+            # Join the actual witnessed endpoints, not every observation
+            # sharing this token. Same-record edges already attach other
+            # observations to the appropriate record.
+            pair = directional_transfer_witness(group)
+            if pair is None:
+                inconsistent_transfer_direction_groups += 1
+                continue
+            join(list(pair), "clipboard_transfer")
         else:
             join([row["event_id"] for row in group], "clipboard_transfer")
 
@@ -579,8 +587,11 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
     linked = link_observations(events)
     rows = {row["event_id"]: row for row in linked["rows"]}
     bases: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
-    for left, _right, basis in linked["links"]:
-        bases[linked["root"](left)][basis] += 1
+    link_edges: dict[str, list[tuple[str, str, str]]] = defaultdict(list)
+    for left, right, basis in linked["links"]:
+        root = linked["root"](left)
+        bases[root][basis] += 1
+        link_edges[root].append((left, right, basis))
     items: list[dict[str, Any]] = []
     item_of: dict[str, str] = {}
     record_positions, record_scope_positions = record_path_index(linked["rows"])
@@ -598,6 +609,9 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             [rows[i] for i in ids], position_index=record_positions,
             scope_positions=record_scope_positions,
         )
+        bridge_evidence = observed_record_link_evidence(
+            [rows[i] for i in ids], link_edges[linked["root"](ids[0])],
+        )
         items.append({
             "item_id": item_id,
             "event_ids": ids[:_MAX_EVENT_IDS],
@@ -612,6 +626,7 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             **segments,
             **surfaces,
             **record_path,
+            **bridge_evidence,
             "link_basis": basis,
             "cross_record_join": len(refs) > 1,
             "confidence": min(_CONFIDENCE[name] for name in basis) if basis else _CONFIDENCE["same_record"],
@@ -662,6 +677,9 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             "clock_gaps_alone_do_not_split_activity_segments": True,
             "observed_surface_runs_are_not_task_memberships": True,
             "observed_record_paths_are_not_verified_business_transitions": True,
+            "record_bridges_are_observed_link_witnesses_not_handoffs": True,
+            "directional_bridges_require_ordered_copy_paste": True,
+            "legacy_shared_token_bridges_have_no_observed_direction": True,
             "observed_record_changes_require_same_exact_capture_scope": True,
             "unknown_record_runs_do_not_create_transitions": True,
             "interleaved_nonmember_evidence_breaks_record_path_continuity": True,
