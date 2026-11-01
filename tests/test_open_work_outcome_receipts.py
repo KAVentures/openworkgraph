@@ -1148,3 +1148,91 @@ def test_operation_receipt_passes_provider_family_fence_to_reader(
     assert result["operation_verified"] is True
     assert result["customer_outcome_verified"] is False
     assert result["agent_execution_authorized"] is False
+
+
+@pytest.mark.parametrize(("provider", "kind", "host"), [
+    ("github", "pull_request", "github.com"),
+    ("jira", "issue", "team.atlassian.net"),
+    ("stripe", "invoice", "dashboard.stripe.com"),
+    ("stripe", "refund", "dashboard.stripe.com"),
+])
+@pytest.mark.parametrize("request_refresh", [False, True])
+@pytest.mark.parametrize("has_matching_row", [False, True])
+def test_unscoped_raw_event_projection_cannot_refresh_provider(
+    provider, kind, host, request_refresh, has_matching_row,
+):
+    # Even an exact-looking, allowlisted synthetic row is not proof of a
+    # canonical retained DB lookup. The provider must not be contacted before
+    # the outer operation receipt can reject the unscoped result.
+    calls = []
+    row = {
+        "event_id": "synthetic-1",
+        "observed_at": WHEN.isoformat(),
+        "event_type": "click",
+        "source": "browser",
+        "metadata": {"resource_reference": {
+            "resource_ref": REF, "provider": provider,
+            "resource_kind": kind, "host": host,
+        }},
+    }
+
+    def fake_source_reader(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"availability": "source_reported"}
+
+    graph = record_graph(
+        REF, _raw_events=[row] if has_matching_row else [],
+        include_source_status=request_refresh,
+        required_source_provider_kind=(provider, kind),
+        source_reader=fake_source_reader,
+    )
+    assert graph["record_observed"] is has_matching_row
+    assert graph["source_rows_scoped_to_exact_record"] is False
+    assert graph["source_log_join_supported"] is False
+    assert graph["source_evidence"]["availability"] == "unknown"
+    assert graph["source_evidence"]["reason"] == (
+        "unscoped_raw_events_cannot_authorize_source_refresh"
+        if request_refresh else "source_refresh_not_requested"
+    )
+    assert calls == []
+
+
+@pytest.mark.parametrize(("provider", "kind", "host"), [
+    ("github", "pull_request", "github.com"),
+    ("jira", "issue", "team.atlassian.net"),
+    ("stripe", "invoice", "dashboard.stripe.com"),
+    ("stripe", "refund", "dashboard.stripe.com"),
+])
+def test_canonical_exact_record_read_still_allows_explicit_source_refresh(
+    monkeypatch, provider, kind, host,
+):
+    import importlib
+
+    module = importlib.import_module("server.record_graph")
+    row = {
+        "event_id": "retained-1",
+        "observed_at": WHEN.isoformat(),
+        "event_type": "click",
+        "source": "browser",
+        "metadata": {"resource_reference": {
+            "resource_ref": REF, "provider": provider,
+            "resource_kind": kind, "host": host,
+        }},
+    }
+    monkeypatch.setattr(module, "_record_rows", lambda *_args, **_kwargs: [row])
+    calls = []
+
+    def fake_source_reader(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"availability": "source_reported", "source_state_reported": True}
+
+    graph = record_graph(
+        REF, include_source_status=True,
+        required_source_provider_kind=(provider, kind),
+        source_reader=fake_source_reader,
+    )
+    assert graph["record_observed"] is True
+    assert graph["source_rows_scoped_to_exact_record"] is True
+    assert graph["source_log_join_supported"] is True
+    assert graph["source_evidence"]["availability"] == "source_reported"
+    assert len(calls) == 1
