@@ -174,3 +174,45 @@ with TestClient(app) as client:
     result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env,
                             capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+
+def test_review_queue_flags_recorded_issues_without_calling_missing_data_clean():
+    digest = "a" * 64
+    def report(batch, *, accepted, rejected, missing, events):
+        return {"batch": batch, "kind": "append" if batch else "import",
+                "transform": {"transform_sha256": digest},
+                "rows": {"accepted": accepted, "rejected": rejected,
+                         "duplicates_skipped_on_append": 0},
+                "diagnostics": {"events": events, "events_without_resource": missing,
+                                "events_sharing_a_timestamp_in_a_case": 0,
+                                "events_dated_after_reference": 0}}
+    result = trends.build([
+        report(0, accepted=2, rejected=0, missing=0, events=2),
+        report(1, accepted=2, rejected=1, missing=1, events=2),
+        report(3, accepted=0, rejected=0, missing=0, events=0),
+    ], [2])
+    queue = result["review_queue"]
+    assert [r["batch"] for r in queue] == [0, 1, 2, 3]
+    assert queue[0]["status"] == "no_recorded_issue"
+    assert queue[0]["flags"] == []
+    assert queue[1]["status"] == "recorded_issue"
+    assert queue[1]["flags"] == ["rejected_input_rows", "events_without_resource"]
+    assert queue[1]["unknown_fields"] == []
+    assert queue[2] == {"batch": 2, "status": "missing_report",
+                        "flags": [], "unknown_fields": ["quality_report"]}
+    assert queue[3]["status"] == "incomplete_evidence"
+    assert "events_without_resource" in queue[3]["unknown_fields"]
+    assert "comparison_missing_intermediate_report" in queue[3]["unknown_fields"]
+    assert result["interpretation"]["review_queue_is_descriptive_not_quarantine"] is True
+    assert trends.build([], [0])["review_queue"][0]["status"] == "missing_report"
+    assert "alice" not in json.dumps(queue)
+
+
+def test_review_queue_unknown_legacy_fields_and_transform_are_not_clean():
+    report = {"batch": 0, "rows": {"accepted": 2, "rejected": 0},
+              "diagnostics": {"events": 2, "events_without_resource": 0}}
+    item = trends.build([report])["review_queue"][0]
+    assert item["status"] == "incomplete_evidence"
+    assert "transform_unverified" in item["unknown_fields"]
+    assert "events_sharing_timestamp" in item["unknown_fields"]
+    assert item["flags"] == []
