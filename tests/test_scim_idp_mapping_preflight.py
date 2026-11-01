@@ -1189,3 +1189,124 @@ def test_checked_optional_group_counts_cli_parity_without_exposing_member_id():
     assert report["checked"]["group_patch"] == 2
     assert "overlapping_group_member_patch_paths" in codes(report)
     assert "opaque_secret_934" not in completed.stdout + completed.stderr
+
+
+# Optional Group operation-level declarations: static protocol/verb checks only.
+# These never execute provisioning or establish actual Entra/Okta compatibility.
+@pytest.mark.parametrize("client", ["entra", "okta", "other"])
+@pytest.mark.parametrize("verb,path,blocker", [
+    ("remove", 'members[value eq "usr_A"]', None),
+    ("REMOVE", 'MEMBERS[VALUE EQ "usr_A"]', None),
+    ("add", 'members[value eq "usr_A"]', "group_member_selector_requires_remove"),
+    ("replace", 'members[value eq "usr_A"]', "group_member_selector_requires_remove"),
+    ("remove", "displayName", "group_displayname_remove_forbidden"),
+    ("replace", "displayName", None),
+    ("add", "displayName", None),
+    ("remove", "externalId", None),
+    ("replace", "externalId", None),
+    ("add", "members", None),
+    ("replace", "members", None),
+    ("remove", "members", None),
+    ("move", "members", "unsupported_group_patch_verb"),
+    ("remove", 'members[unknown eq "usr_A"]', "unsupported_group_patch_path"),
+], ids=[
+    "selector-remove", "selector-ascii-case", "selector-add-blocked",
+    "selector-replace-blocked", "required-name-remove-blocked",
+    "name-replace", "name-add", "external-id-remove", "external-id-replace",
+    "whole-members-add", "whole-members-replace", "whole-members-remove",
+    "unknown-verb", "unknown-selector",
+])
+def test_group_patch_operation_verb_contract_is_fail_closed(client, verb, path, blocker):
+    groups = {
+        "enabled": True, "match_attributes": ["externalId"],
+        "create_attributes": ["displayName", "externalId"],
+        "patch_operations": [{"op": verb, "path": path}],
+    }
+    report = assess(mapping(client=client, groups=groups))
+    assert report["status"] == ("blocked" if blocker else "requires_live_validation")
+    assert (blocker in codes(report)) if blocker else not (
+        {"unsupported_group_patch_path", "unsupported_group_patch_verb",
+         "group_member_selector_requires_remove",
+         "group_displayname_remove_forbidden"} & codes(report))
+    assert report["checked"]["group_patch_operations"] == 1
+    assert "group_patch" not in report["checked"]
+    assert "usr_A" not in json.dumps(report)
+    assert "live_validation_required" in codes(report)
+    if "members[value" in path.lower() and blocker is None:
+        assert "group_member_patch_ids_unverified" in codes(report)
+
+
+@pytest.mark.parametrize("ops", [
+    [], [{"op": "remove", "path": "members"}],
+])
+def test_group_patch_operations_disabled_are_blocked_even_if_empty(ops):
+    groups = {"enabled": False, "match_attributes": [], "patch_operations": ops}
+    report = assess(mapping(groups=groups))
+    assert report["status"] == "blocked"
+    assert "disabled_groups_with_patch_operations" in codes(report)
+    assert report["checked"]["group_patch_operations"] == len(ops)
+
+
+def test_group_patch_operations_absence_preserves_legacy_report_shape():
+    assert assess(mapping())["checked"] == {
+        "user_matching": 2, "user_create": 4,
+        "user_patch": 2, "group_matching": 0,
+    }
+    groups = {"enabled": True, "match_attributes": ["externalId"],
+              "patch_attributes": ["members"]}
+    report = assess(mapping(groups=groups))
+    assert "group_patch_operations" not in report["checked"]
+    assert report["checked"]["group_patch"] == 1
+    groups["patch_operations"] = []
+    report = assess(mapping(groups=groups))
+    assert report["checked"]["group_patch_operations"] == 0
+    assert report["checked"]["group_patch"] == 1
+
+
+@pytest.mark.parametrize("bad_ops", [
+    "remove", None, {}, [{"op": "remove"}],
+    [{"op": "remove", "path": "members", "token": "secret"}],
+    [{"op": "remove", "path": 3}], [{"op": True, "path": "members"}],
+    [{"op": "remove\\n", "path": "members"}],
+    [{"op": "remove", "path": "members"}] * 33,
+])
+def test_group_patch_operation_declaration_rejects_bad_shapes(bad_ops):
+    groups = {"enabled": True, "match_attributes": ["externalId"],
+              "patch_operations": bad_ops}
+    with pytest.raises(InvalidMapping) as error:
+        assess(mapping(groups=groups))
+    assert "secret" not in str(error.value)
+
+
+def test_group_patch_operations_warn_for_member_overlap_without_identity_echo():
+    groups = {
+        "enabled": True, "match_attributes": ["externalId"],
+        "patch_operations": [
+            {"op": "replace", "path": "members"},
+            {"op": "remove", "path": 'members[value eq "usr_PRIVATE"]'},
+        ],
+    }
+    report = assess(mapping(groups=groups))
+    assert report["status"] == "requires_live_validation"
+    assert {"group_member_selector_remove_only", "group_member_patch_ids_unverified",
+            "overlapping_group_member_patch_paths"} <= codes(report)
+    assert report["checked"]["group_patch_operations"] == 2
+    assert "usr_PRIVATE" not in json.dumps(report)
+
+
+def test_group_patch_operations_cli_is_static_and_does_not_echo_member_id(tmp_path):
+    groups = {
+        "enabled": True, "match_attributes": ["externalId"],
+        "patch_operations": [{"op": "add",
+                              "path": 'members[value eq "usr_PRIVATE"]'}],
+    }
+    file = tmp_path / "group-ops.json"
+    file.write_text(json.dumps(mapping(groups=groups)), encoding="utf-8")
+    result = subprocess.run([sys.executable, str(SCRIPT), str(file)],
+                            capture_output=True, text=True)
+    assert result.returncode == 2
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "blocked"
+    assert "group_member_selector_requires_remove" in codes(payload)
+    assert payload["checked"]["group_patch_operations"] == 1
+    assert "usr_PRIVATE" not in result.stdout + result.stderr
