@@ -269,6 +269,13 @@ def assess(mapping: Any) -> dict:
     def add(severity: str, code: str, path: str, message: str) -> None:
         findings.append({"severity": severity, "code": code, "path": path, "message": message})
 
+    # The shipped User PATCH endpoint accepts 1–20 operations per HTTP
+    # request. Declared possible operations can span multiple requests, so
+    # 21–32 entries require a batching caution, never a false blocker.
+    if user_patch_ops is not None and len(user_patch_ops) > 20:
+        add("caution", "user_patch_single_request_limit", "users.patch_operations",
+            "The User endpoint permits at most 20 operations per PATCH request; verify how the IdP batches declared operations")
+
     if user_patch_ops is not None:
         # The shipped User PATCH handler accepts pathless add/replace with an
         # object-valued value, but not pathless remove. A declared list is not
