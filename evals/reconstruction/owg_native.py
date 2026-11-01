@@ -134,10 +134,71 @@ def predict_record_lanes(case: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _linked_projection(event: dict[str, Any]) -> tuple[Any, ...] | None:
+    """Visible, link-authorizing fields of one observation, not hidden identity.
+
+    Rich evidence omits actor/device/organization, so those stay authoritative
+    only in the original source row and the production linker's scope checks.
+    Metadata comparisons intentionally retain literal malformed claims: an
+    unseen or changed tab/transfer/reference cannot acquire link authority.
+    """
+    stamp = _stamp(event.get("observed_at"))
+    metadata = event.get("metadata")
+    if stamp is None or not isinstance(metadata, dict):
+        return None
+    return (
+        stamp, event.get("app"), event.get("event_type"),
+        event.get("source"), event.get("session_id"),
+        metadata.get("resource_reference"),
+        metadata.get("tab_context_id"),
+        metadata.get("clipboard_transfer_id"),
+        metadata.get("clipboard_source_observed"),
+        metadata.get("action"), metadata.get("semantic_action"),
+        event.get("tab_context_id"), event.get("clipboard_transfer_id"),
+    )
+
+
+def _visible_linked_source_events(case: dict[str, Any]) -> list[dict[str, Any]]:
+    """Keep only unambiguous source observations actually presented for scoring.
+
+    Filtering happens BEFORE linking: a source-only event must neither appear
+    as a member nor bridge two otherwise separate visible components. Reused
+    IDs with conflicting source payloads or visible link evidence fail closed.
+    Identical duplicates are idempotent. This is evaluator-only; the production
+    linker continues to receive the caller's authorized source observations.
+    """
+    visible: dict[str, list[tuple[Any, ...] | None]] = {}
+    for event in case["presented_evidence"]:
+        if not isinstance(event, dict):
+            continue
+        event_id = event.get("event_id")
+        if isinstance(event_id, str) and _EVENT_ID.fullmatch(event_id):
+            visible.setdefault(event_id, []).append(_linked_projection(event))
+
+    source = list(case.get("source_events") or case["presented_evidence"])
+    by_id: dict[str, list[dict[str, Any]]] = {}
+    for event in source:
+        if not isinstance(event, dict):
+            continue
+        event_id = event.get("event_id")
+        if isinstance(event_id, str) and _EVENT_ID.fullmatch(event_id):
+            by_id.setdefault(event_id, []).append(event)
+
+    admitted: list[dict[str, Any]] = []
+    for event_id, rows in by_id.items():
+        projection = _linked_projection(rows[0])
+        if (projection is None or not visible.get(event_id)
+                or any(row != rows[0] for row in rows[1:])
+                or any(item != projection for item in visible[event_id])):
+            continue
+        admitted.append(rows[0])
+    return admitted
+
+
 def predict_linked_items(case: dict[str, Any], *, accept_candidates: bool = False) -> dict[str, Any]:
     """Merged multi-signal items. Accepting the ambiguous candidate links is a
     diagnostic upper bound only: OWG itself never merges them."""
-    events = list(case.get("source_events") or case["presented_evidence"])
+    events = _visible_linked_source_events(case)
     linked = link_observations(events)
     members = list(linked["members"].values())
     if accept_candidates:
