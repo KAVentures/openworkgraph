@@ -377,24 +377,47 @@ def assess(mapping: Any) -> dict:
     # then one of its children, depends on operation order and current data.
     # Warn rather than block: these are legal shipped operations and a static
     # declaration cannot know whether a client actually sends them together.
-    contact_keys = effective_contact_paths
-    contact_overlap = ("field", "emails") in contact_keys and len(contact_keys) > 1
-    if not contact_overlap:
+    # The legacy path list and optional operation declarations describe the
+    # same possible PATCH targets. An operation-only mapping (or a combination
+    # of the two) can overwrite overlapping contact data just as a legacy-only
+    # mapping can. Normalize supported paths only, without exposing literals.
+    operation_contact_keys: set[tuple[str, ...]] = set()
+    for path in contact_operation_paths:
+        selector = _CONTACT_SELECTOR.fullmatch(path)
+        if selector is None:
+            operation_contact_keys.add(("field", path.casefold()))
+        else:
+            operation_contact_keys.add((
+                "selector", selector.group(1).casefold(),
+                json.loads(selector.group(2)).casefold(),
+                (selector.group(3) or "").casefold(),
+            ))
+
+    def overlapping_contact_paths(keys: set[tuple[str, ...]]) -> bool:
+        if ("field", "emails") in keys and len(keys) > 1:
+            return True
         for child in _CONTACT_CHILDREN:
-            if (("field", "emails." + child) in contact_keys and any(
+            if (("field", "emails." + child) in keys and any(
                     key[0] == "selector" and key[3] in ("", child)
-                    for key in contact_keys)):
-                contact_overlap = True
-                break
-    if not contact_overlap:
+                    for key in keys)):
+                return True
         selected_children: dict[tuple[str, str], set[str]] = {}
-        for key in contact_keys:
+        for key in keys:
             if key[0] == "selector":
                 selected_children.setdefault((key[1], key[2]), set()).add(key[3])
-        contact_overlap = any("" in children and len(children) > 1
-                              for children in selected_children.values())
+        return any("" in children and len(children) > 1
+                   for children in selected_children.values())
+
+    legacy_contact_overlap = overlapping_contact_paths(effective_contact_paths)
+    contact_overlap = overlapping_contact_paths(
+        effective_contact_paths | operation_contact_keys)
     if contact_overlap:
-        add("caution", "overlapping_contact_patch_paths", "users.patch_attributes",
+        # Preserve the existing legacy-only finding path for consumers. When
+        # optional operations introduce the overlap, point to their declaration
+        # without echoing the target selector or its contact value.
+        location = ("users.patch_attributes" if legacy_contact_overlap
+                    else "users.patch_operations")
+        add("caution", "overlapping_contact_patch_paths", location,
             "Contact PATCH paths may overwrite overlapping targets; review client operation order and current data")
     if "username" not in create:
         add("blocker", "missing_stable_username", "users.create_attributes",
