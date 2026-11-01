@@ -1178,8 +1178,6 @@ def test_linked_projection_top_level_only_clipboard_requires_visible_provenance(
     for accepting_candidates in (False, True):
         withheld = predict_linked_items(case, accept_candidates=accepting_candidates)
         assert {frozenset(w["event_ids"]) for w in withheld["workflows"]} == {
-            frozenset({"a2", "b2", "b3"})
-        } or {frozenset(w["event_ids"]) for w in withheld["workflows"]} == {
             frozenset({"b2", "b3"})
         }
         assert {"a1", "b1"} <= set(withheld["unassigned_event_ids"])
