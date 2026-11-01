@@ -211,6 +211,15 @@ def _linked_projection(event: dict[str, Any]) -> str | None:
         for field in ("resource_ref", "provider", "resource_kind", "host"):
             if field in reference and not isinstance(reference[field], str):
                 return None
+    # Compare only the identity components the shipped linker actually uses.
+    # It casefolds valid opaque refs, provider/kind and host; unrelated extra
+    # reference attributes are not link authority. Keep malformed/invalid
+    # claims raw so they cannot impersonate a normalized valid identity.
+    reference_claim = metadata.get("resource_reference")
+    if isinstance(reference_claim, dict):
+        normalized_identity = _identity(event)
+        if normalized_identity is not None:
+            reference_claim = ("normalized_record_identity", *normalized_identity[:4])
     # Rich evidence projects metadata tokens into top-level convenience keys.
     # Those are not independent claims. Reject source-only top-level tokens or
     # contradictions instead of mistaking a convenience copy for a conflict.
@@ -229,7 +238,7 @@ def _linked_projection(event: dict[str, Any]) -> str | None:
     return _canonical_eval_json((
         stamp, event.get("app"), event.get("event_type"),
         event.get("source"), event.get("session_id"),
-        metadata.get("resource_reference"),
+        reference_claim,
         metadata.get("tab_context_id"),
         metadata.get("clipboard_transfer_id"),
         metadata.get("clipboard_source_observed"),
