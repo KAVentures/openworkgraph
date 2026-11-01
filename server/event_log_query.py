@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 import json
 import math
 import secrets
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
@@ -51,6 +52,15 @@ _CASE_DIMENSIONS = {
     "last_activity": "last_activity",
     "variant": "variant",
     "has_rework": "CASE WHEN rework THEN 'rework' ELSE 'no rework' END",
+}
+# Explicit IANA-local wall-time dimensions. Stored event instants are UTC-naive;
+# interpret them in UTC first, then convert the instant to the chosen zone.
+# The zone is always a bound SQL parameter, never interpolated user input.
+_LOCAL_CASE_DIMENSIONS = {
+    "start_weekday_local": "strftime(timezone(?, timezone('UTC', started)), '%u %A')",
+    "start_hour_local": "strftime(timezone(?, timezone('UTC', started)), '%H')",
+    "end_weekday_local": "strftime(timezone(?, timezone('UTC', ended)), '%u %A')",
+    "end_hour_local": "strftime(timezone(?, timezone('UTC', ended)), '%H')",
 }
 _EVENT_DIMENSIONS = {
     "activity": "activity",
@@ -135,6 +145,7 @@ class AnalysisSpec(_Strict):
     order: Literal["first_measure_desc", "first_measure_asc", "dimensions"] = "first_measure_desc"
     limit: StrictInt = Field(default=100, ge=1, le=MAX_ROWS)
     case_type: Name | None = None
+    time_zone: Annotated[str, Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_+./-]+$")] | None = None
 
 
 class SavedAnalysis(_Strict):
@@ -156,7 +167,18 @@ def parse(spec: Any) -> AnalysisSpec:
         raise workspace.EventLogWorkspaceError(
             "analysis is invalid: " + ".".join(str(p) for p in first["loc"]) + " " + first["msg"]) from None
     cohorts.parse_cohort(parsed.cohort)
-    allowed = _CASE_DIMENSIONS if parsed.level == "cases" else _EVENT_DIMENSIONS
+    allowed = ({**_CASE_DIMENSIONS, **_LOCAL_CASE_DIMENSIONS}
+               if parsed.level == "cases" else _EVENT_DIMENSIONS)
+    local_time_requested = any(d in _LOCAL_CASE_DIMENSIONS for d in parsed.dimensions)
+    if local_time_requested:
+        if parsed.time_zone is None:
+            raise workspace.EventLogWorkspaceError("local time dimensions require an explicit IANA time_zone")
+        try:
+            ZoneInfo(parsed.time_zone)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise workspace.EventLogWorkspaceError("time_zone must be a known IANA time zone") from None
+    elif parsed.time_zone is not None:
+        raise workspace.EventLogWorkspaceError("time_zone requires a local time dimension")
     for dimension in parsed.dimensions:
         if dimension not in allowed and _attribute_dimension(dimension) is None:
             raise workspace.EventLogWorkspaceError(
@@ -334,12 +356,17 @@ def run(log_id: str, spec: Any, *, control=None) -> dict[str, Any]:
                 conn.execute(f"DELETE FROM qc WHERE NOT coalesce(({' AND '.join(clauses)}), false)", params)
             metric_columns, metric_coverage = _metrics(conn, parsed.metrics)
             dimension_sql = []
+            dimension_params = []
             for dimension in parsed.dimensions:
                 attribute = _attribute_dimension(dimension)
-                if attribute is None:
-                    dimension_sql.append(_CASE_DIMENSIONS[dimension])
-                else:
+                if attribute is not None:
                     dimension_sql.append("""map_extract(json_transform(case_attributes, '"MAP(VARCHAR, VARCHAR)"'), ?)[1]""")
+                    dimension_params.append(attribute)
+                elif dimension in _LOCAL_CASE_DIMENSIONS:
+                    dimension_sql.append(_LOCAL_CASE_DIMENSIONS[dimension])
+                    dimension_params.append(parsed.time_zone)
+                else:
+                    dimension_sql.append(_CASE_DIMENSIONS[dimension])
         else:
             source = "ce"
             clauses = []
@@ -347,12 +374,14 @@ def run(log_id: str, spec: Any, *, control=None) -> dict[str, Any]:
             if parsed.activity_in:
                 clauses.append("list_contains(?, activity)"); params.append(parsed.activity_in)
             dimension_sql = []
+            dimension_params = []
             for dimension in parsed.dimensions:
                 attribute = _attribute_dimension(dimension)
                 dimension_sql.append(_EVENT_DIMENSIONS[dimension] if attribute is None else
                                      """map_extract(json_transform(attributes, '"MAP(VARCHAR, VARCHAR)"'), ?)[1]""")
-        # Attribute names are parameters of the SELECT list, which precedes WHERE.
-        dimension_params = [a for a in map(_attribute_dimension, parsed.dimensions) if a is not None]
+                if attribute is not None:
+                    dimension_params.append(attribute)
+        # SELECT dimension parameters precede WHERE parameters in SQL order.
         measures = [_column(m, metric_columns) for m in parsed.measures]
         select = [f"{sql} AS d{i}" for i, sql in enumerate(dimension_sql)] + [f"{sql} AS m{i}" for i, (_, sql) in enumerate(measures)]
         where_sql = " WHERE " + " AND ".join(clauses) if clauses else ""
