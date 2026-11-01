@@ -165,6 +165,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `POST /v1/event-logs/{log_id}/object-relationships/query` | Literal endpoint/type/qualifier and incoming/outgoing filters, revision-bound keyset pages, current endpoint event counts. Does not merge cases. |
 | `GET /v1/event-logs/{log_id}/object-flattening` | Per object type, what analysing it as the case leaves out (deficiency), copies (convergence) and turns into apparent repetition (divergence), plus qualifiers. |
 | `POST /v1/event-logs/{log_id}/object-constraints` | Rules across object types: objects per event, related objects per object, and an activity only after a required activity of every related object. |
+| `POST /v1/event-logs/{log_id}/object-process-model/discovery`, `…/conformance` | Object-centric process model: a lifecycle model per object type and single or variable arcs, discovered from the log or edited, with each object's lifecycle replayed and each event checked against its arcs. See [OBJECT_CENTRIC_PROCESS_MODELS.md](OBJECT_CENTRIC_PROCESS_MODELS.md). |
 | `GET /v1/event-logs/{log_id}/object-attributes` | Per object type and attribute, how timed values change and how many event links happened while another value than the stored one held; `object_id` adds one object's timeline. |
 | `GET /v1/event-logs/{log_id}/variants` | Most frequent variants with share and median duration. |
 | `GET /v1/event-logs/{log_id}/directly-follows` | Directly-follows graph with start and end activities. |

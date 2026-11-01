@@ -29,6 +29,7 @@ from . import event_log_model_discovery as model_discovery
 from . import process_discovery_provenance as discovery_provenance
 from . import event_log_object_attributes as object_attributes
 from . import event_log_object_constraints as object_constraints
+from . import event_log_object_process_model as object_process_model
 from . import event_log_object_diagnostics as object_diagnostics
 from . import event_log_objects as objects
 from . import event_log_object_relationships as object_relationships
@@ -379,11 +380,11 @@ def event_log_organization(request: Request, log_id: str, case_type: str | None 
                     automation_resources=automation_resource, limit=limit)
 
 
-async def _json_body(request: Request, what: str, *, strict: bool = False) -> Any:
+async def _json_body(request: Request, what: str, *, strict: bool = False, limit: int = 65536) -> Any:
     if not str(request.headers.get("content-type") or "").startswith("application/json"):
         raise HTTPException(415, f"{what} must be JSON")
     body = await request.body()
-    if len(body) > 65536:
+    if len(body) > limit:
         raise HTTPException(413, f"{what} is too large")
     try:
         if strict:
@@ -419,6 +420,29 @@ async def event_log_object_constraints(request: Request, log_id: str):
     spec = await _json_body(request, "object rules", strict=True)
     try:
         result = await run_in_threadpool(object_constraints.check, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/object-process-model/discovery")
+async def event_log_object_process_model_discovery(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "object process model discovery", strict=True)
+    try:
+        result = await run_in_threadpool(object_process_model.discover, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/object-process-model/conformance")
+async def event_log_object_process_model_conformance(request: Request, log_id: str):
+    _require_dashboard(request)
+    # Up to eight bounded type models (40 nodes, 100 transitions and 40 rules each).
+    spec = await _json_body(request, "object process model", strict=True, limit=object_process_model.MAX_REQUEST_BYTES)
+    try:
+        result = await run_in_threadpool(object_process_model.check, log_id, spec)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
