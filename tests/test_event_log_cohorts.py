@@ -113,7 +113,8 @@ def test_benchmark_preserves_fractional_seconds_and_strict_sla_boundary():
     assert gap["sampled_median_throughput_seconds_first"] == pytest.approx(1.0)
     assert gap["sampled_median_throughput_seconds_second"] == pytest.approx(2.0)
     assert result["overlapping_cases"] == 0
-    assert result["causal_claims"] is False
+    # The benchmark intentionally has no causal-claims field: it is descriptive only.
+    assert "causal_claims" not in result
 
 
 def test_benchmark_compares_two_cohorts_with_intervals():
@@ -132,7 +133,8 @@ def test_benchmark_compares_two_cohorts_with_intervals():
     assert fix["activity"] == "Fix" and fix["ci_excludes_zero"] is True
     approve = next(a for a in result["activity_presence"] if a["activity"] == "Approve")
     assert approve["ci_excludes_zero"] is False
-    assert result["intervals_assume_independent_cohorts"] is True and result["causal_claims"] is False
+    assert result["intervals_assume_independent_cohorts"] is True
+    assert "causal_claims" not in result
 
 
 def test_benchmark_throughput_interval_discloses_actual_case_sample_support(monkeypatch):
