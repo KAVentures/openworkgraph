@@ -159,7 +159,13 @@ A matching ID alone is insufficient: the visible event must also carry a
 single consistent normalized (opaque reference, provider, resource kind, host)
 identity **and the same admitted UTC observation instant** as the source row.
 Different timezone offsets representing the same instant are equivalent; a
-microsecond difference is not. Missing, malformed, contradictory or
+microsecond difference is not. Visible record identity components must be
+**literal strings when present**, before case-insensitive normalization:
+boolean providers/kinds and numeric or null hosts cannot impersonate source
+strings such as `"true"` or `"123"`, or a missing host. Valid literal
+case variants and legacy absent hosts remain accepted. This visible-only
+admission check does not rewrite the shipped source engine's identity rules
+or independently authenticate a provider. Missing, malformed, contradictory or
 cross-provider visible identity or timestamp is withheld, not silently
 replaced with source-only provenance. Repeated visible IDs with the same
 identity are allowed only when one visible timestamp matches the first
