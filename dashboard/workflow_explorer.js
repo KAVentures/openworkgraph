@@ -563,11 +563,16 @@
   function reviewedHandoffText(state, shadow) {
     const scope = JSON.parse(state.windowJSON);
     const evidenceInstruction = state.ids.length
-      ? 'Use get_workflow_evidence with only these exact execution_ids: ' + state.ids.join(', ') + '. '
-      : 'Find exact supporting executions independently; none were available in this selection. ';
+      ? (shadow ? 'For a later separately authorized read-only check, use only these execution_ids: ' :
+          'Use authorized read-only get_workflow_evidence with only these execution_ids: ') +
+        state.ids.join(', ') + '. ' + (shadow ? 'Do not fetch them during planning. ' : '')
+      : (shadow ? 'Plan how to find exact supporting executions; none are available in this selection. ' :
+          'Find exact supporting executions independently; none were available in this selection. ');
     const revisionInstruction = state.reviewedId
-      ? 'Read get_workflow_knowledge(workflow_id="' + state.reviewedId + '") and require revision ' +
-        state.reviewedRevision + '; if stale or inaccessible, stop and request new human review. '
+      ? (shadow ? 'Plan a future get_workflow_knowledge(workflow_id="' :
+          'Read get_workflow_knowledge(workflow_id="') + state.reviewedId + '") and require revision ' +
+        state.reviewedRevision + '; if stale or inaccessible, stop and request new human review. ' +
+        (shadow ? 'Do not fetch it during planning. ' : '')
       : 'No user-reviewed group revision was provided; treat this as an inferred candidate only. ';
     return [
       'OpenWorkGraph agent-neutral READ-ONLY request. This is not a grant or authorization.',
@@ -585,7 +590,7 @@
           'Do not call tools, run an agent, execute a test, write to a business system or claim validation passed.'
         : 'Investigate the observed sequence, independently verify current business-case identity and outcomes with authorized read-only evidence, ' +
           'list omissions and conflicting observations, and propose questions for a human reviewer. ' +
-          'Do not execute tools or business writes, infer policy, invent results, or treat a candidate as approved.'
+          'Do not invoke write tools or business actions, infer policy, invent results, or treat a candidate as approved.'
     ].join('\n\n');
   }
 
