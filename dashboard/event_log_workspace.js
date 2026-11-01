@@ -1205,6 +1205,15 @@
       return {name:m[1].trim(),share:Math.round(Number(m[2])*1e4)/1e6,rank:Number(m[3])};
     });
   }
+  // A batch for one activity from form values, or null without one: {activity, batch:{size, max_wait_minutes?}}.
+  function simBatch(values){
+    if(!values.activity)return null;
+    const size=Number(values.size);
+    if(!Number.isInteger(size)||size<2)throw new Error('A batch holds a whole number of at least 2 cases.');
+    const batch={size};
+    if(String(values.maxWaitHours||'').trim()){const h=Number(values.maxWaitHours);if(!(h>0))throw new Error('The longest wait for a batch is a positive number of hours.');batch.max_wait_minutes=Math.round(h*60*1000)/1000;}
+    return {activity:values.activity,batch};
+  }
   function simPool(values){
     const name=String(values.name||'').trim();
     if(!name)return null;
@@ -1368,7 +1377,11 @@
         const poolActivities=select('owgEventLogSimPoolActivities',Object.keys(cal.activities||{}).map(a=>[a,a]));poolActivities.multiple=true;poolActivities.size=3;
         const poolRow=el('div',null,'row');poolRow.style.alignItems='end';
         const priorityText=input('owgEventLogSimPriorities','text','e.g. urgent 30% 0, standard 70% 1');priorityText.maxLength=300;
-        poolRow.append(field('Shared pool in the scenario (optional)',poolName),field('People in the pool',poolSize),field('Activities the pool does',poolActivities),field('Priority classes in the scenario (optional; rank 0 is served first)',priorityText));
+        const batchActivity=select('owgEventLogSimBatchActivity',[['','No batching'],...Object.keys(cal.activities||{}).map(a=>[a,a])]);
+        const batchSize=input('owgEventLogSimBatchSize','number');batchSize.min='2';batchSize.step='1';batchSize.value='10';
+        const batchWait=input('owgEventLogSimBatchWait','number');batchWait.min='0';batchWait.step='any';batchWait.placeholder='no limit';
+        poolRow.append(field('Shared pool in the scenario (optional)',poolName),field('People in the pool',poolSize),field('Activities the pool does',poolActivities),field('Priority classes in the scenario (optional; rank 0 is served first)',priorityText),
+          field('Batch an activity in the scenario',batchActivity),field('Cases per batch',batchSize),field('Longest wait for a batch (hours)',batchWait));
         const run=button('Run simulation','secondary');run.id='owgEventLogSimRun';
         const routeKind=select('owgEventLogSimRouting',ROUTINGS);
         const pathsField=field('Routing: weighted lines or JSON for exact labels and weights',paths);
@@ -1384,6 +1397,8 @@
             if(routeKind.value==='transitions'){scenario.routing='transitions';delete scenario.paths;}
             const pool=simPool({name:poolName.value,resources:poolSize.value,activities:[...poolActivities.selectedOptions].map(o=>o.value)});
             if(pool)scenario.pools=pool;
+            const batched=simBatch({activity:batchActivity.value,size:batchSize.value,maxWaitHours:batchWait.value});
+            if(batched)activities[batched.activity]={...activities[batched.activity],batch:batched.batch};
             const classes=simPriorities(priorityText.value);
             if(classes)scenario.priorities=classes;
             const calValues={days:days.value,from:from.value,to:to.value,timezone:zone.value,holidays:holidays.value};
@@ -1422,6 +1437,7 @@
               ...(r.scenario.arrival_pattern?[el('div','Arrivals: '+arrivalText(r.scenario.arrival_pattern)+'. The arrival rate you set stays the long-run average.','muted')]:[]),
               ...(r.baseline_calendar||r.scenario.calendar?[el('div','Working time: baseline '+calendarText(r.baseline_calendar)+'; scenario '+calendarText(r.scenario.calendar)+'. Utilization is measured against working time.','muted')]:[]),
               table(['Activity','Resources','Minutes','Utilization','Mean wait','90th percentile wait'],r.result.activities.map(a=>[a.activity+(a.pool?' ('+a.pool+')':''),a.resources,a.minutes,pct(a.utilization),duration(a.mean_wait_seconds),duration(a.p90_wait_seconds)])),
+              ...(r.result.activities.some(a=>a.batch)?[table(['Batched activity','Cases per batch','Longest wait','Batches run','Average batch','Mean wait','Still waiting'],r.result.activities.filter(a=>a.batch).map(a=>[a.activity,a.batch.size,a.batch.max_wait_minutes?duration(a.batch.max_wait_minutes*60):'no limit',Number(a.batch.batches).toLocaleString(),a.batch.mean_batch_size===null?'—':Number(a.batch.mean_batch_size).toFixed(1),duration(a.mean_wait_seconds),a.batch.waiting_in_unfilled_batch]))]:[]),
               ...(r.result.priority_classes?[table(['Priority class','Share','Rank','Median cycle time','90th percentile','Mean wait per step'],r.result.priority_classes.map(c=>[c.name,pct(c.share),c.rank,duration(c.cycle_time_seconds.p50),duration(c.cycle_time_seconds.p90),duration(c.mean_wait_seconds_per_step)]))]:[]),
               ...(r.result.pools?[table(['Shared pool','People','Activities','Utilization','Mean wait','90th percentile wait'],r.result.pools.map(p=>[p.pool,p.resources,p.activities.join(', '),pct(p.utilization),duration(p.mean_wait_seconds),duration(p.p90_wait_seconds)]))]:[]),
               (()=>{const list=el('ul');list.className='muted';r.assumptions.forEach(x=>list.appendChild(el('li',x)));return list;})());
@@ -2532,6 +2548,6 @@
     return box;
   }
 
-  window.__owgEventLogModel={simPriorities,objectModelArcs,objectModelText,visitRows,simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
+  window.__owgEventLogModel={simBatch,simPriorities,objectModelArcs,objectModelText,visitRows,simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();

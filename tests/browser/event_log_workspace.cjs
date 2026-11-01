@@ -444,6 +444,17 @@ const path=require('node:path');
    assert.equal(ranked.baseline.priority_classes,undefined);assert.equal(ranked.result.priority_classes.length,2);
    await page.getByRole('cell',{name:'urgent',exact:true}).waitFor();
    await page.locator('#owgEventLogSimPriorities').fill('');
+   // Batch one activity in the scenario (one outside the shared pool, which a batch cannot join).
+   const batchable=(await page.locator('#owgEventLogSimBatchActivity option').evaluateAll(o=>o.map(x=>x.value))).find(v=>v&&!['Check','Approve'].includes(v));
+   await page.locator('#owgEventLogSimBatchActivity').selectOption(batchable);
+   await page.locator('#owgEventLogSimBatchSize').fill('3');await page.locator('#owgEventLogSimBatchWait').fill('8');
+   const [batchResponse]=await Promise.all([page.waitForResponse(r=>r.url().includes('/simulate')),page.locator('#owgEventLogSimRun').click()]);
+   const batchedRun=await batchResponse.json();
+   assert.equal(batchResponse.status(),200,JSON.stringify(batchedRun));
+   assert.deepEqual(batchedRun.scenario.activities[batchable].batch,{size:3,max_wait_minutes:480});
+   assert.equal(batchedRun.baseline.activities.find(a=>a.activity===batchable).batch,undefined);
+   await page.getByRole('columnheader',{name:'Batched activity',exact:true}).waitFor();
+   await page.locator('#owgEventLogSimBatchActivity').selectOption('');
    // Seasonal arrivals for both runs: weekday office hours entered as weights, then measured from this log.
    await page.locator('#owgEventLogSimDays').selectOption('');
    assert.equal(await page.locator('#owgEventLogSimHourly').isVisible(),false,'weight fields appear only for entered weights');

@@ -481,6 +481,30 @@ A scenario can serve some cases first. For example:
   3.2 h, because reordering a work-conserving queue keeps it.
 - **Dashboard:** the simulation form takes classes as `urgent 30% 0, standard 70% 1`.
 
+#### Batch processing
+
+A scenario can batch an activity, for example a payment run:
+
+```json
+{"activities": {"Pay": {"batch": {"size": 10, "max_wait_minutes": 1440}}}}
+```
+
+- **How a batch runs:** the activity's cases wait until `size` are waiting, or until the oldest has waited
+  `max_wait_minutes`. A free resource then takes up to `size` of them, lowest priority rank first, and serves
+  the whole batch in one activity time. All members move on together.
+- **No maximum wait:** a batch that never fills holds its cases. They are counted in
+  `cases_waiting_in_unfilled_batches` and per activity, and are not measured as finished.
+- **Offered load:** counts the work of full batches, that is the activity time divided by the size.
+- **Limits:** a batched activity cannot also be in a shared pool. The measured baseline is never batched.
+- **Results:** add `batch` to the activity's row: settings, batches run, mean batch size and cases still waiting.
+- **Checks:**
+  - with a size of 5, 1 case an hour and near-instant service, the mean wait is the expected
+    (K − 1) / (2λ) = 2 h;
+  - with a size of 100 and a 60-minute limit, it is (60 + 30) / 2 = 45 min, and no case waits longer;
+  - members reach the next activity together.
+- **Dashboard:** the simulation form batches one activity, with the cases per batch and an optional longest
+  wait in hours.
+
 #### Seasonal arrivals
 
 Without a pattern, cases arrive at a steady rate around the clock. An `arrival_pattern` makes the rate
