@@ -225,10 +225,8 @@ def test_rest_change_impact_preview_is_read_only_and_cas_bound(local):
     assert changed.status_code == 200, changed.text
     assert client.post(IMPACT, headers=headers, json=_preview(
         A, saved[A]["revision"], saved[A]["edit_token"])).status_code == 409
-    assert client.get(BASE, headers=headers).json()["items"] == [
-        item for item in client.get(BASE, headers=headers).json()["items"]
-        if item["work_item_ref"] in (A, D)
-    ]
+    assert {item["work_item_ref"] for item in
+            client.get(BASE, headers=headers).json()["items"]} == {A, D}
 
 
 def test_impact_preview_refuses_missing_review_scope_auth_and_stale_tokens(local):
