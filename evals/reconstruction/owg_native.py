@@ -146,6 +146,12 @@ def _linked_projection(event: dict[str, Any]) -> tuple[Any, ...] | None:
     metadata = event.get("metadata")
     if stamp is None or not isinstance(metadata, dict):
         return None
+    # Rich evidence projects metadata tokens into top-level convenience keys.
+    # Those are not independent claims. Reject source-only top-level tokens or
+    # contradictions instead of mistaking a convenience copy for a conflict.
+    for field in ("tab_context_id", "clipboard_transfer_id"):
+        if field in event and (field not in metadata or event[field] != metadata[field]):
+            return None
     return (
         stamp, event.get("app"), event.get("event_type"),
         event.get("source"), event.get("session_id"),
@@ -154,7 +160,6 @@ def _linked_projection(event: dict[str, Any]) -> tuple[Any, ...] | None:
         metadata.get("clipboard_transfer_id"),
         metadata.get("clipboard_source_observed"),
         metadata.get("action"), metadata.get("semantic_action"),
-        event.get("tab_context_id"), event.get("clipboard_transfer_id"),
     )
 
 
