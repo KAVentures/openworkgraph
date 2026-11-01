@@ -74,6 +74,11 @@ def source_operation_receipt(
         raise ValueError("unsupported provider operation")
     if not 1 <= max_age_seconds <= 3600:
         raise ValueError("invalid maximum source age")
+    # Bind the requested operation to a provider/object family *before*
+    # record_graph can invoke an opt-in source adapter. A mismatched retained
+    # record must not cause an unrelated provider refresh merely to reject
+    # the receipt afterward. Host and tenant checks remain adapter-owned.
+    provider, kind, required_state = _OPS[expected_operation]
     # Source/transport outages must not become a 500 or disclose provider
     # exception text. Do not retry or widen the permitted read; leave invalid
     # requests and programming errors visible to their normal callers.
@@ -81,6 +86,7 @@ def source_operation_receipt(
         graph = record_reader(
             resource_ref, since=since, until=until,
             include_source_status=True,
+            required_source_provider_kind=(provider, kind),
         )
     except (OSError, httpx.HTTPError):
         return _unknown(resource_ref, expected_operation, "source_read_unavailable")
@@ -115,7 +121,6 @@ def source_operation_receipt(
     if (graph.get("source_event_limit_reached") is not False or
         graph.get("record_identity_complete_within_retained_window") is not True):
         return _unknown(resource_ref, expected_operation, "incomplete_or_conflicting_record_identity")
-    provider, kind, required_state = _OPS[expected_operation]
     if graph.get("record_type") != {"provider": provider, "kind": kind}:
         return _unknown(resource_ref, expected_operation, "provider_record_type_mismatch")
     source = graph.get("source_evidence")
