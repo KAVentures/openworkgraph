@@ -1579,3 +1579,67 @@ def test_user_patch_operation_cli_reports_only_generic_shape_metadata(
     assert (expected in codes(report)) if expected else (
         not any(item["severity"] == "blocker" for item in report["findings"]))
     assert "usr_PRIVATE" not in completed.stdout + completed.stderr
+
+
+# The shipped User PATCH endpoint, like Groups, caps a single HTTP
+# request at 20 operations. Offline mapping declarations describe possible
+# operations across requests, so 21–32 is a caution, not a blocker.
+@pytest.mark.parametrize("client", ["entra", "okta", "other"])
+@pytest.mark.parametrize("count,limit_warning", [
+    (0, False), (1, False), (20, False), (21, True), (32, True),
+])
+def test_user_patch_declarations_disclose_single_request_limit(
+        client, count, limit_warning):
+    users = mapping()["users"]
+    users["patch_operations"] = [
+        {"op": "remove", "path": "displayName"} for _ in range(count)
+    ]
+    report = assess(mapping(client=client, users=users))
+    assert report["status"] == "requires_live_validation"
+    assert report["scope"] == "offline_declared_mapping_only"
+    assert report["checked"]["user_patch_operations"] == count
+    warnings = [item for item in report["findings"]
+                if item["code"] == "user_patch_single_request_limit"]
+    assert len(warnings) == int(limit_warning)
+    if warnings:
+        assert warnings[0]["severity"] == "caution"
+        assert warnings[0]["path"] == "users.patch_operations"
+        assert "20" in warnings[0]["message"]
+    assert "live_validation_required" in codes(report)
+
+
+def test_user_patch_declaration_over_32_is_invalid_without_echoing_paths():
+    users = mapping()["users"]
+    users["patch_operations"] = [
+        {"op": "remove", "path": 'emails[type eq "usr_PRIVATE"].value'}
+        for _ in range(33)
+    ]
+    with pytest.raises(InvalidMapping) as error:
+        assess(mapping(users=users))
+    assert "usr_PRIVATE" not in str(error.value)
+
+
+@pytest.mark.parametrize("count,exit_code,warning", [
+    (20, 0, False), (21, 0, True), (32, 0, True), (33, 1, False),
+])
+def test_user_patch_request_cap_cli_is_bounded_and_never_echoes_selectors(
+        tmp_path, count, exit_code, warning):
+    users = mapping()["users"]
+    users["patch_operations"] = [
+        {"op": "remove", "path": 'emails[type eq "usr_PRIVATE"].value'}
+        for _ in range(count)
+    ]
+    file = tmp_path / "user-patch-cap.json"
+    file.write_text(json.dumps(mapping(users=users)), encoding="utf-8")
+    completed = subprocess.run([sys.executable, str(SCRIPT), str(file)],
+                               capture_output=True, text=True)
+    assert completed.returncode == exit_code
+    assert "usr_PRIVATE" not in completed.stdout + completed.stderr
+    payload = json.loads(completed.stdout)
+    if count <= 32:
+        assert payload["status"] == "requires_live_validation"
+        assert payload["checked"]["user_patch_operations"] == count
+        assert ("user_patch_single_request_limit" in codes(payload)) is warning
+    else:
+        assert payload["status"] == "invalid_input"
+        assert payload["findings"][0]["code"] == "invalid_input"
