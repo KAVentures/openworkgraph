@@ -485,6 +485,20 @@
       state.planCriteria[key].trim().length > 0 && state.planCriteria[key].length <= 320);
   }
 
+  // Pure local rehearsal: exact text equality cannot validate provider state.
+  function gradeSyntheticRehearsal(expected, observed, exceptionDecision) {
+    const reasons = [];
+    if (!observed.trim()) reasons.push('No invented normal-case observation supplied.');
+    if (exceptionDecision === 'unknown') reasons.push('Invented exception handling is unknown.');
+    if (reasons.length) return {grade: 'ABSTAIN', reasons};
+    if (observed.trim() !== expected.trim())
+      reasons.push('Invented normal observation differs from expected text (exact comparison).');
+    if (exceptionDecision !== 'abstain')
+      reasons.push('Invented exception continued instead of stopping or abstaining.');
+    return {grade: reasons.length ? 'FAIL' : 'PASS',
+      reasons: reasons.length ? reasons : ['Invented normal text matches exactly and invented exception abstains.']};
+  }
+
   // Imported files are untrusted proposals, never grants or test receipts.
   function importedShadowPlanCriteria(plan, state) {
     if (!plan || typeof plan !== 'object' || Array.isArray(plan) ||
@@ -557,7 +571,8 @@
       reviewedRevision: reviewed ? candidate.reviewed_revision : null,
       variantNumber: lane ? lane.index + 1 : null,
       exact, inspected, shadowEligible,
-      planCriteria: shadowEligible ? {expected: '', exception: '', stop: ''} : null
+      planCriteria: shadowEligible ? {expected: '', exception: '', stop: ''} : null,
+      rehearsal: null
     };
     handoffReview = state;
     host.replaceChildren();
@@ -594,6 +609,16 @@
       'No actual shadow test or provider verification occurs here.'));
     const planInputs = {};
     let planPreview = null;
+    let rehearsalStatus = null;
+    let rehearsalRun = null;
+    let rehearsalDownload = null;
+    let syntheticObservation = null;
+    let syntheticException = null;
+    const invalidateRehearsal = () => {
+      state.rehearsal = null;
+      if (rehearsalStatus) rehearsalStatus.textContent = 'No synthetic rehearsal run. No source or agent was contacted.';
+      if (rehearsalDownload) rehearsalDownload.disabled = true;
+    };
     if (shadowEligible) {
       const plan = element('fieldset');
       plan.id = 'owgExplorerShadowPlan';
@@ -635,12 +660,61 @@
       importStatus.id = 'owgExplorerPlanImportStatus';
       importStatus.setAttribute('role', 'status');
       plan.appendChild(importStatus);
+      const rehearsal = element('fieldset');
+      rehearsal.id = 'owgExplorerSyntheticRehearsal';
+      rehearsal.appendChild(element('legend', 'Local synthetic shadow rehearsal (not a real test)'));
+      rehearsal.appendChild(element('p',
+        'Use invented inputs only. Normal cases use exact text equality; exceptions check a simulated stop/continue choice. A synthetic PASS is never a verified outcome or permission.', 'muted'));
+      const normalLabel = element('label', 'Invented normal-case observation (exact text comparison)');
+      syntheticObservation = element('textarea');
+      syntheticObservation.id = 'owgExplorerSyntheticObserved';
+      syntheticObservation.maxLength = 320;
+      syntheticObservation.rows = 2;
+      normalLabel.appendChild(syntheticObservation);
+      rehearsal.appendChild(normalLabel);
+      const exceptionLabel = element('label', 'Invented exception-case decision');
+      syntheticException = element('select');
+      syntheticException.id = 'owgExplorerSyntheticException';
+      [['unknown', 'Unknown / not simulated'], ['abstain', 'Stop or abstain'],
+        ['continue', 'Continue despite exception']].forEach(([value, label]) => {
+        const option = element('option', label); option.value = value;
+        syntheticException.appendChild(option);
+      });
+      exceptionLabel.appendChild(syntheticException);
+      rehearsal.appendChild(exceptionLabel);
+      rehearsalRun = button('Run local synthetic rehearsal', () => {
+        if (!currentHandoffReview(state) || !checkbox.checked || !completeShadowCriteria(state)) return;
+        const observed = syntheticObservation.value.trim();
+        const decision = syntheticException.value;
+        const outcome = gradeSyntheticRehearsal(state.planCriteria.expected, observed, decision);
+        state.rehearsal = {observed, decision, ...outcome};
+        rehearsalStatus.textContent = 'SYNTHETIC ' + outcome.grade + ' — ' + outcome.reasons.join(' ') +
+          ' No real shadow test, source verification, agent or business action occurred.';
+        updateButtons();
+      }, true);
+      rehearsalRun.id = 'owgExplorerSyntheticRun';
+      rehearsalDownload = button('Download synthetic rehearsal receipt JSON', () =>
+        downloadSyntheticRehearsal(state), true);
+      rehearsalDownload.id = 'owgExplorerSyntheticDownload';
+      rehearsalRun.disabled = true;
+      rehearsalDownload.disabled = true;
+      rehearsalStatus = element('p', 'No synthetic rehearsal run. No source or agent was contacted.', 'muted');
+      rehearsalStatus.id = 'owgExplorerSyntheticStatus';
+      rehearsalStatus.setAttribute('role', 'status');
+      rehearsal.append(rehearsalRun, rehearsalDownload, rehearsalStatus);
+      plan.appendChild(rehearsal);
+      [syntheticObservation, syntheticException].forEach(input => input.addEventListener('input', () => {
+        checkbox.checked = false;
+        invalidateRehearsal();
+        updateButtons();
+      }));
       importInput.addEventListener('change', async () => {
         const file = importInput.files?.[0];
         importInput.value = '';
         if (!file) return;
         // Revoke acknowledgement immediately, including on invalid files.
         checkbox.checked = false;
+        invalidateRehearsal();
         updateButtons();
         if (!currentHandoffReview(state) || !state.shadowEligible) return;
         if (file.size > 32768) {
@@ -689,10 +763,13 @@
       investigation.disabled = !checkbox.checked || !valid;
       shadow.disabled = !checkbox.checked || !valid || !completeShadowCriteria(state);
       downloadPlan.disabled = shadow.disabled;
+      if (rehearsalRun) rehearsalRun.disabled = shadow.disabled;
+      if (rehearsalDownload) rehearsalDownload.disabled = shadow.disabled || !state.rehearsal;
     };
     checkbox.addEventListener('change', updateButtons);
     Object.entries(planInputs).forEach(([key, input]) => input.addEventListener('input', () => {
       state.planCriteria[key] = input.value.trim();
+      invalidateRehearsal();
       // Any changed acceptance criterion requires a fresh human acknowledgement.
       checkbox.checked = false;
       const criteria = state.planCriteria;
@@ -786,6 +863,42 @@
         forbidden: ['automatic source reads', 'agent or test execution', 'business writes',
           'claims of verified outcome or authorization']}
     };
+  }
+
+  function downloadSyntheticRehearsal(state) {
+    const checkbox = document.getElementById('owgExplorerHandoffConfirmed');
+    const observed = document.getElementById('owgExplorerSyntheticObserved');
+    const decision = document.getElementById('owgExplorerSyntheticException');
+    const result = document.getElementById('owgExplorerSyntheticStatus');
+    if (!currentHandoffReview(state) || !checkbox?.checked || !completeShadowCriteria(state) ||
+        !state.rehearsal || observed?.value.trim() !== state.rehearsal.observed ||
+        decision?.value !== state.rehearsal.decision) return;
+    try {
+      const receipt = {
+        schema: 'openworkgraph.synthetic_shadow_rehearsal.v1',
+        kind: 'local_synthetic_rehearsal_not_source_validation',
+        created_at_utc: new Date().toISOString(),
+        execution_permitted: false, source_identity_verified: false,
+        real_shadow_test_status: 'not_run',
+        plan: shadowPlanManifest(state),
+        invented_scenario: {normal_observation: state.rehearsal.observed,
+          exception_decision: state.rehearsal.decision},
+        synthetic_grade: state.rehearsal.grade,
+        reasons: [...state.rehearsal.reasons],
+        limitations: ['invented inputs, not actual evidence', 'exact string comparison, not semantic validation',
+          'not a provider read, test execution, agent run, verified outcome or authorization']
+      };
+      const url = URL.createObjectURL(new Blob([JSON.stringify(receipt, null, 2) + '\n'],
+        {type: 'application/json;charset=utf-8'}));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'owg-synthetic-shadow-rehearsal.json';
+      document.body.appendChild(link);
+      try { link.click(); } finally { link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
+      if (result) result.textContent = 'Synthetic-only receipt downloaded locally. Review invented text before sharing; no real test or provider call ran.';
+    } catch {
+      if (result) result.textContent = 'Synthetic receipt download unavailable; nothing sent or executed.';
+    }
   }
 
   function downloadReviewedShadowPlan(state) {
