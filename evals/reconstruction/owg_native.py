@@ -248,16 +248,30 @@ def _visible_linked_source_events(case: dict[str, Any]) -> list[dict[str, Any]]:
     # Legacy cases without a source_events key still use presented evidence.
     source = list((case["source_events"] if "source_events" in case
                    else case["presented_evidence"]) or [])
+    # The shipped linker's _observations reserves the first normalized ID
+    # with a valid timestamp *before* inspecting record identity. A numeric
+    # source ID 17 therefore consumes the same slot as a later literal "17",
+    # even though only the literal ID may be scored as visible evidence.
+    # Retain all literal duplicates separately to veto contradictory source
+    # claims, rather than granting later rows replacement authority.
+    first_admitted_literal: dict[str, bool] = {}
     by_id: dict[str, list[dict[str, Any]]] = {}
     for event in source:
         if not isinstance(event, dict):
             continue
-        event_id = event.get("event_id")
-        if isinstance(event_id, str) and _EVENT_ID.fullmatch(event_id):
-            by_id.setdefault(event_id, []).append(event)
+        raw_id = event.get("event_id")
+        source_id = str(raw_id or "")
+        if not _EVENT_ID.fullmatch(source_id):
+            continue
+        if source_id not in first_admitted_literal and _stamp(event.get("observed_at")) is not None:
+            first_admitted_literal[source_id] = isinstance(raw_id, str)
+        if isinstance(raw_id, str):
+            by_id.setdefault(raw_id, []).append(event)
 
     admitted: list[dict[str, Any]] = []
     for event_id, rows in by_id.items():
+        if not first_admitted_literal.get(event_id, False):
+            continue
         projection = _linked_projection(rows[0])
         if (projection is None or not visible.get(event_id)
                 or any(item != projection for item in visible[event_id])):
