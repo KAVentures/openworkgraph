@@ -148,7 +148,12 @@ back to **admitted, visible** events carrying its opaque reference. The adapter
 uses the shipped record-lane identity and UTC timestamp admission rules, retains
 the first valid occurrence of a repeated (record, event ID), and does not score
 invalid timestamps, nonliteral/malformed event IDs or source-only rows absent
-from `presented_evidence`. A reused event ID admitted under two distinct
+from `presented_evidence`. The source lane's duplicate admission normalizes
+an ID before reserving its (record, ID) slot: for example, source numeric `17`
+consumes the slot of a later string `"17"`, but the numeric observation is
+not scoreable as a visible literal ID. The evaluator mirrors that ordering
+without inventing a string-ID assignment; a falsey numeric `0` does not
+consume the literal `"0"` slot because production treats it as an empty ID. A reused event ID admitted under two distinct
 records is withheld from both rather than assigned to an arbitrary lane.
 A matching ID alone is insufficient: the visible event must also carry a
 single consistent normalized (opaque reference, provider, resource kind, host)
