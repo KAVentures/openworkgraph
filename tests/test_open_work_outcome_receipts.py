@@ -1295,3 +1295,71 @@ def test_canonical_exact_record_read_still_allows_explicit_source_refresh(
     assert graph["source_log_join_supported"] is True
     assert graph["source_evidence"]["availability"] == "source_reported"
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("conflicting_detail", [
+    None,
+    False,
+    0,
+    "",
+    [],
+    {"verified": False, "kind": "github_pr_merged"},
+    {"verified": 1, "kind": "github_pr_merged"},
+    {"verified": True, "kind": "jira_issue_resolved"},
+    {"verified": True},
+    {"kind": "github_pr_merged"},
+])
+def test_github_explicit_contradictory_operation_detail_is_unknown(
+    conflicting_detail,
+):
+    # GitHub's production adapter does not need a nested operation detail.
+    # But a cache/reader that *does* supply one cannot simultaneously
+    # assert a contradictory result and have it silently ignored.
+    data = response(
+        provider="github", kind="pull_request", state="merged",
+        operation="github_pr_merged",
+    )
+    data["source_evidence"]["verified_operational_outcome"] = conflicting_detail
+    calls = []
+    result = source_operation_receipt(
+        REF, "github_pr_merged", record_reader=reader(data, calls), now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "provider_operation_not_independently_verified"
+    assert result["operation_verified"] is False
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert result["read_only"] is True
+    assert len(calls) == 1
+    assert calls[0][1]["required_source_provider_kind"] == ("github", "pull_request")
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize("detail_present", [False, True])
+def test_github_optional_matching_operation_detail_preserves_provider_only_scope(
+    detail_present,
+):
+    data = response(
+        provider="github", kind="pull_request", state="merged",
+        operation="github_pr_merged",
+    )
+    if not detail_present:
+        # Exact current production adapter shape: source state only.
+        del data["source_evidence"]["verified_operational_outcome"]
+    else:
+        data["source_evidence"]["verified_operational_outcome"] = {
+            "kind": "github_pr_merged", "verified": True,
+        }
+    result = source_operation_receipt(
+        REF, "github_pr_merged", record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["operation_verified"] is True
+    assert result["verification_scope"] == "authenticated_source_provider_operational_state"
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert result["read_only"] is True
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
