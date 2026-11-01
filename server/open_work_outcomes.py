@@ -192,12 +192,21 @@ def source_operation_receipt(
     # reader may omit these optional legacy flags, but if it supplies one
     # that contradicts the provider's scope, it cannot attest this operation.
     # Use literal True, not truthiness (1/"true" are not provenance).
-    scope_flag = (
-        "not_a_claim_of_customer_bank_settlement" if provider == "stripe"
-        else "not_a_claim_of_business_success"
+    # Both provider disclaimers are known limitations, even when one is not
+    # normally emitted by this provider. A cached receipt must not negate the
+    # other disclaimer or hide that contradiction in its operation detail.
+    # Missing optional fields preserve older adapter/cache compatibility.
+    scope_disclaimers = (
+        "not_a_claim_of_business_success",
+        "not_a_claim_of_customer_bank_settlement",
     )
-    if scope_flag in source and source[scope_flag] is not True:
-        return _unknown(resource_ref, expected_operation, "provider_receipt_scope_conflict")
+    nested_detail = source.get("verified_operational_outcome")
+    for assertions in (source, nested_detail):
+        if isinstance(assertions, dict) and any(
+            flag in assertions and assertions[flag] is not True
+            for flag in scope_disclaimers
+        ):
+            return _unknown(resource_ref, expected_operation, "provider_receipt_scope_conflict")
     # This pre-existing adapter field is unfortunately named: Stripe sets it
     # true for a successful *processor* operation, while GitHub/Jira keep it
     # false because their statuses do not establish business success. Neither
@@ -222,7 +231,6 @@ def source_operation_receipt(
         "agent_caused_operation_verified",
         "agent_execution_authorized",
     )
-    nested_detail = source.get("verified_operational_outcome")
     for assertions in (source, nested_detail):
         if isinstance(assertions, dict) and any(
             flag in assertions and assertions[flag] is not False
