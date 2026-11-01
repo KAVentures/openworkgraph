@@ -964,7 +964,7 @@ def test_optional_group_patch_mapping_accepts_only_shipped_static_paths(client, 
     report = assess(mapping(client=client, groups=groups))
     assert report["status"] == "requires_live_validation"
     assert "unsupported_attribute" not in codes(report)
-    assert "group_member_selector_remove_only" in codes(report) == (
+    assert ("group_member_selector_remove_only" in codes(report)) == (
         any("[" in path for path in patch_paths))
     assert ("group_member_patch_ids_unverified" in codes(report)) == (
         any("[" in path or path.lower() == "members" for path in patch_paths))
