@@ -573,3 +573,33 @@ verify each envelope has 1–20 operations, the exact current Group ETag,
 operation ordering and membership results, and 428/412 behavior for missing
 or stale versions. These synthetic mapping checks are **not** real
 Entra/Okta conformance or company rollout acceptance.
+
+
+## User PATCH per-request operation limit (offline only)
+
+The shipped User PATCH handler accepts **1–20 operations in one HTTP
+request**. The optional `users.patch_operations` declaration is a list of
+*possible* client operation shapes, not a captured request or proof that
+all declared operations are sent together. It remains bounded to 32
+declarations for offline review. When a mapping declares **21–32**
+operations, the preflight adds the nonblocking
+`user_patch_single_request_limit` caution: those operations cannot all
+be sent together in one supported User PATCH request. They might be
+valid if split across multiple independently authorized requests, but
+only real IdP traffic establishes the batching, order and ETag behavior.
+
+Zero declarations do not establish support for an empty PATCH envelope:
+the server rejects an actual request with zero operations. More than 32
+declarations remain invalid offline input. The caution preserves
+`status`, the legacy four `checked` counts, optional
+`checked.user_patch_operations`, all existing blockers and the shipped
+server behavior. No raw values, contact addresses, selector literals,
+User IDs or credentials are accepted into or echoed by reports.
+
+For a separately authorized disposable Entra/Okta acceptance run, verify
+actual request envelopes have 1–20 operations, whether each operation
+carries its required value, the correct current User If-Match (or the
+separately approved standalone unversioned-PATCH policy), stale-version
+refusal, provider isolation, offboarding/revocation and rollback/restore.
+These offline synthetic declarations are **not** live client conformance,
+real-tenant validation or company rollout acceptance.
