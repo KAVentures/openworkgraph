@@ -461,3 +461,33 @@ alongside its existing valid-window and offset-clock controls. These tests
 are not live-provider, tenant-grant, revocation, customer-outcome, or business
 uplift evidence. No new source privileges, network reads, background polling,
 agent execution, or business writes are introduced.
+
+
+## Timezone-explicit history-window preflight
+
+A provider operation receipt is stricter than the general historical-evidence
+query parser. The latter accepts some legacy date-only or timezone-naive
+strings, which may be interpreted in the local machine's timezone. Before
+invoking any source-capable record reader, the operation verifier requires
+every explicitly supplied `since`/`until` boundary to be a bounded (at most
+64-character) ISO-8601 **datetime** with `T` separator and explicit `Z` or
+`+HH:MM`/`-HH:MM` timezone. Minute and second precision, fractional seconds
+(up to nine digits), and explicit offsets remain valid. `None` still means
+omitted. The existing canonical `_ts` parser is reused for calendar validity
+and strict `since < until` ordering; the source receipt's own `verified_at`
+parser remains unchanged.
+
+Date-only, ISO week/basic dates, space-separated or timezone-naive datetimes,
+malformed offsets, excessive precision and oversized inputs now raise the
+existing `WorkflowEvidenceError` **before** the reader can make a source
+request. This deliberately narrows only the opt-in verification boundary, not
+general workflow evidence retrieval, REST/MCP, capture, Discovery Mode or
+source adapter permissions. It prevents host-timezone ambiguity in the
+caller-selected retained-history scope; it is not a tenant authorization,
+revocation or real-provider outcome proof.
+
+Four synthetic provider-operation families have 112 invalid-boundary
+parameterizations requiring zero fake-reader calls and 20 valid
+timezone-aware-window controls that preserve read-only, provider-only receipts.
+These are committed regression cases, not evidence of native pytest execution
+or live customer/provider acceptance.
