@@ -3527,3 +3527,47 @@ test('zero-event review never implies pagination, export coverage or available d
   assert.equal(h.tickets.length, 0);
   assert.equal(h.downloads, 0);
 });
+
+test('mixed daily event totals cannot be mistaken for dated workflow observations', async t => {
+  const utcDay = observedStart.slice(0, 10) + 'T00:00:00Z';
+  const nextUtcDay = new Date(Date.parse(utcDay) + 86400000).toISOString();
+  for (const kind of ['mixed', 'ordinary-only', 'diagnostic-only']) {
+    await t.test(kind, async () => {
+      const mixed = kind === 'mixed', diagnosticOnly = kind === 'diagnostic-only';
+      const ordinary = diagnosticOnly ? 0 : mixed ? 2 : 4;
+      const health = 4 - ordinary;
+      const h = await openAllRetainedPreview(d => ({
+        ...d,
+        canonical_rows: 4, retained_rows: 4,
+        event_types: diagnosticOnly ? {capture_health: 4}
+          : mixed ? {focus_span: 2, capture_health: 1, capture_gap: 1}
+            : {focus_span: 4},
+        sources: {desktop: 4},
+        work_evidence: {ordinary_event_rows: ordinary, health_event_rows: health},
+        analysis_plan: {date_chunks: [{
+          since: utcDay, until: nextUtcDay, event_rows: 4
+        }], more_dates_not_listed: false}
+      }));
+      assert.equal(h.modals, 1);
+      assert.match(h.modalHtml, /4 events<\/li>/);
+      if (mixed) {
+        assert.match(h.modalHtml, /Mixed selected evidence: 2 ordinary work observations and 2 capture-health\/gap records/);
+        assert.match(h.modalHtml, /Daily totals do not distinguish their event types/);
+        assert.match(h.modalHtml, /a listed date may contain diagnostics only/);
+        assert.match(h.modalHtml, /Inspect event-level evidence before treating any date as workflow evidence/);
+        assert.match(h.modalHtml, /Review selected work evidence \(workflow unverified\)|bounded list of observed UTC dates/);
+      } else {
+        assert.doesNotMatch(h.modalHtml, /Mixed selected evidence:/);
+        if (diagnosticOnly) {
+          assert.match(h.modalHtml, /Review capture-health diagnostic dates/);
+          assert.doesNotMatch(h.modalHtml, /may ask an AI to review one date at a time/);
+        }
+      }
+      await h.modal['#analysisCopy'].onclick();
+      if (diagnosticOnly) assertCopyEvidenceWarning(h.copied, 'request-rollover', true);
+      else assert.deepEqual(h.copied, ['request-rollover']);
+      assert.equal(h.tickets.length, 0);
+      assert.equal(h.downloads, 0);
+    });
+  }
+});
