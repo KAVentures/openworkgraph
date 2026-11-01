@@ -119,7 +119,8 @@ def _object(value: Any, path: str, required: set[str], optional: set[str] = froz
     return value
 
 
-def _attributes(value: Any, path: str, *, minimum: int, max_path: int = 128) -> list[str]:
+def _attributes(value: Any, path: str, *, minimum: int, max_path: int = 128,
+                check_duplicates: bool = True) -> list[str]:
     if type(value) is not list or not minimum <= len(value) <= MAX_ATTRIBUTES:
         raise InvalidMapping(f"{path} must have {minimum}–{MAX_ATTRIBUTES} paths")
     folded = []
@@ -132,7 +133,7 @@ def _attributes(value: Any, path: str, *, minimum: int, max_path: int = 128) -> 
         # shipped attribute parser's lower(), not Unicode casefold(), so
         # long-s Unicode names cannot impersonate ASCII SCIM attributes.
         folded.append(item if "[" in item else item.lower())
-    if len({item.casefold() for item in folded}) != len(folded):
+    if check_duplicates and len({item.casefold() for item in folded}) != len(folded):
         raise InvalidMapping(f"{path} contains duplicate paths")
     return folded
 
@@ -165,8 +166,28 @@ def assess(mapping: Any) -> dict:
     group_create = (_attributes(groups["create_attributes"], "groups.create_attributes", minimum=0)
                     if "create_attributes" in groups else None)
     group_patch = (_attributes(groups["patch_attributes"], "groups.patch_attributes",
-                               minimum=0, max_path=1024)
+                               minimum=0, max_path=1024, check_duplicates=False)
                    if "patch_attributes" in groups else None)
+    if group_patch is not None:
+        # Group member IDs are opaque, case-sensitive SCIM User resource IDs.
+        # The shipped Group PATCH selector decodes JSON and compares the
+        # resulting ID exactly; raw casefold() would conflate distinct IDs,
+        # while differently escaped JSON literals could target one ID twice.
+        # Normalize only ASCII-insensitive selector structure, never the ID.
+        effective_group_paths: set[tuple[str, str]] = set()
+        for value in group_patch:
+            selector = _GROUP_MEMBER_SELECTOR.fullmatch(value)
+            if selector is not None and _supported_group_patch_path(value):
+                effective = ("member", json.loads(selector.group(1)))
+            elif value.lower() in GROUP_PATCH:
+                effective = ("field", value.lower())
+            else:
+                # Unsupported paths will also receive the usual blocker;
+                # preserve generic duplicate rejection without echoing input.
+                effective = ("unsupported", value.casefold())
+            if effective in effective_group_paths:
+                raise InvalidMapping("groups.patch_attributes contains duplicate effective paths")
+            effective_group_paths.add(effective)
     # Different spellings of the same *supported* contact PATCH target must
     # not pass as independent mappings. The shipped contact parser strips the
     # exact core User URN, decodes JSON selector literals and compares selected
