@@ -75,7 +75,11 @@ def _align(trace: list[str], path: list[str]) -> tuple[int, list[tuple[str, str]
 def conformance(log_id: str, model: Any, case_type: str | None = None,
                 max_variants: int = 500) -> dict[str, Any]:
     paths = parse_reference_model(model)
-    max_variants = max(1, min(int(max_variants), MAX_ALIGNED_VARIANTS))
+    # Direct integrations must not silently truncate or coerce malformed caps.
+    # The REST route already declares a bounded integer query parameter.
+    if not isinstance(max_variants, int) or isinstance(max_variants, bool):
+        raise EventLogWorkspaceError("max_variants must be an integer")
+    max_variants = max(1, min(max_variants, MAX_ALIGNED_VARIANTS))
 
     def run(conn):
         total_cases = conn.execute("SELECT count(DISTINCT case_id) FROM ce").fetchone()[0]
