@@ -1563,6 +1563,60 @@ test('selected-range AI history grant shows exact bounds, expiry and export dist
   assert.equal(h.downloads, 1);
 });
 
+test('selected AI history grant retains microsecond UTC bounds instead of hiding a valid short lease', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle();
+  h.reply(h.reads[1], {...h.preview('range', 'precise-grant'),
+    local_ai_enabled: true,
+    local_ai_history_access: {mode: 'selected_range',
+      since: '2026-10-20T00:00:00.000001Z',
+      until: '2026-10-20T02:00:00.000002+02:00',
+      expires_at: new Date(Date.now() + 86400_000).toISOString()}});
+  await open;
+  assert.equal(h.modals, 1);
+  assert.ok(h.modalHtml.includes(
+    'Local saved-history grant: 2026-10-20T00:00:00.000001Z to 2026-10-20T00:00:00.000002Z'));
+  assert.match(h.modalHtml, /snapshot only, may not cover this selected work period/);
+  assert.match(h.modalHtml, /Preparing or downloading a local file does not grant AI history access/);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-precise-grant']);
+  assert.equal(h.tickets.length, 0);
+  assert.equal(h.downloads, 0);
+});
+
+test('AI grant expiry uses full fractional precision against the local clock', async t => {
+  const localNow = new Date(fixtureDay.getFullYear(), fixtureDay.getMonth(),
+    fixtureDay.getDate(), 23, 59, 0).toISOString();
+  const futureByMicrosecond = localNow.replace(/\\.000Z$/, '.000001Z');
+  for (const [name, expiry, valid] of [
+    ['one microsecond ahead', futureByMicrosecond, true],
+    ['equal to current millisecond', localNow, false],
+    ['invalid rollover', localNow.replace(/T[0-9]{2}:/, 'T24:'), false]
+  ]) await t.test(name, async () => {
+    const h = harness(Promise.resolve(true), null, adjustableClock().Date);
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const open = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], {...h.preview('range', 'expiry-check'),
+      local_ai_enabled: true,
+      local_ai_history_access: {mode: 'all_saved', expires_at: expiry}});
+    await open;
+    assert.equal(h.modals, 1);
+    if (valid) {
+      assert.match(h.modalHtml, /Local saved-history grant: all saved work/);
+      assert.ok(h.modalHtml.includes('Grant expiry: ' + futureByMicrosecond));
+    } else {
+      assert.match(h.modalHtml, /permission could not be verified from this preview/);
+      assert.doesNotMatch(h.modalHtml, /Local saved-history grant:/);
+    }
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-expiry-check']);
+    assert.equal(h.tickets.length, 0);
+  });
+});
+
 test('AI grant disclosure fails conservatively for malformed or unrecognized lease metadata', async t => {
   const cases = [
     ['invalid selected start', true, {mode:'selected_range',
