@@ -91,3 +91,21 @@ Synthetic parameterized regressions cover early rejection, unused malformed
 thresholds, inclusive integer threshold boundaries and existing integer limit
 clamping. These checks are **not** native cross-platform CI or evidence of
 real-provider/customer acceptance, causal relationships or authorized actions.
+
+## Related R6 KPI automation-resource list validation
+
+The KPI REST route passes literal resource names as a list. Direct Python
+`kpis(automation_resources=...)` previously iterated a single string into
+individual character names, could accept malformed mixed-type entries, and
+could raise uncaught `TypeError` for noniterable or unhashable values.
+
+Direct calls now accept `None` or a `list[str]` and reject other shapes or
+non-string entries with `EventLogWorkspaceError` **before querying a saved
+log**. Valid literal names (including leading/trailing whitespace), duplicate
+deduplication in first-seen order, omission of empty strings, the 50-distinct-
+resource limit, and the 200-character-per-name limit remain unchanged. The
+existing REST query parsing and response shape are not changed. Synthetic
+mocked-query regressions exercise malformed inputs, empty/duplicate/whitespace
+names, and boundary-sized valid lists. These are not native CI, live-provider
+acceptance, or consenting-customer evidence; no resource name establishes a
+verified automation outcome or authorizes an agent action.
