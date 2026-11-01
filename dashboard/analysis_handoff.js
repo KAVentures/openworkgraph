@@ -563,14 +563,14 @@
       ? 'Analyze a large history in smaller parts'
       : diagnosticOnly ? 'Review capture-health diagnostic dates' : 'Review missing date coverage';
     const dateCoverageIntro = ordinaryRows > 0
-      ? 'Ask your AI to process one day at a time, follow every page, and keep track of what it has examined. Repeated-work maps are optional.'
+      ? 'This is a bounded list of observed UTC dates, not a paginated chronology. After explicitly sharing a locally inspected package, you may ask an AI to review one date at a time. It must disclose gaps and unknown coverage rather than infer workflows from missing dates.'
       : diagnosticOnly
         ? 'The listed dates contain capture-health/gap diagnostics only, not workflow steps. They cannot substantiate repeated-work maps or automation opportunities.'
         : 'No recorded events are available to analyze. Missing dates do not establish inactivity, complete capture or current consent.';
     const dateCoverageDownload = d.canonical_rows
       ? diagnosticOnly
-        ? 'The optional diagnostic download contains the full selected period; inspect it locally before sharing.'
-        : 'The file download still contains the full selected period.'
+        ? 'An optional diagnostic download requests the selected period again, subject to current consent, retention and access. It is not a verified workflow or guaranteed complete capture; inspect it locally before sharing.'
+        : 'A download requests the selected period again, subject to current consent, retention and access. Without detailed chronology selected, it is a summary package rather than raw event rows; inspect the actual file before sharing.'
       : 'No evidence package is available for this zero-event selection; only the explanatory request can be copied.';
     const dailyChunks = d.analysis_plan?.date_chunks;
     // A truncated date plan is a bounded review sample, not a paginated UI.
