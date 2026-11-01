@@ -275,7 +275,7 @@ def _linked_projection(event: dict[str, Any]) -> str | None:
     if isinstance(reference_claim, dict):
         normalized_identity = _identity(event)
         if normalized_identity is not None:
-            reference_claim = ("normalized_record_identity", *normalized_identity[:4])
+            reference_claim = ["normalized_record_identity", *normalized_identity[:4]]
     # Rich evidence projects metadata tokens into top-level convenience keys.
     # Those are not independent claims. Reject source-only top-level tokens or
     # contradictions instead of mistaking a convenience copy for a conflict.
@@ -291,7 +291,10 @@ def _linked_projection(event: dict[str, Any]) -> str | None:
                                or not isinstance(event[field], str)
                                or event[field] != metadata[field]):
             return None
-    return _canonical_eval_json((
+    # The duplicate-source preflight rejects tuples by design: this internal
+    # projection must use JSON-native lists at every level, including the
+    # normalized identity above, or all legitimate links fail closed.
+    return _canonical_eval_json([
         stamp, event.get("app"), event.get("event_type"),
         event.get("source"), event.get("session_id"),
         reference_claim,
@@ -299,7 +302,7 @@ def _linked_projection(event: dict[str, Any]) -> str | None:
         metadata.get("clipboard_transfer_id"),
         metadata.get("clipboard_source_observed"),
         metadata.get("action"), metadata.get("semantic_action"),
-    ))
+    ])
 
 
 def _visible_linked_source_events(case: dict[str, Any]) -> list[dict[str, Any]]:
