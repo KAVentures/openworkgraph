@@ -598,7 +598,7 @@
         receipt.source_identity_verified !== false ||
         receipt.real_shadow_test_status !== 'not_run' ||
         typeof receipt.created_at_utc !== 'string' ||
-        !/^\\d{4}-\\d{2}-\\d{2}T/.test(receipt.created_at_utc) ||
+        !/^\d{4}-\d{2}-\d{2}T/.test(receipt.created_at_utc) ||
         !Number.isFinite(Date.parse(receipt.created_at_utc)) ||
         !Array.isArray(receipt.limitations)) {
       throw new Error('Not a non-executing OWG synthetic suite receipt v1.');
