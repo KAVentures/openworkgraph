@@ -658,3 +658,70 @@ stale incarnation, review revocation, source switch, default OFF, foreign
 Origin/bearer denial and malformed graph refusal. Synthetic local tests do
 not establish real-provider/customer acceptance. All native exact-head CI,
 accessibility, scale, packaging and review gates still apply before merge.
+
+
+## Explicit source-scanned reviewed case dossier (local REST, experimental)
+
+An authenticated local dashboard session can explicitly request
+`POST /v1/open-work/declarations/dossier` **after** a case has a current
+human review and a durable owner declaration. The endpoint joins the existing
+reviewed SQLite dependency DAG to the **existing** read-only
+`stripe_open_work_case_context` source inventory/history reader; it does not
+introduce a new provider adapter, grant, background scanner, store or engine.
+
+Example request body (the revision/token must come from a fresh authorized
+`GET /v1/open-work/declarations`, not from this documentation):
+
+```json
+{
+  "work_item_ref": "owg:w:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "expected_revision": 1,
+  "expected_edit_token": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "confirm_source_scan": true,
+  "max_pages": 2
+}
+```
+
+The dashboard session, current source-account-derived scope, current reviewed
+case and all transitive owner-declared prerequisites, and exact revision plus
+incarnation token are checked **before** any source read. The caller must
+affirmatively request a bounded 1–3-page source scan for **each** call; existing
+restricted Stripe read opt-in and provider/account checks still apply.
+`confirm_source_scan:false`, a stale CAS, removed review, missing source,
+foreign Origin or an API bearer cannot trigger this scan. The endpoint
+rechecks the source scope and exact target/prerequisite revisions, tokens,
+reviews and expiry after the scan; changes fail with a privacy-safe 409 rather
+than returning an apparently current approval. These checks narrow races,
+but are **not** atomic cross-process provider grant fencing.
+
+The `openworkgraph.local-reviewed-case-dossier.v1` response contains only
+the selected owner-declared goal/expected-outcome code and version, ordered
+transitive declared prerequisite refs and versions, source-reported
+`open`/explicit `unknown` state with verified-at/coverage when available,
+and at most eight opaque retained OWG record refs with counts and truncation.
+It does **not** echo native Stripe invoice IDs, customer identities, amounts,
+source payloads, raw timeline content, private scope or edit tokens.
+`Cache-Control: no-store` applies to successful responses. The existing
+Stripe case-context reader may read provider inventory and retained local
+history only under the explicit user request; it never writes to Stripe.
+
+**Unknown is not paid or completed.** A source outage, partial inventory
+without the selected case, or absence from a complete open-invoice list
+returns unknown; it does not establish settlement, a satisfied customer,
+a follow-up obligation or an agent-caused result. Declared prerequisites are
+**owner statements**, not source-verified dependencies. All business
+obligation, expected-outcome completion, customer outcome and agent
+execution authority flags remain false. There is no auto-execution or new
+MCP inventory permission. The current prototype is local single-account,
+not production organization-wide RBAC.
+
+The FastAPI/SQLite synthetic acceptance in
+`tests/test_open_work_case_dossier.py` covers an A→B→C owner-declared
+chain, explicit fresh scan, count-only observation minimization, stale
+revision and missing-consent no-read, source outages/partial inventory,
+source switch, prerequisite revision and human-review revocation during
+scan, bearer/Origin refusal and contradictory source status. These fake
+source tests are **not** live restricted-Stripe account acceptance, real
+tenant revocation guarantees, customer-outcome adjudication or held-out
+A/B/C commercial-benefit evidence. All exact-head native CI gates must pass
+before this draft can merge.
