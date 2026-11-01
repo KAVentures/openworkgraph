@@ -285,7 +285,9 @@ def root_cause(log_id: str, outcome: str, case_type: str | None = None, *, thres
                 "outcome": {"kind": outcome, "threshold_seconds": threshold_seconds, "activity": activity}}
         if not n or y in (0, n):
             return {**base, "features_tested": 0, "associations": [],
-                    "note": "the outcome does not vary across cases, so nothing can be associated with it"}
+                    "note": "the outcome does not vary across cases, so nothing can be associated with it",
+                    "associations_are_not_causes": True,
+                    "temporal_order_not_checked": True}
         excluded = activity if outcome in {"contains_activity", "ends_with"} else None
         rows = conn.execute("""WITH f AS (
               SELECT DISTINCT case_id, 'activity' AS kind, activity AS value FROM ce WHERE activity IS DISTINCT FROM $excluded
