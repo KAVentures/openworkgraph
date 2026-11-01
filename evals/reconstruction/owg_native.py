@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from server.record_case_lanes import _EVENT_ID, _identity, _stamp, record_case_lanes
-from server.work_item_links import link_observations
+from server.work_item_links import _link_scope, _TAB, _TRANSFER, link_observations
 
 from .fixtures import load_cases
 from .scoring import aggregate
@@ -176,6 +176,72 @@ def _linked_projection(event: dict[str, Any]) -> str | None:
     ))
 
 
+
+def _veto_hidden_source_ephemeral_links(
+    source: list[dict[str, Any]], admitted: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Hidden source rows can DISPROVE a weak link, never create one.
+
+    A source-only third record sharing a scoped clipboard transfer makes the
+    original three-record group ambiguous. Removing that row before linking
+    must not manufacture a two-record transfer. Likewise a hidden second
+    record in a tab must not manufacture a single-record tab association.
+    Remove only matching weak tokens from copies of visible admitted rows;
+    retain their independently supported exact-record evidence.
+    """
+    admitted_ids = {event["event_id"] for event in admitted}
+    token_fields = (("clipboard_transfer_id", _TRANSFER), ("tab_context_id", _TAB))
+    vetoes: dict[str, set[tuple[tuple[str, str, str, str], str]]] = {
+        field: set() for field, _ in token_fields
+    }
+    for event in source:
+        if not isinstance(event, dict):
+            continue
+        event_id = event.get("event_id")
+        if (not isinstance(event_id, str) or not _EVENT_ID.fullmatch(event_id)
+                or event_id in admitted_ids or _stamp(event.get("observed_at")) is None):
+            continue
+        scope = _link_scope(event)
+        if scope is None:
+            continue
+        metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+        for field, pattern in token_fields:
+            # Both explicit locations matter: a contradictory hidden claim
+            # must not become harmless merely because one was ignored.
+            for claim in (event.get(field), metadata.get(field)):
+                if isinstance(claim, str) and pattern.fullmatch(claim):
+                    vetoes[field].add((scope, claim))
+
+    if not any(vetoes.values()):
+        return admitted
+    safe: list[dict[str, Any]] = []
+    for event in admitted:
+        scope = _link_scope(event)
+        metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+        blocked: set[str] = set()
+        if scope is not None:
+            for field, pattern in token_fields:
+                if any(
+                    isinstance(claim, str) and pattern.fullmatch(claim)
+                    and (scope, claim) in vetoes[field]
+                    for claim in (event.get(field), metadata.get(field))
+                ):
+                    blocked.add(field)
+        if not blocked:
+            safe.append(event)
+            continue
+        # No mutation of the source/corpus. Never strip record references,
+        # scope, action, timestamp, or provenance to bypass source checks.
+        copy = dict(event)
+        copy_meta = dict(metadata)
+        for field in blocked:
+            copy.pop(field, None)
+            copy_meta.pop(field, None)
+        copy["metadata"] = copy_meta
+        safe.append(copy)
+    return safe
+
+
 def _visible_linked_source_events(case: dict[str, Any]) -> list[dict[str, Any]]:
     """Keep only unambiguous source observations actually presented for scoring.
 
@@ -218,7 +284,7 @@ def _visible_linked_source_events(case: dict[str, Any]) -> list[dict[str, Any]]:
             )):
                 continue
         admitted.append(rows[0])
-    return admitted
+    return _veto_hidden_source_ephemeral_links(source, admitted)
 
 
 def predict_linked_items(case: dict[str, Any], *, accept_candidates: bool = False) -> dict[str, Any]:
