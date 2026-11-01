@@ -484,6 +484,56 @@
       state.planCriteria[key].trim().length > 0 && state.planCriteria[key].length <= 320);
   }
 
+  // Imported files are untrusted proposals, never grants or test receipts.
+  function importedShadowPlanCriteria(plan, state) {
+    if (!plan || typeof plan !== 'object' || Array.isArray(plan) ||
+        plan.schema !== 'openworkgraph.shadow_validation_plan.v1' ||
+        plan.kind !== 'non_executing_shadow_validation_plan' ||
+        plan.execution_permitted !== false ||
+        plan.validation?.status !== 'not_run' ||
+        plan.validation?.observed_result !== null ||
+        plan.validation?.pass_fail_abstain !== 'not_assessed' ||
+        plan.safety?.allowed !== 'planning_only_no_tool_calls') {
+      throw new Error('Not an unexecuted OWG shadow-plan v1 proposal.');
+    }
+    const group = plan.reviewed_group;
+    const evidence = plan.selected_evidence;
+    if (!group || group.workflow_id !== state.reviewedId ||
+        group.revision !== state.reviewedRevision ||
+        group.meaning !== 'user_classification_not_authorization' ||
+        !evidence || evidence.variant_number !== state.variantNumber ||
+        evidence.exact_displayed_variant !== true ||
+        evidence.inspection !== 'bounded_selected_references_only' ||
+        evidence.source_identity_verified !== false ||
+        evidence.source_completeness !== 'unknown') {
+      throw new Error('Plan review identity or evidence status does not match this selection.');
+    }
+    const window = evidence.window_utc;
+    const expectedWindow = JSON.parse(state.windowJSON);
+    if (!window || typeof window !== 'object' || Array.isArray(window) ||
+        Object.keys(window).length !== Object.keys(expectedWindow).length ||
+        Object.keys(expectedWindow).some(key => window[key] !== expectedWindow[key])) {
+      throw new Error('Plan period differs; reopen the exact reviewed evidence window.');
+    }
+    const refs = evidence.execution_ids;
+    if (!Array.isArray(refs) || refs.length !== state.ids.length ||
+        new Set(refs).size !== refs.length ||
+        !refs.every(id => typeof id === 'string' && state.ids.includes(id))) {
+      throw new Error('Plan execution references differ from the freshly inspected variant.');
+    }
+    const criteria = plan.human_proposed_untrusted_criteria;
+    const fields = {
+      expected: criteria?.normal_case_expected,
+      exception: criteria?.exception_case,
+      stop: criteria?.fail_or_abstain_rule
+    };
+    if (!Object.values(fields).every(value => typeof value === 'string' &&
+        value.trim().length > 0 && value.length <= 320)) {
+      throw new Error('Plan criteria are missing or exceed the 320-character limit.');
+    }
+    return Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, value.trim()]));
+  }
+
   // Review and handoff are separate actions. The only export is an explicit
   // browser-local plan-only JSON download; no server export or execution occurs.
   function openHandoffReview(candidate, lane) {
@@ -572,6 +622,51 @@
       planPreview.style.whiteSpace = 'pre-wrap';
       planPreview.style.overflowWrap = 'anywhere';
       plan.appendChild(planPreview);
+      const importLabel = element('label', 'Reopen a previously downloaded shadow-plan JSON (local file only)');
+      const importInput = element('input');
+      importInput.id = 'owgExplorerPlanImport';
+      importInput.type = 'file';
+      importInput.accept = '.json,application/json';
+      importLabel.appendChild(importInput);
+      plan.appendChild(importLabel);
+      const importStatus = element('p',
+        'Import only restores untrusted proposed criteria when this exact reviewed variant, period and freshly inspected references match. It never restores approval.', 'muted');
+      importStatus.id = 'owgExplorerPlanImportStatus';
+      importStatus.setAttribute('role', 'status');
+      plan.appendChild(importStatus);
+      importInput.addEventListener('change', async () => {
+        const file = importInput.files?.[0];
+        importInput.value = '';
+        if (!file) return;
+        // Revoke acknowledgement immediately, including on invalid files.
+        checkbox.checked = false;
+        updateButtons();
+        if (!currentHandoffReview(state) || !state.shadowEligible) return;
+        if (file.size > 32768) {
+          importStatus.textContent = 'Plan refused: file exceeds the 32 KiB local import limit.';
+          return;
+        }
+        try {
+          const raw = await file.text();
+          if (!currentHandoffReview(state)) return; // Selection changed while reading.
+          const restored = importedShadowPlanCriteria(JSON.parse(raw), state);
+          Object.entries(restored).forEach(([key, value]) => {
+            planInputs[key].value = value;
+            state.planCriteria[key] = value;
+          });
+          planPreview.textContent =
+            'Proposed normal-case result: ' + restored.expected + '\n' +
+            'Proposed exception: ' + restored.exception + '\n' +
+            'Proposed fail/abstain rule: ' + restored.stop;
+          importStatus.textContent =
+            'Matching unexecuted plan criteria restored locally. Inspect and edit them, then explicitly acknowledge this fresh review. No prior approval or test result was imported.';
+          updateButtons();
+        } catch (error) {
+          if (currentHandoffReview(state)) importStatus.textContent =
+            'Plan refused: ' + (error instanceof SyntaxError ?
+              'invalid JSON.' : String(error.message || 'unrecognized plan.'));
+        }
+      });
       panel.appendChild(plan);
     }
     const acknowledgment = element('label');
