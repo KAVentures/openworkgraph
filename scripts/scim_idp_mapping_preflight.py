@@ -178,7 +178,10 @@ def assess(mapping: Any) -> dict:
             raise InvalidMapping("groups.patch_operations must be a bounded list")
         group_patch_ops = []
         for index, raw_op in enumerate(raw_ops):
-            item = _object(raw_op, f"groups.patch_operations[{index}]", {"op", "path"})
+            item = _object(raw_op, f"groups.patch_operations[{index}]", {"op", "path"},
+                           {"value_present"})
+            if "value_present" in item and type(item["value_present"]) is not bool:
+                raise InvalidMapping("groups.patch_operations value_present must be a boolean")
             verb = item["op"]
             if type(verb) is not str or re.fullmatch(r"[A-Za-z]{1,16}", verb) is None:
                 raise InvalidMapping("groups.patch_operations contains an invalid verb")
@@ -186,7 +189,7 @@ def assess(mapping: Any) -> dict:
                 [item["path"]], f"groups.patch_operations[{index}].path",
                 minimum=1, max_path=1024, check_duplicates=False,
             )[0]
-            group_patch_ops.append((verb.lower(), declared_path))
+            group_patch_ops.append((verb.lower(), declared_path, item.get("value_present")))
     if group_patch is not None:
         # Group member IDs are opaque, case-sensitive SCIM User resource IDs.
         # The shipped Group PATCH selector decodes JSON and compares the
@@ -329,7 +332,7 @@ def assess(mapping: Any) -> dict:
         add("blocker", "disabled_groups_with_patch_operations", "groups.patch_operations",
             "Group PATCH operations are declared although Group provisioning is disabled")
     if group_patch_ops is not None:
-        for index, (verb, declared_path) in enumerate(group_patch_ops):
+        for index, (verb, declared_path, value_present) in enumerate(group_patch_ops):
             location = f"groups.patch_operations[{index}]"
             if not _supported_group_patch_path(declared_path):
                 add("blocker", "unsupported_group_patch_path", location + ".path",
@@ -344,6 +347,19 @@ def assess(mapping: Any) -> dict:
             elif declared_path.lower() == "displayname" and verb == "remove":
                 add("blocker", "group_displayname_remove_forbidden", location + ".op",
                     "Required Group displayName cannot be removed")
+            elif verb in {"add", "replace"}:
+                # The shipped Group PATCH handler requires an explicit value
+                # key for add/replace, regardless of whether its payload is
+                # valid. Do not accept a declared-absent key as compatible;
+                # an omitted declaration is unknown, not a live test pass.
+                if value_present is False:
+                    add("blocker", "group_patch_required_value_missing",
+                        location + ".value_present",
+                        "Declared Group add/replace operation omits the required value property")
+                elif value_present is None:
+                    add("caution", "group_patch_value_presence_undeclared",
+                        location + ".value_present",
+                        "Group add/replace value-property presence was not declared; verify actual IdP payload")
     if groups["enabled"]:
         if group_create is None:
             add("caution", "group_create_mapping_not_declared", "groups.create_attributes",
@@ -370,11 +386,11 @@ def assess(mapping: Any) -> dict:
             selectors = [value for value in (group_patch or [])
                          if (_GROUP_MEMBER_SELECTOR.fullmatch(value) is not None
                              and _supported_group_patch_path(value))]
-            selectors.extend(path for _, path in (group_patch_ops or [])
+            selectors.extend(path for _, path, _ in (group_patch_ops or [])
                              if (_GROUP_MEMBER_SELECTOR.fullmatch(path) is not None
                                  and _supported_group_patch_path(path)))
             whole_members = ("members" in (group_patch or []) or
-                             any(path.lower() == "members" for _, path in (group_patch_ops or [])))
+                             any(path.lower() == "members" for _, path, _ in (group_patch_ops or [])))
             if selectors:
                 add("caution", "group_member_selector_remove_only", "groups.patch_attributes",
                     "Shipped Group member selectors support removal only; verify actual PATCH verbs and current ETags")
