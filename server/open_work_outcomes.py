@@ -12,6 +12,7 @@ import httpx
 from typing import Any, Callable
 
 from .record_graph import record_graph
+from .workflow_evidence import WorkflowEvidenceError, _ts
 
 _OPS = {
     "github_pr_merged": ("github", "pull_request", "merged"),
@@ -77,6 +78,24 @@ def source_operation_receipt(
     # source reader can be invoked; never silently coerce a policy boundary.
     if type(max_age_seconds) is not int or not 1 <= max_age_seconds <= 3600:
         raise ValueError("invalid maximum source age")
+    # The canonical record_graph validates the selected retained-history
+    # window before its own source adapter dispatch. Apply the SAME existing
+    # _ts/WorkflowEvidenceError contract here too, so an alternate authorized
+    # record_reader cannot perform a provider read with an invalid or reversed
+    # window before the verifier discovers the scope conflict afterward.
+    for name, value in (("since", since), ("until", until)):
+        if value and _ts(value) is None:
+            raise WorkflowEvidenceError(f"{name} must be an ISO-8601 timestamp")
+    if since and until and _ts(since) >= _ts(until):
+        raise WorkflowEvidenceError("until must be after since")
+    # A test/evaluation clock is not a source authorization. Refuse an invalid
+    # explicit clock before any provider read rather than consuming source
+    # privileges and only then returning an unknown receipt.
+    if now is not None and (
+        not isinstance(now, datetime) or now.tzinfo is None or
+        now.utcoffset() is None
+    ):
+        raise ValueError("now must be a timezone-aware datetime")
     # Bind the requested operation to a provider/object family *before*
     # record_graph can invoke an opt-in source adapter. A mismatched retained
     # record must not cause an unrelated provider refresh merely to reject
