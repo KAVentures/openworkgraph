@@ -40,8 +40,11 @@ _CASE_DIMENSIONS = {
     # two-dimensional day/hour breakdown sorts chronologically by dimensions.
     "start_weekday_utc": "strftime(started, '%u %A')",
     "start_hour_utc": "strftime(started, '%H')",
+    # Single bucket preserves the second dimension for case attributes or variants.
+    "start_weekday_hour_utc": "strftime(started, '%u %A %H')",
     "end_weekday_utc": "strftime(ended, '%u %A')",
     "end_hour_utc": "strftime(ended, '%H')",
+    "end_weekday_hour_utc": "strftime(ended, '%u %A %H')",
     # Half-open, disjoint elapsed-time bands; never a local wall-clock estimate.
     "duration_band": """CASE WHEN duration < 3600 THEN '0: under 1 hour'
         WHEN duration < 86400 THEN '1: 1 to under 24 hours'
@@ -59,14 +62,17 @@ _CASE_DIMENSIONS = {
 _LOCAL_CASE_DIMENSIONS = {
     "start_weekday_local": "strftime(timezone(?, timezone('UTC', started)), '%u %A')",
     "start_hour_local": "strftime(timezone(?, timezone('UTC', started)), '%H')",
+    "start_weekday_hour_local": "strftime(timezone(?, timezone('UTC', started)), '%u %A %H')",
     "end_weekday_local": "strftime(timezone(?, timezone('UTC', ended)), '%u %A')",
     "end_hour_local": "strftime(timezone(?, timezone('UTC', ended)), '%H')",
+    "end_weekday_hour_local": "strftime(timezone(?, timezone('UTC', ended)), '%u %A %H')",
 }
 _LOCAL_EVENT_DIMENSIONS = {
     # Event timestamps are also stored as UTC-naive instants. Explicit IANA
     # conversion is needed to group actual observed event volume by local shift.
     "weekday_local": "strftime(timezone(?, timezone('UTC', ts)), '%u %A')",
     "hour_local": "strftime(timezone(?, timezone('UTC', ts)), '%H')",
+    "weekday_hour_local": "strftime(timezone(?, timezone('UTC', ts)), '%u %A %H')",
 }
 _EVENT_DIMENSIONS = {
     "activity": "activity",
@@ -75,6 +81,7 @@ _EVENT_DIMENSIONS = {
     "month": "strftime(date_trunc('month', ts), '%Y-%m')",
     "weekday": "dayname(ts)",
     "hour": "CAST(hour(ts) AS VARCHAR)",
+    "weekday_hour_utc": "strftime(ts, '%u %A %H')",
 }
 _CASE_VALUES = {"duration_seconds": "duration", "events": "events", "distinct_activities": "distinct_activities"}
 _FUNCTIONS = {"median": "quantile_cont({x}, 0.5)", "p90": "quantile_cont({x}, 0.9)", "avg": "avg({x})",
