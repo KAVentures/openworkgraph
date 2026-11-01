@@ -788,8 +788,9 @@ can have many distinct labels; concatenating all of them into the review modal
 can obscure the consent and evidence limitations, or make the modal expensive
 to render.
 
-The modal now shows **at most eight** source categories in the backend's
-reported order. A label longer than **96 Unicode code points** is visibly
+The modal shows **at most eight** source categories, ranked by descending
+validated selected-event count (literal source-label tie break), not by the
+backend's arbitrary map insertion order. A label longer than **96 Unicode code points** is visibly
 shortened with a **[source label truncated]** marker, rather than being
 silently presented as the full identity. Blank labels are explicitly shown as
 **[blank source label]**. Labels remain HTML-escaped. If categories are
@@ -1179,3 +1180,31 @@ does not trigger an export ticket, upload or model call.
 Synthetic DOM regressions cover all three categories and a nonempty health-only
 UTC daily chunk. These are disclosure checks, **not** validation of recorder
 coverage, live consent, customer workflows or competitor parity.
+
+## Dominant-source visibility in bounded review (Worker B, 2026-11-01)
+
+The Prepare for AI review lists only eight reported source categories. Previously
+it used the incoming source-map insertion order. An imported map with eight
+zero-count or rare labels first could hide a source accounting for nearly all
+selected observations, while still reporting only an undifferentiated omitted
+total. That makes the bounded review less useful for deciding what evidence to
+inspect before an explicit agent-neutral handoff.
+
+The **display-only** list now orders the validated partition by **descending
+selected-event count**, breaking ties by literal source-label order. This makes
+the same source map reproducible across insertion orders and keeps high-count
+sources visible. The summary still discloses the **exact number of omitted
+categories and their total selected events**, bounds visible labels to 96 Unicode
+code points, escapes untrusted HTML/format controls, and explicitly calls source
+names *reported labels, not verified identities*. The underlying source map,
+canonical observations, permissions, redaction, export ticket, copied request,
+consent, retention and backend API are unchanged.
+
+Three deterministic synthetic mock-DOM regressions cover a late dominant
+source preceded by eight zero-count categories, a late high-volume source with
+positive-count low-volume omissions, and reproducible literal-name ordering
+when counts tie. They also assert Copy remains request-only and initiates no
+export ticket or download. These checks are not real-browser/WCAG, real-provider,
+consenting-user pilot, verified business outcome or competitor-parity evidence.
+
+Coordination: [#326 claim 6553708598](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6553708598).
