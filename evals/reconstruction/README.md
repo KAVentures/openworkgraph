@@ -200,9 +200,16 @@ source duplicate slot as its later literal string ID. That later string is
 withheld rather than scored from a source row the production linker suppressed.
 The nonliteral row never becomes visible membership. Reversed source order
 preserves the literal first-admitted event; malformed timestamps and falsey
-nonliteral IDs do not consume an ID slot. Conflicting literal duplicate claims
-remain conservatively withheld. These are evaluator-only parity and provenance
-checks, not a change to production deduplication or a held-out score claim.
+nonliteral IDs do not consume an ID slot. Conflicting **timestamp-valid** literal duplicate claims
+remain conservatively withheld. The production linker ignores malformed
+timestamps before first-ID admission; the evaluator now likewise ignores
+invalid-timestamp source duplicates when selecting the first admitted literal
+row and checking duplicate conflicts. Thus an invalid earlier or later replay
+cannot veto or substitute for a valid observed transfer, while a conflicting
+valid replay still fails closed. Synthetic regressions check both source orders
+and the candidate-accepting diagnostic. These are evaluator-only parity and
+provenance checks, not a change to production deduplication or a held-out
+score claim.
 Rich-evidence top-level tab/transfer fields are convenience copies of
 metadata, not independent source claims. Both locations, when present,
 now require **literal, pattern-valid matching strings**: Python equality
