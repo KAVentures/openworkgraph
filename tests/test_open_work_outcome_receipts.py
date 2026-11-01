@@ -8,6 +8,7 @@ import pytest
 import httpx
 
 from server.open_work_outcomes import source_operation_receipt
+from server.record_graph import record_graph
 
 REF = "owg:r:" + "a" * 32
 WHEN = datetime(2026, 10, 19, 10, 0, tzinfo=timezone.utc)
@@ -500,6 +501,7 @@ def test_receipt_rejects_missing_or_different_returned_history_window(
     assert "VERY_PRIVATE_CUSTOMER" not in str(result)
     assert calls == [(REF, {
         "since": None, "until": None, "include_source_status": True,
+        "required_source_provider_kind": (provider, kind),
     })]
 
 
@@ -548,7 +550,8 @@ def test_receipt_rejects_cached_window_when_caller_requests_bounded_history(
     assert result["availability"] == "unknown"
     assert result["reason"] == "source_window_scope_conflict"
     assert result["operation_verified"] is False
-    assert calls == [(REF, {**requested, "include_source_status": True})]
+    assert calls == [(REF, {**requested, "include_source_status": True,
+                            "required_source_provider_kind": (provider, kind)})]
     assert "VERY_PRIVATE_CUSTOMER" not in str(result)
 
 
@@ -610,6 +613,7 @@ def test_receipt_requires_exact_authenticated_source_read_method(
     assert result["read_only"] is True
     assert calls == [(REF, {
         "since": None, "until": None, "include_source_status": True,
+        "required_source_provider_kind": (provider, kind),
     })]
     assert "VERY_PRIVATE_CUSTOMER" not in str(result)
     assert "untrusted_cached_export" not in str(result)
@@ -672,6 +676,7 @@ def test_receipt_rejects_unsupported_or_malformed_source_log_join(
     assert result["read_only"] is True
     assert calls == [(REF, {
         "since": None, "until": None, "include_source_status": True,
+        "required_source_provider_kind": (provider, kind),
     })]
     assert "VERY_PRIVATE_CUSTOMER" not in str(result)
 
@@ -736,6 +741,7 @@ def test_source_reader_transport_outage_is_privacy_safe_unknown(
     assert result["read_only"] is True
     assert calls == [(REF, {
         "since": None, "until": None, "include_source_status": True,
+        "required_source_provider_kind": (provider, kind),
     })]
     assert "PRIVATE_NATIVE_RECORD_AND_CUSTOMER" not in str(result)
 
@@ -754,6 +760,7 @@ def test_source_reader_programming_and_request_errors_are_not_masked(failure):
         )
     assert calls == [(REF, {
         "since": None, "until": None, "include_source_status": True,
+        "required_source_provider_kind": ("stripe", "invoice"),
     })]
 
 
@@ -802,6 +809,7 @@ def test_jira_resolution_timestamp_must_be_aware_bounded_and_consistent(bad_time
     assert result["agent_execution_authorized"] is False
     assert calls == [(REF, {
         "since": None, "until": None, "include_source_status": True,
+        "required_source_provider_kind": ("jira", "issue"),
     })]
     assert "VERY_PRIVATE_CUSTOMER" not in str(result)
 
@@ -868,6 +876,7 @@ def test_jira_verified_resolution_requires_exact_provider_defined_scope(bad_scop
     assert result["agent_execution_authorized"] is False
     assert calls == [(REF, {
         "since": None, "until": None, "include_source_status": True,
+        "required_source_provider_kind": ("jira", "issue"),
     })]
     assert "VERY_PRIVATE_CUSTOMER" not in str(result)
     assert "PRIVATE_NATIVE_ID" not in str(result)
@@ -938,6 +947,7 @@ def test_receipt_requires_bounded_explicit_source_read_timestamp(
     assert result["read_only"] is True
     assert calls == [(REF, {
         "since": None, "until": None, "include_source_status": True,
+        "required_source_provider_kind": (provider, kind),
     })]
     assert "VERY_PRIVATE_CUSTOMER" not in str(result)
     assert "x" * 100 not in str(result)
@@ -1063,5 +1073,78 @@ def test_jira_resolution_clock_skew_cannot_compound(
     assert result["read_only"] is True
     assert calls == [(REF, {
         "since": None, "until": None, "include_source_status": True,
+        "required_source_provider_kind": ("jira", "issue"),
     })]
     assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+# This exercises the real record_graph pre-adapter guard, not only a fake
+# post-read operation receipt. A requested Stripe operation must never cause
+# an unrelated Jira/GitHub adapter read, or vice versa.
+_SOURCE_FAMILIES_WITH_HOST = [
+    ("github", "pull_request", "github.com"),
+    ("jira", "issue", "example.atlassian.net"),
+    ("stripe", "invoice", "dashboard.stripe.com"),
+    ("stripe", "refund", "dashboard.stripe.com"),
+]
+
+
+@pytest.mark.parametrize(("observed_provider", "observed_kind", "observed_host"),
+                         _SOURCE_FAMILIES_WITH_HOST)
+@pytest.mark.parametrize(("operation", "expected_provider", "expected_kind", "_state"),
+                         _OPERATION_FAMILIES)
+def test_record_graph_fences_wrong_operation_family_before_source_adapter(
+    observed_provider, observed_kind, observed_host,
+    operation, expected_provider, expected_kind, _state,
+):
+    event = {
+        "event_id": "synthetic-e1",
+        "observed_at": WHEN.isoformat(),
+        "event_type": "browser_navigation",
+        "source": "browser",
+        "metadata": {"resource_reference": {
+            "resource_ref": REF, "provider": observed_provider,
+            "resource_kind": observed_kind, "host": observed_host,
+        }},
+    }
+    calls = []
+    def source_reader(ref, **kwargs):
+        calls.append((ref, kwargs))
+        return {"availability": "source_reported", "provider": observed_provider}
+
+    graph = record_graph(
+        REF, _raw_events=[event], include_source_status=True,
+        required_source_provider_kind=(expected_provider, expected_kind),
+        source_reader=source_reader,
+    )
+    assert graph["record_type"] == {
+        "provider": observed_provider, "kind": observed_kind,
+    }
+    if (observed_provider, observed_kind) != (expected_provider, expected_kind):
+        assert calls == []
+        assert graph["source_evidence"]["availability"] == "unknown"
+        assert graph["source_evidence"]["reason"] == "selected_source_type_not_observed"
+    else:
+        assert calls == [(REF, {})]
+        assert graph["source_evidence"]["availability"] == "source_reported"
+    assert graph["source_log_join_supported"] is True
+    assert graph["read_only"] is True
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+def test_operation_receipt_passes_provider_family_fence_to_reader(
+    operation, provider, kind, state,
+):
+    calls = []
+    result = source_operation_receipt(
+        REF, operation,
+        record_reader=reader(response(provider, kind, state, operation), calls),
+        now=WHEN,
+    )
+    assert calls == [(REF, {
+        "since": None, "until": None, "include_source_status": True,
+        "required_source_provider_kind": (provider, kind),
+    })]
+    assert result["operation_verified"] is True
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_execution_authorized"] is False
