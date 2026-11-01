@@ -263,7 +263,12 @@ def _visible_linked_source_events(case: dict[str, Any]) -> list[dict[str, Any]]:
         source_id = str(raw_id or "")
         if not _EVENT_ID.fullmatch(source_id):
             continue
-        if source_id not in first_admitted_literal and _stamp(event.get("observed_at")) is not None:
+        # Production skips malformed timestamps before reserving an ID. Do
+        # not let an invalid earlier/later duplicate replace or veto the first
+        # timestamp-valid literal observation admitted by the linker.
+        if _stamp(event.get("observed_at")) is None:
+            continue
+        if source_id not in first_admitted_literal:
             first_admitted_literal[source_id] = isinstance(raw_id, str)
         if isinstance(raw_id, str):
             by_id.setdefault(raw_id, []).append(event)
