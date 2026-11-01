@@ -689,7 +689,8 @@
       invalidateEvidence();
       const refresh=document.getElementById('owgExplorerRefresh');
       if(refresh)refresh.disabled=false;
-      selectedId=candidate.candidate_cluster_id;selectedExample=null;activeBundle=bundle;currentWindow=filter;
+      // A saved grouping payload is classification data, not a fresh explicit evidence inspection.
+      selectedId=candidate.candidate_cluster_id;selectedExample=null;activeBundle=null;currentWindow=filter;
       renderCandidates();renderDetail(candidate);
     },
     clearReviewed(label){
