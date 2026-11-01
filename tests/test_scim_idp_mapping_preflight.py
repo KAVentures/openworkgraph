@@ -1015,6 +1015,53 @@ def test_group_patch_mapping_absence_does_not_imply_supported_or_unsupported_upd
     assert "unsupported_attribute" not in codes(report)
 
 
+@pytest.mark.parametrize("client", ["entra", "okta", "other"])
+@pytest.mark.parametrize("patch_paths,overlap", [
+    (["members", 'members[value eq "usr_A"]'], True),
+    (["MEMBERS", r'MEMBERS[VALUE EQ "u\\u0073r_A"]'], True),
+    (["members"], False),
+    (['members[value eq "usr_A"]'], False),
+    (['members[value eq "usr_A"]', 'members[value eq "usr_a"]'], False),
+    (["members", 'members[value ne "usr_A"]'], False),
+], ids=["whole-plus-selector", "case-and-escape-variants", "whole-only",
+        "selector-only", "distinct-selectors", "unsupported-selector"])
+def test_group_patch_overlap_warning_is_bounded_nonblocking_and_no_identity_echo(
+        client, patch_paths, overlap):
+    groups = {"enabled": True, "match_attributes": ["externalId"],
+              "patch_attributes": patch_paths}
+    report = assess(mapping(client=client, groups=groups))
+    assert ("overlapping_group_member_patch_paths" in codes(report)) is overlap
+    assert report["status"] == ("blocked" if " ne " in patch_paths[-1]
+                                else "requires_live_validation")
+    assert ("unsupported_attribute" in codes(report)) == (" ne " in patch_paths[-1])
+    assert "usr_A" not in json.dumps(report)
+    assert "usr_a" not in json.dumps(report)
+    if overlap:
+        finding = next(f for f in report["findings"]
+                       if f["code"] == "overlapping_group_member_patch_paths")
+        assert finding["severity"] == "caution"
+        assert finding["path"] == "groups.patch_attributes"
+
+
+def test_group_patch_overlap_cli_and_disabled_groups_preserve_gates():
+    groups = {"enabled": True, "match_attributes": ["externalId"],
+              "patch_attributes": ["members", 'members[value eq "usr_secret"]']}
+    completed = subprocess.run([sys.executable, str(SCRIPT), "-"],
+                               input=json.dumps(mapping(groups=groups)),
+                               capture_output=True, text=True, check=False)
+    assert completed.returncode == 0, completed.stderr
+    report = json.loads(completed.stdout)
+    assert "overlapping_group_member_patch_paths" in codes(report)
+    assert "usr_secret" not in completed.stdout + completed.stderr
+
+    groups["enabled"] = False
+    groups["match_attributes"] = []
+    disabled = assess(mapping(groups=groups))
+    assert disabled["status"] == "blocked"
+    assert "disabled_groups_with_patch_mapping" in codes(disabled)
+    assert "overlapping_group_member_patch_paths" not in codes(disabled)
+
+
 def test_group_patch_selector_is_removal_only_not_a_general_member_update():
     groups = {"enabled": True, "match_attributes": ["externalId"],
               "patch_attributes": ["members", 'members[value eq "u1"]']}
