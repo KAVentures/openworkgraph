@@ -482,9 +482,9 @@
     if (!host || selectedId !== candidate.candidate_cluster_id || selectedExample !== lane) return;
     const ids = selectedIds(candidate, lane);
     const snapshot = JSON.stringify(currentWindow);
-    const inspected = !!(activeBundle &&
-      count(activeBundle.selector?.selected_execution_count) > 0 &&
-      ids.some(id => safeArray(activeBundle.selector?.execution_ids).includes(id)));
+    const inspected = !!(activeBundle && ids.length > 0 &&
+      count(activeBundle.selector?.selected_execution_count) >= ids.length &&
+      ids.every(id => safeArray(activeBundle.selector?.execution_ids).includes(id)));
     const reviewed = typeof candidate.reviewed_workflow_id === 'string' &&
       /^[A-Za-z0-9_-]+$/.test(candidate.reviewed_workflow_id) &&
       Number.isSafeInteger(candidate.reviewed_revision) && candidate.reviewed_revision > 0;
