@@ -13,7 +13,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field, field_validator
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -665,6 +665,13 @@ def export_session(fmt: str, scope: str = "current", include_raw: bool = False, 
         media_type=media,
         headers={"Content-Disposition": f'attachment; filename="{filename}"', "Cache-Control": "no-store"},
     )
+
+
+@app.get("/event-log-quality-trends.js")
+def event_log_quality_trends_script() -> FileResponse:
+    """Public static code only; the data endpoint still requires a local dashboard session."""
+    return FileResponse(ROOT / "dashboard" / "event_log_quality_trends.js",
+                        media_type="application/javascript", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/", response_class=HTMLResponse)
