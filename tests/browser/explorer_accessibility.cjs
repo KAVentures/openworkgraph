@@ -374,6 +374,69 @@ const path=require('node:path');
    await acknowledge.check();await suiteRun.click();
    assert.match(await suiteStatus.textContent(),/SYNTHETIC SUITE PASS/);
    // Eight is a hard UI bound; removing cases invalidates results and a
+   // Compare two explicitly run, invented-only suites without trusting the
+   // imported grades or carrying forward a provider result/approval.
+   const compareImport=page.locator('#owgExplorerSuiteCompareImport');
+   const compareStatus=page.locator('#owgExplorerSuiteCompareStatus');
+   const compareDownload=page.locator('#owgExplorerSuiteCompareDownload');
+   const uploadBaseline=(value)=>compareImport.setInputFiles({
+     name:'prior-synthetic-suite.json',mimeType:'application/json',
+     buffer:Buffer.isBuffer(value)?value:Buffer.from(typeof value==='string'?value:JSON.stringify(value))
+   });
+   assert.equal(await compareDownload.isDisabled(),true,'comparison needs an explicit prior receipt');
+   await uploadBaseline(template);
+   await compareStatus.filter({hasText:/Not a non-executing OWG synthetic suite receipt/}).waitFor();
+   await uploadBaseline('{bad');
+   await compareStatus.filter({hasText:/invalid JSON/}).waitFor();
+   await uploadBaseline({...suiteReceipt,execution_permitted:true});
+   await compareStatus.filter({hasText:/Not a non-executing OWG synthetic suite receipt/}).waitFor();
+   await uploadBaseline({...suiteReceipt,plan:{...suiteReceipt.plan,
+     reviewed_group:{...suiteReceipt.plan.reviewed_group,revision:5}}});
+   await compareStatus.filter({hasText:/review identity/}).waitFor();
+   await uploadBaseline({...suiteReceipt,invented_scenario_results:
+     suiteReceipt.invented_scenario_results.map((row,index)=>index===1?{...row,synthetic_grade:'PASS'}:row)});
+   await compareStatus.filter({hasText:/grade or reasons are inconsistent/}).waitFor();
+   await uploadBaseline({...suiteReceipt,synthetic_grade_counts:{PASS:2,FAIL:0,ABSTAIN:0}});
+   await compareStatus.filter({hasText:/aggregate or grade counts/}).waitFor();
+   await uploadBaseline({...suiteReceipt,invented_scenario_results:suiteReceipt.invented_scenario_results.slice(0,1)});
+   await compareStatus.filter({hasText:/2–8 invented cases/}).waitFor();
+   await uploadBaseline(Buffer.alloc(32769,65));
+   await compareStatus.filter({hasText:/32 KiB/}).waitFor();
+   await uploadBaseline(suiteReceipt);
+   await compareStatus.filter({hasText:/SYNTHETIC COMPARISON/}).waitFor();
+   assert.match(await compareStatus.textContent(),/1 changed inputs, 1 changed grades/);
+   assert.match(await compareStatus.textContent(),/Baseline FAIL → current PASS/);
+   assert.equal(await acknowledge.isChecked(),false,'baseline import must not restore approval');
+   assert.equal(await compareDownload.isDisabled(),true,'comparison export requires fresh acknowledgement');
+   await audit(page,'#owgWorkflowExplorer','Local invented suite baseline comparison');
+   await acknowledge.check();
+   assert.equal(await compareDownload.isDisabled(),false);
+   const comparisonPending=page.waitForEvent('download');
+   await compareDownload.focus();await page.keyboard.press('Enter');
+   const comparisonArtifact=await comparisonPending;
+   assert.equal(comparisonArtifact.suggestedFilename(),'owg-synthetic-shadow-comparison.json');
+   const comparison=JSON.parse(await fs.readFile(await comparisonArtifact.path(),'utf8'));
+   assert.equal(comparison.schema,'openworkgraph.synthetic_shadow_suite_comparison.v1');
+   assert.equal(comparison.execution_permitted,false);
+   assert.equal(comparison.source_identity_verified,false);
+   assert.equal(comparison.real_shadow_test_status,'not_run');
+   assert.equal(comparison.plan.reviewed_group.revision,4);
+   assert.deepEqual(comparison.plan.selected_evidence.execution_ids,['execution:synthetic_ref']);
+   assert.equal(comparison.invented_cases,2);
+   assert.equal(comparison.invented_inputs_changed,1);
+   assert.equal(comparison.synthetic_grades_changed,1);
+   assert.deepEqual(comparison.per_scenario.map(row=>row.baseline_grade),['PASS','FAIL']);
+   assert.deepEqual(comparison.per_scenario.map(row=>row.current_grade),['PASS','PASS']);
+   assert(!JSON.stringify(comparison).includes('Invented incorrect status'),
+     'comparison report excludes raw invented observations');
+   assert(!JSON.stringify(comparison).includes('Reviewed synthetic example'),
+     'comparison report excludes private workflow labels');
+   assert.equal(evidenceReads,suiteReadsBefore,'local comparison cannot read evidence');
+   assert.equal(writes,0,'local comparison cannot write business or workflow data');
+   await suiteCases.nth(0).locator('textarea').fill('Changed after comparison');
+   assert.equal(await compareDownload.isDisabled(),true,'scenario edit invalidates comparison');
+   assert.match(await compareStatus.textContent(),/No current synthetic comparison/);
+   assert.equal(await acknowledge.isChecked(),false,'edit revokes comparison acknowledgement');
    // one-case suite cannot be run or downloaded.
    for(let i=0;i<6;i++)await suiteAdd.click();
    assert.equal(await suiteCases.count(),8);
