@@ -573,6 +573,14 @@
         : 'The file download still contains the full selected period.'
       : 'No evidence package is available for this zero-event selection; only the explanatory request can be copied.';
     const dailyChunks = d.analysis_plan?.date_chunks;
+    // A truncated date plan is a bounded review sample, not a paginated UI.
+    // Validation already conserves every listed event count, so this exact
+    // difference is the number of selected events on unlisted UTC dates.
+    const omittedDateEvents = d.analysis_plan?.more_dates_not_listed === true
+      ? d.canonical_rows - dailyChunks.reduce((sum, chunk) => sum + chunk.event_rows, 0)
+      : null;
+    const omittedDateNotice = omittedDateEvents === null ? '' :
+      `<p>Only the first 31 observed UTC dates are listed; ${esc(omittedDateEvents)} additional selected recorded events occur on unlisted later dates. This panel cannot page those dates. Inspect the separately downloaded package locally or use currently authorized chronology tools for further review; neither proves complete capture.</p>`;
     const dailyBreakdown = !Array.isArray(dailyChunks)
       ? '<p>No daily breakdown was provided; date coverage is unknown.</p>'
       : dailyChunks.length
@@ -623,7 +631,7 @@
         <p>${esc(latestWorkStatement)} Capture health and gaps are shown separately; they do not confirm the recorder is running.</p>
         <p>${esc(localRead)} Hosted AI availability must be checked separately: it only sees previously shared evidence. Preparing or downloading a local file does not grant AI history access.</p>
       </div>
-      <details><summary>${esc(dateCoverageTitle)}</summary><p>${esc(dateCoverageIntro)} ${esc(dateCoverageDownload)}</p>${dailyBreakdown}${d.analysis_plan?.more_dates_not_listed?'<p>Only the first 31 dates are listed. Continue through the remaining selected dates.</p>':''}</details>
+      <details><summary>${esc(dateCoverageTitle)}</summary><p>${esc(dateCoverageIntro)} ${esc(dateCoverageDownload)}</p>${dailyBreakdown}${omittedDateNotice}</details>
       <details><summary>Preview redacted context examples</summary><p>${esc(focusExampleSummary)}</p><ul>${focusExampleItems}</ul><p>Filtering is best effort; inspect any downloaded package before sharing it.</p></details>
       <label style="display:flex;gap:8px;margin:12px 0"><input id="analysisDetailed" type="checkbox" ${d.canonical_rows?'':'disabled'}>Include detailed chronological evidence (raw local event rows, more labels and context)</label>
       <p>Copy request copies only the prepared request text. Download saves a separate local evidence file; an AI will not receive that file unless you inspect and attach or share it yourself.</p>
