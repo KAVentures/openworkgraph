@@ -852,3 +852,75 @@ mid-read review/prerequisite/source revocation, outages, contradictory source
 evidence and private-field minimization. Synthetic acceptance is not live
 Stripe/tenant validation, verified customer outcome or held-out agent uplift.
 The draft remains unmerged pending all exact-head native CI and review gates.
+
+
+## Atomic creation of a reviewed case dependency graph (local REST)
+
+An authenticated **local dashboard session** can create **one to four new**
+owner-declared cases in a single SQLite transaction. This avoids leaving a
+half-created dependency chain when a later declaration fails. All cases must
+already have current local human reviews, retained human history must be
+enabled, and a verified Stripe source account must still be configured.
+This is **not** a source inventory, provider operation, obligation inference,
+business completion, or agent execution permission.
+
+```http
+POST /v1/open-work/declarations/batch
+Authorization: OWG-Session <current-local-dashboard-session>
+Content-Type: application/json
+
+{
+  "confirm_batch_create": true,
+  "items": [
+    {
+      "work_item_ref": "owg:w:cccccccccccccccccccccccccccccccc",
+      "goal_code": "review_source_state",
+      "expected_outcome_code": "source_state_rechecked",
+      "depends_on_work_item_refs": ["owg:w:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+      "expected_revision": 0,
+      "expected_edit_token": null
+    },
+    {
+      "work_item_ref": "owg:w:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "goal_code": "review_source_state",
+      "expected_outcome_code": "source_state_rechecked",
+      "depends_on_work_item_refs": ["owg:w:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+      "expected_revision": 0,
+      "expected_edit_token": null
+    },
+    {
+      "work_item_ref": "owg:w:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "goal_code": "review_source_state",
+      "expected_outcome_code": "source_state_rechecked",
+      "depends_on_work_item_refs": [],
+      "expected_revision": 0,
+      "expected_edit_token": null
+    }
+  ]
+}
+```
+
+Input order does not matter: the server validates the explicit DAG and
+creates prerequisites first. A new declaration may also reference a currently
+approved existing case in the **same source account**. The request never
+updates an existing case: each item must carry create-only CAS
+`expected_revision: 0` and `expected_edit_token: null`. Duplicate
+refs, missing/revoked reviews, stale existing rows, invalid/foreign
+prerequisites, cycles, source revocation and exceeding the 50-row ledger
+limit fail the whole batch; no partial owner graph is committed.
+
+A successful response contains `format: openworkgraph.local-case-declaration-batch.v1`,
+`created_count`, and `items` in deterministic prerequisite-first order. Each item has
+a new random incarnation token and revision 1 for subsequent exact-CAS edits.
+It explicitly marks source reads/writes, customer-outcome verification,
+business obligation and agent execution as false. Responses are `no-store`.
+Use the existing `GET /v1/open-work/declarations/graph` to inspect the
+result, and the existing impact preview before any later explicit edit/delete.
+
+The transaction rechecks local review windows and history retention immediately
+before commit, but **does not provide atomic cross-process fencing** against
+an independently revoked source grant after commit. The route checks the
+source-account scope both before and after the transaction and scrubs on
+detected source change. The source account is derived server-side, never from
+the JSON request. This is a single-installation, synthetic-tested foundation,
+not production multi-tenant RBAC or independently verified business outcomes.
