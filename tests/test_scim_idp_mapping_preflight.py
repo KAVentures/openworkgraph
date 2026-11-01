@@ -1643,3 +1643,64 @@ def test_user_patch_request_cap_cli_is_bounded_and_never_echoes_selectors(
     else:
         assert payload["status"] == "invalid_input"
         assert payload["findings"][0]["code"] == "invalid_input"
+
+
+# The operation-level User PATCH declaration must not bypass warnings that
+# previously examined only the independent legacy path-only mapping.
+@pytest.mark.parametrize("client", ["entra", "okta", "other"])
+@pytest.mark.parametrize("operation,expect_contact,expect_value_selector", [
+    ({"op": "remove", "path": "emails"}, True, False),
+    ({"op": "remove", "path": 'emails[type eq "work"].value'}, True, False),
+    ({"op": "remove", "path": 'emails[value eq "usr_PRIVATE"].value'}, True, True),
+    ({"op": "remove", "path":
+      'urn:ietf:params:scim:schemas:core:2.0:User:emails[value eq "usr_PRIVATE"].value'},
+     True, True),
+    ({"op": "replace", "path": "", "value_present": True,
+      "value_attributes": ["emails"]}, True, False),
+    ({"op": "replace", "path": "", "value_present": True,
+      "value_attributes": ["active"]}, False, False),
+    ({"op": "replace", "path": "name.givenName", "value_present": True}, False, False),
+])
+def test_operation_only_contact_patch_retains_descriptive_cautions(
+        client, operation, expect_contact, expect_value_selector):
+    users = mapping()["users"]
+    users["patch_attributes"] = []
+    users["patch_operations"] = [operation]
+    report = assess(mapping(client=client, users=users))
+    assert report["status"] == "requires_live_validation"
+    assert ("unverified_contact_metadata" in codes(report)) is expect_contact
+    assert ("contact_value_selector" in codes(report)) is expect_value_selector
+    assert report["checked"]["user_patch"] == 0
+    assert report["checked"]["user_patch_operations"] == 1
+    assert "live_validation_required" in codes(report)
+    assert "usr_PRIVATE" not in json.dumps(report)
+    assert "emails[" not in json.dumps(report)
+
+
+def test_operation_only_contact_value_selector_cli_remains_private(tmp_path):
+    users = mapping()["users"]
+    users["patch_attributes"] = []
+    users["patch_operations"] = [{
+        "op": "remove",
+        "path": 'emails[value eq "usr_PRIVATE"].value',
+    }]
+    file = tmp_path / "operation-only-contact.json"
+    file.write_text(json.dumps(mapping(users=users)), encoding="utf-8")
+    completed = subprocess.run([sys.executable, str(SCRIPT), str(file)],
+                               capture_output=True, text=True)
+    assert completed.returncode == 0
+    report = json.loads(completed.stdout)
+    assert report["status"] == "requires_live_validation"
+    assert {"unverified_contact_metadata", "contact_value_selector"} <= codes(report)
+    assert "usr_PRIVATE" not in completed.stdout + completed.stderr
+    assert "emails[" not in completed.stdout + completed.stderr
+
+
+def test_operation_only_contact_cautions_do_not_weaken_existing_blockers():
+    users = mapping()["users"]
+    users["create_attributes"] = ["active"]
+    users["patch_attributes"] = []
+    users["patch_operations"] = [{"op": "remove", "path": "emails"}]
+    report = assess(mapping(users=users))
+    assert report["status"] == "blocked"
+    assert {"missing_stable_username", "unverified_contact_metadata"} <= codes(report)
