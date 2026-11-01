@@ -157,6 +157,44 @@ def test_conformance_activity_diagnostics_count_cases_not_repeated_moves(monkeyp
     ]
 
 
+@pytest.mark.parametrize("value", [
+    2.5, float("nan"), float("inf"), float("-inf"),
+    "2", "invalid", None, True, False, [], {},
+])
+def test_conformance_direct_variant_cap_rejects_nonintegers_before_query(value, monkeypatch):
+    """Direct callers must receive a domain error, not coercion or a raw Python exception."""
+    monkeypatch.setattr(workspace, "_query", lambda *args: pytest.fail("invalid cap reached the query"))
+    with pytest.raises(workspace.EventLogWorkspaceError, match="max_variants must be an integer"):
+        analytics.conformance("synthetic", MODEL, max_variants=value)
+
+
+def test_conformance_direct_integer_variant_cap_preserves_existing_clamping(monkeypatch):
+    """Genuine integer caps retain their existing inclusive clamp and SQL bound."""
+    queries = []
+
+    class EmptyLog:
+        def execute(self, sql):
+            queries.append(sql)
+            return self
+
+        def fetchone(self):
+            return (0,)
+
+        def fetchall(self):
+            return []
+
+    monkeypatch.setattr(workspace, "_query", lambda log_id, case_type, fn: fn(EmptyLog()))
+    for requested, applied in ((-1, 1), (0, 1), (1, 1), (2, 2),
+                               (analytics.MAX_ALIGNED_VARIANTS, analytics.MAX_ALIGNED_VARIANTS),
+                               (analytics.MAX_ALIGNED_VARIANTS + 1, analytics.MAX_ALIGNED_VARIANTS)):
+        queries.clear()
+        result = analytics.conformance("synthetic-empty-log", MODEL, max_variants=requested)
+        assert result["max_variants_applied"] == applied
+        assert len(queries) == 2
+        assert f"LIMIT {applied}" in queries[1]
+        assert result["cases"] == result["aligned_cases"] == 0
+
+
 def test_conformance_variant_cap_discloses_omitted_cases_separately_from_long_traces():
     """Fitness only covers aligned cases; the two omission reasons partition the rest."""
     model = {"format": "openworkgraph.reference-model.v1", "paths": [["C"]]}
