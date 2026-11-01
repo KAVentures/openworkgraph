@@ -1351,3 +1351,35 @@ not native Chromium/WCAG, a real consenting-user pilot, verified provider
 authorization, a business outcome, or competitor parity.
 
 Coordination: [#326 claim 6556492470](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6556492470).
+
+
+## Truncated UTC date plans disclose omitted selected events (Worker B, 2026-11-01)
+
+The local preview lists at most **31 observed UTC dates** from the selected
+period. When the backend explicitly reports \`more_dates_not_listed: true\`,
+the date review now shows the **exact number of selected recorded events not
+represented by those listed date chunks**: \`canonical_rows\` minus the sum
+of validated \`date_chunks[].event_rows\`. This arithmetic is permitted only
+after the existing safe-integer, partition, chronological ordering and
+truncated-plan validation. It is a selected-event count, **not** a count of
+unlisted dates, missed observations, completed cases or true workflows.
+
+Previously the modal told the user to "Continue through the remaining
+selected dates", but the date preview has no pagination control. The
+replacement explicitly says it **cannot page those dates** and directs the
+reviewer to inspect a separately downloaded local package or currently
+authorized chronology tools. The full chronology and current permissions
+must be checked independently; neither establishes complete capture or
+unchanging evidence. The preview still shows diagnostic-only dates without
+inviting AI workflow inference, and Copy remains request-only with no ticket,
+download, upload or model invocation. Complete plans and legacy plans without
+an explicit truncation flag do not invent omitted-event totals.
+
+Two deterministic synthetic Node mock-DOM test functions exercise ordinary
+and health-only 32-day histories (31 listed dates, 7 selected events omitted)
+plus complete and legacy date plans, verifying exact counts, explicit
+non-pagination, uncertainty, and no export on Copy. They do **not** establish
+native Chromium/WCAG acceptance, real consenting-user pilot, live-provider
+validation, business outcomes, ROI or competitor parity.
+
+Coordination: [#326 claim 6557006223](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6557006223).
