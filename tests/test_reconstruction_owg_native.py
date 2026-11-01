@@ -507,3 +507,76 @@ def test_linked_projection_never_reconstructs_revoked_source_even_in_candidate_m
         frozenset(visible_ids)
     }
     assert result["unassigned_event_ids"] == []
+
+
+def test_linked_projection_hidden_third_record_vetoes_transfer_not_same_record():
+    from copy import deepcopy
+    source = _linked_eval_rows()
+    hidden = _linked_eval_event(
+        "c1", "owg:r:" + "c" * 32, "2026-10-20T10:00:15Z",
+        transfer="xfer-1",
+    )
+    original = deepcopy([*source, hidden])
+    visible = _linked_eval_case([*source, hidden], source)
+    for accepting_candidates in (False, True):
+        result = predict_linked_items(
+            visible, accept_candidates=accepting_candidates
+        )
+        assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
+            frozenset({"a1", "a2"}), frozenset({"b1", "b2", "b3"})
+        }
+        assert "c1" not in str(result)
+    assert [*source, hidden] == original  # evaluator never edits source rows
+
+
+def test_linked_projection_hidden_second_record_vetoes_single_record_tab():
+    from copy import deepcopy
+    a = "owg:r:" + "a" * 32
+    c = "owg:r:" + "c" * 32
+    first = _linked_eval_event("a1", a, "2026-10-20T10:00:00Z")
+    second = _linked_eval_event("a2", a, "2026-10-20T10:00:10Z")
+    loose = _linked_eval_event("loose", a, "2026-10-20T10:00:20Z")
+    del loose["metadata"]["resource_reference"]
+    hidden = _linked_eval_event("c1", c, "2026-10-20T10:00:30Z")
+    for row in (first, second, loose, hidden):
+        row["metadata"]["tab_context_id"] = "tab-1"
+
+    # Without the hidden second record, the same tab has one record and can
+    # attach the unreferenced observation. With it, the tab is multiplexed.
+    baseline = predict_linked_items(_linked_eval_case(
+        [first, second, loose], [first, second, loose]
+    ))
+    assert {frozenset(w["event_ids"]) for w in baseline["workflows"]} == {
+        frozenset({"a1", "a2", "loose"})
+    }
+    source = deepcopy([first, second, loose, hidden])
+    result = predict_linked_items(_linked_eval_case(source, source[:3]))
+    assert [w["event_ids"] for w in result["workflows"]] == [["a1", "a2"]]
+    assert result["unassigned_event_ids"] == ["loose"]
+    assert source[0]["metadata"]["tab_context_id"] == "tab-1"
+
+
+def test_linked_projection_hidden_tokens_never_poison_another_capture_scope():
+    from copy import deepcopy
+    source = _linked_eval_rows()
+    for scope_field in ("organization_id", "actor_id", "device_id", "session_id"):
+        hidden = _linked_eval_event(
+            "c1", "owg:r:" + "c" * 32, "2026-10-20T10:00:15Z",
+            transfer="xfer-1",
+        )
+        hidden[scope_field] = "different-" + scope_field
+        result = predict_linked_items(_linked_eval_case(
+            [*source, hidden], source
+        ))
+        assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
+            frozenset({"a1", "a2", "b1", "b2", "b3"})
+        }, scope_field
+
+    # A source-only event without the relevant token is not a veto.
+    hidden = deepcopy(source[2])
+    hidden["event_id"] = "unseen"
+    hidden["metadata"].pop("clipboard_transfer_id")
+    result = predict_linked_items(_linked_eval_case([*source, hidden], source))
+    assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
+        frozenset({"a1", "a2", "b1", "b2", "b3"})
+    }
