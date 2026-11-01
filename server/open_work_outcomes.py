@@ -161,6 +161,18 @@ def source_operation_receipt(
     if state != required_state:
         return _unknown(resource_ref, expected_operation, "provider_state_not_expected_operation")
 
+    # The production GitHub adapter proves its merge state directly and
+    # does not emit a nested operation detail. Preserve that contract, but
+    # never ignore a contradictory detail supplied by another authorized
+    # reader/cache: explicit unverified or wrong-operation evidence cannot
+    # coexist with a successful operation receipt.
+    if expected_operation == "github_pr_merged" and "verified_operational_outcome" in source:
+        github_detail = source["verified_operational_outcome"]
+        if (not isinstance(github_detail, dict) or
+            github_detail.get("verified") is not True or
+            github_detail.get("kind") != expected_operation):
+            return _unknown(resource_ref, expected_operation, "provider_operation_not_independently_verified")
+
     if expected_operation != "github_pr_merged":
         detail = source.get("verified_operational_outcome")
         if not isinstance(detail, dict) or detail.get("verified") is not True or detail.get("kind") != expected_operation:
