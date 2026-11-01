@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from server import open_work_case_declarations as declarations
 from server import open_work_reviews as reviews
 from server import open_work_declaration_routes as routes
-from server.open_work_case_graph import project_declared_case_graph
+from server.open_work_case_graph import (project_declared_case_graph, project_declared_case_change_impact)
 from server.local_auth import create_dashboard_session, ensure_api_token
 from server.secure_app import app
 
@@ -171,3 +171,126 @@ def test_projection_refuses_incomplete_or_overclaimed_snapshots(corruption):
         snapshot["items"][1]["customer_outcome_verified"] = True
     with pytest.raises(declarations.CaseDeclarationError):
         project_declared_case_graph(snapshot)
+
+
+IMPACT = BASE + "/impact"
+
+
+def _preview(ref, revision, token, operation="delete"):
+    return {
+        "work_item_ref": ref,
+        "expected_revision": revision,
+        "expected_edit_token": token,
+        "operation": operation,
+    }
+
+
+def test_rest_change_impact_preview_is_read_only_and_cas_bound(local):
+    local["account"] = "acct_test_12345678"
+    for ref in (A, B, C, D):
+        _review(ref)
+    client, headers = TestClient(app), _owner()
+    saved = {}
+    for ref, deps in ((A, []), (B, [A]), (C, [B]), (D, [])):
+        result = client.post(BASE, headers=headers, json=_save(ref, deps))
+        assert result.status_code == 200, result.text
+        saved[ref] = result.json()
+    before = client.get(BASE, headers=headers).json()["items"]
+    result = client.post(IMPACT, headers=headers, json=_preview(
+        A, saved[A]["revision"], saved[A]["edit_token"]))
+    assert result.status_code == 200, result.text
+    assert result.headers["cache-control"] == "no-store"
+    impact = result.json()
+    assert impact["operation"] == "delete"
+    assert impact["affected_case_refs"] == [A, B, C]
+    assert impact["invalidated_dependent_refs"] == [B, C]
+    assert impact["affected_case_count"] == 3
+    assert impact["unaffected_case_count"] == 1
+    assert impact["mutation_performed"] is False
+    assert impact["requires_separate_confirmed_cas_write"] is True
+    assert impact["source_read_performed"] is False
+    assert impact["customer_outcome_verified"] is False
+    assert impact["agent_execution_authorized"] is False
+    assert "edit_token" not in impact
+    assert client.get(BASE, headers=headers).json()["items"] == before
+
+    # The same impact applies to a revision; the subsequent confirmed CAS
+    # mutation (not the preview) actually invalidates dependent approvals.
+    revised = client.post(IMPACT, headers=headers, json=_preview(
+        A, saved[A]["revision"], saved[A]["edit_token"], "revise"))
+    assert revised.status_code == 200
+    assert revised.json()["invalidated_dependent_refs"] == [B, C]
+    changed = client.post(BASE, headers=headers, json=_save(
+        A, revision=saved[A]["revision"], token=saved[A]["edit_token"]))
+    assert changed.status_code == 200, changed.text
+    assert client.post(IMPACT, headers=headers, json=_preview(
+        A, saved[A]["revision"], saved[A]["edit_token"])).status_code == 409
+    assert client.get(BASE, headers=headers).json()["items"] == [
+        item for item in client.get(BASE, headers=headers).json()["items"]
+        if item["work_item_ref"] in (A, D)
+    ]
+
+
+def test_impact_preview_refuses_missing_review_scope_auth_and_stale_tokens(local):
+    client, owner = TestClient(app), _owner()
+    fake = _preview(A, 1, "a" * 32)
+    bearer = {"Authorization": "Bearer " + ensure_api_token()}
+    for headers in ({}, bearer, {**owner, "Origin": "https://evil.example"}):
+        assert client.post(IMPACT, headers=headers, json=fake).status_code in (401, 403)
+    assert client.post(IMPACT, headers=owner, json=fake).status_code == 403
+    assert not declarations._path().exists()
+
+    local["account"] = "acct_test_12345678"
+    _review(A)
+    a = client.post(BASE, headers=owner, json=_save(A)).json()
+    valid = _preview(A, a["revision"], a["edit_token"])
+    assert client.post(IMPACT, headers=owner, json=valid).status_code == 200
+    for bad in (
+        {**valid, "expected_revision": True},
+        {**valid, "expected_revision": 0},
+        {**valid, "expected_edit_token": "b" * 32},
+        {**valid, "operation": "execute"},
+        {**valid, "unexpected": "value"},
+    ):
+        assert client.post(IMPACT, headers=owner, json=bad).status_code in (409, 422)
+    local["account"] = "acct_test_other"
+    assert client.post(IMPACT, headers=owner, json=valid).status_code == 409
+    local["account"] = "acct_test_12345678"
+    reviews.remove_review_intention(A)
+    assert client.post(IMPACT, headers=owner, json=valid).status_code == 409
+    local["account"] = None
+    assert client.post(IMPACT, headers=owner, json=valid).status_code == 403
+
+
+def test_change_impact_projection_rejects_corrupt_or_overclaimed_graph():
+    def item(ref, deps, token):
+        return {
+            "work_item_ref": ref, "depends_on_work_item_refs": deps,
+            "goal_code": "review_source_state",
+            "expected_outcome_code": "source_state_rechecked",
+            "revision": 1, "edit_token": token,
+            "updated_at": "2026-11-01T00:00:00+00:00",
+            "expires_at": "2026-11-02T00:00:00+00:00",
+            "provenance": "explicit_owner_declaration_not_source_verified",
+            "source_state": "unknown_until_explicit_recheck",
+            "expected_outcome_verified": False,
+            "business_obligation_verified": False,
+            "customer_outcome_verified": False,
+            "agent_execution_authorized": False,
+        }
+    snapshot = {"format": "openworkgraph.local-case-declarations.v1",
+                "items": [item(A, [], "a" * 32), item(B, [A], "b" * 32)]}
+    assert project_declared_case_change_impact(
+        snapshot, work_item_ref=A, expected_revision=1,
+        expected_edit_token="a" * 32, operation="delete"
+    )["invalidated_dependent_refs"] == [B]
+    for altered in (
+        {"items": [item(B, [A], "b" * 32)]},
+        {"items": [item(A, [B], "a" * 32), item(B, [A], "b" * 32)]},
+        {"items": [item(A, [], "a" * 32), {**item(B, [A], "b" * 32),
+                                          "customer_outcome_verified": True}]},
+    ):
+        with pytest.raises(declarations.CaseDeclarationError):
+            project_declared_case_change_impact(
+                {**snapshot, **altered}, work_item_ref=A, expected_revision=1,
+                expected_edit_token="a" * 32, operation="delete")
