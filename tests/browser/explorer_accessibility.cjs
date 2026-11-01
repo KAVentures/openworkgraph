@@ -141,17 +141,70 @@ const path=require('node:path');
        }
      });
    });
-   await page.getByRole('button',{name:'Copy AI handoff request',exact:true}).click();
+   await page.getByRole('button',{name:'Review safe agent handoff',exact:true}).click();
+   const acknowledge=page.locator('#owgExplorerHandoffConfirmed');
+   const copyInvestigation=page.getByRole('button',{name:'Copy reviewed investigation request',exact:true});
+   const copyShadow=page.getByRole('button',{name:'Copy non-executing shadow-test plan request',exact:true});
+   assert.equal(await copyInvestigation.isDisabled(),true,'copy must require explicit review');
+   assert.equal(await copyShadow.isDisabled(),true,'shadow needs exact selected inspected variant');
+   await audit(page,'#owgWorkflowExplorer','Unconfirmed agent handoff review');
+   await acknowledge.check();
+   await copyInvestigation.click();
    assert.match(await page.evaluate(()=>window.__owgCopiedHandoff),/execution:other_variant/);
+   assert.match(await page.evaluate(()=>window.__owgCopiedHandoff),/No complete exact variant is asserted/);
    await page.locator('#owgExplorerDetail svg g[role=button]').first().click();
+   assert.equal(await page.locator('#owgExplorerHandoffPanel').count(),0,'selecting a step invalidates the old review');
    const evidenceReadsBefore=evidenceReads;
    await page.getByRole('button',{name:'Review selected examples',exact:true}).click();
    assert.match(await page.locator('#owgExplorerEvidence').textContent(),/No selectable execution references available/);
    assert.equal(evidenceReads,evidenceReadsBefore,'unlinked selected variant must not request unrelated candidate evidence');
-   await page.getByRole('button',{name:'Copy AI handoff request',exact:true}).click();
+   await page.getByRole('button',{name:'Review safe agent handoff',exact:true}).click();
+   assert.equal(await copyShadow.isDisabled(),true,'unlinked variant cannot become a shadow-plan request');
+   await page.locator('#owgExplorerHandoffConfirmed').check();
+   await copyInvestigation.click();
    const unlinkedHandoff=await page.evaluate(()=>window.__owgCopiedHandoff);
-   assert.match(unlinkedHandoff,/Find and inspect the exact executions/);
+   assert.match(unlinkedHandoff,/Find exact supporting executions independently/);
    assert(!unlinkedHandoff.includes('execution:other_variant'),'handoff must not attribute unrelated candidate refs to selected variant');
+
+   // A reviewed group with exact selected refs still cannot copy a shadow plan
+   // until the user inspects current bounded support and confirms the review.
+   await page.evaluate(()=>{
+     window.owgWorkflowExplorer.showReviewedGroup({
+       label:'Reviewed synthetic example',workflow_id:'reviewed_test',revision:4,
+       bundle:{
+         selector:{execution_ids:['execution:synthetic_ref'],selected_execution_count:1},
+         structural_alignment:{structural_sequence_variants:[{exact_variants:[{
+           readable_steps:['Read record','Check outcome'],structural_steps:['action:read','action:check'],
+           execution_count:1,execution_ids:['execution:synthetic_ref']
+         }]}]}
+       }
+     });
+   });
+   await page.locator('#owgExplorerDetail svg g[role=button]').first().click();
+   await page.getByRole('button',{name:'Review safe agent handoff',exact:true}).click();
+   assert.equal(await copyShadow.isDisabled(),true,'reviewed group alone does not prove current source support');
+   await page.route('**/v1/workflow-evidence?*',route=>route.fulfill({
+     status:200,contentType:'application/json',
+     body:JSON.stringify({selector:{execution_ids:['execution:synthetic_ref'],selected_execution_count:1},
+       structural_alignment:{high_support_steps:[]},provenance:{source_limit_reached:false}})
+   }));
+   await page.getByRole('button',{name:'Review selected examples',exact:true}).click();
+   await page.locator('#owgExplorerEvidence h4').waitFor();
+   await page.getByRole('button',{name:'Review safe agent handoff',exact:true}).click();
+   assert.equal(await copyShadow.isDisabled(),true,'explicit confirmation remains required after support inspection');
+   await page.locator('#owgExplorerHandoffConfirmed').check();
+   assert.equal(await copyShadow.isDisabled(),false);
+   await copyShadow.click();
+   const shadowText=await page.evaluate(()=>window.__owgCopiedHandoff);
+   assert.match(shadowText,/require revision 4/);
+   assert.match(shadowText,/NON-EXECUTING shadow-validation PLAN only/);
+   assert.match(shadowText,/execution:synthetic_ref/);
+   assert.match(shadowText,/Do not call tools, run an agent, execute a test/);
+   await audit(page,'#owgWorkflowExplorer','Confirmed shadow-plan handoff');
+   await page.unroute('**/v1/workflow-evidence?*');
+   await period.selectOption('7');
+   assert.equal(await page.locator('#owgExplorerHandoffPanel').count(),0,'period change invalidates reviewed copy');
+   assert.equal(writes,0,'handoff flow never writes to workflow APIs');
    await page.setViewportSize({width:390,height:844});
    assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false);
    assert.equal(writes,0);assert.deepEqual(errors,[]);
