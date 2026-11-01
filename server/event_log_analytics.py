@@ -253,9 +253,14 @@ def root_cause(log_id: str, outcome: str, case_type: str | None = None, *, thres
         or not 1 <= threshold_seconds <= 10 ** 9
     ):
         raise EventLogWorkspaceError("threshold_seconds must be an integer between 1 and 1000000000")
+    # Even when the selected outcome does not use activity as a predicate,
+    # the optional value is reflected in outcome metadata. Do not echo an
+    # arbitrary container or an overlong value from a direct Python caller.
+    if activity is not None and (not isinstance(activity, str) or len(activity) > 200):
+        raise EventLogWorkspaceError("activity must be a string of at most 200 characters")
     if outcome == "duration_over" and threshold_seconds is None:
         raise EventLogWorkspaceError("threshold_seconds is required for a duration outcome")
-    if outcome in {"contains_activity", "ends_with"} and not (isinstance(activity, str) and 0 < len(activity) <= 200):
+    if outcome in {"contains_activity", "ends_with"} and not activity:
         raise EventLogWorkspaceError("activity is required for this outcome")
     if not isinstance(limit, int) or isinstance(limit, bool):
         raise EventLogWorkspaceError("limit must be an integer")
