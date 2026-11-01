@@ -3008,10 +3008,10 @@ test('daily chunk clipping refuses a one-microsecond extension beyond the select
 
 
 test('period summary preserves exact source-reported microsecond observations and offsets', async t => {
-  const oneMicrosecond = stamp => stamp.replace(/\\.000Z$/, '.000001Z');
-  const twoMicroseconds = stamp => stamp.replace(/\\.000Z$/, '.000002Z');
+  const oneMicrosecond = stamp => stamp.replace(/\.000Z$/, '.000001Z');
+  const twoMicroseconds = stamp => stamp.replace(/\.000Z$/, '.000002Z');
   const offsetFirst = asOffset(Date.parse(observedStart), 2)
-    .replace(/\\.000\\+02:00$/, '.000001+02:00');
+    .replace(/\.000\+02:00$/, '.000001+02:00');
   for (const [name, first, last] of [
     ['two distinct observations in the same displayed local second',
       oneMicrosecond(observedStart), twoMicroseconds(observedStart)],
