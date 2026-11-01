@@ -572,7 +572,7 @@
       variantNumber: lane ? lane.index + 1 : null,
       exact, inspected, shadowEligible,
       planCriteria: shadowEligible ? {expected: '', exception: '', stop: ''} : null,
-      rehearsal: null
+      rehearsal: null, suiteResult: null
     };
     handoffReview = state;
     host.replaceChildren();
@@ -614,7 +614,20 @@
     let rehearsalDownload = null;
     let syntheticObservation = null;
     let syntheticException = null;
+    const suiteRows = [];
+    let suiteStatus = null, suiteRun = null, suiteDownload = null, suiteAdd = null;
+    let nextSuiteId = 0;
+    const suiteCases = () => suiteRows.map(row => ({
+      normal_observation: row.observed.value.trim(), exception_decision: row.decision.value
+    }));
+    const invalidateSuite = () => {
+      state.suiteResult = null;
+      if (suiteStatus) suiteStatus.replaceChildren(element('p',
+        'No synthetic suite run. No source, model or agent was contacted.'));
+      if (suiteDownload) suiteDownload.disabled = true;
+    };
     const invalidateRehearsal = () => {
+      invalidateSuite();
       state.rehearsal = null;
       if (rehearsalStatus) rehearsalStatus.textContent = 'No synthetic rehearsal run. No source or agent was contacted.';
       if (rehearsalDownload) rehearsalDownload.disabled = true;
@@ -703,6 +716,107 @@
       rehearsalStatus.setAttribute('role', 'status');
       rehearsal.append(rehearsalRun, rehearsalDownload, rehearsalStatus);
       plan.appendChild(rehearsal);
+      const suite = element('fieldset');
+      suite.id = 'owgExplorerSyntheticSuite';
+      suite.appendChild(element('legend', 'Multi-scenario synthetic rehearsal (2–8 invented cases)'));
+      suite.appendChild(element('p',
+        'Add invented normal observations and simulated exception decisions. Each case is graded independently; FAIL takes precedence over ABSTAIN. This is not a provider test.', 'muted'));
+      const suiteList = element('div');
+      suiteList.id = 'owgExplorerSuiteCases';
+      suite.appendChild(suiteList);
+      const renumberSuite = () => suiteRows.forEach((row, index) => {
+        row.legend.textContent = 'Invented scenario ' + (index + 1);
+      });
+      const addSuiteCase = (initial = false) => {
+        if (suiteRows.length >= 8) return;
+        const id = ++nextSuiteId;
+        const row = element('fieldset');
+        row.className = 'owg-explorer-suite-case';
+        const legend = element('legend', 'Invented scenario ' + (suiteRows.length + 1));
+        row.appendChild(legend);
+        const observedLabel = element('label', 'Invented normal observation');
+        const observed = element('textarea');
+        observed.id = 'owgExplorerSuiteObserved' + id;
+        observed.rows = 2;
+        observed.maxLength = 320;
+        observedLabel.appendChild(observed);
+        const decisionLabel = element('label', 'Simulated exception decision');
+        const decision = element('select');
+        decision.id = 'owgExplorerSuiteDecision' + id;
+        [['unknown', 'Unknown / not simulated'], ['abstain', 'Stop or abstain'],
+          ['continue', 'Continue despite exception']].forEach(([value, label]) => {
+          const option = element('option', label);
+          option.value = value;
+          decision.appendChild(option);
+        });
+        decisionLabel.appendChild(decision);
+        const remove = button('Remove this invented scenario', () => {
+          const index = suiteRows.findIndex(item => item.row === row);
+          if (index < 0) return;
+          suiteRows.splice(index, 1);
+          row.remove();
+          renumberSuite();
+          checkbox.checked = false;
+          invalidateRehearsal();
+          updateButtons();
+        }, true);
+        row.append(observedLabel, decisionLabel, remove);
+        suiteList.appendChild(row);
+        suiteRows.push({row, legend, observed, decision});
+        [observed, decision].forEach(input => {
+          const changed = () => {
+            checkbox.checked = false;
+            invalidateRehearsal();
+            updateButtons();
+          };
+          input.addEventListener('input', changed);
+          input.addEventListener('change', changed);
+        });
+        if (!initial) {
+          checkbox.checked = false;
+          invalidateRehearsal();
+          updateButtons();
+        }
+      };
+      addSuiteCase(true);
+      addSuiteCase(true);
+      suiteAdd = button('Add invented scenario', () => addSuiteCase(), true);
+      suiteAdd.id = 'owgExplorerSuiteAdd';
+      suiteRun = button('Run synthetic scenario suite', () => {
+        if (!currentHandoffReview(state) || !checkbox.checked || !completeShadowCriteria(state) ||
+            suiteRows.length < 2 || suiteRows.length > 8) return;
+        const cases = suiteCases();
+        const results = cases.map((item, index) => ({
+          scenario: index + 1, ...item,
+          ...gradeSyntheticRehearsal(state.planCriteria.expected,
+            item.normal_observation, item.exception_decision)
+        }));
+        const counts = {PASS: 0, FAIL: 0, ABSTAIN: 0};
+        results.forEach(item => { counts[item.grade]++; });
+        const aggregate = counts.FAIL ? 'FAIL' : counts.ABSTAIN ? 'ABSTAIN' : 'PASS';
+        state.suiteResult = {snapshot: JSON.stringify(cases), results, counts, aggregate};
+        const summary = element('p', 'SYNTHETIC SUITE ' + aggregate + ' — ' +
+          results.length + ' invented cases; PASS ' + counts.PASS + ', FAIL ' +
+          counts.FAIL + ', ABSTAIN ' + counts.ABSTAIN + '. No real test ran.');
+        const list = element('ol');
+        results.forEach(item => list.appendChild(element('li',
+          'Scenario ' + item.scenario + ': SYNTHETIC ' + item.grade + ' — ' +
+          item.reasons.join(' '))));
+        suiteStatus.replaceChildren(summary, list);
+        updateButtons();
+      }, true);
+      suiteRun.id = 'owgExplorerSuiteRun';
+      suiteDownload = button('Download synthetic suite receipt JSON', () =>
+        downloadSyntheticSuite(state, suiteCases()), true);
+      suiteDownload.id = 'owgExplorerSuiteDownload';
+      suiteRun.disabled = true;
+      suiteDownload.disabled = true;
+      suiteStatus = element('div');
+      suiteStatus.id = 'owgExplorerSuiteStatus';
+      suiteStatus.setAttribute('role', 'status');
+      invalidateSuite();
+      suite.append(suiteAdd, suiteRun, suiteDownload, suiteStatus);
+      plan.appendChild(suite);
       [syntheticObservation, syntheticException].forEach(input => input.addEventListener('input', () => {
         checkbox.checked = false;
         invalidateRehearsal();
@@ -765,6 +879,9 @@
       downloadPlan.disabled = shadow.disabled;
       if (rehearsalRun) rehearsalRun.disabled = shadow.disabled;
       if (rehearsalDownload) rehearsalDownload.disabled = shadow.disabled || !state.rehearsal;
+      if (suiteAdd) suiteAdd.disabled = suiteRows.length >= 8;
+      if (suiteRun) suiteRun.disabled = shadow.disabled || suiteRows.length < 2;
+      if (suiteDownload) suiteDownload.disabled = suiteRun.disabled || !state.suiteResult;
     };
     checkbox.addEventListener('change', updateButtons);
     Object.entries(planInputs).forEach(([key, input]) => input.addEventListener('input', () => {
@@ -898,6 +1015,46 @@
       if (result) result.textContent = 'Synthetic-only receipt downloaded locally. Review invented text before sharing; no real test or provider call ran.';
     } catch {
       if (result) result.textContent = 'Synthetic receipt download unavailable; nothing sent or executed.';
+    }
+  }
+
+  function downloadSyntheticSuite(state, currentCases) {
+    const checkbox = document.getElementById('owgExplorerHandoffConfirmed');
+    const status = document.getElementById('owgExplorerSuiteStatus');
+    const run = state.suiteResult;
+    if (!currentHandoffReview(state) || !checkbox?.checked || !completeShadowCriteria(state) ||
+        !run || currentCases.length < 2 || currentCases.length > 8 ||
+        JSON.stringify(currentCases) !== run.snapshot) return;
+    try {
+      const receipt = {
+        schema: 'openworkgraph.synthetic_shadow_suite.v1',
+        kind: 'local_invented_scenarios_not_provider_validation',
+        created_at_utc: new Date().toISOString(),
+        execution_permitted: false, source_identity_verified: false,
+        real_shadow_test_status: 'not_run',
+        plan: shadowPlanManifest(state),
+        synthetic_aggregate_grade: run.aggregate,
+        synthetic_grade_counts: {...run.counts},
+        invented_scenario_results: run.results.map(item => ({
+          scenario: item.scenario, normal_observation: item.normal_observation,
+          exception_decision: item.exception_decision,
+          synthetic_grade: item.grade, reasons: [...item.reasons]
+        })),
+        limitations: ['invented inputs only', 'exact string comparison, not semantic validation',
+          'not a provider read, real test, agent run, verified business outcome or permission']
+      };
+      const url = URL.createObjectURL(new Blob([JSON.stringify(receipt, null, 2) + '\\n'],
+        {type: 'application/json;charset=utf-8'}));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'owg-synthetic-shadow-suite.json';
+      document.body.appendChild(link);
+      try { link.click(); } finally { link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
+      if (status) status.appendChild(element('p',
+        'Synthetic suite receipt downloaded locally. Review invented text before sharing; no real test ran.'));
+    } catch {
+      if (status) status.appendChild(element('p',
+        'Synthetic suite download unavailable. Nothing was sent or executed.'));
     }
   }
 
