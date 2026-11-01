@@ -431,3 +431,31 @@ def test_linked_projection_withholds_conflicting_duplicate_source_or_visible_ids
             frozenset({"a1", "a2"}), frozenset({"b2", "b3"})
         }
         assert "b1" not in str(result["workflows"])
+
+
+def test_linked_projection_duplicate_replay_is_idempotent_when_byte_equivalent():
+    from copy import deepcopy
+    source = _linked_eval_rows()
+    replay = deepcopy(source[2])
+    result = predict_linked_items(_linked_eval_case([*source, replay], source))
+    assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
+        frozenset({"a1", "a2", "b1", "b2", "b3"})
+    }
+
+
+def test_linked_projection_refuses_bool_integer_equality_as_transfer_provenance():
+    from copy import deepcopy
+    source = _linked_eval_rows()
+    visible = deepcopy(source)
+    # Python considers True == 1, but those are different JSON claims.
+    visible[2]["metadata"]["clipboard_source_observed"] = 1
+    result = predict_linked_items(_linked_eval_case(source, visible))
+    assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
+        frozenset({"a1", "a2"}), frozenset({"b2", "b3"})
+    }
+    duplicate = deepcopy(source[2])
+    duplicate["metadata"]["clipboard_source_observed"] = 1
+    result = predict_linked_items(_linked_eval_case([*source, duplicate], source))
+    assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
+        frozenset({"a1", "a2"}), frozenset({"b2", "b3"})
+    }
