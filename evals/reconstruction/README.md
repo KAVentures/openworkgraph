@@ -177,6 +177,33 @@ conflicting source identity, source-versus-visible provenance mismatches,
 contradictory visible IDs, mismatched/malformed UTC observation instants,
 first-admitted duplicate timestamps, and normalized positive controls.
 
+### Linked-item evaluator visibility and revocation boundary
+
+The `linked_items` and diagnostic `linked_items_accepting_candidates`
+conditions now admit source observations **before** invoking the existing
+production linker only when their literal event ID is present in the supplied
+`presented_evidence`, with the same UTC observation instant, app, event type,
+source, session and link-authorizing reference/tab/clipboard/action metadata.
+Offset-equivalent instants are accepted; missing or contradictory evidence,
+reused IDs with conflicting source or visible claims, and source-only rows are
+withheld. Rich-evidence top-level tab/transfer fields are convenience copies of
+metadata, not independent source claims. An unpresented source-only copy/paste
+row must not bridge two visible records or create a candidate link.
+
+The filter retains the original authorized source rows for the linker's own
+organization/actor/device/session checks. These identities are deliberately
+absent from the rich evidence and cannot be independently verified from its
+projection. This is an **evaluation admission boundary**, not a new capture,
+privacy, source-authentication or production-linking engine. It never upgrades
+ambiguous candidates into verified membership; the accepting-candidates mode
+remains an explicitly unsafe diagnostic upper bound.
+
+Synthetic regressions cover hidden transfer bridges, changed visible
+provenance, exact UTC offsets, duplicate IDs, and legitimate visible transfer
+linking. They do not replace preregistered held-out scoring, real consenting
+pilots or native CI. No assignment F1 ≥ 0.90 or contamination ≤ 0.05
+achievement is asserted.
+
 ### Multi-signal linked items
 
 `server/work_item_links.py` (roadmap #326 A1) extends exact-record lanes. Observations
