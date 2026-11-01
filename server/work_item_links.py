@@ -36,7 +36,7 @@ from typing import Any
 
 from .record_case_lanes import _EVENT_ID, _RESOURCE, _identity, _stamp, _token
 from .reconstruction_segments import observed_activity_segments
-from .reconstruction_record_path import observed_record_path
+from .reconstruction_record_path import observed_record_path, record_path_index
 from .reconstruction_switches import observed_work_switches
 from .reconstruction_surfaces import observed_surface_runs
 from .reconstruction_transfer_episodes import disjoint_directional_transfer_episodes
@@ -583,6 +583,7 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
         bases[linked["root"](left)][basis] += 1
     items: list[dict[str, Any]] = []
     item_of: dict[str, str] = {}
+    record_positions, record_scope_positions = record_path_index(linked["rows"])
     groups = sorted((ids for ids in linked["members"].values() if len(ids) >= 2),
                     key=lambda ids: (-len(ids), rows[ids[0]]["observed_at"], ids[0]))
     for number, ids in enumerate(groups[:max_items], start=1):
@@ -593,7 +594,10 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
         basis = dict(sorted(bases[linked["root"](ids[0])].items()))
         segments = observed_activity_segments(linked["rows"], ids)
         surfaces = observed_surface_runs([rows[i] for i in ids])
-        record_path = observed_record_path([rows[i] for i in ids])
+        record_path = observed_record_path(
+            [rows[i] for i in ids], position_index=record_positions,
+            scope_positions=record_scope_positions,
+        )
         items.append({
             "item_id": item_id,
             "event_ids": ids[:_MAX_EVENT_IDS],
@@ -660,6 +664,7 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             "observed_record_paths_are_not_verified_business_transitions": True,
             "observed_record_changes_require_same_exact_capture_scope": True,
             "unknown_record_runs_do_not_create_transitions": True,
+            "interleaved_nonmember_evidence_breaks_record_path_continuity": True,
             "unknown_surfaces_are_not_other_app": True,
             "surface_transitions_require_verified_same_capture_scope": True,
             "observed_switches_require_same_scope_literal_record_endpoints": True,
