@@ -473,11 +473,14 @@
     const ordinaryRows = d.work_evidence?.ordinary_event_rows ??
       (d.canonical_rows - (d.event_types.capture_gap || 0) -
         (d.event_types.capture_health || 0));
+    const diagnosticRows = d.canonical_rows - ordinaryRows;
     const evidenceWarning = ordinaryRows === 0
       ? d.canonical_rows === 0
         ? "\n\nEvidence limitation: No recorded events in this local preview's selected period. This is not proof of inactivity or complete capture. Do not infer a workflow, business completion, time savings, or ROI from absent ordinary work evidence. If other currently authorized evidence is available, evaluate it separately and disclose its source and limits; otherwise report insufficient evidence."
         : "\n\nEvidence limitation: This local preview contains only capture-health or gap records, not ordinary work events for the selected period. Health and gap records are not workflow steps. Do not infer a workflow, business completion, time savings, or ROI from absent ordinary work evidence. If other currently authorized evidence is available, evaluate it separately and disclose its source and limits; otherwise report insufficient evidence."
-      : '';
+      : diagnosticRows > 0
+        ? `\n\nEvidence limitation: This selected local period contains ${ordinaryRows} ordinary work observations and ${diagnosticRows} capture-health/gap records. UTC daily totals are untyped: a listed date may contain only diagnostics, not workflow steps. Inspect event-level evidence and source provenance before inferring any workflow; do not treat diagnostic records as work, or claim verified business completion, savings, or ROI. Capture completeness is unverified.`
+        : '';
     // Evidence availability is not workflow confirmation. Capture-health and
     // gap records can be downloaded for diagnostics, but cannot substantiate
     // an automation opportunity or completed business process.
@@ -575,7 +578,6 @@
     // Date plans report total selected rows per UTC day, not per-day event
     // types. A mixed selection can contain health-only dates; never turn a
     // date total into a claimed observed workflow step.
-    const diagnosticRows = d.canonical_rows - ordinaryRows;
     const dateTypeNotice = ordinaryRows > 0 && diagnosticRows > 0
       ? `<p class="muted">Mixed selected evidence: ${esc(ordinaryRows)} ordinary work observations and ${esc(diagnosticRows)} capture-health/gap records. Daily totals do not distinguish their event types; a listed date may contain diagnostics only. Inspect event-level evidence before treating any date as workflow evidence.</p>`
       : '';
