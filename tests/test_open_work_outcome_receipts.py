@@ -23,6 +23,17 @@ SOURCE_READ_METHOD = {
 
 def response(provider="stripe", kind="invoice", state="paid",
              operation="stripe_invoice_paid", verified=True):
+    detail = {
+        "kind": operation, "scope": "stripe_processor_only",
+        "verified": verified,
+    }
+    if provider == "jira":
+        # Match the existing production Jira adapter's independent
+        # resolution-detail contract, not just its top-level "done" state.
+        detail.update(
+            status="resolved" if verified else "unverified",
+            source_timestamp=WHEN.isoformat() if verified else None,
+        )
     return {
         "resource_ref": REF,
         "source_rows_scoped_to_exact_record": True,
@@ -37,10 +48,7 @@ def response(provider="stripe", kind="invoice", state="paid",
             "source_state_reported": True, "source_state": state,
             "verified_at": WHEN.isoformat(),
             "verification_method": SOURCE_READ_METHOD[provider],
-            "verified_operational_outcome": {
-                "kind": operation, "scope": "stripe_processor_only",
-                "verified": verified,
-            },
+            "verified_operational_outcome": detail,
             "private_customer": "VERY_PRIVATE_CUSTOMER",
         },
     }
@@ -744,3 +752,90 @@ def test_source_reader_programming_and_request_errors_are_not_masked(failure):
     assert calls == [(REF, {
         "since": None, "until": None, "include_source_status": True,
     })]
+
+
+@pytest.mark.parametrize("bad_status", [
+    None, False, 0, "unverified", "RESOLVED", "done", {}, [],
+])
+def test_jira_verified_flag_cannot_override_contradictory_resolution_status(bad_status):
+    data = response(provider="jira", kind="issue", state="done",
+                    operation="jira_issue_resolved")
+    data["source_evidence"]["verified_operational_outcome"]["status"] = bad_status
+    result = source_operation_receipt(
+        REF, "jira_issue_resolved", record_reader=lambda *_a, **_kw: data,
+        now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "provider_resolution_detail_conflict"
+    assert result["operation_verified"] is False
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize("bad_timestamp", [
+    None, False, 0, [], {},
+    "", "not-a-timestamp", "2026-10-19T10:00:00",
+    "2026-10-19T10:05:01+00:00",
+    "2026-10-19T12:05:01+02:00",
+    "x" * 100,
+])
+def test_jira_resolution_timestamp_must_be_aware_bounded_and_consistent(bad_timestamp):
+    data = response(provider="jira", kind="issue", state="done",
+                    operation="jira_issue_resolved")
+    data["source_evidence"]["verified_operational_outcome"]["source_timestamp"] = bad_timestamp
+    calls = []
+    result = source_operation_receipt(
+        REF, "jira_issue_resolved", record_reader=reader(data, calls), now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "provider_resolution_detail_conflict"
+    assert result["operation_verified"] is False
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert calls == [(REF, {
+        "since": None, "until": None, "include_source_status": True,
+    })]
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+def test_jira_missing_resolution_detail_fields_are_unknown():
+    for missing in ("status", "source_timestamp"):
+        data = response(provider="jira", kind="issue", state="done",
+                        operation="jira_issue_resolved")
+        del data["source_evidence"]["verified_operational_outcome"][missing]
+        result = source_operation_receipt(
+            REF, "jira_issue_resolved", record_reader=lambda *_a, **_kw: data,
+            now=WHEN,
+        )
+        assert result["availability"] == "unknown"
+        assert result["reason"] == "provider_resolution_detail_conflict"
+        assert result["operation_verified"] is False
+
+
+@pytest.mark.parametrize("resolution_stamp", [
+    "2026-10-19T10:00:00+00:00",
+    "2026-10-19T10:05:00+00:00",
+    "2026-10-19T12:00:00+02:00",
+    "2026-10-19T10:00:00Z",
+    "2026-10-18T09:00:00+00:00",
+])
+def test_jira_consistent_resolution_detail_keeps_provider_only_success(resolution_stamp):
+    data = response(provider="jira", kind="issue", state="done",
+                    operation="jira_issue_resolved")
+    data["source_evidence"]["verified_operational_outcome"]["source_timestamp"] = resolution_stamp
+    result = source_operation_receipt(
+        REF, "jira_issue_resolved", record_reader=lambda *_a, **_kw: data,
+        now=WHEN,
+    )
+    assert result["availability"] == "source_reported"
+    assert result["operation_verified"] is True
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
