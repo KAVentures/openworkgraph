@@ -246,9 +246,11 @@ bounds, not production-linker validation, a held-out accuracy result or
 customer-scale performance proof. The separate unmerged #500 production-linker
 draft must not be treated as current `main` behavior.
 
-Rich-evidence top-level tab/transfer fields are convenience copies of
-metadata, not independent source claims. Both locations, when present,
-now require **literal, pattern-valid matching strings**: Python equality
+In the standard rich-evidence format, top-level tab/transfer fields are
+convenience copies of metadata, not independent source claims. Alternative
+explicitly presented top-level-only tokens are admitted only when the matching
+source token is also observed. Both locations, when present, require
+**literal, pattern-valid matching strings**: Python equality
 (`True == 1`) and the current linker's coercion of booleans/numbers into
 opaque-looking token strings cannot establish a transfer or tab link.
 Malformed metadata-only claims are withheld too; valid legacy metadata-only
