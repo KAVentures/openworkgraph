@@ -419,6 +419,27 @@ def test_root_cause_outcome_kinds_and_validation():
             analytics.root_cause(log_id, **kwargs)
 
 
+
+@pytest.mark.parametrize(("outcome", "activity", "expected_outcome_cases"), [
+    ("ends_with", "Close", 60),                 # every case ends with Close
+    ("contains_activity", "NeverObserved", 0), # no case contains the target
+])
+def test_root_cause_constant_outcome_preserves_noncausal_provenance(
+    outcome, activity, expected_outcome_cases,
+):
+    """Even zero-variance results must not omit noncausal/temporal caveats."""
+    result = analytics.root_cause(_log(), outcome, activity=activity)
+    assert result["cases"] == 60
+    assert result["outcome_cases"] == expected_outcome_cases
+    assert result["features_tested"] == 0 and result["associations"] == []
+    assert result["note"] == "the outcome does not vary across cases, so nothing can be associated with it"
+    assert result["associations_are_not_causes"] is True
+    assert result["temporal_order_not_checked"] is True
+    assert result["outcome"] == {
+        "kind": outcome, "threshold_seconds": None, "activity": activity,
+    }
+
+
 @pytest.mark.parametrize("outcome", [
     [], {}, ["rework"], {"kind": "rework"}, set(),
     None, False, 123, 1.5, float("nan"),
