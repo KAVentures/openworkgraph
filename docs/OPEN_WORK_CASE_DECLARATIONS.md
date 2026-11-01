@@ -616,3 +616,45 @@ The response format is `openworkgraph.local-case-dependency-graph.v1`. `nodes` i
 The projection refuses duplicate identities, dangling dependencies, cycles, malformed references or contradictory verification flags instead of silently presenting a dependent as a newly approved independent root. The existing SQLite ledger already withholds expired/revoked dependencies transitively; changing or deleting a prerequisite invalidates dependent declarations, and the graph reflects that on the next authenticated read. This remains a single-installation local prototype without an atomic cross-process source-grant epoch fence or production organization-wide RBAC.
 
 `tests/test_open_work_case_graph.py` covers actual FastAPI + SQLite three-level dependency creation, deterministic nodes/edges, prerequisite CAS invalidation, source-account switch, explicit review revocation, disconnect, default-OFF read, forbidden bearer/Origin and corrupt-snapshot refusal. These are synthetic local acceptance checks, not live-provider acceptance or independently verified customer outcomes. All required native cross-platform, browser, accessibility, scale and packaging checks must pass on the exact PR head before merge.
+
+
+## Preview a declaration revision or deletion before invalidating dependents
+
+A local, explicitly authenticated dashboard session can now call
+`POST /v1/open-work/declarations/impact` to preview the **current reviewed
+declaration approvals** that a later revision or deletion would invalidate.
+The request is an exact JSON object with `work_item_ref`,
+`expected_revision`, `expected_edit_token`, and `operation` (`revise` or
+`delete`). The revision and incarnation token must match the current
+reviewed declaration; a stale, removed or foreign-source declaration is
+refused rather than silently projected as independent work.
+
+The read-only response includes the target, a deterministic prerequisite-first
+list of **transitively invalidated dependent opaque references**, affected and
+unaffected counts, and the explicit owner-declaration provenance. For example,
+with owner-reviewed A → B → C and unrelated D, a preview of revising or
+deleting A reports A/B/C as affected, B/C as dependent approvals requiring
+fresh human review, and D as unaffected. It does not mutate any declaration,
+remove any review, fetch a source record, or verify an outcome. It returns no
+native provider identifiers, customer text, amounts, source credentials or
+edit tokens. Source state remains unknown and business/customer/agent
+authority flags remain false.
+
+This is **advisory point-in-time impact**, not a lock, confirmation or
+authorization. The actual existing POST or DELETE requires its own explicit
+confirmation and exact revision+incarnation CAS; concurrent changes after a
+preview make a stale write fail. The preview uses the existing bounded
+`list_case_declarations` plus `project_declared_case_graph`, so it shares
+the same review, retention, dependency, source-account and origin/session
+protections. It refuses malformed/cyclic/dangling/overclaimed graphs, requires
+the current locally configured source, rechecks source scope after projection,
+uses `Cache-Control: no-store`, and is never exposed to MCP/bearer/extension
+callers. This does not establish atomic multi-process grant revocation or
+company-wide tenant RBAC.
+
+`tests/test_open_work_case_graph.py` exercises actual FastAPI+SQLite
+A→B→C/D impact previews, non-mutation, subsequent confirmed revision,
+stale incarnation, review revocation, source switch, default OFF, foreign
+Origin/bearer denial and malformed graph refusal. Synthetic local tests do
+not establish real-provider/customer acceptance. All native exact-head CI,
+accessibility, scale, packaging and review gates still apply before merge.
