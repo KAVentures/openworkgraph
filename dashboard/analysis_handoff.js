@@ -319,7 +319,13 @@
   function sourceSummary(sources) {
     const shown = [];
     let omittedCategories = 0, omittedEvents = 0;
-    for (const [name, count] of Object.entries(sources)) {
+    // Source-map insertion order is not evidence importance: a long tail of
+    // empty/rare labels must not hide the largest observed source in a bounded
+    // review. Counts are already validated as a conserved safe-integer partition.
+    // Literal-name ties make the same source map reproducible across import order.
+    const ranked = Object.entries(sources).sort((a, b) =>
+      b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    for (const [name, count] of ranked) {
       if (shown.length < 8) shown.push(`${name.trim() ? visibleEvidenceLabel(name, 'source') : '[blank source label]'}: ${count}`);
       else { omittedCategories++; omittedEvents += count; }
     }
@@ -566,7 +572,7 @@
         <p>${esc(d.canonical_rows)} recorded events · ${esc(d.event_types.focus_span||0)} focus spans · ${esc(d.event_types.capture_gap||0)} unobserved-gap records.</p>
         <p>${esc(selectedPeriod)} Observed: ${esc(d.first_observed_at||'none')} to ${esc(d.last_observed_at||'none')}.</p>
         <p>${esc(scopeFreshnessStatement)} This preview is not an immutable export snapshot or proof of complete capture.</p>
-        <p>Reported sources (bounded preview; labels are not verified identities): ${esc(sourceSummary(d.sources))}. ${esc(workTextStatement)}</p>
+        <p>Reported sources (bounded preview; labels are not verified identities): ${esc(sourceSummary(d.sources))}. Highest selected-event counts appear first (literal-label tie break); omitted totals are disclosed. ${esc(workTextStatement)}</p>
         <p>${esc(latestWorkStatement)} Capture health and gaps are shown separately; they do not confirm the recorder is running.</p>
         <p>${esc(localRead)} Hosted AI availability must be checked separately: it only sees previously shared evidence. Preparing or downloading a local file does not grant AI history access.</p>
       </div>
