@@ -419,6 +419,29 @@ def test_root_cause_outcome_kinds_and_validation():
             analytics.root_cause(log_id, **kwargs)
 
 
+@pytest.mark.parametrize("outcome", [
+    [], {}, ["rework"], {"kind": "rework"}, set(),
+    None, False, 123, 1.5, float("nan"),
+])
+def test_root_cause_direct_outcome_rejects_malformed_types_before_query(outcome, monkeypatch):
+    """Unhashable outcomes must fail with the domain error, not raw TypeError."""
+    monkeypatch.setattr(workspace, "_query", lambda *args: pytest.fail("invalid outcome reached query"))
+    with pytest.raises(workspace.EventLogWorkspaceError, match="outcome must be one of"):
+        analytics.root_cause("unused-synthetic-log", outcome)
+
+
+@pytest.mark.parametrize(("outcome", "kwargs"), [
+    ("rework", {}),
+    ("duration_over", {"threshold_seconds": 1}),
+    ("contains_activity", {"activity": "Review"}),
+    ("ends_with", {"activity": "Close"}),
+])
+def test_root_cause_direct_outcome_accepts_valid_names_before_query(outcome, kwargs, monkeypatch):
+    """Keep all four existing outcome contracts valid after strict type checking."""
+    monkeypatch.setattr(workspace, "_query", lambda *args: "validated-without-database")
+    assert analytics.root_cause("unused-synthetic-log", outcome, **kwargs) == "validated-without-database"
+
+
 @pytest.mark.parametrize("value", [
     0, -1, 10 ** 9 + 1, 1.5, 5.0, float("nan"),
     float("inf"), float("-inf"), "5", "bad", True, False, [], {},
