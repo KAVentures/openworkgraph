@@ -27,6 +27,25 @@ _VERIFICATION_METHODS = {
     "stripe": "opted_in_restricted_key_stripe_account_and_record_get",
 }
 _REF = re.compile(r"^owg:r:[0-9a-f]{32}$")
+# Production adapters emit explicit timezone-aware ISO date-times. Python's
+# fromisoformat also accepts week dates, basic dates and space separators,
+# which are not an unambiguous source receipt contract.
+_SOURCE_TIMESTAMP = re.compile(
+    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
+    r"(?:\\.[0-9]{1,9})?(?:Z|[+-][0-9]{2}:[0-9]{2})$"
+)
+
+
+def _parse_source_timestamp(value: Any) -> datetime:
+    # Reject non-JSON timestamps and unbounded or ambiguous strings *before*
+    # parsing. Both verified_at and Jira resolution dates use this contract.
+    if (not isinstance(value, str) or len(value) > 64 or
+        _SOURCE_TIMESTAMP.fullmatch(value) is None):
+        raise ValueError("invalid source timestamp format")
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("source timestamp must have a timezone")
+    return parsed
 
 
 def _unknown(ref: str, op: str, reason: str) -> dict[str, Any]:
@@ -118,9 +137,7 @@ def source_operation_receipt(
         return _unknown(resource_ref, expected_operation, "source_verification_provenance_conflict")
     stamp = source.get("verified_at")
     try:
-        when = datetime.fromisoformat(str(stamp or "").replace("Z", "+00:00"))
-        if when.tzinfo is None:
-            raise ValueError("missing timezone")
+        when = _parse_source_timestamp(stamp)
         current = now or datetime.now(timezone.utc)
         if current.tzinfo is None:
             raise ValueError("current timezone missing")
@@ -153,12 +170,8 @@ def source_operation_receipt(
             if detail.get("status") != "resolved":
                 return _unknown(resource_ref, expected_operation, "provider_resolution_detail_conflict")
             resolution_stamp = detail.get("source_timestamp")
-            if not isinstance(resolution_stamp, str) or len(resolution_stamp) > 64:
-                return _unknown(resource_ref, expected_operation, "provider_resolution_detail_conflict")
             try:
-                resolved_at = datetime.fromisoformat(resolution_stamp.replace("Z", "+00:00"))
-                if resolved_at.tzinfo is None or resolved_at.utcoffset() is None:
-                    raise ValueError("resolution timestamp must be timezone-aware")
+                resolved_at = _parse_source_timestamp(resolution_stamp)
                 # The source's resolution event cannot occur more than the
                 # allowed clock skew AFTER the authenticated status read.
                 if (resolved_at - when).total_seconds() > 300:
