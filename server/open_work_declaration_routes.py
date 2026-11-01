@@ -301,6 +301,12 @@ async def get_local_reviewed_dependency_status(request: Request, response: Respo
                 "reason": "source_unavailable",
                 "source_evidence": {"source_state": "unknown"},
             }
+        # Refuse malformed or contradictory source evidence immediately;
+        # never perform further scans on a corrupted provider projection.
+        try:
+            compose_reviewed_case_dossier({"work_item_ref": ref}, scanned)
+        except (CaseDeclarationError, OSError, TypeError, KeyError) as exc:
+            raise _safe_error(exc) from None
         contexts.append(scanned)
         # Stop before the next provider read if source, review, or a declared
         # prerequisite changed while the previous read was in flight.
