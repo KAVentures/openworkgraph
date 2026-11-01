@@ -139,6 +139,26 @@ def source_operation_receipt(
             return _unknown(resource_ref, expected_operation, "provider_operation_not_independently_verified")
         if provider == "stripe" and detail.get("scope") != "stripe_processor_only":
             return _unknown(resource_ref, expected_operation, "provider_receipt_scope_conflict")
+        if provider == "jira":
+            # The existing Jira adapter reports a verified resolution only
+            # with BOTH a resolved detail status and a timezone-aware source
+            # resolution timestamp. A contradictory or incomplete detail
+            # must not be promoted merely because its verified flag is true.
+            if detail.get("status") != "resolved":
+                return _unknown(resource_ref, expected_operation, "provider_resolution_detail_conflict")
+            resolution_stamp = detail.get("source_timestamp")
+            if not isinstance(resolution_stamp, str) or len(resolution_stamp) > 64:
+                return _unknown(resource_ref, expected_operation, "provider_resolution_detail_conflict")
+            try:
+                resolved_at = datetime.fromisoformat(resolution_stamp.replace("Z", "+00:00"))
+                if resolved_at.tzinfo is None or resolved_at.utcoffset() is None:
+                    raise ValueError("resolution timestamp must be timezone-aware")
+                # The source's resolution event cannot occur more than the
+                # allowed clock skew AFTER the authenticated status read.
+                if (resolved_at - when).total_seconds() > 300:
+                    return _unknown(resource_ref, expected_operation, "provider_resolution_detail_conflict")
+            except (ValueError, TypeError, OverflowError):
+                return _unknown(resource_ref, expected_operation, "provider_resolution_detail_conflict")
 
     return {
         "format": "openworkgraph.source-operation-receipt.v1",
