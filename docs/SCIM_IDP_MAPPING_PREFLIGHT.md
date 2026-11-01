@@ -437,8 +437,8 @@ independently include a bounded `groups.patch_operations` list:
     "enabled": true,
     "match_attributes": ["externalId"],
     "patch_operations": [
-      {"op": "replace", "path": "displayName"},
-      {"op": "add", "path": "members"},
+      {"op": "replace", "path": "displayName", "value_present": true},
+      {"op": "add", "path": "members", "value_present": true},
       {"op": "remove", "path": "members[value eq \"usr_SYNTHETIC\"]"}
     ]
   }
@@ -456,6 +456,24 @@ declaring `add` or `replace` on that selector is a blocker. Removing
 `displayName` is also a blocker because the field is required. Whole
 `members` and `externalId` support the documented verbs, subject to
 actual payload, current state, provider isolation and exact ETag checks.
+
+For supported Group `add` and `replace` paths, the shipped Group
+PATCH handler requires a **present `value` property** in the actual
+operation object. The optional **boolean** `value_present` declaration
+records only whether the IdP is configured to send that property; it must
+never contain an actual value, email, User ID or customer payload.
+`value_present: false` on a supported add/replace path is a **blocker**
+(`group_patch_required_value_missing`), because the shipped handler rejects
+that request. If `value_present` is **omitted**, older declarations remain
+accepted but receive a **nonblocking**
+`group_patch_value_presence_undeclared` caution: absent evidence is not a
+validated payload. `value_present: true` removes that particular uncertainty,
+but **does not validate the value's type, content, Group membership authority,
+provider-scoped identity, actual IdP request, or the presence of an exact
+If-Match ETag**. Group `remove` operations do not require a value property;
+this flag has no effect on their supported verb/path checks. Nonboolean flags
+are invalid input. Reports expose only generic diagnostic locations, never
+actual values.
 
 The operation list is **optional and independent** of the legacy path-only
 `groups.patch_attributes` list. An omitted list remains *unknown*; an
