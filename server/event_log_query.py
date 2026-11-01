@@ -35,6 +35,17 @@ Name = Annotated[str, Field(min_length=1, max_length=200)]
 _CASE_DIMENSIONS = {
     "start_week": "strftime(date_trunc('week', started), '%Y-%m-%d')",
     "start_month": "strftime(date_trunc('month', started), '%Y-%m')",
+    # Case timestamps are stored in UTC. Prefix weekday with ISO 1..7 so a
+    # two-dimensional day/hour breakdown sorts chronologically by dimensions.
+    "start_weekday_utc": "strftime(started, '%u %A')",
+    "start_hour_utc": "strftime(started, '%H')",
+    "end_weekday_utc": "strftime(ended, '%u %A')",
+    "end_hour_utc": "strftime(ended, '%H')",
+    # Half-open, disjoint elapsed-time bands; never a local wall-clock estimate.
+    "duration_band": """CASE WHEN duration < 3600 THEN '0: under 1 hour'
+        WHEN duration < 86400 THEN '1: 1 to under 24 hours'
+        WHEN duration < 604800 THEN '2: 1 to under 7 days'
+        ELSE '3: 7 days or more' END""",
     "end_week": "strftime(date_trunc('week', ended), '%Y-%m-%d')",
     "first_activity": "first_activity",
     "last_activity": "last_activity",
