@@ -152,9 +152,13 @@ from `presented_evidence`. A reused event ID admitted under two distinct
 records is withheld from both rather than assigned to an arbitrary lane.
 A matching ID alone is insufficient: the visible event must also carry a
 single consistent normalized (opaque reference, provider, resource kind, host)
-identity matching the admitted source row. Missing, malformed, contradictory
-or cross-provider visible identity is withheld, not silently replaced with
-source-only provenance. Repeated identical visible identities are allowed.
+identity **and the same admitted UTC observation instant** as the source row.
+Different timezone offsets representing the same instant are equivalent; a
+microsecond difference is not. Missing, malformed, contradictory or
+cross-provider visible identity or timestamp is withheld, not silently
+replaced with source-only provenance. Repeated visible IDs with the same
+identity are allowed only when one visible timestamp matches the first
+source-admitted observation; a later duplicate cannot stand in for it.
 The rich evidence format intentionally omits organization identity, so the
 adapter cannot independently verify a tenant from the presented row; the
 production lane's source-side organization/identity checks still apply.
@@ -170,7 +174,8 @@ true workflows is reported as contamination rather than hidden.
 holdout cases and adds adversarial projection checks for invalid timestamps,
 duplicate IDs, cross-record collisions, source-only rows, offset ordering,
 conflicting source identity, source-versus-visible provenance mismatches,
-contradictory visible IDs, and normalized positive controls.
+contradictory visible IDs, mismatched/malformed UTC observation instants,
+first-admitted duplicate timestamps, and normalized positive controls.
 
 ### Multi-signal linked items
 
