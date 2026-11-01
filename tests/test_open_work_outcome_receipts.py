@@ -905,3 +905,116 @@ def test_jira_exact_issue_only_scope_preserves_resolution_not_customer_success()
     assert result["agent_caused_operation_verified"] is False
     assert result["agent_execution_authorized"] is False
     assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+@pytest.mark.parametrize("bad_stamp", [
+    None, False, 0, 1, [], {}, WHEN,
+    "2026-W43-1T10:00:00+00:00",  # permissive Python week date
+    "20261019T100000+00:00",     # basic date/time
+    "2026-10-19 10:00:00+00:00", # ambiguous separator
+    "2026-10-19T10:00+00:00",    # missing seconds
+    "2026-10-19T10:00:00+0000",  # missing offset colon
+    "2026-10-19T10:00:00",       # naive timestamp
+    "2026-10-19T10:00:00.1234567890Z",  # excessive precision
+    pytest.param("x" * 100_000, id="oversized-untrusted-timestamp"),
+])
+def test_receipt_requires_bounded_explicit_source_read_timestamp(
+    operation, provider, kind, state, bad_stamp,
+):
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    data["source_evidence"]["verified_at"] = bad_stamp
+    calls = []
+    result = source_operation_receipt(
+        REF, operation, record_reader=reader(data, calls), now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "invalid_provider_receipt_timestamp"
+    assert result["operation_verified"] is False
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert result["read_only"] is True
+    assert calls == [(REF, {
+        "since": None, "until": None, "include_source_status": True,
+    })]
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+    assert "x" * 100 not in str(result)
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+@pytest.mark.parametrize("good_stamp", [
+    "2026-10-19T10:00:00Z",
+    "2026-10-19T10:00:00+00:00",
+    "2026-10-19T12:00:00+02:00",
+    "2026-10-19T10:00:00.123456+00:00",
+    "2026-10-19T10:00:00.123456789Z",
+])
+def test_receipt_accepts_explicit_source_time_without_business_authority(
+    operation, provider, kind, state, good_stamp,
+):
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    data["source_evidence"]["verified_at"] = good_stamp
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["availability"] == "source_reported"
+    assert result["operation_verified"] is True
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize("bad_resolution_stamp", [
+    WHEN, "2026-W43-1T10:00:00+00:00", "20261019T100000+00:00",
+    "2026-10-19 10:00:00+00:00", "2026-10-19T10:00+00:00",
+    "2026-10-19T10:00:00+0000", "2026-10-19T10:00:00.1234567890Z",
+    pytest.param("x" * 100_000, id="oversized-untrusted-resolution"),
+])
+def test_jira_resolution_rejects_noncanonical_source_time(bad_resolution_stamp):
+    data = response(provider="jira", kind="issue", state="done",
+                    operation="jira_issue_resolved")
+    data["source_evidence"]["verified_operational_outcome"]["source_timestamp"] = (
+        bad_resolution_stamp
+    )
+    result = source_operation_receipt(
+        REF, "jira_issue_resolved",
+        record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "provider_resolution_detail_conflict"
+    assert result["operation_verified"] is False
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize("resolution_stamp", [
+    "2026-10-19T10:00:00Z",
+    "2026-10-19T12:00:00+02:00",
+    "2026-10-19T10:00:00.123456+00:00",
+    "2026-10-19T10:00:00.123456789Z",
+])
+def test_jira_resolution_accepts_explicit_source_time_without_customer_claim(
+    resolution_stamp,
+):
+    data = response(provider="jira", kind="issue", state="done",
+                    operation="jira_issue_resolved")
+    data["source_evidence"]["verified_operational_outcome"]["source_timestamp"] = (
+        resolution_stamp
+    )
+    result = source_operation_receipt(
+        REF, "jira_issue_resolved",
+        record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["availability"] == "source_reported"
+    assert result["operation_verified"] is True
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
