@@ -152,3 +152,25 @@ boundaries, and required-target empty-string rejection. Native Ubuntu,
 macOS, Windows and browser/packaging/scale CI remains a separate merge gate.
 No provider/customer acceptance, causal claim, tenant authorization,
 consent, retention, provenance or agent action is inferred from this fix.
+
+
+## Root-cause constant-outcome provenance (R6)
+
+Root-cause analysis returns no feature associations when every case has the
+selected outcome or when no case has it: without variation there is no
+case-level contrast to estimate. Previously this early-return response omitted
+the `associations_are_not_causes` and `temporal_order_not_checked` fields
+present in the varying-outcome response. The omission could make downstream
+consumers incorrectly treat missing caution flags as a different evidentiary
+standard.
+
+Both existing flags now remain explicitly `true` even when
+`features_tested == 0` and `associations == []`. The existing no-variation
+note, case counts, outcome metadata, statistical behavior and response keys
+are otherwise unchanged. This is an **additive provenance correction**, not a
+claim of causality, temporal ordering, source verification or permission to
+act. Synthetic regression cases cover both all-positive and all-negative
+outcomes from an imported local fixture. Native cross-platform CI, real
+provider acceptance and consenting-customer evaluation remain separate
+requirements; no new capture, tenant access, retention behavior, or business
+writes are introduced.
