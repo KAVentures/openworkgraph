@@ -100,6 +100,16 @@ def local_owg_server(mapping, *, refuse=False):
         def log_message(self, *args):
             pass
 
+        def do_GET(self):
+            assert self.path == "/v1/event-logs"
+            assert self.headers["Authorization"] == "OWG-Session " + SESSION
+            encoded = json.dumps(workspace.list_logs(), default=str).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
         def do_POST(self):
             calls.append(self.path)
             body = self.rfile.read(int(self.headers["Content-Length"]))
@@ -216,7 +226,20 @@ def test_local_http_rejection_is_ambiguous_until_history_checked(
 def test_transport_failure_is_unverified_and_does_not_echo_credentials(
         setup_journal, capsys):
     class Fails:
-        def open(self, *_args, **_kwargs):
+        def open(self, req, timeout):
+            if req.get_method() == "GET":
+                class Response:
+                    status = 200
+                    headers = {"Content-Type": "application/json"}
+                    def geturl(self):
+                        return req.full_url
+                    def read(self, size):
+                        return json.dumps(workspace.list_logs(), default=str).encode()[:size]
+                    def __enter__(self):
+                        return self
+                    def __exit__(self, *_):
+                        return False
+                return Response()
             raise error.URLError("PRIVATE-ERROR-CONTAINING-TOKEN")
 
     assert main(args(setup_journal), opener=Fails()) == 3
@@ -236,6 +259,25 @@ def test_corrupted_journal_row_refused_before_http(setup_journal, capsys):
             pytest.fail("Invalid journal must never reach HTTP")
 
     assert main(args(data), opener=NeverCalled()) == 2
+    assert json.loads(capsys.readouterr().out)["status"] == "refused"
+
+
+def test_wrong_local_log_namespace_refused_before_post(setup_journal, capsys):
+    data = setup_journal
+    other = workspace.import_log(
+        BytesIO(_export_csv([BASE]).encode()), name="Other tenant source",
+        source_format="csv",
+        mapping={**data[4], "source_namespace": "another_tenant",
+                 "case_namespace": "another_tenant"},
+    )
+    cli = args(data)
+    original = data[3]
+    cli[cli.index(original)] = other["log_id"]
+    cli[cli.index(original)] = other["log_id"]
+    with local_owg_server(data[4]) as (port, calls):
+        cli[cli.index("--port") + 1] = str(port)
+        assert main(cli) == 2
+        assert not calls
     assert json.loads(capsys.readouterr().out)["status"] == "refused"
 
 
