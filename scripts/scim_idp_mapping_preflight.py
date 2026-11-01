@@ -387,12 +387,22 @@ def assess(mapping: Any) -> dict:
     add("caution", "live_validation_required", "client",
         "Static mapping checks never establish live Entra/Okta interoperability or company rollout readiness")
     blocked = any(item["severity"] == "blocker" for item in findings)
+    # Count only *declared* paths, never inferred or actually executed
+    # operations. Keep the four legacy keys stable for existing consumers.
+    # Optional Group declarations must remain distinguishable from absence:
+    # an explicitly empty list is reviewed (count zero), whereas an omitted
+    # field is unknown and must not acquire a fabricated count.
+    checked = {"user_matching": len(match), "user_create": len(create),
+               "user_patch": len(patch), "group_matching": len(group_match)}
+    if group_create is not None:
+        checked["group_create"] = len(group_create)
+    if group_patch is not None:
+        checked["group_patch"] = len(group_patch)
     return {
         "status": "blocked" if blocked else "requires_live_validation",
         "scope": "offline_declared_mapping_only",
         "findings": findings,
-        "checked": {"user_matching": len(match), "user_create": len(create),
-                    "user_patch": len(patch), "group_matching": len(group_match)},
+        "checked": checked,
     }
 
 
