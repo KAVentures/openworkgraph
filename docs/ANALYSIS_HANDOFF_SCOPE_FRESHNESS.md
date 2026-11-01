@@ -1383,3 +1383,35 @@ native Chromium/WCAG acceptance, real consenting-user pilot, live-provider
 validation, business outcomes, ROI or competitor parity.
 
 Coordination: [#326 claim 6557006223](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6557006223).
+
+
+## Non-paginated date guidance and export coverage caveat (Worker B, 2026-11-01)
+
+The Prepare for AI daily review is a **bounded, non-paginated** display of
+observed UTC dates, not a way to advance through every page of the event log.
+For ordinary observations it may suggest reviewing one date at a time **only
+after the user explicitly inspects and shares a local package**, while requiring
+the downstream reviewer to disclose missing dates, unknown capture coverage,
+and unverified workflow inferences. Diagnostic-only histories never receive
+workflow-review instructions; zero-event selections offer no evidence download.
+
+The download control requests the selected scope **again**, subject to current
+authorization, consent, retention, deletion, and intervening capture changes.
+It is not an immutable snapshot or a guarantee that the preview and downloaded
+file contain identical rows. The existing unchecked detailed-chronology option
+produces a summary/operational package, not raw local event rows; raw chronology
+requires an explicit opt-in. This is grounded in
+`server/exporter.py:build_export_payload` and its
+`raw_local_evidence` inclusion gate. Review the actual file before sharing.
+No new data leaves the device, no AI model runs, and Copy remains request-only.
+
+Two committed synthetic Node mock-DOM test functions exercise ordinary,
+capture-health-only and zero-event previews, including the absence of invented
+pagination, unconditional full-period export claims, and clipboard-triggered
+ticket/download side effects. All three scenarios passed in an **isolated V8
+actual-source mock DOM** (35 assertions), **not** native Node, Chromium, WCAG,
+cross-platform, scale, packaging, a consenting-user pilot, provider validation,
+verified business outcome, ROI, or competitor parity. The server, export payload,
+consent enforcement and authorization are unchanged.
+
+Coordination: [#326 claim 6557688499](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6557688499).
