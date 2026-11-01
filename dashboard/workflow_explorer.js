@@ -160,6 +160,9 @@
       '#owgWorkflowExplorer .owg-map-scroll svg{display:block;max-height:730px}',
       '#owgWorkflowExplorer .owg-explorer-actions{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}',
       '#owgWorkflowExplorer .owg-map-node:focus rect{stroke-width:3}',
+      '#owgExplorerShadowPlan{min-width:0;max-width:100%;box-sizing:border-box;margin:12px 0}',
+      '#owgExplorerShadowPlan label{display:grid;gap:4px;margin:8px 0}',
+      '#owgExplorerShadowPlan textarea{width:100%;min-width:0;box-sizing:border-box;resize:vertical}',
       '@media(max-width:800px){#owgWorkflowExplorer .owg-explorer-layout{grid-template-columns:minmax(0,1fr)}}'
     ].join('\n');
     card.prepend(style);
