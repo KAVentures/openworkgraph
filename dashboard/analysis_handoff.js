@@ -498,15 +498,26 @@
     // Do not turn malformed lease metadata into an apparent permission.
     const leaseObject=access!==null && typeof access==='object' && !Array.isArray(access);
     const leaseExpiry=canonicalUtcInstant(access?.expires_at);
+    const grantedAt=canonicalUtcInstant(access?.granted_at);
+    const nowInstant=new Date().toISOString();
     // The local clock is millisecond-resolution, but a lease expiring one
     // microsecond after that instant is still future-dated. Do not round it
     // into an apparently expired grant or overstate its actual expiry time.
     const expiryValid=access?.expires_at==null ||
-      (leaseExpiry!==null && compareExactInstants(
-        access.expires_at, new Date().toISOString()) > 0);
+      (leaseExpiry!==null && compareExactInstants(access.expires_at, nowInstant) > 0);
+    // Production policy records granted_at on every new saved-history grant.
+    // An impossible future/malformed grant timestamp is not evidence of
+    // permission. Legacy previews may omit it, but remain snapshot-only.
+    // Compare full fractional seconds so a microsecond reversal is not hidden.
+    const grantedValid=access?.granted_at==null ||
+      (grantedAt!==null &&
+        compareExactInstants(access.granted_at, nowInstant) <= 0 &&
+        (access.expires_at==null ||
+          (leaseExpiry!==null &&
+            compareExactInstants(access.granted_at, access.expires_at) < 0)));
     let localRead='Local AI saved-history permission could not be verified from this preview; check current settings before using an AI.';
     if(d.local_ai_enabled===false) localRead='Local AI access is off.';
-    else if(d.local_ai_enabled===true && leaseObject && expiryValid){
+    else if(d.local_ai_enabled===true && leaseObject && expiryValid && grantedValid){
       const until=leaseExpiry?' Grant expiry: '+leaseExpiry+'.':'';
       if(access.mode==='off')
         localRead='Local AI can read the current run only; saved-history access is off.';
