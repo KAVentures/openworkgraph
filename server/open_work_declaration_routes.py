@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from .open_work_case_graph import project_declared_case_graph, project_declared_case_change_impact
 from .open_work_case_dossier import admitted_case_dossier_snapshot, compose_reviewed_case_dossier
 from .open_work_case_context import stripe_open_work_case_context
+from .open_work_case_portfolio import admit_portfolio, compose_portfolio_status
 from .open_work_dependency_dossier import (
     select_dependency_status_targets, compose_dependency_status_snapshot,
 )
@@ -326,6 +327,72 @@ async def get_local_reviewed_dependency_status(request: Request, response: Respo
     try:
         result = compose_dependency_status_snapshot(
             admitted, selected, contexts, unscanned_prerequisites=unscanned)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+
+
+@router.post("/v1/open-work/declarations/portfolio-status")
+async def get_local_reviewed_case_portfolio_status(request: Request, response: Response):
+    """Explicit bounded scan of independently selected reviewed case goals.
+
+    Unlike dependency-status this checks independently selected cases, while
+    still pinning every transitive declared prerequisite for each selected
+    case. A source status is never a customer outcome or business obligation.
+    """
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "cases", "confirm_source_scan", "max_pages",
+    })
+    if payload["confirm_source_scan"] is not True:
+        raise HTTPException(403, "explicit portfolio source scan confirmation required")
+    pages = payload["max_pages"]
+    if type(pages) is not int or not 1 <= pages <= 3:
+        raise HTTPException(422, "max_pages must be between 1 and 3")
+    try:
+        before = await asyncio.to_thread(list_case_declarations, scope)
+        admitted, signatures = admit_portfolio(before, payload["cases"])
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    contexts = []
+    for item in admitted:
+        ref = item["work_item_ref"]
+        try:
+            scanned = await asyncio.to_thread(
+                stripe_open_work_case_context, ref,
+                explicit_scan_authorized=True, max_pages=pages,
+            )
+        except (ValueError, OSError, TypeError, CaseDeclarationError, sqlite3.DatabaseError):
+            scanned = {
+                "format": "openworkgraph.open-work-case-context.v1",
+                "work_item_ref": ref,
+                "availability": "unknown",
+                "reason": "source_unavailable",
+                "source_evidence": {"source_state": "unknown"},
+            }
+        try:
+            # Refuse contradictory provider identity/status before any next
+            # provider read, not merely at the end of the batch.
+            compose_reviewed_case_dossier(item, scanned)
+        except (CaseDeclarationError, OSError, TypeError, KeyError) as exc:
+            raise _safe_error(exc) from None
+        contexts.append(scanned)
+        await _recheck_source(scope)
+        try:
+            after = await asyncio.to_thread(list_case_declarations, scope)
+            _current, current_signatures = admit_portfolio(after, payload["cases"])
+            if current_signatures != signatures:
+                raise CaseDeclarationError("stale portfolio prerequisite review changed")
+        except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+            raise _safe_error(exc) from None
+    try:
+        result = compose_portfolio_status(admitted, contexts)
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
         raise _safe_error(exc) from None
     await _recheck_source(scope)
