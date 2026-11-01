@@ -931,3 +931,67 @@ def test_lane_projection_accepts_equivalent_offset_replays_but_not_invalid_repla
         result = predict_record_lanes(_lane_projection_case(source, presented))
         assert [w["event_ids"] for w in result["workflows"]] == [["second"]]
         assert result["unassigned_event_ids"] == ["first"]
+
+
+def test_lane_projection_refuses_type_coerced_visible_record_identity():
+    """Visible booleans/numbers cannot impersonate matching source strings."""
+    from copy import deepcopy
+
+    ref = "owg:r:" + "a" * 32
+    for field, nonliteral, source_literal in (
+        ("provider", True, "true"),
+        ("resource_kind", True, "true"),
+        ("host", 123, "123"),
+        ("host", None, ""),
+    ):
+        source = [
+            _lane_projection_event("first", ref, "2026-10-20T10:00:00Z"),
+            _lane_projection_event("second", ref, "2026-10-20T10:01:00Z"),
+        ]
+        for row in source:
+            row["metadata"]["resource_reference"][field] = source_literal
+        visible = deepcopy(source)
+        visible[0]["metadata"]["resource_reference"][field] = nonliteral
+        # Before this admission check, _identity stringified True as "true",
+        # 123 as "123", and None as an absent host, allowing false attribution.
+        for presented in (visible, list(reversed(visible))):
+            result = predict_record_lanes(_lane_projection_case(source, presented))
+            assert [lane["event_ids"] for lane in result["workflows"]] == [
+                ["second"]
+            ], field
+            assert result["unassigned_event_ids"] == ["first"], field
+
+
+def test_lane_projection_preserves_literal_casefolded_and_absent_host_identity():
+    """Reject only malformed visible types, not valid normalized strings."""
+    from copy import deepcopy
+
+    ref = "owg:r:" + "a" * 32
+    source = [
+        _lane_projection_event("first", ref, "2026-10-20T10:00:00.000001Z"),
+        _lane_projection_event("second", ref, "2026-10-20T10:01:00Z"),
+    ]
+    for row in source:
+        identity = row["metadata"]["resource_reference"]
+        identity.update(provider="true", resource_kind="true", host="123")
+    visible = deepcopy(source)
+    identity = visible[0]["metadata"]["resource_reference"]
+    identity.update(resource_ref=ref.upper(), provider="TRUE",
+                    resource_kind="TRUE", host="123")
+    visible[0]["observed_at"] = "2026-10-20T11:00:00.000001+01:00"
+    result = predict_record_lanes(_lane_projection_case(source, visible))
+    assert [lane["event_ids"] for lane in result["workflows"]] == [
+        ["first", "second"]
+    ]
+    assert result["unassigned_event_ids"] == []
+
+    # The source and visible evidence may both omit a legacy host; that is
+    # distinct from an explicitly present, nonliteral null host.
+    for row in source:
+        row["metadata"]["resource_reference"].pop("host")
+    legacy_visible = deepcopy(source)
+    result = predict_record_lanes(_lane_projection_case(source, legacy_visible))
+    assert [lane["event_ids"] for lane in result["workflows"]] == [
+        ["first", "second"]
+    ]
+    assert result["unassigned_event_ids"] == []
