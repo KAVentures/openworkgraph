@@ -84,9 +84,15 @@ def source_operation_receipt(
     # record_reader cannot perform a provider read with an invalid or reversed
     # window before the verifier discovers the scope conflict afterward.
     for name, value in (("since", since), ("until", until)):
-        if value and _ts(value) is None:
+        # None means omitted. An explicitly supplied falsey value (0, False,
+        # "", [], ...) is NOT an omitted scope: the canonical reader's
+        # truthiness check would otherwise skip validation before an alternate
+        # authorized source-capable reader is invoked.
+        if value is not None and (
+            not isinstance(value, str) or not value.strip() or _ts(value) is None
+        ):
             raise WorkflowEvidenceError(f"{name} must be an ISO-8601 timestamp")
-    if since and until and _ts(since) >= _ts(until):
+    if since is not None and until is not None and _ts(since) >= _ts(until):
         raise WorkflowEvidenceError("until must be after since")
     # A test/evaluation clock is not a source authorization. Refuse an invalid
     # explicit clock before any provider read rather than consuming source
