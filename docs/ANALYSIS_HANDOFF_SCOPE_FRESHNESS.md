@@ -1273,3 +1273,26 @@ These tests are **not** real-browser/WCAG acceptance, a consenting-user pilot,
 provider-identity verification, a business-outcome proof or competitor parity.
 
 Coordination: [#326 claim 6554762405](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6554762405).
+
+
+## Selected versus retained evidence accounting
+
+The local overview now shows both `canonical_rows` (observations selected
+for this preview) and `retained_rows` (the backend's reported retained row
+count). The Prepare for AI modal repeats these values for explicit human review.
+The validated relationship is `0 <= canonical_rows <= retained_rows`; it is
+not an estimate of recorder uptime, capture completeness, user productivity,
+or the number of completed business cases.
+
+A larger retained count does **not** mean that the difference represents missed
+work. Rows may fall outside the selected time window or otherwise be excluded
+from this preview. Conversely, equal counts do **not** prove that all work was
+captured. These are descriptive counts from the current local response, not a
+durable evidence snapshot or permission grant. Existing zero-event warnings,
+copy-only behavior, export-ticket validation, redaction and consent rules are
+unchanged.
+
+Two synthetic mock-DOM regressions check selected < retained and selected =
+retained, including no invented completeness claim and request-only Copy.
+They do not establish real-user acceptance, recorder completeness, verified
+business outcomes or competitor parity.
