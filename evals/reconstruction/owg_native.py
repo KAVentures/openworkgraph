@@ -107,6 +107,27 @@ def _admitted_visible_lane_members(
     }
 
 
+
+def _presented_event_ids(presented: list[Any]) -> list[str]:
+    """Return unique literal observation IDs, never coerced or invented IDs.
+
+    Malformed rows are not legitimate scored evidence. A duplicate visible
+    event ID is one observation identity, not two artificial unassigned items.
+    """
+    ids: list[str] = []
+    seen: set[str] = set()
+    for event in presented:
+        if not isinstance(event, dict):
+            continue
+        event_id = event.get("event_id")
+        if (not isinstance(event_id, str) or not _EVENT_ID.fullmatch(event_id)
+                or event_id in seen):
+            continue
+        seen.add(event_id)
+        ids.append(event_id)
+    return ids
+
+
 def predict_record_lanes(case: dict[str, Any]) -> dict[str, Any]:
     # An explicitly empty source is authoritative (revocation/deletion). Only an
     # absent source key denotes a legacy presented-only evaluation case.
@@ -127,7 +148,7 @@ def predict_record_lanes(case: dict[str, Any]) -> dict[str, Any]:
     } for index, ids in enumerate(
         (members[ref] for ref in sorted(published)), start=1
     ) if ids]
-    all_ids = [str(e["event_id"]) for e in presented]
+    all_ids = _presented_event_ids(presented)
     return {
         "case_id": case["case_id"],
         "workflows": workflows,
@@ -150,9 +171,8 @@ def _canonical_eval_json(value: Any) -> str | None:
 def _linked_projection(event: dict[str, Any]) -> str | None:
     """Visible, link-authorizing fields of one observation, not hidden identity.
 
-    Rich evidence omits actor/device/organization. Source rows retain them,
-    but the current main linker does not yet isolate ephemeral tokens by scope
-    (see separate draft #500); this evaluator cannot authenticate visible scope.
+    Rich evidence omits actor/device/organization, so those stay authoritative
+    only in the original source row and the production linker's scope checks.
     Metadata comparisons intentionally retain literal malformed claims: an
     unseen or changed tab/transfer/reference cannot acquire link authority.
     """
@@ -163,8 +183,17 @@ def _linked_projection(event: dict[str, Any]) -> str | None:
     # Rich evidence projects metadata tokens into top-level convenience keys.
     # Those are not independent claims. Reject source-only top-level tokens or
     # contradictions instead of mistaking a convenience copy for a conflict.
-    for field in ("tab_context_id", "clipboard_transfer_id"):
-        if field in event and (field not in metadata or event[field] != metadata[field]):
+    for field, pattern in (("tab_context_id", _TAB),
+                           ("clipboard_transfer_id", _TRANSFER)):
+        # The shipped linker can stringify booleans and numbers into valid
+        # token-shaped values. Never grant evaluator link authority through
+        # that coercion, or Python's True == 1 equality shortcut.
+        if field in metadata and (not isinstance(metadata[field], str)
+                                  or not pattern.fullmatch(metadata[field])):
+            return None
+        if field in event and (field not in metadata
+                               or not isinstance(event[field], str)
+                               or event[field] != metadata[field]):
             return None
     return _canonical_eval_json((
         stamp, event.get("app"), event.get("event_type"),
@@ -177,99 +206,7 @@ def _linked_projection(event: dict[str, Any]) -> str | None:
     ))
 
 
-
-
-def _eval_ephemeral_scope(event: dict[str, Any]) -> tuple[str, str, str, str] | None:
-    """Fail-closed scope for evaluator vetoes; do not depend on unmerged linker PRs.
-
-    The currently shipped linker may still use globally keyed ephemeral IDs.
-    This helper only prevents a hidden source claim from poisoning an unrelated
-    tenant/actor/device/session in the evaluation admission projection.
-    """
-    values: list[str] = []
-    for field in ("organization_id", "actor_id", "device_id", "session_id"):
-        if field not in event:
-            values.append("")
-            continue
-        value = event[field]
-        if (not isinstance(value, str) or not value or len(value) > 160
-                or value.isspace()
-                or any(ord(char) < 32 or ord(char) == 127 for char in value)):
-            return None
-        values.append(value)
-    return tuple(values)  # type: ignore[return-value]
-
-
-def _veto_hidden_source_ephemeral_links(
-    source: list[dict[str, Any]], admitted: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], set[str]]:
-    """Hidden source rows can DISPROVE a weak link, never create one.
-
-    A source-only third record sharing a scoped clipboard transfer makes the
-    original three-record group ambiguous. Removing that row before linking
-    must not manufacture a two-record transfer. Likewise a hidden second
-    record in a tab must not manufacture a single-record tab association.
-    Remove only matching weak tokens from copies of visible admitted rows;
-    retain their independently supported exact-record evidence.
-    """
-    admitted_ids = {event["event_id"] for event in admitted}
-    token_fields = (("clipboard_transfer_id", _TRANSFER), ("tab_context_id", _TAB))
-    vetoes: dict[str, set[tuple[tuple[str, str, str, str], str]]] = {
-        field: set() for field, _ in token_fields
-    }
-    for event in source:
-        if not isinstance(event, dict):
-            continue
-        event_id = event.get("event_id")
-        if (not isinstance(event_id, str) or not _EVENT_ID.fullmatch(event_id)
-                or event_id in admitted_ids or _stamp(event.get("observed_at")) is None):
-            continue
-        scope = _eval_ephemeral_scope(event)
-        if scope is None:
-            continue
-        metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
-        for field, pattern in token_fields:
-            # Both explicit locations matter: a contradictory hidden claim
-            # must not become harmless merely because one was ignored.
-            for claim in (event.get(field), metadata.get(field)):
-                if isinstance(claim, str) and pattern.fullmatch(claim):
-                    vetoes[field].add((scope, claim))
-
-    if not any(vetoes.values()):
-        return admitted, set()
-    safe: list[dict[str, Any]] = []
-    blocked_ids: set[str] = set()
-    for event in admitted:
-        scope = _eval_ephemeral_scope(event)
-        metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
-        blocked: set[str] = set()
-        if scope is not None:
-            for field, pattern in token_fields:
-                if any(
-                    isinstance(claim, str) and pattern.fullmatch(claim)
-                    and (scope, claim) in vetoes[field]
-                    for claim in (event.get(field), metadata.get(field))
-                ):
-                    blocked.add(field)
-        if not blocked:
-            safe.append(event)
-            continue
-        blocked_ids.add(event["event_id"])
-        # No mutation of the source/corpus. Never strip record references,
-        # scope, action, timestamp, or provenance to bypass source checks.
-        copy = dict(event)
-        copy_meta = dict(metadata)
-        for field in blocked:
-            copy.pop(field, None)
-            copy_meta.pop(field, None)
-        copy["metadata"] = copy_meta
-        safe.append(copy)
-    return safe, blocked_ids
-
-
-def _visible_linked_source_events(
-    case: dict[str, Any],
-) -> tuple[list[dict[str, Any]], set[str]]:
+def _visible_linked_source_events(case: dict[str, Any]) -> list[dict[str, Any]]:
     """Keep only unambiguous source observations actually presented for scoring.
 
     Filtering happens BEFORE linking: a source-only event must neither appear
@@ -311,25 +248,19 @@ def _visible_linked_source_events(
             )):
                 continue
         admitted.append(rows[0])
-    return _veto_hidden_source_ephemeral_links(source, admitted)
+    return admitted
 
 
 def predict_linked_items(case: dict[str, Any], *, accept_candidates: bool = False) -> dict[str, Any]:
     """Merged multi-signal items. Accepting the ambiguous candidate links is a
     diagnostic upper bound only: OWG itself never merges them."""
-    events, weak_link_veto_ids = _visible_linked_source_events(case)
+    events = _visible_linked_source_events(case)
     linked = link_observations(events)
     members = list(linked["members"].values())
     if accept_candidates:
         parent = {event_id: index for index, ids in enumerate(members) for event_id in ids}
         merged: dict[int, set[int]] = {index: {index} for index in range(len(members))}
         for candidate in linked["candidates"]:
-            # Stripping a contradicted tab/transfer may expose an unrelated
-            # same-app continuity candidate. Never let diagnostic candidate
-            # acceptance undo a source-only negative-evidence veto.
-            if (candidate["event_id"] in weak_link_veto_ids or
-                    candidate["toward_event_id"] in weak_link_veto_ids):
-                continue
             a, b = parent[candidate["event_id"]], parent[candidate["toward_event_id"]]
             if merged[a] is not merged[b]:
                 union = merged[a] | merged[b]
@@ -341,7 +272,7 @@ def predict_linked_items(case: dict[str, Any], *, accept_candidates: bool = Fals
                    for group in groups]
     members = [ids for ids in members if len(ids) >= 2]
     assigned = {event_id for ids in members for event_id in ids}
-    all_ids = [str(e["event_id"]) for e in case["presented_evidence"]]
+    all_ids = _presented_event_ids(case["presented_evidence"])
     return {
         "case_id": case["case_id"],
         "workflows": [{
