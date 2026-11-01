@@ -38,6 +38,7 @@ from .record_case_lanes import _EVENT_ID, _RESOURCE, _identity, _stamp, _token
 from .reconstruction_segments import observed_activity_segments
 from .reconstruction_switches import observed_work_switches
 from .reconstruction_surfaces import observed_surface_runs
+from .reconstruction_transfer_episodes import disjoint_directional_transfer_episodes
 
 _TRANSFER = re.compile(r"^[A-Za-z0-9:._-]{1,120}$")
 _TAB = re.compile(r"^[A-Za-z0-9:._-]{1,160}$")
@@ -409,6 +410,8 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
     for group in by_ref.values():
         join(group, "same_record")
     ambiguous_transfer_groups = 0
+    recovered_transfer_groups = 0
+    recovered_transfer_episodes = 0
     inconsistent_transfer_direction_groups = 0
     for token_key, group in by_transfer.items():
         if token_key in tainted_transfers:
@@ -420,7 +423,18 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
         # Keep independent same-record evidence but do not merge the fanout.
         referenced_records = {row["ref"] for row in group if row["ref"]}
         if len(referenced_records) > 2:
-            ambiguous_transfer_groups += 1
+            # A capture token may be reused for separate operations. Recover
+            # strictly witnessed, non-overlapping directional episodes only;
+            # never union the entire multi-record token group. Any partial,
+            # interleaved, loose or repeated-record evidence remains ambiguous.
+            episodes = disjoint_directional_transfer_episodes(group)
+            if episodes is None:
+                ambiguous_transfer_groups += 1
+                continue
+            for source_event, target_event in episodes:
+                join([source_event, target_event], "clipboard_transfer")
+            recovered_transfer_groups += 1
+            recovered_transfer_episodes += len(episodes)
             continue
         # Any explicit copy/paste observation makes direction relevant.
         # A generic click in the same token group cannot erase contradictory
@@ -552,6 +566,8 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
     return {"rows": rows, "members": members, "root": union.find, "links": links,
             "candidates": candidates, "conflicting_references": conflicts,
             "ambiguous_transfer_groups": ambiguous_transfer_groups,
+            "recovered_transfer_groups": recovered_transfer_groups,
+            "recovered_transfer_episodes": recovered_transfer_episodes,
             "inconsistent_transfer_direction_groups": inconsistent_transfer_direction_groups,
             "tab_component_conflicts": tab_component_conflicts}
 
@@ -626,6 +642,8 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
         "unlinked_observation_count": unlinked,
         "conflicting_reference_groups_suppressed": linked["conflicting_references"],
         "ambiguous_clipboard_transfer_groups": linked["ambiguous_transfer_groups"],
+        "recovered_reused_clipboard_transfer_groups": linked["recovered_transfer_groups"],
+        "recovered_disjoint_clipboard_transfer_episodes": linked["recovered_transfer_episodes"],
         "inconsistent_clipboard_transfer_direction_groups": linked["inconsistent_transfer_direction_groups"],
         "ambiguous_tab_component_attachments_suppressed": linked["tab_component_conflicts"],
         "link_contract": {
@@ -644,6 +662,7 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             "ephemeral_signals_scope": "exact_organization_actor_device_session",
             "missing_scope_is_wildcard": False,
             "multiplexed_clipboard_transfer_is_unmerged": True,
+            "reused_clipboard_token_only_links_disjoint_explicit_episodes": True,
             "explicit_clipboard_direction_conflicts_are_unmerged": True,
             "competing_tab_component_records_are_unmerged": True,
             "labels_titles_urls_and_clipboard_contents_read": False,
