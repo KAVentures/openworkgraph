@@ -172,6 +172,7 @@ def test_selection_and_tenant_bound_journal_and_grant(tmp_path, monkeypatch):
         fake = FakeTransport([record(incident=ids[0])])
         assert main(args(tmp_path, other_grant, output="wrong.csv",
                          tenant=tenant, ids=ids), opener=fake) == 2
+        assert not fake.calls  # existing journal mismatch refused before source read
         assert not (tmp_path / "wrong.csv").exists()
     assert len(rows(tmp_path / "first.csv")) == 1
 
