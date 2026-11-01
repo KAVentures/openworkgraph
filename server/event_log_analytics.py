@@ -234,19 +234,33 @@ def root_cause(log_id: str, outcome: str, case_type: str | None = None, *, thres
                activity: str | None = None, limit: int = 30) -> dict[str, Any]:
     if outcome not in _OUTCOMES:
         raise EventLogWorkspaceError("outcome must be one of " + ", ".join(sorted(_OUTCOMES)))
-    if outcome in {"duration_over"} and not (threshold_seconds and 0 < int(threshold_seconds) <= 10 ** 9):
+    # Direct integrations must follow the typed REST contract without
+    # truncating fractional thresholds or leaking raw int() conversion errors.
+    # Validate supplied thresholds even for non-duration outcomes: an unused
+    # malformed argument must not be silently accepted.
+    if threshold_seconds is not None and (
+        not isinstance(threshold_seconds, int) or isinstance(threshold_seconds, bool)
+        or not 1 <= threshold_seconds <= 10 ** 9
+    ):
+        raise EventLogWorkspaceError("threshold_seconds must be an integer between 1 and 1000000000")
+    if outcome == "duration_over" and threshold_seconds is None:
         raise EventLogWorkspaceError("threshold_seconds is required for a duration outcome")
     if outcome in {"contains_activity", "ends_with"} and not (isinstance(activity, str) and 0 < len(activity) <= 200):
         raise EventLogWorkspaceError("activity is required for this outcome")
-    limit = max(1, min(int(limit), 100))
+    if not isinstance(limit, int) or isinstance(limit, bool):
+        raise EventLogWorkspaceError("limit must be an integer")
+    # Preserve historical direct-call integer clamping; REST remains 1..100.
+    limit = max(1, min(limit, 100))
     outcome_sql = {
         "duration_over": "epoch(max(ts) - min(ts)) > $threshold",
         "contains_activity": "bool_or(activity = $activity)",
         "ends_with": "arg_max(activity, (ts, event_id)) = $activity",
         "rework": "count(*) > count(DISTINCT activity)",
     }[outcome]
-    params = {key: value for key, value in (("threshold", int(threshold_seconds or 0)), ("activity", activity or ""))
-              if "$" + key in outcome_sql}
+    params = {key: value for key, value in (
+        ("threshold", threshold_seconds if threshold_seconds is not None else 0),
+        ("activity", activity or ""),
+    ) if "$" + key in outcome_sql}
 
     def run(conn):
         conn.execute(f"""CREATE OR REPLACE TEMP TABLE co AS
