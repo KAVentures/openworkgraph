@@ -132,8 +132,14 @@ def source_operation_receipt(
     # Older Stripe receipts omit object_type; their exact record kind is
     # already established above by the retained record graph. When a source
     # supplies object_type, it must agree rather than being silently ignored.
+    # Current adapters omit a nested resource_ref: the canonical record
+    # graph already binds the requested exact opaque ref. If an integration
+    # reader supplies one, however, a contradictory or malformed reference
+    # cannot attest a different record under the same provider and kind.
+    # Do not echo that potentially sensitive mismatched value.
     if (source.get("provider") != provider or
-        ("object_type" in source and source["object_type"] != kind)):
+        ("object_type" in source and source["object_type"] != kind) or
+        ("resource_ref" in source and source["resource_ref"] != resource_ref)):
         return _unknown(resource_ref, expected_operation, "provider_receipt_identity_conflict")
     # The reported state is independently verified only when it comes from
     # the already-permitted authenticated source-read path. A missing,
