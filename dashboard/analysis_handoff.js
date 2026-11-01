@@ -445,7 +445,7 @@
       // disclose exact source-reported ISO instants so two microsecond-apart
       // observations cannot appear to have identical verified timestamps.
       const text=d.canonical_rows
-        ? `${d.canonical_rows} recorded events · observed locally ${new Date(d.first_observed_at).toLocaleString()} – ${new Date(d.last_observed_at).toLocaleString()} · reported ISO times ${d.first_observed_at} – ${d.last_observed_at} (offsets preserved)`
+        ? `${d.canonical_rows} recorded events selected (${d.retained_rows} retained rows reported; capture completeness unverified) · observed locally ${new Date(d.first_observed_at).toLocaleString()} – ${new Date(d.last_observed_at).toLocaleString()} · reported ISO times ${d.first_observed_at} – ${d.last_observed_at} (offsets preserved)`
         : d.retained_rows
           ? 'No events recorded in this selection. Other retained evidence exists; inactivity and capture completeness are unverified.'
           : 'No retained events reported. Recording and consent status are unverified; this does not establish inactivity.';
@@ -603,6 +603,7 @@
       <div class="note"><strong>Selected local evidence preview — not sent to an AI</strong>
         <p>${esc(d.canonical_rows)} recorded events · ${esc(d.event_types.focus_span||0)} focus spans · ${esc(d.event_types.capture_gap||0)} unobserved-gap records.</p>
         <p>${esc(selectedPeriod)} Observed: ${esc(d.first_observed_at||'none')} to ${esc(d.last_observed_at||'none')}.</p>
+         <p>Coverage accounting: ${esc(d.canonical_rows)} selected recorded events out of ${esc(d.retained_rows)} retained rows reported. Retained rows do not prove complete capture; unselected retained rows may be outside this period or otherwise excluded, not proof of inactivity or missed work.</p>
         <p>${esc(scopeFreshnessStatement)} This preview is not an immutable export snapshot or proof of complete capture.</p>
         <p>Reported sources (bounded preview; labels are not verified identities): ${esc(sourceSummary(d.sources))}. Highest selected-event counts appear first (literal-label tie break); omitted totals are disclosed. ${esc(workTextStatement)}</p>
         <p>${esc(latestWorkStatement)} Capture health and gaps are shown separately; they do not confirm the recorder is running.</p>
