@@ -793,3 +793,61 @@ and source-data minimization. This is not real Stripe/tenant acceptance,
 customer-outcome adjudication or a held-out A/B/C commercial benefit trial.
 Exact-head cross-platform CI and real consenting account acceptance remain
 required before production claims or merging the draft.
+
+
+## Explicit multi-case reviewed portfolio status (local REST, experimental)
+
+The dashboard-only `POST /v1/open-work/declarations/portfolio-status`
+lets an operator check **1–4 independently selected, currently reviewed
+cases** in one bounded request. Unlike `dependency-status`, selected cases
+need not share a prerequisite chain. Each selected case must carry its exact
+current revision and incarnation token from the authenticated declaration
+list; an invalid selection rejects the **whole** request before any source
+read. All transitive prerequisite approvals are pinned and revalidated,
+but are **not** automatically scanned or source-verified.
+
+Example body (replace refs and tokens with the current local list values):
+
+```json
+{
+  "confirm_source_scan": true,
+  "max_pages": 2,
+  "cases": [
+    {"work_item_ref": "owg:w:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+     "expected_revision": 1,
+     "expected_edit_token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"work_item_ref": "owg:w:cccccccccccccccccccccccccccccccc",
+     "expected_revision": 1,
+     "expected_edit_token": "dddddddddddddddddddddddddddddddd"}
+  ]
+}
+```
+
+The server requires a real local dashboard session, current account-scoped
+source and owner reviews, explicit source-scan confirmation and the existing
+separately authorized restricted Stripe reader. The `max_pages` bound is
+1–3 **per selected case**, at most four sequential source reads. After
+**every** read it rechecks source scope, all selected revisions/incarnations
+and their transitive prerequisite review/version signatures; revocation or
+a stale declaration stops remaining reads. This is not an atomic provider
+snapshot or an atomic cross-process revocation fence.
+
+`openworkgraph.local-reviewed-case-portfolio.v1` returns selected opaque
+case refs, owner-declared goal/expected-outcome codes, prerequisite counts,
+separate source-reported `open` or `unknown` states and timestamps, and
+bounded retained OWG reference/count summaries. Unselected prerequisites
+remain unscanned; the response explicitly marks them as **not implicitly
+verified**. No native IDs, customer data, amounts, raw timeline, account
+scope or edit tokens are returned. No result is persisted, automatically
+refreshed or exposed to an agent. Provider `open` does not prove a
+business obligation; `unknown` does not mean paid or completed. Expected
+outcome, customer completion, business obligation and execution authority
+remain false.
+
+`tests/test_open_work_case_portfolio.py` uses real local FastAPI/SQLite
+review and declaration storage with a fake source reader to cover independent
+cases, exact-CAS preflight before provider IO, source isolation, authorization,
+mid-read review/prerequisite/source revocation, outages, contradictory source
+evidence and private-field minimization. Synthetic acceptance is not live
+Stripe/tenant validation, verified customer outcome or held-out agent uplift.
+The draft remains unmerged pending all exact-head native CI and review gates.
