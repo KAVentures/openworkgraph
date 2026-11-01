@@ -1885,3 +1885,31 @@ def test_unsupported_contact_operation_does_not_create_false_overlap():
     assert "unsupported_user_patch_path" in codes(report)
     assert "overlapping_contact_patch_paths" not in codes(report)
     assert "synthetic-secret" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("operation,overlap,blocked", [
+    ({"op": "replace", "path": "", "value_present": True,
+      "value_attributes": ["emails"]}, True, False),
+    ({"op": "add", "path": "",
+      "value_attributes": ["name", "emails"]}, True, False),
+    ({"op": "replace", "path": "", "value_present": False,
+      "value_attributes": ["emails"]}, False, True),
+    ({"op": "remove", "path": "",
+      "value_attributes": ["emails"]}, False, True),
+    ({"op": "replace", "path": "", "value_present": True,
+      "value_attributes": ["name"]}, False, False),
+])
+def test_pathless_contact_object_overlap_respects_supported_write_shapes(
+        operation, overlap, blocked):
+    users = mapping()["users"]
+    users["patch_attributes"] = ['emails[type eq "work"].value']
+    users["patch_operations"] = [operation]
+    report = assess(mapping(users=users))
+    assert ("overlapping_contact_patch_paths" in codes(report)) is overlap
+    assert report["status"] == ("blocked" if blocked else "requires_live_validation")
+    if overlap:
+        finding = next(f for f in report["findings"]
+                       if f["code"] == "overlapping_contact_patch_paths")
+        assert finding["path"] == "users.patch_operations"
+        assert finding["severity"] == "caution"
+    assert "live_validation_required" in codes(report)
