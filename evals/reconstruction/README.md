@@ -193,7 +193,17 @@ Offset-equivalent instants are accepted; missing or contradictory evidence,
 reused IDs with conflicting source or visible claims, and source-only rows are
 withheld. Exact duplicate source JSON claims remain idempotent; bounded
 canonical JSON comparisons distinguish booleans from integers and refuse
-malformed or oversized duplicate claims. Rich-evidence top-level tab/transfer fields are convenience copies of
+malformed or oversized duplicate claims. The linked-item evaluator also mirrors
+the shipped linker's **first valid-timestamp, normalized event-ID admission**:
+an earlier numeric `17`, boolean `True` or float `1.0` reserves the same
+source duplicate slot as its later literal string ID. That later string is
+withheld rather than scored from a source row the production linker suppressed.
+The nonliteral row never becomes visible membership. Reversed source order
+preserves the literal first-admitted event; malformed timestamps and falsey
+nonliteral IDs do not consume an ID slot. Conflicting literal duplicate claims
+remain conservatively withheld. These are evaluator-only parity and provenance
+checks, not a change to production deduplication or a held-out score claim.
+Rich-evidence top-level tab/transfer fields are convenience copies of
 metadata, not independent source claims. Both locations, when present,
 now require **literal, pattern-valid matching strings**: Python equality
 (`True == 1`) and the current linker's coercion of booleans/numbers into
