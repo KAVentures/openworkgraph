@@ -101,3 +101,44 @@ Synthetic tests cover both DST transitions, midnight/weekday crossing,
 save/reload, malicious zone refusal, and mixed attribute/zone parameter
 ordering. Native cross-platform CI and real consenting source validation
 are separate acceptance gates.
+
+## Event-volume heatmap in an explicit IANA local zone
+
+To inspect **when events were observed** (rather than only when cases
+started/ended), use the event-level `weekday_local` and `hour_local` dimensions.
+The existing authenticated analysis endpoint supports this spec:
+
+```json
+{
+  "level": "events",
+  "dimensions": ["weekday_local", "hour_local"],
+  "time_zone": "Europe/Stockholm",
+  "activity_in": ["Approve"],
+  "measures": [{"fn": "count"}, {"fn": "cases"}, {"fn": "share"}],
+  "order": "dimensions",
+  "limit": 168
+}
+```
+
+This returns up to 168 populated local weekday/hour bins. `count` is observed
+events, `cases` is distinct case IDs within each bin, and `share` is the
+fraction of matching events represented by that bin; one case can contribute
+events to multiple bins. An activity filter is optional and restricts the
+population before grouping. The selected zone and filters survive existing
+saved-analysis save/reload. The original UTC event `weekday` and `hour`
+dimensions retain their prior behavior and require no `time_zone`.
+
+Spring DST jumps can leave local hour bins absent. Autumn DST folds combine
+two distinct UTC hours into one local bin. The conversion is performed only
+for grouping; source timestamps and elapsed durations remain unchanged.
+Absent bins are not proof of zero upstream events or full source coverage.
+No employee-level performance scoring, shift staffing recommendations,
+business-hours calendar or provider-authoritative activity claims are made.
+
+The IANA zone is explicitly required for local dimensions, validated before
+querying, and bound as a SQL value. The analysis continues to use the same
+typed compiler, event/case permissions, bounded result limits, log retention,
+revocation and export behavior. Synthetic regressions exercise DST, event
+counts versus distinct cases, activity filters, attribute/zone SQL parameter
+ordering, UTC compatibility and saved definitions. Native CI and real
+consenting source acceptance remain separate gates.
