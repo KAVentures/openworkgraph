@@ -112,10 +112,19 @@
       if(d.omitted)drillOutput.appendChild(element('p',d.omitted+' additional categories omitted (latest '+MAX_REASONS+' shown by count).'));
     }
     drillSelect.addEventListener('change',showDetail);
+    function clearState() {
+      ++ticket;loaded=null;loadedReports=[];download.disabled=true;run.disabled=false;
+      output.replaceChildren();drillSelect.disabled=true;drillSelect.replaceChildren();
+      drillOutput.replaceChildren();
+    }
+    const picker=document.getElementById('owgEventLogPick');
+    if(picker)picker.addEventListener('change',()=>{
+      if(logId()!==selected){clearState();message.textContent='Select and analyse a log again.';}
+    });
     run.addEventListener('click',async()=>{
       const id=logId();
-      if(!id || id!==selected){message.textContent='Select and analyse a log again.';return;}
-      const n=++ticket;loaded=null;loadedReports=[];download.disabled=true;run.disabled=true;output.replaceChildren();drillSelect.disabled=true;drillSelect.replaceChildren();drillOutput.replaceChildren();
+      if(!id || id!==selected){clearState();message.textContent='Select and analyse a log again.';return;}
+      clearState();const n=ticket;run.disabled=true;
       message.textContent='Reading local batch reports…';
       try{
         // Dashboard bootstrap injects the local session; no AI bearer or external URL.
