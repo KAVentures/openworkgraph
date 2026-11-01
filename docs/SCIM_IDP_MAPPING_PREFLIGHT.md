@@ -422,3 +422,54 @@ Group declarations and actual offline CLI JSON parity. It does **not**
 exercise Entra, Okta, SCIM server mutations, tenant credentials, live
 provider state, revocation or backup/restore. Those require the separately
 authorized disposable-tenant acceptance procedures above.
+
+
+## Optional Group PATCH verb declarations (offline only)
+
+The optional `groups.patch_attributes` list records paths but cannot show
+which HTTP PATCH **verbs** an IdP actually emits. To detect incompatible
+declared verb/path combinations before any live test, a mapping may
+independently include a bounded `groups.patch_operations` list:
+
+```json
+{
+  "groups": {
+    "enabled": true,
+    "match_attributes": ["externalId"],
+    "patch_operations": [
+      {"op": "replace", "path": "displayName"},
+      {"op": "add", "path": "members"},
+      {"op": "remove", "path": "members[value eq \"usr_SYNTHETIC\"]"}
+    ]
+  }
+}
+```
+
+This fragment illustrates the optional `groups` section of a full mapping;
+do not place actual provider IDs, user IDs, email addresses or tokens in the
+declaration. At most 32 operation objects are accepted, each with exactly
+`op` and `path`. Verbs are ASCII case-insensitive and limited to
+`add`, `replace`, `remove`; paths use the existing bounded Group PATCH
+grammar. An unknown verb or path is a **blocker**. The shipped Group handler
+supports `members[value eq "opaque-user-id"]` **only with `remove`**;
+declaring `add` or `replace` on that selector is a blocker. Removing
+`displayName` is also a blocker because the field is required. Whole
+`members` and `externalId` support the documented verbs, subject to
+actual payload, current state, provider isolation and exact ETag checks.
+
+The operation list is **optional and independent** of the legacy path-only
+`groups.patch_attributes` list. An omitted list remains *unknown*; an
+explicitly empty list produces a zero `checked.group_patch_operations`
+count. Declaring it while Groups are disabled is blocked even if empty.
+Existing four report counts and any optional `group_patch` count are
+unchanged. If member-selector and whole-member operations are both declared,
+the existing nonblocking overlap/opaque-ID cautions still apply; no User ID
+or selector literal is echoed in findings. A declaration does not validate
+the actual `value` payload, ordering, Group ETag, user ID resolution,
+permission or live IdP behavior. The Group endpoint does **not** grant OWG
+roles through membership.
+
+Before rollout, an explicitly authorized disposable Entra/Okta tenant must
+show the **actual emitted** operation verbs, paths, values, 428/412 stale
+ETag refusal, provider-scoped User IDs, revocation and offboarding behavior.
+These synthetic offline checks are not live provider/customer acceptance.
