@@ -21,7 +21,7 @@ observed second-minus-first difference is exactly zero, although an
 independent-group confidence interval can have nonzero width. A synthetic
 regression covers this case and a partially overlapping comparison.
 
-This is a **wording correction only**: no statistical formula, sampled case
+The **overlap-warning correction itself is wording only**: no statistical formula, sampled case
 selection, point estimate, CI, JSON key, endpoint, stored event, permission,
 tenant isolation, consent, retention, or export behavior is changed. An
 overlap-aware paired analysis would require separately specified estimands,
@@ -29,3 +29,22 @@ sampling assumptions, and validation. Do not interpret these descriptive
 associations as causal findings, business outcomes, or permission to execute
 an agent action. Synthetic regressions are not real-provider or consenting-
 customer acceptance.
+
+## Direct-call benchmark display limit validation
+
+The optional Python-only `benchmark(..., limit=...)` parameter caps the
+number of reported variants (at most 50) and activity rows (at most twice
+that cap). It is **not** an input exposed by the authenticated REST benchmark
+endpoint. Previously the direct function coerced `int(limit)` before
+clamping, silently truncating fractions, accepting booleans or numeric
+strings, and leaking raw `TypeError`, `ValueError` or `OverflowError` for
+malformed or nonfinite inputs.
+
+Direct calls now require a genuine Python integer, excluding `bool`, and
+raise `EventLogWorkspaceError` for other types **before querying saved
+logs**. Existing integer clamping to 1–50 is unchanged, including values
+outside that range; the REST/MCP/dashboard response contract, sampled
+intervals, point estimates, case selection, authorization and stored data
+are unchanged. Synthetic mocked-query tests cover malformed values and
+the actual query closure's integer clamp, not native DuckDB, HTTP,
+cross-platform, real-provider or consenting-customer acceptance.
