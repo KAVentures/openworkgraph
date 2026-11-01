@@ -1243,3 +1243,33 @@ download. These are not actual Chromium/WCAG, real consenting-user pilot,
 verified source-identity, business-outcome or competitor-parity results.
 
 Coordination: [#326 claim 6554231894](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6554231894).
+
+
+## Missing focus labels are not observed source identities (Worker B, 2026-11-01)
+
+The bounded redacted focus examples are **samples**, not an authenticated
+application inventory or complete record of activity. Previously, a missing
+`app` was rendered as `Unknown app`, and an absent, null, or empty
+`window_title` as `Untitled activity`. Those phrases could themselves be
+literal supplied values, making missing provenance indistinguishable from a
+reported label. An explicitly blank title also looked like a named activity.
+
+The review now separates **`app not supplied`** and
+**`title not supplied`** from **`reported app: …`** and
+**`reported title: …`**. Explicit empty and whitespace-only supplied titles
+receive distinct visible placeholders. These are presentation-only provenance
+markers; they do not verify the app/title or change the canonical event,
+sample, redaction, source identities, export payload, or copyable AI request.
+Untrusted supplied labels remain bounded and HTML/control-character escaped.
+The observation time still displays the exact supplied offset-aware instant,
+or explicitly says when the time was not supplied.
+
+Deterministic synthetic mock-DOM regression cases distinguish absent/null
+metadata from literal `Unknown app` / `Untitled activity`, explicit empty
+and whitespace-only titles, and a literal `title not supplied` value.
+Existing escaping and request-only Copy tests remain, and no export ticket,
+download, upload, model call or business write is initiated by copying.
+These tests are **not** real-browser/WCAG acceptance, a consenting-user pilot,
+provider-identity verification, a business-outcome proof or competitor parity.
+
+Coordination: [#326 claim 6554762405](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6554762405).
