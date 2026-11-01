@@ -1022,3 +1022,45 @@ def test_group_patch_selector_is_removal_only_not_a_general_member_update():
     assert report["status"] == "requires_live_validation"
     assert {"group_member_selector_remove_only", "group_member_patch_ids_unverified"} <= codes(report)
     assert "u1" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("client", ["entra", "okta", "other"])
+@pytest.mark.parametrize("paths", [
+    ['members[value eq "usr_A"]', 'members[value eq "usr_a"]'],
+    ['members[value eq "usr_123"]', 'MEMBERS[VALUE EQ "USR_123"]'],
+])
+def test_group_patch_member_selectors_keep_opaque_user_ids_case_sensitive(client, paths):
+    # Shipped Group PATCH uses exact string membership, not casefolded identity.
+    # Static path support does not claim either synthetic ID exists in OWG.
+    groups = {"enabled": True, "match_attributes": ["externalId"],
+              "patch_attributes": paths}
+    report = assess(mapping(client=client, groups=groups))
+    assert report["status"] == "requires_live_validation"
+    assert "unsupported_attribute" not in codes(report)
+    assert "group_member_selector_remove_only" in codes(report)
+    assert "group_member_patch_ids_unverified" in codes(report)
+    assert not any(value in json.dumps(report) for value in ("usr_A", "usr_a", "USR_123"))
+
+
+@pytest.mark.parametrize("paths", [
+    ['members[value eq "usr_123"]', 'MEMBERS[VALUE EQ "usr_123"]'],
+    ['members[value eq "usr_123"]', r'members[value eq "u\\u0073r_123"]'],
+    [r'members[value eq "u\\u0073r_123"]', 'members[value eq "usr_123"]'],
+    ["members", "MEMBERS"],
+])
+def test_group_patch_effective_duplicate_is_refused_without_echo(paths):
+    groups = {"enabled": True, "match_attributes": ["externalId"],
+              "patch_attributes": paths}
+    with pytest.raises(InvalidMapping, match="duplicate effective paths") as error:
+        assess(mapping(groups=groups))
+    assert "usr_123" not in str(error.value)
+    assert "members[value" not in str(error.value)
+
+
+def test_group_patch_unsupported_paths_still_block_after_effective_dedupe():
+    groups = {"enabled": True, "match_attributes": ["externalId"],
+              "patch_attributes": ['members[value ne "usr_123"]']}
+    report = assess(mapping(groups=groups))
+    assert report["status"] == "blocked"
+    assert "unsupported_attribute" in codes(report)
+    assert "usr_123" not in json.dumps(report)
