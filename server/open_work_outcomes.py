@@ -146,6 +146,18 @@ def source_operation_receipt(
     # malformed or different method is not proof of that provenance.
     if source.get("verification_method") != _VERIFICATION_METHODS[provider]:
         return _unknown(resource_ref, expected_operation, "source_verification_provenance_conflict")
+    # Existing provider adapters explicitly bound what their operation state
+    # does NOT prove: GitHub/Jira do not attest business success, and Stripe
+    # processor success is not customer-bank settlement. A cache or injected
+    # reader may omit these optional legacy flags, but if it supplies one
+    # that contradicts the provider's scope, it cannot attest this operation.
+    # Use literal True, not truthiness (1/"true" are not provenance).
+    scope_flag = (
+        "not_a_claim_of_customer_bank_settlement" if provider == "stripe"
+        else "not_a_claim_of_business_success"
+    )
+    if scope_flag in source and source[scope_flag] is not True:
+        return _unknown(resource_ref, expected_operation, "provider_receipt_scope_conflict")
     stamp = source.get("verified_at")
     try:
         when = _parse_source_timestamp(stamp)
