@@ -112,3 +112,23 @@ def test_existing_read_only_workflow_evidence_exposes_focus_without_new_endpoint
     assert groups(linked)[("e01", "e02", "e03")]["association_status"] == "linked"
     assert linked["read_only"] and not linked["authoritative"]
     assert not linked["link_contract"]["linked_items_are_tasks"]
+
+
+def test_bounded_focus_refuses_nine_unreferenced_steps():
+    # The cap is a completeness/ambiguity guard, not a time threshold.
+    trace = [event(1, A)] + [event(i) for i in range(2, 11)] + [
+        event(11, A), event(12, B),
+    ]
+    result = linked_work_items(trace)
+    assert result["observed_bracketed_tab_focus_links"] == 0
+    assert ("e01", "e11") in groups(result)
+    assert result["unlinked_observation_count"] == 10
+
+
+def test_conflicting_tab_claim_vetoes_focus_without_erasing_same_record():
+    trace = [event(1, A), event(2), event(3, A), event(4, B)]
+    trace[1]["tab_context_id"] = "contradictory-tab"
+    result = linked_work_items(trace)
+    assert result["observed_bracketed_tab_focus_links"] == 0
+    assert ("e01", "e03") in groups(result)
+    assert result["unlinked_observation_count"] == 2
