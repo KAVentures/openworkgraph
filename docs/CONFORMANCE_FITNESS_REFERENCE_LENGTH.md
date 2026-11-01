@@ -65,3 +65,29 @@ packaging, must pass on the exact PR head before merging.
 The same analytics module exposes `kpis(..., sla_seconds=...)` to direct Python callers. Its authenticated REST endpoint already parses `sla_seconds` as an integer from 1 through 1,000,000,000. Direct calls now enforce that same inclusive bound and require a genuine Python integer (not a boolean), rejecting fractional values, numeric strings, nonfinite values and malformed types with `EventLogWorkspaceError` **before querying a saved log**. Omitting the SLA (`None`) remains valid. Existing valid integer thresholds, KPI results, REST/MCP/dashboard response shapes, consent and tenant controls are unchanged.
 
 Parameterized synthetic tests cover invalid inputs and both inclusive bounds without a database. They are not native CI, real-provider acceptance, or consenting-customer validation.
+
+
+## Related R6 root-cause parameter validation
+
+The authenticated root-cause REST route already accepts integer
+`threshold_seconds` values from 1 through 1,000,000,000 and integer
+`limit` values from 1 through 100. Previously, direct Python
+`root_cause()` callers could pass a fractional threshold or display limit
+that `int()` silently truncated, or a malformed/nonfinite value that raised
+a raw Python conversion exception. A malformed threshold could also raise
+an exception for a non-duration outcome even though that threshold is unused.
+
+Direct callers now receive `EventLogWorkspaceError` **before querying saved
+logs** for supplied noninteger, boolean, nonfinite or out-of-range thresholds,
+and for noninteger/boolean limits. The duration outcome still requires an
+explicit threshold; integer limits retain their historical direct-call
+1–100 clamp (REST continues to validate 1–100). A valid supplied threshold
+for a non-duration outcome remains accepted but does not affect that outcome.
+No statistical computation, feature attribution, confidence interval,
+response field, HTTP parameter, REST/MCP/dashboard integration, permission,
+retention or consent behavior changes.
+
+Synthetic parameterized regressions cover early rejection, unused malformed
+thresholds, inclusive integer threshold boundaries and existing integer limit
+clamping. These checks are **not** native cross-platform CI or evidence of
+real-provider/customer acceptance, causal relationships or authorized actions.
