@@ -296,11 +296,16 @@ def record_graph(
     } for row in matched[:_MAX_TIMELINE]]
     source = _source_unknown("source_refresh_not_requested")
     if include_source_status:
+        # _raw_events is an internal structural-projection/test input, not an
+        # authorized exact-record DB read. A caller-supplied row must never
+        # trigger a live provider refresh before downstream scope checks.
+        if _raw_events is not None:
+            source = _source_unknown("unscoped_raw_events_cannot_authorize_source_refresh")
         # A caller verifying a specific operation must not refresh a *different*
         # provider merely to discover the mismatch after the source read.
         # This is an additive restriction; exact host/tenant opt-in checks in
         # each existing adapter still apply before any authorized read.
-        if (required_source_provider_kind is not None and
+        elif (required_source_provider_kind is not None and
                 (identity is None or identity[:2] != required_source_provider_kind)):
             source = _source_unknown("selected_source_type_not_observed")
         elif required_source_type is not None and identity != required_source_type:
@@ -339,7 +344,7 @@ def record_graph(
         "record_identity_complete_within_retained_window": not truncated and not conflicts,
         "source_window": {"since": since, "until": until},
         "observed_same_record_not_verified_handoff": True,
-        "source_log_join_supported": bool(identity and not truncated and not conflicts and (identity == ("github", "pull_request", "github.com") or
+        "source_log_join_supported": bool(_raw_events is None and identity and not truncated and not conflicts and (identity == ("github", "pull_request", "github.com") or
             (identity[0] == "jira" and identity[1] == "issue" and identity[2].endswith(".atlassian.net")) or
             (identity[0] == "stripe" and identity[1] in {"invoice", "refund"} and identity[2] == "dashboard.stripe.com"))),
         "verified_customer_outcome": False,
