@@ -209,6 +209,26 @@ def source_operation_receipt(
     if ("verified_business_outcome" in source and
         source["verified_business_outcome"] is not expected_legacy_outcome):
         return _unknown(resource_ref, expected_operation, "provider_receipt_scope_conflict")
+    # An authenticated source state can verify a provider operation, but it
+    # cannot silently acquire business, customer, agent-causality or execution
+    # authority. Older receipts omit these optional fields. If an injected
+    # cache/reader supplies them at either level, an explicit non-False value
+    # contradicts the narrower provider-only contract and must fail closed.
+    # Keep the legacy verified_business_outcome adapter field separate: for
+    # Stripe it historically denotes processor success, not customer outcome.
+    non_authority_flags = (
+        "business_objective_verified",
+        "customer_outcome_verified",
+        "agent_caused_operation_verified",
+        "agent_execution_authorized",
+    )
+    nested_detail = source.get("verified_operational_outcome")
+    for assertions in (source, nested_detail):
+        if isinstance(assertions, dict) and any(
+            flag in assertions and assertions[flag] is not False
+            for flag in non_authority_flags
+        ):
+            return _unknown(resource_ref, expected_operation, "provider_receipt_scope_conflict")
     stamp = source.get("verified_at")
     try:
         when = _parse_source_timestamp(stamp)
