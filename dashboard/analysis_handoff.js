@@ -58,7 +58,7 @@
     const parts = exactInstantParts(value);
     if (!parts) return null;
     const utcSecond = new Date(parts[0]).toISOString();
-    return utcSecond.slice(0, -4) + '.' + parts[1].padEnd(3, '0') + 'Z';
+    return utcSecond.slice(0, -5) + '.' + parts[1].padEnd(3, '0') + 'Z';
   }
   function selection() {
     if (period === 'current' || period === 'all') return {scope: period};
