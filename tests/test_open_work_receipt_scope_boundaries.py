@@ -4,7 +4,7 @@ These are synthetic, read-only contract tests, not provider/tenant validation.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -117,6 +117,74 @@ def test_provider_scope_disclaimer_absent_or_explicit_true_stays_provider_only(
     assert receipt["verification_scope"] == (
         "authenticated_source_provider_operational_state"
     )
+    assert receipt["business_objective_verified"] is False
+    assert receipt["customer_outcome_verified"] is False
+    assert receipt["agent_caused_operation_verified"] is False
+    assert receipt["agent_execution_authorized"] is False
+    assert receipt["read_only"] is True
+    assert "PRIVATE_NEVER_RETURN" not in str(receipt)
+
+
+@pytest.mark.parametrize("operation,provider,kind,state,scope_flag", OPERATIONS)
+@pytest.mark.parametrize(
+    "invalid_age",
+    [True, False, 1.5, 3600.5, None, "900", [], {}, float("nan"),
+     float("inf"), 0, -1, 3601],
+    ids=["true", "false", "fraction", "fraction-over-max", "none",
+         "string", "list", "dict", "nan", "infinity", "zero",
+         "negative", "above-max"],
+)
+def test_invalid_source_age_policy_rejected_before_provider_read(
+    operation, provider, kind, state, scope_flag, invalid_age,
+):
+    # Invalid age policies must not cause a source refresh, even if an
+    # injected reader would otherwise return a matching provider receipt.
+    calls = []
+
+    def unexpected_read(*args, **kwargs):
+        calls.append((args, kwargs))
+        return _graph(operation, provider, kind, state)
+
+    with pytest.raises(ValueError, match="invalid maximum source age"):
+        source_operation_receipt(
+            REF, operation, max_age_seconds=invalid_age,
+            record_reader=unexpected_read, now=WHEN,
+        )
+    assert calls == []
+
+
+@pytest.mark.parametrize("operation,provider,kind,state,scope_flag", OPERATIONS)
+@pytest.mark.parametrize(
+    "limit,age,verified",
+    [(1, 1, True), (1, 2, False),
+     (900, 900, True), (900, 901, False),
+     (3600, 3600, True), (3600, 3601, False)],
+)
+def test_exact_integer_age_boundary_preserves_provider_only_result(
+    operation, provider, kind, state, scope_flag, limit, age, verified,
+):
+    graph = _graph(operation, provider, kind, state)
+    source = graph["source_evidence"]
+    stamp = (WHEN - timedelta(seconds=age)).isoformat()
+    source["verified_at"] = stamp
+    if provider == "jira":
+        # Keep independent Jira resolution evidence consistent with the
+        # authenticated source read; age alone is under test here.
+        source["verified_operational_outcome"]["source_timestamp"] = stamp
+    calls = []
+
+    def read(ref, **kwargs):
+        calls.append((ref, kwargs))
+        return graph
+
+    receipt = source_operation_receipt(
+        REF, operation, max_age_seconds=limit, record_reader=read, now=WHEN,
+    )
+    assert len(calls) == 1
+    assert receipt["operation_verified"] is verified
+    assert receipt["availability"] == ("source_reported" if verified else "unknown")
+    if not verified:
+        assert receipt["reason"] == "source_receipt_stale_or_clock_conflict"
     assert receipt["business_objective_verified"] is False
     assert receipt["customer_outcome_verified"] is False
     assert receipt["agent_caused_operation_verified"] is False
