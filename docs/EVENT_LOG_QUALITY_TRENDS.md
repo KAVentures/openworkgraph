@@ -7,14 +7,36 @@ batch has more rejected rows, skipped duplicates, missing resources or tied
 timestamps than the previous batch, without exposing source values or storing
 another copy of the events.
 
+## Use the local dashboard
+
+Open the **Event logs** workspace, select a retained log, click **Analyse**,
+then expand **Data quality** and click **Compare batches**. The independent
+dashboard panel reads the same session-authenticated local quality endpoint
+only after you click. It shows a row for each of five quality metrics in each
+batch: numerator, denominator, percentage, and percentage-point change (or
+**Not comparable**), with explicit comparison status. Future-dated percentages
+are shown per batch but never compared across different report timestamps.
+
+At most the **latest 100 stored reports** are rendered in the table to bound
+browser work; the panel states the full report count and missing-report count.
+**Download shown batches CSV** exports only those displayed counts, rates and
+comparison statuses, not source events, employee names, row samples, mappings
+or raw provider fields. CSV cells are escaped against spreadsheet formulas.
+The report remains local and read-only, with no new grant or business action.
+Switching logs or replacing the analysis invalidates any in-flight response;
+no stale report is rendered for another selection.
+
+The dashboard JavaScript is served as a static local asset. The existing
+quality endpoint continues to require an OWG dashboard session. The table is
+a descriptive review aid, not a claim that different source batches are
+statistically exchangeable or that upstream data are complete.
+
 The existing `reports`, `current`, `log` and
 `batches_without_report` fields are unchanged. No new authentication scope,
 remote publication, background job or business action is added. AI bearer
-tokens and MCP cannot read these local business logs. Existing dashboards that
-do not yet display trends continue to work; the data is available through the
-authenticated REST response. A future dashboard visualization must be
-coordinated separately because multiple active feature PRs own the shared
-workspace JavaScript.
+tokens and MCP cannot read these local business logs. The dashboard now displays trends through an isolated script without changing
+the existing workspace JavaScript. The same data remains available through
+the authenticated REST response.
 
 ## Read a trend
 
