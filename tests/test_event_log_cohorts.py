@@ -220,8 +220,8 @@ def test_identical_cohorts_disclose_independent_interval_limit_without_direction
     assert differences["sla_breach_rate"]["difference"] == 0
     assert differences["median_throughput_seconds"]["difference"] == 0
     assert differences["rework_rate"]["ci95"][0] < 0 < differences["rework_rate"]["ci95"][1]
-    # Descriptive only: no paired-cohort inference or verified causal effect.
-    assert identical["causal_claims"] is False
+    # Descriptive only: do not invent a causal-claims field in the existing API.
+    assert "causal_claims" not in identical
 
 
 def test_median_difference_bootstrap_is_deterministic_and_brackets_the_estimate():
