@@ -178,6 +178,49 @@ def test_lane_projection_refuses_coerced_nonstring_event_id_but_preserves_valid_
     assert "17" not in str(result)  # numeric IDs never become scored strings
 
 
+def test_lane_projection_nonliteral_first_duplicate_consumes_source_admission_slot():
+    # record_case_lanes coerces IDs before de-duplicating them, while the
+    # evaluator must never coerce a nonliteral ID into scored evidence.
+    # A numeric/bool source row can therefore suppress a later string ID.
+    ref = "owg:r:" + "a" * 32
+    for nonliteral, literal in ((17, "17"), (True, "True"), (1.5, "1.5")):
+        first = _lane_projection_event(nonliteral, ref, "2026-10-20T10:00:00Z")
+        literal_row = _lane_projection_event(literal, ref, "2026-10-20T10:01:00Z")
+        other = _lane_projection_event("other", ref, "2026-10-20T10:02:00Z")
+        last = _lane_projection_event("last", ref, "2026-10-20T10:03:00Z")
+        presented = [literal_row, other, last]
+        # The source engine admits the nonliteral first, suppressing the
+        # later literal duplicate; it must not be resurrected by projection.
+        result = predict_record_lanes(_lane_projection_case(
+            [first, literal_row, other, last], presented
+        ))
+        assert [w["event_ids"] for w in result["workflows"]] == [
+            ["other", "last"]
+        ], nonliteral
+        assert result["unassigned_event_ids"] == [literal], nonliteral
+
+        # Conversely, a literal first occurrence remains scoreable, even
+        # when a later nonliteral source row has an earlier timestamp.
+        result = predict_record_lanes(_lane_projection_case(
+            [literal_row, first, other, last], presented
+        ))
+        assert [w["event_ids"] for w in result["workflows"]] == [
+            [literal, "other", "last"]
+        ], nonliteral
+        assert result["unassigned_event_ids"] == [], nonliteral
+
+    # Falsey numeric zero is normalized by production to an empty ID, so
+    # it cannot consume the valid literal string "0" duplicate slot.
+    zero = _lane_projection_event(0, ref, "2026-10-20T10:00:00Z")
+    literal_zero = _lane_projection_event("0", ref, "2026-10-20T10:01:00Z")
+    other = _lane_projection_event("other", ref, "2026-10-20T10:02:00Z")
+    result = predict_record_lanes(_lane_projection_case(
+        [zero, literal_zero, other], [literal_zero, other]
+    ))
+    assert [w["event_ids"] for w in result["workflows"]] == [["0", "other"]]
+    assert result["unassigned_event_ids"] == []
+
+
 def test_lane_projection_preserves_offset_order_and_shipped_identity_conflict_veto():
     ref = "owg:r:" + "a" * 32
     first = _lane_projection_event("first", ref, "2026-10-20T11:00:00+01:00")
