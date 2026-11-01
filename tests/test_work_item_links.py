@@ -319,15 +319,22 @@ def test_literal_metadata_and_explicit_top_level_identifiers_still_work():
         assert set(_items(result)) == {("e01", "e02")}, field
         assert _items(result)[("e01", "e02")]["link_basis"] == {expected_basis: 1}
 
-        # Explicit valid string wins over malformed metadata, rather than
-        # rejecting a genuine top-level identifier.
+        # Matching literal claims in both locations remain a valid signal.
+        first[field] = "literal-opaque"
+        second[field] = "literal-opaque"
+        result = linked_work_items([first, second])
+        assert set(_items(result)) == {("e01", "e02")}, field
+        assert _items(result)[("e01", "e02")]["link_basis"] == {expected_basis: 1}
+
+        # An explicit top-level string with contradictory malformed metadata
+        # is not trustworthy: both token claims are withheld, not coerced.
         first[field] = "top-level-opaque"
         second[field] = "top-level-opaque"
         first["metadata"][field] = 7
         second["metadata"][field] = True
         result = linked_work_items([first, second])
-        assert set(_items(result)) == {("e01", "e02")}, field
-        assert _items(result)[("e01", "e02")]["link_basis"] == {expected_basis: 1}
+        assert result["items"] == [], field
+        assert result["candidate_links"] == [], field
 
 
 
@@ -1035,8 +1042,14 @@ def test_duplicate_id_veto_is_exact_to_each_occurrence_scope_and_token():
     ]
     for collisions in ((first, duplicate), (duplicate, first)):
         result = linked_work_items([*collisions, *events])
-        assert set(_items(result)) == {("e06", "e07"), ("e08", "e09")}
-        assert result["unlinked_observation_count"] == 4
+        # The conflicting duplicate vetoes only its scoped reused-tab
+        # token. Independent same-record A evidence (e02/e08) and the
+        # uncontested other-tab loose event (e09) still legitimately link.
+        assert set(_items(result)) == {("e06", "e07"), ("e02", "e08", "e09")}
+        assert _items(result)[("e02", "e08", "e09")]["link_basis"] == {
+            "same_record": 1, "same_tab_single_record": 1,
+        }
+        assert result["unlinked_observation_count"] == 3
         assert result["candidate_links"] == []
 
 
