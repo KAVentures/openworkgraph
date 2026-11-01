@@ -632,3 +632,27 @@ separately approved standalone unversioned-PATCH policy), stale-version
 refusal, provider isolation, offboarding/revocation and rollback/restore.
 These offline synthetic declarations are **not** live client conformance,
 real-tenant validation or company rollout acceptance.
+
+## Selector-key mutation and PATCH ordering (offline caution only)
+
+The shipped contact PATCH handler re-evaluates each selector against the **current**
+array after earlier operations. Changing `emails.type` or `emails.value` can
+therefore change which contacts a later `emails[type eq "..."]` or
+`emails[value eq "..."]` operation selects. A selector can also invalidate
+itself: `emails[type eq "work"].type` followed by
+`emails[type eq "work"].display` may fail with no target, even though the
+reverse order succeeds. Similarly, changing `work` to `home` can cause a
+later `home` selector to target the previously `work` contact.
+
+The preflight emits the existing **nonblocking**
+`overlapping_contact_patch_paths` caution for selector-key writes combined
+with other selected writes, across legacy paths and optional User PATCH
+operation declarations. It also covers global key-field writes paired with
+selectors of that key. Distinct literal selectors of one kind remain
+nonoverlapping when neither writes that selector's key; distinct non-key
+children of the same selector likewise remain separate. A declaration
+does **not** prove the IdP sends these paths together, their order, the
+values written, or the resulting server state. Cautions contain no selector
+literal, email or customer data. Validate actual emitted request sequences
+and current-state behavior only in an explicitly authorized disposable
+provider/tenant; this tool performs no provisioning or network calls.
