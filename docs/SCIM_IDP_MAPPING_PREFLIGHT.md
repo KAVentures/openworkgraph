@@ -355,7 +355,7 @@ neither is evidence that the User exists or belongs to the current provider.
 
 The static mapping now refuses duplicate **effective** Group PATCH paths.
 For example, `members[value eq "usr_123"]` and
-`MEMBERS[VALUE EQ "u\\u0073r_123"]` decode to the same target even
+`MEMBERS[VALUE EQ "u\u0073r_123"]` decode to the same target even
 though their source spelling differs. Plain paths such as `members` and
 `MEMBERS` also remain duplicates. Selector structure is ASCII
 case-insensitive; the decoded opaque member value is not folded. Duplicate
