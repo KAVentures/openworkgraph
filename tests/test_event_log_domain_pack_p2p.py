@@ -31,7 +31,7 @@ def _rules(report):
 
 def test_the_catalog_offers_both_packs():
     listed = {p["pack_id"]: p for p in packs.catalog()["packs"]}
-    assert list(listed) == ["order_to_cash", PACK]
+    assert list(listed) == ["order_to_cash", PACK, "service_management"]
     assert listed[PACK]["definitions"] == {"metrics": 4, "compliance_rules": 7, "object_rules": 3,
                                           "reference_model_types": 5}
 

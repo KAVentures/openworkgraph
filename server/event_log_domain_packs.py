@@ -223,8 +223,80 @@ PROCURE_TO_PAY_1_0_0: dict[str, Any] = {
     ],
 }
 
+SERVICE_MANAGEMENT_1_0_0: dict[str, Any] = {
+    "format": FORMAT, "pack_id": "service_management", "version": "1.0.0", "title": "IT service management",
+    "description": ("Incidents from logging to resolution: time to assign and to resolve against response and "
+                    "resolution targets, reassignments between groups, reopened incidents, and resolution before "
+                    "closure. Works on a single-case CSV export as well as on an object-centric log."),
+    "object_types": [
+        {"role": "incident", "label": "Incident", "required": True},
+        {"role": "problem", "label": "Problem", "required": False},
+    ],
+    "activities": [
+        {"role": "log_incident", "label": "Log incident", "required": True},
+        {"role": "assign", "label": "Assign", "required": True},
+        {"role": "start_work", "label": "Start work", "required": False},
+        {"role": "reassign", "label": "Reassign", "required": False},
+        {"role": "resolve", "label": "Resolve", "required": True},
+        {"role": "reopen", "label": "Reopen", "required": False},
+        {"role": "close", "label": "Close", "required": False},
+    ],
+    "parameters": [
+        {"name": "response_hours", "label": "Assign within (hours of logging)", "unit": "hours",
+         "default": 4, "min": 0.25, "max": 720},
+        {"name": "resolution_hours", "label": "Resolve within (hours of logging)", "unit": "hours",
+         "default": 72, "min": 1, "max": 8760},
+    ],
+    "metrics": [
+        {"case_type": "@incident", "metric": {"name": "itsm_time_to_assign", "kind": "time_between",
+                                              "from_activity": "@log_incident", "to_activity": "@assign"}},
+        {"case_type": "@incident", "metric": {"name": "itsm_time_to_resolve", "kind": "time_between",
+                                              "from_activity": "@log_incident", "to_activity": "@resolve",
+                                              "to_occurrence": "last"}},
+        {"case_type": "@incident", "metric": {"name": "itsm_reassignments", "kind": "activity_count",
+                                              "activity": "@reassign"}},
+        {"case_type": "@incident", "metric": {"name": "itsm_reopens", "kind": "activity_count", "activity": "@reopen"}},
+    ],
+    "compliance": [
+        {"case_type": "@incident", "rule": {"template": "response_within", "a": "@log_incident", "b": "@assign",
+                                            "seconds": "$response_hours"}},
+        {"case_type": "@incident", "rule": {"template": "response_within", "a": "@log_incident", "b": "@resolve",
+                                            "seconds": "$resolution_hours"}},
+        {"case_type": "@incident", "rule": {"template": "precedence", "a": "@assign", "b": "@resolve"}},
+        {"case_type": "@incident", "rule": {"template": "existence", "a": "@reassign", "max": 2}},
+        {"case_type": "@incident", "rule": {"template": "existence", "a": "@reopen", "max": 0}},
+        {"case_type": "@incident", "rule": {"template": "precedence", "a": "@resolve", "b": "@close"}},
+    ],
+    "object_rules": [
+        {"template": "event_cardinality", "activity": "@resolve", "object_type": "@incident", "min": 1, "max": 1},
+        {"template": "object_cardinality", "object_type": "@problem", "related_type": "@incident", "min": 1},
+    ],
+    "reference_model": {
+        "types": [
+            {"object_type": "@incident", "steps": ["@log_incident", "@assign", {"optional": "@start_work"},
+                                                   "@resolve", {"optional": "@close"}]},
+        ],
+        "arcs": [
+            {"activity": "@log_incident", "object_type": "@incident", "variable": False},
+            {"activity": "@assign", "object_type": "@incident", "variable": False},
+            {"activity": "@start_work", "object_type": "@incident", "variable": False},
+            {"activity": "@resolve", "object_type": "@incident", "variable": False},
+            {"activity": "@close", "object_type": "@incident", "variable": False},
+        ],
+    },
+    "assumptions": [
+        "The reference lifecycle is the happy path: reassignments and reopenings show as deviations from it, by "
+        "design, and are also counted by their own rules.",
+        "More than two reassignments of one incident counts as ping-pong between groups.",
+        "Response and resolution are measured from the first logging to the first assignment and to each "
+        "resolution; time with the requester, on hold or outside support hours is not excluded.",
+        "Response and resolution targets are parameters with stated defaults, not your service levels until set.",
+    ],
+}
+
 PACKS: dict[str, dict[str, dict[str, Any]]] = {"order_to_cash": {"1.0.0": ORDER_TO_CASH_1_0_0},
-                                              "procure_to_pay": {"1.0.0": PROCURE_TO_PAY_1_0_0}}
+                                              "procure_to_pay": {"1.0.0": PROCURE_TO_PAY_1_0_0},
+                                              "service_management": {"1.0.0": SERVICE_MANAGEMENT_1_0_0}}
 
 
 class _Strict(BaseModel):
@@ -277,8 +349,13 @@ class _Unmapped(Exception):
         self.role = role
 
 
+UNIT_SECONDS = {"days": 86400, "hours": 3600}
+
+
 def _resolve(value: Any, names: dict[str, str], params: dict[str, float], key: str | None = None) -> Any:
-    """Replace ``@role`` with the mapped name and ``$parameter`` (days) with seconds; unmapped roles raise."""
+    """Replace ``@role`` with the mapped name and ``$parameter`` with seconds; unmapped roles raise.
+
+    ``params`` holds (value, seconds per unit) pairs; a parameter's unit is days unless the pack says hours."""
     if isinstance(value, dict):
         return {k: _resolve(v, names, params, k) for k, v in value.items()}
     if isinstance(value, list):
@@ -288,7 +365,8 @@ def _resolve(value: Any, names: dict[str, str], params: dict[str, float], key: s
             raise _Unmapped(value[1:])
         return names[value[1:]]
     if isinstance(value, str) and value.startswith("$") and key == "seconds":
-        return int(round(params[value[1:]] * 86400))
+        amount, unit = params[value[1:]]
+        return int(round(amount * unit))
     return value
 
 
@@ -331,6 +409,8 @@ def resolve(pack: dict[str, Any], mapping: dict[str, dict[str, str]], params: di
     """Every definition of the pack with the log's names, and the ones an unmapped optional role leaves out."""
     names = {**mapping["object_types"], **mapping["activities"]}
     labels = {a["role"]: a["label"] for a in pack["activities"]}
+    units = {p["name"]: UNIT_SECONDS[p.get("unit", "days")] for p in pack["parameters"]}
+    params = {name: (value, units[name]) for name, value in params.items()}
     out: dict[str, Any] = {"metrics": [], "compliance": [], "object_rules": [], "not_applicable": []}
     for section in ("metrics", "compliance", "object_rules"):
         for n, item in enumerate(pack[section]):

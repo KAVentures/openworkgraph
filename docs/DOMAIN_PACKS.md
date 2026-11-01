@@ -1,8 +1,8 @@
 # Domain packs
 
 A domain pack bundles the definitions a process team would otherwise rebuild for every log of a well-known
-process. Two packs ship, each at version 1.0.0: **order to cash** (`order_to_cash`) and **procure to pay**
-(`procure_to_pay`). Packs are local definitions: they add no source access, uploads or model calls. Both can be
+process. Three packs ship, each at version 1.0.0: **order to cash** (`order_to_cash`), **procure to pay**
+(`procure_to_pay`) and **IT service management** (`service_management`). Packs are local definitions: they add no source access, uploads or model calls. Both can be
 installed on the same log; each owns its own metrics.
 
 ## What a pack contains
@@ -67,6 +67,36 @@ installed on the same log; each owns its own metrics.
     - three late deliveries;
     - one invoice never paid and one paid twice;
     - one invoice without any order.
+
+## IT service management
+
+- **Single-case CSV:** this pack works on a single-case CSV export of incidents: map the incident role to the
+  log's `case` object type. Problems are optional, for object-centric logs.
+- **Roles:** incident (required), problem; log incident, assign, start work, reassign, resolve, reopen, close.
+- **Case metrics:**
+  - time to assign;
+  - time to the last resolution;
+  - reassignments per incident;
+  - reopenings per incident.
+- **Compliance rules:**
+  - assigned within *response hours* (default 4);
+  - resolved within *resolution hours* (default 72);
+  - resolved only after assignment;
+  - at most two reassignments (more counts as ping-pong between groups);
+  - never reopened;
+  - closed only after resolution.
+- **Parameters:** these are in hours. Parameters declare their unit, days unless stated, so the other packs'
+  definitions are unchanged.
+- **Object rules:** one incident per resolution, and every problem has incidents (when problems are mapped).
+- **Reference model:** the happy path (log, assign, optionally start work, resolve, optionally close).
+  Reassignments and reopenings deviate from it by design, and are counted by their own rules.
+- **Limits:** times are elapsed. Time on hold, with the requester or outside support hours is not excluded.
+- **Fixture:** `tests/service_management_fixture.py` is a 60-incident CSV. The report finds every planted
+  deviation and fits the happy path to the 40 incidents without one:
+  - six late assignments and three late resolutions;
+  - four ping-pong incidents;
+  - seven reopened incidents;
+  - one resolved before assignment and one closed before resolution.
 
 ## API
 
