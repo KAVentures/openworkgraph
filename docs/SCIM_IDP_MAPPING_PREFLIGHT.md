@@ -242,16 +242,23 @@ identities. No real IdP calls, identities or permissions are changed here.
 
 ## Deactivation lifecycle mapping review (offline only)
 
-A declared User PATCH mapping without the `active` attribute now produces the
-nonblocking `deactivation_patch_not_declared` caution. This includes mappings
-that otherwise pass the supported attribute and ETag checks, and applies to
-declared Entra, Okta or other clients. It identifies a **missing declaration**:
-the preflight cannot demonstrate that a deactivation request will be sent via
-the declared PATCH attributes. It does **not** prove that an IdP cannot
-deactivate through a separately supported and tested PUT or other lifecycle
-operation. Conversely, declaring `active` removes this particular caution
-but does **not** prove the IdP sends the request, that the current service
-credential has the correct scope, or that OWG offboarding/revocation succeeds.
+A declared User PATCH mapping without a supported `active` update
+produces the nonblocking `deactivation_patch_not_declared` caution. The
+preflight checks **both** the legacy `users.patch_attributes` list and
+optional `users.patch_operations`: a declared `add`/`replace` on
+`active`, or a pathless `add`/`replace` with
+`value_attributes: ["active"]`, satisfies this *declaration-only* check.
+This covers an Okta-style pathless active update without requiring a
+redundant legacy mapping. A pathless operation with undeclared object fields,
+an unsupported `remove active`, or an explicitly absent required `value`
+does **not** satisfy the check. Unknown `value_present` still triggers its
+separate caution, even when `active` is declared.
+
+This is only a missing-declaration warning for Entra, Okta and other clients;
+it does **not** establish that an IdP actually emits a supported deactivation
+request, that a separately supported PUT or other lifecycle route is absent,
+that the current service credential has the correct scope, or that OWG
+offboarding/revocation succeeds.
 
 Before any company rollout, use a disposable, customer-controlled IdP and
 employee to exercise disabled-by-default authorization, create, deactivate,
