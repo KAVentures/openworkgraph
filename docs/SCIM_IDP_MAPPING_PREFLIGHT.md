@@ -313,6 +313,14 @@ the field remain valid and receive no implied Group PATCH certification.
 An explicit Group PATCH declaration while `groups.enabled=false` is blocked,
 even if its attribute list is empty.
 
+The Group member selector expression is compiled at CLI import, not just
+when a Group mapping is assessed. The offline regression suite therefore
+executes the **actual CLI process** for supported literal/escaped selectors
+and unsupported operators/children, preventing a malformed selector pattern
+from making every preflight invocation fail before assessment. This tests
+local parser availability and declared path syntax only, not live Group PATCH
+operations or IdP conformance.
+
 The static preflight accepts only the shipped Group PATCH path subset:
 `displayName`, `externalId`, `members` and the literal
 `members[value eq "opaque-user-id"]` selector. Structural matching follows
