@@ -303,6 +303,18 @@ replay regressions check idempotence, late contradictions and admission order
 without asserting hardware-dependent memory/timing thresholds. These tests do
 not demonstrate held-out F1, contamination, or real-world scale.
 
+The linked-item evaluator's **internal visible projection is JSON-native at
+every nesting level**: a list of link-authorizing fields, with normalized
+record identity represented as a nested list. This matters because the strict,
+bounded duplicate-source JSON preflight intentionally rejects Python tuples.
+Using tuples for the evaluator's own projection would reject every otherwise
+valid linked observation and silently turn accepted memberships into empty
+predictions. A direct regression checks nonempty projections, valid observed
+clipboard links and same-record membership in both candidate modes, plus
+fail-closed contradictory source duplicates. This fixes evaluator-only
+admission, not the production linker, and does not establish any held-out
+threshold or native CI result.
+
 The filter retains the original authorized source rows for the linker's own
 organization/actor/device/session checks. These identities are deliberately
 absent from the rich evidence and cannot be independently verified from its
