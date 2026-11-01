@@ -30,6 +30,7 @@ from . import process_discovery_provenance as discovery_provenance
 from . import event_log_object_attributes as object_attributes
 from . import event_log_object_constraints as object_constraints
 from . import event_log_object_process_model as object_process_model
+from . import event_log_impact as impact
 from . import event_log_object_diagnostics as object_diagnostics
 from . import event_log_objects as objects
 from . import event_log_object_relationships as object_relationships
@@ -443,6 +444,17 @@ async def event_log_object_process_model_conformance(request: Request, log_id: s
     spec = await _json_body(request, "object process model", strict=True, limit=object_process_model.MAX_REQUEST_BYTES)
     try:
         result = await run_in_threadpool(object_process_model.check, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/impact")
+async def event_log_impact(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "impact analysis", strict=True)
+    try:
+        result = await run_in_threadpool(impact.analyze, log_id, spec)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})

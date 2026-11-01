@@ -356,6 +356,7 @@
     results.append(activityBox,inspection.node);
     results.appendChild(kpiSection(names));
     results.appendChild(benchmarkSection(names));
+    results.appendChild(impactSection(names));
     results.appendChild(savedGraphSection(names,inspection));
     results.appendChild(simulationSection());
     results.appendChild(conformanceSection((variants.variants||[])[0]));
@@ -771,6 +772,66 @@
           el('div',r.interpretation,'muted'));
       }catch(error){if(current(t))out.replaceChildren(el('div',error.message,'muted'));}
       finally{if(current(t))check.disabled=false;}
+    };
+    return box;
+  }
+
+  // Impact request from the form: a local date becomes midnight UTC; empty optional fields are left out.
+  function impactSpec(v){
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(v.date||''))throw new Error('Enter the date the change went live.');
+    const spec={intervention_at:v.date+'T00:00:00Z',metric:v.metric};
+    if(v.metric==='sla_breach'){const h=Number(v.slaHours);if(!(h>0))throw new Error('Enter the SLA in hours.');spec.sla_seconds=Math.round(h*3600);}
+    if(v.metric==='activity_count'){if(!v.activity)throw new Error('Choose the activity to count.');spec.activity=v.activity;}
+    if(String(v.window||'').trim()){const w=Number(v.window);if(!Number.isInteger(w)||w<1)throw new Error('The window is a whole number of days.');spec.window_days=w;}
+    if(String(v.recent||'').trim()){const r=Number(v.recent);if(!Number.isInteger(r)||r<0)throw new Error('Recent days is a whole number.');spec.exclude_recent_days=r;}
+    const treated={};if(v.treatedActivity)treated.activity=v.treatedActivity;if(v.treatedResource)treated.resource=v.treatedResource;
+    if(Object.keys(treated).length)spec.treated=treated;
+    return spec;
+  }
+  // Plain rows for an impact result.
+  function impactRows(r){
+    const shown=x=>x===null||x===undefined?'—':r.unit==='seconds'?duration(Math.abs(x)):r.unit==='share of cases'?pct(Math.abs(x)):Number(Math.abs(x)).toFixed(2);
+    const signed=x=>x===null||x===undefined?'—':(x<0?'−':x>0?'+':'')+shown(x);
+    const range=ci=>ci?signed(ci[0])+' to '+signed(ci[1]):'—';
+    const rows=Object.entries(r.groups).map(([name,g])=>[name==='all'?'All cases':name==='treated'?'Treated':'Control',Number(g.baseline.cases).toLocaleString(),shown(g.baseline.mean),Number(g.follow_up.cases).toLocaleString(),shown(g.follow_up.mean)]);
+    const c=r.change,d=r.control_adjusted;
+    return {rows,
+      change:c.estimated?'Mean change '+signed(c.mean_change)+' (95% '+range(c.mean_change_ci95)+'); median change '+signed(c.median_change)+' (95% '+range(c.median_change_ci95)+').':c.reason,
+      control:d?(d.estimated?'Against the control cohort: '+signed(d.difference_in_differences)+' (95% '+range(d.ci95)+').':d.reason):null,
+      placebo:r.placebo.estimated?'Placebo check at '+String(r.placebo.placebo_at).slice(0,10)+': '+signed(r.placebo.mean_change)+' (95% '+range(r.placebo.mean_change_ci95)+')'+(r.placebo.pre_trend_detected?', already changing before the intervention.':', no earlier change.'):'Placebo check: '+r.placebo.reason+'.'};
+  }
+
+  function impactSection(activityNames){
+    const box=section('Intervention impact');box.id='owgImpact';
+    box.appendChild(el('div','Compare cases that started before and after a change went live, such as an automation or a new rule. Optionally compare with cases the change did not apply to. Results show what changed between the periods, not proof that the change caused it.','muted'));
+    const date=input('owgImpactDate','date'),metric=select('owgImpactMetric',[['cycle_time','Cycle time'],['rework','Rework (an activity repeated)'],['sla_breach','SLA breaches'],['activity_count','Count of one activity']]);
+    const sla=input('owgImpactSla','number');sla.min='0';sla.step='any';sla.placeholder='hours';
+    const activity=select('owgImpactActivity',activityNames.map(a=>[a,a]));
+    const windowDays=input('owgImpactWindow','number');windowDays.min='1';windowDays.placeholder='all';
+    const recent=input('owgImpactRecent','number');recent.min='0';recent.placeholder='0';
+    const treatedActivity=select('owgImpactTreatedActivity',[['','Every case'],...activityNames.map(a=>[a,'Cases with '+a])]);
+    const treatedResource=input('owgImpactTreatedResource','text','Resource');treatedResource.maxLength=200;
+    const run=button('Measure impact');run.id='owgImpactRun';
+    const f={sla:field('SLA (hours)',sla),activity:field('Activity',activity)};
+    const sync=()=>{show(f.sla,metric.value==='sla_breach');show(f.activity,metric.value==='activity_count');};metric.onchange=sync;sync();
+    const row=el('div',null,'row');row.style.alignItems='end';
+    row.append(field('Change went live (UTC)',date),field('Measure',metric),...Object.values(f),field('Days on each side',windowDays),field('Leave out the last … days',recent),field('Change applies to',treatedActivity),field('…or to resource',treatedResource),run);
+    const out=el('div');out.id='owgImpactResults';out.setAttribute('role','status');
+    box.append(row,out);
+    const generation=state.generation,logId=state.logId;let turn=0;
+    run.onclick=async()=>{
+      const t=++turn;
+      let spec;try{spec=impactSpec({date:date.value,metric:metric.value,slaHours:sla.value,activity:activity.value,window:windowDays.value,recent:recent.value,treatedActivity:treatedActivity.value,treatedResource:treatedResource.value.trim()});}
+      catch(error){out.replaceChildren(el('div',error.message,'muted'));return;}
+      run.disabled=true;out.replaceChildren(el('div','Measuring…','muted'));
+      try{
+        const r=await (await api('/v1/event-logs/'+encodeURIComponent(logId)+'/impact',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        if(generation!==state.generation||!box.isConnected||t!==turn)return;
+        const v=impactRows(r);
+        out.replaceChildren(el('div',r.reading,'note'),table(['Cases','Before','Mean before','After','Mean after'],v.rows),el('div',v.change,'muted'),
+          ...(v.control?[el('div',v.control,'muted')]:[]),el('div',v.placebo,'muted'),el('div',r.interpretation,'muted'));
+      }catch(error){if(t===turn)out.replaceChildren(el('div',error.message,'muted'));}
+      finally{if(t===turn)run.disabled=false;}
     };
     return box;
   }
@@ -2517,6 +2578,6 @@
     return box;
   }
 
-  window.__owgEventLogModel={objectModelArcs,objectModelText,visitRows,simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
+  window.__owgEventLogModel={impactSpec,impactRows,objectModelArcs,objectModelText,visitRows,simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
