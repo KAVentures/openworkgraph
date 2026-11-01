@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import sqlite3
 import tempfile
 import threading
 from typing import Any
@@ -191,6 +192,19 @@ def remove_review_intention(work_item_ref: str, *, now: datetime | None = None) 
         items = _read(now or datetime.now(timezone.utc))
         found = work_item_ref in items
         if found:
+            # Keep owner-declared case facts no longer than their reviewed case.
+            # Purge first: a failed review write may lose a declaration, but
+            # must never leave an undeleted declaration with revoked review.
+            from .open_work_case_declarations import (
+                purge_case_declaration, clear_case_declarations,
+            )
+            try:
+                purge_case_declaration(work_item_ref)
+            except (OSError, ValueError, sqlite3.DatabaseError):
+                # A corrupt/unreadable auxiliary ledger must never prevent
+                # explicit deletion of the primary reviewed case. Erase all
+                # auxiliary declarations rather than retain an orphan.
+                clear_case_declarations()
             del items[work_item_ref]
             _write(items)
         return found
@@ -199,6 +213,10 @@ def remove_review_intention(work_item_ref: str, *, now: datetime | None = None) 
 def clear_review_intentions() -> None:
     """Scrub local review intentions on Stripe source connect/disconnect."""
     with _LOCK:
+        # Existing Stripe disconnect/replacement and session-only retention
+        # cleanup must also erase the additive, local-only case fact ledger.
+        from .open_work_case_declarations import clear_case_declarations
+        clear_case_declarations()
         path = _path()
         try:
             path.unlink()

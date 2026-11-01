@@ -744,6 +744,9 @@ app.include_router(_agent_router)
 from . import workflow_evidence_routes as _workflow_evidence_routes  # noqa: E402,F401
 from .local_source_routes import router as _local_source_router  # noqa: E402
 app.include_router(_local_source_router)
+# Explicit local human-reviewed Open Work declarations; no MCP/AI bearer rights.
+from .open_work_declaration_routes import router as _open_work_declaration_router  # noqa: E402
+app.include_router(_open_work_declaration_router)
 from .event_log_routes import router as _event_log_router  # noqa: E402
 app.include_router(_event_log_router)
 from .automation_monitoring_routes import router as _automation_monitoring_router  # noqa: E402
