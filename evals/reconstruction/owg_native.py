@@ -180,6 +180,21 @@ def _linked_projection(event: dict[str, Any]) -> str | None:
     metadata = event.get("metadata")
     if stamp is None or not isinstance(metadata, dict):
         return None
+    # The production linker normalizes source fields for display/grouping, but
+    # a malformed raw value must not become evaluation link authority merely
+    # because its visible copy contains the same Python value. In particular,
+    # bool providers/kinds and numeric hosts can stringify into valid labels;
+    # nonstring apps can create ambiguous surface-continuity candidates.
+    app = event.get("app")
+    if app is not None and not isinstance(app, str):
+        return None
+    if "resource_reference" in metadata:
+        reference = metadata["resource_reference"]
+        if not isinstance(reference, dict):
+            return None
+        for field in ("resource_ref", "provider", "resource_kind", "host"):
+            if field in reference and not isinstance(reference[field], str):
+                return None
     # Rich evidence projects metadata tokens into top-level convenience keys.
     # Those are not independent claims. Reject source-only top-level tokens or
     # contradictions instead of mistaking a convenience copy for a conflict.
