@@ -106,3 +106,43 @@ After selecting **Compare batches** in **Event logs → Analyse → Data quality
 Reason categories are counts of recorded validation categories and may overlap: **do not add them together as unique rejected rows**. Category names are untrusted labels rendered as text, not HTML, and are not included in the existing counts-only CSV. This does not reveal rejected source-row samples or establish complete provider history, causation, individual productivity, or live-provider/customer acceptance. The selection and drill-down are ephemeral and reset with each new comparison; switching to a different log cannot download a stale comparison.
 
 The committed Node regression exercises missing/unknown reasons, a large bounded reason list, suspicious formula-like labels, overlapping reasons and the interactive local quality-response rendering. Native cross-platform and browser checks are still required on the exact PR head before merge.
+
+
+## Batch quality review queue
+
+The same **Compare batches** action now renders a **Batch quality review queue**
+above the trend table. It is derived entirely from stored report counts, with
+no additional event scan, provider read, cloud upload or permission. Each batch
+has one of four descriptive statuses:
+
+- **Recorded issue — inspect**: at least one *recorded* count is positive
+  (rejected input, skipped duplicates, missing resources, tied timestamps or
+  future-dated events). This is a reason to inspect the batch, **not** proof of
+  a provider defect or a quarantine action.
+- **Incomplete evidence**: no recorded positive count, but one or more
+  diagnostic rates or the declared transform/comparison is unknown,
+  inapplicable or incomparable. An empty denominator is not a clean bill of
+  health.
+- **Missing quality report**: the import/append batch exists but its historical
+  report is absent. No diagnostic values are invented.
+- **No recorded issue (not source-complete)**: all five recorded metrics have
+  known, zero counts and a known transform; this does not prove the source
+  export is complete or accurate.
+
+The queue is ordered by batch, bounded to the latest 100 entries in the
+browser, and identifies which recorded diagnostic fields are positive and
+which evidence fields are unknown. **Inspect batch** navigates directly to
+the existing per-batch rejection diagnostics for batches with saved reports.
+Missing-report entries cannot be inspected as though they had report content.
+Switching the selected log clears the queue and invalidates in-flight results.
+
+REST consumers receive an additive `batch_trends.review_queue[]` array with
+`batch`, `status`, `flags`, and `unknown_fields`. The status and field
+names are bounded vocabulary strings, not source-row values. The response
+retains the existing `batch_trends.format` version because this is additive,
+and `interpretation.review_queue_is_descriptive_not_quarantine=true`
+prevents interpreting the queue as a write, source-completeness assertion or
+automatic quarantine decision. No new endpoint, background sync or role
+exists. Synthetic tests exercise recorded problems, absent reports, empty
+denominators, legacy transforms, browser rendering, direct inspection and
+untrusted status labels; real-provider/customer validation is still required.
