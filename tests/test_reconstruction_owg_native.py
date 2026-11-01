@@ -1162,3 +1162,103 @@ def test_lane_projection_preserves_literal_casefolded_and_absent_host_identity()
         ["first", "second"]
     ]
     assert result["unassigned_event_ids"] == []
+
+
+def test_linked_projection_top_level_only_clipboard_requires_visible_provenance():
+    """Shipped _field accepts literal top-level transfers, not hidden source-only ones."""
+    from copy import deepcopy
+
+    source = deepcopy(_linked_eval_rows())
+    for index in (0, 2):
+        token = source[index]["metadata"].pop("clipboard_transfer_id")
+        source[index]["clipboard_transfer_id"] = token
+    case = _linked_eval_case(source, source)
+    # The standard rich projection reads metadata, not source top-level fields:
+    # a source-only transfer must NOT bridge the two otherwise distinct records.
+    for accepting_candidates in (False, True):
+        withheld = predict_linked_items(case, accept_candidates=accepting_candidates)
+        assert {frozenset(w["event_ids"]) for w in withheld["workflows"]} == {
+            frozenset({"a2", "b2", "b3"})
+        } or {frozenset(w["event_ids"]) for w in withheld["workflows"]} == {
+            frozenset({"b2", "b3"})
+        }
+        assert {"a1", "b1"} <= set(withheld["unassigned_event_ids"])
+
+    # A caller that actually presents the same literal top-level evidence
+    # independently makes both source and visible link claims verifiable.
+    for index in (0, 2):
+        case["presented_evidence"][index]["clipboard_transfer_id"] = "xfer-1"
+    assert [row["event_id"] for row in _visible_linked_source_events(case)] == [
+        "a1", "a2", "b1", "b2", "b3"
+    ]
+    for accepting_candidates in (False, True):
+        linked = predict_linked_items(case, accept_candidates=accepting_candidates)
+        assert {frozenset(w["event_ids"]) for w in linked["workflows"]} == {
+            frozenset({"a1", "a2", "b1", "b2", "b3"})
+        }
+        assert linked["unassigned_event_ids"] == []
+
+
+def test_linked_projection_accepts_cross_location_literal_token_not_contradiction():
+    """Metadata-only and top-level-only identical visible claims are equivalent."""
+    from copy import deepcopy
+
+    source = deepcopy(_linked_eval_rows())
+    case = _linked_eval_case(source, source)
+    for index in (0, 2):
+        visible = case["presented_evidence"][index]
+        assert visible.pop("clipboard_transfer_id") == "xfer-1"
+        visible["clipboard_transfer_id"] = visible["metadata"].pop(
+            "clipboard_transfer_id"
+        )
+    for accepting_candidates in (False, True):
+        linked = predict_linked_items(case, accept_candidates=accepting_candidates)
+        assert {frozenset(w["event_ids"]) for w in linked["workflows"]} == {
+            frozenset({"a1", "a2", "b1", "b2", "b3"})
+        }
+
+    for malformed in (True, 1, None, "", "bad token", "xfer-2"):
+        conflicted = deepcopy(case)
+        conflicted["presented_evidence"][2]["metadata"][
+            "clipboard_transfer_id"
+        ] = malformed
+        for accepting_candidates in (False, True):
+            linked = predict_linked_items(
+                conflicted, accept_candidates=accepting_candidates
+            )
+            assert {frozenset(w["event_ids"]) for w in linked["workflows"]} == {
+                frozenset({"a1", "a2"}), frozenset({"b2", "b3"})
+            }, malformed
+            assert linked["unassigned_event_ids"] == ["b1"], malformed
+
+
+def test_linked_projection_top_level_only_tab_links_single_record_not_guesswork():
+    """A visible literal tab can join one unreferenced observation to its sole record."""
+    from copy import deepcopy
+
+    ref = "owg:r:" + "a" * 32
+    anchor = _linked_eval_event("anchor", ref, "2026-10-20T10:00:00Z")
+    loose = _linked_eval_event("loose", ref, "2026-10-20T10:01:00Z")
+    loose["metadata"].pop("resource_reference")
+    source = [anchor, loose]
+    for row in source:
+        row["tab_context_id"] = "tab-one"
+    case = _linked_eval_case(source, source)
+    for row in case["presented_evidence"]:
+        row["tab_context_id"] = "tab-one"
+    for accepting_candidates in (False, True):
+        linked = predict_linked_items(case, accept_candidates=accepting_candidates)
+        assert [w["event_ids"] for w in linked["workflows"]] == [
+            ["anchor", "loose"]
+        ]
+        assert linked["unassigned_event_ids"] == []
+
+    for invalid in (True, 1, None, "", "other-tab", "bad token"):
+        contradicted = deepcopy(case)
+        contradicted["presented_evidence"][1]["metadata"]["tab_context_id"] = invalid
+        for accepting_candidates in (False, True):
+            result = predict_linked_items(
+                contradicted, accept_candidates=accepting_candidates
+            )
+            assert result["workflows"] == [], invalid
+            assert result["unassigned_event_ids"] == ["anchor", "loose"], invalid
