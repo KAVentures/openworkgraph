@@ -83,6 +83,7 @@ test('on-demand local read renders counts as text and rejects stale log response
     appendChild(item){this.children.push(item);return item;}
     replaceChildren(...items){this.children=[...items];}
     addEventListener(type,callback){this.listeners[type]=callback;}
+    focus(){this.focused=true;}
     setAttribute(key,value){this[key]=value;}
     querySelector(selector){
       const id=selector.startsWith('#')?selector.slice(1):selector;
@@ -119,7 +120,8 @@ test('on-demand local read renders counts as text and rejects stale log response
   picker.value='log_123';
   const second=run.listeners.click();
   resolveFetch({ok:true,json:async()=>({
-    batch_trends:{batches:[report(0,'first_report',2,0.2,null)],batches_without_report:[]},
+    batch_trends:{batches:[report(0,'first_report',2,0.2,null)],batches_without_report:[],
+      review_queue:[{batch:0,status:'recorded_issue',flags:['rejected_input_rows'],unknown_fields:[]}]},
     reports:[{batch:0,created_at:'2026-11-01T18:00:00Z',
       transform:{transform_sha256:'b'.repeat(64)},
       rows:{accepted:8,rejected:2,rejected_by_reason:{'=unsafe':2},
@@ -129,9 +131,18 @@ test('on-demand local read renders counts as text and rejects stale log response
   assert.equal(download.disabled,false);
   assert.ok(output.querySelector('#owgQualityTrendsRows'));
   assert.equal(output.querySelector('#owgQualityTrendsRows').children[1].children[0].children[1].textContent,'Rejected input');
+  const reviewTable=quality.querySelector('#owgQualityReviewTable');
+  assert.ok(reviewTable);
+  const reviewRow=reviewTable.children[1].children[0];
+  assert.equal(reviewRow.children[1].textContent,'Recorded issue — inspect');
+  assert.equal(reviewRow.children[2].textContent,'Rejected input');
+  const inspect=reviewRow.children[4].children[0];
+  assert.equal(inspect.disabled,false);
+  inspect.listeners.click();
   const select=quality.querySelector('#owgQualityBatchSelect');
   const details=quality.querySelector('#owgQualityBatchDetails');
   assert.equal(select.disabled,false);
+  assert.equal(select.focused,true);
   assert.equal(select.value,'0');
   assert.match(details.children[0].textContent,/Rejected 2/);
   assert.match(details.children[1].textContent,/recorded categories/);
@@ -168,4 +179,31 @@ test('batch drill-down shows bounded, counts-only rejection categories with over
     'Rejection reasons were not recorded for this batch.');
   assert.equal(view.detail([{batch:0,rows:{rejected_by_reason:{x:Infinity,y:-1,z:3}}}],0)
     .reasons.find(r=>r.name==='x').count,'Unknown');
+});
+
+
+test('quality review queue distinguishes observed problems, unknowns and missing reports', () => {
+  const data={review_queue:[
+    {batch:0,status:'no_recorded_issue',flags:[],unknown_fields:[]},
+    {batch:1,status:'recorded_issue',flags:['rejected_input_rows','events_without_resource'],unknown_fields:[]},
+    {batch:2,status:'missing_report',flags:[],unknown_fields:['quality_report']},
+    {batch:3,status:'incomplete_evidence',flags:[],unknown_fields:['transform_unverified',
+      'comparison_missing_intermediate_report']},
+  ]};
+  const rows=view.reviewRows(data);
+  assert.equal(rows.length,4);
+  assert.match(rows[0].status,/not source-complete/);
+  assert.equal(rows[1].flags,'Rejected input, Missing resources');
+  assert.equal(rows[2].status,'Missing quality report');
+  assert.equal(rows[2].unknown,'Quality report missing');
+  assert.equal(rows[3].flags,'None recorded');
+  assert.match(rows[3].unknown,/Missing intermediate report/);
+  assert.deepEqual(view.reviewRows({review_queue:[{batch:-1},{batch:'1'},null]}),[]);
+  assert.equal(view.reviewRows({review_queue:Array.from({length:150},(_,batch)=>({
+    batch,status:'incomplete_evidence',flags:[],unknown_fields:[]}))}).length,100);
+  const hostile=view.reviewRows({review_queue:[{batch:5,status:'<script>',flags:['=HYPERLINK()'],
+    unknown_fields:['<img>']}]})[0];
+  assert.equal(hostile.status,'Unknown review status');
+  assert.equal(hostile.flags,'None recorded');
+  assert.equal(hostile.unknown,'None');
 });
