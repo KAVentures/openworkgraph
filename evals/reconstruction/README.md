@@ -186,7 +186,9 @@ production linker only when their literal event ID is present in the supplied
 source, session and link-authorizing reference/tab/clipboard/action metadata.
 Offset-equivalent instants are accepted; missing or contradictory evidence,
 reused IDs with conflicting source or visible claims, and source-only rows are
-withheld. Rich-evidence top-level tab/transfer fields are convenience copies of
+withheld. Exact duplicate source JSON claims remain idempotent; bounded
+canonical JSON comparisons distinguish booleans from integers and refuse
+malformed or oversized duplicate claims. Rich-evidence top-level tab/transfer fields are convenience copies of
 metadata, not independent source claims. An unpresented source-only copy/paste
 row must not bridge two visible records or create a candidate link.
 
