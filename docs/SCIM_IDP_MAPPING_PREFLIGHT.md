@@ -98,6 +98,23 @@ but the declared creation mapping omits it, the tool emits a **nonblocking**
 correlation cannot be demonstrated by this declaration. The preflight does
 not infer that matching by `displayName` is safe or unique.
 
+If enabled Group creation declares `members`, the preflight adds the
+**nonblocking** `group_member_id_resolution_unverified` caution. OWG's shipped
+Group membership handler resolves each `members[].value` as the **current
+provider's OWG SCIM User resource ID** (the `id` returned by User create/read),
+not `userName`, `externalId`, an email address, a Group display name or an
+OIDC subject. An IdP may correctly retain and send those IDs, but merely
+declaring a `members` mapping does not demonstrate it. Before enabling
+membership sync, in an explicitly authorized disposable tenant: create two
+Users under provider A, read and record their returned opaque IDs, create a
+Group with those IDs, read back direct membership, then verify that a
+userName/externalId in place of an ID and a User ID belonging only to provider
+B cannot silently attach. Test offboarding, rehire, source revocation and
+stale ETags without granting OWG roles or access. Record actual client
+requests and outcomes separately from this offline declaration. Omitting
+`members` from a declared create mapping does **not** establish that later
+Group PATCH membership updates are supported or absent.
+
 For **older mapping files** with enabled Groups but no
 `groups.create_attributes` field, the tool emits a **nonblocking**
 `group_create_mapping_not_declared` caution rather than inventing a
