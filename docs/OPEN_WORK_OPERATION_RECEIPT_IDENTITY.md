@@ -412,3 +412,31 @@ provider-operational-state-only; business/customer outcomes and agent
 execution authority remain false. These are deterministic contract cases,
 not native cross-platform CI, live tenant/provider acceptance, or evidence
 of commercial benefit.
+
+
+## Pre-read retained-window and evaluation-clock admission
+
+The operation verifier now checks the caller's `since`/`until` window **before**
+invoking any source-capable record reader. It deliberately reuses
+`workflow_evidence._ts` and `WorkflowEvidenceError`, the same validation
+contract already used by canonical `record_graph`: malformed boundaries and
+equal/reversed bounded windows are rejected without dispatch. This matters for
+alternate explicitly authorized readers/caches that do not perform the
+canonical database preflight themselves. Existing valid windows and default
+`None` boundaries retain their semantics; this does not widen access or
+convert missing historical observations into obligations.
+
+An explicitly supplied evaluation `now` must be a timezone-aware
+`datetime` before any read. Naive datetimes, strings, numbers and booleans
+are rejected with `ValueError` instead of spending a source read and only
+then producing a timestamp error. With `now=None`, the existing current UTC
+clock is used. The existing 1..3600-second source-age policy and five-minute
+future-skew bound are unchanged.
+
+Synthetic fake-reader regressions exercise four provider-operation families:
+16 malformed/equal/reversed window scenarios and 16 invalid-clock scenarios
+must make **zero** reader calls; eight valid bounded/default-window controls
+must preserve a provider-only verified operation, with all customer, business,
+agent-causality and execution-authorization flags false. These are committed
+contract tests, not proof of native test execution, real provider access,
+source-grant epoch fencing, customer outcomes or measured business uplift.
