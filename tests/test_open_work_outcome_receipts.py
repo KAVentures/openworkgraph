@@ -90,7 +90,9 @@ def test_github_merge_provider_status_not_deployment_or_customer_outcome():
 def test_jira_requires_explicit_operational_resolution_receipt():
     data = response(provider="jira", kind="issue", state="done",
                     operation="jira_issue_resolved")
-    data["source_evidence"]["verified_operational_outcome"].pop("scope")
+    assert data["source_evidence"]["verified_operational_outcome"]["scope"] == (
+        "jira_issue_only_not_customer_acknowledgement_or_refund"
+    )
     r = source_operation_receipt(
         REF, "jira_issue_resolved",
         record_reader=lambda *_a, **_kw: data, now=WHEN,
