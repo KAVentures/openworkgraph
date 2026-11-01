@@ -1316,3 +1316,38 @@ export-ticket or download operation. These checks do **not** prove live capture,
 source identity, consenting-user acceptance, or competitor parity. The backend,
 retained events, permission decisions, export contents and AI execution are
 unchanged.
+
+
+## Saved-history grant timestamps are disclosure evidence, not authorization
+
+The Prepare for AI review previously treated a syntactically recognizable
+`local_ai_history_access.mode` and a future `expires_at` as enough to display
+an affirmative saved-history grant, even when a supplied `granted_at` was
+malformed, in the future, or later than the expiration. This could mislead a
+reviewer about when consent was granted. Production
+`shared/history_policy.py:set_ai_history_access` records `granted_at` for
+new saved-history grants, but this browser preview is only a local snapshot.
+
+When `granted_at` is supplied, the review now requires an exact offset-aware
+timestamp no later than the current local clock and, if an expiration exists,
+strictly earlier than the expiration. Fractional seconds are compared without
+millisecond truncation; one-microsecond ordering differences remain visible.
+Malformed or contradictory timestamps leave the permission **unverified**;
+they do not claim consent was denied, revoke a grant or alter any backend
+permission decision. Existing expiry validation remains in place.
+
+Legacy previews that omit `granted_at` (or report null) remain reviewable
+under the pre-existing snapshot-only caveat. A valid past grant with no expiry
+is also supported, consistent with the local indefinite-grant policy. The
+dashboard does not infer that a copied request, evidence download or AI
+handoff itself grants saved-history access. The user must check current
+permissions independently; there is no AI execution or upload in this flow.
+
+Eight deterministic synthetic mock-DOM subcases exercise malformed, future,
+fractional-future and post-expiry grant timestamps, valid offset/microsecond
+and indefinite grants, and legacy absent/null metadata. They also assert
+request-only Copy initiates no export ticket or download. These checks are
+not native Chromium/WCAG, a real consenting-user pilot, verified provider
+authorization, a business outcome, or competitor parity.
+
+Coordination: [#326 claim 6556492470](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6556492470).
