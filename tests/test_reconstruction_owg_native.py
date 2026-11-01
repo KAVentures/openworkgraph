@@ -685,3 +685,57 @@ def test_linked_projection_rejects_nonliteral_app_surface_candidates():
     assert [w["event_ids"] for w in predict_linked_items(
         case, accept_candidates=True
     )["workflows"]] == [["loose1", "loose2"]]
+
+
+def test_linked_projection_respects_first_normalized_source_id_admission():
+    # The shipped linker normalizes event IDs before its first-valid-timestamp
+    # duplicate check. A nonliteral first ID can suppress a later literal ID,
+    # but may never itself become scored visible membership.
+    from copy import deepcopy
+
+    ref = "owg:r:" + "a" * 32
+    at = "2026-10-20T10:00:00Z"
+    anchor = _linked_eval_event("anchor", ref, "2026-10-20T10:01:00Z")
+    for nonliteral, literal in ((17, "17"), (True, "True"), (1.0, "1.0")):
+        first = _linked_eval_event(nonliteral, ref, at)
+        later = _linked_eval_event(literal, ref, at)
+        visible = [later, anchor]
+        for accept_candidates in (False, True):
+            result = predict_linked_items(
+                _linked_eval_case([first, later, anchor], visible),
+                accept_candidates=accept_candidates,
+            )
+            assert result["workflows"] == [], (nonliteral, accept_candidates)
+            assert result["unassigned_event_ids"] == [literal, "anchor"]
+
+        # Reverse admission: the literal valid ID is the first source row
+        # and remains linkable; a later nonliteral duplicate cannot veto it.
+        result = predict_linked_items(
+            _linked_eval_case([later, first, anchor], visible)
+        )
+        assert [w["event_ids"] for w in result["workflows"]] == [
+            [literal, "anchor"]
+        ], nonliteral
+        assert result["unassigned_event_ids"] == []
+
+        # An invalid-timestamp nonliteral row never consumes the slot.
+        invalid = deepcopy(first)
+        invalid["observed_at"] = "not-a-timestamp"
+        result = predict_linked_items(
+            _linked_eval_case([invalid, later, anchor], visible)
+        )
+        assert [w["event_ids"] for w in result["workflows"]] == [
+            [literal, "anchor"]
+        ], nonliteral
+
+    # Production treats falsey IDs as empty before normalizing. They do
+    # not reserve the later literal "0" or "False" source admission slot.
+    for nonliteral, literal in ((0, "0"), (False, "False"), (None, "None")):
+        first = _linked_eval_event(nonliteral, ref, at)
+        later = _linked_eval_event(literal, ref, at)
+        result = predict_linked_items(
+            _linked_eval_case([first, later, anchor], [later, anchor])
+        )
+        assert [w["event_ids"] for w in result["workflows"]] == [
+            [literal, "anchor"]
+        ], nonliteral
