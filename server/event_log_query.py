@@ -62,6 +62,12 @@ _LOCAL_CASE_DIMENSIONS = {
     "end_weekday_local": "strftime(timezone(?, timezone('UTC', ended)), '%u %A')",
     "end_hour_local": "strftime(timezone(?, timezone('UTC', ended)), '%H')",
 }
+_LOCAL_EVENT_DIMENSIONS = {
+    # Event timestamps are also stored as UTC-naive instants. Explicit IANA
+    # conversion is needed to group actual observed event volume by local shift.
+    "weekday_local": "strftime(timezone(?, timezone('UTC', ts)), '%u %A')",
+    "hour_local": "strftime(timezone(?, timezone('UTC', ts)), '%H')",
+}
 _EVENT_DIMENSIONS = {
     "activity": "activity",
     "resource": "nullif(resource, '')",
@@ -168,8 +174,9 @@ def parse(spec: Any) -> AnalysisSpec:
             "analysis is invalid: " + ".".join(str(p) for p in first["loc"]) + " " + first["msg"]) from None
     cohorts.parse_cohort(parsed.cohort)
     allowed = ({**_CASE_DIMENSIONS, **_LOCAL_CASE_DIMENSIONS}
-               if parsed.level == "cases" else _EVENT_DIMENSIONS)
-    local_time_requested = any(d in _LOCAL_CASE_DIMENSIONS for d in parsed.dimensions)
+               if parsed.level == "cases" else {**_EVENT_DIMENSIONS, **_LOCAL_EVENT_DIMENSIONS})
+    local_time_requested = any(d in _LOCAL_CASE_DIMENSIONS or d in _LOCAL_EVENT_DIMENSIONS
+                               for d in parsed.dimensions)
     if local_time_requested:
         if parsed.time_zone is None:
             raise workspace.EventLogWorkspaceError("local time dimensions require an explicit IANA time_zone")
@@ -377,10 +384,14 @@ def run(log_id: str, spec: Any, *, control=None) -> dict[str, Any]:
             dimension_params = []
             for dimension in parsed.dimensions:
                 attribute = _attribute_dimension(dimension)
-                dimension_sql.append(_EVENT_DIMENSIONS[dimension] if attribute is None else
-                                     """map_extract(json_transform(attributes, '"MAP(VARCHAR, VARCHAR)"'), ?)[1]""")
                 if attribute is not None:
+                    dimension_sql.append("""map_extract(json_transform(attributes, '"MAP(VARCHAR, VARCHAR)"'), ?)[1]""")
                     dimension_params.append(attribute)
+                elif dimension in _LOCAL_EVENT_DIMENSIONS:
+                    dimension_sql.append(_LOCAL_EVENT_DIMENSIONS[dimension])
+                    dimension_params.append(parsed.time_zone)
+                else:
+                    dimension_sql.append(_EVENT_DIMENSIONS[dimension])
         # SELECT dimension parameters precede WHERE parameters in SQL order.
         measures = [_column(m, metric_columns) for m in parsed.measures]
         select = [f"{sql} AS d{i}" for i, sql in enumerate(dimension_sql)] + [f"{sql} AS m{i}" for i, (_, sql) in enumerate(measures)]
