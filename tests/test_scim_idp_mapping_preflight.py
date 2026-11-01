@@ -991,6 +991,7 @@ def test_group_patch_preflight_rejects_unsupported_paths_without_echo(bad_path):
     report = assess(mapping(groups=groups))
     assert report["status"] == "blocked"
     assert "unsupported_attribute" in codes(report)
+    assert "group_member_selector_remove_only" not in codes(report)
     assert bad_path not in json.dumps(report)
     assert "live_validation_required" in codes(report)
 
