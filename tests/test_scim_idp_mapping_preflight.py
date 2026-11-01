@@ -947,3 +947,77 @@ def test_ascii_case_contact_selector_remains_supported_by_shipped_dispatch(path)
     assert result["status"] == "requires_live_validation"
     assert "unsupported_attribute" not in codes(result)
     assert path not in json.dumps(result)
+
+
+@pytest.mark.parametrize("client", ["entra", "okta", "other"])
+@pytest.mark.parametrize("patch_paths", [
+    ["displayName"],
+    ["externalId", "members"],
+    ['members[value eq "usr_123"]'],
+    ['MEMBERS[VALUE EQ "usr_123"]'],
+    ['members[value eq "u\\u0073r_123"]'],
+])
+def test_optional_group_patch_mapping_accepts_only_shipped_static_paths(client, patch_paths):
+    groups = {"enabled": True, "match_attributes": ["externalId"],
+              "create_attributes": ["displayName", "externalId"],
+              "patch_attributes": patch_paths}
+    report = assess(mapping(client=client, groups=groups))
+    assert report["status"] == "requires_live_validation"
+    assert "unsupported_attribute" not in codes(report)
+    assert "group_member_selector_remove_only" in codes(report) == (
+        any("[" in path for path in patch_paths))
+    assert ("group_member_patch_ids_unverified" in codes(report)) == (
+        any("[" in path or path.lower() == "members" for path in patch_paths))
+    assert "live_validation_required" in codes(report)
+    assert "usr_123" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("bad_path", [
+    "members.value",
+    "members[type eq \"User\"]",
+    'members[value ne "usr_123"]',
+    'members[value eq "usr_123"].value',
+    'members[value  eq "usr_123"]',
+    'memberſ[value eq "usr_123"]',
+    'members[value eq "\\u0000"]',
+    'members[value eq "\\ud800"]',
+    'members[value eq ""]',
+    "roles",
+    "urn:ietf:params:scim:schemas:core:2.0:Group:members",
+])
+def test_group_patch_preflight_rejects_unsupported_paths_without_echo(bad_path):
+    groups = {"enabled": True, "match_attributes": ["externalId"],
+              "patch_attributes": [bad_path]}
+    report = assess(mapping(groups=groups))
+    assert report["status"] == "blocked"
+    assert "unsupported_attribute" in codes(report)
+    assert bad_path not in json.dumps(report)
+    assert "live_validation_required" in codes(report)
+
+
+@pytest.mark.parametrize("patch_paths", [[], ["members"], ['members[value eq "u1"]']])
+def test_group_patch_declaration_while_groups_disabled_blocks_even_if_empty(patch_paths):
+    groups = {"enabled": False, "match_attributes": [],
+              "patch_attributes": patch_paths}
+    report = assess(mapping(groups=groups))
+    assert report["status"] == "blocked"
+    assert "disabled_groups_with_patch_mapping" in codes(report)
+    assert "groups_not_certified" not in codes(report)
+
+
+def test_group_patch_mapping_absence_does_not_imply_supported_or_unsupported_updates():
+    old = mapping(groups={"enabled": True, "match_attributes": ["externalId"]})
+    report = assess(old)
+    assert report["status"] == "requires_live_validation"
+    assert "group_member_selector_remove_only" not in codes(report)
+    assert "group_member_patch_ids_unverified" not in codes(report)
+    assert "unsupported_attribute" not in codes(report)
+
+
+def test_group_patch_selector_is_removal_only_not_a_general_member_update():
+    groups = {"enabled": True, "match_attributes": ["externalId"],
+              "patch_attributes": ["members", 'members[value eq "u1"]']}
+    report = assess(mapping(groups=groups))
+    assert report["status"] == "requires_live_validation"
+    assert {"group_member_selector_remove_only", "group_member_patch_ids_unverified"} <= codes(report)
+    assert "u1" not in json.dumps(report)
