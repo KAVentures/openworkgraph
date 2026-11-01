@@ -187,8 +187,9 @@ def _canonical_eval_json(value: Any) -> str | None:
 def _linked_projection(event: dict[str, Any]) -> str | None:
     """Visible, link-authorizing fields of one observation, not hidden identity.
 
-    Rich evidence omits actor/device/organization, so those stay authoritative
-    only in the original source row and the production linker's scope checks.
+    Rich evidence omits actor/device/organization; the evaluator cannot
+    independently attest those scopes. It preserves original source rows and
+    leaves production scope enforcement to the separately reviewed linker.
     Metadata comparisons intentionally retain literal malformed claims: an
     unseen or changed tab/transfer/reference cannot acquire link authority.
     """
