@@ -3092,9 +3092,23 @@ test('handoff grades no evidence, health diagnostics and unverified ordinary wor
       assert.match(h.modalHtml, downloadLabel);
       if (name === 'ordinary observations') {
         assert.match(h.modalHtml, /An AI may help review observations after you explicitly share evidence/);
+        assert.match(h.modalHtml, /Analyze a large history in smaller parts/);
+        assert.match(h.modalHtml, /Ask your AI to process one day at a time/);
+        assert.match(h.modalHtml, /The file download still contains the full selected period/);
       } else {
         assert.match(h.modalHtml, /Do not infer a workflow from missing observations or capture-health diagnostics/);
         assert.doesNotMatch(h.modalHtml, /An AI may help review observations/);
+        assert.doesNotMatch(h.modalHtml, /Ask your AI to process one day at a time/);
+        assert.doesNotMatch(h.modalHtml, /Analyze a large history in smaller parts/);
+        if (name === 'health-only diagnostics') {
+          assert.match(h.modalHtml, /Review capture-health diagnostic dates/);
+          assert.match(h.modalHtml, /capture-health\/gap diagnostics only, not workflow steps/);
+          assert.match(h.modalHtml, /optional diagnostic download contains the full selected period/);
+        } else {
+          assert.match(h.modalHtml, /Review missing date coverage/);
+          assert.match(h.modalHtml, /No recorded events are available to analyze/);
+          assert.doesNotMatch(h.modalHtml, /optional diagnostic download/);
+        }
       }
       assert.doesNotMatch(h.modalHtml, /Discover opportunities from recorded work/);
       assert.match(h.modalHtml, /Selected local evidence preview — not sent to an AI/);
@@ -3111,4 +3125,31 @@ test('handoff grades no evidence, health diagnostics and unverified ordinary wor
       }
     });
   }
+});
+
+
+test('health-only daily chunks remain visible as diagnostics, never AI workflow guidance', async () => {
+  const utcDay = observedStart.slice(0, 10);
+  const dayStart = utcDay + 'T00:00:00Z';
+  const dayEnd = new Date(Date.parse(dayStart) + 86400000).toISOString();
+  const h = await openAllRetainedPreview(d => ({
+    ...d,
+    event_types: {capture_gap: 1, capture_health: 1},
+    work_evidence: {ordinary_event_rows: 0, health_event_rows: 2},
+    analysis_plan: {date_chunks: [{since: dayStart, until: dayEnd, event_rows: 2}],
+      more_dates_not_listed: false}
+  }));
+  assert.equal(h.modals, 1);
+  assert.match(h.modalHtml, /Review capture-health diagnostic dates/);
+  assert.ok(h.modalHtml.includes(dayStart), 'diagnostic UTC day is still visible');
+  assert.match(h.modalHtml, /2 events<\/li>/);
+  assert.match(h.modalHtml, /capture-health\/gap diagnostics only, not workflow steps/);
+  assert.doesNotMatch(h.modalHtml, /Ask your AI to process one day at a time/);
+  assert.doesNotMatch(h.modalHtml, /Repeated-work maps are optional/);
+  assert.equal(h.modal['#analysisDownload'].disabled, false,
+    'existing explicitly requested diagnostic download remains available');
+  await h.modal['#analysisCopy'].onclick();
+  assertCopyEvidenceWarning(h.copied, 'request-rollover', true);
+  assert.equal(h.tickets.length, 0, 'copy must not initiate an export');
+  assert.equal(h.downloads, 0);
 });
