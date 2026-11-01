@@ -1061,3 +1061,35 @@ underlying source authenticity, provider completeness, snapshot immutability,
 commercial ROI, or competitor parity.
 
 Coordination: [#326 claim 6550924281](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6550924281).
+
+## Exact local AI saved-history lease disclosure (Worker B, 2026-11-01)
+
+The Prepare for AI modal reports a **snapshot** of local AI saved-history
+consent. It does not grant permission, authorize a file download, or imply
+that the AI has received any evidence. Previously, that snapshot normalized
+selected-range and expiry instants with `Date.parse` and
+`Date.toISOString`, discarding fractions beyond milliseconds. A valid
+selected-range grant lasting only one microsecond could appear unverified;
+a displayed grant bound or expiry could differ from its supplied value.
+
+The disclosure now normalizes valid offset-aware instants to UTC **without
+losing fractional digits**. Whole-second or millisecond values retain the
+existing `.000Z` display convention; higher precision remains visible.
+The strict exact-instant comparator checks that selected-range start is
+before its exclusive end and that an expiry is later than the local clock.
+Malformed, reversed, unknown or expired grants remain **unverified**.
+Because the local clock is millisecond-resolution, an expiry exactly one
+microsecond after the current clock instant is still future-dated; the
+display retains that microsecond rather than rounding it away.
+
+Synthetic Node mock-DOM regressions cover a one-microsecond selected grant
+with offset-equivalent endpoints, a one-microsecond future expiry, an
+expiry equal to the local clock, and an invalid rollover clock. Copy
+remains request-only, with no export ticket or evidence download. This
+is only truthful local display of reported consent metadata: actual
+permissions, revocation, export authorization and provider state are
+unchanged and must be checked independently. Tests are **not** native
+cross-platform/Chromium/WCAG/scale/packaging acceptance, a real consenting
+pilot, or proof of competitor parity.
+
+Coordination: [#326 claim 6551469704](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6551469704).
