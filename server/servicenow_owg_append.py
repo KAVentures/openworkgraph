@@ -91,6 +91,56 @@ def _opener():
     )
 
 
+def verify_local_target(log_id: str, port: int, namespace: str,
+                        session: str, *, opener=None) -> None:
+    """Refuse a log whose source-key namespace belongs to another selection.
+
+    The local dashboard's read-only log list is authoritative for the current
+    log identity. We do not silently mix a different provider/tenant/selection
+    into an existing event log.
+    """
+    if not _LOG.fullmatch(log_id) or type(port) is not int or not 1 <= port <= 65535:
+        raise AppendError("Invalid local event-log target")
+    session = _session(session)
+    url = f"http://127.0.0.1:{port}/v1/event-logs"
+    req = request.Request(
+        url, method="GET", headers={
+            "Authorization": "OWG-Session " + session,
+            "Accept": "application/json",
+        },
+    )
+    transport = _opener() if opener is None else opener
+    try:
+        with transport.open(req, timeout=15) as response:
+            status = response.status
+            final_url = response.geturl()
+            media = response.headers.get("Content-Type", "")
+            raw = response.read(MAX_RESPONSE_BYTES + 1)
+    except (OSError, error.URLError, ValueError):
+        raise AppendError("Local OWG target could not be verified") from None
+    if (status != 200 or final_url != url
+            or media.split(";", 1)[0].strip().lower() != "application/json"
+            or len(raw) > MAX_RESPONSE_BYTES):
+        raise AppendError("Local OWG target could not be verified")
+    try:
+        result = json.loads(raw.decode("utf-8"), object_pairs_hook=_pairs_unique)
+    except (ValueError, UnicodeError):
+        raise AppendError("Local OWG target could not be verified") from None
+    if type(result) is not dict or type(result.get("logs")) is not list:
+        raise AppendError("Local OWG target could not be verified")
+    matching = [item for item in result["logs"]
+                if type(item) is dict and item.get("log_id") == log_id]
+    if len(matching) != 1:
+        raise AppendError("Selected local event log is missing or ambiguous")
+    identity = matching[0].get("source_identity")
+    namespaces = identity.get("namespaces") if type(identity) is dict else None
+    if (type(namespaces) is not list or len(namespaces) != 1
+            or type(namespaces[0]) is not dict
+            or namespaces[0].get("source_namespace") != namespace
+            or namespaces[0].get("case_namespace") != namespace):
+        raise AppendError("Selected local event log has a different source scope")
+
+
 def append_local(log_id: str, port: int, body: bytes, namespace: str,
                  session: str, *, opener=None) -> dict:
     if not _LOG.fullmatch(log_id) or type(port) is not int or not 1 <= port <= 65535:
@@ -175,6 +225,10 @@ def main(argv: list[str] | None = None, *, opener=None) -> int:
         scope.require_authority()
         body, count, namespace = _payload(
             scope, args.timezone, args.journal, args.grant_file,
+        )
+        _check_grant(args.grant_file, scope)
+        verify_local_target(
+            args.log_id, args.port, namespace, session, opener=opener,
         )
         _check_grant(args.grant_file, scope)
         attempted = True
