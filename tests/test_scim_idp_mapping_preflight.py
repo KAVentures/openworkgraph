@@ -1310,3 +1310,91 @@ def test_group_patch_operations_cli_is_static_and_does_not_echo_member_id(tmp_pa
     assert "group_member_selector_requires_remove" in codes(payload)
     assert payload["checked"]["group_patch_operations"] == 1
     assert "usr_PRIVATE" not in result.stdout + result.stderr
+
+
+# Group add/replace requires the *presence* of the value key in shipped
+# gateway/scim_groups.py. This declaration never includes actual payloads.
+@pytest.mark.parametrize("client", ["entra", "okta", "other"])
+@pytest.mark.parametrize("verb,path", [
+    ("add", "displayName"),
+    ("replace", "externalId"),
+    ("add", "members"),
+    ("replace", "members"),
+])
+@pytest.mark.parametrize("value_present,expected_code", [
+    (True, None),
+    (False, "group_patch_required_value_missing"),
+    (None, "group_patch_value_presence_undeclared"),
+], ids=["declared-present", "declared-absent", "undeclared"])
+def test_group_patch_add_replace_declared_value_presence_is_fail_closed(
+        client, verb, path, value_present, expected_code):
+    op = {"op": verb, "path": path}
+    if value_present is not None:
+        op["value_present"] = value_present
+    groups = {"enabled": True, "match_attributes": ["externalId"],
+              "patch_operations": [op]}
+    report = assess(mapping(client=client, groups=groups))
+    assert report["status"] == (
+        "blocked" if value_present is False else "requires_live_validation")
+    assert ("group_patch_required_value_missing" in codes(report)) is (value_present is False)
+    assert ("group_patch_value_presence_undeclared" in codes(report)) is (value_present is None)
+    assert report["checked"]["group_patch_operations"] == 1
+    assert "value_present" not in json.dumps(report.get("checked"))
+    if expected_code:
+        assert expected_code in codes(report)
+    assert "live_validation_required" in codes(report)
+
+
+@pytest.mark.parametrize("verb,path", [
+    ("remove", "externalId"),
+    ("remove", "members"),
+    ("remove", 'members[value eq "usr_SYNTHETIC"]'),
+])
+@pytest.mark.parametrize("presence", [None, False, True])
+def test_group_patch_remove_does_not_require_a_value_property(verb, path, presence):
+    op = {"op": verb, "path": path}
+    if presence is not None:
+        op["value_present"] = presence
+    report = assess(mapping(groups={"enabled": True, "match_attributes": ["externalId"],
+                                    "patch_operations": [op]}))
+    assert report["status"] == "requires_live_validation"
+    assert "group_patch_required_value_missing" not in codes(report)
+    assert "group_patch_value_presence_undeclared" not in codes(report)
+    assert "usr_SYNTHETIC" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("bad", [None, 0, 1, "true", [], {}])
+def test_group_patch_value_presence_must_be_literal_json_boolean(bad):
+    groups = {"enabled": True, "match_attributes": ["externalId"],
+              "patch_operations": [{"op": "replace", "path": "displayName",
+                                    "value_present": bad}]}
+    with pytest.raises(InvalidMapping) as error:
+        assess(mapping(groups=groups))
+    assert "displayName" not in str(error.value)
+
+
+@pytest.mark.parametrize("present,exit_code,code", [
+    (True, 0, None),
+    (False, 2, "group_patch_required_value_missing"),
+    (None, 0, "group_patch_value_presence_undeclared"),
+])
+def test_group_patch_value_presence_cli_reports_generic_status_without_payload(
+        tmp_path, present, exit_code, code):
+    op = {"op": "replace", "path": "members"}
+    if present is not None:
+        op["value_present"] = present
+    groups = {"enabled": True, "match_attributes": ["externalId"],
+              "patch_operations": [op]}
+    file = tmp_path / "group-value-presence.json"
+    file.write_text(json.dumps(mapping(groups=groups)), encoding="utf-8")
+    completed = subprocess.run([sys.executable, str(SCRIPT), str(file)],
+                               capture_output=True, text=True)
+    assert completed.returncode == exit_code
+    report = json.loads(completed.stdout)
+    assert report["status"] == (
+        "blocked" if present is False else "requires_live_validation")
+    assert (code in codes(report)) if code else (
+        "group_patch_required_value_missing" not in codes(report)
+        and "group_patch_value_presence_undeclared" not in codes(report))
+    assert report["checked"]["group_patch_operations"] == 1
+    assert "usr_SYNTHETIC" not in completed.stdout + completed.stderr
