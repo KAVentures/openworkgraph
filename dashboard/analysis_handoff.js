@@ -576,8 +576,26 @@
     // A sample with no observation timestamp must not look as though its
     // provenance time was verified. Keep the supplied offset-aware instant
     // verbatim rather than silently converting it to the viewer's timezone.
+    // A missing label is not the same as a literal reported "Unknown app" or
+    // "Untitled activity". Empty/whitespace-only titles are supplied but
+    // uninformative; do not silently substitute an invented activity title.
     const focusExampleItems = focusExampleCount
-      ? d.redacted_examples.map(x=>`<li>${esc(visibleEvidenceLabel(x.app == null ? 'Unknown app' : x.app, 'sample'))} · ${esc(visibleEvidenceLabel(x.window_title||'Untitled activity', 'sample'))} · ${x.observed_at == null ? 'observation time not supplied' : `observed at <time datetime="${esc(x.observed_at)}">${esc(x.observed_at)}</time>`}</li>`).join('')
+      ? d.redacted_examples.map(x => {
+          const appLabel = x.app == null
+            ? 'app not supplied'
+            : 'reported app: ' + visibleEvidenceLabel(x.app, 'sample');
+          const titleLabel = x.window_title == null
+            ? 'title not supplied'
+            : x.window_title === ''
+              ? 'reported title: [empty title label]'
+              : !x.window_title.trim()
+                ? 'reported title: [whitespace-only title label]'
+                : 'reported title: ' + visibleEvidenceLabel(x.window_title, 'sample');
+          const observed = x.observed_at == null
+            ? 'observation time not supplied'
+            : `observed at <time datetime="${esc(x.observed_at)}">${esc(x.observed_at)}</time>`;
+          return `<li>${esc(appLabel)} · ${esc(titleLabel)} · ${observed}</li>`;
+        }).join('')
       : '<li>No redacted context examples supplied.</li>';
     window.openModal?.('Prepare for AI',ordinaryRows>0?'Review selected work evidence (workflow unverified)':'Review evidence limitations (no verified workflow)',`
       <p>${ordinaryRows>0?'No workflow description or repeated pattern is required. An AI may help review observations after you explicitly share evidence; this panel does not run a model.':'No ordinary work evidence is available for workflow review. Do not infer a workflow from missing observations or capture-health diagnostics; this panel does not run a model.'}</p>
