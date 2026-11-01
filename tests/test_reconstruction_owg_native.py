@@ -553,6 +553,13 @@ def test_linked_projection_hidden_second_record_vetoes_single_record_tab():
     result = predict_linked_items(_linked_eval_case(source, source[:3]))
     assert [w["event_ids"] for w in result["workflows"]] == [["a1", "a2"]]
     assert result["unassigned_event_ids"] == ["loose"]
+    # A stripped tab must not reappear as a same-app continuity candidate
+    # when the intentionally unsafe diagnostic mode accepts candidates.
+    diagnostic = predict_linked_items(
+        _linked_eval_case(source, source[:3]), accept_candidates=True
+    )
+    assert [w["event_ids"] for w in diagnostic["workflows"]] == [["a1", "a2"]]
+    assert diagnostic["unassigned_event_ids"] == ["loose"]
     assert source[0]["metadata"]["tab_context_id"] == "tab-1"
 
 
