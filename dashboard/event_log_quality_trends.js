@@ -89,7 +89,7 @@
         output.append(wrap,element('p','Future-dated rates use different report times and are never compared. No provider completeness, causality or individual performance is inferred.'));
         download.disabled=false;
       }catch(error){if(current(id,n))message.textContent=error?.message||'Batch trends unavailable.';}
-      finally{if(current(id,n))run.disabled=false;}
+      finally{if(panel.isConnected && ticket===n)run.disabled=false;}
     });
     download.addEventListener('click',()=>{
       if(!loaded || !panel.isConnected || logId()!==selected)return;
