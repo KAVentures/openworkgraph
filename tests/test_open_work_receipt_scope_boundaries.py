@@ -409,3 +409,83 @@ def test_explicit_aware_history_windows_preserve_provider_only_receipts(
             "required_source_provider_kind": (provider, kind),
         },
     )]
+
+
+@pytest.mark.parametrize("operation,provider,kind,state,scope_flag", OPERATIONS)
+@pytest.mark.parametrize(
+    "malformed_legacy",
+    [None, 0, 1, "true", "false", [], {}],
+    ids=["null", "zero", "one", "string-true", "string-false",
+         "array", "object"],
+)
+def test_explicit_malformed_legacy_business_outcome_is_not_source_proof(
+    operation, provider, kind, state, scope_flag, malformed_legacy,
+):
+    # Stripe's historical flag means a *processor* operation, not customer
+    # settlement. GitHub/Jira keep it false. No non-Boolean flag can
+    # override either provider's narrower authenticated source receipt.
+    graph = _graph(operation, provider, kind, state)
+    graph["source_evidence"]["verified_business_outcome"] = malformed_legacy
+    calls = []
+
+    def read(ref, **kwargs):
+        calls.append((ref, kwargs))
+        return graph
+
+    result = source_operation_receipt(
+        REF, operation, record_reader=read, now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "provider_receipt_scope_conflict"
+    assert result["operation_verified"] is False
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert result["read_only"] is True
+    assert "PRIVATE_NEVER_RETURN" not in str(result)
+    assert calls == [(REF, {
+        "since": None, "until": None, "include_source_status": True,
+        "required_source_provider_kind": (provider, kind),
+    })]
+
+
+@pytest.mark.parametrize("operation,provider,kind,state,scope_flag", OPERATIONS)
+def test_explicit_opposite_legacy_business_outcome_is_conflicted(
+    operation, provider, kind, state, scope_flag,
+):
+    graph = _graph(operation, provider, kind, state)
+    graph["source_evidence"]["verified_business_outcome"] = provider != "stripe"
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: graph, now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "provider_receipt_scope_conflict"
+    assert result["operation_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert "PRIVATE_NEVER_RETURN" not in str(result)
+
+
+@pytest.mark.parametrize("operation,provider,kind,state,scope_flag", OPERATIONS)
+@pytest.mark.parametrize("legacy_present", [False, True])
+def test_matching_or_absent_legacy_business_outcome_remains_provider_only(
+    operation, provider, kind, state, scope_flag, legacy_present,
+):
+    graph = _graph(operation, provider, kind, state)
+    if legacy_present:
+        graph["source_evidence"]["verified_business_outcome"] = provider == "stripe"
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: graph, now=WHEN,
+    )
+    assert result["availability"] == "source_reported"
+    assert result["operation_verified"] is True
+    assert result["verification_scope"] == (
+        "authenticated_source_provider_operational_state"
+    )
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert result["read_only"] is True
+    assert "PRIVATE_NEVER_RETURN" not in str(result)
