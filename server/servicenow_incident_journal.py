@@ -124,6 +124,26 @@ def _connect(path: Path) -> sqlite3.Connection:
     return db
 
 
+def verify_existing_scope(
+    scope: SelectedIncidents, *, timezone_name: str, journal_file: Path,
+) -> None:
+    """Refuse a mismatched existing journal before any external source GET."""
+    if not journal_file.exists() and not journal_file.is_symlink():
+        return
+    _checked_journal_file(journal_file)
+    db = None
+    try:
+        db = _connect(journal_file)
+        metadata = db.execute("SELECT version,digest FROM scope WHERE id=1").fetchone()
+        if metadata != (1, _scope_digest(scope, timezone_name)):
+            raise JournalError("Journal scope, selection or timezone mismatch")
+    except (sqlite3.Error, OSError):
+        raise JournalError("Existing journal could not be verified") from None
+    finally:
+        if db is not None:
+            db.close()
+
+
 def update_journal(
     scope: SelectedIncidents, *, timezone_name: str, journal_file: Path,
     grant_file: Path, incoming: list[tuple[str, str, str, str]] | None,
@@ -140,6 +160,8 @@ def update_journal(
         raise JournalError("Explicit source timezone required")
     if incoming is not None and (type(incoming) is not list or len(incoming) > 8):
         raise JournalError("Selected-source batch exceeds bound")
+    if incoming is None and not journal_file.exists():
+        raise JournalError("Cannot export a missing journal")
     created = _checked_journal_file(journal_file)
     db = None
     try:
@@ -184,6 +206,9 @@ def update_journal(
                 by_id[row[3]] = row
                 added += 1
         _check_grant(grant_file, scope)
+        if (db.execute("PRAGMA page_count").fetchone()[0]
+                * db.execute("PRAGMA page_size").fetchone()[0] > MAX_DB_BYTES):
+            raise JournalError("Journal storage limit reached")
         db.execute("COMMIT")
         if journal_file.stat().st_size > MAX_DB_BYTES:
             # A 4096-row bounded journal should never reach this threshold.
@@ -228,6 +253,8 @@ def main(argv: list[str] | None = None, *, opener=None) -> int:
             raise JournalError("Journal, grant and output must be separate files")
         _private_directory(args.output.parent)
         _check_grant(args.grant_file, scope)
+        verify_existing_scope(scope, timezone_name=args.timezone,
+                              journal_file=args.journal)
         incoming = None
         represented = None
         if not args.export_only:
