@@ -420,8 +420,12 @@
       validatePreview(d);
       // No selected observations is not proof that no work occurred, nor
       // evidence of the recorder's current consent or capture state.
+      // Localized Date formatting drops submillisecond precision and the
+      // reported timezone offset. Keep the familiar local-time overview, but
+      // disclose exact source-reported ISO instants so two microsecond-apart
+      // observations cannot appear to have identical verified timestamps.
       const text=d.canonical_rows
-        ? `${d.canonical_rows} recorded events · observed ${new Date(d.first_observed_at).toLocaleString()} – ${new Date(d.last_observed_at).toLocaleString()}`
+        ? `${d.canonical_rows} recorded events · observed locally ${new Date(d.first_observed_at).toLocaleString()} – ${new Date(d.last_observed_at).toLocaleString()} · reported ISO times ${d.first_observed_at} – ${d.last_observed_at} (offsets preserved)`
         : d.retained_rows
           ? 'No events recorded in this selection. Other retained evidence exists; inactivity and capture completeness are unverified.'
           : 'No retained events reported. Recording and consent status are unverified; this does not establish inactivity.';
