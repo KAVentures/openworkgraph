@@ -109,6 +109,40 @@
     }catch(error){if(active()&&own===sequence){await load().catch(()=>{});say(error.message+' Review the current policy before retrying.');}}
    });
   }
+  function groupNamePolicyForm(row,item){
+   const open=el('button','Group naming policy');open.dataset.scimGroupNamePolicy=item.provider_id;open.disabled=!options.canWrite;
+   const form=el('div');form.hidden=true;let state=null,sequence=0;
+   const note=el('p','Optionally require unique active Group names within this provider for identity-provider matching. Stored whitespace normalization and case-insensitive comparison apply. Resolve existing collisions first. Groups do not grant OWG permissions. Upgrade all serving workers before enabling and test the actual IdP mappings.');
+   const status=el('p');status.setAttribute('role','status');
+   const check=el('input');check.type='checkbox';check.id='scimGroupNames-'+item.provider_id;
+   const label=el('label','Require unique active Group names');label.htmlFor=check.id;
+   const choice=el('div');choice.className='check';choice.append(check,label);
+   const save=el('button','Save Group naming policy');save.dataset.scimGroupNameSave=item.provider_id;save.disabled=true;
+   const close=el('button','Close Group naming policy');form.append(note,status,choice,save,close);row.append(open,form);
+   const active=()=>valid()&&row.isConnected&&!form.hidden;
+   check.addEventListener('change',()=>{save.disabled=!options.canWrite||!state||check.checked===state.enabled;});
+   close.addEventListener('click',()=>{sequence++;state=null;form.hidden=true;open.disabled=!options.canWrite;});
+   open.addEventListener('click',async()=>{
+    if(!valid()||!options.canWrite)return;
+    const own=++sequence;state=null;save.disabled=true;check.disabled=true;open.disabled=true;form.hidden=false;forget();
+    status.textContent='Checking current Group names…';
+    try{
+     const value=await options.api('GET',path+'/'+encodeURIComponent(item.provider_id)+'/group-name-policy');
+     if(!active()||own!==sequence)return;
+     state=value;check.checked=value.enabled;check.disabled=false;
+     status.textContent=(value.enabled?'Unique names required. ':'Unique-name constraint is off. ')+'Active Groups: '+Number(value.active_groups).toLocaleString()+'. Additional name collisions: '+Number(value.colliding_groups).toLocaleString()+'.';
+    }catch(error){if(active()&&own===sequence)status.textContent=error.message;}
+   });
+   save.addEventListener('click',async()=>{
+    if(!active()||!options.canWrite||!state||check.checked===state.enabled)return;
+    const own=sequence,value=state,allow=check.checked;save.disabled=true;check.disabled=true;
+    try{
+     await options.api('PATCH',path+'/'+encodeURIComponent(item.provider_id)+'/group-name-policy',{revision:value.revision,enabled:allow});
+     if(!active()||own!==sequence)return;
+     await load();say(allow?'Unique active Group names are now required for this provider.':'Group naming constraint disabled for this provider.');
+    }catch(error){if(active()&&own===sequence){await load().catch(()=>{});say(error.message+' Review the current Group naming policy before retrying.');}}
+   });
+  }
   async function load(){
    const response=await options.api('GET',path);if(!valid())return;
    list.replaceChildren();
@@ -140,7 +174,7 @@
       catch(error){say(error.message);if(valid())await load().catch(()=>{});}
      });controls.append(toggle,revoke);
     }
-    row.append(controls);if(!item.revoked_at){assignmentForm(row,item);clientPolicyForm(row,item);}list.append(row);
+    row.append(controls);if(!item.revoked_at){assignmentForm(row,item);clientPolicyForm(row,item);groupNamePolicyForm(row,item);}list.append(row);
    }
   }
   create.addEventListener('click',async()=>{

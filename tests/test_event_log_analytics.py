@@ -70,6 +70,88 @@ def test_conformance_fitness_and_deviations():
     assert analytics.conformance(log_id, alternatives)["fitting_cases"] == 54
 
 
+def test_conformance_variant_cap_discloses_omitted_cases_separately_from_long_traces():
+    """Fitness only covers aligned cases; the two omission reasons partition the rest."""
+    model = {"format": "openworkgraph.reference-model.v1", "paths": [["C"]]}
+    rows = ["case,activity,time,who"]
+    rows += [f"{case},{activity},2024-01-01T00:00:00Z,ann" for case, activity in
+             (("a", "A"), ("b", "B"), ("c", "C"), ("d", "C"))]
+    log_id = _log("\n".join(rows))
+    limited = analytics.conformance(log_id, model, max_variants=1)
+    assert limited["cases"] == 4 and limited["aligned_cases"] == 2
+    assert (limited["max_variants_applied"], limited["variants_selected"],
+            limited["variants_aligned"], limited["variants_skipped_trace_too_long"]) == (1, 1, 1, 0)
+    assert analytics.conformance(log_id, model, max_variants=0)["max_variants_applied"] == 1
+    assert limited["cases_not_aligned_trace_too_long"] == 0
+    assert limited["cases_not_aligned_variant_limit"] == 2
+    assert limited["variant_limit_truncated"] is True
+    assert (limited["variants_observed"], limited["variants_not_selected_variant_limit"]) == (3, 2)
+    # A and B tie in frequency. The deterministic literal path ordering selects A first.
+    tied = analytics.conformance(log_id, model, max_variants=2)
+    assert (tied["variants_observed"], tied["variants_selected"],
+            tied["variants_not_selected_variant_limit"]) == (3, 2, 1)
+    assert tied["cases_not_aligned_variant_limit"] == 1
+    assert limited["fitting_cases"] == 2 and limited["fitness"] == 1
+    complete = analytics.conformance(log_id, model, max_variants=3)
+    assert complete["aligned_cases"] == 4
+    assert (complete["max_variants_applied"], complete["variants_selected"],
+            complete["variants_aligned"], complete["variants_skipped_trace_too_long"]) == (3, 3, 3, 0)
+    assert complete["cases_not_aligned_variant_limit"] == 0
+    assert complete["variant_limit_truncated"] is False
+    assert (complete["variants_observed"], complete["variants_not_selected_variant_limit"]) == (3, 0)
+
+    # A frequent 301-event trace exceeds the alignment bound. Its cases are
+    # not cap omissions, even when a rarer short trace is excluded by LIMIT.
+    rows = ["case,activity,time,who"]
+    for case in ("long1", "long2"):
+        for index in range(301):
+            rows.append(f"{case},L,2024-01-01T00:{index // 60:02d}:{index % 60:02d}Z,ann")
+    rows.append("short,A,2024-01-01T00:00:00Z,ann")
+    long_log = _log("\n".join(rows))
+    short_model = {"format": "openworkgraph.reference-model.v1", "paths": [["A"]]}
+    limited = analytics.conformance(long_log, short_model, max_variants=1)
+    assert (limited["cases"], limited["aligned_cases"],
+            limited["cases_not_aligned_trace_too_long"],
+            limited["cases_not_aligned_variant_limit"]) == (3, 0, 2, 1)
+    assert limited["variant_limit_truncated"] is True
+    assert (limited["variants_selected"], limited["variants_aligned"],
+            limited["variants_skipped_trace_too_long"]) == (1, 0, 1)
+    assert (limited["variants_observed"], limited["variants_not_selected_variant_limit"]) == (2, 1)
+    complete = analytics.conformance(long_log, short_model, max_variants=2)
+    assert (complete["cases"], complete["aligned_cases"],
+            complete["cases_not_aligned_trace_too_long"],
+            complete["cases_not_aligned_variant_limit"]) == (3, 1, 2, 0)
+    assert complete["variant_limit_truncated"] is False
+    assert (complete["variants_selected"], complete["variants_aligned"],
+            complete["variants_skipped_trace_too_long"]) == (2, 1, 1)
+    assert (complete["variants_observed"], complete["variants_not_selected_variant_limit"]) == (2, 0)
+    assert complete["variants_selected"] == (complete["variants_aligned"] +
+                                             complete["variants_skipped_trace_too_long"])
+
+
+def test_conformance_empty_case_relation_has_zero_variant_denominators(monkeypatch):
+    """An empty selected case relation must not assume a ranked first row exists."""
+    class EmptyConn:
+        def execute(self, sql):
+            self.is_count = "count(DISTINCT case_id)" in sql
+            return self
+
+        def fetchone(self):
+            assert self.is_count
+            return (0,)
+
+        def fetchall(self):
+            assert not self.is_count
+            return []
+
+    monkeypatch.setattr(workspace, "_query", lambda log_id, case_type, fn: fn(EmptyConn()))
+    result = analytics.conformance("empty", {"format": "openworkgraph.reference-model.v1",
+                                              "paths": [["A"]]}, max_variants=1)
+    assert (result["cases"], result["aligned_cases"], result["variants_observed"],
+            result["variants_selected"], result["variants_not_selected_variant_limit"]) == (0, 0, 0, 0, 0)
+    assert result["variant_limit_truncated"] is False and result["fitness"] is None
+
+
 @pytest.mark.parametrize("model", [
     {}, {"format": "other", "paths": [["A"]]}, {"format": "openworkgraph.reference-model.v1", "paths": []},
     {"format": "openworkgraph.reference-model.v1", "paths": [["A", 3]]},
@@ -97,6 +179,39 @@ def test_kpis_throughput_rework_sla_and_declared_automation():
         analytics.kpis(log_id, automation_resources=[f"r{i}" for i in range(51)])
     with pytest.raises(workspace.EventLogWorkspaceError):
         analytics.kpis(log_id, sla_seconds=0)
+
+
+
+def test_subsecond_kpi_and_root_cause_duration_thresholds():
+    """Elapsed seconds, not whole-second boundaries, govern strict > thresholds.
+
+    Synthetic import regression only: not provider or customer acceptance.
+    """
+    rows = [
+        "case,activity,time,who",
+        "a,Start,2024-01-01T00:00:00Z,team",
+        "a,End,2024-01-01T00:00:00.500000Z,team",
+        "b,Start,2024-01-01T00:01:00Z,team",
+        "b,End,2024-01-01T00:01:01.000000Z,team",
+        "c,Start,2024-01-01T00:02:00Z,team",
+        "c,End,2024-01-01T00:02:01.500000Z,team",
+        "d,Start,2024-01-01T00:03:00Z,team",
+        "d,End,2024-01-01T00:03:02.750000Z,team",
+    ]
+    log_id = _log("\n".join(rows))
+    result = analytics.kpis(log_id, sla_seconds=1)
+    assert result["cases"] == 4
+    throughput = result["throughput_seconds"]
+    assert throughput["p50"] == pytest.approx(1.25)
+    assert throughput["p90"] == pytest.approx(2.375)
+    assert throughput["p95"] == pytest.approx(2.5625)
+    assert throughput["mean"] == pytest.approx(1.4375)
+    assert result["sla"] == {"seconds": 1, "breached_cases": 2, "breach_rate": 0.5}
+    assert result["completed_per_week"] == [
+        {"week_starting": "2024-01-01", "cases": 4, "median_throughput_seconds": pytest.approx(1.25)}
+    ]
+    assert analytics.root_cause(log_id, "duration_over", threshold_seconds=1)["outcome_cases"] == 2
+    assert analytics.root_cause(log_id, "duration_over", threshold_seconds=2)["outcome_cases"] == 1
 
 
 def test_newcombe_interval_matches_published_example():
@@ -171,6 +286,10 @@ with TestClient(app) as client:
     assert client.post(base + "/conformance", json=model).status_code == 401
     ok = client.post(base + "/conformance", json=model, headers=headers)
     assert ok.status_code == 200 and ok.json()["fitting_cases"] == 6, ok.text
+    assert ok.json()["cases_not_aligned_variant_limit"] == 0 and not ok.json()["variant_limit_truncated"]
+    assert (ok.json()["variants_selected"], ok.json()["variants_aligned"],
+            ok.json()["variants_skipped_trace_too_long"]) == (2, 2, 0)
+    assert (ok.json()["variants_observed"], ok.json()["variants_not_selected_variant_limit"]) == (2, 0)
     assert client.post(base + "/conformance", content=b"x", headers={**headers, "Content-Type": "text/plain"}).status_code == 415
     assert client.post(base + "/conformance", content=b"{", headers={**headers, "Content-Type": "application/json"}).status_code == 422
     assert client.post(base + "/conformance", content=b" " * 70000, headers={**headers, "Content-Type": "application/json"}).status_code == 413

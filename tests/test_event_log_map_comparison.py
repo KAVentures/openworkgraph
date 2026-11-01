@@ -54,7 +54,110 @@ def test_frequency_and_time_differences_per_path():
     assert ab["median_gap_seconds_first"] == 3600 and ab["median_gap_seconds_second"] == 3 * 3600
     gap = ab["median_gap_difference"]
     assert gap["seconds"] == 2 * 3600 and gap["ci_excludes_zero"]
+    assert (gap["sampled_gaps_first"], gap["sampled_gaps_second"]) == (30, 15)
+    assert not gap["sampling_truncated_first"] and not gap["sampling_truncated_second"]
+    assert (gap["sampled_median_gap_seconds_first"], gap["sampled_median_gap_seconds_second"]) == (3600, 10800)
+    assert gap["seconds"] == gap["sampled_median_gap_seconds_second"] - gap["sampled_median_gap_seconds_first"]
+    assert ab["median_gap_interval_status"] == "estimated"
+    assert new["median_gap_interval_status"] == "insufficient_support"
+    assert result["timed_paths_eligible"] == result["timed_paths_evaluated"]
+    assert result["timed_paths_omitted_rank_limit"] == 0
     assert result["paths_only_in_second"] == 2 and result["paths_only_in_first"] == 0
+
+
+
+def test_timed_gap_interval_discloses_reservoir_cap_and_sample_medians(monkeypatch):
+    """A sampled interval must not silently inherit the full-cohort denominator."""
+    monkeypatch.setattr(compare, "GAP_SAMPLE", 4)
+    monkeypatch.setattr(compare, "GAP_ROUNDS", 12)
+    result = compare.compare_maps(_log(), [JANUARY, FEBRUARY])
+    ab = _paths(result)[("A", "B")]
+    gap = ab["median_gap_difference"]
+    assert (ab["transitions_in_first"], ab["transitions_in_second"]) == (30, 15)
+    assert (gap["sampled_gaps_first"], gap["sampled_gaps_second"]) == (4, 4)
+    assert gap["sampling_truncated_first"] and gap["sampling_truncated_second"]
+    assert gap["seconds"] == gap["sampled_median_gap_seconds_second"] - gap["sampled_median_gap_seconds_first"]
+    assert "12 rounds" in gap["method"] and "up to 4 sampled gaps" in gap["method"]
+    assert "sampled_gaps_first" not in ab, "sampling support belongs to the timed interval only"
+    assert result["intervals_assume_independent_cohorts"] is True
+
+    # The reservoir must operate on the *matching path*, not sample all
+    # directly-follows transitions before filtering. A→B and B→C coexist
+    # with other paths in both cohorts, but each has >=4 transitions.
+    bc = _paths(result)[("B", "C")]
+    assert (bc["transitions_in_first"], bc["transitions_in_second"]) == (30, 30)
+    bc_gap = bc["median_gap_difference"]
+    assert (bc_gap["sampled_gaps_first"], bc_gap["sampled_gaps_second"]) == (4, 4)
+    assert bc_gap["sampling_truncated_first"] and bc_gap["sampling_truncated_second"]
+
+
+
+def test_timed_gap_cap_uses_literal_path_tiebreak_for_equal_support():
+    """Exactly 25 of 26 tied paths receive intervals, regardless of CSV row order."""
+    def make_log(reverse):
+        rows = ["case,activity,time"]
+        cases = [(month, index, repeat)
+                 for month in range(2) for index in range(26) for repeat in range(2)]
+        if reverse:
+            cases.reverse()
+        for month, index, repeat in cases:
+            start = START + timedelta(days=31 * month, minutes=3 * index + repeat)
+            case = f"c{month}-{index}-{repeat}"
+            rows.append(f"{case},A,{start.isoformat()}")
+            rows.append(f"{case},B{index:02d},{(start + timedelta(hours=1)).isoformat()}")
+        return workspace.import_log(
+            BytesIO(("\n".join(rows) + "\n").encode()),
+            name="tied-paths", source_format="csv",
+            mapping={"case_column": "case", "activity_column": "activity",
+                     "timestamp_column": "time"})["log_id"]
+
+    expected = {("A", f"B{i:02d}") for i in range(compare.TIMED_PATHS)}
+    for reverse in (False, True):
+        result = compare.compare_maps(make_log(reverse), [JANUARY, FEBRUARY], limit=40)
+        assert result["cases"] == [52, 52]
+        assert result["paths_total"] == compare.TIMED_PATHS + 1
+        assert {("A", f"B{i:02d}") for i in range(26)} == set(_paths(result))
+        timed = {(p["from"], p["to"]) for p in result["paths"] if "median_gap_difference" in p}
+        assert timed == expected
+        assert ("A", "B25") not in timed
+        assert result["timed_paths_eligible"] == 26
+        assert result["timed_paths_evaluated"] == compare.TIMED_PATHS
+        assert result["timed_paths_omitted_rank_limit"] == 1
+        assert all(p["median_gap_interval_status"] == "estimated"
+                   for p in result["paths"] if (p["from"], p["to"]) in timed)
+        assert _paths(result)[("A", "B25")]["median_gap_interval_status"] == "rank_limit"
+        assert "median_gap_difference" not in _paths(result)[("A", "B25")]
+
+        # The aggregate denominators describe the full map, even if the
+        # caller asks to display only one ranked path.
+        limited = compare.compare_maps(make_log(reverse), [JANUARY, FEBRUARY], limit=1)
+        assert len(limited["paths"]) == 1 and limited["paths_total"] == 26
+        assert (limited["timed_paths_eligible"], limited["timed_paths_evaluated"],
+                limited["timed_paths_omitted_rank_limit"]) == (26, 25, 1)
+
+
+def test_one_transition_does_not_claim_a_bootstrap_interval():
+    """A path observed once on one side is not a rank-limit omission."""
+    rows = ["case,activity,time"]
+    for case_id, day, target in (
+        ("jan-1", 0, "B"), ("jan-2", 1, "C"),
+        ("feb-1", 31, "B"), ("feb-2", 32, "B"),
+    ):
+        start = START + timedelta(days=day)
+        rows.append(f"{case_id},A,{start.isoformat()}")
+        rows.append(f"{case_id},{target},{(start + timedelta(minutes=2)).isoformat()}")
+    log = workspace.import_log(
+        BytesIO(("\n".join(rows) + "\n").encode()), name="one-transition",
+        source_format="csv", mapping={"case_column": "case",
+                                      "activity_column": "activity",
+                                      "timestamp_column": "time"})["log_id"]
+    result = compare.compare_maps(log, [JANUARY, FEBRUARY])
+    ab = _paths(result)[("A", "B")]
+    assert (ab["transitions_in_first"], ab["transitions_in_second"]) == (1, 2)
+    assert ab["median_gap_interval_status"] == "insufficient_support"
+    assert "median_gap_difference" not in ab
+    assert (result["timed_paths_eligible"], result["timed_paths_evaluated"],
+            result["timed_paths_omitted_rank_limit"]) == (0, 0, 0)
 
 
 def test_side_by_side_maps_and_overlap_warning():
@@ -103,6 +206,95 @@ def test_activity_truncation_distinguishes_exact_cap_from_omitted_names():
     # Existing displayed-edge and start-activity limits remain unchanged.
     assert len(exact["transitions"]) == len(overflow["transitions"]) == compare.MAX_MAP_ACTIVITIES - 1
     assert exact["start_activities"] == overflow["start_activities"] == {"Activity-000": 1}
+
+
+def test_map_side_aggregates_are_bounded_before_fetchall(monkeypatch):
+    """Even with omitted activity names, side-map rows are filtered in SQL."""
+    rows = ["case,activity,time"]
+    for month in (0, 1):
+        day = START + timedelta(days=32 * month)
+        for i in range(compare.MAX_MAP_ACTIVITIES + 2):
+            stamp = (day + timedelta(minutes=i)).isoformat()
+            rows.append(f"case-{month},Activity-{i:03d},{stamp}")
+    log = workspace.import_log(
+        BytesIO(("\n".join(rows) + "\n").encode()),
+        name="many-activities", source_format="csv",
+        mapping={"case_column": "case", "activity_column": "activity",
+                 "timestamp_column": "time"})["log_id"]
+
+    original_query = workspace._query
+    seen = {"edges": 0, "starts": 0}
+
+    class AuditedConnection:
+        def __init__(self, raw):
+            self.raw = raw
+
+        def execute(self, sql, params=None):
+            if "SELECT src, dst, count(*), count(DISTINCT case_id), quantile_cont(gap, 0.5)" in sql:
+                seen["edges"] += 1
+                assert "WHERE src IN (" in sql and "AND dst IN (" in sql
+                assert f"LIMIT {compare.MAX_MAP_ACTIVITIES ** 2}" in sql
+                assert len(params) == 2 * compare.MAX_MAP_ACTIVITIES
+            if "SELECT activity, count(*) FROM (SELECT activity, row_number()" in sql:
+                seen["starts"] += 1
+                assert "WHERE k = 1 AND activity IN (" in sql
+                assert f"LIMIT {compare.MAX_MAP_ACTIVITIES}" in sql
+                assert len(params) == compare.MAX_MAP_ACTIVITIES
+            return self.raw.execute(sql, params) if params is not None else self.raw.execute(sql)
+
+        def __getattr__(self, name):
+            return getattr(self.raw, name)
+
+    def audited_query(log_id, case_type, run):
+        return original_query(log_id, case_type, lambda conn: run(AuditedConnection(conn)))
+
+    monkeypatch.setattr(workspace, "_query", audited_query)
+    result = compare.compare_maps(log, [JANUARY, FEBRUARY])
+    assert seen == {"edges": 2, "starts": 2}
+    for side in result["maps"]:
+        assert side["activities_truncated"]
+        assert len(side["activities"]) == compare.MAX_MAP_ACTIVITIES
+        assert len(side["transitions"]) == compare.MAX_MAP_ACTIVITIES - 1
+        assert side["start_activities"] == {"Activity-000": 1}
+
+
+def test_capped_gap_samples_are_stable_across_calls_and_csv_order(monkeypatch):
+    """A seeded reservoir alone cannot guarantee the same sampled transitions."""
+    monkeypatch.setattr(compare, "GAP_SAMPLE", 7)
+    monkeypatch.setattr(compare, "GAP_ROUNDS", 24)
+
+    def make_log(reverse):
+        cases = [(month, i) for month in range(2) for i in range(40)]
+        if reverse:
+            cases.reverse()
+        rows = ["case,activity,time"]
+        for month, i in cases:
+            start = START + timedelta(days=31 * month, minutes=3 * i)
+            gap = 5 + (i * 7 % 31) + 2 * month
+            case = f"c{month}-{i}"
+            rows.extend((
+                f"{case},A,{start.isoformat()}",
+                f"{case},B,{(start + timedelta(minutes=gap)).isoformat()}",
+            ))
+        return workspace.import_log(
+            BytesIO(("\n".join(rows) + "\n").encode()),
+            name="varied-gaps", source_format="csv",
+            mapping={"case_column": "case", "activity_column": "activity",
+                     "timestamp_column": "time"})["log_id"]
+
+    baseline = None
+    for reverse in (False, True):
+        log_id = make_log(reverse)
+        for _ in range(3):
+            result = compare.compare_maps(log_id, [JANUARY, FEBRUARY])
+            ab = _paths(result)[("A", "B")]
+            interval = ab["median_gap_difference"]
+            assert (interval["sampled_gaps_first"], interval["sampled_gaps_second"]) == (7, 7)
+            assert interval["sampling_truncated_first"] and interval["sampling_truncated_second"]
+            if baseline is None:
+                baseline = interval
+            else:
+                assert interval == baseline
 
 
 def test_real_http_route_requires_a_dashboard_session(tmp_path):

@@ -72,6 +72,50 @@ def test_attribute_cohorts_use_case_object_attributes():
     assert analytics.kpis(log_id, "order", cohort={"attribute": "region = US"})["cases"] == 15
 
 
+
+def test_benchmark_preserves_fractional_seconds_and_strict_sla_boundary():
+    """A 1.5s case breaches a 1s SLA; exactly 1.0s does not.
+
+    date_diff('second', ...) truncated elapsed time and silently classified
+    the 1.5s case as on time. This is synthetic, not provider acceptance.
+    """
+    rows = [
+        "case,activity,time,who",
+        "a1,Start,2024-01-01T00:00:00Z,team_a",
+        "a1,End,2024-01-01T00:00:00.500000Z,team_a",
+        "a2,Start,2024-01-01T00:01:00Z,team_a",
+        "a2,End,2024-01-01T00:01:01Z,team_a",
+        "a3,Start,2024-01-01T00:02:00Z,team_a",
+        "a3,End,2024-01-01T00:02:01.500000Z,team_a",
+        "b1,Start,2024-01-01T00:03:00Z,team_b",
+        "b1,End,2024-01-01T00:03:01.250000Z,team_b",
+        "b2,Start,2024-01-01T00:04:00Z,team_b",
+        "b2,End,2024-01-01T00:04:02.750000Z,team_b",
+    ]
+    log_id = workspace.import_log(
+        BytesIO(("\n".join(rows) + "\n").encode()),
+        name="fractional-duration-synthetic", source_format="csv", mapping=MAPPING,
+    )["log_id"]
+    result = cohorts.benchmark(
+        log_id, [{"resource": "team_a"}, {"resource": "team_b"}], sla_seconds=1,
+    )
+    first, second = result["cohorts"]
+    assert (first["cases"], second["cases"]) == (3, 2)
+    assert first["throughput_seconds"]["p50"] == pytest.approx(1.0)
+    assert first["throughput_seconds"]["p90"] == pytest.approx(1.4)
+    assert second["throughput_seconds"]["p50"] == pytest.approx(2.0)
+    assert second["throughput_seconds"]["p90"] == pytest.approx(2.6)
+    assert (first["sla_breached_cases"], second["sla_breached_cases"]) == (1, 2)
+    assert first["sla_breach_rate"] == round(1 / 3, 6)
+    assert second["sla_breach_rate"] == 1.0
+    gap = result["differences_second_minus_first"]["median_throughput_seconds"]
+    assert gap["difference"] == pytest.approx(1.0)
+    assert gap["sampled_median_throughput_seconds_first"] == pytest.approx(1.0)
+    assert gap["sampled_median_throughput_seconds_second"] == pytest.approx(2.0)
+    assert result["overlapping_cases"] == 0
+    assert result["causal_claims"] is False
+
+
 def test_benchmark_compares_two_cohorts_with_intervals():
     log_id = _log()
     result = cohorts.benchmark(log_id, [{"label": "bob", "resource": "bob"}, {"label": "ann", "resource": "ann"}],
@@ -89,6 +133,60 @@ def test_benchmark_compares_two_cohorts_with_intervals():
     approve = next(a for a in result["activity_presence"] if a["activity"] == "Approve")
     assert approve["ci_excludes_zero"] is False
     assert result["intervals_assume_independent_cohorts"] is True and result["causal_claims"] is False
+
+
+def test_benchmark_throughput_interval_discloses_actual_case_sample_support(monkeypatch):
+    """A capped bootstrap must not imply full-cohort statistical support."""
+    log_id = _log()
+    specs = [{"resource": "bob"}, {"resource": "ann"}]
+    full = cohorts.benchmark(log_id, specs)
+    full_gap = full["differences_second_minus_first"]["median_throughput_seconds"]
+    assert (full_gap["sampled_cases_first"], full_gap["sampled_cases_second"]) == (40, 20)
+    assert not full_gap["sampling_truncated_first"]
+    assert not full_gap["sampling_truncated_second"]
+    assert (full_gap["sample_fraction_first"], full_gap["sample_fraction_second"]) == (1.0, 1.0)
+    assert full_gap["sampled_median_throughput_seconds_first"] == full["cohorts"][0]["throughput_seconds"]["p50"]
+    assert full_gap["sampled_median_throughput_seconds_second"] == full["cohorts"][1]["throughput_seconds"]["p50"]
+
+    # A cap between the cohort sizes truncates only one side.
+    monkeypatch.setattr(cohorts, "BOOTSTRAP_SAMPLE", 30)
+    partial = cohorts.benchmark(log_id, specs)["differences_second_minus_first"]["median_throughput_seconds"]
+    assert (partial["sampled_cases_first"], partial["sampled_cases_second"]) == (30, 20)
+    assert partial["sampling_truncated_first"] and not partial["sampling_truncated_second"]
+    assert (partial["sample_fraction_first"], partial["sample_fraction_second"]) == (0.75, 1.0)
+
+    monkeypatch.setattr(cohorts, "BOOTSTRAP_SAMPLE", 3)
+    capped = cohorts.benchmark(log_id, specs)
+    gap = capped["differences_second_minus_first"]["median_throughput_seconds"]
+    assert [side["cases"] for side in capped["cohorts"]] == [40, 20]
+    assert (gap["sampled_cases_first"], gap["sampled_cases_second"]) == (3, 3)
+    assert gap["sampling_truncated_first"] and gap["sampling_truncated_second"]
+    assert (gap["sample_fraction_first"], gap["sample_fraction_second"]) == (0.075, 0.15)
+    assert gap["sample_fraction_first"] == round(gap["sampled_cases_first"] / capped["cohorts"][0]["cases"], 6)
+    assert gap["sample_fraction_second"] == round(gap["sampled_cases_second"] / capped["cohorts"][1]["cases"], 6)
+    assert gap["difference"] == (gap["sampled_median_throughput_seconds_second"]
+                                 - gap["sampled_median_throughput_seconds_first"])
+    assert cohorts.benchmark(log_id, specs)["differences_second_minus_first"]["median_throughput_seconds"] == gap
+    assert not any("case_id" in key for key in gap)
+
+
+def test_benchmark_capped_hash_sample_is_independent_of_import_order(monkeypatch):
+    """Identical case sets produce identical capped bootstrap support across row orders."""
+    rows = _claims_csv().splitlines()
+    reversed_log = workspace.import_log(
+        BytesIO(("\n".join([rows[0], *reversed(rows[1:])]) + "\n").encode()),
+        name="claims-reversed", source_format="csv", mapping=MAPPING)["log_id"]
+    original_log = _log()
+    monkeypatch.setattr(cohorts, "BOOTSTRAP_SAMPLE", 3)
+    specs = [{"resource": "bob"}, {"resource": "ann"}]
+    expected = cohorts.benchmark(original_log, specs)[
+        "differences_second_minus_first"]["median_throughput_seconds"]
+    assert expected["sampled_cases_first"] == expected["sampled_cases_second"] == 3
+    for _ in range(3):
+        assert cohorts.benchmark(original_log, specs)[
+            "differences_second_minus_first"]["median_throughput_seconds"] == expected
+        assert cohorts.benchmark(reversed_log, specs)[
+            "differences_second_minus_first"]["median_throughput_seconds"] == expected
 
 
 def test_benchmark_reports_overlap_and_refuses_bad_input():
@@ -109,6 +207,16 @@ def test_median_difference_bootstrap_is_deterministic_and_brackets_the_estimate(
     estimate, low, high = cohorts.median_difference(a, b)
     assert estimate == 10 and low <= 10 <= high
     assert cohorts.median_difference(a, b) == (estimate, low, high)
+
+
+def test_median_difference_bootstrap_is_invariant_to_sample_row_order():
+    """Seeded bootstrap intervals must depend on the samples, not SQL row order."""
+    first = [1, 10, 100, 2, 20, 200]
+    second = [5, 50, 500, 6, 60, 600]
+    expected = cohorts.median_difference(first, second)
+    assert cohorts.median_difference(list(reversed(first)), second) == expected
+    assert cohorts.median_difference(first, list(reversed(second))) == expected
+    assert cohorts.median_difference([20, 1, 200, 10, 2, 100], [60, 5, 600, 50, 6, 500]) == expected
 
 
 def test_real_http_cohort_routes(tmp_path):
@@ -135,6 +243,12 @@ with TestClient(app) as client:
     result = client.post(base + "/benchmark", json=spec, headers=headers)
     assert result.status_code == 200, result.text
     assert [c["cases"] for c in result.json()["cohorts"]] == [10, 10]
+    gap = result.json()["differences_second_minus_first"]["median_throughput_seconds"]
+    assert (gap["sampled_cases_first"], gap["sampled_cases_second"]) == (10, 10)
+    assert not gap["sampling_truncated_first"] and not gap["sampling_truncated_second"]
+    assert (gap["sample_fraction_first"], gap["sample_fraction_second"]) == (1.0, 1.0)
+    assert gap["difference"] == (gap["sampled_median_throughput_seconds_second"]
+                                 - gap["sampled_median_throughput_seconds_first"])
     assert client.post(base + "/benchmark", json=[1], headers=headers).status_code == 422
     assert client.post(base + "/benchmark", content=b"x", headers={**headers, "Content-Type": "text/plain"}).status_code == 415
     assert client.post(base + "/benchmark", json={"cohorts": [{}, {}], "sla_seconds": "x"}, headers=headers).status_code == 422

@@ -12,6 +12,7 @@ from . import scim_provisioning as scim, scim_bulk as bulk, scim_groups as group
 from . import scim_query as query
 from .scim_assignment import Assignments
 from .scim_client_policy import Policies
+from .scim_group_name_policy import Policies as GroupNamePolicies
 from .employees import EmployeeError
 
 MEDIA = 'application/scim+json'
@@ -114,6 +115,7 @@ def build_router(service, require_admin, base_url):
     groups = group_module.Groups(service)
     assignments = Assignments(service)
     policies = Policies(service)
+    group_name_policies = GroupNamePolicies(service)
 
     def authenticate(provider_id, request):
         token = _bearer(request)
@@ -219,6 +221,22 @@ def build_router(service, require_admin, base_url):
             raise scim.Error(400, 'Client policy does not accept query options', 'invalidValue')
         body = await _body(request)
         value = await run_in_threadpool(policies.set, organization, provider_id, body, principal.audit_id)
+        return JSONResponse(value, headers={'Cache-Control': 'no-store'})
+
+    @router.get('/v1/admin/scim-providers/{organization}/{provider_id}/group-name-policy')
+    def group_name_policy(organization: str, provider_id: str, request: Request):
+        require_admin(request.headers.get('authorization'))
+        if request.query_params:
+            raise scim.Error(400, 'Group naming policy does not accept query options', 'invalidValue')
+        return JSONResponse(group_name_policies.get(organization, provider_id), headers={'Cache-Control': 'no-store'})
+
+    @router.patch('/v1/admin/scim-providers/{organization}/{provider_id}/group-name-policy')
+    async def set_group_name_policy(organization: str, provider_id: str, request: Request):
+        principal = require_admin(request.headers.get('authorization'))
+        if request.query_params:
+            raise scim.Error(400, 'Group naming policy does not accept query options', 'invalidValue')
+        value = await run_in_threadpool(group_name_policies.set, organization, provider_id,
+                                       await _body(request), principal.audit_id)
         return JSONResponse(value, headers={'Cache-Control': 'no-store'})
 
     @router.get('/scim/v2/{provider_id}/ServiceProviderConfig')
