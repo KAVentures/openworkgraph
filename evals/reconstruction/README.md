@@ -197,6 +197,18 @@ Malformed metadata-only claims are withheld too; valid legacy metadata-only
 strings remain accepted. An unpresented source-only copy/paste row must not
 bridge two visible records or create a candidate link.
 
+Explicit record-identity components (`resource_ref`, `provider`, `resource_kind`,
+`host`) must also be **literal strings** when present, and an explicitly
+present `resource_reference` must be an object. Otherwise the current linker
+could stringify a boolean provider, numeric host or malformed reference into
+plausible same-record evidence even when the visible and source copies match.
+Non-null app labels must likewise be literal strings: a boolean, number or
+object cannot authorize a same-app continuity candidate in the diagnostic
+mode. Missing references and null/absent app labels retain their no-signal
+semantics; valid literal record identity and same-app ambiguity still work.
+These are evaluator admission checks, not changes to production grouping or
+claims that the identity is provider-verified.
+
 An explicit `source_events: []` (or null) is authoritative: if source
 evidence has been revoked/deleted, neither the record-lane nor linked-item
 evaluation may fall back to a stale `presented_evidence` snapshot and
