@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from server.record_case_lanes import _EVENT_ID, _identity, _stamp, record_case_lanes
-from server.work_item_links import _link_scope, _TAB, _TRANSFER, link_observations
+from server.work_item_links import _TAB, _TRANSFER, link_observations
 
 from .fixtures import load_cases
 from .scoring import aggregate
@@ -177,6 +177,28 @@ def _linked_projection(event: dict[str, Any]) -> str | None:
 
 
 
+
+def _eval_ephemeral_scope(event: dict[str, Any]) -> tuple[str, str, str, str] | None:
+    """Fail-closed scope for evaluator vetoes; do not depend on unmerged linker PRs.
+
+    The currently shipped linker may still use globally keyed ephemeral IDs.
+    This helper only prevents a hidden source claim from poisoning an unrelated
+    tenant/actor/device/session in the evaluation admission projection.
+    """
+    values: list[str] = []
+    for field in ("organization_id", "actor_id", "device_id", "session_id"):
+        if field not in event:
+            values.append("")
+            continue
+        value = event[field]
+        if (not isinstance(value, str) or not value or len(value) > 160
+                or value.isspace()
+                or any(ord(char) < 32 or ord(char) == 127 for char in value)):
+            return None
+        values.append(value)
+    return tuple(values)  # type: ignore[return-value]
+
+
 def _veto_hidden_source_ephemeral_links(
     source: list[dict[str, Any]], admitted: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -201,7 +223,7 @@ def _veto_hidden_source_ephemeral_links(
         if (not isinstance(event_id, str) or not _EVENT_ID.fullmatch(event_id)
                 or event_id in admitted_ids or _stamp(event.get("observed_at")) is None):
             continue
-        scope = _link_scope(event)
+        scope = _eval_ephemeral_scope(event)
         if scope is None:
             continue
         metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
@@ -216,7 +238,7 @@ def _veto_hidden_source_ephemeral_links(
         return admitted
     safe: list[dict[str, Any]] = []
     for event in admitted:
-        scope = _link_scope(event)
+        scope = _eval_ephemeral_scope(event)
         metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
         blocked: set[str] = set()
         if scope is not None:
