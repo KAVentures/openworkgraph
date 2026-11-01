@@ -289,3 +289,40 @@ def test_valid_history_window_and_offset_clock_preserve_provider_only_receipt(
     assert receipt["agent_execution_authorized"] is False
     assert receipt["read_only"] is True
     assert "PRIVATE_NEVER_RETURN" not in str(receipt)
+
+
+@pytest.mark.parametrize("operation,provider,kind,state,scope_flag", OPERATIONS)
+@pytest.mark.parametrize("window_name", ["since", "until"])
+@pytest.mark.parametrize(
+    "invalid_explicit_scope",
+    [
+        False, 0, 0.0, "", [], {}, (), b"2026-11-01T08:00:00+00:00",
+        datetime(2026, 11, 1, 8, 0, tzinfo=timezone.utc),
+    ],
+    ids=[
+        "false", "integer-zero", "float-zero", "empty-string", "empty-list",
+        "empty-dict", "empty-tuple", "bytes-timestamp", "datetime-object",
+    ],
+)
+def test_explicit_falsey_or_nonstr_history_scope_never_invokes_source_reader(
+    operation, provider, kind, state, scope_flag, window_name,
+    invalid_explicit_scope,
+):
+    # Only None represents an omitted history bound. Previously, falsey
+    # caller values bypassed the truthiness-based _ts check, and even a
+    # datetime object could be implicitly converted into a string by _ts.
+    # Neither is safe authorization for an alternate source-capable reader.
+    from server.workflow_evidence import WorkflowEvidenceError
+
+    calls = []
+
+    def unexpected_read(*args, **kwargs):
+        calls.append((args, kwargs))
+        return _graph(operation, provider, kind, state)
+
+    with pytest.raises(WorkflowEvidenceError, match="ISO-8601 timestamp"):
+        source_operation_receipt(
+            REF, operation, record_reader=unexpected_read, now=WHEN,
+            **{window_name: invalid_explicit_scope},
+        )
+    assert calls == []
