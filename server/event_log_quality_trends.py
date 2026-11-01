@@ -57,6 +57,41 @@ def _metrics(report: dict[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
+
+def _review_queue(series: list[dict[str, Any]], missing: list[int]) -> list[dict[str, Any]]:
+    """Review priorities derived only from recorded counts, never source values.
+
+    A positive recorded diagnostic is a reason to inspect a supplied batch, not
+    proof of upstream failure. Unknown denominators, missing reports and
+    mapping changes remain explicit rather than becoming clean results.
+    """
+    queue: list[dict[str, Any]] = []
+    for item in series:
+        metrics = item["metrics"]
+        flags = [key for key in METRICS if metrics[key]["count"] is not None
+                 and metrics[key]["count"] > 0]
+        unknown = [key for key in METRICS if metrics[key]["rate"] is None]
+        comparison = item["comparison"]["status"]
+        if item["transform_sha256"] is None:
+            unknown.append("transform_unverified")
+        if comparison in ("missing_intermediate_report", "unknown_transform",
+                          "transform_changed"):
+            unknown.append("comparison_" + comparison)
+        queue.append({
+            "batch": item["batch"],
+            "status": ("recorded_issue" if flags else
+                       "incomplete_evidence" if unknown else "no_recorded_issue"),
+            "flags": flags,
+            "unknown_fields": unknown,
+        })
+    present = {item["batch"] for item in series}
+    for batch in missing:
+        if batch not in present:
+            queue.append({"batch": batch, "status": "missing_report",
+                          "flags": [], "unknown_fields": ["quality_report"]})
+    return sorted(queue, key=lambda item: item["batch"])
+
+
 def build(reports: list[dict[str, Any]], missing_batches: list[int] | None = None) -> dict[str, Any]:
     """Compute per-batch rates and safe deltas from stored, sample-free reports.
 
@@ -111,6 +146,7 @@ def build(reports: list[dict[str, Any]], missing_batches: list[int] | None = Non
         "format": FORMAT,
         "batches": series,
         "batches_without_report": missing,
+        "review_queue": _review_queue(series, missing),
         "interpretation": {
             "descriptive_only": True,
             "source_completeness_verified": False,
@@ -120,6 +156,7 @@ def build(reports: list[dict[str, Any]], missing_batches: list[int] | None = Non
             "rejected_reason_counts_may_overlap": True,
             "rates_are_not_individual_worker_performance": True,
             "no_business_action_authorized": True,
+            "review_queue_is_descriptive_not_quarantine": True,
         },
     }
 
