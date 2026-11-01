@@ -1054,6 +1054,45 @@ test('work evidence totals, capture-health partition and liveness metadata fail 
   }
 });
 
+test('unsupported affirmative recorder-liveness claims never become reviewable evidence', async t => {
+  const cases = [
+    ['ordinary events with forged affirmative liveness', true, false, false],
+    ['health-only diagnostics with forged affirmative liveness', true, true, false],
+    ['explicit unverified liveness', false, false, true],
+    ['legacy absent liveness', undefined, false, true],
+    ['legacy null liveness', null, false, true]
+  ];
+  for (const [name, flag, healthOnly, accepted] of cases) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    const work_evidence = {
+      ordinary_event_rows: healthOnly ? 0 : 2,
+      health_event_rows: healthOnly ? 2 : 0,
+      last_work_observed_at: healthOnly ? null : observedStart,
+      ...(flag === undefined ? {} : {recorder_liveness_verified: flag})
+    };
+    const preview = {...h.preview('range', 'liveness-review'), work_evidence,
+      ...(healthOnly ? {event_types: {capture_health: 2}} : {})};
+    h.reply(h.reads[1], preview);
+    await opening;
+    assert.equal(h.modals, accepted ? 1 : 0, name);
+    assert.equal(h.tickets.length, 0, name);
+    assert.equal(h.downloads, 0, name);
+    if (!accepted) {
+      assert.deepEqual(h.copied, [], name);
+      assert.match(h.summary.textContent, /incomplete or malformed/i, name);
+      return;
+    }
+    assert.match(h.modalHtml, /do not confirm the recorder is running/, name);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-liveness-review'], name);
+    assert.equal(h.tickets.length, 0, name);
+    assert.equal(h.downloads, 0, name);
+  });
+});
+
 test('valid selected work/health partition and optional legacy metadata still prepare safely', async () => {
   const valid = [
     {work_evidence: {ordinary_event_rows: 1, health_event_rows: 1,
