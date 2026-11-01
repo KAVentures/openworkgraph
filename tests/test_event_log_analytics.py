@@ -289,6 +289,24 @@ def test_invalid_reference_models_are_refused(model):
         analytics.conformance(log_id, model)
 
 
+@pytest.mark.parametrize("bad", [
+    0, -1, 10 ** 9 + 1, 1.5, float("nan"), float("inf"),
+    float("-inf"), "3600", "not-a-number", True, False, [], {},
+])
+def test_kpi_direct_sla_rejects_noninteger_or_out_of_range_before_query(bad, monkeypatch):
+    """Direct callers receive a domain validation error, not coercion or Python errors."""
+    monkeypatch.setattr(workspace, "_query", lambda *args: pytest.fail("invalid SLA reached query"))
+    with pytest.raises(workspace.EventLogWorkspaceError, match="sla_seconds must be an integer"):
+        analytics.kpis("unused-synthetic-log", sla_seconds=bad)
+
+
+def test_kpi_direct_sla_accepts_exact_integer_bounds_and_none(monkeypatch):
+    """Existing valid typed REST values and no-SLA requests retain their query path."""
+    monkeypatch.setattr(workspace, "_query", lambda *args: "validated-without-database")
+    for value in (None, 1, 3600, 10 ** 9):
+        assert analytics.kpis("unused-synthetic-log", sla_seconds=value) == "validated-without-database"
+
+
 def test_kpis_throughput_rework_sla_and_declared_automation():
     log_id = _log()
     result = analytics.kpis(log_id, sla_seconds=4 * 3600, automation_resources=["bot"])
