@@ -142,6 +142,37 @@ def test_group_create_declaration_matches_shipped_required_name_and_lineage(
 
 
 @pytest.mark.parametrize("client", ["entra", "okta", "other"])
+@pytest.mark.parametrize("members_declared", [False, True], ids=["no-members", "members"])
+def test_group_create_members_require_live_provider_scoped_user_id_resolution(
+        client, members_declared):
+    groups = {
+        "enabled": True,
+        "match_attributes": ["externalId"],
+        "create_attributes": ["displayName", "externalId"] + (["members"] if members_declared else []),
+    }
+    report = assess(mapping(client=client, groups=groups))
+    assert report["status"] == "requires_live_validation"
+    assert ("group_member_id_resolution_unverified" in codes(report)) is members_declared
+    assert "missing_group_create_displayname" not in codes(report)
+    assert "group_externalid_match_not_created" not in codes(report)
+    assert "groups_not_certified" in codes(report)
+    assert report["scope"] == "offline_declared_mapping_only"
+    assert "members" not in json.dumps(report)
+
+
+def test_group_member_id_caution_requires_enabled_declared_group_creation():
+    undeclared = {"enabled": True, "match_attributes": ["externalId"]}
+    assert "group_member_id_resolution_unverified" not in codes(
+        assess(mapping(groups=undeclared)))
+    disabled = {"enabled": False, "match_attributes": [],
+                "create_attributes": ["displayName", "members"]}
+    report = assess(mapping(groups=disabled))
+    assert report["status"] == "blocked"
+    assert "disabled_groups_with_create_mapping" in codes(report)
+    assert "group_member_id_resolution_unverified" not in codes(report)
+
+
+@pytest.mark.parametrize("client", ["entra", "okta", "other"])
 def test_group_create_mapping_absence_is_unknown_not_inferred_from_matching(client):
     groups = {"enabled": True, "match_attributes": ["externalId"]}
     report = assess(load_text(json.dumps(mapping(client=client, groups=groups))))
