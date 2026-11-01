@@ -88,14 +88,20 @@ def _admitted_visible_lane_members(
         match = _identity(event)
         stamp = _stamp(event.get("observed_at"))
         raw_id = event.get("event_id")
-        if (match is None or stamp is None or not isinstance(raw_id, str)
-                or not _EVENT_ID.fullmatch(raw_id)):
+        # The shipped lane engine coerces IDs *before* first-(ref, ID)
+        # duplicate admission. A nonliteral first ID (e.g. 17) must consume
+        # the same source slot as a later literal "17", even though the
+        # nonliteral row itself is never scoreable as visible evidence.
+        source_id = str(raw_id or "")
+        if match is None or stamp is None or not _EVENT_ID.fullmatch(source_id):
             continue
         ref = match[0]
-        key = (ref, raw_id)
+        key = (ref, source_id)
         if key in admitted:
             continue
         admitted.add(key)
+        if not isinstance(raw_id, str) or not _EVENT_ID.fullmatch(raw_id):
+            continue
         owners.setdefault(raw_id, set()).add(ref)
         visible = visible_identities.get(raw_id)
         if ref in published and visible is not None and visible[0] == match[:4] and stamp in visible[1]:
