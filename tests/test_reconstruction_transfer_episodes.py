@@ -136,6 +136,24 @@ def test_exact_scope_isolation_keeps_reused_token_pairs_separate():
                               event(2, ref(2), token=None)])["items"] == []
 
 
+
+def test_missing_legacy_scope_cannot_recover_multi_record_token_episodes():
+    # Legacy unknown scope is not a wildcard or a proof of one capture actor.
+    observations = [
+        event(1, ref(1), "copy"), event(2, ref(2), "paste"),
+        event(3, ref(3), "copy"), event(4, ref(4), "paste"),
+    ]
+    for field in ("organization_id", "actor_id", "device_id", "session_id"):
+        unknown = [dict(row) for row in observations]
+        for row in unknown:
+            row.pop(field)
+        result = linked_work_items(unknown)
+        assert result["items"] == [], field
+        assert result["ambiguous_clipboard_transfer_groups"] == 1, field
+        assert result["recovered_disjoint_clipboard_transfer_episodes"] == 0, field
+
+
+
 def test_bounded_recovery_refuses_large_reused_token_without_partial_links():
     # The cap applies to the whole token group, not the first 64 episodes.
     observations = [
