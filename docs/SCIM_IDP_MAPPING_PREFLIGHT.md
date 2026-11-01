@@ -491,3 +491,30 @@ Before rollout, an explicitly authorized disposable Entra/Okta tenant must
 show the **actual emitted** operation verbs, paths, values, 428/412 stale
 ETag refusal, provider-scoped User IDs, revocation and offboarding behavior.
 These synthetic offline checks are not live provider/customer acceptance.
+
+
+## Group PATCH per-request operation limit (offline only)
+
+The shipped Group PATCH handler accepts **1–20 operations in one HTTP PATCH
+request**. The optional `groups.patch_operations` declaration is a list of
+*possible* client operations, not an observed HTTP request or a promise that
+all declared operations are emitted together. It remains bounded to 32
+declarations for offline review. When a mapping declares **21–32**
+operations, the preflight adds the nonblocking
+`group_patch_single_request_limit` caution: **those operations cannot all
+be sent together in one supported Group PATCH request**. They may be valid
+when distributed across separate versioned requests, but only actual
+IdP traffic can establish batching and order.
+
+This caution does not alter `status`, `checked.group_patch_operations`,
+the existing disabled-Group blockers, or Group server behavior. Zero
+declarations do not claim a valid empty PATCH request: an actual empty
+operations array is refused by the server. More than 32 declarations
+remain invalid offline input. The preflight never reads or echoes
+operation values, opaque member IDs, tenant data or credentials.
+
+Before rollout, inspect disposable, authorized IdP Group PATCH requests:
+verify each envelope has 1–20 operations, the exact current Group ETag,
+operation ordering and membership results, and 428/412 behavior for missing
+or stale versions. These synthetic mapping checks are **not** real
+Entra/Okta conformance or company rollout acceptance.
