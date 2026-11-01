@@ -124,11 +124,15 @@ def main(argv: list[str] | None = None, *, provider_opener=None,
             "--port", str(args.port), "--consent-local-journal-read",
             "--consent-local-append",
         ]
+        # Once control enters the append component, an exception or malformed
+        # receipt cannot prove the POST did not happen. Default to uncertain.
+        possible_append = True
         append_code, append_report = _child(
             append_main, append_args, opener=local_opener,
         )
         if append_code != 0:
-            possible_append = append_report.get("possible_local_append") is True
+            possible_append = (append_report.get("possible_local_append") is not False
+                               or append_report.get("local_owg_append_performed") is True)
             print(json.dumps({
                 "format": "openworkgraph.servicenow-selected-run.v1",
                 "status": "append_unverified" if possible_append else "append_refused",
