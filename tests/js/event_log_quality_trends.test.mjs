@@ -164,6 +164,7 @@ test('batch drill-down shows bounded, counts-only rejection categories with over
       rejected_by_reason:reasons,reason_counts_can_overlap:true}}];
   const d=view.detail(reports,2);
   assert.equal(d.batch,'Append 2');
+  assert.equal(d.created_at,'2026-11-01T18:00:00Z');
   assert.equal(d.transform,'aaaaaaaaaaaa');
   assert.equal(d.accepted,'20');
   assert.equal(d.rejected,'10');
