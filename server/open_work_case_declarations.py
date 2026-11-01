@@ -1002,3 +1002,154 @@ def clear_case_declarations() -> None:
 __all__ = ["CaseDeclarationError", "save_case_declaration",
            "list_case_declarations", "delete_case_declaration",
            "purge_case_declaration", "clear_case_declarations"]
+
+
+def create_case_declaration_batch(
+    scope_ref: str, items: list[dict[str, Any]], *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Atomically create 1–4 reviewed owner declarations in the SAME ledger.
+
+    Batch creation never revises an existing declaration. Every new item has
+    explicit create-only CAS (revision 0, no incarnation token). Dependencies
+    may reference current same-scope approvals or other items in this batch,
+    irrespective of input order. The entire transaction rolls back on failure.
+    No provider read, source status, inferred obligation or agent permission.
+    """
+    _check_ref(scope_ref, _SCOPE, "source scope")
+    if not isinstance(items, list) or not 1 <= len(items) <= 4:
+        raise CaseDeclarationError("invalid bounded declaration batch")
+
+    required = {
+        "work_item_ref", "goal_code", "expected_outcome_code",
+        "depends_on_work_item_refs", "expected_revision", "expected_edit_token",
+    }
+    by_ref: dict[str, dict[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, dict) or set(item) != required:
+            raise CaseDeclarationError("invalid exact batch declaration fields")
+        ref = item["work_item_ref"]
+        _check_ref(ref, _REF, "work item reference")
+        if ref in by_ref:
+            raise CaseDeclarationError("duplicate batch declaration")
+        if (item["goal_code"] not in _GOALS or
+            item["expected_outcome_code"] not in _EXPECTED or
+            type(item["expected_revision"]) is not int or
+            item["expected_revision"] != 0 or
+            item["expected_edit_token"] is not None):
+            raise CaseDeclarationError("batch requires explicit create-only owner approval")
+        dependencies = item["depends_on_work_item_refs"]
+        if not isinstance(dependencies, list) or len(dependencies) > _MAX_DEPENDENCIES:
+            raise CaseDeclarationError("invalid bounded batch dependencies")
+        for dep in dependencies:
+            _check_ref(dep, _REF, "dependency")
+        if ref in dependencies or len(set(dependencies)) != len(dependencies):
+            raise CaseDeclarationError("duplicate or self-referential batch dependency")
+        by_ref[ref] = {**item, "depends_on_work_item_refs": list(dependencies)}
+
+    # Deterministic topological admission: a dependent may precede its
+    # prerequisite in the submitted JSON, but cycles never become roots.
+    pending = set(by_ref)
+    ordered: list[str] = []
+    while pending:
+        ready = sorted(
+            ref for ref in pending
+            if all(dep not in by_ref or dep in ordered
+                   for dep in by_ref[ref]["depends_on_work_item_refs"])
+        )
+        if not ready:
+            raise CaseDeclarationError("cyclic batch owner dependency")
+        ordered.extend(ready)
+        pending.difference_update(ready)
+
+    current = _current(now)
+    days = _retention_days()
+    if days is None:
+        raise CaseDeclarationError("durable declarations require retained human history")
+    required_reviews = set(by_ref)
+    for item in by_ref.values():
+        required_reviews.update(item["depends_on_work_item_refs"])
+    reviewed = _reviewed(current)
+    if any(ref not in reviewed for ref in required_reviews):
+        raise CaseDeclarationError("batch case or prerequisite lacks current review")
+
+    with _database(create=True) as db:
+        assert db is not None
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            live_reviewed = _reviewed(current)
+            if any(live_reviewed.get(ref) != reviewed[ref]
+                   for ref in required_reviews):
+                raise CaseDeclarationError("batch review revoked or replaced")
+            live_days = _retention_days()
+            if live_days is None:
+                raise CaseDeclarationError("batch retention revoked")
+            days = min(days, live_days)
+            _prune(db, current, days, live_reviewed)
+
+            # Reject the whole batch before any insertion if even one case
+            # already exists or the global 50-case capacity would overflow.
+            if any(_get(db, ref) is not None for ref in by_ref):
+                raise CaseDeclarationError("stale batch create revision")
+            count = db.execute("SELECT COUNT(*) FROM declarations").fetchone()[0]
+            if count + len(by_ref) > _MAX_ITEMS:
+                raise CaseDeclarationError("local declaration limit reached")
+
+            saved: dict[str, dict[str, Any]] = {}
+            for ref in ordered:
+                item = by_ref[ref]
+                dependency_expiries: list[datetime] = []
+                for dep in item["depends_on_work_item_refs"]:
+                    prerequisite = _get(db, dep)
+                    if prerequisite is None or prerequisite[1] != scope_ref:
+                        raise CaseDeclarationError("batch prerequisite scope or approval changed")
+                    if (datetime.fromisoformat(prerequisite[6]) > current or
+                        datetime.fromisoformat(prerequisite[7]) > current):
+                        raise CaseDeclarationError("batch prerequisite newer than approval")
+                    dependency_expiries.append(datetime.fromisoformat(prerequisite[8]))
+                expires = min(
+                    current + timedelta(days=days),
+                    live_reviewed[ref][1], *dependency_expiries,
+                )
+                if expires <= current:
+                    raise CaseDeclarationError("batch prerequisite approval expired")
+                db.execute(
+                    "INSERT INTO declarations VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (ref, scope_ref, item["goal_code"],
+                     item["expected_outcome_code"],
+                     json.dumps(item["depends_on_work_item_refs"]), 1,
+                     current.isoformat(), current.isoformat(), expires.isoformat(),
+                     secrets.token_hex(16)),
+                )
+                row = _get(db, ref)
+                if row is None:
+                    raise CaseDeclarationError("batch saved declaration unavailable")
+                saved[ref] = _public(row)
+
+            # Recheck outside-store review and policy before committing the
+            # entire DAG. This narrows, but cannot eliminate, cross-process
+            # source-grant/review revocation races.
+            final_reviewed = _reviewed(current)
+            if any(final_reviewed.get(ref) != live_reviewed[ref]
+                   for ref in required_reviews):
+                raise CaseDeclarationError("batch review changed before commit")
+            if _retention_days() != live_days:
+                raise CaseDeclarationError("batch retention changed before commit")
+            db.execute("COMMIT")
+        except Exception:
+            db.execute("ROLLBACK")
+            raise
+
+    return {
+        "format": "openworkgraph.local-case-declaration-batch.v1",
+        "created_count": len(ordered),
+        "items": [saved[ref] for ref in ordered],
+        "atomic_local_commit": True,
+        "source_read_performed": False,
+        "source_write_performed": False,
+        "business_obligation_verified": False,
+        "expected_outcome_verified": False,
+        "customer_outcome_verified": False,
+        "agent_execution_authorized": False,
+        "not_synced": True,
+    }
