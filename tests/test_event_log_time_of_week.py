@@ -140,3 +140,85 @@ def test_new_dimensions_do_not_grant_raw_sql_or_event_case_scope_mixing():
     with pytest.raises(workspace.EventLogWorkspaceError, match="unknown cases dimension"):
         query.parse({"level": "cases", "dimensions": ["start_hour_utc; DROP TABLE events"],
                      "measures": [{"fn": "count"}]})
+
+
+def test_explicit_iana_local_weekday_hour_tracks_spring_and_fall_dst():
+    # Stockholm spring jump skips 02:xx; autumn 02:xx repeats. These are
+    # observed wall-clock bins, not disjoint UTC hours or labor-time estimates.
+    log = _import([
+        ("spring_before", "Seen", "2024-03-31T00:30:00Z"),
+        ("spring_after", "Seen", "2024-03-31T01:30:00Z"),
+        ("fall_first", "Seen", "2024-10-27T00:30:00Z"),
+        ("fall_second", "Seen", "2024-10-27T01:30:00Z"),
+    ])
+    result = query.run(log, {
+        "level": "cases", "dimensions": ["start_weekday_local", "start_hour_local"],
+        "time_zone": "Europe/Stockholm", "measures": [{"fn": "count"}],
+        "order": "dimensions",
+    })
+    assert result["rows"] == [
+        ["7 Sunday", "01", 1],
+        ["7 Sunday", "02", 2],
+        ["7 Sunday", "03", 1],
+    ]
+    assert result["spec"]["time_zone"] == "Europe/Stockholm"
+    assert result["matching"]["cases"] == 4
+    assert result["rows_truncated"] is False
+
+
+def test_local_start_and_end_may_cross_weekday_boundary_and_can_be_saved():
+    log = _import([
+        ("overnight", "Start", "2024-01-07T23:30:00Z"),
+        ("overnight", "End", "2024-01-08T01:30:00Z"),
+    ])
+    spec = {
+        "level": "cases", "dimensions": ["start_weekday_local", "end_hour_local"],
+        "time_zone": "Europe/Stockholm",
+        "measures": [{"fn": "count"}], "order": "dimensions",
+    }
+    saved = query.save(log, {"name": "Stockholm overnight", "spec": spec})
+    reloaded = query.list_saved(log)["analyses"][0]
+    assert reloaded["analysis_id"] == saved["analysis_id"]
+    assert reloaded["spec"]["time_zone"] == "Europe/Stockholm"
+    assert query.run(log, reloaded["spec"])["rows"] == [["1 Monday", "02", 1]]
+    assert _run(log, ["start_weekday_utc", "start_hour_utc"])["rows"] == [
+        ["7 Sunday", "23", 1],
+    ]
+
+
+@pytest.mark.parametrize("zone", [
+    None, "Not/A_Real_Time_Zone", "../etc/passwd", "Europe/Stockholm'; DROP TABLE ce; --",
+])
+def test_local_time_requires_a_valid_bound_iana_zone(zone):
+    spec = {"level": "cases", "dimensions": ["start_hour_local"],
+            "measures": [{"fn": "count"}]}
+    if zone is not None:
+        spec["time_zone"] = zone
+    with pytest.raises(workspace.EventLogWorkspaceError, match="time_zone|analysis is invalid"):
+        query.parse(spec)
+
+
+def test_zone_cannot_silently_change_utc_or_event_level_analyses():
+    for spec in [
+        {"level": "cases", "dimensions": ["start_hour_utc"],
+         "time_zone": "Europe/Stockholm", "measures": [{"fn": "count"}]},
+        {"level": "events", "dimensions": ["hour"],
+         "time_zone": "Europe/Stockholm", "measures": [{"fn": "count"}]},
+        {"level": "events", "dimensions": ["start_hour_local"],
+         "time_zone": "Europe/Stockholm", "measures": [{"fn": "count"}]},
+    ]:
+        with pytest.raises(workspace.EventLogWorkspaceError):
+            query.parse(spec)
+
+
+def test_local_time_zone_parameter_order_with_case_attribute_dimension():
+    # Both the IANA zone and attribute name are bound SELECT parameters;
+    # neither can be spliced into the SQL compiler as an identifier.
+    log = _cases()
+    result = query.run(log, {
+        "level": "cases", "dimensions": ["start_hour_local", "attribute:priority"],
+        "time_zone": "Europe/Stockholm", "measures": [{"fn": "count"}],
+        "order": "dimensions",
+    })
+    assert result["matching"]["cases"] == 5
+    assert sum(row[-1] for row in result["rows"]) == 5
