@@ -237,6 +237,18 @@ semantics; valid literal record identity and same-app ambiguity still work.
 These are evaluator admission checks, not changes to production grouping or
 claims that the identity is provider-verified.
 
+For **valid literal** record identities, linked-item visible/source admission
+now compares only the production linker's normalized opaque reference,
+provider, kind and host. Case-only differences in those strings and extra
+reference annotations that the linker does not use are not reasons to discard
+an otherwise identical visible observation. Distinct normalized providers,
+kinds, hosts or refs still fail closed; invalid/nonliteral identity claims
+remain raw or rejected, never silently converted into valid authority. Source
+organization/actor/device isolation is still enforced by the original
+authorized observations, not reconstructed from redacted rich evidence. This
+corrects evaluator-only false-negative admission, not verified provider
+identity, cross-record semantic linking, or the preregistered holdout score.
+
 An explicit `source_events: []` (or null) is authoritative: if source
 evidence has been revoked/deleted, neither the record-lane nor linked-item
 evaluation may fall back to a stale `presented_evidence` snapshot and
