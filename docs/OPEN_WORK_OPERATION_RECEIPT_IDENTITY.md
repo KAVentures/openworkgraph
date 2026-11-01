@@ -215,3 +215,33 @@ production-shaped Jira fixture now includes the adapter's actual scope, so
 previously valid Jira resolution tests remain realistic. No provider adapter,
 source permissions, REST/MCP contract, background reads or business writes
 change. Native pytest and real-tenant/provider acceptance must still run.
+
+
+## Bounded explicit source receipt timestamps
+
+The provider-read `source_evidence.verified_at` and Jira's separately
+reported `verified_operational_outcome.source_timestamp` now share one
+strict post-read timestamp contract. Each must be a string of at most 64
+characters, with an explicit calendar date, `T` separator, hours/minutes/
+seconds, optional 1–9 fractional digits and an explicit `Z` or `±HH:MM`
+timezone offset. The parsed datetime must be timezone-aware. The existing
+source freshness limit (maximum 15 minutes by default, bounded by 1 hour)
+and Jira resolution-versus-read clock-skew check remain unchanged.
+
+Python's permissive `datetime.fromisoformat` alone accepts week dates,
+compact dates, space separators and other formats that production adapters
+do not emit. It can also receive non-string or very long injected metadata.
+These forms now fail closed before parsing: malformed source read times yield
+`unknown/invalid_provider_receipt_timestamp`; malformed Jira resolution
+times yield `unknown/provider_resolution_detail_conflict`. Neither path
+reflects the invalid value, provider exception or customer text in the
+returned receipt.
+
+The fake-reader regressions cover four provider-operation families, valid
+UTC `Z`, explicit offset and fractional-second controls, ambiguous dates,
+non-string values, and 100 KB untrusted timestamps. These are source-metadata
+admission tests, **not** proof that a provider read occurred, that a tenant
+grant was current, that consent or revocation was fenced, or that an agent
+caused a verified customer/business outcome. No new source read, permission,
+route, background action, credential, retention behavior or execution
+authority is introduced.
