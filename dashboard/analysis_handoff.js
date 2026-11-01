@@ -92,6 +92,10 @@
     const dateLabel = value => typeof value === 'string' &&
       (/^\d{4}-\d{2}-\d{2}$/.test(value) || instant(value)) &&
       calendarDay(value) && Number.isFinite(Date.parse(value));
+    // Date-only chunk labels denote UTC midnight; timestamped labels retain
+    // their full fractional precision and explicit offset for comparisons.
+    const chunkInstant = value => /^\d{4}-\d{2}-\d{2}$/.test(value)
+      ? value + 'T00:00:00Z' : value;
     // Displayed date chunks must not claim observations outside this selection.
     // 'all' is unbounded; 'current' may have a recorder-run start bound.
     const bounds = d?.window;
@@ -136,26 +140,31 @@
                   !count(x.event_rows)) return false;
               // A displayed stepwise plan must not silently repeat, overlap,
               // reverse or reorder evidence windows. Date-only labels are UTC.
-              const since = Date.parse(x.since), until = Date.parse(x.until);
+              const sinceInstant = chunkInstant(x.since), untilInstant = chunkInstant(x.until);
+              const since = Date.parse(sinceInstant);
               // The backend groups rows by UTC date and clips that one-day
               // window to the selected period. A multi-day or midnight-
               // crossing chunk would falsely advertise daily coverage.
-              const nextUtcMidnight = Math.floor(since / 86400000) * 86400000 + 86400000;
+              const nextUtcMidnight = new Date(
+                Math.floor(since / 86400000) * 86400000 + 86400000).toISOString();
               // A positive-count chunk must overlap the actual observed span.
               // The chunk end is exclusive; do not present events before the
               // first or after the last observed event as supported evidence.
               if (x.event_rows > 0 &&
                   (!instant(first) || !instant(last) ||
-                   until <= Date.parse(first) || since > Date.parse(last)))
+                   compareExactInstants(untilInstant, first) <= 0 ||
+                   compareExactInstants(sinceInstant, last) > 0))
                 return false;
-              return since < until && until <= nextUtcMidnight &&
-                (windowStart === null || since >= windowStart) &&
-                (windowEnd === null || until <= windowEnd) &&
+              return compareExactInstants(sinceInstant, untilInstant) < 0 &&
+                compareExactInstants(untilInstant, nextUtcMidnight) <= 0 &&
+                (windowStart === null || compareExactInstants(sinceInstant, bounds.since) >= 0) &&
+                (windowEnd === null || compareExactInstants(untilInstant, bounds.until) <= 0) &&
                 // A daily plan is one entry per UTC calendar date, not
                 // several disjoint fragments of the same day. UTC instants
                 // (rather than textual timezone labels) define identity.
-                (i === 0 || (Date.parse(list[i - 1].until) <= since &&
-                  Math.floor(Date.parse(list[i - 1].since) / 86400000) <
+                (i === 0 || (compareExactInstants(
+                  chunkInstant(list[i - 1].until), sinceInstant) <= 0 &&
+                  Math.floor(Date.parse(chunkInstant(list[i - 1].since)) / 86400000) <
                     Math.floor(since / 86400000)));
             }))));
     // Both maps partition the selected events; a date plan may list only
@@ -189,8 +198,8 @@
     // A conserved row total alone cannot prove that the displayed dates
     // contain the first/last observed event. The end bound is exclusive.
     const containsInstant = (chunk, value) => chunk && instant(value) &&
-      Date.parse(chunk.since) <= Date.parse(value) &&
-      Date.parse(value) < Date.parse(chunk.until);
+      compareExactInstants(chunkInstant(chunk.since), value) <= 0 &&
+      compareExactInstants(value, chunkInstant(chunk.until)) < 0;
     const explicitEndpointsValid = coverageFlag == null || d.canonical_rows === 0 ||
       (Array.isArray(listed) && listed.length > 0 &&
         containsInstant(listed[0], first) &&
