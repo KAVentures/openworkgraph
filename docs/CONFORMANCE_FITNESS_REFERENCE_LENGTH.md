@@ -127,3 +127,28 @@ statistics, thresholds, returned fields, authenticated REST/MCP/dashboard
 contracts, consent, retention, tenant isolation, provenance or agent-action
 authorization. Native cross-platform CI and consenting-provider/customer
 acceptance remain separate required gates.
+
+
+## Optional root-cause activity metadata (R6 direct-call validation)
+
+The root-cause API's optional `activity` field is included in returned
+`outcome` metadata even for `rework` and `duration_over`, which do not use
+it as a filter. Previously a direct Python call could pass a list, mapping,
+number or an arbitrarily long string for this unused field; the malformed
+value could then appear in the response. The HTTP route already limits
+`activity` to an optional string of at most 200 characters.
+
+All direct callers now receive `EventLogWorkspaceError` **before saved-log
+access** for a supplied non-string or string longer than 200 characters,
+regardless of outcome kind. `None`, empty strings for outcomes that do not
+use activity, literal whitespace and strings up to 200 characters retain
+their existing meaning. `contains_activity` and `ends_with` still require
+a nonempty activity. The four outcomes, query predicates, statistics,
+response keys and REST/MCP/dashboard compatibility are unchanged.
+
+The new parameterized tests are synthetic, with mocked query access: they
+cover invalid optional activity across all outcome kinds, accepted
+boundaries, and required-target empty-string rejection. Native Ubuntu,
+macOS, Windows and browser/packaging/scale CI remains a separate merge gate.
+No provider/customer acceptance, causal claim, tenant authorization,
+consent, retention, provenance or agent action is inferred from this fix.
