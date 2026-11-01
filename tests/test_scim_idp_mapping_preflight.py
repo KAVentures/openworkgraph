@@ -621,11 +621,10 @@ def test_overlapping_contact_patch_paths_warn_without_claiming_duplicate_target(
     ["emails.value", 'emails[type eq "work"].display'],
     ['emails[type eq "work"].value', 'emails[type eq "work"].primary'],
     ['emails[type eq "work"]', 'emails[type eq "home"].value'],
-    ['emails[type eq "work"].value', 'emails[value eq "work"].value'],
 ], ids=[
     "whole-array-only", "distinct-all-contacts-children",
     "different-child-fields", "distinct-selected-children",
-    "distinct-selected-type", "different-selector-kinds",
+    "distinct-selected-type",
 ])
 def test_nonoverlapping_declared_contact_paths_do_not_get_overlap_warning(paths):
     users = mapping()["users"]
@@ -1794,7 +1793,7 @@ def test_pathless_deactivation_cli_does_not_claim_missing_active_or_live_success
     (['emails[type eq "work"]', 'emails[type eq "work"].primary'], True),
     (['emails[type eq "work"].value', 'emails[type eq "work"].primary'], False),
     (['emails[type eq "work"]', 'emails[type eq "home"].value'], False),
-    (['emails[type eq "work"]', 'emails[value eq "work"].value'], False),
+    (['emails[type eq "work"]', 'emails[value eq "work"].value'], True),
     (["emails"], False),
     (["emails", 'urn:ietf:params:scim:schemas:core:2.0:User:emails[type eq "work"].value'], True),
 ], ids=["whole-plus-selector", "all-value-plus-selector", "selected-whole-plus-child",
@@ -1913,3 +1912,83 @@ def test_pathless_contact_object_overlap_respects_supported_write_shapes(
         assert finding["path"] == "users.patch_operations"
         assert finding["severity"] == "caution"
     assert "live_validation_required" in codes(report)
+
+
+# Different selector kinds can identify the SAME stored contact:
+# {"type": "work", "value": "private@example.test"} satisfies both.
+# This is a data-dependent caution, not a claim that any real IdP emits
+# either request, and distinct literal selectors of one kind stay separate.
+@pytest.mark.parametrize("client", ["entra", "okta", "other"])
+@pytest.mark.parametrize("declaration_mode", ["legacy", "operations", "mixed"])
+@pytest.mark.parametrize("first,second,overlap", [
+    ('emails[type eq "work"].value',
+     'emails[value eq "private@example.test"].value', True),
+    ('emails[type eq "work"].primary',
+     'emails[value eq "private@example.test"].display', True),
+    ('emails[type eq "work"].value',
+     'emails[type eq "home"].value', False),
+    ('emails[value eq "a@example.test"].value',
+     'emails[value eq "b@example.test"].value', False),
+    ('emails[type eq "work"].value',
+     'emails[type eq "work"].primary', False),
+], ids=["type-and-value-same-child", "type-and-value-different-children",
+        "different-types", "different-values", "same-selector-distinct-children"])
+def test_mixed_contact_selector_kinds_are_potentially_overlapping(
+        client, declaration_mode, first, second, overlap):
+    from gateway.scim_user_emails import _path
+    _path(first)
+    _path(second)
+    users = mapping()["users"]
+    if declaration_mode == "legacy":
+        users["patch_attributes"] = [first, second]
+    elif declaration_mode == "operations":
+        users["patch_attributes"] = []
+        users["patch_operations"] = [
+            {"op": "remove", "path": first},
+            {"op": "remove", "path": second},
+        ]
+    else:
+        users["patch_attributes"] = [first]
+        users["patch_operations"] = [{"op": "remove", "path": second}]
+    report = assess(mapping(client=client, users=users))
+    findings = [finding for finding in report["findings"]
+                if finding["code"] == "overlapping_contact_patch_paths"]
+    assert bool(findings) is overlap
+    assert report["status"] == "requires_live_validation"
+    assert "unsupported_attribute" not in codes(report)
+    assert "unsupported_user_patch_path" not in codes(report)
+    if overlap:
+        assert len(findings) == 1
+        assert findings[0]["severity"] == "caution"
+        assert findings[0]["path"] == (
+            "users.patch_attributes" if declaration_mode == "legacy"
+            else "users.patch_operations")
+    serialized = json.dumps(report)
+    assert "private@example.test" not in serialized
+    assert "a@example.test" not in serialized
+    assert "b@example.test" not in serialized
+
+
+def test_mixed_contact_selector_overlap_cli_preserves_blocker_and_privacy():
+    secret = "private+selector@example.test"
+    users = mapping()["users"]
+    users["create_attributes"] = ["active"]  # Existing blocker must survive.
+    users["patch_attributes"] = ['emails[type eq "work"].value']
+    users["patch_operations"] = [
+        {"op": "remove", "path": f'emails[value eq "{secret}"].primary'},
+    ]
+    completed = subprocess.run(
+        [sys.executable, str(SCRIPT), "-"],
+        input=json.dumps(mapping(client="okta", users=users)),
+        capture_output=True, text=True, check=False,
+    )
+    assert completed.returncode == 2, completed.stderr
+    report = json.loads(completed.stdout)
+    assert report["status"] == "blocked"
+    assert {"missing_stable_username", "overlapping_contact_patch_paths",
+            "contact_value_selector", "live_validation_required"} <= codes(report)
+    overlap = next(item for item in report["findings"]
+                   if item["code"] == "overlapping_contact_patch_paths")
+    assert overlap["path"] == "users.patch_operations"
+    assert secret not in completed.stdout + completed.stderr
+    assert "emails[value" not in completed.stdout + completed.stderr
