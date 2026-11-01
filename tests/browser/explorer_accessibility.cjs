@@ -342,6 +342,28 @@ const path=require('node:path');
    assert.equal(suiteReceipt.plan.reviewed_group.revision,4);
    assert.deepEqual(suiteReceipt.plan.selected_evidence.execution_ids,['execution:synthetic_ref']);
    assert(!JSON.stringify(suiteReceipt).includes('Reviewed synthetic example'));
+   // Portable scenario *template* (no grades) can be explicitly saved and
+   // reopened after a fresh review, without treating a receipt as authority.
+   const suiteTemplateDownload=page.locator('#owgExplorerSuiteTemplateDownload');
+   assert.equal(await suiteTemplateDownload.isDisabled(),false);
+   const templatePending=page.waitForEvent('download');
+   await suiteTemplateDownload.focus();await page.keyboard.press('Enter');
+   const templateArtifact=await templatePending;
+   assert.equal(templateArtifact.suggestedFilename(),'owg-invented-shadow-scenarios.json');
+   const template=JSON.parse(await fs.readFile(await templateArtifact.path(),'utf8'));
+   const savedSuiteTemplateBytes=await fs.readFile(await templateArtifact.path());
+   assert.equal(template.schema,'openworkgraph.synthetic_shadow_suite_template.v1');
+   assert.equal(template.kind,'local_invented_scenarios_unrun');
+   assert.equal(template.execution_permitted,false);
+   assert.equal(template.source_identity_verified,false);
+   assert.equal(template.real_shadow_test_status,'not_run');
+   assert.equal(template.plan.validation.status,'not_run');
+   assert.equal(template.plan.reviewed_group.revision,4);
+   assert.deepEqual(template.plan.selected_evidence.execution_ids,['execution:synthetic_ref']);
+   assert.equal(template.invented_scenarios.length,2);
+   assert.deepEqual(template.invented_scenarios.map(row=>row.exception_decision),['abstain','continue']);
+   assert(!JSON.stringify(template).includes('synthetic_grade'),'a template never imports or exports grades');
+   assert(!JSON.stringify(template).includes('Reviewed synthetic example'),'private group labels must not leak');
    await suiteCases.nth(1).locator('textarea').fill(manifest.human_proposed_untrusted_criteria.normal_case_expected);
    await suiteCases.nth(1).locator('select').selectOption('unknown');
    assert.equal(await suiteDownload.isDisabled(),true,'edited case invalidates old suite receipt');
@@ -443,7 +465,51 @@ const path=require('node:path');
    assert.equal(await page.locator('#owgExplorerHandoffConfirmed').isChecked(),false,
      'import must never carry forward an approval');
    assert.equal(await downloadPlan.isDisabled(),true);
-   assert.equal(evidenceReads,readsBeforeImport,'file import must make no evidence/network request');
+   const templateImport=page.locator('#owgExplorerSuiteTemplateImport');
+   const templateMessage=page.locator('#owgExplorerSuiteTemplateStatus');
+   const uploadTemplate=(value)=>templateImport.setInputFiles({
+     name:'invented-scenarios.json',mimeType:'application/json',
+     buffer:Buffer.isBuffer(value)?value:Buffer.from(typeof value==='string'?value:JSON.stringify(value))
+   });
+   const restoredCases=page.locator('#owgExplorerSuiteCases .owg-explorer-suite-case');
+   await uploadTemplate(suiteReceipt);
+   await templateMessage.filter({hasText:/Not an unexecuted OWG invented-scenario template/}).waitFor();
+   await uploadTemplate('{bad');
+   await templateMessage.filter({hasText:/invalid JSON/}).waitFor();
+   await uploadTemplate({...template,execution_permitted:true});
+   await templateMessage.filter({hasText:/Template refused/}).waitFor();
+   await uploadTemplate({...template,plan:{...template.plan,reviewed_group:{...template.plan.reviewed_group,revision:5}}});
+   await templateMessage.filter({hasText:/review identity/}).waitFor();
+   await uploadTemplate({...template,invented_scenarios:[...template.invented_scenarios,
+     {...template.invented_scenarios[0],exception_decision:'execute'}]});
+   await templateMessage.filter({hasText:/Invented scenario 3/}).waitFor();
+   await uploadTemplate({...template,synthetic_aggregate_grade:'PASS'});
+   await templateMessage.filter({hasText:/Not an unexecuted OWG invented-scenario template/}).waitFor();
+   await uploadTemplate(Buffer.alloc(32769,65));
+   await templateMessage.filter({hasText:/32 KiB/}).waitFor();
+   await page.locator('#owgExplorerPlan_expected').fill('Edited proposed result');
+   await uploadTemplate(template);
+   await templateMessage.filter({hasText:/criteria differ/}).waitFor();
+   await page.locator('#owgExplorerPlan_expected').fill(
+     manifest.human_proposed_untrusted_criteria.normal_case_expected);
+   assert.equal(await restoredCases.count(),2);
+   await uploadTemplate(savedSuiteTemplateBytes);
+   await templateMessage.filter({hasText:/2 invented scenarios restored locally/}).waitFor();
+   assert.equal(await restoredCases.count(),2);
+   assert.equal(await restoredCases.nth(0).locator('textarea').inputValue(),
+     template.invented_scenarios[0].normal_observation);
+   assert.equal(await restoredCases.nth(1).locator('textarea').inputValue(),
+     template.invented_scenarios[1].normal_observation);
+   assert.equal(await restoredCases.nth(1).locator('select').inputValue(),'continue');
+   assert.equal(await page.locator('#owgExplorerHandoffConfirmed').isChecked(),false);
+   assert.equal(await suiteDownload.isDisabled(),true,'import cannot restore a prior grade or receipt');
+   assert.equal(await suiteRun.isDisabled(),true,'import cannot restore approval');
+   await audit(page,'#owgWorkflowExplorer','Reopened invented scenario template before approval');
+   await page.locator('#owgExplorerHandoffConfirmed').check();
+   await suiteRun.focus();await page.keyboard.press('Enter');
+   assert.match(await suiteStatus.textContent(),/SYNTHETIC SUITE FAIL/);
+   assert.equal(await suiteDownload.isDisabled(),false,'new explicit review and rerun create a new local result');
+   assert.equal(evidenceReads,readsBeforeImport,'file imports and local suite rerun must make no evidence/network request');
    await audit(page,'#owgWorkflowExplorer','Reopened unconfirmed local shadow plan');
    await page.locator('#owgExplorerHandoffConfirmed').check();
    assert.equal(await downloadPlan.isDisabled(),false,'new human confirmation can enable local download');
