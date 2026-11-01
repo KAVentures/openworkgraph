@@ -115,7 +115,7 @@ def _export_csv(rows: list[tuple[str, str, str, str]]) -> str:
 
 def _connect(path: Path) -> sqlite3.Connection:
     # mode=rw forbids SQLite silently creating a new file if a path disappears.
-    uri = "file:" + quote(str(path.resolve()), safe="/") + "?mode=rw"
+    uri = "file:" + quote(path.resolve().as_posix(), safe="/:") + "?mode=rw"
     db = sqlite3.connect(uri, uri=True, timeout=1, isolation_level=None)
     db.execute("PRAGMA trusted_schema=OFF")
     db.execute("PRAGMA secure_delete=ON")
