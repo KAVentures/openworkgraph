@@ -131,7 +131,7 @@ def test_authorization_confirmation_source_revocation_and_scope(local):
     assert client.post(BATCH, headers=auth, json={
         "confirm_batch_create": False, "items": [_item(A)],
     }).status_code == 403
-    assert client.post(BATCH, json=_batch(_item(A))).status_code == 403
+    assert client.post(BATCH, json=_batch(_item(A))).status_code == 401
     bearer = {"Authorization": "Bearer " + ensure_api_token()}
     assert client.post(BATCH, headers=bearer, json=_batch(_item(A))).status_code == 403
     foreign = {**auth, "Origin": "https://foreign.invalid"}
