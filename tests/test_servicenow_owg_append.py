@@ -289,6 +289,7 @@ def test_fastapi_route_requires_real_local_session_and_storage_confirmation(
     from server import event_log_routes
 
     data = setup_journal
+    monkeypatch.setattr(event_log_routes, "DATA_DIR", data[0])
     monkeypatch.setattr(event_log_routes, "dashboard_session_valid",
                         lambda value: value == SESSION)
     app = FastAPI()
