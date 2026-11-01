@@ -3283,3 +3283,42 @@ test('distinct empty and whitespace-only source keys do not collapse in review',
   assert.equal(h.tickets.length, 0);
   assert.equal(h.downloads, 0);
 });
+
+test('selected evidence count discloses larger retained history without inventing missing work', async () => {
+  const h = harness();
+  await settle();
+  h.reply(h.reads[0], {...h.preview('range', 'initial'), retained_rows: 12});
+  await settle();
+  assert.match(h.summary.textContent,
+    /2 recorded events selected \(12 retained rows reported; capture completeness unverified\)/);
+  const open = h.bars[0].controls.button.onclick();
+  await settle();
+  h.reply(h.reads[1], {...h.preview('range', 'selected'), retained_rows: 12});
+  await open;
+  assert.equal(h.modals, 1);
+  assert.match(h.modalHtml, /Coverage accounting: 2 selected recorded events out of 12 retained rows reported/);
+  assert.match(h.modalHtml, /not proof of inactivity or missed work/);
+  assert.match(h.modalHtml, /Retained rows do not prove complete capture/);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-selected']);
+  assert.equal(h.tickets.length, 0);
+  assert.equal(h.downloads, 0);
+});
+
+test('equal selected and retained counts still do not claim complete capture', async () => {
+  const h = harness();
+  await settle();
+  h.reply(h.reads[0], h.preview('range', 'initial'));
+  await settle();
+  assert.match(h.summary.textContent,
+    /2 recorded events selected \(2 retained rows reported; capture completeness unverified\)/);
+  const open = h.bars[0].controls.button.onclick();
+  await settle();
+  h.reply(h.reads[1], h.preview('range', 'equal'));
+  await open;
+  assert.match(h.modalHtml, /Coverage accounting: 2 selected recorded events out of 2 retained rows reported/);
+  assert.match(h.modalHtml, /Retained rows do not prove complete capture/);
+  assert.doesNotMatch(h.modalHtml, /all work (?:was|has been) captured/i);
+  assert.equal(h.tickets.length, 0);
+  assert.equal(h.downloads, 0);
+});
