@@ -169,3 +169,28 @@ exceptions and two negative controls. These tests do not prove live-provider
 availability, tenant isolation, revocation fencing or business completion.
 A successful authenticated provider state remains narrower than a customer
 outcome and never authorizes agent execution.
+
+## Jira resolution-detail consistency
+
+The existing Jira OAuth adapter emits a separate `verified_operational_outcome`
+only after its current issue status is `done`, its resolution object is
+present, and the source resolution date parses as a timezone-aware timestamp.
+A verified Jira operation receipt now additionally requires the adapter's
+detail `status=resolved` and a nonempty, bounded (at most 64 characters),
+timezone-aware `source_timestamp`. The resolution event must not be more
+than five minutes **after** the authenticated source-read `verified_at`
+clock; older valid resolutions remain acceptable because the current state
+is separately re-read. Contradictory or absent detail fields return
+`unknown/provider_resolution_detail_conflict` without echoing source text.
+
+This guards the distinction between Jira's current status category and its
+separate resolution evidence; a generic `done` label and a truthy
+`verified` flag cannot independently prove resolution. The Stripe
+processor-only and GitHub PR-merge contracts are unchanged. Synthetic tests
+cover eight contradictory detail statuses, eleven malformed/naive/future
+resolution timestamps, two missing-field cases, and five valid timestamp
+controls; existing four-provider positive regressions continue to apply.
+No provider adapter, OAuth grant, source read, endpoint, agent execution,
+or business write is introduced. This is a **post-read consistency check**,
+not live Jira tenant validation, a cryptographic provider attestation, an
+agent-causality claim, or evidence of customer/business completion.
