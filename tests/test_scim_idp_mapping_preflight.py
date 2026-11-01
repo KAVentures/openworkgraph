@@ -1438,7 +1438,7 @@ def test_group_patch_declaration_over_32_still_refuses_without_echoing_paths():
 
 
 @pytest.mark.parametrize("count,exit_code,warning", [
-    (20, 0, False), (21, 0, True), (32, 0, True), (33, 2, False),
+    (20, 0, False), (21, 0, True), (32, 0, True), (33, 1, False),
 ])
 def test_group_patch_request_cap_cli_reports_static_caution_without_values(
         tmp_path, count, exit_code, warning):
@@ -1459,4 +1459,5 @@ def test_group_patch_request_cap_cli_reports_static_caution_without_values(
         assert payload["checked"]["group_patch_operations"] == count
         assert ("group_patch_single_request_limit" in codes(payload)) is warning
     else:
-        assert payload["status"] == "invalid_mapping"
+        assert payload["status"] == "invalid_input"
+        assert payload["findings"][0]["code"] == "invalid_input"
