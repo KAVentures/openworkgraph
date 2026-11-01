@@ -99,6 +99,9 @@ CREATE TABLE IF NOT EXISTS signal_rules (
   log_id VARCHAR NOT NULL, rule_id VARCHAR NOT NULL, created_at TIMESTAMP NOT NULL,
   definition VARCHAR NOT NULL, last_evaluated_at TIMESTAMP, last_state VARCHAR
 );
+CREATE TABLE IF NOT EXISTS domain_pack_installs (
+  log_id VARCHAR NOT NULL, pack_id VARCHAR NOT NULL, installed_at TIMESTAMP NOT NULL, definition VARCHAR NOT NULL
+);
 CREATE TABLE IF NOT EXISTS signal_reviews (
   log_id VARCHAR NOT NULL, rule_id VARCHAR NOT NULL,
   state_fingerprint VARCHAR NOT NULL, acknowledged_at TIMESTAMP NOT NULL,
@@ -676,7 +679,7 @@ def delete_log(log_id: str) -> dict[str, Any]:
                 from .jira_retained_profiles import forget_dataset
                 forget_dataset(conn, log_id)
                 for table in ("object_relationships", "event_source_keys", "event_source_namespaces", "discovery_snapshots", "log_appends", "log_quality", "quarantine", "quarantine_decisions", "filter_sets",
-                              "metric_definitions", "saved_analyses", "signal_reviews", "signal_rules", "event_objects", "events", "objects",
+                              "domain_pack_installs", "metric_definitions", "saved_analyses", "signal_reviews", "signal_rules", "event_objects", "events", "objects",
                               "object_attribute_values",
                               "logs"):
                     conn.execute(f"DELETE FROM {table} WHERE log_id = ?", [log_id])
