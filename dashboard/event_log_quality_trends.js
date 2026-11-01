@@ -10,6 +10,26 @@
     unknown_transform:'Transform unknown',transform_changed:'Mapping changed',
     same_transform:'Same transform (descriptive)'};
   const MAX_VISIBLE = 100;
+  const REVIEW_STATUS = {recorded_issue:'Recorded issue — inspect',incomplete_evidence:'Incomplete evidence',
+    missing_report:'Missing quality report',no_recorded_issue:'No recorded issue (not source-complete)'};
+  const REVIEW_FIELDS = Object.fromEntries(METRICS);
+  Object.assign(REVIEW_FIELDS, {transform_unverified:'Transform unknown',
+    comparison_missing_intermediate_report:'Missing intermediate report',
+    comparison_unknown_transform:'Comparison transform unknown',
+    comparison_transform_changed:'Comparison mapping changed',
+    quality_report:'Quality report missing'});
+  function reviewRows(trends) {
+    if (!trends || !Array.isArray(trends.review_queue)) return [];
+    return trends.review_queue.slice(-MAX_VISIBLE).filter(r=>r && Number.isSafeInteger(r.batch) && r.batch>=0)
+      .map(r=>({
+        batchId:r.batch,batch:label(r.batch),
+        status:REVIEW_STATUS[r.status] || 'Unknown review status',
+        flags:Array.isArray(r.flags) ? r.flags.filter(k=>Object.hasOwn(REVIEW_FIELDS,k))
+          .map(k=>REVIEW_FIELDS[k]).join(', ') || 'None recorded' : 'Unknown',
+        unknown:Array.isArray(r.unknown_fields) ? r.unknown_fields
+          .filter(k=>Object.hasOwn(REVIEW_FIELDS,k)).map(k=>REVIEW_FIELDS[k]).join(', ') || 'None' : 'Unknown'
+      }));
+  }
   const count = x => Number.isSafeInteger(x) && x >= 0 ? String(x) : 'Unknown';
   const rate = x => typeof x === 'number' && Number.isFinite(x) && x >= 0 && x <= 1
     ? (x * 100).toFixed(2) + '%' : 'Unknown';
@@ -64,7 +84,7 @@
         'Rejection reasons were not recorded for this batch.'};
   }
   if (typeof module !== 'undefined' && module.exports)
-    module.exports = {rows,csv,csvCell,count,rate,change,status,detail,MAX_VISIBLE,MAX_REASONS};
+    module.exports = {rows,csv,csvCell,count,rate,change,status,detail,reviewRows,MAX_VISIBLE,MAX_REASONS};
   if (typeof document === 'undefined') return;
   const element = (tag,text) => {const e=document.createElement(tag);if(text!==undefined)e.textContent=text;return e;};
   const logId = () => document.getElementById('owgEventLogPick')?.value || '';
@@ -81,6 +101,10 @@
     message.id='owgQualityTrendsStatus';message.className='muted';
     message.setAttribute('role','status');message.setAttribute('aria-live','polite');
     const output=element('div');output.id='owgQualityTrendsTable';
+    const reviewPanel=element('section');reviewPanel.id='owgQualityReviewQueue';
+    const reviewOutput=element('div');reviewOutput.id='owgQualityReviewRows';
+    reviewPanel.append(element('h4','Batch quality review queue'),
+      element('p','Recorded problems and missing evidence are review prompts, not quarantine decisions or proof of upstream failure.'),reviewOutput);
     const drill=element('section');drill.id='owgQualityBatchDrilldown';
     const drillLabel=element('label','Inspect rejection reasons for batch: ');
     drillLabel.htmlFor='owgQualityBatchSelect';
@@ -88,7 +112,7 @@
     drillLabel.appendChild(drillSelect);
     const drillOutput=element('div');drillOutput.id='owgQualityBatchDetails';
     drill.append(element('h4','Batch rejection diagnostics'),drillLabel,drillOutput);
-    panel.append(element('h4','Import/append quality trends'),intro,run,download,message,output,drill);
+    panel.append(element('h4','Import/append quality trends'),intro,run,download,message,reviewPanel,output,drill);
     quality.appendChild(panel);
     const selected=logId();let ticket=0,loaded=null,loadedReports=[];
     const current=(id,n)=>panel.isConnected && logId()===id && ticket===n;
@@ -114,7 +138,7 @@
     drillSelect.addEventListener('change',showDetail);
     function clearState() {
       ++ticket;loaded=null;loadedReports=[];download.disabled=true;run.disabled=false;
-      output.replaceChildren();drillSelect.disabled=true;drillSelect.replaceChildren();
+      output.replaceChildren();reviewOutput.replaceChildren();drillSelect.disabled=true;drillSelect.replaceChildren();
       drillOutput.replaceChildren();
     }
     const picker=document.getElementById('owgEventLogPick');
@@ -140,6 +164,33 @@
         for(const batch of available){const option=element('option',label(batch.batch));option.value=String(batch.batch);drillSelect.appendChild(option);}
         drillSelect.disabled=!available.length;
         if(available.length){drillSelect.value=String(available[available.length-1].batch);showDetail();}
+        const queue=reviewRows(trends);
+        if (queue.length) {
+          const table=element('table');table.id='owgQualityReviewTable';
+          const head=element('thead'),hr=element('tr');
+          for(const heading of ['Batch','Review status','Recorded diagnostics','Unknown / incomparable','Inspect']){
+            const th=element('th',heading);th.scope='col';hr.appendChild(th);
+          }
+          head.appendChild(hr);
+          const body=element('tbody');
+          for(const item of queue) {
+            const tr=element('tr');
+            for(const value of [item.batch,item.status,item.flags,item.unknown])tr.appendChild(element('td',value));
+            const cell=element('td'),inspect=element('button','Inspect batch');
+            inspect.type='button';inspect.className='secondary';
+            inspect.disabled=!available.some(b=>b.batch===item.batchId);
+            inspect.setAttribute('aria-label','Inspect quality report for '+item.batch);
+            inspect.addEventListener('click',()=>{
+              if(!current(id,n) || inspect.disabled)return;
+              drillSelect.value=String(item.batchId);showDetail();drillSelect.focus();
+            });
+            cell.appendChild(inspect);tr.appendChild(cell);body.appendChild(tr);
+          }
+          table.append(head,body);const wrap=element('div');wrap.className='table-wrap';
+          wrap.appendChild(table);reviewOutput.appendChild(wrap);
+          if(trends.review_queue.length>MAX_VISIBLE)
+            reviewOutput.appendChild(element('p','Latest '+MAX_VISIBLE+' review entries shown.'));
+        } else reviewOutput.appendChild(element('p','No saved quality reports to review.'));
         const shown=rows(trends),missing=Array.isArray(trends.batches_without_report)?trends.batches_without_report.length:0;
         message.textContent=trends.batches.length+' reports; '+missing+' missing; '+
           (trends.batches.length>MAX_VISIBLE?'latest '+MAX_VISIBLE+' shown. ':'')+
