@@ -549,6 +549,40 @@
     return Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, value.trim()]));
   }
 
+  // A suite template is an untrusted, invented-input proposal, not a grade or
+  // execution receipt. A fresh matching review and identical criteria are
+  // required before any rows can be restored.
+  function importedSyntheticSuiteTemplate(template, state) {
+    const keys = ['schema', 'kind', 'created_at_utc', 'execution_permitted',
+      'source_identity_verified', 'real_shadow_test_status', 'plan', 'invented_scenarios'];
+    if (!template || typeof template !== 'object' || Array.isArray(template) ||
+        Object.keys(template).some(key => !keys.includes(key)) ||
+        template.schema !== 'openworkgraph.synthetic_shadow_suite_template.v1' ||
+        template.kind !== 'local_invented_scenarios_unrun' ||
+        template.execution_permitted !== false ||
+        template.source_identity_verified !== false ||
+        template.real_shadow_test_status !== 'not_run') {
+      throw new Error('Not an unexecuted OWG invented-scenario template v1.');
+    }
+    const criteria = importedShadowPlanCriteria(template.plan, state);
+    if (!completeShadowCriteria(state) ||
+        Object.keys(criteria).some(key => criteria[key] !== state.planCriteria[key])) {
+      throw new Error('Template criteria differ from the current proposed plan; reopen the matching plan first.');
+    }
+    const rows = template.invented_scenarios;
+    if (!Array.isArray(rows) || rows.length < 2 || rows.length > 8)
+      throw new Error('Template must contain 2–8 invented scenarios.');
+    return rows.map((row, index) => {
+      if (!row || typeof row !== 'object' || Array.isArray(row) ||
+          Object.keys(row).sort().join(',') !== 'exception_decision,normal_observation' ||
+          typeof row.normal_observation !== 'string' || row.normal_observation.length > 320 ||
+          !['unknown', 'abstain', 'continue'].includes(row.exception_decision)) {
+        throw new Error('Invented scenario ' + (index + 1) + ' is invalid or exceeds 320 characters.');
+      }
+      return {normal_observation: row.normal_observation, exception_decision: row.exception_decision};
+    });
+  }
+
   // Review and handoff are separate actions. The only export is an explicit
   // browser-local plan-only JSON download; no server export or execution occurs.
   function openHandoffReview(candidate, lane) {
@@ -616,6 +650,7 @@
     let syntheticException = null;
     const suiteRows = [];
     let suiteStatus = null, suiteRun = null, suiteDownload = null, suiteAdd = null;
+    let suiteTemplateDownload = null, suiteTemplateStatus = null;
     let nextSuiteId = 0;
     const suiteCases = () => suiteRows.map(row => ({
       normal_observation: row.observed.value.trim(), exception_decision: row.decision.value
@@ -815,7 +850,56 @@
       suiteStatus.id = 'owgExplorerSuiteStatus';
       suiteStatus.setAttribute('role', 'status');
       invalidateSuite();
-      suite.append(suiteAdd, suiteRun, suiteDownload, suiteStatus);
+      suiteTemplateDownload = button('Download invented scenario template JSON', () =>
+        downloadSyntheticSuiteTemplate(state, suiteCases()), true);
+      suiteTemplateDownload.id = 'owgExplorerSuiteTemplateDownload';
+      suiteTemplateDownload.disabled = true;
+      const suiteTemplateLabel = element('label',
+        'Reopen an invented scenario template JSON (local file only)');
+      const suiteTemplateImport = element('input');
+      suiteTemplateImport.id = 'owgExplorerSuiteTemplateImport';
+      suiteTemplateImport.type = 'file';
+      suiteTemplateImport.accept = '.json,application/json';
+      suiteTemplateLabel.appendChild(suiteTemplateImport);
+      suiteTemplateStatus = element('p',
+        'Only invented inputs can be restored after a fresh exact review, matching plan criteria and evidence inspection. No grades or approval are imported.', 'muted');
+      suiteTemplateStatus.id = 'owgExplorerSuiteTemplateStatus';
+      suiteTemplateStatus.setAttribute('role', 'status');
+      suiteTemplateImport.addEventListener('change', async () => {
+        const file = suiteTemplateImport.files?.[0];
+        suiteTemplateImport.value = '';
+        if (!file) return;
+        checkbox.checked = false;
+        invalidateRehearsal();
+        updateButtons();
+        if (!currentHandoffReview(state) || !state.shadowEligible) return;
+        if (file.size > 32768) {
+          suiteTemplateStatus.textContent = 'Template refused: file exceeds the 32 KiB local import limit.';
+          return;
+        }
+        try {
+          const raw = await file.text();
+          if (!currentHandoffReview(state)) return;
+          const restored = importedSyntheticSuiteTemplate(JSON.parse(raw), state);
+          suiteRows.splice(0).forEach(item => item.row.remove());
+          restored.forEach(item => {
+            addSuiteCase(true);
+            const row = suiteRows[suiteRows.length - 1];
+            row.observed.value = item.normal_observation;
+            row.decision.value = item.exception_decision;
+          });
+          renumberSuite();
+          suiteTemplateStatus.textContent = restored.length +
+            ' invented scenarios restored locally. No grades, results, permissions or acknowledgement were imported. Review and confirm before rerunning.';
+          updateButtons();
+        } catch (error) {
+          if (currentHandoffReview(state)) suiteTemplateStatus.textContent =
+            'Template refused: ' + (error instanceof SyntaxError ?
+              'invalid JSON.' : String(error.message || 'unrecognized template.'));
+        }
+      });
+      suite.append(suiteAdd, suiteRun, suiteDownload, suiteStatus,
+        suiteTemplateDownload, suiteTemplateLabel, suiteTemplateStatus);
       plan.appendChild(suite);
       [syntheticObservation, syntheticException].forEach(input => input.addEventListener('input', () => {
         checkbox.checked = false;
@@ -882,6 +966,7 @@
       if (suiteAdd) suiteAdd.disabled = suiteRows.length >= 8;
       if (suiteRun) suiteRun.disabled = shadow.disabled || suiteRows.length < 2;
       if (suiteDownload) suiteDownload.disabled = suiteRun.disabled || !state.suiteResult;
+      if (suiteTemplateDownload) suiteTemplateDownload.disabled = shadow.disabled || suiteRows.length < 2 || suiteRows.length > 8;
     };
     checkbox.addEventListener('change', updateButtons);
     Object.entries(planInputs).forEach(([key, input]) => input.addEventListener('input', () => {
@@ -1015,6 +1100,38 @@
       if (result) result.textContent = 'Synthetic-only receipt downloaded locally. Review invented text before sharing; no real test or provider call ran.';
     } catch {
       if (result) result.textContent = 'Synthetic receipt download unavailable; nothing sent or executed.';
+    }
+  }
+
+  function downloadSyntheticSuiteTemplate(state, currentCases) {
+    const checkbox = document.getElementById('owgExplorerHandoffConfirmed');
+    const status = document.getElementById('owgExplorerSuiteTemplateStatus');
+    if (!currentHandoffReview(state) || !checkbox?.checked || !completeShadowCriteria(state) ||
+        currentCases.length < 2 || currentCases.length > 8 ||
+        currentCases.some(row => typeof row.normal_observation !== 'string' ||
+          row.normal_observation.length > 320 ||
+          !['unknown', 'abstain', 'continue'].includes(row.exception_decision))) return;
+    try {
+      const template = {
+        schema: 'openworkgraph.synthetic_shadow_suite_template.v1',
+        kind: 'local_invented_scenarios_unrun',
+        created_at_utc: new Date().toISOString(),
+        execution_permitted: false, source_identity_verified: false,
+        real_shadow_test_status: 'not_run',
+        plan: shadowPlanManifest(state),
+        invented_scenarios: currentCases.map(row => ({...row}))
+      };
+      const url = URL.createObjectURL(new Blob([JSON.stringify(template, null, 2) + '\n'],
+        {type: 'application/json;charset=utf-8'}));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'owg-invented-shadow-scenarios.json';
+      document.body.appendChild(link);
+      try { link.click(); } finally { link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
+      if (status) status.textContent =
+        'Invented-only template downloaded locally. No grade, source verification, permission or execution was exported.';
+    } catch {
+      if (status) status.textContent = 'Template download unavailable. Nothing was sent or executed.';
     }
   }
 
