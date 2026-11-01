@@ -3164,7 +3164,7 @@ test('dominant reported source remains visible even when many zero-count labels 
   assert.match(h.modalHtml, /dominant-late: 12, runner-up-late: 2, zero-01: 0/);
   assert.doesNotMatch(h.modalHtml, /zero-07: 0|zero-08: 0/);
   assert.match(h.modalHtml,
-    /2 additional source categories \\(0 selected events\\) omitted from this preview/);
+    /2 additional source categories \(0 selected events\) omitted from this preview/);
   assert.match(h.modalHtml, /Highest selected-event counts appear first/);
   assert.match(h.modalHtml, /labels are not verified identities/);
   await h.modal['#analysisCopy'].onclick();
@@ -3185,7 +3185,7 @@ test('source summary counts omissions from the low-volume tail rather than impor
     /dominant-late: 25, runner-up-late: 10, third-late: 5, small-01: 1/);
   assert.doesNotMatch(h.modalHtml, /small-06: 1|small-07: 1|small-08: 1/);
   assert.match(h.modalHtml,
-    /3 additional source categories \\(3 selected events\\) omitted from this preview/);
+    /3 additional source categories \(3 selected events\) omitted from this preview/);
   assert.match(h.modalHtml, /48 recorded events/);
   await h.modal['#analysisCopy'].onclick();
   assert.deepEqual(h.copied, ['request-source-breakdown']);
@@ -3202,7 +3202,7 @@ test('equal-count source labels use deterministic literal-name tie ordering', as
     /alpha: 1, beta: 1, delta: 1, epsilon: 1, eta: 1, gamma: 1, iota: 1, kappa: 1/);
   assert.doesNotMatch(h.modalHtml, /theta: 1|zeta: 1/);
   assert.match(h.modalHtml,
-    /2 additional source categories \\(2 selected events\\) omitted from this preview/);
+    /2 additional source categories \(2 selected events\) omitted from this preview/);
   await h.modal['#analysisCopy'].onclick();
   assert.deepEqual(h.copied, ['request-source-breakdown']);
   assert.equal(h.tickets.length, 0);
