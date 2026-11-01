@@ -134,7 +134,17 @@ def predict_record_lanes(case: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _linked_projection(event: dict[str, Any]) -> tuple[Any, ...] | None:
+def _canonical_eval_json(value: Any) -> str | None:
+    """Bounded, type-preserving JSON comparison for evaluator evidence claims."""
+    try:
+        encoded = json.dumps(value, sort_keys=True, separators=(",", ":"),
+                             ensure_ascii=True, allow_nan=False)
+    except (TypeError, ValueError, OverflowError, RecursionError):
+        return None
+    return encoded if len(encoded) <= 65536 else None
+
+
+def _linked_projection(event: dict[str, Any]) -> str | None:
     """Visible, link-authorizing fields of one observation, not hidden identity.
 
     Rich evidence omits actor/device/organization, so those stay authoritative
@@ -152,7 +162,7 @@ def _linked_projection(event: dict[str, Any]) -> tuple[Any, ...] | None:
     for field in ("tab_context_id", "clipboard_transfer_id"):
         if field in event and (field not in metadata or event[field] != metadata[field]):
             return None
-    return (
+    return _canonical_eval_json((
         stamp, event.get("app"), event.get("event_type"),
         event.get("source"), event.get("session_id"),
         metadata.get("resource_reference"),
@@ -160,7 +170,7 @@ def _linked_projection(event: dict[str, Any]) -> tuple[Any, ...] | None:
         metadata.get("clipboard_transfer_id"),
         metadata.get("clipboard_source_observed"),
         metadata.get("action"), metadata.get("semantic_action"),
-    )
+    ))
 
 
 def _visible_linked_source_events(case: dict[str, Any]) -> list[dict[str, Any]]:
@@ -172,7 +182,7 @@ def _visible_linked_source_events(case: dict[str, Any]) -> list[dict[str, Any]]:
     Identical duplicates are idempotent. This is evaluator-only; the production
     linker continues to receive the caller's authorized source observations.
     """
-    visible: dict[str, list[tuple[Any, ...] | None]] = {}
+    visible: dict[str, list[str | None]] = {}
     for event in case["presented_evidence"]:
         if not isinstance(event, dict):
             continue
@@ -193,9 +203,14 @@ def _visible_linked_source_events(case: dict[str, Any]) -> list[dict[str, Any]]:
     for event_id, rows in by_id.items():
         projection = _linked_projection(rows[0])
         if (projection is None or not visible.get(event_id)
-                or any(row != rows[0] for row in rows[1:])
                 or any(item != projection for item in visible[event_id])):
             continue
+        if len(rows) > 1:
+            first_claim = _canonical_eval_json(rows[0])
+            if (first_claim is None or any(
+                _canonical_eval_json(row) != first_claim for row in rows[1:]
+            )):
+                continue
         admitted.append(rows[0])
     return admitted
 
