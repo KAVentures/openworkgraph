@@ -416,12 +416,22 @@ def assess(mapping: Any) -> dict:
     if "username" in patch:
         add("blocker", "immutable_username", "users.patch_attributes",
             "OWG does not support changing the stable userName/evidence actor")
-    if "active" not in patch:
-        # A declared PATCH mapping without active does not demonstrate that an
-        # IdP can deactivate an employee. Do not block a possible separately
-        # tested PUT/other lifecycle path or imply live provider certification.
+    # Either declaration format may describe a supported User deactivation
+    # PATCH. Operation-level pathless objects are used by some IdPs (notably
+    # Okta); checking only legacy paths incorrectly reports active as missing.
+    # Unsupported remove and explicitly value-less operations do not establish
+    # a usable declaration. Unknown value presence retains its own caution.
+    declared_deactivation = "active" in patch or any(
+        verb in {"add", "replace"} and value_present is not False
+        and (declared_path == "active"
+             or (not declared_path and fields is not None and "active" in fields))
+        for verb, declared_path, value_present, fields in (user_patch_ops or [])
+    )
+    if not declared_deactivation:
+        # A missing declaration cannot demonstrate that the IdP will
+        # deactivate; PUT or another separately tested lifecycle path may.
         add("caution", "deactivation_patch_not_declared", "users.patch_attributes",
-            "Declared User PATCH mapping omits active; verify a supported deactivate operation before rollout")
+            "Declared User PATCH mapping omits a supported active update; verify a deactivate operation before rollout")
     for path, values in (("users.create_attributes", create), ("users.patch_attributes", patch)):
         if "name" in values and any(value.startswith("name.") for value in values):
             add("caution", "overlapping_name_paths", path,
