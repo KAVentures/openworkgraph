@@ -109,3 +109,21 @@ mocked-query regressions exercise malformed inputs, empty/duplicate/whitespace
 names, and boundary-sized valid lists. These are not native CI, live-provider
 acceptance, or consenting-customer evidence; no resource name establishes a
 verified automation outcome or authorizes an agent action.
+
+
+## Related R6 root-cause outcome-name validation
+
+The direct Python `root_cause(outcome=...)` entry point previously checked
+membership in a set of supported outcome names before checking the input type.
+A list, dictionary or set is unhashable, so malformed direct calls could raise
+raw Python `TypeError` rather than the documented `EventLogWorkspaceError`.
+The entry point now requires a string belonging to the existing four outcomes
+(`duration_over`, `contains_activity`, `ends_with`, `rework`) before
+querying any saved log. The error message and valid names are unchanged.
+
+Synthetic mocked-query tests cover unhashable and other malformed values,
+plus all four valid names with their required parameters. This does not change
+statistics, thresholds, returned fields, authenticated REST/MCP/dashboard
+contracts, consent, retention, tenant isolation, provenance or agent-action
+authorization. Native cross-platform CI and consenting-provider/customer
+acceptance remain separate required gates.
