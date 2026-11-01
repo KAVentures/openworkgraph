@@ -38,7 +38,7 @@ function adjustableClock() {
 }
 function harness(auth = Promise.resolve(true), clipboardWrite = null, clockDate = null) {
   const reads = [], tickets = [], copied = [], toasts = [], summaries = [], bars = [];
-  let downloads = 0, modals = 0, modalHtml = '';
+  let downloads = 0, modals = 0, modalHtml = '', modalTitle = '', modalSubtitle = '';
   const modal = Object.fromEntries(['#analysisRequest', '#analysisCopy', '#analysisDownload',
     '#analysisDetailed', '#analysisActionStatus'].map(key => [key, {textContent: '', checked: false}]));
   function element(tag) {
@@ -79,7 +79,7 @@ function harness(auth = Promise.resolve(true), clipboardWrite = null, clockDate 
     location: {origin: 'http://localhost:8765'},
     __owgAuthReady: auth,
     toast(message) {toasts.push(message);},
-    openModal(_title, _subtitle, html) {modals++; modalHtml = html;}
+    openModal(title, subtitle, html) {modals++; modalTitle = title; modalSubtitle = subtitle; modalHtml = html;}
   };
   const fetch = (url, options = {}) => {
     const item = {...deferred(), url: String(url), options};
@@ -132,6 +132,7 @@ function harness(auth = Promise.resolve(true), clipboardWrite = null, clockDate 
   return {reads, tickets, copied, toasts, modal, bars, summary, window,
     get modals() {return modals;}, get downloads() {return downloads;},
     get modalHtml() {return modalHtml;},
+    get modalTitle() {return modalTitle;}, get modalSubtitle() {return modalSubtitle;},
     reply, preview};
 }
 
@@ -3054,4 +3055,54 @@ test('zero-event summary keeps uncertainty rather than inventing observed timest
   await h.modal['#analysisCopy'].onclick();
   assertCopyEvidenceWarning(h.copied, 'request-rollover');
   assert.equal(h.downloads, 0);
+});
+
+
+test('handoff grades no evidence, health diagnostics and unverified ordinary work separately', async t => {
+  const cases = [
+    ['ordinary observations', d => ({...d,
+      work_evidence: {ordinary_event_rows: 2, health_event_rows: 0}}),
+      /ordinary work observations are present, but no workflow, business completion, or automation opportunity is verified/,
+      /Review selected work evidence \(workflow unverified\)/,
+      /Download AI evidence package/],
+    ['health-only diagnostics', d => ({...d,
+      event_types: {capture_gap: 1, capture_health: 1},
+      work_evidence: {ordinary_event_rows: 0, health_event_rows: 2,
+        last_work_observed_at: null}}),
+      /insufficient for workflow review — only capture-health or gap records are present/,
+      /Review evidence limitations \(no verified workflow\)/,
+      /Download capture-health diagnostic package/],
+    ['no recorded events', d => ({...d,
+      canonical_rows: 0, retained_rows: 2,
+      first_observed_at: null, last_observed_at: null,
+      event_types: {}, sources: {}, redacted_examples: [],
+      work_evidence: {ordinary_event_rows: 0, health_event_rows: 0,
+        last_work_observed_at: null}}),
+      /insufficient for workflow review — no recorded events in this selection/,
+      /Review evidence limitations \(no verified workflow\)/,
+      /Evidence download unavailable/]
+  ];
+  for (const [name, mutate, grade, subtitle, downloadLabel] of cases) {
+    await t.test(name, async () => {
+      const h = await openAllRetainedPreview(mutate);
+      assert.equal(h.modals, 1);
+      assert.equal(h.modalTitle, 'Prepare for AI');
+      assert.match(h.modalSubtitle, subtitle);
+      assert.match(h.modalHtml, grade);
+      assert.match(h.modalHtml, downloadLabel);
+      assert.doesNotMatch(h.modalHtml, /Discover opportunities from recorded work/);
+      assert.match(h.modalHtml, /Selected local evidence preview — not sent to an AI/);
+      assert.equal(h.modal['#analysisDownload'].disabled, name === 'no recorded events');
+      await h.modal['#analysisCopy'].onclick();
+      assert.equal(h.tickets.length, 0, 'Copy must not request a download ticket');
+      assert.equal(h.downloads, 0, 'Copy must not download evidence');
+      assert.equal(h.copied.length, 1);
+      if (name === 'ordinary observations') assert.equal(h.copied[0], 'request-rollover');
+      else assertCopyEvidenceWarning(h.copied, 'request-rollover', name === 'health-only diagnostics');
+      if (name === 'no recorded events') {
+        await h.modal['#analysisDownload'].onclick();
+        assert.equal(h.tickets.length, 0);
+      }
+    });
+  }
 });
