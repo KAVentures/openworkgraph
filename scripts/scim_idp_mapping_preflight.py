@@ -147,7 +147,7 @@ def assess(mapping: Any) -> dict:
         "match_attributes", "create_attributes", "patch_attributes", "write_mode",
     })
     groups = _object(root["groups"], "groups", {"enabled", "match_attributes"},
-                     {"create_attributes", "patch_attributes"})
+                     {"create_attributes", "patch_attributes", "patch_operations"})
     policy = _object(root["provider_policy"], "provider_policy", {"allow_unversioned_user_patch"},
                      {"unique_group_names"})
     if type(policy.get("unique_group_names", False)) is not bool:
@@ -168,6 +168,25 @@ def assess(mapping: Any) -> dict:
     group_patch = (_attributes(groups["patch_attributes"], "groups.patch_attributes",
                                minimum=0, max_path=1024, check_duplicates=False)
                    if "patch_attributes" in groups else None)
+    # Optional operation-level declaration supplements (never replaces) the
+    # legacy path-only Group mapping. The shipped Group PATCH handler has
+    # verb-specific restrictions that cannot be checked from paths alone.
+    group_patch_ops = None
+    if "patch_operations" in groups:
+        raw_ops = groups["patch_operations"]
+        if type(raw_ops) is not list or len(raw_ops) > MAX_ATTRIBUTES:
+            raise InvalidMapping("groups.patch_operations must be a bounded list")
+        group_patch_ops = []
+        for index, raw_op in enumerate(raw_ops):
+            item = _object(raw_op, f"groups.patch_operations[{index}]", {"op", "path"})
+            verb = item["op"]
+            if type(verb) is not str or re.fullmatch(r"[A-Za-z]{1,16}", verb) is None:
+                raise InvalidMapping("groups.patch_operations contains an invalid verb")
+            declared_path = _attributes(
+                [item["path"]], f"groups.patch_operations[{index}].path",
+                minimum=1, max_path=1024, check_duplicates=False,
+            )[0]
+            group_patch_ops.append((verb.lower(), declared_path))
     if group_patch is not None:
         # Group member IDs are opaque, case-sensitive SCIM User resource IDs.
         # The shipped Group PATCH selector decodes JSON and compares the
@@ -306,6 +325,25 @@ def assess(mapping: Any) -> dict:
     if not groups["enabled"] and group_patch is not None:
         add("blocker", "disabled_groups_with_patch_mapping", "groups.patch_attributes",
             "Group PATCH is declared although Group provisioning is disabled")
+    if not groups["enabled"] and group_patch_ops is not None:
+        add("blocker", "disabled_groups_with_patch_operations", "groups.patch_operations",
+            "Group PATCH operations are declared although Group provisioning is disabled")
+    if group_patch_ops is not None:
+        for index, (verb, declared_path) in enumerate(group_patch_ops):
+            location = f"groups.patch_operations[{index}]"
+            if not _supported_group_patch_path(declared_path):
+                add("blocker", "unsupported_group_patch_path", location + ".path",
+                    "Declared Group PATCH operation uses an unsupported path")
+            elif verb not in {"add", "replace", "remove"}:
+                add("blocker", "unsupported_group_patch_verb", location + ".op",
+                    "Declared Group PATCH operation uses an unsupported verb")
+            elif (_GROUP_MEMBER_SELECTOR.fullmatch(declared_path) is not None
+                  and verb != "remove"):
+                add("blocker", "group_member_selector_requires_remove", location + ".op",
+                    "Group member selectors support only remove operations")
+            elif declared_path.lower() == "displayname" and verb == "remove":
+                add("blocker", "group_displayname_remove_forbidden", location + ".op",
+                    "Required Group displayName cannot be removed")
     if groups["enabled"]:
         if group_create is None:
             add("caution", "group_create_mapping_not_declared", "groups.create_attributes",
@@ -328,17 +366,22 @@ def assess(mapping: Any) -> dict:
                 add("caution", "group_member_id_resolution_unverified",
                     "groups.create_attributes",
                     "Declared Group members require current provider-scoped OWG User IDs; verify IdP member-value resolution with disposable Users")
-        if group_patch is not None:
-            selectors = [value for value in group_patch
+        if group_patch is not None or group_patch_ops is not None:
+            selectors = [value for value in (group_patch or [])
                          if (_GROUP_MEMBER_SELECTOR.fullmatch(value) is not None
                              and _supported_group_patch_path(value))]
+            selectors.extend(path for _, path in (group_patch_ops or [])
+                             if (_GROUP_MEMBER_SELECTOR.fullmatch(path) is not None
+                                 and _supported_group_patch_path(path)))
+            whole_members = ("members" in (group_patch or []) or
+                             any(path.lower() == "members" for _, path in (group_patch_ops or [])))
             if selectors:
                 add("caution", "group_member_selector_remove_only", "groups.patch_attributes",
                     "Shipped Group member selectors support removal only; verify actual PATCH verbs and current ETags")
-            if "members" in group_patch or selectors:
+            if whole_members or selectors:
                 add("caution", "group_member_patch_ids_unverified", "groups.patch_attributes",
                     "Group PATCH members require current provider-scoped OWG User IDs; static paths do not verify resolution")
-            if "members" in group_patch and selectors:
+            if whole_members and selectors:
                 # Whole-member updates and selector removals can touch the
                 # same provider-scoped membership set. Both are valid paths,
                 # but an IdP may emit them in an order that changes the result.
@@ -398,6 +441,8 @@ def assess(mapping: Any) -> dict:
         checked["group_create"] = len(group_create)
     if group_patch is not None:
         checked["group_patch"] = len(group_patch)
+    if group_patch_ops is not None:
+        checked["group_patch_operations"] = len(group_patch_ops)
     return {
         "status": "blocked" if blocked else "requires_live_validation",
         "scope": "offline_declared_mapping_only",
