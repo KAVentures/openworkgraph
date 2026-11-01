@@ -1156,3 +1156,26 @@ request-only behavior without tickets or downloads. Real browser, accessibility,
 consenting-user and live-provider acceptance remain separate gates.
 
 Coordination: [#326 claim 6552672223](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6552672223).
+
+## Daily breakdown language follows evidence sufficiency
+
+The expandable daily breakdown is **not** itself a verified workflow map. When
+ordinary work observations exist, it may describe optional user-controlled
+day-by-day AI review of the selected evidence, with the existing caveats about
+coverage, redaction and incomplete history. No AI is invoked by opening it.
+
+When the selected period contains **only capture-health/gap rows**, the same
+bounded UTC date list remains visible as a *diagnostic* chronology, but the
+heading and introduction must not instruct an AI to discover repeated work or
+automation opportunities. The existing explicitly requested local download
+remains available and is identified as a diagnostic package, not proof of work.
+
+When **no rows** were recorded, the date section says there is nothing to
+analyze and that missing observations do not establish inactivity, complete
+capture or consent. It does not invite an AI to process days, and there is no
+evidence-file download. Copying the explanatory request is still local and
+does not trigger an export ticket, upload or model call.
+
+Synthetic DOM regressions cover all three categories and a nonempty health-only
+UTC daily chunk. These are disclosure checks, **not** validation of recorder
+coverage, live consent, customer workflows or competitor parity.
