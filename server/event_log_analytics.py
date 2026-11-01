@@ -240,7 +240,9 @@ def risk_difference(y1: int, n1: int, y0: int, n0: int, z: float = 1.959964) -> 
 
 def root_cause(log_id: str, outcome: str, case_type: str | None = None, *, threshold_seconds: int | None = None,
                activity: str | None = None, limit: int = 30) -> dict[str, Any]:
-    if outcome not in _OUTCOMES:
+    # A malformed direct-call outcome may be an unhashable list/dict; reject
+    # it with the public domain error instead of leaking Python TypeError.
+    if not isinstance(outcome, str) or outcome not in _OUTCOMES:
         raise EventLogWorkspaceError("outcome must be one of " + ", ".join(sorted(_OUTCOMES)))
     # Direct integrations must follow the typed REST contract without
     # truncating fractional thresholds or leaking raw int() conversion errors.
