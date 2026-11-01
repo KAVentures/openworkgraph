@@ -274,3 +274,55 @@ def test_lane_projection_accepts_normalized_visible_identity_without_tenant_leak
         ["first", "second"]
     ]
     assert result["unassigned_event_ids"] == []
+
+
+def test_lane_projection_requires_source_admitted_instant_to_be_visible():
+    from copy import deepcopy
+
+    ref = "owg:r:" + "a" * 32
+    source = [
+        _lane_projection_event("first", ref, "2026-10-20T10:00:00.000001Z"),
+        _lane_projection_event("second", ref, "2026-10-20T10:01:00Z"),
+    ]
+    visible = deepcopy(source)
+    # Same event ID, record, provider, kind and host, but not the observed
+    # instant admitted by the source engine: this is not the same observation.
+    visible[0]["observed_at"] = "2026-10-20T10:00:00.000002Z"
+    result = predict_record_lanes(_lane_projection_case(source, visible))
+    assert [lane["event_ids"] for lane in result["workflows"]] == [["second"]]
+    assert result["unassigned_event_ids"] == ["first"]
+
+    # Malformed or absent visible timestamps cannot be repaired from source.
+    for invalid in ("invalid-time", None, "2026-10-20T10:00:00"):
+        malformed = deepcopy(source)
+        malformed[0]["observed_at"] = invalid
+        result = predict_record_lanes(_lane_projection_case(source, malformed))
+        assert [lane["event_ids"] for lane in result["workflows"]] == [["second"]]
+        assert result["unassigned_event_ids"] == ["first"]
+
+
+def test_lane_projection_accepts_offset_equivalent_instant_and_first_admitted_duplicate():
+    from copy import deepcopy
+
+    ref = "owg:r:" + "a" * 32
+    first = _lane_projection_event("first", ref, "2026-10-20T10:00:00.000001Z")
+    second = _lane_projection_event("second", ref, "2026-10-20T10:01:00Z")
+    duplicate = _lane_projection_event("first", ref, "2026-10-20T10:03:00Z")
+    source = [first, second, duplicate]
+
+    # The source engine keeps the first valid duplicate; later duplicate
+    # timestamps do not override its admitted instant.
+    visible = deepcopy(source)
+    visible[0]["observed_at"] = "2026-10-20T11:00:00.000001+01:00"
+    result = predict_record_lanes(_lane_projection_case(source, visible))
+    assert [lane["ordered_event_ids"] for lane in result["workflows"]] == [
+        ["first", "second"]
+    ]
+    assert result["unassigned_event_ids"] == []
+
+    # Showing only the later same-ID duplicate must not substitute for the
+    # first source-admitted observation, even with identical resource identity.
+    only_later = [deepcopy(duplicate), deepcopy(second)]
+    result = predict_record_lanes(_lane_projection_case(source, only_later))
+    assert [lane["event_ids"] for lane in result["workflows"]] == [["second"]]
+    assert result["unassigned_event_ids"] == ["first"]
