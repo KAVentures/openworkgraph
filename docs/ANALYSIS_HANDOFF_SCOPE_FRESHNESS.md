@@ -1415,3 +1415,32 @@ verified business outcome, ROI, or competitor parity. The server, export payload
 consent enforcement and authorization are unchanged.
 
 Coordination: [#326 claim 6557688499](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6557688499).
+
+
+## Mixed daily counts do not classify workflow evidence (Worker B, 2026-11-01)
+
+The Prepare for AI daily breakdown lists **total recorded event rows per UTC
+date**, not a per-date partition of ordinary work and capture-health/gap
+diagnostics. In a mixed selection, the date list previously appeared beside
+ordinary-work review guidance without saying that a particular date might
+contain **only diagnostics**. This could overstate evidence for repeated work.
+
+The review now displays the validated **selected-period** ordinary and
+capture-health/gap totals together, explicitly warns that the daily totals
+cannot classify dates, and asks the reviewer to inspect event-level evidence
+before treating a date as workflow evidence. A period containing only ordinary
+events needs no mixed-evidence notice; a diagnostic-only period retains its
+existing no-workflow guidance. The disclosure neither assigns diagnostic rows
+to particular dates nor implies that an ordinary event verifies a complete
+workflow, source identity, business outcome or automation permission.
+
+A deterministic synthetic actual-source mock-DOM regression covers a mixed
+four-row period (two ordinary and two diagnostic rows), an ordinary-only period
+and a diagnostic-only period, each with a conserved one-day date plan. It
+asserts the mixed-only disclosure and confirms Copy remains request-only with
+no export ticket or download. This is not native Chromium/WCAG, cross-platform
+or scale acceptance, a real consenting-user pilot, verified provider state,
+commercial ROI or competitor parity. No backend, event classification, consent,
+export payload, AI execution or business write changes.
+
+Coordination: [#326 claim 6558368521](https://github.com/KAVentures/openworkgraph/issues/326#issuecomment-6558368521).
