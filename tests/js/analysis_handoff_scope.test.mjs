@@ -3005,3 +3005,53 @@ test('daily chunk clipping refuses a one-microsecond extension beyond the select
     }
   });
 });
+
+
+test('period summary preserves exact source-reported microsecond observations and offsets', async t => {
+  const oneMicrosecond = stamp => stamp.replace(/\\.000Z$/, '.000001Z');
+  const twoMicroseconds = stamp => stamp.replace(/\\.000Z$/, '.000002Z');
+  const offsetFirst = asOffset(Date.parse(observedStart), 2)
+    .replace(/\\.000\\+02:00$/, '.000001+02:00');
+  for (const [name, first, last] of [
+    ['two distinct observations in the same displayed local second',
+      oneMicrosecond(observedStart), twoMicroseconds(observedStart)],
+    ['offset-aware source timestamp remains verbatim',
+      offsetFirst, twoMicroseconds(observedStart)]
+  ]) await t.test(name, async () => {
+    // Date/locale rendering alone cannot distinguish these observations.
+    assert.equal(Date.parse(first), Date.parse(last));
+    assert.equal(new Date(first).toLocaleString(), new Date(last).toLocaleString());
+    const h = await openAllRetainedPreview(d => ({
+      ...d, first_observed_at: first, last_observed_at: last
+    }));
+    assert.equal(h.modals, 1);
+    assert.match(h.summary.textContent, /2 recorded events.*observed locally/);
+    assert.match(h.summary.textContent, /reported ISO times/);
+    assert.ok(h.summary.textContent.includes(first), 'first source instant is not rounded');
+    assert.ok(h.summary.textContent.includes(last), 'last source instant is not rounded');
+    assert.match(h.summary.textContent, /offsets preserved/);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-rollover']);
+    assert.equal(h.tickets.length, 0);
+  });
+});
+
+test('zero-event summary keeps uncertainty rather than inventing observed timestamps', async () => {
+  const h = await openAllRetainedPreview(d => ({
+    ...d, canonical_rows: 0, retained_rows: 0,
+    first_observed_at: null, last_observed_at: null,
+    event_types: {}, sources: {}, redacted_examples: [],
+    analysis_plan: {date_chunks: []}, work_evidence: {}
+  }));
+  assert.equal(h.modals, 1);
+  assert.match(h.summary.textContent, /No retained events reported/);
+  assert.match(h.summary.textContent, /consent status are unverified/);
+  assert.doesNotMatch(h.summary.textContent, /reported ISO times/);
+  assert.equal(h.modal['#analysisDownload'].disabled, true);
+  assert.equal(h.tickets.length, 0);
+  await h.modal['#analysisCopy'].onclick();
+  assertCopyEvidenceWarning(h.copied, 'request-rollover');
+  assert.equal(h.downloads, 0);
+});
