@@ -2892,8 +2892,11 @@ test('ticket bounds reject submillisecond changes but accept exact offset equiva
     const body = JSON.parse(h.tickets[0].options.body);
     const since = valid
       ? asOffset(Date.parse(body.since), 2).replace(/\.000\+02:00$/, '.000000+02:00')
-      : body.since.replace(/\.000Z$/, '.000001Z');
-    const until = body.until.replace(/\.000Z$/, '.000000+00:00');
+      : body.since.replace(/\.\d+(?=Z|\+00:00$)/, '.000001');
+    const until = body.until.replace(/\.\d+(?=Z|\+00:00$)/, '.000000');
+    // The server may echo +00:00 rather than Z and six fractional digits.
+    // A negative test must actually shift the exact instant in either form.
+    assert.equal(valid || since !== body.since, true);
     assert.equal(Date.parse(since), Date.parse(body.since));
     const params = new URLSearchParams({scope: 'range', include_raw: 'false',
       redact_names: 'true', ticket: 'synthetic-ticket', since, until});
