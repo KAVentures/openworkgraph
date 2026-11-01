@@ -12,9 +12,19 @@ non-string, or different `source_evidence.provider` returns
 `operation_verified=false`. If the source receipt supplies an `object_type`,
 it must also equal the observed record kind. Older Stripe receipts do not
 supply `object_type` and remain supported, because the retained record graph
-already establishes their kind; Jira and GitHub supply the field. An absent
-source status remains `authoritative_provider_status_unavailable` rather
-than being upgraded into an identity success.
+already establishes their kind; Jira and GitHub supply the field. When a
+source receipt additionally supplies `source_evidence.resource_ref`, it must
+match the exact requested opaque `owg:r:` reference. A conflicting, null,
+malformed or differently scoped supplied reference fails closed to
+`unknown/provider_receipt_identity_conflict` without echoing the source
+value. The current GitHub/Jira/Stripe adapters omit this optional field, so
+their existing authenticated read contract is unchanged; its absence is not
+an independent identity assertion and never replaces the canonical
+`record_graph` exact-record scope checks. The four-operation synthetic
+regressions cover 36 contradictory nested references and eight matching or
+absent controls. These do not demonstrate real-provider/tenant acceptance.
+An absent source status remains `authoritative_provider_status_unavailable`
+rather than being upgraded into an identity success.
 
 Positive retained-record evidence is now admitted only when both
 `record_observed` and `record_identity_complete_within_retained_window` are
