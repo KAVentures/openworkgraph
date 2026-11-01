@@ -3587,11 +3587,11 @@ test('mixed legacy evidence still carries diagnostic provenance into copied agen
     sources: {desktop: 3}, work_evidence: undefined, analysis_plan: undefined
   }));
   assert.equal(h.modals, 1);
-  assert.match(h.modalHtml, /Mixed selected evidence: 1 ordinary work observations and 2 capture-health\/gap records/);
+  assert.match(h.modalHtml, /Mixed selected evidence: 1 ordinary work observation and 2 capture-health\/gap records/);
   assert.match(h.modalHtml, /No daily breakdown was provided; date coverage is unknown/);
   await h.modal['#analysisCopy'].onclick();
   assert.equal(h.copied.length, 1);
-  assert.match(h.copied[0], /^request-rollover\n\nEvidence limitation: This selected local period contains 1 ordinary work observations and 2 capture-health\/gap records/);
+  assert.match(h.copied[0], /^request-rollover\n\nEvidence limitation: This selected local period contains 1 ordinary work observation and 2 capture-health\/gap records/);
   assert.match(h.copied[0], /UTC daily totals are untyped/);
   assert.match(h.copied[0], /Capture completeness is unverified/);
   assert.equal(h.tickets.length, 0);
