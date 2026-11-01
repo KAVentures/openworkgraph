@@ -198,6 +198,17 @@ def source_operation_receipt(
     )
     if scope_flag in source and source[scope_flag] is not True:
         return _unknown(resource_ref, expected_operation, "provider_receipt_scope_conflict")
+    # This pre-existing adapter field is unfortunately named: Stripe sets it
+    # true for a successful *processor* operation, while GitHub/Jira keep it
+    # false because their statuses do not establish business success. Neither
+    # meaning verifies customer outcome here. If a source/cache supplies this
+    # legacy assertion, it must agree with the authenticated adapter's own
+    # provider-specific contract. Missing is allowed for older readers; an
+    # explicit conflicting or non-Boolean value is not evidence of success.
+    expected_legacy_outcome = provider == "stripe"
+    if ("verified_business_outcome" in source and
+        source["verified_business_outcome"] is not expected_legacy_outcome):
+        return _unknown(resource_ref, expected_operation, "provider_receipt_scope_conflict")
     stamp = source.get("verified_at")
     try:
         when = _parse_source_timestamp(stamp)
