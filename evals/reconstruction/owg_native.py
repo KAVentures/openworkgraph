@@ -276,21 +276,27 @@ def _linked_projection(event: dict[str, Any]) -> str | None:
         normalized_identity = _identity(event)
         if normalized_identity is not None:
             reference_claim = ["normalized_record_identity", *normalized_identity[:4]]
-    # Rich evidence projects metadata tokens into top-level convenience keys.
-    # Those are not independent claims. Reject source-only top-level tokens or
-    # contradictions instead of mistaking a convenience copy for a conflict.
+    # Rich evidence normally copies metadata tokens into top-level convenience
+    # fields. Other authorized callers can present an independently observed
+    # top-level-only token, which the shipped linker also recognizes. Admit
+    # either location only when its value is a literal valid token, and reject
+    # contradictory dual claims rather than selecting a preferred one.
+    tokens: dict[str, str | None] = {}
     for field, pattern in (("tab_context_id", _TAB),
                            ("clipboard_transfer_id", _TRANSFER)):
-        # The shipped linker can stringify booleans and numbers into valid
-        # token-shaped values. Never grant evaluator link authority through
-        # that coercion, or Python's True == 1 equality shortcut.
-        if field in metadata and (not isinstance(metadata[field], str)
-                                  or not pattern.fullmatch(metadata[field])):
+        # Never grant link authority via production's string coercion of bools
+        # or numbers (including Python's True == 1 equality shortcut).
+        in_metadata, at_top = field in metadata, field in event
+        if in_metadata and (not isinstance(metadata[field], str)
+                            or not pattern.fullmatch(metadata[field])):
             return None
-        if field in event and (field not in metadata
-                               or not isinstance(event[field], str)
-                               or event[field] != metadata[field]):
+        if at_top and (not isinstance(event[field], str)
+                       or not pattern.fullmatch(event[field])):
             return None
+        if in_metadata and at_top and metadata[field] != event[field]:
+            return None
+        tokens[field] = (metadata[field] if in_metadata else
+                         event[field] if at_top else None)
     # The duplicate-source preflight rejects tuples by design: this internal
     # projection must use JSON-native lists at every level, including the
     # normalized identity above, or all legitimate links fail closed.
@@ -298,8 +304,8 @@ def _linked_projection(event: dict[str, Any]) -> str | None:
         stamp, event.get("app"), event.get("event_type"),
         event.get("source"), event.get("session_id"),
         reference_claim,
-        metadata.get("tab_context_id"),
-        metadata.get("clipboard_transfer_id"),
+        tokens["tab_context_id"],
+        tokens["clipboard_transfer_id"],
         metadata.get("clipboard_source_observed"),
         metadata.get("action"), metadata.get("semantic_action"),
     ])
