@@ -26,8 +26,10 @@ observations can join their corresponding item independently.
 This is intentionally **not** a generic copy/paste sessionizer. Recovery
 requires all of the following for a multi-record token group:
 
-- An already validated literal source-record reference and exact capture scope
-  on **every** observation; no loose event can be silently skipped.
+- An already validated literal source-record reference and **all four present,
+  valid capture-scope components** (organization, actor, device, session)
+  on **every** observation; no loose event or missing legacy scope can be
+  silently skipped. Existing legacy two-record behavior is unchanged.
 - Exactly consecutive explicit `copy`, then `paste` observations, with
   strictly increasing validated UTC instants and different record identities.
 - Each record identity occurs in **only one** episode, preventing a transitive
