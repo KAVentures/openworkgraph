@@ -36,6 +36,15 @@ _SOURCE_TIMESTAMP = re.compile(
     r"(?:\.[0-9]{1,9})?(?:Z|[+-][0-9]{2}:[0-9]{2})$"
 )
 
+# Caller-selected history windows must be unambiguous across host timezones.
+# Allow minute precision (a supported existing caller form), but never accept
+# date-only, week/basic dates, spaces, or timezone-naive datetimes.
+_WINDOW_TIMESTAMP = re.compile(
+    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}"
+    r"(?::[0-9]{2}(?:\.[0-9]{1,9})?)?(?:Z|[+-][0-9]{2}:[0-9]{2})$"
+)
+
+
 
 def _parse_source_timestamp(value: Any) -> datetime:
     # Reject non-JSON timestamps and unbounded or ambiguous strings *before*
@@ -89,9 +98,12 @@ def source_operation_receipt(
         # truthiness check would otherwise skip validation before an alternate
         # authorized source-capable reader is invoked.
         if value is not None and (
-            not isinstance(value, str) or not value.strip() or _ts(value) is None
+            not isinstance(value, str) or len(value) > 64 or
+            _WINDOW_TIMESTAMP.fullmatch(value) is None or _ts(value) is None
         ):
-            raise WorkflowEvidenceError(f"{name} must be an ISO-8601 timestamp")
+            raise WorkflowEvidenceError(
+                f"{name} must be a timezone-aware ISO-8601 timestamp"
+            )
     if since is not None and until is not None and _ts(since) >= _ts(until):
         raise WorkflowEvidenceError("until must be after since")
     # A test/evaluation clock is not a source authorization. Refuse an invalid
