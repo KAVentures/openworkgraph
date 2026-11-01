@@ -240,6 +240,20 @@ scenario, including diagnostic candidate-acceptance mode. Only an *absent*
 Synthetic tests exercise both cases; they do not establish end-to-end
 revocation propagation, live source deletion or held-out reconstruction quality.
 
+Duplicate replay admission is now bounded by **unique literal event IDs** rather
+than the number of repeated visible/source observations. For each ID, the
+evaluator retains one first-valid source row, one first visible projection and
+an irreversible contradiction state. It canonicalizes complete source JSON
+only if a second timestamp-valid literal row with the same ID appears; a
+malformed/oversized or contradictory replay still withholds the ID. An earlier
+valid-timestamp nonliteral ID continues to reserve the production duplicate
+slot, and malformed-timestamp rows do not. This reduces evaluator-only
+duplicate bookkeeping, **not** the size of the already-loaded synthetic corpus,
+the production linker's memory use or any source retention. Large synthetic
+replay regressions check idempotence, late contradictions and admission order
+without asserting hardware-dependent memory/timing thresholds. These tests do
+not demonstrate held-out F1, contamination, or real-world scale.
+
 The filter retains the original authorized source rows for the linker's own
 organization/actor/device/session checks. These identities are deliberately
 absent from the rich evidence and cannot be independently verified from its
