@@ -484,8 +484,8 @@
       state.planCriteria[key].trim().length > 0 && state.planCriteria[key].length <= 320);
   }
 
-  // Review and copy are deliberately separate actions. This panel cannot call an AI,
-  // create an export ticket, save knowledge, or authorize a source operation.
+  // Review and handoff are separate actions. The only export is an explicit
+  // browser-local plan-only JSON download; no server export or execution occurs.
   function openHandoffReview(candidate, lane) {
     const host = document.getElementById('owgExplorerHandoffReview');
     if (!host || selectedId !== candidate.candidate_cluster_id || selectedExample !== lane) return;
@@ -516,7 +516,7 @@
     panel.setAttribute('aria-label', 'Review safe agent handoff');
     panel.appendChild(element('h4', 'Review before sharing with an AI'));
     panel.appendChild(element('p',
-      'This prepares text for your clipboard only. It never invokes an agent or tests a workflow. ' +
+      'This prepares clipboard text or an explicitly downloaded local plan-only JSON file. It never invokes an agent or tests a workflow. ' +
       'Review private labels locally before copying or sharing anything. Observations are not policy, permission or verified outcomes.'));
     panel.appendChild(element('p',
       'Selected evidence window: ' + (currentWindow.since || 'all retained history') +
@@ -549,7 +549,7 @@
       plan.appendChild(element('legend', 'Define the non-executing shadow-validation plan'));
       plan.appendChild(element('p',
         'Enter proposed criteria, not observed facts or authorization. Do not include names, secrets, or personal data. ' +
-        'All three fields are required before copying a plan; nothing is saved or run.', 'muted'));
+        'All three fields are required before copying or downloading a plan; no server data is saved and nothing is run.', 'muted'));
       const fields = [
         ['expected', 'Normal-case expected result', 'What observable result would count as success?'],
         ['exception', 'Exception case to check', 'What exception or missing evidence must be examined?'],
@@ -584,14 +584,15 @@
     const actions = element('div', null, 'owg-explorer-actions');
     const investigation = button('Copy reviewed investigation request', () => copyReviewedHandoff(state, false), true);
     const shadow = button('Copy non-executing shadow-test plan request', () => copyReviewedHandoff(state, true), true);
+    const downloadPlan = button('Download non-executing shadow-plan JSON', () => downloadReviewedShadowPlan(state), true);
     investigation.disabled = true;
     shadow.disabled = true;
+    downloadPlan.disabled = true;
     const updateButtons = () => {
-      const valid = handoffReview === state && selectedId === state.candidateId &&
-        selectedExample === state.lane && JSON.stringify(currentWindow) === state.windowJSON &&
-        latestEvidenceRequest === state.evidenceGeneration;
+      const valid = currentHandoffReview(state);
       investigation.disabled = !checkbox.checked || !valid;
       shadow.disabled = !checkbox.checked || !valid || !completeShadowCriteria(state);
+      downloadPlan.disabled = shadow.disabled;
     };
     checkbox.addEventListener('change', updateButtons);
     Object.entries(planInputs).forEach(([key, input]) => input.addEventListener('input', () => {
@@ -606,7 +607,7 @@
         : 'Complete all three criteria to preview the proposed plan.';
       updateButtons();
     }));
-    actions.append(investigation, shadow);
+    actions.append(investigation, shadow, downloadPlan);
     panel.appendChild(actions);
     const result = element('p', 'Nothing copied or sent. No AI or shadow test has run.', 'muted');
     result.id = 'owgExplorerHandoffStatus';
@@ -655,13 +656,70 @@
     ].join('\n\n');
   }
 
+  function currentHandoffReview(state) {
+    return handoffReview === state && selectedId === state.candidateId &&
+      selectedExample === state.lane && JSON.stringify(currentWindow) === state.windowJSON &&
+      latestEvidenceRequest === state.evidenceGeneration;
+  }
+
+  // Portable review proposal, deliberately NOT an executable test definition.
+  // Raw step labels, evidence bodies and provider identities never enter this file.
+  function shadowPlanManifest(state) {
+    return {
+      schema: 'openworkgraph.shadow_validation_plan.v1',
+      kind: 'non_executing_shadow_validation_plan',
+      created_at_utc: new Date().toISOString(),
+      execution_permitted: false,
+      reviewed_group: {workflow_id: state.reviewedId, revision: state.reviewedRevision,
+        meaning: 'user_classification_not_authorization'},
+      selected_evidence: {window_utc: JSON.parse(state.windowJSON), variant_number: state.variantNumber,
+        exact_displayed_variant: true, execution_ids: [...state.ids],
+        inspection: 'bounded_selected_references_only', source_identity_verified: false,
+        source_completeness: 'unknown'},
+      human_proposed_untrusted_criteria: {
+        normal_case_expected: state.planCriteria.expected,
+        exception_case: state.planCriteria.exception,
+        fail_or_abstain_rule: state.planCriteria.stop
+      },
+      validation: {status: 'not_run', observed_result: null, pass_fail_abstain: 'not_assessed'},
+      safety: {allowed: 'planning_only_no_tool_calls',
+        required_before_any_future_validation: ['fresh consent and tenant authorization',
+          'retention and source availability', 'exact reviewed revision',
+          'independent source identity and outcome verification',
+          'separate explicit human approval for any execution'],
+        forbidden: ['automatic source reads', 'agent or test execution', 'business writes',
+          'claims of verified outcome or authorization']}
+    };
+  }
+
+  function downloadReviewedShadowPlan(state) {
+    const result = document.getElementById('owgExplorerHandoffStatus');
+    const checkbox = document.getElementById('owgExplorerHandoffConfirmed');
+    if (!currentHandoffReview(state) || !checkbox?.checked || !completeShadowCriteria(state)) {
+      if (result) result.textContent = 'Selection or review changed. Reopen and confirm the current handoff.';
+      return;
+    }
+    try {
+      const file = new Blob([JSON.stringify(shadowPlanManifest(state), null, 2) + '\n'],
+        {type: 'application/json;charset=utf-8'});
+      const url = URL.createObjectURL(file);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'owg-shadow-validation-plan.json';
+      document.body.appendChild(link);
+      try { link.click(); } finally { link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
+      if (result && currentHandoffReview(state)) result.textContent =
+        'Plan-only JSON download requested. Inspect it before sharing. No AI, source tool or shadow test ran.';
+    } catch {
+      if (result && currentHandoffReview(state)) result.textContent =
+        'Local JSON download unavailable. Nothing was sent or executed.';
+    }
+  }
+
   async function copyReviewedHandoff(state, shadow) {
     const result = document.getElementById('owgExplorerHandoffStatus');
     const checkbox = document.getElementById('owgExplorerHandoffConfirmed');
-    const valid = handoffReview === state && selectedId === state.candidateId &&
-      selectedExample === state.lane && JSON.stringify(currentWindow) === state.windowJSON &&
-      latestEvidenceRequest === state.evidenceGeneration;
-    if (!valid || !checkbox?.checked || (shadow && !completeShadowCriteria(state))) {
+    if (!currentHandoffReview(state) || !checkbox?.checked || (shadow && !completeShadowCriteria(state))) {
       if (result) result.textContent = 'Selection or review changed. Reopen and confirm the current handoff.';
       return;
     }
