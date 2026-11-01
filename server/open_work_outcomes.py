@@ -174,7 +174,12 @@ def source_operation_receipt(
                 resolved_at = _parse_source_timestamp(resolution_stamp)
                 # The source's resolution event cannot occur more than the
                 # allowed clock skew AFTER the authenticated status read.
-                if (resolved_at - when).total_seconds() > 300:
+                # Compare against BOTH clocks: source verified_at may itself
+                # be up to five minutes ahead of the local clock. Otherwise
+                # stacking two independent skew allowances would accept a
+                # purported resolution almost ten minutes in the future.
+                if ((resolved_at - when).total_seconds() > 300 or
+                    (resolved_at - current).total_seconds() > 300):
                     return _unknown(resource_ref, expected_operation, "provider_resolution_detail_conflict")
             except (ValueError, TypeError, OverflowError):
                 return _unknown(resource_ref, expected_operation, "provider_resolution_detail_conflict")
