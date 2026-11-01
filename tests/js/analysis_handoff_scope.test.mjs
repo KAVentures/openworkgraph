@@ -2874,3 +2874,78 @@ test('valid submillisecond observation and sample order accepts offset-equivalen
   assert.equal(h.tickets.length, 0);
   assert.equal(h.downloads, 0);
 });
+
+
+test('daily evidence chunks enforce exact microsecond coverage and UTC-day ceilings', async t => {
+  const first = '2026-10-01T10:00:00.000001Z';
+  const last = '2026-10-01T10:00:00.000003Z';
+  const cases = [
+    ['complete plan omits first observation by one microsecond',
+      {since: '2026-10-01T10:00:00.000002Z',
+        until: '2026-10-01T10:00:01Z', event_rows: 2}, false],
+    ['positive-count chunk starts one microsecond after last observation',
+      {since: '2026-10-01T10:00:00.000004Z',
+        until: '2026-10-01T10:00:01Z', event_rows: 2}, false],
+    ['chunk crosses UTC midnight by one microsecond',
+      {since: '2026-10-01T23:59:59Z',
+        until: '2026-10-02T00:00:00.000001Z', event_rows: 2}, false],
+    ['exact submillisecond span with UTC-equivalent offset is covered',
+      {since: '2026-10-01T12:00:00.000001+02:00',
+        until: '2026-10-01T10:00:00.000004Z', event_rows: 2}, true]
+  ];
+  for (const [name, chunk, accepted] of cases) await t.test(name, async () => {
+    const h = await openAllRetainedPreview(d => ({
+      ...d, first_observed_at: first, last_observed_at: last,
+      analysis_plan: {date_chunks: [chunk], more_dates_not_listed: false}
+    }));
+    assert.equal(h.modals, accepted ? 1 : 0);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+    if (accepted) {
+      await h.modal['#analysisCopy'].onclick();
+      assert.deepEqual(h.copied, ['request-rollover']);
+      assert.equal(h.tickets.length, 0);
+    } else {
+      assert.deepEqual(h.copied, []);
+      assert.match(h.summary.textContent, /incomplete or malformed/i);
+    }
+  });
+});
+
+test('daily chunk clipping refuses a one-microsecond extension beyond the selected range', async t => {
+  for (const [name, extraMicrosecond, accepted] of [
+    ['one microsecond beyond selected end', true, false],
+    ['exact selected end with equivalent UTC offset', false, true]
+  ]) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    const selected = new URLSearchParams(h.reads[1].url.split('?')[1]);
+    const end = selected.get('until');
+    const endMs = Date.parse(end);
+    const chunkEnd = extraMicrosecond
+      ? end.replace(/\\.000Z$/, '.000001Z')
+      : end.replace(/Z$/, '+00:00');
+    assert.equal(Date.parse(chunkEnd), endMs);
+    h.reply(h.reads[1], {...h.preview('range', 'clipped-daily-plan'),
+      first_observed_at: new Date(endMs - 45000).toISOString(),
+      last_observed_at: new Date(endMs - 30000).toISOString(),
+      analysis_plan: {date_chunks: [{
+        since: new Date(endMs - 60000).toISOString(),
+        until: chunkEnd, event_rows: 2
+      }], more_dates_not_listed: false}});
+    await opening;
+    assert.equal(h.modals, accepted ? 1 : 0);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+    if (accepted) {
+      await h.modal['#analysisCopy'].onclick();
+      assert.deepEqual(h.copied, ['request-clipped-daily-plan']);
+      assert.equal(h.tickets.length, 0);
+    } else {
+      assert.deepEqual(h.copied, []);
+      assert.match(h.summary.textContent, /incomplete or malformed/i);
+    }
+  });
+});
