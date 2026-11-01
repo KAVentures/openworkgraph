@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from server.open_work_outcomes import source_operation_receipt
+from server.workflow_evidence import WorkflowEvidenceError
 
 REF = "owg:r:" + "a" * 32
 WHEN = datetime(2026, 11, 1, 8, 0, tzinfo=timezone.utc)
@@ -326,3 +327,85 @@ def test_explicit_falsey_or_nonstr_history_scope_never_invokes_source_reader(
             **{window_name: invalid_explicit_scope},
         )
     assert calls == []
+
+
+# The general historical-evidence parser intentionally supports legacy date
+# forms. Operation verification is narrower: a timezone-ambiguous caller
+# window must never reach a source-capable reader on a different host.
+_AMBIGUOUS_WINDOWS = (
+    "2026-11-01",                         # date only
+    "2026-W44-7T08:00:00Z",              # ISO week date
+    "20261101T080000Z",                 # ISO basic datetime
+    "2026-11-01 08:00:00Z",             # space separator
+    "2026-11-01T08:00:00",              # naive seconds
+    "2026-11-01T08:00",                 # naive minutes
+    "2026-11-01T08:00:00+0000",         # offset without colon
+    "2026-11-01T08:00:00z",             # noncanonical lowercase Z
+    "2026-11-01T08:00:00+24:00",        # impossible offset
+    "2026-11-01T08:00:00+00:00\n",      # trailing data
+    "2026-11-01T08:00:00+00:00+00:00",  # doubled offset
+    "2026-11-01T08:00:00.1234567890Z", # unbounded precision
+    "2026-11-01T08:00:00+00",          # incomplete offset
+    "2026-11-01T08:00:00Z" + "x" * 100, # oversized input
+)
+
+
+@pytest.mark.parametrize("operation,provider,kind,state,scope_flag", OPERATIONS)
+@pytest.mark.parametrize("boundary", ["since", "until"])
+@pytest.mark.parametrize("ambiguous", _AMBIGUOUS_WINDOWS)
+def test_ambiguous_history_window_never_reaches_source_reader(
+    operation, provider, kind, state, scope_flag, boundary, ambiguous,
+):
+    calls = []
+
+    def unexpected_read(*args, **kwargs):
+        calls.append((args, kwargs))
+        return _graph(operation, provider, kind, state)
+
+    with pytest.raises(WorkflowEvidenceError, match="timezone-aware ISO-8601"):
+        source_operation_receipt(
+            REF, operation, record_reader=unexpected_read, now=WHEN,
+            **{boundary: ambiguous},
+        )
+    assert calls == []
+
+
+_AWARE_WINDOWS = (
+    ("2026-11-01T07:00Z", "2026-11-01T08:01Z"),
+    ("2026-11-01T08:00+00:00", "2026-11-01T08:01+00:00"),
+    ("2026-11-01T08:00:00+00:00", "2026-11-01T08:01:00+00:00"),
+    ("2026-11-01T09:00:00+01:00", "2026-11-01T09:01:00+01:00"),
+    ("2026-11-01T07:30:00.123456789Z", "2026-11-01T08:30:00Z"),
+)
+
+
+@pytest.mark.parametrize("operation,provider,kind,state,scope_flag", OPERATIONS)
+@pytest.mark.parametrize("since,until", _AWARE_WINDOWS)
+def test_explicit_aware_history_windows_preserve_provider_only_receipts(
+    operation, provider, kind, state, scope_flag, since, until,
+):
+    graph = _graph(operation, provider, kind, state)
+    graph["source_window"] = {"since": since, "until": until}
+    calls = []
+
+    def read(ref, **kwargs):
+        calls.append((ref, kwargs))
+        return graph
+
+    receipt = source_operation_receipt(
+        REF, operation, since=since, until=until, record_reader=read, now=WHEN,
+    )
+    assert receipt["availability"] == "source_reported"
+    assert receipt["operation_verified"] is True
+    assert receipt["business_objective_verified"] is False
+    assert receipt["customer_outcome_verified"] is False
+    assert receipt["agent_caused_operation_verified"] is False
+    assert receipt["agent_execution_authorized"] is False
+    assert receipt["read_only"] is True
+    assert "PRIVATE_NEVER_RETURN" not in str(receipt)
+    assert calls == [(
+        REF, {
+            "since": since, "until": until, "include_source_status": True,
+            "required_source_provider_kind": (provider, kind),
+        },
+    )]
