@@ -222,3 +222,83 @@ def test_local_time_zone_parameter_order_with_case_attribute_dimension():
     })
     assert result["matching"]["cases"] == 5
     assert sum(row[-1] for row in result["rows"]) == 5
+
+
+def test_event_level_iana_local_hour_weekday_counts_distinct_cases_and_shares():
+    # Spring skips 02:xx; autumn repeats 02:xx. The same local hour
+    # contains two distinct UTC hours and two source cases, not three.
+    log = _import([
+        ("spring_before", "Seen", "2024-03-31T00:30:00Z"),
+        ("spring_after", "Seen", "2024-03-31T01:30:00Z"),
+        ("fall_first", "Seen", "2024-10-27T00:30:00Z"),
+        ("fall_first", "Seen", "2024-10-27T00:45:00Z"),
+        ("fall_second", "Seen", "2024-10-27T01:30:00Z"),
+        ("fall_second", "Other", "2024-10-27T01:31:00Z"),
+    ])
+    spec = {
+        "level": "events",
+        "dimensions": ["weekday_local", "hour_local"],
+        "time_zone": "Europe/Stockholm",
+        "activity_in": ["Seen"],
+        "measures": [{"fn": "count"}, {"fn": "cases"}, {"fn": "share"}],
+        "order": "dimensions",
+        "limit": 168,
+    }
+    result = query.run(log, spec)
+    assert result["columns"] == [
+        "weekday_local", "hour_local", "count", "cases", "share"
+    ]
+    assert result["rows"] == [
+        ["7 Sunday", "01", 1, 1, 0.2],
+        ["7 Sunday", "02", 3, 2, 0.6],
+        ["7 Sunday", "03", 1, 1, 0.2],
+    ]
+    assert result["matching"] == {"rows": 5, "cases": 4}
+    assert result["rows_truncated"] is False
+
+    saved = query.save(log, {"name": "Local observed events", "spec": spec})
+    reloaded = query.list_saved(log)["analyses"][0]
+    assert reloaded["analysis_id"] == saved["analysis_id"]
+    assert reloaded["spec"]["time_zone"] == "Europe/Stockholm"
+    assert query.run(log, reloaded["spec"])["rows"] == result["rows"]
+
+
+def test_event_local_dimension_and_attribute_bind_parameters_before_filters():
+    log = _import([
+        ("a", "Seen", "2024-01-01T23:30:00Z"),
+        ("b", "Seen", "2024-01-02T00:30:00Z"),
+        ("c", "Other", "2024-01-02T00:31:00Z"),
+    ])
+    result = query.run(log, {
+        "level": "events",
+        "dimensions": ["attribute:priority", "hour_local"],
+        "time_zone": "Europe/Stockholm",
+        "activity_in": ["Seen"],
+        "measures": [{"fn": "count"}],
+        "order": "dimensions",
+    })
+    assert result["rows"] == [[None, "00", 1], [None, "01", 1]]
+    assert result["matching"] == {"rows": 2, "cases": 2}
+    # Existing UTC hour remains UTC, with no zone required.
+    utc = query.run(log, {
+        "level": "events", "dimensions": ["hour"],
+        "activity_in": ["Seen"], "measures": [{"fn": "count"}],
+        "order": "dimensions",
+    })
+    assert utc["matching"]["rows"] == 2
+    assert sorted(row[-1] for row in utc["rows"]) == [1, 1]
+
+
+def test_event_local_zone_is_required_and_cannot_change_utc_event_dimensions():
+    for spec in [
+        {"level": "events", "dimensions": ["hour_local"],
+         "measures": [{"fn": "count"}]},
+        {"level": "events", "dimensions": ["weekday_local"],
+         "time_zone": "Not/A_Real_Time_Zone", "measures": [{"fn": "count"}]},
+        {"level": "events", "dimensions": ["hour"],
+         "time_zone": "Europe/Stockholm", "measures": [{"fn": "count"}]},
+        {"level": "cases", "dimensions": ["hour_local"],
+         "time_zone": "Europe/Stockholm", "measures": [{"fn": "count"}]},
+    ]:
+        with pytest.raises(workspace.EventLogWorkspaceError):
+            query.parse(spec)
