@@ -455,6 +455,15 @@
         ? "\n\nEvidence limitation: No recorded events in this local preview's selected period. This is not proof of inactivity or complete capture. Do not infer a workflow, business completion, time savings, or ROI from absent ordinary work evidence. If other currently authorized evidence is available, evaluate it separately and disclose its source and limits; otherwise report insufficient evidence."
         : "\n\nEvidence limitation: This local preview contains only capture-health or gap records, not ordinary work events for the selected period. Health and gap records are not workflow steps. Do not infer a workflow, business completion, time savings, or ROI from absent ordinary work evidence. If other currently authorized evidence is available, evaluate it separately and disclose its source and limits; otherwise report insufficient evidence."
       : '';
+    // Evidence availability is not workflow confirmation. Capture-health and
+    // gap records can be downloaded for diagnostics, but cannot substantiate
+    // an automation opportunity or completed business process.
+    const diagnosticOnly=d.canonical_rows>0 && ordinaryRows===0;
+    const evidenceAssessment=ordinaryRows===0
+      ? d.canonical_rows===0
+        ? 'Evidence assessment: insufficient for workflow review — no recorded events in this selection. Capture coverage and consent status remain unverified.'
+        : 'Evidence assessment: insufficient for workflow review — only capture-health or gap records are present. These are diagnostics, not observed workflow steps.'
+      : 'Evidence assessment: ordinary work observations are present, but no workflow, business completion, or automation opportunity is verified. Human review is required.';
     const request=d.request_text+evidenceWarning;
     const chosen={scope:d.window.scope,...(d.window.scope==='range'?{since:d.window.since,until:d.window.until}:{})};
     if(!selectionStillMatches(chosen)){
@@ -534,8 +543,9 @@
     const focusExampleItems = focusExampleCount
       ? d.redacted_examples.map(x=>`<li>${esc(visibleEvidenceLabel(x.app == null ? 'Unknown app' : x.app, 'sample'))} · ${esc(visibleEvidenceLabel(x.window_title||'Untitled activity', 'sample'))} · ${x.observed_at == null ? 'observation time not supplied' : `observed at <time datetime="${esc(x.observed_at)}">${esc(x.observed_at)}</time>`}</li>`).join('')
       : '<li>No redacted context examples supplied.</li>';
-    window.openModal?.('Prepare for AI','Discover opportunities from recorded work',`
+    window.openModal?.('Prepare for AI',ordinaryRows>0?'Review selected work evidence (workflow unverified)':'Review evidence limitations (no verified workflow)',`
       <p>No workflow description or repeated pattern is required. Your AI will interpret the evidence; this panel does not run a model.</p>
+      <p><strong>${esc(evidenceAssessment)}</strong></p>
       <div class="note"><strong>Selected local evidence preview — not sent to an AI</strong>
         <p>${esc(d.canonical_rows)} recorded events · ${esc(d.event_types.focus_span||0)} focus spans · ${esc(d.event_types.capture_gap||0)} unobserved-gap records.</p>
         <p>${esc(selectedPeriod)} Observed: ${esc(d.first_observed_at||'none')} to ${esc(d.last_observed_at||'none')}.</p>
@@ -550,9 +560,9 @@
       <p>Copy request copies only the prepared request text. Download saves a separate local evidence file; an AI will not receive that file unless you inspect and attach or share it yourself.</p>
       <p>Name redaction is best effort, not anonymization. Even summary exports may contain sensitive titles, URLs or metadata; detailed chronology adds raw local evidence that may contain more sensitive content. Inspect the file before sharing it. Gaps and foreground time are not measured lost work or savings.</p>
       ${d.canonical_rows?'':'<p class="muted">No recorded events in the selected period. An evidence package is unavailable; you can still copy the explanatory request. This does not establish inactivity or complete capture.</p>'}
-      <div class="modal-actions"><button type="button" id="analysisDownload" ${d.canonical_rows?'':'disabled'}>Download AI evidence package</button><button type="button" class="secondary" id="analysisCopy">Copy request for my AI</button></div>
+      <div class="modal-actions"><button type="button" id="analysisDownload" ${d.canonical_rows?'':'disabled'}>${d.canonical_rows?(diagnosticOnly?'Download capture-health diagnostic package':'Download AI evidence package'):'Evidence download unavailable'}</button><button type="button" class="secondary" id="analysisCopy">Copy request for my AI</button></div>
       <details style="margin-top:12px"><summary>Read the request</summary><pre style="white-space:pre-wrap" id="analysisRequest"></pre></details>
-      <div class="muted" id="analysisActionStatus" role="status">Nothing has been sent to an AI. ${d.canonical_rows?'Downloads work with any capable AI, without an OWG cloud account.':'There is no recorded-event package to download for this selection.'}</div>`);
+      <div class="muted" id="analysisActionStatus" role="status">Nothing has been sent to an AI. ${d.canonical_rows?(diagnosticOnly?'Only capture-health/gap diagnostics are available; no workflow is verified.':'Downloads work with any capable AI, without an OWG cloud account.'):'There is no recorded-event package to download for this selection.'}</div>`);
     const requestNode=$('#analysisRequest'), statusNode=$('#analysisActionStatus');
     const copyNode=$('#analysisCopy'), downloadNode=$('#analysisDownload'), detailedNode=$('#analysisDetailed');
     requestNode.textContent=request;
