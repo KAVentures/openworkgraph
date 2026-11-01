@@ -1928,7 +1928,7 @@ def test_pathless_contact_object_overlap_respects_supported_write_shapes(
     ('emails[type eq "work"].value',
      'emails[type eq "home"].value', False),
     ('emails[value eq "a@example.test"].value',
-     'emails[value eq "b@example.test"].value', False),
+     'emails[value eq "b@example.test"].value', True),
     ('emails[type eq "work"].value',
      'emails[type eq "work"].primary', False),
 ], ids=["type-and-value-same-child", "type-and-value-different-children",
@@ -1991,4 +1991,134 @@ def test_mixed_contact_selector_overlap_cli_preserves_blocker_and_privacy():
                    if item["code"] == "overlapping_contact_patch_paths")
     assert overlap["path"] == "users.patch_operations"
     assert secret not in completed.stdout + completed.stderr
+    assert "emails[value" not in completed.stdout + completed.stderr
+
+
+# A PATCH operation is applied to the *current* contact array. Changing a
+# selector's own key can change the target of a later operation, even if the
+# later operation writes a different child. This is an offline warning only:
+# no declaration proves an IdP emits these operations in one HTTP request.
+@pytest.mark.parametrize("client", ["entra", "okta", "other"])
+@pytest.mark.parametrize("declaration_mode", ["legacy", "operations", "mixed"])
+@pytest.mark.parametrize("first,second,overlap", [
+    ('emails[type eq "work"].type',
+     'emails[type eq "work"].display', True),
+    ('emails[type eq "work"].type',
+     'emails[type eq "home"].display', True),
+    ('emails[value eq "a@example.test"].value',
+     'emails[value eq "b@example.test"].primary', True),
+    ("emails.type", 'emails[type eq "work"].display', True),
+    ("emails.value", 'emails[value eq "a@example.test"].display', True),
+    ("emails.type", 'emails[value eq "a@example.test"].display', False),
+    ("emails.value", 'emails[type eq "work"].display', False),
+    ('emails[type eq "work"].display',
+     'emails[type eq "home"].primary', False),
+    ('emails[type eq "work"].value',
+     'emails[type eq "work"].primary', False),
+    ('emails[value eq "a@example.test"].display',
+     'emails[value eq "b@example.test"].primary', False),
+], ids=[
+    "same-selector-key-changed", "distinct-selector-key-changed",
+    "value-selector-key-changed", "all-type-mutates-type-selector",
+    "all-value-mutates-value-selector", "different-global-key-type",
+    "different-global-key-value", "disjoint-type-selectors",
+    "same-selector-disjoint-children", "disjoint-value-selectors",
+])
+def test_selector_key_mutation_can_change_later_contact_patch_target(
+        client, declaration_mode, first, second, overlap):
+    from gateway.scim_user_emails import _path
+    _path(first)
+    _path(second)
+    users = mapping()["users"]
+    if declaration_mode == "legacy":
+        users["patch_attributes"] = [first, second]
+    elif declaration_mode == "operations":
+        users["patch_attributes"] = []
+        users["patch_operations"] = [
+            {"op": "replace", "path": path, "value_present": True}
+            for path in (first, second)
+        ]
+    else:
+        users["patch_attributes"] = [first]
+        users["patch_operations"] = [
+            {"op": "replace", "path": second, "value_present": True},
+        ]
+    report = assess(mapping(client=client, users=users))
+    findings = [item for item in report["findings"]
+                if item["code"] == "overlapping_contact_patch_paths"]
+    assert bool(findings) is overlap
+    assert report["status"] == "requires_live_validation"
+    assert "live_validation_required" in codes(report)
+    assert "unsupported_attribute" not in codes(report)
+    assert "unsupported_user_patch_path" not in codes(report)
+    if overlap:
+        assert len(findings) == 1
+        assert findings[0]["severity"] == "caution"
+        assert findings[0]["path"] == (
+            "users.patch_attributes" if declaration_mode == "legacy"
+            else "users.patch_operations")
+    serialized = json.dumps(report)
+    assert "a@example.test" not in serialized
+    assert "b@example.test" not in serialized
+    assert 'type eq "work"' not in serialized
+
+
+def test_shipped_contact_patch_reselects_after_selector_key_change():
+    from gateway.scim_provisioning import Error
+    from gateway.scim_user_emails import normalize, patch
+
+    initial = normalize([{
+        "value": "synthetic@example.test", "type": "work", "display": "Original",
+    }])
+    changed_type = patch(initial, 'emails[type eq "work"].type',
+                         "replace", "home")
+    with pytest.raises(Error) as missing_target:
+        patch(changed_type, 'emails[type eq "work"].display',
+              "replace", "Changed")
+    assert missing_target.value.status == 400
+
+    changed_display = patch(initial, 'emails[type eq "work"].display',
+                            "replace", "Changed")
+    reversed_order = patch(changed_display, 'emails[type eq "work"].type',
+                           "replace", "home")
+    assert reversed_order[0]["display"] == "Changed"
+    assert reversed_order[0]["type"] == "home"
+
+    # Two *different* literal selectors of the same kind can also become
+    # overlapping when an earlier operation changes the selector key.
+    newly_home = patch(changed_type, 'emails[type eq "home"].display',
+                       "replace", "New home")
+    assert newly_home[0]["display"] == "New home"
+    with pytest.raises(Error):
+        patch(initial, 'emails[type eq "home"].display',
+              "replace", "New home")
+
+
+def test_selector_key_mutation_cli_preserves_blocker_and_redacts_values():
+    secret = "synthetic-selector-secret@example.test"
+    users = mapping()["users"]
+    users["create_attributes"] = ["active"]  # Existing identity gate.
+    users["patch_attributes"] = [
+        f'emails[value eq "{secret}"].value',
+    ]
+    users["patch_operations"] = [
+        {"op": "replace", "path": 'emails[value eq "other@example.test"].display',
+         "value_present": True},
+    ]
+    completed = subprocess.run(
+        [sys.executable, str(SCRIPT), "-"],
+        input=json.dumps(mapping(client="okta", users=users)),
+        capture_output=True, text=True, check=False,
+    )
+    assert completed.returncode == 2, completed.stderr
+    report = json.loads(completed.stdout)
+    assert report["status"] == "blocked"
+    assert {"missing_stable_username", "overlapping_contact_patch_paths",
+            "contact_value_selector", "live_validation_required"} <= codes(report)
+    finding = next(item for item in report["findings"]
+                   if item["code"] == "overlapping_contact_patch_paths")
+    assert finding["path"] == "users.patch_operations"
+    assert finding["severity"] == "caution"
+    assert secret not in completed.stdout + completed.stderr
+    assert "other@example.test" not in completed.stdout + completed.stderr
     assert "emails[value" not in completed.stdout + completed.stderr
