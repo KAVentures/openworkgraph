@@ -144,3 +144,34 @@ def test_no_time_only_link_or_transition_and_existing_api_is_read_only():
     assert linked["read_only"] is True
     assert linked["authoritative"] is False
     assert "record_case_lanes" in result
+
+
+def test_interleaved_foreign_case_breaks_path_without_inventing_direct_transition():
+    linked = linked_work_items([
+        event(1, A, action="copy", transfer="transfer-five"),
+        event(2, B, action="paste", transfer="transfer-five"),
+        event(3, "owg:r:" + "c" * 32),
+        event(4, "owg:r:" + "c" * 32),
+        event(5, A), event(6, A),
+    ])
+    assert linked["total_items"] == 2
+    item = next(item for item in linked["items"] if item["cross_record_join"])
+    assert item["observed_record_run_count"] == 3
+    assert item["observed_record_change_count"] == 1
+    assert item["observed_record_interleaved_boundary_count"] == 1
+    assert [r["boundary_before"] for r in item["observed_record_runs"]] == [
+        [], ["observed_record_change"], ["interleaved_other_observation"],
+    ]
+    assert item["observed_record_runs"][2]["first_event_id"] == "e0005"
+    assert linked["link_contract"]["interleaved_nonmember_evidence_breaks_record_path_continuity"]
+
+
+def test_other_actor_interleaving_does_not_disclose_or_split_local_path():
+    linked = linked_work_items([
+        event(1, A), event(2, B, actor="actor-b"),
+        event(3, B, actor="actor-b"), event(4, A),
+    ])
+    item = next(item for item in linked["items"] if A in item["resource_refs"])
+    assert item["observed_record_run_count"] == 1
+    assert item["observed_record_interleaved_boundary_count"] == 0
+    assert item["observed_record_change_count"] == 0
