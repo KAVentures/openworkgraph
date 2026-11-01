@@ -575,7 +575,7 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
         refs = sorted({rows[i]["ref"] for i in ids if rows[i]["ref"]})
         basis = dict(sorted(bases[linked["root"](ids[0])].items()))
         segments = observed_activity_segments(linked["rows"], ids)
-        surfaces = observed_surface_runs(linked["rows"], ids)
+        surfaces = observed_surface_runs([rows[i] for i in ids])
         items.append({
             "item_id": item_id,
             "event_ids": ids[:_MAX_EVENT_IDS],
