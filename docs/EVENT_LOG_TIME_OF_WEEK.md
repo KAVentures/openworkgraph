@@ -61,3 +61,43 @@ crossing, two-dimensional grouping, chronological weekday/hour sorting,
 all exact duration-band boundaries, filters, saved definitions and rejection
 of SQL-like or wrong-level dimensions. This is not real-provider or
 consenting-customer acceptance, and does not establish competitor parity.
+
+
+## IANA-local business-time view (explicit opt-in per analysis)
+
+For time-of-week charts in the analyst's actual operational time zone, use
+`start_weekday_local`, `start_hour_local`, `end_weekday_local`, and/or
+`end_hour_local`, **and explicitly provide** `time_zone` with a valid IANA
+zone name. This is a *display/grouping conversion only*, not a change to
+stored timestamps, duration, source coverage, consent or log identity.
+
+```json
+{
+  "level": "cases",
+  "dimensions": ["start_weekday_local", "start_hour_local"],
+  "time_zone": "Europe/Stockholm",
+  "measures": [{"fn": "count"}, {"fn": "median", "of": "duration_seconds"}],
+  "order": "dimensions",
+  "limit": 168
+}
+```
+
+The query interprets stored UTC timestamps as instants, then groups them by
+their IANA local weekday/hour. Spring daylight-saving transitions can skip a
+local hour; autumn transitions can repeat the same wall-clock hour, which
+**combines two distinct UTC hours into one bin**. Neither a zero count nor a
+repeated hour establishes a staffing requirement or source completeness.
+Elapsed durations remain UTC-instant differences, never wall-clock subtraction.
+
+The zone is validated before reading a log and passed as a bound SQL
+parameter; it is never interpolated into SQL. Local dimensions without
+`time_zone`, unknown zones, and zones supplied to UTC-only/event analyses
+are refused rather than silently changing interpretation. Saved analyses
+preserve the exact zone name. Existing UTC dimensions retain their original
+meaning and need no zone. These results do not infer the user's local zone
+from their computer or location, and they do not rate employees.
+
+Synthetic tests cover both DST transitions, midnight/weekday crossing,
+save/reload, malicious zone refusal, and mixed attribute/zone parameter
+ordering. Native cross-platform CI and real consenting source validation
+are separate acceptance gates.
