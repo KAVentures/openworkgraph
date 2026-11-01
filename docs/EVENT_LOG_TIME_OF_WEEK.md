@@ -1,0 +1,63 @@
+# R9 — UTC case intake/completion heatmaps and elapsed-time bands
+
+The existing **local, session-authenticated, typed event-log analysis API**
+supports five new case-level dimensions. They compose with the existing
+`count`, `cases`, `share`, median/p90/average duration, cohort filters,
+save/reload and bounded two-dimensional grouping. This is a usable way to
+inspect *when supplied cases begin or finish* and how their elapsed durations
+are distributed, without raw SQL, new source access or person-level scoring.
+
+| Dimension | Meaning |
+| --- | --- |
+| `start_weekday_utc` | UTC weekday of each case's first recorded event, prefixed with ISO weekday 1 (Monday) through 7 (Sunday) |
+| `start_hour_utc` | UTC hour of the first event, `00`–`23` |
+| `end_weekday_utc` | UTC weekday of the last recorded event |
+| `end_hour_utc` | UTC hour of the last recorded event, `00`–`23` |
+| `duration_band` | Elapsed first-to-last-event duration in four nonoverlapping half-open bands: under 1 hour; 1–under 24 hours; 1–under 7 days; 7 days or more |
+
+**Example:** With a selected retained log, POST to the existing
+`/v1/event-logs/{log_id}/analysis` endpoint using the usual
+`OWG-Session` local dashboard authorization:
+
+```json
+{
+  "level": "cases",
+  "dimensions": ["start_weekday_utc", "start_hour_utc"],
+  "measures": [
+    {"fn": "count"},
+    {"fn": "median", "of": "duration_seconds"}
+  ],
+  "order": "dimensions",
+  "limit": 168
+}
+```
+
+The result is a bounded day-by-hour table (up to 7 × 24 cells) with counts
+and the median elapsed duration in seconds. Missing day/hour combinations
+have **no row**; do not interpret them as complete upstream coverage.
+A second analysis can group by `end_weekday_utc` and `end_hour_utc` to
+inspect completion patterns. Grouping by `duration_band` exposes the
+distribution of recorded case elapsed time. These dimensions are also valid
+in the existing saved-analysis definitions.
+
+All timestamps are normalized to UTC by the existing importer; these
+dimensions are **not local business-hours or shift calendars**. Overnight
+cases can start and end on different UTC days. Duration is wall-clock elapsed
+time between first and last observed events, **not** labor time, processing
+time, source-authoritative case duration or a productivity metric. A
+single-event case has zero observed duration; it is not evidence that the
+business process was instantaneous. Cases with unobserved source history can
+be partial, and the result cannot establish how many upstream cases are
+missing.
+
+The existing two-dimension/four-measure/500-row limits, cohort and case
+notion, explicit authorization, safe SQL compiler, retention and deletion
+rules remain unchanged. No new API route, raw event export, background sync,
+identity access, telemetry or business action is introduced. Saved definitions
+are local to the selected log and are deleted with it.
+
+Synthetic regression coverage checks UTC offset normalization, midnight
+crossing, two-dimensional grouping, chronological weekday/hour sorting,
+all exact duration-band boundaries, filters, saved definitions and rejection
+of SQL-like or wrong-level dimensions. This is not real-provider or
+consenting-customer acceptance, and does not establish competitor parity.
