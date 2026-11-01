@@ -73,3 +73,54 @@ test('malformed rates and counts cannot become misleading zeros or percentages',
   assert.equal(view.change(0),'0.00 pp');
   assert.equal(view.change(null),'Not comparable');
 });
+
+test('on-demand local read renders counts as text and rejects stale log responses', async () => {
+  const {readFileSync} = await import('node:fs');
+  const {runInNewContext} = await import('node:vm');
+  class FakeElement {
+    constructor(tag) {this.tag=tag;this.children=[];this.listeners={};this.isConnected=true;this.style={};this.textContent='';this.value='';}
+    append(...items){this.children.push(...items);}
+    appendChild(item){this.children.push(item);return item;}
+    replaceChildren(...items){this.children=[...items];}
+    addEventListener(type,callback){this.listeners[type]=callback;}
+    setAttribute(key,value){this[key]=value;}
+    querySelector(selector){
+      const id=selector.startsWith('#')?selector.slice(1):selector;
+      for(const child of this.children){if(child.id===id)return child;const found=child.querySelector?.(selector);if(found)return found;}
+      return null;
+    }
+  }
+  Object.defineProperty(FakeElement.prototype,'innerHTML',{set(){throw new Error('unsafe HTML rendering');}});
+  const quality=new FakeElement('section');quality.id='owgQuality';
+  const picker=new FakeElement('select');picker.value='log_123';
+  const document={
+    readyState:'complete',body:new FakeElement('body'),
+    createElement:tag=>new FakeElement(tag),
+    getElementById:id=>id==='owgQuality'?quality:id==='owgEventLogPick'?picker:null
+  };
+  let resolveFetch,requested='';
+  const source=readFileSync(new URL('../../dashboard/event_log_quality_trends.js',import.meta.url),'utf8');
+  runInNewContext(source,{document,MutationObserver:class {observe(){}},
+    fetch:path=>{requested=path;return new Promise(resolve=>{resolveFetch=resolve;});}});
+  const run=quality.querySelector('#owgQualityTrendsRun');
+  const download=quality.querySelector('#owgQualityTrendsCsv');
+  const output=quality.querySelector('#owgQualityTrendsTable');
+  assert.ok(run && download && output);
+  assert.equal(requested,''); // no implicit data fetch
+  const first=run.listeners.click();
+  assert.equal(requested,'/v1/event-logs/log_123/quality');
+  assert.equal(download.disabled,true);
+  picker.value='log_other';
+  resolveFetch({ok:true,json:async()=>({batch_trends:{batches:[report(0,'first_report',2,0.2,null)]}})});
+  await first;
+  assert.equal(output.children.length,0); // stale data never rendered
+  assert.equal(download.disabled,true);
+  assert.equal(run.disabled,false); // a stale request cannot strand the control
+  picker.value='log_123';
+  const second=run.listeners.click();
+  resolveFetch({ok:true,json:async()=>({batch_trends:{batches:[report(0,'first_report',2,0.2,null)],batches_without_report:[]}})});
+  await second;
+  assert.equal(download.disabled,false);
+  assert.ok(output.querySelector('#owgQualityTrendsRows'));
+  assert.equal(output.querySelector('#owgQualityTrendsRows').children[1].children[0].children[1].textContent,'Rejected input');
+});
