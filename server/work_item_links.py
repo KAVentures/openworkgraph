@@ -36,6 +36,7 @@ from typing import Any
 
 from .record_case_lanes import _EVENT_ID, _RESOURCE, _identity, _stamp, _token
 from .reconstruction_segments import observed_activity_segments
+from .reconstruction_record_path import observed_record_path
 from .reconstruction_switches import observed_work_switches
 from .reconstruction_surfaces import observed_surface_runs
 from .reconstruction_transfer_episodes import disjoint_directional_transfer_episodes
@@ -592,6 +593,7 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
         basis = dict(sorted(bases[linked["root"](ids[0])].items()))
         segments = observed_activity_segments(linked["rows"], ids)
         surfaces = observed_surface_runs([rows[i] for i in ids])
+        record_path = observed_record_path([rows[i] for i in ids])
         items.append({
             "item_id": item_id,
             "event_ids": ids[:_MAX_EVENT_IDS],
@@ -605,6 +607,7 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
                                 "source": rows[i]["source"]} for i in ids[:24]],
             **segments,
             **surfaces,
+            **record_path,
             "link_basis": basis,
             "cross_record_join": len(refs) > 1,
             "confidence": min(_CONFIDENCE[name] for name in basis) if basis else _CONFIDENCE["same_record"],
@@ -654,6 +657,9 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             "interruption_requires_same_scope_foreign_record": True,
             "clock_gaps_alone_do_not_split_activity_segments": True,
             "observed_surface_runs_are_not_task_memberships": True,
+            "observed_record_paths_are_not_verified_business_transitions": True,
+            "observed_record_changes_require_same_exact_capture_scope": True,
+            "unknown_record_runs_do_not_create_transitions": True,
             "unknown_surfaces_are_not_other_app": True,
             "surface_transitions_require_verified_same_capture_scope": True,
             "observed_switches_require_same_scope_literal_record_endpoints": True,
