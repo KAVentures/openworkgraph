@@ -192,13 +192,36 @@ def test_benchmark_capped_hash_sample_is_independent_of_import_order(monkeypatch
 def test_benchmark_reports_overlap_and_refuses_bad_input():
     log_id = _log()
     overlapping = cohorts.benchmark(log_id, [{}, {"resource": "ann"}])
-    assert overlapping["overlapping_cases"] == 20 and "overstate" in overlapping["note"]
+    assert overlapping["overlapping_cases"] == 20 and "may understate or overstate uncertainty" in overlapping["note"]
     for bad in ([{}], [{}, {}, {}], "x", [{"resource": "nobody"}, {}]):
         with pytest.raises(workspace.EventLogWorkspaceError):
             cohorts.benchmark(log_id, bad)
     for sla in ("x", 0, True, 10 ** 10):
         with pytest.raises(workspace.EventLogWorkspaceError):
             cohorts.benchmark(log_id, [{}, {}], sla_seconds=sla)
+
+
+
+def test_identical_cohorts_disclose_independent_interval_limit_without_directional_claim():
+    """Synthetic identical membership: independent intervals are not paired intervals.
+
+    The exact observed second-minus-first difference is zero, but the
+    independent-sample interval can have nonzero width. That does not mean
+    overlap always makes an interval too narrow or always too wide.
+    """
+    log_id = _log()
+    identical = cohorts.benchmark(log_id, [{}, {}], sla_seconds=4 * 3600)
+    assert identical["overlapping_cases"] == 60
+    assert [side["cases"] for side in identical["cohorts"]] == [60, 60]
+    assert identical["intervals_assume_independent_cohorts"] is True
+    assert "may understate or overstate uncertainty" in identical["note"]
+    differences = identical["differences_second_minus_first"]
+    assert differences["rework_rate"]["difference"] == 0
+    assert differences["sla_breach_rate"]["difference"] == 0
+    assert differences["median_throughput_seconds"]["difference"] == 0
+    assert differences["rework_rate"]["ci95"][0] < 0 < differences["rework_rate"]["ci95"][1]
+    # Descriptive only: no paired-cohort inference or verified causal effect.
+    assert identical["causal_claims"] is False
 
 
 def test_median_difference_bootstrap_is_deterministic_and_brackets_the_estimate():
