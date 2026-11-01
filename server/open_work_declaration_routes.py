@@ -15,6 +15,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response
 
+from .open_work_case_graph import project_declared_case_graph
 from .local_auth import dashboard_session_valid, _read_or_create_secret
 from .local_source_credentials import _metadata_path, _read_metadata
 from .open_work_case_declarations import (
@@ -128,6 +129,29 @@ async def list_local_case_declarations(request: Request, response: Response):
         raise _safe_error(exc) from None
     await _recheck_source(scope)
     return {**result, "available": True}
+
+
+@router.get("/v1/open-work/declarations/graph")
+async def get_local_case_dependency_graph(request: Request, response: Response):
+    """Dashboard-only graph of currently reviewed declarations, never source truth."""
+    _dashboard_only(request)
+    response.headers["Cache-Control"] = "no-store"
+    scope = await asyncio.to_thread(_source_scope)
+    if scope is None:
+        # No source grant means no durable declaration graph can be read.
+        return {
+            **project_declared_case_graph({
+                "format": "openworkgraph.local-case-declarations.v1", "items": [],
+            }),
+            "available": False,
+        }
+    try:
+        snapshot = await asyncio.to_thread(list_case_declarations, scope)
+        graph = project_declared_case_graph(snapshot)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    return {**graph, "available": True}
 
 
 @router.post("/v1/open-work/declarations")
