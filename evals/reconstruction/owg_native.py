@@ -236,26 +236,35 @@ def _visible_linked_source_events(case: dict[str, Any]) -> list[dict[str, Any]]:
     Identical duplicates are idempotent. This is evaluator-only; the production
     linker continues to receive the caller's authorized source observations.
     """
-    visible: dict[str, list[str | None]] = {}
+    # A repeated visible ID is one observation identity. Keep only its first
+    # projection and an irreversible conflict state, not a list of all replays.
+    # None also represents malformed visible evidence and cannot be repaired by
+    # a later, well-formed duplicate.
+    visible: dict[str, str | None] = {}
     for event in case["presented_evidence"]:
         if not isinstance(event, dict):
             continue
         event_id = event.get("event_id")
-        if isinstance(event_id, str) and _EVENT_ID.fullmatch(event_id):
-            visible.setdefault(event_id, []).append(_linked_projection(event))
+        if not isinstance(event_id, str) or not _EVENT_ID.fullmatch(event_id):
+            continue
+        projection = _linked_projection(event)
+        if event_id not in visible:
+            visible[event_id] = projection
+        elif visible[event_id] != projection:
+            visible[event_id] = None
 
-    # Do not resurrect deleted source observations from a stale visible snapshot.
-    # Legacy cases without a source_events key still use presented evidence.
-    source = list((case["source_events"] if "source_events" in case
-                   else case["presented_evidence"]) or [])
-    # The shipped linker's _observations reserves the first normalized ID
-    # with a valid timestamp *before* inspecting record identity. A numeric
-    # source ID 17 therefore consumes the same slot as a later literal "17",
-    # even though only the literal ID may be scored as visible evidence.
-    # Retain all literal duplicates separately to veto contradictory source
-    # claims, rather than granting later rows replacement authority.
+    # Explicit empty source is authoritative after revocation. Only a missing
+    # source key is the legacy presented-only contract. Avoid copying the full
+    # source list merely to iterate it.
+    source = (case["source_events"] if "source_events" in case
+              else case["presented_evidence"]) or []
+    # Production reserves the first normalized ID with a valid timestamp,
+    # including numeric/boolean IDs. A later literal duplicate cannot replace
+    # an earlier nonliteral admission. Invalid timestamps reserve no slot.
     first_admitted_literal: dict[str, bool] = {}
-    by_id: dict[str, list[dict[str, Any]]] = {}
+    first_literal_rows: dict[str, dict[str, Any]] = {}
+    first_claims: dict[str, str | None] = {}
+    conflicting_literals: set[str] = set()
     for event in source:
         if not isinstance(event, dict):
             continue
@@ -263,31 +272,33 @@ def _visible_linked_source_events(case: dict[str, Any]) -> list[dict[str, Any]]:
         source_id = str(raw_id or "")
         if not _EVENT_ID.fullmatch(source_id):
             continue
-        # Production skips malformed timestamps before reserving an ID. Do
-        # not let an invalid earlier/later duplicate replace or veto the first
-        # timestamp-valid literal observation admitted by the linker.
         if _stamp(event.get("observed_at")) is None:
             continue
         if source_id not in first_admitted_literal:
             first_admitted_literal[source_id] = isinstance(raw_id, str)
-        if isinstance(raw_id, str):
-            by_id.setdefault(raw_id, []).append(event)
+        if not isinstance(raw_id, str):
+            continue
+        if raw_id not in first_literal_rows:
+            first_literal_rows[raw_id] = event
+            continue
+        # Compare complete source JSON claims only when a valid literal replay
+        # exists. Canonicalization is bounded and type-preserving; a malformed
+        # or oversized duplicate is never allowed to replace the first row.
+        if raw_id not in first_claims:
+            first_claims[raw_id] = _canonical_eval_json(first_literal_rows[raw_id])
+        claim = first_claims[raw_id]
+        if claim is None or _canonical_eval_json(event) != claim:
+            conflicting_literals.add(raw_id)
 
     admitted: list[dict[str, Any]] = []
-    for event_id, rows in by_id.items():
+    for event_id, first in first_literal_rows.items():
         if not first_admitted_literal.get(event_id, False):
             continue
-        projection = _linked_projection(rows[0])
-        if (projection is None or not visible.get(event_id)
-                or any(item != projection for item in visible[event_id])):
+        if event_id in conflicting_literals:
             continue
-        if len(rows) > 1:
-            first_claim = _canonical_eval_json(rows[0])
-            if (first_claim is None or any(
-                _canonical_eval_json(row) != first_claim for row in rows[1:]
-            )):
-                continue
-        admitted.append(rows[0])
+        projection = _linked_projection(first)
+        if projection is not None and visible.get(event_id) == projection:
+            admitted.append(first)
     return admitted
 
 
