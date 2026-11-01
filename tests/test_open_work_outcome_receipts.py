@@ -264,6 +264,65 @@ def test_receipt_rejects_conflicting_optional_source_object_kind(
     ("stripe_refund_processor_succeeded", "stripe", "refund", "succeeded"),
     ("jira_issue_resolved", "jira", "issue", "done"),
 ])
+@pytest.mark.parametrize("conflicting_ref", [
+    None, False, 0, 1, "", "owg:r:" + "b" * 32,
+    "PRIVATE_OTHER_RECORD", [], {},
+])
+def test_receipt_rejects_conflicting_nested_source_record_reference(
+    operation, provider, kind, state, conflicting_ref,
+):
+    # An optional adapter/cache identity must never contradict the exact
+    # canonical record, even if its provider status otherwise looks valid.
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    data["source_evidence"]["resource_ref"] = conflicting_ref
+    calls = []
+    result = source_operation_receipt(
+        REF, operation, record_reader=reader(data, calls), now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "provider_receipt_identity_conflict"
+    assert result["operation_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["business_objective_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert result["resource_ref"] == REF
+    assert "PRIVATE_OTHER_RECORD" not in str(result)
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), [
+    ("github_pr_merged", "github", "pull_request", "merged"),
+    ("stripe_invoice_paid", "stripe", "invoice", "paid"),
+    ("stripe_refund_processor_succeeded", "stripe", "refund", "succeeded"),
+    ("jira_issue_resolved", "jira", "issue", "done"),
+])
+@pytest.mark.parametrize("nested_ref_present", [False, True])
+def test_matching_or_absent_nested_source_record_reference_remains_valid(
+    operation, provider, kind, state, nested_ref_present,
+):
+    # Production adapters omit this field; integrations may explicitly bind
+    # it to the exact requested opaque reference. Neither grants new rights.
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    if nested_ref_present:
+        data["source_evidence"]["resource_ref"] = REF
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["operation_verified"] is True
+    assert result["customer_outcome_verified"] is False
+    assert result["business_objective_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), [
+    ("github_pr_merged", "github", "pull_request", "merged"),
+    ("stripe_invoice_paid", "stripe", "invoice", "paid"),
+    ("stripe_refund_processor_succeeded", "stripe", "refund", "succeeded"),
+    ("jira_issue_resolved", "jira", "issue", "done"),
+])
 @pytest.mark.parametrize("field,reason", [
     ("record_observed", "record_not_observed_in_permitted_window"),
     ("record_identity_complete_within_retained_window",
