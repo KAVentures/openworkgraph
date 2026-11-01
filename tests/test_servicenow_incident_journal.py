@@ -261,6 +261,22 @@ def test_output_rejected_after_grant_revocation_on_offline_export(
     assert not (tmp_path / "offline.csv").exists()
 
 
+def test_private_directory_with_spaces_is_supported_on_all_platforms(
+        tmp_path, monkeypatch):
+    private = tmp_path / "private selected incidents"
+    private.mkdir()
+    if os.name == "posix":
+        private.chmod(0o700)
+    grant_path = grant(private)
+    monkeypatch.setenv("OWG_SERVICENOW_TOKEN", TOKEN)
+    assert main(args(private, grant_path), opener=FakeTransport()) == 0
+    assert len(rows(private / "first.csv")) == 1
+    monkeypatch.delenv("OWG_SERVICENOW_TOKEN")
+    assert main(args(private, grant_path, output="offline recovered.csv",
+                     export_only=True), opener=FakeTransport()) == 0
+    assert rows(private / "offline recovered.csv") == rows(private / "first.csv")
+
+
 def test_empty_filtered_page_never_deletes_existing_revision(tmp_path, monkeypatch):
     grant_path = grant(tmp_path)
     monkeypatch.setenv("OWG_SERVICENOW_TOKEN", TOKEN)
