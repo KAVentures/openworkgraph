@@ -509,81 +509,65 @@ def test_linked_projection_never_reconstructs_revoked_source_even_in_candidate_m
     assert result["unassigned_event_ids"] == []
 
 
-def test_linked_projection_hidden_third_record_vetoes_transfer_not_same_record():
+def test_linked_projection_rejects_type_coerced_dual_transfer_tokens():
     from copy import deepcopy
-    source = _linked_eval_rows()
-    hidden = _linked_eval_event(
-        "c1", "owg:r:" + "c" * 32, "2026-10-20T10:00:15Z",
-        transfer="xfer-1",
-    )
-    original = deepcopy([*source, hidden])
-    visible = _linked_eval_case([*source, hidden], source)
-    for accepting_candidates in (False, True):
-        result = predict_linked_items(
-            visible, accept_candidates=accepting_candidates
-        )
+    for metadata_value, top_level_value in (
+        (1, True), (True, True), ("xfer-1", True), (1.0, 1),
+    ):
+        source = deepcopy(_linked_eval_rows())
+        case = _linked_eval_case(source, source)
+        for index in (0, 2):
+            for row in (case["source_events"][index],
+                        case["presented_evidence"][index]):
+                row["metadata"]["clipboard_transfer_id"] = metadata_value
+                row["clipboard_transfer_id"] = top_level_value
+        result = predict_linked_items(case)
         assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
-            frozenset({"a1", "a2"}), frozenset({"b1", "b2", "b3"})
-        }
-        assert "c1" not in str(result)
-    assert [*source, hidden] == original  # evaluator never edits source rows
+            frozenset({"b2", "b3"})
+        }, (metadata_value, top_level_value)
+        assert {"a1", "b1"} <= set(result["unassigned_event_ids"])
 
 
-def test_linked_projection_hidden_second_record_vetoes_single_record_tab():
+def test_linked_projection_rejects_nonliteral_metadata_only_tokens():
     from copy import deepcopy
-    a = "owg:r:" + "a" * 32
-    c = "owg:r:" + "c" * 32
-    first = _linked_eval_event("a1", a, "2026-10-20T10:00:00Z")
-    second = _linked_eval_event("a2", a, "2026-10-20T10:00:10Z")
-    loose = _linked_eval_event("loose", a, "2026-10-20T10:00:20Z")
-    del loose["metadata"]["resource_reference"]
-    hidden = _linked_eval_event("c1", c, "2026-10-20T10:00:30Z")
-    for row in (first, second, loose, hidden):
-        row["metadata"]["tab_context_id"] = "tab-1"
-
-    # Without the hidden second record, the same tab has one record and can
-    # attach the unreferenced observation. With it, the tab is multiplexed.
-    baseline = predict_linked_items(_linked_eval_case(
-        [first, second, loose], [first, second, loose]
-    ))
-    assert {frozenset(w["event_ids"]) for w in baseline["workflows"]} == {
-        frozenset({"a1", "a2", "loose"})
-    }
-    source = deepcopy([first, second, loose, hidden])
-    result = predict_linked_items(_linked_eval_case(source, source[:3]))
-    assert [w["event_ids"] for w in result["workflows"]] == [["a1", "a2"]]
-    assert result["unassigned_event_ids"] == ["loose"]
-    # A stripped tab must not reappear as a same-app continuity candidate
-    # when the intentionally unsafe diagnostic mode accepts candidates.
-    diagnostic = predict_linked_items(
-        _linked_eval_case(source, source[:3]), accept_candidates=True
-    )
-    assert [w["event_ids"] for w in diagnostic["workflows"]] == [["a1", "a2"]]
-    assert diagnostic["unassigned_event_ids"] == ["loose"]
-    assert source[0]["metadata"]["tab_context_id"] == "tab-1"
-
-
-def test_linked_projection_hidden_tokens_never_poison_another_capture_scope():
-    from copy import deepcopy
-    source = _linked_eval_rows()
-    for scope_field in ("organization_id", "actor_id", "device_id", "session_id"):
-        hidden = _linked_eval_event(
-            "c1", "owg:r:" + "c" * 32, "2026-10-20T10:00:15Z",
-            transfer="xfer-1",
-        )
-        hidden[scope_field] = "different-" + scope_field
-        result = predict_linked_items(_linked_eval_case(
-            [*source, hidden], source
-        ))
+    for malformed in (True, 1, 1.0, None, "", "bad token"):
+        source = deepcopy(_linked_eval_rows())
+        case = _linked_eval_case(source, source)
+        for index in (0, 2):
+            for row in (case["source_events"][index],
+                        case["presented_evidence"][index]):
+                row["metadata"]["clipboard_transfer_id"] = malformed
+                row.pop("clipboard_transfer_id", None)
+        result = predict_linked_items(case)
         assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
-            frozenset({"a1", "a2", "b1", "b2", "b3"})
-        }, scope_field
+            frozenset({"b2", "b3"})
+        }, malformed
 
-    # A source-only event without the relevant token is not a veto.
-    hidden = deepcopy(source[2])
-    hidden["event_id"] = "unseen"
-    hidden["metadata"].pop("clipboard_transfer_id")
-    result = predict_linked_items(_linked_eval_case([*source, hidden], source))
+    # Literal metadata-only strings remain supported, including legacy rows
+    # without top-level convenience copies.
+    source = deepcopy(_linked_eval_rows())
+    case = _linked_eval_case(source, source)
+    for index in (0, 2):
+        case["presented_evidence"][index].pop("clipboard_transfer_id", None)
+    result = predict_linked_items(case)
     assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
         frozenset({"a1", "a2", "b1", "b2", "b3"})
     }
+
+
+def test_native_predictions_do_not_invent_or_duplicate_presented_event_ids():
+    from copy import deepcopy
+    source = _linked_eval_rows()
+    case = _linked_eval_case(source, source)
+    case["presented_evidence"].extend([
+        {"event_id": True}, {"event_id": 123}, {"event_id": None},
+        {"event_id": "contains space"}, {"event_id": "orphan"},
+        {"event_id": "orphan"}, {"not_an_event": True}, None, "bad row",
+        deepcopy(case["presented_evidence"][0]),
+    ])
+    for predictor in (predict_record_lanes, predict_linked_items):
+        result = predictor(case)
+        assert result["unassigned_event_ids"] == ["orphan"]
+        assigned = [event_id for w in result["workflows"] for event_id in w["event_ids"]]
+        assert len(assigned) == len(set(assigned))
+        assert not set(assigned) & {"True", "123", "None", "contains space"}
