@@ -219,7 +219,7 @@ async def get_local_reviewed_case_dossier(request: Request, response: Response):
             stripe_open_work_case_context, payload["work_item_ref"],
             explicit_scan_authorized=True, max_pages=max_pages,
         )
-    except (ValueError, OSError, TypeError):
+    except (ValueError, OSError, TypeError, CaseDeclarationError, sqlite3.DatabaseError):
         # A failed explicit read cannot establish a completed operation.
         source = {
             "format": "openworkgraph.open-work-case-context.v1",
