@@ -291,3 +291,40 @@ def test_missing_required_child_counts_never_commits_checkpoint(environment, cap
     assert report["status"] == "append_unverified"
     assert not (environment[0] / "checkpoint.json").exists()
     assert provider.calls == 0
+
+
+def test_revoked_grant_refuses_before_source_get(environment, capsys):
+    provider = Provider()
+    root, grant, _, _ = environment
+    document = json.loads(grant.read_text())
+    document["enabled"] = False
+    grant.write_text(json.dumps(document))
+    assert main(cli(environment, 8765, first=True), provider_opener=provider,
+                now_fn=lambda: NOW) == 2
+    report = json.loads(capsys.readouterr().out)
+    assert report["status"] == "refused"
+    assert provider.calls == 0
+    assert not (root / "checkpoint.json").exists()
+
+
+def test_revocation_after_append_does_not_advance_checkpoint(environment, capsys, monkeypatch):
+    import server.servicenow_incident_checkpoint as module
+    provider = Provider()
+    root, grant, _, _ = environment
+    actual = module._journal_latest
+
+    def revoke_after_append(*args):
+        document = json.loads(grant.read_text())
+        document["enabled"] = False
+        grant.write_text(json.dumps(document))
+        return actual(*args)
+
+    monkeypatch.setattr(module, "_journal_latest", revoke_after_append)
+    with owg_server(environment[3]) as (port, posts):
+        assert main(cli(environment, port, first=True), provider_opener=provider,
+                    now_fn=lambda: NOW) == 3
+        report = json.loads(capsys.readouterr().out)
+        assert report["status"] == "append_completed_checkpoint_unverified"
+        assert len(posts) == 1
+    assert workspace.summary(environment[2])["events"] == 2
+    assert not (root / "checkpoint.json").exists()
