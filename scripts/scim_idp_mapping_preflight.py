@@ -87,7 +87,7 @@ def _supported_contact_patch_path(path: str) -> bool:
 # Keep structural matching ASCII-only: Unicode re.I can match lookalikes that
 # the actual Group PATCH path.lower() dispatcher does not recognize.
 _GROUP_MEMBER_SELECTOR = re.compile(
-    r'members\\[value eq ("(?:[^"\\\\]|\\\\.)*")\\]', re.I | re.ASCII,
+    r'members\[value eq ("(?:[^"\\]|\\.)*")\]', re.I | re.ASCII,
 )
 
 
