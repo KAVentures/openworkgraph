@@ -216,6 +216,21 @@ valid replay still fails closed. Synthetic regressions check both source orders
 and the candidate-accepting diagnostic. These are evaluator-only parity and
 provenance checks, not a change to production deduplication or a held-out
 score claim.
+**Literal top-level tab/clipboard provenance (2026-11-01):** The shipped
+linker accepts valid `tab_context_id` and `clipboard_transfer_id` from
+either canonical metadata or a top-level observation field. The evaluator now
+recognizes the same literal token in either location **only if it is actually
+presented** and agrees with the source observation. Valid metadata-only and
+top-level-only copies of the same token canonicalize identically; contradictory
+dual claims, non-string/invalid tokens, and source-only top-level fields remain
+unassignable. The normal `rich_evidence_row` output derives its convenience
+fields from metadata, so a top-level-only source token is **not** automatically
+made visible by that projection; the evaluator does not invent it. Single-record
+tab linking and observed clipboard transfers remain evidence-dependent; time,
+app adjacency and multiplexed tabs never become automatic links. This is
+measurement parity for alternative presented-evidence shapes, not a change to
+the production linker, a new source entitlement, or a measured held-out gain.
+
 **Evaluator duplicate-claim preflight (2026-11-01):** The source replay
 canonicalizer now validates JSON shape *before* calling `json.dumps`, rather
 than allocating an arbitrarily large serialized string and checking its size
