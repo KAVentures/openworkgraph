@@ -118,9 +118,48 @@ test('on-demand local read renders counts as text and rejects stale log response
   assert.equal(run.disabled,false); // a stale request cannot strand the control
   picker.value='log_123';
   const second=run.listeners.click();
-  resolveFetch({ok:true,json:async()=>({batch_trends:{batches:[report(0,'first_report',2,0.2,null)],batches_without_report:[]}})});
+  resolveFetch({ok:true,json:async()=>({
+    batch_trends:{batches:[report(0,'first_report',2,0.2,null)],batches_without_report:[]},
+    reports:[{batch:0,created_at:'2026-11-01T18:00:00Z',
+      transform:{transform_sha256:'b'.repeat(64)},
+      rows:{accepted:8,rejected:2,rejected_by_reason:{'=unsafe':2},
+        reason_counts_can_overlap:false}}]
+  })});
   await second;
   assert.equal(download.disabled,false);
   assert.ok(output.querySelector('#owgQualityTrendsRows'));
   assert.equal(output.querySelector('#owgQualityTrendsRows').children[1].children[0].children[1].textContent,'Rejected input');
+  const select=quality.querySelector('#owgQualityBatchSelect');
+  const details=quality.querySelector('#owgQualityBatchDetails');
+  assert.equal(select.disabled,false);
+  assert.equal(select.value,'0');
+  assert.match(details.children[0].textContent,/Rejected 2/);
+  assert.match(details.children[1].textContent,/recorded categories/);
+  assert.equal(details.children[2].children[0].children[1].children[0].children[0].textContent,'=unsafe');
+});
+
+test('batch drill-down shows bounded, counts-only rejection categories with overlap warning', () => {
+  const reasons = Object.fromEntries(Array.from({length:17},(_,i)=>['reason_'+String(i).padStart(2,'0'),i]));
+  reasons['=FORMULA()']=99;
+  const reports=[{batch:2,created_at:'2026-11-01T18:00:00Z',
+    transform:{transform_sha256:'a'.repeat(64)},
+    rows:{accepted:20,rejected:10,duplicates_skipped_on_append:3,
+      rejected_by_reason:reasons,reason_counts_can_overlap:true}}];
+  const d=view.detail(reports,2);
+  assert.equal(d.batch,'Append 2');
+  assert.equal(d.transform,'aaaaaaaaaaaa');
+  assert.equal(d.accepted,'20');
+  assert.equal(d.rejected,'10');
+  assert.equal(d.skipped,'3');
+  assert.equal(d.reasons.length,view.MAX_REASONS);
+  assert.equal(d.omitted,6);
+  assert.equal(d.reasons[0].name,'=FORMULA()');
+  assert.equal(d.reasons[0].count,'99');
+  assert.match(d.reason_status,/may overlap/);
+  assert.equal(view.detail(reports,1),null);
+  assert.equal(view.detail(reports,'2'),null);
+  assert.equal(view.detail([{batch:0,rows:{accepted:1,rejected:0}}],0).reason_status,
+    'Rejection reasons were not recorded for this batch.');
+  assert.equal(view.detail([{batch:0,rows:{rejected_by_reason:{x:Infinity,y:-1,z:3}}}],0)
+    .reasons.find(r=>r.name==='x').count,'Unknown');
 });
