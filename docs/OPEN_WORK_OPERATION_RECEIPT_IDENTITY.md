@@ -360,3 +360,36 @@ optional details, the current production no-detail shape and a matching
 detail. These are deterministic contract regressions, **not** proof of
 live GitHub provider acceptance, customer completion or commercial uplift.
 No new source grants, background reads, writes, or agent permissions.
+
+
+## Explicit provider-scope disclaimer contradictions
+
+The existing GitHub and Jira source adapters explicitly state
+`not_a_claim_of_business_success=True`: a PR merge or Jira resolution is
+not proof that the intended business objective or customer outcome occurred.
+The existing Stripe invoice/refund adapter explicitly states
+`not_a_claim_of_customer_bank_settlement=True`: a processor status is not
+proof that the customer received funds or that the business objective
+was satisfied.
+
+A separately supplied authorized reader/cache could previously contradict
+one of these provider-specific limitations (for example, report
+`not_a_claim_of_customer_bank_settlement=False`) while otherwise presenting
+a matching, fresh source operation. The operation receipt now returns
+`unknown/provider_receipt_scope_conflict` when its relevant disclaimer
+is **explicitly present** but not the literal Boolean `True`. Absence is
+backward-compatible with older source-shaped fixtures and does not itself
+grant business or customer authority. The production adapters already
+emit the affirmative disclaimers; no new provider calls or permissions
+are introduced. This check is post-read consistency, not cryptographic
+source attestation or a guarantee against stale/revoked source grants.
+
+The standalone synthetic contract tests in
+`tests/test_open_work_receipt_scope_boundaries.py` cover four operation
+families (GitHub PR, Jira issue, Stripe invoice and refund), 28 explicit
+false/malformed contradictions and eight valid absent/true controls.
+They assert no private customer fields in the output, exact requested
+provider/kind pre-read scoping, read-only operation and false
+business/customer/agent authority. These tests do not establish live
+provider acceptance, tenant isolation under real grants, independent
+customer outcomes, or held-out commercial uplift.
