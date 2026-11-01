@@ -1043,7 +1043,7 @@
         limitations: ['invented inputs only', 'exact string comparison, not semantic validation',
           'not a provider read, real test, agent run, verified business outcome or permission']
       };
-      const url = URL.createObjectURL(new Blob([JSON.stringify(receipt, null, 2) + '\\n'],
+      const url = URL.createObjectURL(new Blob([JSON.stringify(receipt, null, 2) + '\n'],
         {type: 'application/json;charset=utf-8'}));
       const link = document.createElement('a');
       link.href = url;
