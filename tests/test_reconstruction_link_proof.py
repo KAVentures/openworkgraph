@@ -92,6 +92,24 @@ def test_legacy_generic_token_bridge_is_explicitly_undirected():
     assert bridge["witness_event_ids"] == ["e0001", "e0002"]
 
 
+def test_loose_first_legacy_token_keeps_undirected_record_bridge():
+    # The earliest observation is unreferenced. It must not hide the actual
+    # weak A/B record association behind loose-to-record union-tree edges.
+    result = linked_work_items([
+        event(1, None, transfer="generic-loose-first"),
+        event(2, A, transfer="generic-loose-first"),
+        event(3, B, transfer="generic-loose-first"),
+    ])
+    [item] = result["items"]
+    assert item["event_ids"] == ["e0001", "e0002", "e0003"]
+    assert item["link_basis"] == {"clipboard_transfer": 2}
+    assert item["observed_record_bridge_count"] == 1
+    [bridge] = item["observed_record_bridges"]
+    assert bridge["witness_event_ids"] == ["e0002", "e0003"]
+    assert bridge["evidence_class"] == "legacy_shared_token"
+    assert bridge["direction_observed"] is False
+
+
 def test_reused_token_recovers_two_disjoint_witnessed_bridges_not_one_case():
     result = linked_work_items([
         event(1, A, action="copy", transfer="reused"),
