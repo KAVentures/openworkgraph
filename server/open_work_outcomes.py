@@ -72,7 +72,10 @@ def source_operation_receipt(
         raise ValueError("resource_ref must be a normalized OWG record reference")
     if expected_operation not in _OPS:
         raise ValueError("unsupported provider operation")
-    if not 1 <= max_age_seconds <= 3600:
+    # Age policy is expressed in whole seconds. Reject booleans (which are
+    # Python integers), fractional floats and nonnumeric inputs before any
+    # source reader can be invoked; never silently coerce a policy boundary.
+    if type(max_age_seconds) is not int or not 1 <= max_age_seconds <= 3600:
         raise ValueError("invalid maximum source age")
     # Bind the requested operation to a provider/object family *before*
     # record_graph can invoke an opt-in source adapter. A mismatched retained
