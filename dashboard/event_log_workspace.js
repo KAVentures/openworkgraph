@@ -2488,12 +2488,14 @@
     const activity=select('owgPredictActivity',activityNames.slice(0,500).map(x=>[x,x]));
     const estimator=select('owgPredictEstimator',[['completed_cases','Completed cases only'],['survival','Completed and still-open cases']]);
     const run=button('Predict');run.id='owgPredictRun';
+    const watch=button('Monitor quality over time','secondary');watch.id='owgPredictMonitor';
     const f={hours:field('Hours',hours),activity:field('Activity',activity)};
     const sync=()=>{show(f.hours,outcome.value==='duration_over');show(f.activity,outcome.value==='contains_activity');};
     outcome.onchange=sync;sync();
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities that end a case',ends),field('Also predict',outcome),f.hours,f.activity,field('Learn from',estimator),run);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities that end a case',ends),field('Also predict',outcome),f.hours,f.activity,field('Learn from',estimator),run,watch);
     const out=el('div');out.id='owgPredictResults';out.setAttribute('role','status');
-    box.append(row,out);
+    const monitorOut=el('div');monitorOut.id='owgPredictMonitoring';monitorOut.setAttribute('role','status');
+    box.append(row,out,monitorOut);
     const generation=state.generation;
     run.onclick=async()=>{
       try{
@@ -2514,9 +2516,39 @@
           el('div',quality,'muted'),table(headers,rows),el('div',r.interpretation,'muted'));
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
     };
+    let watchTurn=0;
+    watch.onclick=async()=>{
+      const t=++watchTurn;watch.disabled=true;monitorOut.replaceChildren(el('div','Replaying past windows…','muted'));
+      try{
+        // Monitoring scores the completed-cases estimator, whatever the live setting.
+        const spec={...predictionSpec({ends:ends.value,outcome:outcome.value,hours:hours.value,activity:activity.value,estimator:'completed_cases'}),windows:6};
+        delete spec.estimator;if(state.caseType)spec.case_type=state.caseType;
+        const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/predictions/monitoring',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        if(generation!==state.generation||t!==watchTurn)return;
+        const v=monitoringRows(r);
+        monitorOut.replaceChildren(el('h4','Prediction quality over time'),el('div',v.summary,'note'),
+          table(['Window','Cases scored','Typical error','Naive error','Range held the time',...(spec.outcome?['Brier score']:[])],v.rows.map(row=>spec.outcome?row:row.slice(0,5))),
+          ...(v.proposal?[el('div',v.proposal,'muted')]:[]),el('div',r.interpretation,'muted'));
+      }catch(error){if(t===watchTurn)monitorOut.replaceChildren(el('div',error.message,'muted'));}
+      finally{if(t===watchTurn)watch.disabled=false;}
+    };
     return box;
   }
 
-  window.__owgEventLogModel={objectModelArcs,objectModelText,visitRows,simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
+  // Plain reading of prediction monitoring: one row per window, flags and the proposal in words.
+  function monitoringRows(r){
+    const flagText={ranges_too_narrow:'ranges have become too narrow',ranges_too_wide:'ranges have become too wide',error_rising:'typical error has risen'};
+    const rows=r.windows.map(w=>w.scored?['#'+w.window+' to '+String(w.to).slice(0,10),Number(w.scored_cases).toLocaleString(),duration(w.mean_absolute_error_seconds),duration(w.naive_mean_absolute_error_seconds),
+      pct(w.p10_p90_coverage)+' ['+pct(w.p10_p90_coverage_ci95[0])+', '+pct(w.p10_p90_coverage_ci95[1])+']'+(w.coverage_flag?' ⚠':''),w.brier_score===undefined?'—':Number(w.brier_score).toFixed(3)]
+      :['#'+w.window+' to '+String(w.to).slice(0,10),'—','—','—',w.reason,'—']);
+    const flags=r.flags.map(f=>flagText[f.flag]||f.flag);
+    const p=r.recalibration_proposal;
+    return {rows,
+      summary:flags.length?'In the latest window '+flags.join(' and ')+'. Review the predictions before relying on them.':'No drift flagged in the latest window.',
+      proposal:p?'Proposal, not applied: scale each range around its median by '+Number(p.range_scaling_factor).toFixed(2)+'×. That would have held '+pct(p.latest_window_coverage_after)+' of the latest window (now '+pct(p.latest_window_coverage_before)+')'+
+        (p.previous_window_coverage_after===null?'.':' and '+pct(p.previous_window_coverage_after)+' of the window before.'):null};
+  }
+
+  window.__owgEventLogModel={monitoringRows,objectModelArcs,objectModelText,visitRows,simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();

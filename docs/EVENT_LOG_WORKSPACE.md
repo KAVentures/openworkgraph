@@ -950,6 +950,11 @@ Remaining time is measured to the last recorded event. Predictions are estimates
 history, not commitments or targets, and no resources are used. One million events take a few
 seconds (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_predictions.py`).
 
+`POST /v1/event-logs/{log_id}/predictions/monitoring` replays the backtest over rolling windows to show whether
+prediction quality holds over time. It reports error, range coverage and the Brier score per window, flags drift
+in the latest window, and proposes (never applies) a recalibration. See
+[PREDICTION_MONITORING.md](PREDICTION_MONITORING.md).
+
 ### Still-open cases and censoring
 
 Learning only from completed cases is biased: when an export ends, the cases still open are

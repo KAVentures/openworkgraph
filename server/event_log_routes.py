@@ -37,6 +37,7 @@ from . import event_log_organization as organization
 from . import event_log_playback as playback
 from . import event_log_process_map as process_maps
 from . import event_log_predictions as predictions
+from . import event_log_prediction_monitoring as prediction_monitoring
 from . import event_log_quality as quality
 from . import event_log_quarantine as quarantine
 from . import event_log_query as analysis
@@ -468,6 +469,17 @@ async def event_log_predictions(request: Request, log_id: str):
     spec = await _json_body(request, "prediction settings")
     try:
         result = await run_in_threadpool(predictions.predict, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/predictions/monitoring")
+async def event_log_prediction_monitoring(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "monitoring settings", strict=True)
+    try:
+        result = await run_in_threadpool(prediction_monitoring.monitor, log_id, spec)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})

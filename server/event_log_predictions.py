@@ -80,27 +80,33 @@ def _outcome_sql(outcome: Outcome | None) -> tuple[str, list[Any]]:
     return "list_contains(c.acts, ?)", [outcome.activity]
 
 
+def _prepare(conn, settings: PredictionSpec, log_id: str):
+    """Cases (``pc``) and one training row per event of every completed case (``pp``); returns the log's end."""
+    cohorts.restrict(conn, cohorts.parse_cohort(settings.cohort), log_id)
+    as_of = conn.execute("SELECT max(ts) FROM ce").fetchone()[0]
+    conn.execute("""CREATE OR REPLACE TEMP TABLE pc AS SELECT case_id, min(ts) AS started, max(ts) AS ended,
+          count(*) AS events, arg_max(activity, struct_pack(t := ts, e := event_id)) AS last_activity,
+          list(DISTINCT activity) AS acts FROM ce GROUP BY case_id""")
+    conn.execute("ALTER TABLE pc ADD COLUMN complete BOOLEAN")
+    conn.execute("UPDATE pc SET complete = list_contains(?, last_activity)", [settings.end_activities])
+    outcome_sql, outcome_params = _outcome_sql(settings.outcome)
+    # One training row per event of every completed case: the state after
+    # that event and what happened next. The final event (nothing left)
+    # is excluded so predictions are only about unfinished work.
+    conn.execute(f"""CREATE OR REPLACE TEMP TABLE pp AS SELECT e.case_id, e.activity,
+          least(e.n, {MAX_STEP}) AS step, epoch(c.ended - e.ts) AS remaining,
+          epoch(e.ts - c.started) AS elapsed, c.ended, {outcome_sql} AS outcome
+        FROM (SELECT case_id, activity, ts, row_number() OVER (PARTITION BY case_id ORDER BY ts, event_id) AS n
+              FROM ce) e JOIN pc c ON c.case_id = e.case_id
+        WHERE c.complete AND e.n < c.events""", outcome_params)
+    return as_of
+
+
 def predict(log_id: str, spec: Any) -> dict[str, Any]:
     settings = parse(spec)
 
     def run(conn):
-        cohorts.restrict(conn, cohorts.parse_cohort(settings.cohort), log_id)
-        as_of = conn.execute("SELECT max(ts) FROM ce").fetchone()[0]
-        conn.execute("""CREATE OR REPLACE TEMP TABLE pc AS SELECT case_id, min(ts) AS started, max(ts) AS ended,
-              count(*) AS events, arg_max(activity, struct_pack(t := ts, e := event_id)) AS last_activity,
-              list(DISTINCT activity) AS acts FROM ce GROUP BY case_id""")
-        conn.execute("ALTER TABLE pc ADD COLUMN complete BOOLEAN")
-        conn.execute("UPDATE pc SET complete = list_contains(?, last_activity)", [settings.end_activities])
-        outcome_sql, outcome_params = _outcome_sql(settings.outcome)
-        # One training row per event of every completed case: the state after
-        # that event and what happened next. The final event (nothing left)
-        # is excluded so predictions are only about unfinished work.
-        conn.execute(f"""CREATE OR REPLACE TEMP TABLE pp AS SELECT e.case_id, e.activity,
-              least(e.n, {MAX_STEP}) AS step, epoch(c.ended - e.ts) AS remaining,
-              epoch(e.ts - c.started) AS elapsed, c.ended, {outcome_sql} AS outcome
-            FROM (SELECT case_id, activity, ts, row_number() OVER (PARTITION BY case_id ORDER BY ts, event_id) AS n
-                  FROM ce) e JOIN pc c ON c.case_id = e.case_id
-            WHERE c.complete AND e.n < c.events""", outcome_params)
+        as_of = _prepare(conn, settings, log_id)
         completed = conn.execute("SELECT count(*) FROM pc WHERE complete").fetchone()[0]
         open_total = conn.execute("SELECT count(*) FROM pc WHERE NOT complete").fetchone()[0]
         conn.execute("""CREATE OR REPLACE TEMP TABLE po AS SELECT case_id, last_activity AS activity,
