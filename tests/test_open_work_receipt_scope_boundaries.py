@@ -191,3 +191,101 @@ def test_exact_integer_age_boundary_preserves_provider_only_result(
     assert receipt["agent_execution_authorized"] is False
     assert receipt["read_only"] is True
     assert "PRIVATE_NEVER_RETURN" not in str(receipt)
+
+
+@pytest.mark.parametrize("operation,provider,kind,state,scope_flag", OPERATIONS)
+@pytest.mark.parametrize(
+    "window",
+    [
+        {"since": "not-an-iso-timestamp"},
+        {"until": "not-an-iso-timestamp"},
+        {"since": "2026-11-01T09:00:00+00:00",
+         "until": "2026-11-01T08:00:00+00:00"},
+        {"since": "2026-11-01T08:00:00+00:00",
+         "until": "2026-11-01T08:00:00+00:00"},
+    ],
+    ids=["bad-since", "bad-until", "reversed", "equal"],
+)
+def test_invalid_history_window_rejected_before_any_source_reader(
+    operation, provider, kind, state, scope_flag, window,
+):
+    from server.workflow_evidence import WorkflowEvidenceError
+
+    calls = []
+
+    def unexpected_read(*args, **kwargs):
+        calls.append((args, kwargs))
+        return _graph(operation, provider, kind, state)
+
+    with pytest.raises(WorkflowEvidenceError):
+        source_operation_receipt(
+            REF, operation, record_reader=unexpected_read, now=WHEN, **window,
+        )
+    assert calls == []
+
+
+@pytest.mark.parametrize("operation,provider,kind,state,scope_flag", OPERATIONS)
+@pytest.mark.parametrize(
+    "invalid_clock",
+    [
+        datetime(2026, 11, 1, 8, 0),
+        "2026-11-01T08:00:00Z",
+        0,
+        False,
+    ],
+    ids=["naive-datetime", "timestamp-string", "numeric", "boolean"],
+)
+def test_invalid_evaluation_clock_rejected_before_any_source_reader(
+    operation, provider, kind, state, scope_flag, invalid_clock,
+):
+    calls = []
+
+    def unexpected_read(*args, **kwargs):
+        calls.append((args, kwargs))
+        return _graph(operation, provider, kind, state)
+
+    with pytest.raises(ValueError, match="timezone-aware datetime"):
+        source_operation_receipt(
+            REF, operation, record_reader=unexpected_read, now=invalid_clock,
+        )
+    assert calls == []
+
+
+@pytest.mark.parametrize("operation,provider,kind,state,scope_flag", OPERATIONS)
+@pytest.mark.parametrize(
+    "window",
+    [
+        {"since": "2026-11-01T07:00:00+00:00",
+         "until": "2026-11-01T09:00:00+00:00"},
+        {"since": None, "until": None},
+    ],
+    ids=["bounded", "unbounded-default"],
+)
+def test_valid_history_window_and_offset_clock_preserve_provider_only_receipt(
+    operation, provider, kind, state, scope_flag, window,
+):
+    graph = _graph(operation, provider, kind, state)
+    graph["source_window"] = dict(window)
+    calls = []
+
+    def read(ref, **kwargs):
+        calls.append((ref, kwargs))
+        return graph
+
+    offset_clock = WHEN.astimezone(timezone(timedelta(hours=2)))
+    receipt = source_operation_receipt(
+        REF, operation, record_reader=read, now=offset_clock, **window,
+    )
+    assert len(calls) == 1
+    assert calls[0][0] == REF
+    assert calls[0][1]["since"] == window["since"]
+    assert calls[0][1]["until"] == window["until"]
+    assert calls[0][1]["required_source_provider_kind"] == (provider, kind)
+    assert receipt["availability"] == "source_reported"
+    assert receipt["operation_verified"] is True
+    assert receipt["business_objective_verified"] is False
+    assert receipt["customer_outcome_verified"] is False
+    assert receipt["agent_caused_operation_verified"] is False
+    assert receipt["agent_execution_authorized"] is False
+    assert receipt["read_only"] is True
+    assert "PRIVATE_NEVER_RETURN" not in str(receipt)
