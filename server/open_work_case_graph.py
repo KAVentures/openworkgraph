@@ -6,6 +6,8 @@ This does not discover cases, infer obligations, verify source/customer outcomes
 or authorize agents. The caller must first obtain a consent/retention-filtered
 snapshot from open_work_case_declarations.list_case_declarations.
 """
+import hmac
+import re
 from typing import Any
 
 from .open_work_case_declarations import CaseDeclarationError
@@ -115,4 +117,78 @@ def project_declared_case_graph(snapshot: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-__all__ = ["project_declared_case_graph"]
+
+
+_EDIT_TOKEN = re.compile(r"^[0-9a-f]{32}$")
+
+
+def project_declared_case_change_impact(
+    snapshot: dict[str, Any], *, work_item_ref: str,
+    expected_revision: int, expected_edit_token: str,
+    operation: str,
+) -> dict[str, Any]:
+    """Preview the owner approvals invalidated by a separate CAS edit/delete.
+
+    A preview is a non-mutating, point-in-time snapshot. The later write must
+    separately confirm intent and check the same revision and incarnation.
+    """
+    if operation not in ("revise", "delete"):
+        raise CaseDeclarationError("invalid change operation")
+    if (not isinstance(work_item_ref, str) or
+        not re.fullmatch(r"owg:w:[0-9a-f]{32}", work_item_ref) or
+        type(expected_revision) is not int or expected_revision < 1 or
+        not isinstance(expected_edit_token, str) or
+        not _EDIT_TOKEN.fullmatch(expected_edit_token)):
+        raise CaseDeclarationError("invalid change preview request")
+
+    graph = project_declared_case_graph(snapshot)
+    matches = [item for item in snapshot["items"]
+               if item["work_item_ref"] == work_item_ref]
+    if len(matches) != 1:
+        raise CaseDeclarationError("stale declaration: case not currently reviewed")
+    item = matches[0]
+    token = item.get("edit_token")
+    if (type(item.get("revision")) is not int or
+        item["revision"] != expected_revision or
+        not isinstance(token, str) or not _EDIT_TOKEN.fullmatch(token) or
+        not hmac.compare_digest(token, expected_edit_token)):
+        raise CaseDeclarationError("stale declaration version or incarnation")
+
+    children: dict[str, list[str]] = {}
+    for edge in graph["edges"]:
+        children.setdefault(edge["prerequisite_ref"], []).append(edge["dependent_ref"])
+    affected = {work_item_ref}
+    frontier = [work_item_ref]
+    while frontier:
+        current = frontier.pop()
+        for dependent in children.get(current, []):
+            if dependent not in affected:
+                affected.add(dependent)
+                frontier.append(dependent)
+    depth = {node["work_item_ref"]: node["dependency_depth"] for node in graph["nodes"]}
+    dependents = sorted(affected - {work_item_ref},
+                        key=lambda ref: (depth[ref], ref))
+    return {
+        "format": "openworkgraph.local-case-change-impact.v1",
+        "work_item_ref": work_item_ref,
+        "operation": operation,
+        "expected_revision": expected_revision,
+        "invalidated_dependent_refs": dependents,
+        "invalidated_dependent_count": len(dependents),
+        "affected_case_refs": [work_item_ref, *dependents],
+        "affected_case_count": len(affected),
+        "unaffected_case_count": graph["case_count"] - len(affected),
+        "provenance": _PROVENANCE,
+        "advisory_snapshot_only": True,
+        "requires_separate_confirmed_cas_write": True,
+        "mutation_performed": False,
+        "source_inventory_complete": False,
+        "source_read_performed": False,
+        "source_state": "unknown_until_explicit_recheck",
+        "customer_outcome_verified": False,
+        "business_obligation_verified": False,
+        "agent_execution_authorized": False,
+        "not_synced": True,
+    }
+
+__all__ = ["project_declared_case_graph", "project_declared_case_change_impact"]
