@@ -179,7 +179,11 @@ def benchmark(log_id: str, cohorts: Any, case_type: str | None = None, sla_secon
     if sla_seconds is not None and (not isinstance(sla_seconds, int) or isinstance(sla_seconds, bool)
                                     or not 0 < sla_seconds <= 10 ** 9):
         raise EventLogWorkspaceError("sla_seconds must be a positive number of seconds")
-    limit = max(1, min(int(limit), 50))
+    # Direct callers must not silently truncate/coerce a malformed display cap.
+    # This is an internal-only parameter; the REST benchmark route does not expose it.
+    if not isinstance(limit, int) or isinstance(limit, bool):
+        raise EventLogWorkspaceError("limit must be an integer")
+    limit = max(1, min(limit, 50))
 
     def run(conn):
         restrict(conn, first, log_id, "ca")
