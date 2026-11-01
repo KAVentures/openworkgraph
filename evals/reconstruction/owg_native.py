@@ -31,14 +31,17 @@ def _ref(event: dict[str, Any]) -> str:
     return str(ref.get("resource_ref") or "").lower()
 
 
-def _visible_lane_identities(presented: list[dict[str, Any]]) -> dict[str, tuple[str, str, str, str] | None]:
-    """Admit an ID only with one consistent visible record/source identity.
+def _visible_lane_identities(
+    presented: list[dict[str, Any]],
+) -> dict[str, tuple[tuple[str, str, str, str], set[str]] | None]:
+    """Admit an ID only with consistent visible identity and UTC instants.
 
     Rich evidence deliberately omits organization identity. Compare the four
     public resource components, not a guessed tenant or source-only row.
-    Conflicting, missing or malformed visible identities are unassignable.
+    A duplicate visible ID may retain several valid observed instants, but a
+    missing/malformed timestamp or conflicting identity vetoes its authority.
     """
-    identities: dict[str, tuple[str, str, str, str] | None] = {}
+    identities: dict[str, tuple[tuple[str, str, str, str], set[str]] | None] = {}
     for event in presented:
         if not isinstance(event, dict):
             continue
@@ -46,17 +49,22 @@ def _visible_lane_identities(presented: list[dict[str, Any]]) -> dict[str, tuple
         if not isinstance(event_id, str) or not _EVENT_ID.fullmatch(event_id):
             continue
         match = _identity(event)
-        visible = match[:4] if match else None
+        stamp = _stamp(event.get("observed_at"))
+        visible = match[:4] if match and stamp is not None else None
         if event_id not in identities:
-            identities[event_id] = visible
-        elif identities[event_id] != visible:
-            identities[event_id] = None
+            identities[event_id] = (visible, {stamp}) if visible is not None else None
+        elif identities[event_id] is not None:
+            prior_identity, prior_stamps = identities[event_id]
+            if visible is None or prior_identity != visible:
+                identities[event_id] = None
+            else:
+                prior_stamps.add(stamp)
     return identities
 
 
 def _admitted_visible_lane_members(
     events: list[dict[str, Any]], published: set[str],
-    visible_identities: dict[str, tuple[str, str, str, str] | None],
+    visible_identities: dict[str, tuple[tuple[str, str, str, str], set[str]] | None],
 ) -> dict[str, list[str]]:
     """Project only source rows actually admitted by the shipped lane engine.
 
@@ -68,7 +76,8 @@ def _admitted_visible_lane_members(
     Nonliteral/malformed IDs and source-only rows cannot be scored as visible
     evidence, even if the source lane's aggregate count includes them. A visible
     ID must also carry the same unambiguous provider/kind/host/opaque reference
-    as its admitted source row; matching an ID alone is not provenance.
+    as its admitted source row, at the admitted UTC instant; matching an ID
+    alone is not provenance.
     """
     admitted: set[tuple[str, str]] = set()
     owners: dict[str, set[str]] = {}
@@ -88,7 +97,8 @@ def _admitted_visible_lane_members(
             continue
         admitted.add(key)
         owners.setdefault(raw_id, set()).add(ref)
-        if ref in published and visible_identities.get(raw_id) == match[:4]:
+        visible = visible_identities.get(raw_id)
+        if ref in published and visible is not None and visible[0] == match[:4] and stamp in visible[1]:
             rows[ref].append((stamp, raw_id))
     return {
         ref: [event_id for _, event_id in sorted(values)
