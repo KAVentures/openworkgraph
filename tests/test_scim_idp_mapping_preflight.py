@@ -1670,6 +1670,11 @@ def test_operation_only_contact_patch_retains_descriptive_cautions(
     assert report["status"] == "requires_live_validation"
     assert ("unverified_contact_metadata" in codes(report)) is expect_contact
     assert ("contact_value_selector" in codes(report)) is expect_value_selector
+    if expect_value_selector:
+        selector_findings = [finding for finding in report["findings"]
+                             if finding["code"] == "contact_value_selector"]
+        assert len(selector_findings) == 1
+        assert selector_findings[0]["path"] == "users.patch_operations"
     assert report["checked"]["user_patch"] == 0
     assert report["checked"]["user_patch_operations"] == 1
     assert "live_validation_required" in codes(report)
