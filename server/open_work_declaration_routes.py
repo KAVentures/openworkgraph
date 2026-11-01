@@ -16,6 +16,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from .open_work_case_graph import project_declared_case_graph, project_declared_case_change_impact
+from .open_work_case_dossier import admitted_case_dossier_snapshot, compose_reviewed_case_dossier
+from .open_work_case_context import stripe_open_work_case_context
 from .local_auth import dashboard_session_valid, _read_or_create_secret
 from .local_source_credentials import _metadata_path, _read_metadata
 from .open_work_case_declarations import (
@@ -178,6 +180,71 @@ async def preview_local_case_declaration_change(request: Request, response: Resp
     await _recheck_source(scope)
     response.headers["Cache-Control"] = "no-store"
     return impact
+
+
+
+@router.post("/v1/open-work/declarations/dossier")
+async def get_local_reviewed_case_dossier(request: Request, response: Response):
+    """Explicit source scan joined to an exact, still-current owner declaration.
+
+    No new source permission: reuse the existing Stripe case-context reader,
+    its separately opted-in restricted source and retained OWG evidence.
+    This endpoint never writes to Stripe or authorizes agent execution.
+    """
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_source_scan", "max_pages",
+    })
+    if payload["confirm_source_scan"] is not True:
+        raise HTTPException(403, "explicit source scan confirmation required")
+    max_pages = payload["max_pages"]
+    if type(max_pages) is not int or not 1 <= max_pages <= 3:
+        raise HTTPException(422, "max_pages must be between 1 and 3")
+    try:
+        before = await asyncio.to_thread(list_case_declarations, scope)
+        admitted, signature = admitted_case_dossier_snapshot(
+            before,
+            work_item_ref=payload["work_item_ref"],
+            expected_revision=payload["expected_revision"],
+            expected_edit_token=payload["expected_edit_token"],
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError) as exc:
+        raise _safe_error(exc) from None
+    # The initial source scope/review/CAS gate happens BEFORE provider IO.
+    await _recheck_source(scope)
+    try:
+        source = await asyncio.to_thread(
+            stripe_open_work_case_context, payload["work_item_ref"],
+            explicit_scan_authorized=True, max_pages=max_pages,
+        )
+    except (ValueError, OSError, TypeError):
+        # A failed explicit read cannot establish a completed operation.
+        source = {
+            "format": "openworkgraph.open-work-case-context.v1",
+            "work_item_ref": payload["work_item_ref"],
+            "availability": "unknown",
+            "reason": "source_unavailable",
+            "source_evidence": {"source_state": "unknown"},
+        }
+    await _recheck_source(scope)
+    try:
+        after = await asyncio.to_thread(list_case_declarations, scope)
+        _admitted_after, current_signature = admitted_case_dossier_snapshot(
+            after,
+            work_item_ref=payload["work_item_ref"],
+            expected_revision=payload["expected_revision"],
+            expected_edit_token=payload["expected_edit_token"],
+        )
+        if current_signature != signature:
+            raise CaseDeclarationError("stale declaration dependency review changed")
+        result = compose_reviewed_case_dossier(admitted, source)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
 
 
 @router.post("/v1/open-work/declarations")
