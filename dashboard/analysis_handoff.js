@@ -572,6 +572,13 @@
         ? 'An optional diagnostic download requests the selected period again, subject to current consent, retention and access. It is not a verified workflow or guaranteed complete capture; inspect it locally before sharing.'
         : 'A download requests the selected period again, subject to current consent, retention and access. Without detailed chronology selected, it is a summary package rather than raw event rows; inspect the actual file before sharing.'
       : 'No evidence package is available for this zero-event selection; only the explanatory request can be copied.';
+    // Date plans report total selected rows per UTC day, not per-day event
+    // types. A mixed selection can contain health-only dates; never turn a
+    // date total into a claimed observed workflow step.
+    const diagnosticRows = d.canonical_rows - ordinaryRows;
+    const dateTypeNotice = ordinaryRows > 0 && diagnosticRows > 0
+      ? `<p class="muted">Mixed selected evidence: ${esc(ordinaryRows)} ordinary work observations and ${esc(diagnosticRows)} capture-health/gap records. Daily totals do not distinguish their event types; a listed date may contain diagnostics only. Inspect event-level evidence before treating any date as workflow evidence.</p>`
+      : '';
     const dailyChunks = d.analysis_plan?.date_chunks;
     // A truncated date plan is a bounded review sample, not a paginated UI.
     // Validation already conserves every listed event count, so this exact
@@ -631,7 +638,7 @@
         <p>${esc(latestWorkStatement)} Capture health and gaps are shown separately; they do not confirm the recorder is running.</p>
         <p>${esc(localRead)} Hosted AI availability must be checked separately: it only sees previously shared evidence. Preparing or downloading a local file does not grant AI history access.</p>
       </div>
-      <details><summary>${esc(dateCoverageTitle)}</summary><p>${esc(dateCoverageIntro)} ${esc(dateCoverageDownload)}</p>${dailyBreakdown}${omittedDateNotice}</details>
+      <details><summary>${esc(dateCoverageTitle)}</summary><p>${esc(dateCoverageIntro)} ${esc(dateCoverageDownload)}</p>${dateTypeNotice}${dailyBreakdown}${omittedDateNotice}</details>
       <details><summary>Preview redacted context examples</summary><p>${esc(focusExampleSummary)}</p><ul>${focusExampleItems}</ul><p>Filtering is best effort; inspect any downloaded package before sharing it.</p></details>
       <label style="display:flex;gap:8px;margin:12px 0"><input id="analysisDetailed" type="checkbox" ${d.canonical_rows?'':'disabled'}>Include detailed chronological evidence (raw local event rows, more labels and context)</label>
       <p>Copy request copies only the prepared request text. Download saves a separate local evidence file; an AI will not receive that file unless you inspect and attach or share it yourself.</p>
