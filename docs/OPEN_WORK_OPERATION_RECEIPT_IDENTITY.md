@@ -440,3 +440,24 @@ must preserve a provider-only verified operation, with all customer, business,
 agent-causality and execution-authorization flags false. These are committed
 contract tests, not proof of native test execution, real provider access,
 source-grant epoch fencing, customer outcomes or measured business uplift.
+
+
+## Explicit history-window values are not omitted scope
+
+The operation verifier now distinguishes an omitted `since`/`until` bound
+(`None`) from an **explicitly supplied** falsey or non-string bound. The
+canonical `workflow_evidence._ts` parser remains the timestamp validator
+for nonempty strings, and the same `WorkflowEvidenceError` is raised before
+calling any injected or default source-capable record reader. This closes a
+pre-read scope gap where `False`, numeric zero, empty strings or containers
+could bypass a truthiness-based guard; datetime objects and byte strings
+cannot acquire validity by implicit `str()` conversion either. Both omitted
+bounds remain supported, and valid ISO-8601 string windows preserve existing
+behavior. No change is made to shared `record_graph` or its other callers.
+
+`tests/test_open_work_receipt_scope_boundaries.py` adds 72 synthetic
+provider-operation/window/value combinations requiring **zero** reader calls,
+alongside its existing valid-window and offset-clock controls. These tests
+are not live-provider, tenant-grant, revocation, customer-outcome, or business
+uplift evidence. No new source privileges, network reads, background polling,
+agent execution, or business writes are introduced.
