@@ -244,7 +244,7 @@ def benchmark(log_id: str, cohorts: Any, case_type: str | None = None, sla_secon
             "variants": [{"path": p.split(_SEP), "share_in_first": round(na / a["cases"], 6),
                           "share_in_second": round(nb / b["cases"], 6)} for p, na, nb in variants],
             "intervals_assume_independent_cohorts": True,
-            "note": ("cohorts share cases, so intervals overstate certainty" if overlap else
+            "note": ("cohorts share cases; independent-cohort intervals may understate or overstate uncertainty" if overlap else
                      "differences describe these cohorts; they are not explained or caused by the cohort definition"),
         }
     return workspace._query(log_id, case_type, run)
