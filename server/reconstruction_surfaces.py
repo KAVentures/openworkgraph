@@ -14,26 +14,20 @@ _MAX_EVENT_IDS = 20
 
 
 def observed_surface_runs(
-    rows: list[dict[str, Any]],
-    member_ids: list[str],
+    member_rows: list[dict[str, Any]],
     *,
     max_runs: int = _MAX_RUNS,
 ) -> dict[str, Any]:
     """Return bounded, provenance-bearing surface runs for one linked item.
 
-    Rows are validated UTC-ordered observations from the production linker;
-    membership is already decided. Scope equality is meaningful only when all
+    Member rows are already admitted, UTC-ordered observations from the
+    production linker; membership is already decided. Scope equality is meaningful only when all
     four local capture identity components are present. Missing or invalid
     scope never becomes a wildcard. An unknown app never becomes "Other app"
     and cannot prove two consecutive events used the same surface.
     """
     max_runs = max(1, min(int(max_runs), _MAX_RUNS))
-    by_id = {row["event_id"]: (index, row) for index, row in enumerate(rows)}
-    members = sorted(
-        (by_id[event_id] for event_id in member_ids if event_id in by_id),
-        key=lambda pair: pair[0],
-    )
-    if not members:
+    if not member_rows:
         return {
             "observed_surface_run_count": 0,
             "observed_surface_runs": [],
@@ -76,7 +70,7 @@ def observed_surface_runs(
             "event_ids_truncated": len(current) > _MAX_EVENT_IDS,
         })
 
-    for _position, row in members:
+    for row in member_rows:
         app = row["app"] if isinstance(row.get("app"), str) else ""
         if not app:
             unknown += 1
