@@ -268,8 +268,11 @@
         work.health_event_rows === healthRows);
     const lastWork = work?.last_work_observed_at;
     const workValid = work == null || (object(work) && workCountsValid &&
+      // The local preview does not measure recorder liveness. Its backend
+      // explicitly reports false; a forged affirmative claim cannot become
+      // reviewable evidence, even though the UI separately warns of uncertainty.
       (work.recorder_liveness_verified == null ||
-        typeof work.recorder_liveness_verified === 'boolean') &&
+        work.recorder_liveness_verified === false) &&
       (lastWork == null || (d?.canonical_rows > healthRows &&
         instant(lastWork) && instant(first) && instant(last) &&
         compareExactInstants(first, lastWork) <= 0 &&
