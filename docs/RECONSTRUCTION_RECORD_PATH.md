@@ -21,14 +21,20 @@ flag, boundary reason, first/last admitted event IDs and UTC instants, and
 observed event count. Full-run and observed-record-change counts remain exact
 even when the displayed path is truncated.
 
-A record change requires **adjacent admitted member observations** naming
+A direct record change requires **adjacent admitted member observations** naming
 two different literal records in the same exact capture scope. A missing or
 changed capture scope creates a scope boundary, **not** a cross-actor,
 cross-device, cross-session or cross-tenant transition. An unreferenced member
 creates an explicit unknown-record run; a later known record does not silently
-bridge that uncertainty. Repeated observations of the same record remain one
-run when scope is verified. A clock gap alone does not split a run or create
-a membership edge.
+bridge that uncertainty. Intervening **nonmember observations in the same
+exact scope** create an explicit `interleaved_other_observation` boundary
+instead of a falsely direct record change, even if the surrounding record
+is the same. The global observation positions and scope-local positions are
+indexed once per response, then queried with binary search for each member
+boundary. Activity by another actor, tenant, device or session cannot
+introduce a local interruption. Repeated observations of the same record
+remain one run when scope is verified and uninterrupted. A clock gap alone
+does not split a run or create a membership edge.
 
 Additive fields:
 
@@ -36,6 +42,7 @@ Additive fields:
 - `observed_record_change_count`
 - `observed_unknown_record_observation_count`
 - `observed_record_scope_boundary_count`
+- `observed_record_interleaved_boundary_count`
 - `observed_record_runs_truncated`
 - `observed_record_runs`
 
@@ -49,7 +56,8 @@ Discovery Mode are unchanged. No new data is captured or persisted.
 
 `tests/test_reconstruction_record_path.py` exercises an actual multi-record
 copy/paste-linked item, return to a prior record, unknown tab-attached evidence,
-cross-actor scope boundaries, bounded 42-run projection, no raw identities
+cross-actor scope boundaries, interleaved foreign-case interruptions, bounded
+42-run projection, no raw identities
 in the new path, time-only rejection and existing workflow-evidence API
 integration. Run with:
 
