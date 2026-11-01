@@ -31,8 +31,32 @@ def _ref(event: dict[str, Any]) -> str:
     return str(ref.get("resource_ref") or "").lower()
 
 
+def _visible_lane_identities(presented: list[dict[str, Any]]) -> dict[str, tuple[str, str, str, str] | None]:
+    """Admit an ID only with one consistent visible record/source identity.
+
+    Rich evidence deliberately omits organization identity. Compare the four
+    public resource components, not a guessed tenant or source-only row.
+    Conflicting, missing or malformed visible identities are unassignable.
+    """
+    identities: dict[str, tuple[str, str, str, str] | None] = {}
+    for event in presented:
+        if not isinstance(event, dict):
+            continue
+        event_id = event.get("event_id")
+        if not isinstance(event_id, str) or not _EVENT_ID.fullmatch(event_id):
+            continue
+        match = _identity(event)
+        visible = match[:4] if match else None
+        if event_id not in identities:
+            identities[event_id] = visible
+        elif identities[event_id] != visible:
+            identities[event_id] = None
+    return identities
+
+
 def _admitted_visible_lane_members(
-    events: list[dict[str, Any]], published: set[str], visible_ids: set[str],
+    events: list[dict[str, Any]], published: set[str],
+    visible_identities: dict[str, tuple[str, str, str, str] | None],
 ) -> dict[str, list[str]]:
     """Project only source rows actually admitted by the shipped lane engine.
 
@@ -42,7 +66,9 @@ def _admitted_visible_lane_members(
     raw row by reference. Do not attribute one reused event ID to an arbitrary
     lane: a duplicate across distinct admitted references is unassignable.
     Nonliteral/malformed IDs and source-only rows cannot be scored as visible
-    evidence, even if the source lane's aggregate count includes them.
+    evidence, even if the source lane's aggregate count includes them. A visible
+    ID must also carry the same unambiguous provider/kind/host/opaque reference
+    as its admitted source row; matching an ID alone is not provenance.
     """
     admitted: set[tuple[str, str]] = set()
     owners: dict[str, set[str]] = {}
@@ -62,7 +88,7 @@ def _admitted_visible_lane_members(
             continue
         admitted.add(key)
         owners.setdefault(raw_id, set()).add(ref)
-        if ref in published and raw_id in visible_ids:
+        if ref in published and visible_identities.get(raw_id) == match[:4]:
             rows[ref].append((stamp, raw_id))
     return {
         ref: [event_id for _, event_id in sorted(values)
@@ -76,12 +102,8 @@ def predict_record_lanes(case: dict[str, Any]) -> dict[str, Any]:
     lanes = record_case_lanes(events, max_lanes=30)["lanes"]
     published = {lane["resource_ref"] for lane in lanes}
     presented = case["presented_evidence"]
-    visible_ids = {
-        event["event_id"] for event in presented
-        if isinstance(event, dict) and isinstance(event.get("event_id"), str)
-        and _EVENT_ID.fullmatch(event["event_id"])
-    }
-    members = _admitted_visible_lane_members(events, published, visible_ids)
+    visible_identities = _visible_lane_identities(presented)
+    members = _admitted_visible_lane_members(events, published, visible_identities)
     seen = {event_id for ids in members.values() for event_id in ids}
     workflows = [{
         "prediction_id": f"lane_{index}",
