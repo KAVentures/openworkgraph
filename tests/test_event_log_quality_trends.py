@@ -144,6 +144,12 @@ from fastapi.testclient import TestClient
 from server.secure_app import app
 from server import local_auth
 with TestClient(app) as client:
+    asset = client.get("/event-log-quality-trends.js")
+    assert asset.status_code == 200, asset.text
+    assert "application/javascript" in asset.headers["content-type"]
+    assert "owgQualityTrendsRun" in asset.text
+    assert asset.headers["cache-control"] == "no-store"
+    assert '<script src="/event-log-quality-trends.js"></script>' in client.get("/").text
     headers = {"Authorization": "OWG-Session " + local_auth.create_dashboard_session(),
                "x-owg-local-storage-confirmed": "true"}
     doc = b"case,activity,time,who\na,Open,2024-01-01T00:00:00Z,team\n"
