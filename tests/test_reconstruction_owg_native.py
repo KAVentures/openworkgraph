@@ -789,3 +789,97 @@ def test_linked_projection_valid_conflicting_duplicate_still_vetoes_transfer():
                 frozenset({"a1", "a2"}), frozenset({"b2", "b3"})
             }, (insertion, accepting_candidates)
             assert result["unassigned_event_ids"] == ["b1"]
+
+
+def test_linked_projection_large_duplicate_replay_remains_idempotent():
+    """Thousands of replays cannot create new members or bridge hidden work.
+
+    This stresses the evaluator's constant-per-ID admission bookkeeping,
+    without asserting a timing/memory threshold on different CI machines.
+    """
+    from copy import deepcopy
+
+    original = _linked_eval_rows()
+    replays = [deepcopy(original[2]) for _ in range(2048)]
+    for accepting_candidates in (False, True):
+        case = _linked_eval_case([*original, *replays], [*original, *replays])
+        result = predict_linked_items(case, accept_candidates=accepting_candidates)
+        assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
+            frozenset({"a1", "a2", "b1", "b2", "b3"})
+        }
+        assert result["unassigned_event_ids"] == []
+
+
+def test_linked_projection_late_duplicate_conflicts_are_irreversible():
+    """One contradictory late replay vetoes membership despite valid copies."""
+    from copy import deepcopy
+
+    original = _linked_eval_rows()
+    replays = [deepcopy(original[2]) for _ in range(128)]
+    bad_source = deepcopy(original[2])
+    bad_source["actor_id"] = "another-actor"
+    bad_visible = deepcopy(original[2])
+    bad_visible["observed_at"] = "2026-10-20T10:00:21Z"
+
+    for accepting_candidates in (False, True):
+        # A source-side contradiction is withheld even when the visible
+        # evidence is otherwise consistent.
+        source_conflict = _linked_eval_case(
+            [*original, *replays, bad_source], original
+        )
+        result = predict_linked_items(
+            source_conflict, accept_candidates=accepting_candidates
+        )
+        assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
+            frozenset({"a1", "a2"}), frozenset({"b2", "b3"})
+        }
+        assert result["unassigned_event_ids"] == ["b1"]
+
+        # A visible late duplicate cannot repair a contradictory timestamp
+        # or substitute for the first source-admitted observation.
+        visible_conflict = _linked_eval_case(
+            original, [*original, *replays, bad_visible]
+        )
+        result = predict_linked_items(
+            visible_conflict, accept_candidates=accepting_candidates
+        )
+        assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
+            frozenset({"a1", "a2"}), frozenset({"b2", "b3"})
+        }
+        assert result["unassigned_event_ids"] == ["b1"]
+
+
+def test_linked_projection_first_nonliteral_and_invalid_replays_keep_admission_order():
+    """Bounded replay state retains production's first valid normalized ID."""
+    from copy import deepcopy
+
+    original = _linked_eval_rows()
+    ref = original[2]["metadata"]["resource_reference"]["resource_ref"]
+    numeric = _linked_eval_event(17, ref, "2026-10-20T10:00:20Z")
+    literal = _linked_eval_event("17", ref, "2026-10-20T10:00:20Z")
+    invalid = deepcopy(literal)
+    invalid["observed_at"] = "invalid"
+    anchor = _linked_eval_event("anchor", ref, "2026-10-20T10:00:30Z")
+
+    for accepting_candidates in (False, True):
+        # An earlier numeric source ID reserves "17" even after many
+        # malformed-timestamp replays; it must not become scored membership.
+        case = _linked_eval_case(
+            [numeric, *[deepcopy(invalid) for _ in range(64)], literal, anchor],
+            [literal, anchor],
+        )
+        result = predict_linked_items(case, accept_candidates=accepting_candidates)
+        assert result["workflows"] == []
+        assert result["unassigned_event_ids"] == ["17", "anchor"]
+
+        # Invalid timestamps do not reserve the normalized ID slot, so the
+        # first valid literal row can still link with its same-record anchor.
+        case = _linked_eval_case(
+            [*[deepcopy(invalid) for _ in range(64)], literal, anchor],
+            [literal, anchor],
+        )
+        result = predict_linked_items(case, accept_candidates=accepting_candidates)
+        assert [w["event_ids"] for w in result["workflows"]] == [
+            ["17", "anchor"]
+        ]
+        assert result["unassigned_event_ids"] == []
