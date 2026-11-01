@@ -1589,7 +1589,7 @@ test('selected AI history grant retains microsecond UTC bounds instead of hiding
 test('AI grant expiry uses full fractional precision against the local clock', async t => {
   const localNow = new Date(fixtureDay.getFullYear(), fixtureDay.getMonth(),
     fixtureDay.getDate(), 23, 59, 0).toISOString();
-  const futureByMicrosecond = localNow.replace(/\\.000Z$/, '.000001Z');
+  const futureByMicrosecond = localNow.replace(/\.000Z$/, '.000001Z');
   for (const [name, expiry, valid] of [
     ['one microsecond ahead', futureByMicrosecond, true],
     ['equal to current millisecond', localNow, false],
