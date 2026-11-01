@@ -125,6 +125,19 @@ identity authority. Verify operation ordering and no-match behavior with a
 customer-authorized IdP test before rollout; the static report never echoes
 declared selector values or email addresses.
 
+The overlap caution now considers **both** legacy `users.patch_attributes`
+and optional `users.patch_operations[].path`, even when the legacy list is
+empty. It also considers a whole-array path in one declaration and a selector
+or child path in the other. Only supported, parsed contact paths contribute:
+an unsupported path remains a blocker, not a fabricated overlap. Equivalent
+paths repeated across the two declaration formats do not by themselves imply
+two distinct targets. The caution retains its legacy
+`users.patch_attributes` location when that list alone overlaps; otherwise
+it points to `users.patch_operations`. No literal selector values appear in
+findings, and an overlap is **not** evidence that two declared operations are
+sent in the same HTTP request, that any contact is verified, or that an IdP
+has passed a live tenant test.
+
 ## Optional Group creation mapping and externalId lineage (offline only)
 
 When Groups are enabled, the mapping may now include an **optional**
