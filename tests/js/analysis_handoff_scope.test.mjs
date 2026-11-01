@@ -3406,3 +3406,72 @@ test('AI saved-history grant disclosure checks supplied grant provenance without
     assert.equal(h.downloads, 0);
   });
 });
+
+
+test('truncated UTC date review states exact omitted selected events without inventing pagination', async t => {
+  const utcDay = n => new Date(Date.UTC(2026, 0, 1 + n)).toISOString();
+  const listed = Array.from({length: 31}, (_, i) => ({
+    since: utcDay(i), until: utcDay(i + 1), event_rows: 1
+  }));
+  for (const kind of ['ordinary', 'health-only']) await t.test(kind, async () => {
+    const healthOnly = kind === 'health-only';
+    const h = await openAllRetainedPreview(d => ({
+      ...d,
+      canonical_rows: 38, retained_rows: 40,
+      first_observed_at: '2026-01-01T12:00:00Z',
+      last_observed_at: '2026-02-01T12:00:00Z',
+      event_types: healthOnly ? {capture_health: 38} : {focus_span: 38},
+      sources: {desktop: 38},
+      redacted_examples: [],
+      work_evidence: {ordinary_event_rows: healthOnly ? 0 : 38,
+        health_event_rows: healthOnly ? 38 : 0},
+      analysis_plan: {page_size: 200, date_chunks: listed,
+        more_dates_not_listed: true, chunks_respect_selected_window: true}
+    }));
+    assert.equal(h.modals, 1);
+    assert.match(h.modalHtml, /Only the first 31 observed UTC dates are listed/);
+    assert.match(h.modalHtml, /7 additional selected recorded events occur on unlisted later dates/);
+    assert.match(h.modalHtml, /This panel cannot page those dates/);
+    assert.match(h.modalHtml, /neither proves complete capture/);
+    assert.doesNotMatch(h.modalHtml, /Continue through the remaining selected dates/);
+    assert.doesNotMatch(h.modalHtml, /7 additional dates/);
+    if (healthOnly) {
+      assert.match(h.modalHtml, /Review capture-health diagnostic dates/);
+      assert.doesNotMatch(h.modalHtml, /Ask your AI to process one day at a time/);
+    } else {
+      assert.match(h.modalHtml, /ordinary work observations are present/);
+    }
+    await h.modal['#analysisCopy'].onclick();
+    assert.equal(h.copied.length, 1);
+    if (healthOnly) assertCopyEvidenceWarning(h.copied, 'request-rollover', true);
+    else assert.deepEqual(h.copied, ['request-rollover']);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+  });
+});
+
+test('complete and legacy UTC date plans do not invent omitted rows or pagination', async t => {
+  const day = n => new Date(Date.UTC(2026, 0, 1 + n)).toISOString();
+  for (const coverage of ['complete', 'legacy']) await t.test(coverage, async () => {
+    const h = await openAllRetainedPreview(d => ({
+      ...d,
+      canonical_rows: 4, retained_rows: 4,
+      first_observed_at: '2026-01-01T12:00:00Z',
+      last_observed_at: coverage === 'complete'
+        ? '2026-01-02T12:00:00Z' : '2026-01-01T13:00:00Z',
+      event_types: {focus_span: 4}, sources: {desktop: 4},
+      analysis_plan: {date_chunks: coverage === 'complete'
+        ? [{since: day(0), until: day(1), event_rows: 2},
+          {since: day(1), until: day(2), event_rows: 2}]
+        : [{since: day(0), until: day(1), event_rows: 4}],
+      ...(coverage === 'complete' ? {more_dates_not_listed: false} : {})}
+    }));
+    assert.equal(h.modals, 1);
+    assert.doesNotMatch(h.modalHtml, /additional selected recorded events occur on unlisted later dates/);
+    assert.doesNotMatch(h.modalHtml, /This panel cannot page those dates/);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-rollover']);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+  });
+});
