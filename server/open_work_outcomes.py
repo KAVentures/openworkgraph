@@ -32,7 +32,7 @@ _REF = re.compile(r"^owg:r:[0-9a-f]{32}$")
 # which are not an unambiguous source receipt contract.
 _SOURCE_TIMESTAMP = re.compile(
     r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
-    r"(?:\\.[0-9]{1,9})?(?:Z|[+-][0-9]{2}:[0-9]{2})$"
+    r"(?:\.[0-9]{1,9})?(?:Z|[+-][0-9]{2}:[0-9]{2})$"
 )
 
 
