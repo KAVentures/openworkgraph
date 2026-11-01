@@ -544,7 +544,7 @@
       ? d.redacted_examples.map(x=>`<li>${esc(visibleEvidenceLabel(x.app == null ? 'Unknown app' : x.app, 'sample'))} · ${esc(visibleEvidenceLabel(x.window_title||'Untitled activity', 'sample'))} · ${x.observed_at == null ? 'observation time not supplied' : `observed at <time datetime="${esc(x.observed_at)}">${esc(x.observed_at)}</time>`}</li>`).join('')
       : '<li>No redacted context examples supplied.</li>';
     window.openModal?.('Prepare for AI',ordinaryRows>0?'Review selected work evidence (workflow unverified)':'Review evidence limitations (no verified workflow)',`
-      <p>No workflow description or repeated pattern is required. Your AI will interpret the evidence; this panel does not run a model.</p>
+      <p>${ordinaryRows>0?'No workflow description or repeated pattern is required. An AI may help review observations after you explicitly share evidence; this panel does not run a model.':'No ordinary work evidence is available for workflow review. Do not infer a workflow from missing observations or capture-health diagnostics; this panel does not run a model.'}</p>
       <p><strong>${esc(evidenceAssessment)}</strong></p>
       <div class="note"><strong>Selected local evidence preview — not sent to an AI</strong>
         <p>${esc(d.canonical_rows)} recorded events · ${esc(d.event_types.focus_span||0)} focus spans · ${esc(d.event_types.capture_gap||0)} unobserved-gap records.</p>
