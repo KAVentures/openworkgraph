@@ -259,7 +259,11 @@ def main(argv: list[str] | None = None, *, provider_opener=None,
                 or report.get("source_writes_performed") is not False
                 or report.get("checkpoint_advanced") is not False
                 or report.get("historical_completeness") != "unknown"
-                or report.get("rejected_events") != 0):
+                or report.get("rejected_events") != 0
+                or type(report.get("added_events")) is not int
+                or type(report.get("duplicate_events_skipped")) is not int
+                or report["added_events"] < 0
+                or report["duplicate_events_skipped"] < 0):
             raise CheckpointError("Unexpected child success receipt")
         append_completed = True
         possible_append = False
