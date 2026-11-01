@@ -19,7 +19,7 @@ def _complete_scope(scope: Any) -> bool:
 
 
 def _anchor(row: dict[str, Any]) -> bool:
-    return (bool(row["ref"]) and bool(row["tab"]) and bool(row["app"])
+    return (bool(row["ref"]) and bool(row["tab"]) and row["app"] not in ("", "unknown", "other")
             and row["source"] != "unknown" and _complete_scope(row["scope"])
             and not row["reference_tainted"]
             and not row["ephemeral_claim_tainted"]
