@@ -123,6 +123,8 @@ def test_portfolio_checks_independent_selected_cases_without_scanning_unselected
     assert body["checked_case_count"] == 2
     assert [x["work_item_ref"] for x in body["case_statuses"]] == [B, C]
     assert [x["declared_prerequisite_count"] for x in body["case_statuses"]] == [1, 0]
+    assert [x["unscanned_prerequisite_count"] for x in body["case_statuses"]] == [1, 0]
+    assert [x["all_declared_prerequisites_selected"] for x in body["case_statuses"]] == [False, True]
     assert [x["source_reported_status"]["state"] for x in body["case_statuses"]] == ["open", "unknown"]
     assert body["case_statuses"][0]["retained_observation_summary"][0]["observed_event_count"] == 3
     assert body["case_statuses"][1]["source_reported_status"]["reason"] == "case_not_in_bounded_inventory"
@@ -227,3 +229,20 @@ def test_provider_outage_is_unknown_and_contradiction_stops_remaining_reads(loca
     assert response.status_code == 422, response.text
     assert calls == [B]
     assert "in_PRIVATE" not in response.text
+
+
+def test_selected_prerequisite_is_counted_as_checked_but_not_customer_verified(local, monkeypatch):
+    client, auth = TestClient(app), _auth()
+    saved = _saved(client, auth)
+    calls = []
+    monkeypatch.setattr(routes, "stripe_open_work_case_context",
+                        lambda ref, **kwargs: calls.append(ref) or _reported(ref))
+    response = client.post(ENDPOINT, headers=auth, json=_payload(saved, refs=(A, B)))
+    assert response.status_code == 200, response.text
+    assert calls == [A, B]
+    statuses = response.json()["case_statuses"]
+    assert statuses[1]["declared_prerequisite_count"] == 1
+    assert statuses[1]["unscanned_prerequisite_count"] == 0
+    assert statuses[1]["all_declared_prerequisites_selected"] is True
+    assert statuses[1]["prerequisite_status_not_implicitly_verified"] is True
+    assert response.json()["customer_outcome_verified"] is False
