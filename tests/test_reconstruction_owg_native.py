@@ -435,6 +435,73 @@ def test_linked_projection_preserves_visible_authorized_transfer_and_offset_inst
     assert result["unassigned_event_ids"] == []
 
 
+def test_linked_projection_accepts_normalized_literal_reference_and_ignores_extra_fields():
+    """The evaluator must use the same valid record identity as the linker.
+
+    Cosmetic case differences and attributes the linker never reads cannot
+    hide a visible source-admitted event or reduce same-record recall.
+    """
+    from copy import deepcopy
+
+    source = _linked_eval_rows()
+    case = _linked_eval_case(source, source)
+    visible_ref = case["presented_evidence"][2]["metadata"]["resource_reference"]
+    visible_ref.update(
+        resource_ref=visible_ref["resource_ref"].upper(),
+        provider=" GITHUB ", resource_kind="ISSUE", host="GITHUB.COM",
+        non_linking_annotation={"display_only": "not an identity"},
+    )
+    for accepting_candidates in (False, True):
+        result = predict_linked_items(case, accept_candidates=accepting_candidates)
+        assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
+            frozenset({"a1", "a2", "b1", "b2", "b3"})
+        }
+        assert result["unassigned_event_ids"] == []
+
+    # A source-only annotation is likewise not an identity mismatch.
+    source_with_extra = deepcopy(source)
+    source_with_extra[2]["metadata"]["resource_reference"]["source_annotation"] = "unused"
+    result = predict_linked_items(_linked_eval_case(source_with_extra, source))
+    assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
+        frozenset({"a1", "a2", "b1", "b2", "b3"})
+    }
+
+
+def test_linked_projection_still_rejects_different_normalized_reference_identity():
+    """Normalization never collapses distinct providers, hosts or record IDs."""
+    from copy import deepcopy
+
+    source = _linked_eval_rows()
+    for field, other in (
+        ("resource_ref", "owg:r:" + "c" * 32),
+        ("provider", "jira"),
+        ("resource_kind", "pull_request"),
+        ("host", "another.example"),
+        ("host", ""),
+    ):
+        case = _linked_eval_case(source, source)
+        case["presented_evidence"][2]["metadata"]["resource_reference"][field] = other
+        for accepting_candidates in (False, True):
+            result = predict_linked_items(case, accept_candidates=accepting_candidates)
+            assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
+                frozenset({"a1", "a2"}), frozenset({"b2", "b3"})
+            }, (field, accepting_candidates)
+            assert result["unassigned_event_ids"] == ["b1"]
+
+    # A nonliteral value cannot be rescued by string coercion, even if it
+    # would normalize to the same source string.
+    source_bool = deepcopy(source)
+    for row in source_bool[2:]:
+        row["metadata"]["resource_reference"]["provider"] = "true"
+    case = _linked_eval_case(source_bool, source_bool)
+    case["presented_evidence"][2]["metadata"]["resource_reference"]["provider"] = True
+    result = predict_linked_items(case)
+    assert {frozenset(w["event_ids"]) for w in result["workflows"]} == {
+        frozenset({"a1", "a2"}), frozenset({"b2", "b3"})
+    }
+    assert result["unassigned_event_ids"] == ["b1"]
+
+
 def test_linked_projection_rejects_changed_visible_link_authority_and_time():
     from copy import deepcopy
     source = _linked_eval_rows()
