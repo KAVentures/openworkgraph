@@ -98,3 +98,11 @@ This does not measure the accuracy of a source system, completeness of
 historical exports, performance of an individual employee, or the causal
 effect of an intervention. Do not use rates to rank people or authorize
 automation.
+
+## Interactive per-batch rejection diagnostics
+
+After selecting **Compare batches** in **Event logs → Analyse → Data quality**, use **Inspect rejection reasons for batch** to choose a displayed import/append batch. The drill-down reads the `reports` already returned by the same local, session-authenticated quality request; it performs no additional provider read or write. It shows the batch's accepted/rejected/skipped counts, creation time, a 12-character **transform** SHA-256 prefix (not a source-file digest), and up to 12 rejection categories ordered by recorded count. Omitted categories are counted explicitly. Missing historical reports display **No saved rejection diagnostics** rather than fabricated zeros; unknown reason breakdowns remain unknown.
+
+Reason categories are counts of recorded validation categories and may overlap: **do not add them together as unique rejected rows**. Category names are untrusted labels rendered as text, not HTML, and are not included in the existing counts-only CSV. This does not reveal rejected source-row samples or establish complete provider history, causation, individual productivity, or live-provider/customer acceptance. The selection and drill-down are ephemeral and reset with each new comparison; switching to a different log cannot download a stale comparison.
+
+The committed Node regression exercises missing/unknown reasons, a large bounded reason list, suspicious formula-like labels, overlapping reasons and the interactive local quality-response rendering. Native cross-platform and browser checks are still required on the exact PR head before merge.
