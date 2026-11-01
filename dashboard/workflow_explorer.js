@@ -583,6 +583,64 @@
     });
   }
 
+  // Imported synthetic receipts are comparison data, not approvals or results
+  // from a provider. Regrade each invented case rather than trusting file grades.
+  function importedSyntheticSuiteBaseline(receipt, state) {
+    const keys = ['schema', 'kind', 'created_at_utc', 'execution_permitted',
+      'source_identity_verified', 'real_shadow_test_status', 'plan',
+      'synthetic_aggregate_grade', 'synthetic_grade_counts',
+      'invented_scenario_results', 'limitations'];
+    if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt) ||
+        Object.keys(receipt).sort().join(',') !== keys.sort().join(',') ||
+        receipt.schema !== 'openworkgraph.synthetic_shadow_suite.v1' ||
+        receipt.kind !== 'local_invented_scenarios_not_provider_validation' ||
+        receipt.execution_permitted !== false ||
+        receipt.source_identity_verified !== false ||
+        receipt.real_shadow_test_status !== 'not_run' ||
+        typeof receipt.created_at_utc !== 'string' ||
+        !/^\\d{4}-\\d{2}-\\d{2}T/.test(receipt.created_at_utc) ||
+        !Number.isFinite(Date.parse(receipt.created_at_utc)) ||
+        !Array.isArray(receipt.limitations)) {
+      throw new Error('Not a non-executing OWG synthetic suite receipt v1.');
+    }
+    const criteria = importedShadowPlanCriteria(receipt.plan, state);
+    if (!completeShadowCriteria(state) ||
+        Object.keys(criteria).some(key => criteria[key] !== state.planCriteria[key]))
+      throw new Error('Baseline criteria differ from this freshly reviewed plan.');
+    const rows = receipt.invented_scenario_results;
+    if (!Array.isArray(rows) || rows.length < 2 || rows.length > 8)
+      throw new Error('Baseline must contain 2–8 invented cases.');
+    const counts = {PASS: 0, FAIL: 0, ABSTAIN: 0};
+    const validated = rows.map((row, index) => {
+      if (!row || typeof row !== 'object' || Array.isArray(row) ||
+          Object.keys(row).sort().join(',') !==
+            'exception_decision,normal_observation,reasons,scenario,synthetic_grade' ||
+          row.scenario !== index + 1 ||
+          typeof row.normal_observation !== 'string' || row.normal_observation.length > 320 ||
+          !['unknown', 'abstain', 'continue'].includes(row.exception_decision) ||
+          !Array.isArray(row.reasons)) {
+        throw new Error('Baseline invented case ' + (index + 1) + ' is invalid.');
+      }
+      const grade = gradeSyntheticRehearsal(state.planCriteria.expected,
+        row.normal_observation, row.exception_decision);
+      if (row.synthetic_grade !== grade.grade ||
+          JSON.stringify(row.reasons) !== JSON.stringify(grade.reasons))
+        throw new Error('Baseline grade or reasons are inconsistent with its invented inputs.');
+      counts[grade.grade]++;
+      return {normal_observation: row.normal_observation,
+        exception_decision: row.exception_decision, grade: grade.grade};
+    });
+    const aggregate = counts.FAIL ? 'FAIL' : counts.ABSTAIN ? 'ABSTAIN' : 'PASS';
+    const suppliedCounts = receipt.synthetic_grade_counts;
+    if (!suppliedCounts || typeof suppliedCounts !== 'object' ||
+        Array.isArray(suppliedCounts) ||
+        Object.keys(suppliedCounts).sort().join(',') !== 'ABSTAIN,FAIL,PASS' ||
+        Object.keys(counts).some(key => suppliedCounts[key] !== counts[key]) ||
+        receipt.synthetic_aggregate_grade !== aggregate)
+      throw new Error('Baseline aggregate or grade counts are inconsistent.');
+    return {createdAt: receipt.created_at_utc, aggregate, rows: validated};
+  }
+
   // Review and handoff are separate actions. The only export is an explicit
   // browser-local plan-only JSON download; no server export or execution occurs.
   function openHandoffReview(candidate, lane) {
@@ -606,7 +664,7 @@
       variantNumber: lane ? lane.index + 1 : null,
       exact, inspected, shadowEligible,
       planCriteria: shadowEligible ? {expected: '', exception: '', stop: ''} : null,
-      rehearsal: null, suiteResult: null
+      rehearsal: null, suiteResult: null, suiteComparison: null
     };
     handoffReview = state;
     host.replaceChildren();
@@ -651,11 +709,17 @@
     const suiteRows = [];
     let suiteStatus = null, suiteRun = null, suiteDownload = null, suiteAdd = null;
     let suiteTemplateDownload = null, suiteTemplateStatus = null;
+    let suiteCompareDownload = null, suiteCompareStatus = null, comparisonGeneration = 0;
     let nextSuiteId = 0;
     const suiteCases = () => suiteRows.map(row => ({
       normal_observation: row.observed.value.trim(), exception_decision: row.decision.value
     }));
     const invalidateSuite = () => {
+      comparisonGeneration++;
+      state.suiteComparison = null;
+      if (suiteCompareStatus) suiteCompareStatus.replaceChildren(element('p',
+        'No current synthetic comparison. Import a prior invented-suite receipt after a new local run.'));
+      if (suiteCompareDownload) suiteCompareDownload.disabled = true;
       state.suiteResult = null;
       if (suiteStatus) suiteStatus.replaceChildren(element('p',
         'No synthetic suite run. No source, model or agent was contacted.'));
@@ -898,8 +962,79 @@
               'invalid JSON.' : String(error.message || 'unrecognized template.'));
         }
       });
+      const compareLabel = element('label',
+        'Compare current invented suite with a prior synthetic suite receipt (local file only)');
+      const compareInput = element('input');
+      compareInput.id = 'owgExplorerSuiteCompareImport';
+      compareInput.type = 'file';
+      compareInput.accept = '.json,application/json';
+      compareLabel.appendChild(compareInput);
+      suiteCompareStatus = element('div');
+      suiteCompareStatus.id = 'owgExplorerSuiteCompareStatus';
+      suiteCompareStatus.setAttribute('role', 'status');
+      suiteCompareStatus.appendChild(element('p',
+        'No comparison loaded. Prior grades are independently recalculated, not trusted.'));
+      suiteCompareDownload = button('Download local synthetic comparison JSON', () =>
+        downloadSyntheticComparison(state, suiteCases()), true);
+      suiteCompareDownload.id = 'owgExplorerSuiteCompareDownload';
+      suiteCompareDownload.disabled = true;
+      compareInput.addEventListener('change', async () => {
+        const file = compareInput.files?.[0];
+        compareInput.value = '';
+        if (!file) return;
+        const generation = ++comparisonGeneration;
+        state.suiteComparison = null;
+        checkbox.checked = false;
+        suiteCompareStatus.replaceChildren(element('p', 'Reading a local invented-suite baseline…'));
+        updateButtons();
+        if (!currentHandoffReview(state) || !state.suiteResult) {
+          suiteCompareStatus.textContent = 'Run the current invented scenario suite before comparing.';
+          return;
+        }
+        if (file.size > 32768) {
+          suiteCompareStatus.textContent = 'Baseline refused: file exceeds the 32 KiB local import limit.';
+          return;
+        }
+        try {
+          const raw = await file.text();
+          if (generation !== comparisonGeneration || !currentHandoffReview(state)) return;
+          const baseline = importedSyntheticSuiteBaseline(JSON.parse(raw), state);
+          const run = state.suiteResult;
+          if (!run || run.snapshot !== JSON.stringify(suiteCases()) ||
+              baseline.rows.length !== run.results.length)
+            throw new Error('Baseline and current run must contain the same 2–8 scenario positions.');
+          const rows = baseline.rows.map((prior, index) => {
+            const current = run.results[index];
+            return {scenario: index + 1, baseline_grade: prior.grade,
+              current_grade: current.grade,
+              inputs_changed: prior.normal_observation !== current.normal_observation ||
+                prior.exception_decision !== current.exception_decision,
+              grade_changed: prior.grade !== current.grade};
+          });
+          const changed = rows.filter(row => row.inputs_changed).length;
+          const gradeChanged = rows.filter(row => row.grade_changed).length;
+          state.suiteComparison = {snapshot: run.snapshot, baselineCreatedAt: baseline.createdAt,
+            baselineAggregate: baseline.aggregate, currentAggregate: run.aggregate,
+            changed, gradeChanged, rows};
+          const list = element('ol');
+          rows.forEach(row => list.appendChild(element('li',
+            'Invented scenario ' + row.scenario + ': ' + row.baseline_grade + ' → ' +
+            row.current_grade + '; inputs ' + (row.inputs_changed ? 'changed' : 'unchanged') + '.')));
+          suiteCompareStatus.replaceChildren(element('p',
+            'SYNTHETIC COMPARISON — ' + rows.length + ' invented cases; ' + changed +
+            ' changed inputs, ' + gradeChanged + ' changed grades. ' +
+            'Baseline ' + baseline.aggregate + ' → current ' + run.aggregate +
+            '. No real test, provider verification or execution occurred.'), list);
+          updateButtons();
+        } catch (error) {
+          if (generation === comparisonGeneration && currentHandoffReview(state))
+            suiteCompareStatus.textContent = 'Baseline refused: ' +
+              (error instanceof SyntaxError ? 'invalid JSON.' : String(error.message || 'unrecognized receipt.'));
+        }
+      });
       suite.append(suiteAdd, suiteRun, suiteDownload, suiteStatus,
-        suiteTemplateDownload, suiteTemplateLabel, suiteTemplateStatus);
+        suiteTemplateDownload, suiteTemplateLabel, suiteTemplateStatus,
+        compareLabel, suiteCompareStatus, suiteCompareDownload);
       plan.appendChild(suite);
       [syntheticObservation, syntheticException].forEach(input => input.addEventListener('input', () => {
         checkbox.checked = false;
@@ -966,6 +1101,8 @@
       if (suiteAdd) suiteAdd.disabled = suiteRows.length >= 8;
       if (suiteRun) suiteRun.disabled = shadow.disabled || suiteRows.length < 2;
       if (suiteDownload) suiteDownload.disabled = suiteRun.disabled || !state.suiteResult;
+      if (suiteCompareDownload) suiteCompareDownload.disabled = suiteDownload.disabled ||
+        !state.suiteComparison || state.suiteComparison.snapshot !== JSON.stringify(suiteCases());
       if (suiteTemplateDownload) suiteTemplateDownload.disabled = shadow.disabled || suiteRows.length < 2 || suiteRows.length > 8;
     };
     checkbox.addEventListener('change', updateButtons);
@@ -1172,6 +1309,49 @@
     } catch {
       if (status) status.appendChild(element('p',
         'Synthetic suite download unavailable. Nothing was sent or executed.'));
+    }
+  }
+
+  function downloadSyntheticComparison(state, currentCases) {
+    const checkbox = document.getElementById('owgExplorerHandoffConfirmed');
+    const status = document.getElementById('owgExplorerSuiteCompareStatus');
+    const comparison = state.suiteComparison;
+    if (!currentHandoffReview(state) || !checkbox?.checked || !completeShadowCriteria(state) ||
+        !comparison || !state.suiteResult ||
+        comparison.snapshot !== state.suiteResult.snapshot ||
+        comparison.snapshot !== JSON.stringify(currentCases)) return;
+    try {
+      const report = {
+        schema: 'openworkgraph.synthetic_shadow_suite_comparison.v1',
+        kind: 'local_invented_scenarios_comparison_not_provider_validation',
+        created_at_utc: new Date().toISOString(),
+        execution_permitted: false, source_identity_verified: false,
+        real_shadow_test_status: 'not_run',
+        plan: shadowPlanManifest(state),
+        baseline_created_at_utc: comparison.baselineCreatedAt,
+        baseline_synthetic_aggregate_grade: comparison.baselineAggregate,
+        current_synthetic_aggregate_grade: comparison.currentAggregate,
+        invented_cases: comparison.rows.length,
+        invented_inputs_changed: comparison.changed,
+        synthetic_grades_changed: comparison.gradeChanged,
+        per_scenario: comparison.rows.map(row => ({...row})),
+        limitations: ['invented scenarios and grades only; no real provider or model test',
+          'prior grades recomputed from untrusted invented inputs',
+          'scenario positions are compared, not verified case identities',
+          'no execution, source verification, business outcome or authorization']
+      };
+      const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2) + '\n'],
+        {type: 'application/json;charset=utf-8'}));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'owg-synthetic-shadow-comparison.json';
+      document.body.appendChild(link);
+      try { link.click(); } finally { link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
+      if (status) status.appendChild(element('p',
+        'Local synthetic comparison downloaded. No source, model, agent or business action ran.'));
+    } catch {
+      if (status) status.appendChild(element('p',
+        'Synthetic comparison download unavailable. Nothing was sent or executed.'));
     }
   }
 
