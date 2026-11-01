@@ -354,9 +354,17 @@ def assess(mapping: Any) -> dict:
         if path and _supported_contact_patch_path(path)
     ]
     declared_contact_paths = contact_patch_paths + contact_operation_paths
-    if any((contact_match := _CONTACT_SELECTOR.fullmatch(value)) is not None
-           and contact_match.group(1).casefold() == "value" for value in declared_contact_paths):
-        add("caution", "contact_value_selector", "users.patch_attributes",
+    def has_value_selector(paths: list[str]) -> bool:
+        return any((match := _CONTACT_SELECTOR.fullmatch(value)) is not None
+                   and match.group(1).casefold() == "value" for value in paths)
+
+    legacy_value_selector = has_value_selector(contact_patch_paths)
+    if legacy_value_selector or has_value_selector(contact_operation_paths):
+        # Attribute the finding to a declaration that actually contains the
+        # selector. Legacy reports retain their original finding location.
+        location = ("users.patch_attributes" if legacy_value_selector
+                    else "users.patch_operations")
+        add("caution", "contact_value_selector", location,
             "A contact-value selector is data-dependent and is not an identity match or verification")
     if ("emails" in create
             or any(value.casefold().startswith("emails") for value in declared_contact_paths)
