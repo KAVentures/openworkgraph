@@ -15,7 +15,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response
 
-from .open_work_case_graph import project_declared_case_graph
+from .open_work_case_graph import project_declared_case_graph, project_declared_case_change_impact
 from .local_auth import dashboard_session_valid, _read_or_create_secret
 from .local_source_credentials import _metadata_path, _read_metadata
 from .open_work_case_declarations import (
@@ -152,6 +152,32 @@ async def get_local_case_dependency_graph(request: Request, response: Response):
         raise _safe_error(exc) from None
     await _recheck_source(scope)
     return {**graph, "available": True}
+
+
+
+
+@router.post("/v1/open-work/declarations/impact")
+async def preview_local_case_declaration_change(request: Request, response: Response):
+    """Read-only exact-CAS preview; never a replacement for confirmed write."""
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token", "operation",
+    })
+    try:
+        snapshot = await asyncio.to_thread(list_case_declarations, scope)
+        impact = project_declared_case_change_impact(
+            snapshot,
+            work_item_ref=payload["work_item_ref"],
+            expected_revision=payload["expected_revision"],
+            expected_edit_token=payload["expected_edit_token"],
+            operation=payload["operation"],
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return impact
 
 
 @router.post("/v1/open-work/declarations")
