@@ -72,8 +72,8 @@ subtracted from `ambiguous_single_record_tab_interleaving_abstentions`.
 Without e05, neither loose step can be attributed solely from the tab.
 A cross-app interruption never supplies a positive case link.
 
-A cross-app witness requires a literal different, known app label, a valid
-exact record and complete matching capture scope, a distinct *pre-tab*
+A cross-app witness requires a literal different, known app label, a known
+capture source, a valid exact record and complete matching capture scope, a distinct *pre-tab*
 record-link component, strictly ordered observations, and a two-sided A
 bracket. Cross-app events must not claim clipboard transfer, copy/paste or
 malformed action; unknown surfaces, timestamp ties, intervening ambiguous
