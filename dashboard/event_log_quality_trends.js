@@ -258,8 +258,91 @@
       total:found.length,examined:visible.length,comparablePairs,skippedPairs};
   }
 
+
+  // Compare recorded rejection categories across any complete same-transform
+  // baseline/target window. This is an audit of supplied rows, not a causal
+  // or upstream completeness claim; categories may overlap.
+  const MAX_PAIR_REASON_ROWS = 50;
+  function compareReasonsPair(trends, reports, baseline, target) {
+    const refuse = status => ({status,comparable:false,rows:[],total:0,omitted:0});
+    const pair=comparePair(trends,baseline,target);
+    if (!pair.rows.length) return refuse(pair.status);
+    if (!Array.isArray(reports)) return refuse('Saved rejection-category reports unavailable.');
+    const visible=trends.batches.slice(-MAX_VISIBLE);
+    const byBatch=new Map(visible.map(b=>[b.batch,b]));
+    const byReport=new Map();
+    for (const report of reports) {
+      if (!report || !Number.isSafeInteger(report.batch) ||
+          report.batch<baseline || report.batch>target) continue;
+      if (byReport.has(report.batch))
+        return refuse('Duplicate saved quality reports; category comparison unavailable.');
+      byReport.set(report.batch,report);
+    }
+    for (let id=baseline;id<=target;id++) {
+      const b=byBatch.get(id),r=byReport.get(id);
+      if (!b || !r || !r.transform || r.transform.transform_sha256!==b.transform_sha256)
+        return refuse('Missing or inconsistent intermediate saved report; category comparison unavailable.');
+    }
+    function breakdown(id) {
+      const b=byBatch.get(id),r=byReport.get(id);
+      const metric=b.metrics && b.metrics.rejected_input_rows;
+      const rejected=metric && metric.count,denominator=metric && metric.denominator;
+      const data=r.rows,reasons=data && data.rejected_by_reason;
+      if (!Number.isSafeInteger(rejected) || rejected<0 ||
+          !Number.isSafeInteger(denominator) || denominator<=0 || rejected>denominator ||
+          !data || data.rejected!==rejected || !reasons ||
+          typeof reasons!=='object' || Array.isArray(reasons)) return null;
+      const entries=Object.entries(reasons);
+      if (entries.length>MAX_REASON_CATEGORIES) return null;
+      const values=new Map();
+      for (const [name,n] of entries) {
+        if (!name || name.length>160 || !Number.isSafeInteger(n) ||
+            n<0 || n>rejected) return null;
+        values.set(name,n);
+      }
+      return {denominator,values};
+    }
+    const before=breakdown(baseline),after=breakdown(target);
+    if (!before || !after)
+      return refuse('Missing, oversized or inconsistent endpoint rejection-category breakdown; comparison unavailable.');
+    const names=new Set([...before.values.keys(),...after.values.keys()]);
+    if (names.size>MAX_REASON_CATEGORIES)
+      return refuse('Combined rejection-category count exceeds the review limit.');
+    const all=[...names].map(category=>{
+      const first=before.values.get(category)||0,last=after.values.get(category)||0;
+      const firstRate=first/before.denominator,lastRate=last/after.denominator;
+      const points=(lastRate-firstRate)*100;
+      return {category,baseline_count:count(first),baseline_denominator:count(before.denominator),
+        baseline_rate:rate(firstRate),target_count:count(last),
+        target_denominator:count(after.denominator),target_rate:rate(lastRate),
+        change:change(points),absolutePoints:Math.abs(points)};
+    });
+    all.sort((a,b)=>b.absolutePoints-a.absolutePoints ||
+      a.category.localeCompare(b.category));
+    const rows=all.slice(0,MAX_PAIR_REASON_ROWS).map(({absolutePoints,...row})=>row);
+    return {status:'Comparable recorded categories across '+(target-baseline+1)+
+      ' contiguous same-transform reports. Descriptive only; categories may overlap.',
+      comparable:true,baseline:label(baseline),target:label(target),
+      transform_sha256:byBatch.get(baseline).transform_sha256,
+      rows,total:all.length,omitted:Math.max(0,all.length-MAX_PAIR_REASON_ROWS)};
+  }
+  function csvPairReasons(result) {
+    const keys=['baseline_batch','target_batch','transform_sha256','category',
+      'baseline_recorded_count','baseline_supplied_rows','baseline_rate',
+      'target_recorded_count','target_supplied_rows','target_rate','delta_pp'];
+    const out=[keys.map(csvCell).join(',')];
+    if (!result || !result.comparable || !Array.isArray(result.rows)) return out.join('\\r\\n')+'\\r\\n';
+    for (const r of result.rows) {
+      const values=[result.baseline,result.target,result.transform_sha256,r.category,
+        r.baseline_count,r.baseline_denominator,r.baseline_rate,r.target_count,
+        r.target_denominator,r.target_rate,r.change];
+      out.push(values.map(csvCell).join(','));
+    }
+    return out.join('\\r\\n')+'\\r\\n';
+  }
+
   if (typeof module !== 'undefined' && module.exports)
-    module.exports = {rows,csv,csvCell,count,rate,change,status,detail,reviewRows,comparePair,rankedIncreases,rejectionReasonIncreases,MAX_VISIBLE,MAX_REASONS,MAX_INCREASE_ROWS,MAX_REASON_INCREASE_ROWS};
+    module.exports = {rows,csv,csvCell,count,rate,change,status,detail,reviewRows,comparePair,rankedIncreases,rejectionReasonIncreases,compareReasonsPair,csvPairReasons,MAX_PAIR_REASON_ROWS,MAX_VISIBLE,MAX_REASONS,MAX_INCREASE_ROWS,MAX_REASON_INCREASE_ROWS};
   if (typeof document === 'undefined') return;
   const element = (tag,text) => {const e=document.createElement(tag);if(text!==undefined)e.textContent=text;return e;};
   const logId = () => document.getElementById('owgEventLogPick')?.value || '';
@@ -286,9 +369,15 @@
     const pairTarget=element('select');pairTarget.id='owgQualityPairTarget';pairTarget.disabled=true;
     targetLabel.appendChild(pairTarget);
     const pairOutput=element('div');pairOutput.id='owgQualityPairRows';
+    const pairReasonOutput=element('div');pairReasonOutput.id='owgQualityPairReasonRows';
+    const pairReasonCsv=element('button','Download selected rejection comparison CSV');
+    pairReasonCsv.id='owgQualityPairReasonCsv';pairReasonCsv.type='button';
+    pairReasonCsv.className='secondary';pairReasonCsv.disabled=true;
     pairPanel.append(element('h4','Compare two selected batches'),
       element('p','Compare stored counts only. Both reports and every intervening batch must have the same verified mapping.'),
-      baselineLabel,targetLabel,pairOutput);
+      baselineLabel,targetLabel,pairOutput,element('h4','Selected rejection-category comparison'),
+      element('p','Recorded categories may overlap; differences describe supplied rows, not source quality or completeness.'),
+      pairReasonCsv,pairReasonOutput);
     const increasePanel=element('section');increasePanel.id='owgQualityIncreases';
     const increaseLabel=element('label','Minimum recorded rate increase: ');
     increaseLabel.htmlFor='owgQualityIncreaseThreshold';
@@ -332,7 +421,7 @@
     const selected=logId();let ticket=0,loaded=null,loadedReports=[];
     const current=(id,n)=>panel.isConnected && logId()===id && ticket===n;
     function showPair() {
-      pairOutput.replaceChildren();
+      pairOutput.replaceChildren();pairReasonOutput.replaceChildren();pairReasonCsv.disabled=true;
       if (!loaded || logId()!==selected) return;
       const result=comparePair(loaded,Number(pairBaseline.value),Number(pairTarget.value));
       pairOutput.appendChild(element('p',result.status));
@@ -355,9 +444,45 @@
       table.append(head,body);
       const wrap=element('div');wrap.className='table-wrap';wrap.appendChild(table);
       pairOutput.appendChild(wrap);
+      const reasons=compareReasonsPair(loaded,loadedReports,
+        Number(pairBaseline.value),Number(pairTarget.value));
+      pairReasonOutput.appendChild(element('p',reasons.status));
+      if (!reasons.comparable) return;
+      pairReasonOutput.appendChild(element('p',reasons.rows.length+' of '+reasons.total+
+        ' recorded categories shown (maximum '+MAX_PAIR_REASON_ROWS+'); '+
+        reasons.omitted+' omitted. No raw rejected rows are included.'));
+      if (!reasons.rows.length) return;
+      const reasonTable=element('table');reasonTable.id='owgQualityPairReasonTable';
+      const rh=element('thead'),rhr=element('tr');
+      for(const heading of ['Rejection category','Baseline count','Baseline supplied rows',
+        'Baseline rate','Target count','Target supplied rows','Target rate','Change']) {
+        const th=element('th',heading);th.scope='col';rhr.appendChild(th);
+      }
+      rh.appendChild(rhr);const rb=element('tbody');
+      for(const item of reasons.rows) {
+        const tr=element('tr');
+        for(const key of ['category','baseline_count','baseline_denominator','baseline_rate',
+          'target_count','target_denominator','target_rate','change'])
+          tr.appendChild(element('td',item[key]));
+        rb.appendChild(tr);
+      }
+      reasonTable.append(rh,rb);
+      const rw=element('div');rw.className='table-wrap';rw.appendChild(reasonTable);
+      pairReasonOutput.appendChild(rw);pairReasonCsv.disabled=false;
     }
     pairBaseline.addEventListener('change',showPair);
     pairTarget.addEventListener('change',showPair);
+    pairReasonCsv.addEventListener('click',()=>{
+      if (!loaded || !panel.isConnected || logId()!==selected || pairReasonCsv.disabled) return;
+      const result=compareReasonsPair(loaded,loadedReports,
+        Number(pairBaseline.value),Number(pairTarget.value));
+      if (!result.comparable || !result.rows.length) return;
+      const url=URL.createObjectURL(new Blob([csvPairReasons(result)],
+        {type:'text/csv;charset=utf-8'}));
+      const a=element('a');a.href=url;a.download='owg-selected-rejection-comparison.csv';
+      a.style.display='none';panel.appendChild(a);a.click();a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),1000);
+    });
     function showDetail() {
       drillOutput.replaceChildren();
       if (!loaded || logId()!==selected) return;
@@ -445,7 +570,7 @@
     reasonThreshold.addEventListener('change',showReasons);
     function clearState() {
       ++ticket;loaded=null;loadedReports=[];download.disabled=true;run.disabled=false;
-      output.replaceChildren();reviewOutput.replaceChildren();pairOutput.replaceChildren();increaseOutput.replaceChildren();reasonOutput.replaceChildren();
+      output.replaceChildren();reviewOutput.replaceChildren();pairOutput.replaceChildren();pairReasonOutput.replaceChildren();pairReasonCsv.disabled=true;increaseOutput.replaceChildren();reasonOutput.replaceChildren();
       pairBaseline.disabled=true;pairTarget.disabled=true;
       pairBaseline.replaceChildren();pairTarget.replaceChildren();
       drillSelect.disabled=true;drillSelect.replaceChildren();
