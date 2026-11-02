@@ -2152,6 +2152,82 @@
     return spec;
   }
 
+  // Restore only analysis specs the visible builder can faithfully represent.
+  // Validate the complete draft before changing any form controls or metric state.
+  function analysisDraft(spec,selectedCaseType=''){
+    if(!spec||typeof spec!=='object'||Array.isArray(spec))throw new Error('Saved analysis has no usable definition.');
+    const allowed=new Set(['level','dimensions','measures','limit','metrics','where','case_type']);
+    if(Object.keys(spec).some(k=>!allowed.has(k)))throw new Error('This saved analysis uses options not supported by the builder; use Run instead.');
+    if(!['cases','events'].includes(spec.level)||spec.limit!==100)throw new Error('This saved analysis cannot be edited in this builder; use Run instead.');
+    if((spec.case_type||'')!==selectedCaseType)throw new Error('Select the saved analysis case notion before loading it.');
+    if(!Array.isArray(spec.dimensions)||spec.dimensions.length>2)throw new Error('Saved analysis dimensions cannot be edited here.');
+    const dimOptions=new Set(ANALYSIS_DIMENSIONS[spec.level].map(x=>x[0]));
+    const dims=spec.dimensions.map(d=>{
+      if(typeof d!=='string')throw new Error('Saved analysis has an invalid dimension.');
+      if(d.startsWith('attribute:')){
+        const attribute=d.slice(10);
+        if(!attribute.trim())throw new Error('Saved analysis has an empty attribute dimension.');
+        return {kind:'attribute',attribute};
+      }
+      if(!d||!dimOptions.has(d))throw new Error('Saved analysis uses an unsupported dimension.');
+      return {kind:d,attribute:''};
+    });
+    const where=spec.where||{};
+    if(!where||typeof where!=='object'||Array.isArray(where)||Object.keys(where).some(k=>!['duration_over_seconds','ends_with'].includes(k)))
+      throw new Error('Saved analysis uses filters not supported by the builder.');
+    if(spec.level!=='cases'&&Object.keys(where).length)throw new Error('Event analysis has unsupported case filters.');
+    let hours='';
+    if(Object.hasOwn(where,'duration_over_seconds')){
+      const seconds=where.duration_over_seconds;
+      if(!Number.isSafeInteger(seconds)||seconds<0)throw new Error('Saved analysis has an invalid duration filter.');
+      hours=String(seconds/3600);
+    }
+    if(where.ends_with!==undefined&&typeof where.ends_with!=='string')throw new Error('Saved analysis has an invalid ending activity.');
+    const metrics=spec.metrics||[];
+    if(!Array.isArray(metrics)||metrics.length>4||(spec.level==='events'&&metrics.length))
+      throw new Error('Saved analysis has metrics the builder cannot represent.');
+    const prior=new Set();
+    for(const m of metrics){
+      if(!m||typeof m!=='object'||Array.isArray(m)||!METRIC_KINDS.some(k=>k[0]===m.kind))
+        throw new Error('Saved analysis has an unsupported metric.');
+      if(typeof m.name!=='string'||!/^[a-z][a-z0-9_]{0,39}$/.test(m.name)||prior.has(m.name))
+        throw new Error('Saved analysis has invalid or duplicate metric names.');
+      if(m.kind==='arithmetic'){
+        if(m.expression_version!=='1'||!['add','subtract','multiply','divide','minimum','maximum','average','absolute_difference'].includes(m.operation))
+          throw new Error('Saved analysis has an unsupported arithmetic expression.');
+        for(const operand of [m.left,m.right]){
+          if(!operand||!['metric','constant'].includes(operand.kind))throw new Error('Saved analysis has an invalid arithmetic operand.');
+          if(operand.kind==='metric'&&!prior.has(operand.name))throw new Error('Saved analysis has an out-of-order metric dependency.');
+          if(operand.kind==='constant'&&(!Number.isFinite(operand.value)||typeof operand.unit!=='string'||!/^[A-Za-z%$€£¥/._ -]{1,20}$/.test(operand.unit)))
+            throw new Error('Saved analysis has an invalid typed constant.');
+        }
+      }else{
+        // Reuse the form's validation rules for supported non-arithmetic metrics.
+        caseMetric({name:m.name,kind:m.kind,from:m.from_activity,to:m.to_activity,
+          fromOccurrence:m.from_occurrence,toOccurrence:m.to_occurrence,activity:m.activity,
+          attribute:m.attribute,unit:m.unit,statistic:m.statistic,missingPolicy:m.missing_policy,
+          statActivity:m.activity,stageFrom:m.from_activity,stageTo:m.to_activity,
+          stageOccurrence:m.stage_occurrence});
+      }
+      prior.add(m.name);
+    }
+    if(!Array.isArray(spec.measures)||spec.measures.length<1||spec.measures.length>2)
+      throw new Error('Saved analysis has an unsupported measure selection.');
+    const standard=new Set(ANALYSIS_MEASURES[spec.level].map(x=>x[0]));
+    const measures=spec.measures.map(m=>{
+      if(!m||typeof m!=='object'||typeof m.fn!=='string')throw new Error('Saved analysis has an invalid measure.');
+      const value=m.of===undefined?m.fn:m.fn+':'+m.of;
+      if(!standard.has(value)&&!(spec.level==='cases'&&['median','avg','sum','max'].includes(m.fn)&&
+          typeof m.of==='string'&&m.of.startsWith('metric:')&&prior.has(m.of.slice(7))))
+        throw new Error('Saved analysis uses a measure not available in the builder.');
+      return value;
+    });
+    return {level:spec.level,dim1:dims[0]?.kind||'',attr1:dims[0]?.attribute||'',
+      dim2:dims[1]?.kind||'',attr2:dims[1]?.attribute||'',measure1:measures[0],
+      measure2:measures[1]||'',hours,endsWith:where.ends_with||'',
+      metrics:metrics.map(m=>JSON.parse(JSON.stringify(m)))};
+  }
+
   // One typed case metric from form values; throws a readable error.
   function caseMetric(values){
     const name=String(values.name||'').trim();
@@ -2541,12 +2617,30 @@
     }
     async function refresh(){
       const r=await getJSON(base()+'/analyses');if(generation!==state.generation)return;
-      savedList.replaceChildren(r.analyses.length?table(['Saved analysis','',''],r.analyses.map(a=>{
+      savedList.replaceChildren(r.analyses.length?table(['Saved analysis','','',''],r.analyses.map(a=>{
         const open=button('Run','secondary');open.setAttribute('aria-label','Run saved analysis '+a.name);
         open.onclick=()=>execute({...a.spec}).catch(error=>{message.textContent=error.message;});
+        const load=button('Load into builder','secondary');load.setAttribute('aria-label','Load saved analysis '+a.name+' into builder');
+        load.onclick=()=>{
+          try{
+            if(running)throw new Error('Wait for the current analysis to finish or cancel it before loading a draft.');
+            const draft=analysisDraft(a.spec,state.caseType);
+            // All checks have passed; replace the draft in one synchronous operation.
+            level.value=draft.level;
+            metrics.splice(0,metrics.length,...draft.metrics);
+            renderMetrics();
+            dim1.value=draft.dim1;dim2.value=draft.dim2;
+            attr1.value=draft.attr1;attr2.value=draft.attr2;
+            hours.value=draft.hours;endsWith.value=draft.endsWith;
+            sync();measure1.value=draft.measure1;measure2.value=draft.measure2;
+            resetSharing();last=null;lastSpec=null;out.replaceChildren();exports.enable(false);
+            save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;name.value='';
+            message.textContent='Loaded '+a.name+' into the builder. Edit and run it, then save under a new name; the original is unchanged.';
+          }catch(error){message.textContent=error.message;}
+        };
         const del=button('Delete','secondary');del.setAttribute('aria-label','Delete saved analysis '+a.name);
         del.onclick=async()=>{try{await api(base()+'/analyses/'+encodeURIComponent(a.analysis_id)+'/delete',{method:'POST'});message.textContent='Analysis deleted.';await refresh();}catch(error){message.textContent=error.message;}};
-        return [a.name,open,del];})):el('div','No saved analyses yet.','muted'));
+        return [a.name,open,load,del];})):el('div','No saved analyses yet.','muted'));
     }
     run.onclick=async()=>{
       try{message.textContent='';await execute(analysisSpec({level:level.value,dim1:dim1.value,attr1:attr1.value,dim2:dim2.value,attr2:attr2.value,measure1:measure1.value,measure2:measure2.value,hours:hours.value,endsWith:endsWith.value.trim(),metrics:[...metrics]}));}
@@ -2990,6 +3084,6 @@
         (p.previous_window_coverage_after===null?'.':' and '+pct(p.previous_window_coverage_after)+' of the window before.'):null};
   }
 
-  window.__owgEventLogModel={simBatch,simPriorities,objectModelArcs,objectModelText,visitRows,simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,stageComparisonMetrics,activityComparisonMetrics,activityShareMetrics,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths,packMapping,packGuess,packReportRows,monitoringRows,impactSpec,impactRows};
+  window.__owgEventLogModel={simBatch,simPriorities,objectModelArcs,objectModelText,visitRows,simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,stageComparisonMetrics,activityComparisonMetrics,activityShareMetrics,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,analysisDraft,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths,packMapping,packGuess,packReportRows,monitoringRows,impactSpec,impactRows};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
