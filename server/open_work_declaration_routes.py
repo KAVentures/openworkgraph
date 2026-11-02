@@ -42,11 +42,16 @@ from .open_work_case_declared_outcome import (
     require_declared_payment_goal, compose_fresh_declared_payment_goal,
     compose_historical_declared_payment_goal,
 )
+from .open_work_case_declared_dependency_payment import (
+    admit_declared_dependency_payment_links, same_admitted_payment_chain,
+    compose_declared_dependency_payment_result,
+)
 from .open_work_case_review_packet import (
     issue_review_packet, validate_review_packet, compare_review_packet,
 )
 from .open_work_case_operation_ledger import (
-    append_operation_evidence, read_operation_evidence, dispute_operation_evidence,
+    append_operation_evidence, append_operation_evidence_batch,
+    read_operation_evidence, dispute_operation_evidence,
     clear_operation_evidence,
 )
 from .open_work_case_outcome_reviews import (
@@ -1723,6 +1728,102 @@ async def read_local_declared_stripe_payment_goal_history(request: Request, resp
             secret=secret, guard=guard,
         )
         result = compose_historical_declared_payment_goal(admitted, history)
+        await asyncio.to_thread(guard)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/v1/open-work/declarations/source-goals/verify-dependency-payments")
+async def verify_local_declared_dependency_payment_goals(request: Request, response: Response):
+    """Freshly check every approved payment-goal prerequisite; persist atomically.
+
+    All source links and historical evidence are validated before the first
+    provider read. Source reads are sequential, NOT a provider-atomic snapshot.
+    The local HMAC evidence appends commit together or not at all.
+    """
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_source_verification", "record_links",
+    })
+    if payload["confirm_source_verification"] is not True:
+        raise HTTPException(403, "explicit dependency provider verification required")
+    try:
+        secret = await asyncio.to_thread(_read_or_create_secret, ".open_work_reference_key")
+        before = await asyncio.to_thread(list_case_declarations, scope)
+        admitted = admit_declared_dependency_payment_links(
+            before, work_item_ref=payload["work_item_ref"],
+            expected_revision=payload["expected_revision"],
+            expected_edit_token=payload["expected_edit_token"],
+            record_links=payload["record_links"], scope=scope, secret=secret,
+        )
+        from functools import partial
+        guard = partial(
+            _operation_ledger_guard, scope, payload["work_item_ref"],
+            payload["expected_revision"], payload["expected_edit_token"],
+            admitted["root_signature"],
+        )
+        # Preflight ALL private HMAC chains, even for the last dependency,
+        # before making ANY external provider request.
+        previous = {}
+        for ref in admitted["ordered"]:
+            case = admitted["cases"][ref]
+            previous[ref] = await asyncio.to_thread(
+                read_operation_evidence, case["admitted"], case["signature"],
+                scope=scope, secret=secret, guard=guard,
+            )
+        await asyncio.to_thread(guard)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    verifications = {}
+    for ref in admitted["ordered"]:
+        case = admitted["cases"][ref]
+        try:
+            receipt = await asyncio.to_thread(
+                source_operation_receipt, case["resource_ref"], "stripe_invoice_paid",
+            )
+        except (ValueError, OSError, TypeError, CaseDeclarationError, sqlite3.DatabaseError):
+            receipt = None
+        await _recheck_source(scope)
+        try:
+            current = await asyncio.to_thread(list_case_declarations, scope)
+            rechecked = admit_declared_dependency_payment_links(
+                current, work_item_ref=payload["work_item_ref"],
+                expected_revision=payload["expected_revision"],
+                expected_edit_token=payload["expected_edit_token"],
+                record_links=payload["record_links"], scope=scope, secret=secret,
+            )
+            if not same_admitted_payment_chain(admitted, rechecked):
+                raise CaseDeclarationError("stale declared payment dependency review changed")
+            verifications[ref] = project_case_operation_verification(
+                case["admitted"], case["resource_ref"], receipt,
+            )
+        except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+            raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    try:
+        await asyncio.to_thread(guard)
+        entries = [{
+            "admitted": admitted["cases"][ref]["admitted"],
+            "signature": admitted["cases"][ref]["signature"],
+            "resource_ref": admitted["cases"][ref]["resource_ref"],
+            "verification": verifications[ref],
+            "expected_history": previous[ref]["events"],
+        } for ref in admitted["ordered"]]
+        current_histories = await asyncio.to_thread(
+            append_operation_evidence_batch, entries,
+            scope=scope, secret=secret, guard=guard,
+        )
+        result = compose_declared_dependency_payment_result(
+            root_ref=payload["work_item_ref"], admitted=admitted,
+            previous=previous, current=current_histories,
+            verifications=verifications,
+        )
         await asyncio.to_thread(guard)
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
         raise _safe_error(exc) from None
