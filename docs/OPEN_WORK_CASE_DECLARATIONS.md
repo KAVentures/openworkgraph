@@ -1351,9 +1351,9 @@ not store customer names, native IDs, free-text reasons, receipts, amounts,
 credentials or raw activity. Retention never exceeds the owner's original
 review expiry, configured human-history retention, or seven days. Changed
 source account, review incarnation or prerequisite graph cannot rebind an
-old assessment. Explicit review deletion and source disconnect/clear scrub
-the private store; deleting a declaration also scrubs the store because
-its dependent approvals are invalidated. Default-OFF use creates no store.
+old assessment. Explicit review deletion and declaration deletion scrub assessments for
+the invalidated dependency closure while preserving unrelated reviewed
+cases; source disconnect/clear scrubs the whole private store. Default-OFF use creates no store.
 
 Each call requires a local dashboard session, a separately configured
 Stripe source scope, the exact current owner declaration and entire
