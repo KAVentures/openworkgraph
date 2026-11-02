@@ -138,6 +138,22 @@ const path=require('node:path');
    await page.getByRole('button',{name:'Open linked saved process',exact:true}).click();
    await page.locator('#owgCatalogStatus').filter({hasText:'Opened immutable revision 1.'}).waitFor();
    assert.equal(await page.getByRole('textbox',{name:'Business goal',exact:true}).inputValue(),'Review the selected renewal');
+   // Resume an exact saved design and focus the human assessment without
+   // creating a project or reading a provider.
+   let guidedWrites=0;
+   page.on('request',request=>{if(request.method()!=='GET'&&
+     /\\/agent-project|\\/source-check-export|\\/project-reports/.test(request.url()))guidedWrites++;});
+   await page.locator('#owgPipelineJourney').click();
+   const guide=page.locator('#owgPipelineJourneyGuide');
+   await guide.getByRole('heading',{name:'Resume this evidence-to-implementation journey'}).waitFor();
+   assert(await guide.locator('#owgPipelineJourneyExport').isDisabled());
+   assert(await guide.locator('#owgPipelineJourneyOpenProcess').isEnabled());
+   page.once('dialog',dialog=>dialog.accept());
+   await guide.locator('#owgPipelineJourneyOpenProcess').click();
+   await guide.locator('#owgPipelineJourneyGuideStatus').filter({hasText:'Requested exact linked revision 1'}).waitFor();
+   await guide.locator('#owgPipelineJourneyReviewIdea').click();
+   assert.equal(await page.evaluate(()=>document.activeElement?.id),'owgPipelineAssess');
+   assert.equal(guidedWrites,0);
    assert(await page.locator('#owgPipelineProjectDownload').isDisabled());
    await page.getByRole('button',{name:'Move to Assessing',exact:true}).click();
    await page.locator('#owgPipelineStatus').filter({hasText:'Moved to Assessing.'}).waitFor();
@@ -149,6 +165,12 @@ const path=require('node:path');
    await page.getByRole('button',{name:'Move to Approved',exact:true}).click();
    await page.locator('#owgPipelineStatus').filter({hasText:'Moved to Approved.'}).waitFor();
    const linkedBeforeExport=await page.evaluate(async id=>(await fetch('/v1/automation-pipeline/'+id)).json(),linked.idea_id);
+   await page.locator('#owgPipelineJourney').click();
+   await guide.locator('#owgPipelineJourneyExport').waitFor();
+   assert(await guide.locator('#owgPipelineJourneyExport').isEnabled());
+   await guide.locator('#owgPipelineJourneyExport').click();
+   assert.equal(await page.evaluate(()=>document.activeElement?.id),'owgPipelineProjectDownload');
+   assert.equal(guidedWrites,0,'navigation must not export an agent project');
    const [projectDownload,projectResponse]=await Promise.all([
      page.waitForEvent('download'),
      page.waitForResponse(r=>r.url().endsWith('/'+linked.idea_id+'/agent-project')&&r.request().method()==='POST'),
@@ -177,6 +199,19 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await page.locator('#owgPipelineProjects').getByRole('status').filter({hasText:'Project downloaded.'}).waitFor();
    const recorded=await page.evaluate(async id=>(await fetch('/v1/automation-pipeline/'+id+'/projects')).json(),linked.idea_id);
    assert.equal(recorded.projects.length,1);assert.equal(recorded.deployment_verified,false);
+   // Navigate into the exact selected project's existing read-only report and
+   // source-check forms. The latter still requires fresh explicit consent.
+   await page.locator('#owgPipelineJourney').click();
+   await page.locator('#owgPipelineJourneyProject').selectOption(manifest.project_id);
+   const writesBeforeNavigation=guidedWrites;
+   await page.locator('#owgPipelineJourneyReports').click();
+   await page.locator('#owgPipelineReportProject').waitFor();
+   assert.equal(await page.locator('#owgPipelineReportProject').inputValue(),manifest.project_id);
+   await page.locator('#owgPipelineJourneySource').click();
+   await page.locator('#owgPipelineSourceProject').waitFor();
+   assert.equal(await page.locator('#owgPipelineSourceProject').inputValue(),manifest.project_id);
+   assert.equal(await page.locator('#owgPipelineSourceConsent').isChecked(),false);
+   assert.equal(guidedWrites,writesBeforeNavigation,'stage navigation is read-only');
    // Source-state checks are explicitly confirmed and downloaded only. The
    // unobserved synthetic record must remain unknown and never reach a provider.
    let sourceDownloads=0;page.on('download',d=>{if(d.suggestedFilename()==='owg-project-source-check.json')sourceDownloads++;});
@@ -241,6 +276,19 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await page.locator('#owgPipelineReportLinks li').filter({hasText:'Matching reported specification'}).waitFor();
    const linkedReports=await page.evaluate(async id=>(await fetch('/v1/automation-pipeline/'+id+'/project-reports')).json(),linked.idea_id);
    assert.equal(linkedReports.links.length,1);assert.equal(linkedReports.business_outcomes_verified,false);
+   // Reopen the pinned journey after a dashboard restart in another tab.
+   const resumed=await context.newPage();
+   await resumed.goto(base+'/#session='+session);
+   await resumed.locator('[role=tab][data-tab=evidence]').click();
+   await resumed.locator('#owgPipelineCard').waitFor();
+   await resumed.evaluate(id=>window.dispatchEvent(new CustomEvent('owg-pipeline-open',{detail:{idea_id:id}})),linked.idea_id);
+   await resumed.locator('#owgPipelineProcessStatus').filter({hasText:'Current saved revision'}).waitFor();
+   await resumed.locator('#owgPipelineJourney').click();
+   await resumed.locator('#owgPipelineJourneyGuide').waitFor();
+   await resumed.locator('#owgPipelineJourneyProject').selectOption(manifest.project_id);
+   await resumed.locator('#owgPipelineJourneyArtifact').getByText(/Matching reported specification/).waitFor();
+   assert((await resumed.locator('#owgPipelineJourneyResult').textContent()).includes(manifest.spec_sha256));
+   await resumed.close();
    await page.locator('#owgPipelineJourney').click();
    const journey=page.locator('#owgPipelineJourneyResult');
    await journey.getByText('Dataset and cohort → process: origin is not linked.',{exact:true}).waitFor();
@@ -269,6 +317,12 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await page.locator('#owgPipelineProcessStatus').filter({hasText:'Process changed since this idea was created'}).waitFor();
    await page.locator('#owgPipelineJourney').click();
    await journey.getByText(/Saved process renewal_review · revision 1 · changed since this idea/).waitFor();
+   await guide.getByText(/Process basis is changed/).waitFor();
+   assert(await guide.locator('#owgPipelineJourneyOpenProcess').isEnabled());
+   page.once('dialog',dialog=>dialog.accept());
+   await guide.locator('#owgPipelineJourneyOpenProcess').click();
+   await page.locator('#owgCatalogStatus').filter({hasText:'Opened immutable revision 1.'}).waitFor();
+   assert.equal(await page.getByRole('textbox',{name:'Business goal',exact:true}).inputValue(),'Review the selected renewal');
    await page.getByRole('button',{name:'Move to Implemented',exact:true}).click();
    await page.locator('#owgPipelineStatus').filter({hasText:'linked process changed or is unavailable'}).waitFor();
    assert.equal((await page.evaluate(async id=>(await fetch('/v1/automation-pipeline/'+id)).json(),linked.idea_id)).state,'approved');
@@ -285,6 +339,7 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await page.locator('#owgPipelineProcessStatus').filter({hasText:'Linked revision is unavailable'}).waitFor();
    await page.locator('#owgPipelineJourney').click();
    await journey.getByText(/Saved process renewal_review · revision 1 · unavailable/).waitFor();
+   assert(await guide.locator('#owgPipelineJourneyOpenProcess').isDisabled());
    assert(await page.getByRole('button',{name:'Open linked saved process',exact:true}).isDisabled());
    await page.setViewportSize({width:390,height:844});
    assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false,'no horizontal overflow at phone width');
