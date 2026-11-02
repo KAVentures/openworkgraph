@@ -307,6 +307,23 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    assert(!JSON.stringify(inspectionRecord).includes('owg:r:'));
    assert(!JSON.stringify(inspectionRecord).includes('raw_receipt'));
    assert.match(inspectionRecord.comparison_sha256,/^[a-f0-9]{64}$/);
+   // One portable file carries the saved packet and the exact comparison-bound
+   // inspection notes. The browser must re-fetch the current journey on import.
+   const [bundleDownload]=await Promise.all([
+     page.waitForEvent('download'),
+     inspectionWorklist.locator('#owgPipelineJourneyBundleDownload').click()
+   ]);
+   assert.equal(bundleDownload.suggestedFilename(),'owg-resumable-human-review.json');
+   const reviewBundle=JSON.parse(await fs.readFile(await bundleDownload.path(),'utf8'));
+   assert.equal(reviewBundle.format,'openworkgraph.handoff-human-review-bundle.v1');
+   assert.equal(reviewBundle.scope,'local_human_review_only');
+   assert.equal(reviewBundle.execution_authorized,false);
+   assert.equal(reviewBundle.source_read_authorized,false);
+   assert.deepEqual(reviewBundle.saved_packet,alteredPacket);
+   assert.equal(reviewBundle.inspection_worklist.inspected_count,1);
+   assert.equal(reviewBundle.inspection_worklist.comparison_sha256,inspectionRecord.comparison_sha256);
+   assert(!JSON.stringify(reviewBundle).includes('PRIVATE_RAW_CASE_VALUE'));
+   assert(!JSON.stringify(reviewBundle).includes('raw_receipt'));
    // A local file can resume only the same explicit human inspection after
    // reopening the dashboard. This never changes server-side approval state.
    await inspectionChecks.first().uncheck();
@@ -394,6 +411,34 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await inspectionRestart.locator('#owgPipelineJourneyInspectionRestoreStatus')
      .filter({hasText:/Restored 1 local inspection marks/}).waitFor();
    assert(await restartedChecks.first().isChecked(),'explicit keyboard import resumes the exact inspection after restart');
+   // Repeating with a single bundle needs only one file selection and one
+   // explicit compare action, not a second worklist selection.
+   await inspectionRestart.locator('#owgPipelineJourneyPriorPacket').setInputFiles({
+     name:'resumable-review.json',mimeType:'application/json',
+     buffer:Buffer.from(JSON.stringify(reviewBundle))
+   });
+   await inspectionRestart.locator('#owgPipelineJourneyComparePacket').focus();
+   await inspectionRestart.keyboard.press('Enter');
+   await inspectionRestart.locator('#owgPipelineJourneyInspectionRestoreStatus')
+     .filter({hasText:/Resumed 1 local inspection marks from one review bundle/}).waitFor();
+   assert(await inspectionRestart.locator('#owgPipelineJourneyInspectionWorklist input[type=checkbox]').first().isChecked());
+   // Wrapper-level forged authorization and unrelated project are refused.
+   for(const forgedBundle of [
+     {...reviewBundle,execution_authorized:true},
+     {...reviewBundle,saved_packet:{...reviewBundle.saved_packet,project:{
+       ...reviewBundle.saved_packet.project,project_id:'wrong-project'}}},
+     {...reviewBundle,source_read_authorized:true},
+     {...reviewBundle,extra_approval:true}
+   ]){
+     await inspectionRestart.locator('#owgPipelineJourneyPriorPacket').setInputFiles({
+       name:'invalid-review-bundle.json',mimeType:'application/json',
+       buffer:Buffer.from(JSON.stringify(forgedBundle))
+     });
+     await inspectionRestart.locator('#owgPipelineJourneyComparePacket').click();
+     await inspectionRestart.locator('#owgPipelineJourneyCompareResult')
+       .filter({hasText:/Invalid human review bundle|belongs to another idea or project/}).waitFor();
+     assert.equal(await inspectionRestart.locator('#owgPipelineJourneyInspectionWorklist').count(),0);
+   }
    assert.equal(inspectionRestartWrites,0,'review restoration never writes server state');
    await inspectionRestart.close();
    const invalidInspection=await page.evaluate(([oldPacket,newPacket])=>{
@@ -556,6 +601,18 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    });
    await resumed.locator('#owgPipelineJourneyComparePacket').click();
    await resumed.locator('#owgPipelineJourneyCompareResult').getByText(/Recorded fields changed since the saved packet/).waitFor();
+   // The report was imported after the original inspection. A single-file
+   // review bundle still shows drift, but cannot restore old inspection marks.
+   await resumed.locator('#owgPipelineJourneyPriorPacket').setInputFiles({
+     name:'stale-review-bundle.json',mimeType:'application/json',
+     buffer:Buffer.from(JSON.stringify(reviewBundle))
+   });
+   await resumed.locator('#owgPipelineJourneyComparePacket').click();
+   await resumed.locator('#owgPipelineJourneyCompareResult')
+     .getByText(/Recorded fields changed since the saved packet/).waitFor();
+   await resumed.locator('#owgPipelineJourneyInspectionRestoreStatus')
+     .filter({hasText:/Bundle inspection marks not restored/}).waitFor();
+   assert(!await resumed.locator('#owgPipelineJourneyInspectionWorklist input[type=checkbox]').first().isChecked());
    // The report was imported after the original inspection. A previously
    // exported inspection record must not be replayed on this changed basis.
    await resumed.locator('#owgPipelineJourneyInspectionImportFile').setInputFiles({
