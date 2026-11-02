@@ -19,7 +19,30 @@ episodes**, not asserted tasks or completed cases. An episode ends only when:
    with a known capture source and the same **complete** organization, actor,
    device and session. This yields `observed_other_app_without_record` — an
    **uncertain observed interruption**, not proof of another business case.
-3. The two member observations have **different exact capture scopes**.
+3. An **independently observed, different browser tab without a source record**
+   appears strictly between two member observations in the **same exact tab,
+   known app and capture source**, with the same complete organization, actor,
+   device and session. This yields `observed_other_tab_without_record` —
+   an **uncertain focus interruption**, not a different business case.
+4. Two independently observed exact source-record anchors within an
+   **already-linked work item** name different records in the **same complete
+   capture scope**, with strictly increasing UTC timestamps. This yields
+   `observed_member_record_change`: a *record-context* episode boundary, not
+   a new membership, verified task switch, handoff or outcome. The anchors
+   may be consecutive (A → B → A gives three observed episodes), or separated
+   by **at most eight clean unreferenced member observations**. A strictly
+   contiguous, fully observed A → loose → B span now gives **three** episodes:
+   the observed A anchor, a separate **record-unknown bridge** for the loose
+   member(s), and the independently observed B anchor. The unknown bridge
+   starts with `observed_unreferenced_record_bridge`; the B episode starts
+   with `observed_member_record_change`. The loose actions remain in the same
+   linked work item and are **not** attributed to either exact record. A
+   non-contiguous or otherwise ambiguous span abstains from creating the
+   extra unknown episode. A tied/out-of-order timestamp, incomplete/changed scope,
+   tainted reference or action claim, intervening clipboard transfer, or
+   more than eight unreferenced members prevents the bridged boundary.
+   Existing independently observed foreign-record interruptions take precedence.
+5. The two member observations have **different exact capture scopes**.
    This yields `capture_scope_change` (not proof that a person stopped work).
 
 Both reasons may be represented by a list of reason codes; the first episode
@@ -37,9 +60,28 @@ Timestamp ties, missing/incomplete capture scope, other tenants/actors/devices/
 sessions, unknown/placeholder or control-bearing app names, missing/unknown
 source, contradictory tab/transfer claims, tainted record identities, same-app
 loose actions and already-member app activity do not establish this boundary.
-The `interleaved_other_record` boundary retains precedence when a distinct
+A different-tab event cannot establish a boundary if either anchor has an
+unknown or conflicting tab, if its source/app differs, if timestamps tie, or
+if it carries a clipboard transfer/copy-paste action, malformed action/ephemeral
+claims or an invalid resource reference. A same-tab unreferenced event is not
+negative focus evidence. The tab token, app, capture identity and other-tab
+event ID are not returned; the other-tab observation remains unassigned.
+Cross-app boundaries take precedence over cross-tab boundaries, and the
+`interleaved_other_record` boundary retains precedence when a distinct
 literal source record is actually observed. Unknown observation coverage is
 never silently promoted to an uninterrupted business task.
+The within-item record-context boundary is **presentation-only**: it never
+splits an accepted clipboard-linked work item into separate work items, changes
+its `cross_record_join` or `link_basis`, or uses temporal proximity to infer
+membership. A → unreferenced → B is segmented only when A and B are independently
+observed exact anchors already accepted into the *same linked item*; the
+unreferenced action remains record-unknown and is separately displayed only
+when every intervening observation belongs to that clean bounded member span.
+Removing B recomputes the earlier episode without retaining a stale boundary. It does
+not expose clipboard tokens, capture identity or foreign-record details beyond
+the existing work-item reference projection. Direct-linker and authenticated
+workflow-evidence response tests exercise the new behavior.
+
 The original source-grounded membership, same-record/clipboard/tab link bases,
 uncertainty, ambiguous candidates and item confidence remain unchanged.
 
@@ -88,7 +130,7 @@ Run from repository root:
 python -m pytest -q tests/test_reconstruction_segments.py tests/test_work_item_links.py
 ```
 
-Synthetic tests exercise two interleaved cases, unreferenced known-app switches,
+Synthetic tests exercise two interleaved cases, explicit record-unknown bridge episodes bounded by distinct exact anchors (including 8-vs-9 action limits, competing/foreign observations and removal), unreferenced known-app and independently observed other-tab switches,
 strict timestamp ties, same-app anchors, unknown/tainted capture, different
 tenants/actors/devices/sessions, cross-session same-record resumption, clock-only
 gaps, exact counts/truncation, retention recomputation, privacy and existing
@@ -97,9 +139,29 @@ Cross-platform native pytest, browser/accessibility, scale, packaging and
 release checks must pass on the exact PR head before merge. These synthetic
 checks do not constitute real consenting-user validation.
 
+For example, Browser tab A / Case A → Browser tab B / no record → Browser
+tab A / Case A produces **two** observed Case A episodes with the uncertain
+`observed_other_tab_without_record` boundary, without assigning tab B to A.
+Removing the middle observation recomputes one episode. The existing
+`linked_work_items` and `workflow_evidence` APIs expose this without new
+permissions, new membership edges or a changed response format.
+
 This improves reviewable **segmentation of observed evidence**, not assignment
 F1 by itself. The uncertain other-app boundary must not be treated as a
 confirmed task switch, handoff, user productivity measure or agent authorization.
 No new case memberships or automatic actions are created. The preregistered held-out F1 >= 0.90 and contamination <= 0.05
 targets are **not established** by this change. No private evaluation truth,
 model/API spend, source-provider calls or business writes are introduced.
+
+## Record-unknown bridge example
+
+For an existing, evidence-linked work item with **A exact anchor → one clean
+unreferenced member → B exact anchor**, the read-only API returns three
+`activity_segments`: `[A]`, `[unreferenced]`, `[B]`. The second has
+`boundary_before: ["observed_unreferenced_record_bridge"]` and the third has
+`boundary_before: ["observed_member_record_change"]`. A linked work item is
+**not** a verified business case; the middle observation has no inferred record
+identity, task identity, business outcome or authority to act. An unrelated
+observation between A and B, invalid scope, timestamp tie, tainted identity,
+clipboard action in the bridge, or more than eight loose members prevents the
+new three-way display. The response remains read-only and privacy-minimized.
