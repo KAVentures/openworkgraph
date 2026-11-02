@@ -84,10 +84,11 @@ def _graph_direct_groups(opener, origin, bearer, entra_user):
     # Graph documents the direct memberOf cast. No transitive membership,
     # delta query or directory-wide listing. Refuse incomplete pagination.
     url = (origin + "/v1.0/users/" + entra_user
-           + "/memberOf/microsoft.graph.group?%24select=id&%24top=100")
+           + "/memberOf/microsoft.graph.group?%24select=id&%24top=100&%24count=true")
     req = request.Request(url, method="GET", headers={
         "Authorization": "Bearer " + bearer,
         "Accept": "application/json",
+        "ConsistencyLevel": "eventual",
         "Cache-Control": "no-store",
     })
     try:
