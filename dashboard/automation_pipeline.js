@@ -189,6 +189,27 @@
     return inspected;
   }
 
+  // A single portable local file contains only the previously downloadable
+  // review packet and inspection notes. Never trust the wrapper as an approval.
+  const REVIEW_BUNDLE_FORMAT='openworkgraph.handoff-human-review-bundle.v1';
+  function handoffReviewBundle(saved,inspectionRecord){
+    return {format:REVIEW_BUNDLE_FORMAT,scope:'local_human_review_only',
+      execution_authorized:false,source_read_authorized:false,
+      saved_packet:saved,inspection_worklist:inspectionRecord};
+  }
+  function unpackHandoffReviewInput(value){
+    if(!value||value.format!==REVIEW_BUNDLE_FORMAT)
+      return {saved:value,inspectionRecord:null};
+    const keys=['execution_authorized','format','inspection_worklist','saved_packet',
+      'scope','source_read_authorized'];
+    if(!value||typeof value!=='object'||Array.isArray(value)||
+      inspectionStableJSON(Object.keys(value).sort())!==inspectionStableJSON(keys)||
+      value.scope!=='local_human_review_only'||value.execution_authorized!==false||
+      value.source_read_authorized!==false||!value.saved_packet||!value.inspection_worklist)
+      throw new Error('Invalid human review bundle. No inspection marks were restored.');
+    return {saved:value.saved_packet,inspectionRecord:value.inspection_worklist};
+  }
+
   // Pure helper, exercised by tests: builds an assessment body or throws a readable error.
   function assessmentBody(values,revision){
     const ease={};
@@ -467,7 +488,7 @@
               comparePacket.disabled=true;
               compareResult.textContent='Checking the saved packet against freshly fetched local references…';
               try{
-                const saved=JSON.parse(await file.text());
+                const {saved,inspectionRecord:bundledInspection}=unpackHandoffReviewInput(JSON.parse(await file.text()));
                 if(generation!==detailGeneration||choice.value!==p.project_id||!artifact.contains(compareResult)||requestSequence!==comparisonSequence)return;
                 const fresh=await (await api('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/journey')).json();
                 if(generation!==detailGeneration||choice.value!==p.project_id||!artifact.contains(compareResult)||requestSequence!==comparisonSequence)return;
@@ -521,6 +542,29 @@
                   }catch(e){inspectionStatus.textContent='Could not export local inspection notes: '+e.message;}
                   finally{exportInspection.disabled=false;}
                 };
+                const exportBundle=button('Download resumable review bundle (one file)','secondary');
+                exportBundle.id='owgPipelineJourneyBundleDownload';
+                exportBundle.onclick=async()=>{
+                  if(generation!==detailGeneration||choice.value!==p.project_id||
+                    requestSequence!==comparisonSequence||!compareResult.contains(exportBundle))return;
+                  exportBundle.disabled=true;
+                  try{
+                    const record=handoffInspectionWorklist(saved,latest,[...inspected],new Date().toISOString());
+                    record.comparison_sha256=await handoffInspectionSnapshotDigest(saved,latest);
+                    if(generation!==detailGeneration||choice.value!==p.project_id||
+                      requestSequence!==comparisonSequence||!compareResult.contains(exportBundle))return;
+                    const bundle=handoffReviewBundle(saved,record);
+                    const payload=JSON.stringify(bundle,null,2)+'\\n';
+                    const blob=new Blob([payload],{type:'application/json'});
+                    if(blob.size>65536)throw new Error('Bundle exceeds 64 KiB. Use separate review and inspection files.');
+                    const url=URL.createObjectURL(blob),link=el('a');
+                    link.href=url;link.download='owg-resumable-human-review.json';
+                    document.body.appendChild(link);link.click();link.remove();
+                    setTimeout(()=>URL.revokeObjectURL(url),1000);
+                    guideStatus.textContent='Downloaded one resumable local review file. Inspection is not approval or verification.';
+                  }catch(e){inspectionStatus.textContent='Could not export review bundle: '+e.message;}
+                  finally{exportBundle.disabled=false;}
+                };
                 const importInspection=input('owgPipelineJourneyInspectionImportFile','file');
                 importInspection.accept='.json,application/json';
                 const restoreInspection=button('Restore local inspection marks for this exact comparison','secondary');
@@ -564,7 +608,7 @@
                       (e instanceof SyntaxError?'Invalid JSON.':e.message);
                   }finally{restoreInspection.disabled=false;}
                 };
-                inspection.append(inspectionList,inspectionStatus,exportInspection,
+                inspection.append(inspectionList,inspectionStatus,exportInspection,exportBundle,
                   field('Previously downloaded human inspection worklist (local JSON only)',importInspection),
                   restoreInspection,restoreStatus);
                 compareResult.appendChild(inspection);
@@ -615,6 +659,32 @@
                     });
                   compareResult.appendChild(followups);
                 }
+                // Importing a bundle is one explicit action: compare the saved
+                // packet against a fresh authenticated read, then restore only
+                // exact-matching inspection marks. Drift remains visible even
+                // when marks are refused; nothing is uploaded or authorized.
+                if(bundledInspection){
+                  try{
+                    const digest=await handoffInspectionSnapshotDigest(saved,latest);
+                    if(generation!==detailGeneration||choice.value!==p.project_id||
+                      requestSequence!==comparisonSequence||!compareResult.contains(inspection))return;
+                    const keys=restoreHandoffInspectionKeys(bundledInspection,saved,latest,digest);
+                    const allowed=new Set(keys);
+                    inspected.clear();
+                    inspectionChecksByKey.forEach((check,key)=>{
+                      check.checked=allowed.has(key);
+                      if(check.checked)inspected.add(key);
+                    });
+                    updateInspectionStatus();
+                    restoreStatus.textContent='Resumed '+inspected.size+
+                      ' local inspection marks from one review bundle after a fresh comparison. No approvals were restored.';
+                  }catch(e){
+                    if(generation===detailGeneration&&choice.value===p.project_id&&
+                      requestSequence===comparisonSequence&&compareResult.contains(inspection))
+                      restoreStatus.textContent='Bundle inspection marks not restored: '+
+                        e.message+' Review changed areas and inspect again.';
+                  }
+                }
               }catch(e){
                 if(generation===detailGeneration&&choice.value===p.project_id&&artifact.contains(compareResult)&&requestSequence===comparisonSequence)
                   compareResult.textContent='Could not compare review packet: '+(e instanceof SyntaxError?'Invalid JSON.':e.message);
@@ -625,7 +695,7 @@
             };
             actions.append(reportsAction,sourceAction,downloadPacket);
             const packetImport=el('section');packetImport.append(
-              field('Previously downloaded review packet (local JSON only)',priorPacket),
+              field('Previously downloaded review packet or resumable review bundle (local JSON only)',priorPacket),
               comparePacket,compareResult);
             artifact.append(review,actions,packetImport);
             if(!p.idea_revision_is_current)artifact.appendChild(el('p',
