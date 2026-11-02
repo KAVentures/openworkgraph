@@ -32,6 +32,8 @@ _EXPECTED = frozenset({"human_review_recorded", "source_state_rechecked", "opera
 def _valid_goal_outcome_pair(goal: str, outcome: str) -> bool:
     # Existing combinations remain backward compatible.
     return outcome != "stripe_invoice_paid_reported" or goal == "verify_operation"
+
+
 _FILENAME = ".open_work_case_declarations.sqlite3"
 _MAX_ITEMS = 50
 _MAX_DEPENDENCIES = 8
