@@ -430,6 +430,13 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    const changedPacket=JSON.parse(await fs.readFile(await changedDownload.path(),'utf8'));
    assert.equal(changedPacket.process.status,'changed');
    assert(changedPacket.readiness.blockers.includes('process_not_current'));
+   await page.locator('#owgPipelineJourneyPriorPacket').setInputFiles({
+     name:'original-review.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(handoffPacket))
+   });
+   await page.locator('#owgPipelineJourneyComparePacket').click();
+   await page.locator('#owgPipelineJourneyCompareResult').getByText(/Recorded fields changed since the saved packet/).waitFor();
+   assert((await page.locator('#owgPipelineJourneyCompareResult').textContent()).includes('Saved process availability'));
+
 
    assert(await guide.locator('#owgPipelineJourneyOpenProcess').isEnabled());
    page.once('dialog',dialog=>dialog.accept());
@@ -458,6 +465,13 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    const deletedPacket=JSON.parse(await fs.readFile(await deletedDownload.path(),'utf8'));
    assert.equal(deletedPacket.process.status,'unavailable');
    assert(deletedPacket.readiness.blockers.includes('process_not_current'));
+   await page.locator('#owgPipelineJourneyPriorPacket').setInputFiles({
+     name:'original-review.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(handoffPacket))
+   });
+   await page.locator('#owgPipelineJourneyComparePacket').click();
+   await page.locator('#owgPipelineJourneyCompareResult').getByText(/Recorded fields changed since the saved packet/).waitFor();
+   assert.equal(guidedWrites,writesBeforePacket,'read-only comparison after source deletion must not write');
+
 
    assert(await page.getByRole('button',{name:'Open linked saved process',exact:true}).isDisabled());
    await page.setViewportSize({width:390,height:844});
