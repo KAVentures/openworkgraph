@@ -262,3 +262,58 @@ def test_second_check_transitions_both_cases_and_no_new_permissions(local, monke
         assert data["business_objective_verified"] is False
         assert data["agent_caused_outcome_verified"] is False
         assert data["source_write_performed"] is False
+
+
+def test_second_insert_failure_rolls_back_first_checked_case(local, monkeypatch):
+    """A late SQLite write failure must not leave a half-recorded dependency batch."""
+    with TestClient(app) as client:
+        headers = _auth()
+        a, b, links = _setup(client, headers, monkeypatch)
+        monkeypatch.setattr(routes, "source_operation_receipt", _paid)
+        original = ledger._insert
+        calls = []
+        def fail_second(db, row):
+            calls.append(row["work_item_ref"])
+            if len(calls) == 2:
+                raise sqlite3.OperationalError("synthetic second insert failure")
+            return original(db, row)
+        monkeypatch.setattr(ledger, "_insert", fail_second)
+        rejected = _batch(client, headers, a, links)
+        assert rejected.status_code == 409, rejected.text
+        assert calls == [B, A]
+        with sqlite3.connect(ledger._path()) as db:
+            assert db.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] == 0
+
+
+def test_tampered_later_dependency_history_blocks_all_source_reads(local, monkeypatch):
+    """Even the last selected case's HMAC history is admitted before provider I/O."""
+    with TestClient(app) as client:
+        headers = _auth()
+        a, b, links = _setup(client, headers, monkeypatch)
+        monkeypatch.setattr(routes, "source_operation_receipt", _paid)
+        first = client.post(SINGLE, headers=headers, json={
+            **_cas(a), "confirm_source_verification": True, "record_link": links[1],
+        })
+        assert first.status_code == 200, first.text
+        with sqlite3.connect(ledger._path()) as db:
+            db.execute("UPDATE evidence SET provider_state='unknown' WHERE work_item_ref=?", (A,))
+        monkeypatch.setattr(routes, "source_operation_receipt",
+                            lambda *_: pytest.fail("tampered final case must block first Stripe read"))
+        result = _batch(client, headers, a, links)
+        assert result.status_code in (403, 409, 422)
+
+
+def test_account_change_after_first_read_prevents_second_source_read(local, monkeypatch):
+    with TestClient(app) as client:
+        headers = _auth()
+        a, b, links = _setup(client, headers, monkeypatch)
+        reads = []
+        def switch(ref, op):
+            reads.append(ref)
+            local["id"] = "acct_CHANGED"
+            return _paid(ref, op)
+        monkeypatch.setattr(routes, "source_operation_receipt", switch)
+        rejected = _batch(client, headers, a, links)
+        assert rejected.status_code in (403, 409, 422)
+        assert reads == [RB]
+        assert not ledger._path().exists()
