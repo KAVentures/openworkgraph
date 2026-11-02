@@ -32,14 +32,14 @@ event-log routes; `Authorization: OWG-Session <local-session>`):
 
 ## Activity-specific metrics (same case, different event types)
 
-An optional exact \`activity\` field limits a statistic to events with that
+An optional exact `activity` field limits a statistic to events with that
 activity *within each already-selected full case*. This is useful for asking
-how much was recorded at \`Pay\` versus \`Refund\` without blending amounts
+how much was recorded at `Pay` versus `Refund` without blending amounts
 from unrelated events in the same case. For example, two typed metrics can be
-subtracted with the existing \`arithmetic\` operation (only when declared units
+subtracted with the existing `arithmetic` operation (only when declared units
 match):
 
-\`\`\`json
+```json
 {
   "level": "cases",
   "metrics": [
@@ -55,27 +55,27 @@ match):
   ],
   "measures": [{"fn": "sum", "of": "metric:difference"}]
 }
-\`\`\`
+```
 
 This example sums **differences of per-case average values** only for cases
 with usable Pay *and* Refund values. It is not a financial ledger total,
 net revenue, currency conversion or evidence of complete payment capture.
 For a case with no matching activity, the statistic is **null**, never zero,
-even under \`missing_policy=complete\`. For \`complete\`, every event row
+even under `missing_policy=complete`. For `complete`, every event row
 *matching that activity* must have a finite numeric value; unrelated case
 events are not required to carry that attribute. Missing/invalid/nonfinite
 matching values remain disclosed. The activity string is an exact,
 case-sensitive bound parameter (not an SQL expression or substring).
 
-The existing counts-only \`cases_without_matching_activity\` field identifies
+The existing counts-only `cases_without_matching_activity` field identifies
 selected cases with no matching activity (zero for unfiltered metrics).
-\`cases_with_no_finite_attribute\` includes both cases with only invalid
+`cases_with_no_finite_attribute` includes both cases with only invalid
 matching rows and cases with no matching activity.
-\`flattened_case_event_rows_considered\` and the finite/omitted row counts
-refer **only to matching activity rows** when \`activity\` is specified.
-\`coverage_scope\` changes to
-\`selected_full_cases_matching_activity_flattened_case_event_rows\` in this
-mode. Omit \`activity\` for the unchanged all-activity behavior.
+`flattened_case_event_rows_considered` and the finite/omitted row counts
+refer **only to matching activity rows** when `activity` is specified.
+`coverage_scope` changes to
+`selected_full_cases_matching_activity_flattened_case_event_rows` in this
+mode. Omit `activity` for the unchanged all-activity behavior.
 Saved analyses and reusable metric templates retain the exact selector.
 
 `statistic` must be `average`, `minimum`, `maximum`, `median`, or `p90`.
@@ -83,9 +83,10 @@ Saved analyses and reusable metric templates retain the exact selector.
 
 - **available:** use finite numeric values actually present in each case;
   a case with none returns null. This may produce partial-case values.
-- **complete:** withhold a case's statistic unless *every flattened event row*
-  in that case has a finite numeric value for the chosen attribute. It does
-  not assert that the original source system exported all its events.
+- **complete:** withhold a case's statistic unless *every matching flattened event row*
+  in that case has a finite numeric value for the chosen attribute (all rows
+  when no `activity` is specified). It does not assert that the original
+  source system exported all its events.
 
 For `median` and `p90`, DuckDB computes the **continuous interpolated quantile**
 within each case's observed finite numeric values: the sorted values at
