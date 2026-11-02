@@ -30,7 +30,7 @@ def require_declared_payment_goal(admitted: dict[str, Any]) -> str:
     ):
         raise CaseDeclarationError("reviewed case has no matching source-verifiable payment goal")
     ref = admitted.get("work_item_ref")
-    if not isinstance(ref, str) or owner.get("work_item_ref") != ref:
+    if not isinstance(ref, str) or not ref.startswith("owg:w:"):
         raise CaseDeclarationError("conflicting reviewed source goal identity")
     return ref
 
