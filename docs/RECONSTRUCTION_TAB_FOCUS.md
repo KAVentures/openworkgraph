@@ -45,15 +45,18 @@ app/source, tainted identity and clipboard actions cause abstention.
 ### Interruption-aware nominally single-record tabs
 
 A tab showing only exact record A is not proof that all later unreferenced
-activity belongs to A. When a different exact record B is observed in the
-**same complete capture scope** between the loose event and either nearest
-same-tab A anchor, OWG now withholds the old one-sided
+activity belongs to A. When an **independent** exact-record component B is
+observed in a **different explicitly identified tab and the same complete
+capture scope** between the loose event and either nearest same-tab A anchor,
+OWG now withholds the old one-sided
 `same_tab_single_record` attachment. A bounded, strictly ordered
 `A (tab T) → loose (tab T) → B (tab U) → A (tab T)` span can still
 recover the loose event through two independent A anchors, with a weaker
 `same_tab_single_record_interleaved_bracketed` basis and confidence 0.66.
 A → B → loose with no observed return to A remains unassigned. Foreign B
-is never linked to A merely by switching tabs.
+is never linked to A merely by switching tabs. A source-confirmed clipboard transfer that already joins
+A and B does not count as a competing component; an unknown/tabless record
+does not masquerade as an explicitly identified other tab.
 
 The read-only response exposes
 `observed_single_record_interleaved_focus_links` and
