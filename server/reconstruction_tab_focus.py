@@ -83,6 +83,7 @@ def bracketed_multiplexed_tab_focus(
         loose_ids: list[str] = []
         foreign_count = 0
         cross_app_count = 0
+        unreferenced_app_count = 0
         previous = left
         for next_index in range(index + 1, min(count, index + _MAX_SCAN_SPAN + 1)):
             row = ordered_rows[next_index]
@@ -122,13 +123,37 @@ def bracketed_multiplexed_tab_focus(
                 if foreign_count > _MAX_FOREIGN_TAB_SPAN:
                     break
                 continue
+            # A visible switch to another *named* app is an observed
+            # interruption even when its business record is unknown. It is
+            # never a positive case witness. Require the same complete scope,
+            # trusted capture and a subsequent exact A anchor before using
+            # either side's loose browser observations.
+            if (cross_app_components is not None
+                    and not row["ref"] and not row["tab"]
+                    and row["app"] not in ("", "unknown", "other", "other app", "unknown app")
+                    and row["app"] != left["app"]
+                    and row["source"] not in ("", "unknown")
+                    and row["scope"] == left["scope"]
+                    and _complete_scope(row["scope"])
+                    and not row["reference_tainted"]
+                    and not row["ephemeral_claim_tainted"]
+                    and not row["action_claim_malformed"]
+                    and not row["transfer"]
+                    and row["action"] not in ("copy", "paste")):
+                foreign_count += 1
+                unreferenced_app_count += 1
+                if foreign_count > _MAX_FOREIGN_TAB_SPAN:
+                    break
+                continue
             if loose_ids and _same_anchor(row, left):
                 # A concurrent-tab focus is weaker than a globally consecutive
                 # span, and an explicit transfer at either anchor makes the
                 # interleaved attribution ambiguous.
                 if foreign_count and (left["transfer"] or row["transfer"]):
                     break
-                basis = ("same_tab_cross_app_interleaved_bracketed_record" if cross_app_count
+                basis = ("same_tab_unreferenced_app_interleaved_bracketed_record"
+                         if unreferenced_app_count else
+                         "same_tab_cross_app_interleaved_bracketed_record" if cross_app_count
                          else "same_tab_interleaved_bracketed_record" if foreign_count
                          else "same_tab_bracketed_record")
                 proposals.extend((left["event_id"], loose_id, left["ref"], basis)
@@ -168,11 +193,32 @@ def single_record_tab_foreign_case_boundaries(
     component_same_app_positions: dict[
         tuple[tuple[str, str, str, str], str, str], list[int]
     ] = defaultdict(list)
+    # Unreferenced, named cross-app activity is negative focus evidence,
+    # never a claim about which business record was active. Keep a separate
+    # indexed stream so a single-record tab cannot absorb post-switch clicks.
+    unreferenced_app_positions: dict[tuple[str, str, str, str], list[int]] = defaultdict(list)
+    same_unreferenced_app_positions: dict[
+        tuple[tuple[str, str, str, str], str], list[int]
+    ] = defaultdict(list)
+    tied_unreferenced_apps: dict[
+        tuple[tuple[str, str, str, str], str], set[str]
+    ] = defaultdict(set)
     tied_components: dict[
         tuple[tuple[str, str, str, str], str], set[tuple[str, str, str]]
     ] = defaultdict(set)
     for position, row in enumerate(ordered_rows):
         scope = row["scope"]
+        if (not row["ref"] and not row["tab"] and not row["transfer"]
+                and _complete_scope(scope)
+                and row["app"] not in ("", "unknown", "other", "other app", "unknown app")
+                and row["source"] not in ("", "unknown")
+                and not row["reference_tainted"]
+                and not row["ephemeral_claim_tainted"]
+                and not row["action_claim_malformed"]
+                and row["action"] not in ("copy", "paste")):
+            unreferenced_app_positions[scope].append(position)
+            same_unreferenced_app_positions[(scope, row["app"])].append(position)
+            tied_unreferenced_apps[(scope, row["observed_at"])].add(row["app"])
         if not (row["ref"] and not row["reference_tainted"]
                 and _complete_scope(scope)):
             continue
@@ -208,7 +254,12 @@ def single_record_tab_foreign_case_boundaries(
         own_other_app = (between(component_app_positions[(scope, component)], left, right)
                          - between(component_same_app_positions[(scope, component, app)],
                                    left, right))
-        return all_other_app > own_other_app
+        if all_other_app > own_other_app:
+            return True
+        # Unknown-record activity in another named app is still an observed
+        # focus interruption. It does not establish an independent B case.
+        return (between(unreferenced_app_positions[scope], left, right)
+                > between(same_unreferenced_app_positions[(scope, app)], left, right))
 
     withheld: set[str] = set()
     for (scope, _tab), tab_rows in by_tab.items():
@@ -234,6 +285,12 @@ def single_record_tab_foreign_case_boundaries(
             # Treat foreign record ties at either anchor or the loose step as
             # an unresolved interruption regardless of sort order.
             tied_foreign = any(
+                other_app != anchor_app
+                for p in (left, position, right) if p is not None
+                for other_app in tied_unreferenced_apps.get(
+                    (scope, ordered_rows[p]["observed_at"]), set()
+                )
+            ) or any(
                 component != anchor_component
                 and ((tab and tab != row["tab"])
                      or (app not in ("", "unknown", "other") and app != anchor_app))
