@@ -57,6 +57,16 @@ const path=require('node:path');
    await page.locator('#owgEventLogAnalyze').click();
    const qualityPayload=await (await qualityResponsePromise).json();
    await page.locator('#owgEventLogResults h3',{hasText:'Most common variants'}).waitFor();
+   const [coverageResponse]=await Promise.all([page.waitForResponse(r=>r.url().includes('/variant-coverage')),page.locator('#owgVariantCoverageRun').click()]);
+   const coverageResult=await coverageResponse.json();
+   assert.equal(coverageResult.cases,60);
+   assert.equal(coverageResult.displayed_variants.at(-1).cumulative_cases,60);
+   const coverageBox=page.locator('#owgVariantCoverageRun').locator('..');
+   await coverageBox.getByText('Target case coverage').waitFor();
+   const [coverageJson]=await Promise.all([page.waitForEvent('download'),page.locator('#owgVariantCoverageJson').click()]);
+   const coveragePacket=JSON.parse(await fs.readFile(await coverageJson.path(),'utf8'));
+   assert.deepEqual(coveragePacket.coverage_targets,coverageResult.coverage_targets);
+
    assert.match(await page.locator('#owgEventLogResults').textContent(),/Receive → Check → Approve → Close/);
    await page.locator('#owgQuality summary').click();
    await page.locator('#owgQualityResults table').first().waitFor();
