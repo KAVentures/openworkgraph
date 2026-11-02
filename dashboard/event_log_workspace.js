@@ -2035,6 +2035,7 @@
       const discard=button('Discard kept rows','secondary');discard.id='owgQuarantineDiscard';
       const message=el('div',null,'muted');message.id='owgQuarantineStatus';message.setAttribute('role','status');
       let reviewed=null;
+      let previewGeneration=0;
       preview.disabled=discard.disabled=!r.rows_kept;
       release.disabled=true;
       const row=el('div',null,'row');row.style.alignItems='end';
@@ -2047,10 +2048,11 @@
         ...(r.decisions.length?[table(['Decision','When','Result'],r.decisions.map(d=>[d.kind==='release'?'Released with offset '+d.naive_timestamp_offset:'Discarded',d.decided_at.slice(0,16).replace('T',' ')+' UTC',
           d.kind==='release'?d.rows_released+' of '+d.rows_considered+' rows released, '+(d.events_added||0)+' events added, '+(d.duplicates_skipped||0)+' already in the log':d.rows_discarded+' rows discarded']))]:[]));
       offset.addEventListener('input',()=>{
-        reviewed=null;release.disabled=true;
+        previewGeneration++;reviewed=null;release.disabled=true;
         message.textContent='Offset changed. Preview again before releasing.';
       });
       preview.onclick=async()=>{
+        const requestId=++previewGeneration;
         reviewed=null;release.disabled=true;
         const chosen=offset.value.trim();
         message.textContent='Checking retained rows without changing the log…';
@@ -2058,19 +2060,23 @@
           const result=await (await api(base+'/preview',{method:'POST',
             headers:{'Content-Type':'application/json'},
             body:JSON.stringify({naive_timestamp_offset:chosen})})).json();
-          if(generation!==state.generation||offset.value.trim()!==chosen)return;
+          if(generation!==state.generation||requestId!==previewGeneration||offset.value.trim()!==chosen)return;
+          if(result.naive_timestamp_offset!==chosen){
+            message.textContent='Offset was normalized to '+result.naive_timestamp_offset+'. Enter that offset and preview again.';
+            return;
+          }
           reviewed=result;
           release.disabled=!(Number.isSafeInteger(result.rows_eligible)&&result.rows_eligible>0);
           message.textContent='Preview: '+result.rows_eligible+' of '+result.rows_considered+
             ' retained rows parseable with UTC'+result.naive_timestamp_offset+'; '+
             result.rows_still_rejected+' remain rejected. No rows changed. '+
             'Duplicate skipping may reduce the number of events added. Release is a separate decision.';
-        }catch(error){if(generation===state.generation)message.textContent=error.message;}
+        }catch(error){if(generation===state.generation&&requestId===previewGeneration)message.textContent=error.message;}
       };
       release.onclick=async()=>{
         if(!reviewed||release.disabled||generation!==state.generation)return;
         const selected=reviewed;
-        reviewed=null;release.disabled=true;
+        previewGeneration++;reviewed=null;release.disabled=true;
         try{
           const result=await (await api(base+'/release',{method:'POST',
             headers:{'Content-Type':'application/json'},
@@ -2083,7 +2089,7 @@
         }catch(error){if(generation===state.generation)message.textContent=error.message+' Preview again before releasing.';}
       };
       discard.onclick=async()=>{
-        reviewed=null;release.disabled=true;
+        previewGeneration++;reviewed=null;release.disabled=true;
         try{
           const result=await (await api(base+'/discard',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).json();
           await analyse();status('Discarded '+result.decision.rows_discarded+' kept rows.');
