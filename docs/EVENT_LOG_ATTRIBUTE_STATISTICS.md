@@ -502,3 +502,56 @@ CSV, exercises keyboard activation and the authenticated API, checks signed
 output, unknown-case coverage, atomic refusals, saved replay, CSV and WCAG.
 Native exact-head CI and independent consenting-user acceptance are still
 separate release gates.
+
+
+## One-action selected activity contribution to the whole-case total (dashboard)
+
+In **Build an analysis → Case metrics**, select **Numeric event values within
+each case or stage**, enter the exact retained numeric event attribute and its
+declared unit, and choose **Total** as the within-case statistic. Under
+**Only this activity**, select one exact activity. Leave both stage boundaries
+empty. Choose **Use available finite values** or **Require every matching event
+to have a finite value** deliberately, then activate **Compare selected activity
+with whole-case total (3 metrics)** using mouse or keyboard.
+
+The action atomically adds three ordinary version-1 case metrics:
+
+- `<base>_selected`: the selected activity's finite numeric total per case;
+- `<base>_all`: the whole case's total for the *same* attribute, declared
+  unit and missing-value policy, without an activity filter;
+- `<base>_fraction`: typed `divide(selected, all)`, in dimensionless
+  **ratio** units.
+
+The analysis switches to **Cases** and selects **Average
+`<base>_fraction`** across cases with a known fraction. The three definitions
+are ordinary metrics supported by the existing authenticated REST analysis
+contract, saved analysis replay, coverage reporting and JSON/CSV exports.
+There is no new provider access, permission, data transformation, source write
+or automatic action.
+
+For example, case A records 110 EUR on `Start` and 14 EUR on `Work`.
+With `Work` selected, the numerator is 14 EUR and the whole-case observed
+total is 124 EUR, so the ratio is **14/124 ≈ 0.1129**. Case B has a finite
+`Start` amount but an invalid `Work` value: its selected total is unknown,
+so its fraction is unknown, **not zero**. A zero whole-case denominator is
+also unknown, not infinity or a zero share. The strict complete-value policy
+may withhold a case when any matching whole-case event has an invalid or
+missing numeric value.
+
+**Interpretation limits:** The ratio is *not* automatically a verified
+percentage, revenue share or completeness estimate. Negative or mixed-sign
+recorded amounts can yield ratios outside 0–1. The `available` policy uses
+only finite retained values and may omit invalid/missing observations; the
+`complete` policy refuses incomplete matching sets. Inspect the API's
+per-metric missing-value coverage before interpreting the outer average.
+Declared units are not converted, and selected activities must have been
+observed in the imported log.
+
+The action refuses non-`total` statistics, missing activity selection,
+stage bounds, base names longer than 31 characters, name collisions and fewer
+than three free metric slots, **without partially adding metrics**. Its
+committed real-Chromium acceptance covers actual numeric CSV import,
+keyboard activation, authenticated analysis, ratio and missing-case coverage,
+atomic refusals, saved replay, CSV export and the existing WCAG audit.
+Source-level JavaScript checks are distinct from native Chromium and pytest;
+the latter and independent consenting-user acceptance remain release gates.
