@@ -11,7 +11,8 @@ import sys
 import pytest
 
 from server.reconstruction_review_overlay import (
-    DECISION_FORMAT, apply_review, prepare_review_packet, score_review,
+    ADJUDICATION_FORMAT, DECISION_FORMAT, adjudicate_review,
+    apply_review, prepare_review_packet, score_review,
 )
 from server.work_item_links import linked_work_items
 
@@ -515,3 +516,168 @@ def test_batch_cli_replays_complete_private_sessions_and_refuses_stale_manifest(
         assert run("score-batch", "--manifest", str(manifest),
                    "--output", str(refused_output)).returncode == 2
         assert not refused_output.exists()
+
+
+def test_two_reviewer_consensus_only_promotes_identical_human_choices():
+    events = _events()
+    before = linked_work_items(events)
+    packet = prepare_review_packet(events)
+    candidate = packet["eligible_candidates"][0]
+    first_item, second_item = [x["item_id"] for x in candidate["candidate_items"]]
+    left = _decision(packet, "e03", first_item, "confirm")
+    right = _decision(packet, "e03", second_item, "confirm")
+    disputed = adjudicate_review(events, packet, left, right)
+    assert disputed["format"] == ADJUDICATION_FORMAT
+    assert disputed["consensus_decisions"]["decisions"] == []
+    assert disputed["unresolved_event_ids"] == ["e03"]
+    assert disputed["reviewer_independence_verified"] is False
+    overlay = apply_review(events, packet, disputed)
+    assert overlay["human_confirmed_count"] == 0
+    assert overlay["unresolved_reviewer_disagreement_count"] == 1
+    assert overlay["review_decision_provenance"] == "two_reviewer_consensus"
+    assert "e03" in overlay["unassigned_event_ids"]
+
+    agreed = adjudicate_review(events, packet, left, copy.deepcopy(left))
+    assert agreed["consensus_confirmed_count"] == 1
+    assert agreed["unresolved_event_ids"] == []
+    confirmed = apply_review(events, packet, agreed)
+    assert confirmed["human_confirmed_count"] == 1
+    assert confirmed["human_confirmed_direct_count"] == 1
+    assert confirmed["canonical_membership_unchanged"] is True
+    assert confirmed["authorizes_business_action"] is False
+    assert linked_work_items(events) == before
+    one_sided = adjudicate_review(
+        events, packet, left,
+        {"format": DECISION_FORMAT, "evidence_sha256": packet["evidence_sha256"],
+         "decisions": []},
+    )
+    assert one_sided["unresolved_event_ids"] == ["e03"]
+    assert apply_review(events, packet, one_sided)["human_confirmed_count"] == 0
+    for artifact in (agreed, disputed):
+        output = json.dumps(artifact)
+        for forbidden in ("PRIVATE", "SECRET", "private.example", "/medical-notes"):
+            assert forbidden not in output
+
+
+def test_adjudication_rejects_tampering_revocation_and_unsupported_choices():
+    events = _events()
+    packet = prepare_review_packet(events)
+    target = packet["eligible_candidates"][0]["candidate_items"][0]["item_id"]
+    left = _decision(packet, "e03", target, "confirm")
+    agreed = adjudicate_review(events, packet, left, copy.deepcopy(left))
+    for mutation in (
+        {"consensus_confirmed_count": 2},
+        {"unresolved_event_ids": ["e03"]},
+        {"consensus_decisions": {**agreed["consensus_decisions"], "decisions": []}},
+        {"reviewer_independence_verified": True},
+        {"extra_permission": True},
+    ):
+        forged = {**agreed, **mutation}
+        with pytest.raises(ValueError):
+            apply_review(events, packet, forged)
+    altered = copy.deepcopy(events)
+    altered[2]["metadata"]["target"]["label"] = "PRIVATE-REVOKED"
+    with pytest.raises(ValueError, match="stale|altered"):
+        apply_review(altered, packet, agreed)
+    with pytest.raises(ValueError):
+        adjudicate_review(events, packet, left, _decision(packet, "e01", target, "confirm"))
+    with pytest.raises(ValueError):
+        adjudicate_review(events, packet, left, {**left, "decisions": left["decisions"] * 2})
+
+
+def test_adjudicated_two_hop_and_scoring_preserve_uncertain_intermediary():
+    events = _fragment_events()
+    packet = prepare_review_packet(events)
+    fragment = next(x for x in packet["eligible_candidates"] if x["evidence_hops"] == 2)
+    target = fragment["candidate_items"][0]["item_id"]
+    left = _decision(packet, fragment["event_id"], target, "confirm")
+    artifact = adjudicate_review(events, packet, left, copy.deepcopy(left))
+    overlay = apply_review(events, packet, artifact)
+    middle = fragment["candidate_items"][0]["witness_event_path"][1]
+    assert fragment["event_id"] not in overlay["unassigned_event_ids"]
+    assert middle in overlay["unassigned_event_ids"]
+    assert overlay["human_confirmed_two_hop_count"] == 1
+    truth = {
+        "workflows": [{"event_ids": ["e01", "e02", "e04"]}],
+        "noise_event_ids": ["e03", "e05"],
+    }
+    report = score_review(events, packet, artifact, truth)
+    assert report["review_decision_provenance"] == "two_reviewer_consensus"
+    assert report["automatic_model_improvement_claim"] is False
+    # A reviewer may not confirm the loose fragment while explicitly
+    # rejecting its required intermediary-to-item candidate.
+    direct = next(x for x in packet["eligible_candidates"] if x["event_id"] == middle)
+    conflicting = copy.deepcopy(left)
+    conflicting["decisions"].append({
+        "event_id": middle, "item_id": direct["candidate_items"][0]["item_id"],
+        "action": "reject",
+    })
+    with pytest.raises(ValueError, match="conflicting human decisions"):
+        adjudicate_review(events, packet, conflicting, copy.deepcopy(left))
+
+
+def test_adjudicate_cli_to_apply_score_and_batch_replays_exact_reviewers(tmp_path: Path):
+    root = Path(__file__).resolve().parents[1]
+    def run(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, "-m", "scripts.reconstruction_review", *args],
+            cwd=root, capture_output=True, text=True, timeout=40,
+        )
+    manifest_sessions = []
+    for index in range(2):
+        events, packet, _single, truth = _batch_session(f"adjudication-{index}")
+        target = next(
+            x["item_id"] for x in packet["eligible_candidates"]
+            if x["event_id"] == "e03"
+            for x in x["candidate_items"]
+        )
+        reviewer = _decision(packet, "e03", target, "confirm")
+        paths = {}
+        for name, document in (
+            ("events", events), ("packet", packet), ("reviewer-a", reviewer),
+            ("reviewer-b", copy.deepcopy(reviewer)), ("truth", truth),
+        ):
+            p = tmp_path / f"{index}-{name}.json"
+            p.write_text(json.dumps(document))
+            paths[name] = str(p)
+        artifact = tmp_path / f"{index}-adjudicated.json"
+        result = run(
+            "adjudicate", "--events", paths["events"], "--packet", paths["packet"],
+            "--reviewer-a", paths["reviewer-a"], "--reviewer-b", paths["reviewer-b"],
+            "--output", str(artifact),
+        )
+        assert result.returncode == 0, result.stderr
+        assert json.loads(artifact.read_text())["consensus_confirmed_count"] == 1
+        overlay = tmp_path / f"{index}-overlay.json"
+        assert run("apply", "--events", paths["events"], "--packet", paths["packet"],
+                   "--decisions", str(artifact), "--output", str(overlay)).returncode == 0
+        assert json.loads(overlay.read_text())["review_decision_provenance"] == (
+            "two_reviewer_consensus"
+        )
+        manifest_sessions.append({
+            "events": paths["events"], "packet": paths["packet"],
+            "decisions": str(artifact), "truth": paths["truth"],
+        })
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({
+        "format": "openworkgraph.reconstruction-review-manifest.v1",
+        "sessions": manifest_sessions,
+    }))
+    report_path = tmp_path / "batch-adjudicated.json"
+    result = run("score-batch", "--manifest", str(manifest),
+                 "--output", str(report_path))
+    assert result.returncode == 0, result.stderr
+    report = json.loads(report_path.read_text())
+    assert report["two_reviewer_consensus_session_count"] == 2
+    assert report["unresolved_reviewer_disagreement_count"] == 0
+    assert "PRIVATE" not in report_path.read_text()
+    if os.name != "nt":
+        assert report_path.stat().st_mode & 0o077 == 0
+    # Tampering with the portable adjudication file must fail before output.
+    altered = json.loads(Path(manifest_sessions[1]["decisions"]).read_text())
+    altered["consensus_confirmed_count"] = 2
+    Path(manifest_sessions[1]["decisions"]).write_text(json.dumps(altered))
+    refused = tmp_path / "refused-batch.json"
+    assert run("score-batch", "--manifest", str(manifest),
+               "--output", str(refused)).returncode == 2
+    assert not refused.exists()
