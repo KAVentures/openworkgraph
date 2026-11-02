@@ -128,9 +128,11 @@
       sha(packet.source_check_exports.last_document_sha256);
     const rows=[];
     const add=(id,label,status,basis,note,depends_on=[])=>{
-      const affected_by=depends_on.filter(dep=>rows.find(row=>row.id===dep)?.status!=='locally_current'&&
-        rows.find(row=>row.id===dep)?.status!=='human_review_recorded'&&
-        rows.find(row=>row.id===dep)?.status!=='artifact_recorded');
+      const affected_by=[...new Set(depends_on.flatMap(dep=>{
+        const prior=rows.find(row=>row.id===dep);
+        if(!prior)throw new Error('Dependency review stage order is invalid.');
+        return [...prior.affected_by,...(['locally_current','human_review_recorded','artifact_recorded'].includes(prior.status)?[]:[dep])];
+      }))];
       rows.push({id,label,status,basis,note,depends_on,affected_by});
     };
     add('dataset','Dataset / cohort origin',
