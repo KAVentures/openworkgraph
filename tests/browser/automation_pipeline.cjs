@@ -241,6 +241,40 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    assert.equal(guidedWrites,writesBeforePacket,'review packet must not write or read a provider');
    assert(!JSON.stringify(handoffPacket).includes('PRIVATE_RAW_CASE_VALUE'));
    assert(!JSON.stringify(handoffPacket).includes('owg:r:'));
+   // Importing a local review packet performs a fresh session-authenticated
+   // journey read and compares identities; it never restores approval.
+   const priorPacket=page.locator('#owgPipelineJourneyPriorPacket');
+   const setPacket=async packet=>priorPacket.setInputFiles({
+     name:'prior-handoff-review.json',mimeType:'application/json',
+     buffer:Buffer.from(JSON.stringify(packet))
+   });
+   await setPacket(handoffPacket);
+   const [comparisonResponse]=await Promise.all([
+     page.waitForResponse(r=>r.url().endsWith('/'+linked.idea_id+'/journey')&&r.request().method()==='GET'),
+     page.locator('#owgPipelineJourneyComparePacket').click()
+   ]);
+   assert.equal(comparisonResponse.status(),200);
+   await page.locator('#owgPipelineJourneyCompareResult').getByText(/Recorded fields match the current local references/).waitFor();
+   assert.equal(guidedWrites,writesBeforePacket,'local packet comparison must not write');
+   const alteredPacket=JSON.parse(JSON.stringify(handoffPacket));
+   alteredPacket.process.status='changed';
+   alteredPacket.project.spec_sha256='a'.repeat(64);
+   await setPacket(alteredPacket);
+   await page.locator('#owgPipelineJourneyComparePacket').click();
+   await page.locator('#owgPipelineJourneyCompareResult').getByText(/Recorded fields changed since the saved packet/).waitFor();
+   const comparisonText=await page.locator('#owgPipelineJourneyCompareResult').textContent();
+   assert(comparisonText.includes('Saved process availability'));
+   assert(comparisonText.includes('Project revision and artifact hashes'));
+   const wrongPacket=JSON.parse(JSON.stringify(handoffPacket));
+   wrongPacket.project.project_id='unrelated-project';
+   await setPacket(wrongPacket);
+   await page.locator('#owgPipelineJourneyComparePacket').click();
+   await page.locator('#owgPipelineJourneyCompareResult').getByText(/belongs to another idea or project/).waitFor();
+   await priorPacket.setInputFiles({name:'huge.json',mimeType:'application/json',buffer:Buffer.alloc(65537,32)});
+   await page.locator('#owgPipelineJourneyComparePacket').click();
+   await page.locator('#owgPipelineJourneyCompareResult').getByText(/no larger than 64 KiB/).waitFor();
+   await setPacket(handoffPacket);
+   assert.equal(guidedWrites,writesBeforePacket,'invalid packets must not write or upload');
    // A different selected project must not inherit the first project's hashes.
    const secondPacket=await page.evaluate((packet)=>{
      const model=window.__owgPipelineModel;
