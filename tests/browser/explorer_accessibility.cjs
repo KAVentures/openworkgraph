@@ -45,6 +45,86 @@ const path=require('node:path');
    await page.keyboard.press('Enter');
    await page.locator('#owgExplorerStepInfo').filter({hasText:/step/i}).waitFor();
    await audit(page,'#owgWorkflowExplorer','Explorer with selected variant step');
+   // Functional variant comparison: exact structural alignment is a user-triggered
+   // view, never a substitute for source inspection or reviewed approval.
+   await page.evaluate(()=>{
+     window.owgWorkflowExplorer.showReviewedGroup({
+       label:'Compared synthetic workflow',workflow_id:'compared_fixture',revision:2,
+       bundle:{
+         selector:{execution_ids:['execution:compare_left','execution:compare_right'],selected_execution_count:2},
+         structural_alignment:{structural_sequence_variants:[{exact_variants:[
+           {readable_steps:['Open case','Review case','Close case'],
+            structural_steps:['action:open','action:review','action:close'],
+            execution_count:3,execution_ids:['execution:compare_left']},
+           {readable_steps:['Open case','<img src=x onerror=alert(1)>','Close case'],
+            structural_steps:['action:open','action:escalate','action:close'],
+            execution_count:2,execution_ids:['execution:compare_right']}
+         ]}]}
+       }
+     });
+   });
+   const compareA=page.locator('#owgExplorerCompareA');
+   const compareB=page.locator('#owgExplorerCompareB');
+   const compare=page.getByRole('button',{name:'Compare observed variants',exact:true});
+   assert.equal(await compareA.inputValue(),'0');
+   assert.equal(await compareB.inputValue(),'1');
+   const readsBeforeCompare=evidenceReads;
+   await compare.focus();await page.keyboard.press('Enter');
+   const compareRows=page.locator('#owgExplorerCompareResult tbody tr');
+   assert.equal(await compareRows.count(),4,'structural LCS must preserve ordered shared and differing steps');
+   assert.deepEqual(await compareRows.locator('td:first-child').allTextContents(),
+     ['shared','only A','only B','shared']);
+   assert.match(await page.locator('#owgExplorerCompareResult').textContent(),/2 shared structural steps/);
+   assert.equal(await page.locator('#owgExplorerCompareResult img').count(),0,'untrusted step labels are text, not HTML');
+   assert.match(await page.locator('#owgExplorerCompareResult').textContent(),/<img src=x onerror=alert\(1\)>/);
+   assert.equal(evidenceReads,readsBeforeCompare,'comparison must not fetch source evidence');
+   await audit(page,'#owgWorkflowExplorer','Compared exact observed variants');
+   await compareB.selectOption('0');
+   await compare.click();
+   assert.match(await page.locator('#owgExplorerCompareResult').textContent(),/Choose two different/);
+   await compareB.selectOption('1');
+   await compare.click();
+   await page.getByRole('button',{name:'Review safe agent handoff',exact:true}).click();
+   assert.equal(await page.locator('#owgExplorerHandoffPanel').count(),1);
+   let comparedEvidenceIds='';
+   await page.route('**/v1/workflow-evidence?*',route=>{
+     comparedEvidenceIds=new URL(route.request().url()).searchParams.get('execution_ids');
+     return route.fulfill({status:200,contentType:'application/json',
+       body:JSON.stringify({selector:{execution_ids:['execution:compare_right'],selected_execution_count:1},
+         structural_alignment:{high_support_steps:[]},provenance:{source_limit_reached:false}})});
+   });
+   const inspectB=page.getByRole('button',{name:'Inspect variant B evidence',exact:true});
+   await inspectB.focus();await page.keyboard.press('Enter');
+   await page.locator('#owgExplorerEvidence h4').waitFor();
+   assert.equal(comparedEvidenceIds,'execution:compare_right','comparison drilldown must select only lane B refs');
+   assert.equal(await page.locator('#owgExplorerHandoffPanel').count(),0,'switching lanes revokes old handoff review');
+   assert.match(await page.locator('#owgExplorerStepInfo').textContent(),/Variant 2 selected from comparison/);
+   await page.getByRole('button',{name:'Review safe agent handoff',exact:true}).click();
+   assert.match(await page.locator('#owgExplorerHandoffPanel').textContent(),/Variant 2:/);
+   assert.equal(await page.getByRole('button',{name:'Copy non-executing shadow-test plan request',exact:true}).isDisabled(),true,
+     'comparison and inspection cannot bypass fresh acknowledgement and human criteria');
+   await page.unroute('**/v1/workflow-evidence?*');
+   // A clipped exact lane or incomplete structural mapping is not compared
+   // as a complete route, even if the visible prefix looks similar.
+   await page.evaluate(()=>{
+     window.owgWorkflowExplorer.showReviewedGroup({
+       label:'Clipped synthetic workflow',workflow_id:'clipped_fixture',revision:1,
+       bundle:{selector:{execution_ids:[],selected_execution_count:0},
+         structural_alignment:{structural_sequence_variants:[{exact_variants:[
+           {readable_steps:Array.from({length:25},(_,i)=>'Step '+i),
+            structural_steps:Array.from({length:25},(_,i)=>'action:step_'+i),
+            execution_count:1,execution_ids:[]},
+           {readable_steps:['Step 0','Step 1'],structural_steps:['action:step_0','action:step_1'],
+            execution_count:1,execution_ids:[]}
+         ]}]}}
+     });
+   });
+   await compare.click();
+   assert.match(await page.locator('#owgExplorerCompareResult').textContent(),/Exact structural comparison unavailable/);
+   assert.equal(await page.locator('#owgExplorerCompareResult tbody tr').count(),0);
+   assert.equal(evidenceReads,readsBeforeCompare+1,'refused comparison must not request evidence');
+   assert.equal(writes,0,'comparison and evidence inspection must never write to workflow APIs');
+   await audit(page,'#owgWorkflowExplorer','Clipped variant comparison refusal');
    // Every focusable control must be reachable by Tab and have a visible accessible name.
    const unnamed=await page.evaluate(()=>[...document.querySelectorAll('#owgWorkflowExplorer button, #owgWorkflowExplorer [role=button], #owgWorkflowExplorer input, #owgWorkflowExplorer select')]
      .filter(el=>!el.disabled&&el.getClientRects().length&&!(el.getAttribute('aria-label')||el.textContent.trim()||(el.labels&&el.labels.length)||el.getAttribute('title')||el.getAttribute('placeholder')))
