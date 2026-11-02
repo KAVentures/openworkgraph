@@ -435,7 +435,12 @@ def test_cross_app_tied_order_or_ambiguous_transfer_abstains():
         event(4, A),
     ]
     malformed[2]["event_type"] = None
-    for trace in (tied, transfer, malformed):
+    unknown_source = [
+        event(1, A), event(2),
+        event(3, B, tab=None, app="Terminal", source="unknown"),
+        event(4, A),
+    ]
+    for trace in (tied, transfer, malformed, unknown_source):
         result = linked_work_items(trace)
         assert result["observed_single_record_cross_app_focus_links"] == 0
         assert result["ambiguous_single_record_tab_interleaving_abstentions"] >= 1
