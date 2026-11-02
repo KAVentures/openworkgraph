@@ -47,6 +47,9 @@ from .reconstruction_tab_focus import (
 from .reconstruction_actor_continuity import actor_observation_index, observed_same_record_actor_changes
 from .reconstruction_case_coverage import observed_record_participant_surfaces
 from .reconstruction_app_focus import bracketed_tabless_app_focus
+from .reconstruction_candidate_review import ambiguous_assignment_review
+from .reconstruction_candidate_fragments import ambiguous_fragment_review
+from .reconstruction_assignment_proof import accepted_assignment_proofs
 
 _TRANSFER = re.compile(r"^[A-Za-z0-9:._-]{1,120}$")
 _TAB = re.compile(r"^[A-Za-z0-9:._-]{1,160}$")
@@ -736,6 +739,10 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             tenant_positions=actor_tenant_positions,
         )
         coverage = observed_record_participant_surfaces([rows[i] for i in ids])
+        assignment_proofs = accepted_assignment_proofs(
+            [rows[i] for i in ids], link_edges[linked["root"](ids[0])],
+            visible_event_ids=ids[:_MAX_EVENT_IDS],
+        )
         items.append({
             "item_id": item_id,
             "event_ids": ids[:_MAX_EVENT_IDS],
@@ -753,6 +760,7 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             **bridge_evidence,
             **actor_participation,
             **coverage,
+            **assignment_proofs,
             "link_basis": basis,
             "cross_record_join": len(refs) > 1,
             "confidence": min(_CONFIDENCE[name] for name in basis) if basis else _CONFIDENCE["same_record"],
@@ -779,8 +787,19 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             "association_status": "ambiguous",
             "merged": False,
         })
-    unlinked = sum(1 for ids in linked["members"].values() if len(ids) == 1)
+    singleton_ids = {ids[0] for ids in linked["members"].values() if len(ids) == 1}
+    review_queue = ambiguous_assignment_review(
+        linked["candidates"], item_of, singleton_ids,
+        {item["item_id"] for item in items if item["resource_refs"]},
+    )
+    fragment_queue = ambiguous_fragment_review(
+        linked["candidates"], rows, item_of, singleton_ids,
+        {item["item_id"] for item in items if item["resource_refs"]},
+    )
+    unlinked = len(singleton_ids)
     return {
+        **review_queue,
+        **fragment_queue,
         "format": "openworkgraph.linked-work-items.v1",
         "items": items,
         "total_items": len(groups),
@@ -814,6 +833,7 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             "observed_surface_runs_are_not_task_memberships": True,
             "observed_record_paths_are_not_verified_business_transitions": True,
             "record_bridges_are_observed_link_witnesses_not_handoffs": True,
+            "assignment_proofs_do_not_add_membership_or_verify_case_identity": True,
             "same_record_actor_changes_are_observed_not_verified_handoffs": True,
             "record_participant_surface_coverage_is_presence_not_productivity": True,
             "record_participant_surface_coverage_requires_complete_scope": True,
@@ -853,6 +873,10 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             "labels_titles_urls_and_clipboard_contents_read": False,
             "linked_items_are_tasks": False,
             "ask_when_ambiguous": True,
+            "ambiguous_assignment_review_never_merges_or_authorizes": True,
+            "ambiguous_assignment_review_only_visible_source_anchored_items": True,
+            "ambiguous_fragment_review_is_two_hop_candidate_only": True,
+            "ambiguous_fragment_review_never_creates_membership": True,
         },
         "no_item_means_no_linking_evidence_not_no_work": True,
         "derived": True,
