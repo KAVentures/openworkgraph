@@ -103,7 +103,7 @@ def observed_same_record_actor_changes(
                             "from_observed_at": previous["observed_at"],
                             "to_observed_at": row["observed_at"],
                             "return_to_previously_observed_participant": is_return,
-                            "other_tenant_scoped_observations_between": between,
+                            "intervening_same_tenant_observation_count": between,
                             "continuity_unverified": True,
                             "handoff_verified": False,
                         })
