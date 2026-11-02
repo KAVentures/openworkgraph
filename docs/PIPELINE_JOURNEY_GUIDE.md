@@ -27,6 +27,14 @@ In the selected project's evidence journey, choose **Previously downloaded revie
 
 A matching result means only that the recorded process/idea/project identities and SHA-256 hashes, source-snapshot statuses, imported report statuses, source-check export counters/hashes and review blockers agree with the **new local read**. Changed categories are named for review, without rendering arbitrary text from the file. Refreshing the journey or switching project invalidates the comparison UI; late responses cannot populate the new selection. This is **not** a cryptographic signature, an approval, a live source verification or proof of execution, agent causality or business outcome. Revocation/retention may make prior evidence unavailable, and a point-in-time match cannot establish original data completeness. Re-check immediately before any separately authorized action.
 
+## Review changed areas after a fresh packet comparison
+
+When an imported packet differs from the **fresh authenticated local journey**, the comparison now provides keyboard-operable **Review changed areas** actions. They open the existing exact saved-process revision, opportunity assessment, selected immutable project, that project's imported-report review, or that project's separately consent-gated source-check form as appropriate. Review the changed categories before proceeding. The actions navigate or focus existing controls; **none** approves a decision, re-exports a project, reads a provider or performs a business write.
+
+A changed or unavailable process can be inspected only when its **linked exact revision** is available; the dashboard never substitutes the newest revision. A historical project's source-check action is disabled, with an explanation. Dataset/cohort drift has no automatic repair action: return to the original data workspace and verify source availability, opt-in and completeness. Changed human-review blockers can be inspected in the selected project's checklist, but they are not marked resolved. Project artifact changes focus the explicit project selector rather than silently switching projects.
+
+The review actions appear **only after a valid explicit comparison**. Choosing another packet, changing the project, or refreshing the journey discards the prior actions and any pending response; wrong-project and invalid files never retain actionable links. A matching snapshot provides no new approval or verification. Even after navigating, source reads still require a fresh exact record reference and unchecked-by-default explicit consent.
+
 ## Safety and limitations
 
 - The guide adds **navigation only**. It never automatically saves a process, approves an opportunity, exports a project, links a report, reads a provider, grants tool permissions or executes an agent. Existing REST/MCP and dashboard controls retain their behavior.
