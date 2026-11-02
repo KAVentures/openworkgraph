@@ -350,7 +350,7 @@
             };
 
             const packet=handoffReviewPacket(data,p.project_id,idea.idea_id,new Date().toISOString());
-            const review=el('div',null,'muted');review.id='owgPipelineJourneyReadiness';
+            const review=el('div',null,'muted');review.id='owgPipelineJourneyReadiness';review.tabIndex=-1;
             review.appendChild(el('div','Handoff review: '+packet.readiness.blockers.length+' outstanding checks. This is not permission to execute an agent.'));
             const issues=el('ul');
             const names={no_exact_saved_process:'Exact saved process missing',process_not_current:'Process revision changed or unavailable',
