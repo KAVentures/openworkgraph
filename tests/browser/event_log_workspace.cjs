@@ -1104,6 +1104,69 @@ const path=require('node:path');
    assert.deepEqual(firstStage.rows,[[11]],'A first-stage 2+4 and B observed 5; invalid B Work omitted');
    assert.equal(firstStage.metrics[1].cases_with_value,2);
    assert.ok(firstStage.metrics[1].event_rows_with_missing_invalid_or_nonfinite_attribute>=1);
+   // R9: four backend-supported pairwise operations are now authored without JSON.
+   // A: first-stage total 6 EUR, last completed stage mean 9 EUR.
+   // B: first-stage total 5 EUR but last completed mean is unknown (invalid Work).
+   await page.locator('#owgMetricKind').selectOption('arithmetic');
+   assert.deepEqual(await page.locator('#owgMetricOperation option').evaluateAll(nodes=>nodes.map(n=>n.value)),
+     ['add','subtract','multiply','divide','minimum','maximum','average','absolute_difference']);
+   await page.locator('#owgMetricLeftMetric').selectOption('first_review_total');
+   await page.locator('#owgMetricRightMetric').selectOption('last_review_avg');
+   for(const [operation,expected,description] of [
+     ['minimum',6,'Smaller of'],['maximum',9,'Larger of'],
+     ['average',7.5,'Average of'],['absolute_difference',3,'Absolute difference between']]){
+     const metricName='pair_'+operation;
+     await page.locator('#owgMetricName').fill(metricName);
+     await page.locator('#owgMetricOperation').selectOption(operation);
+     await page.locator('#owgMetricAdd').click();
+     await page.locator('#owgMetricList').filter({hasText:metricName+': '+description+' first_review_total and last_review_avg'}).waitFor();
+     await page.locator('#owgAnalysisMeasure1').selectOption('avg:metric:'+metricName);
+     const [pairResponse]=await Promise.all([
+       page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
+       page.locator('#owgAnalysisRun').click()]);
+     assert.equal(pairResponse.status(),200,operation+' should be accepted by authenticated analysis');
+     const spec=JSON.parse(pairResponse.request().postData());
+     assert.deepEqual(spec.metrics[2],{name:metricName,kind:'arithmetic',expression_version:'1',
+       operation,left:{kind:'metric',name:'first_review_total'},right:{kind:'metric',name:'last_review_avg'}});
+     const result=await pairResponse.json();
+     assert.deepEqual(result.rows,[[expected]],operation+' must not turn missing B into zero');
+     assert.equal(result.metrics[2].cases_with_value,1);
+     assert.equal(result.metrics[2].cases_with_missing_operand,1);
+     assert.equal(result.metrics[2].unit,'EUR');
+     await page.locator('#owgAnalysisResults').filter({hasText:metricName+': 1 cases have a value'}).waitFor();
+     if(operation==='absolute_difference'){
+       await page.locator('#owgMetricSave').click();
+       await page.getByRole('button',{name:'Add saved metric '+metricName,exact:true}).waitFor();
+       const [pairCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCsv').click()]);
+       assert.match(await fs.readFile(await pairCsv.path(),'utf8'),/avg_metric:pair_absolute_difference\\r\\n3/);
+       await page.locator('#owgAnalysisName').fill('Pairwise recorded EUR difference');
+       await page.locator('#owgAnalysisSave').click();
+       await page.locator('#owgAnalysisStatus').filter({hasText:'Analysis saved.'}).waitFor();
+       const [savedPair]=await Promise.all([
+         page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')),
+         page.getByRole('button',{name:'Run saved analysis Pairwise recorded EUR difference',exact:true}).click()]);
+       assert.deepEqual((await savedPair.json()).rows,[[3]]);
+     }
+     await page.getByRole('button',{name:'Remove metric '+metricName,exact:true}).click();
+   }
+   // New same-unit operations must fail closed; EUR and seconds are never converted.
+   await page.locator('#owgMetricName').fill('bad_pair_units');
+   await page.locator('#owgMetricOperation').selectOption('minimum');
+   await page.locator('#owgMetricRightKind').selectOption('constant');
+   await page.locator('#owgMetricRightValue').fill('1');
+   await page.locator('#owgMetricRightUnit').fill('seconds');
+   await page.locator('#owgMetricAdd').click();
+   await page.locator('#owgAnalysisMeasure1').selectOption('avg:metric:bad_pair_units');
+   await page.locator('#owgAnalysisRun').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'identical units'}).waitFor();
+   await page.getByRole('button',{name:'Remove metric bad_pair_units',exact:true}).click();
+   const unknownPairOperation=await page.evaluate(()=>{
+     try{window.__owgEventLogModel.caseMetric({kind:'arithmetic',name:'bad_op',
+       operation:'sql',leftKind:'constant',leftValue:'1',leftUnit:'EUR',
+       rightKind:'constant',rightValue:'2',rightUnit:'EUR'});return 'accepted';}
+     catch(error){return error.message;}
+   });
+   assert.match(unknownPairOperation,/Choose the arithmetic operation/);
    await page.locator('#owgMetricKind').selectOption('arithmetic');
    assert.equal(await page.locator('#owgMetricStatistic').isVisible(),false);
    await page.locator('#owgMetricKind').selectOption('event_attribute_statistic');
