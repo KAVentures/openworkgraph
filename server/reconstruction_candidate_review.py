@@ -48,7 +48,8 @@ def ambiguous_assignment_review(
         )
         if (not isinstance(source, str) or not source
                 or not isinstance(toward, str) or not toward
-                or source == toward or relation not in _WEAK_RELATIONS):
+                or source == toward or not isinstance(relation, str)
+                or relation not in _WEAK_RELATIONS):
             continue
         if source in singleton_ids and toward in item_of:
             loose, witness = source, toward
@@ -61,6 +62,7 @@ def ambiguous_assignment_review(
             grouped[loose][target].add((witness, relation))
 
     entries: list[dict[str, Any]] = []
+    full_support_by_event: dict[str, int] = {}
     competing = 0
     for event_id, targets in grouped.items():
         multiple = len(targets) > 1
@@ -78,6 +80,7 @@ def ambiguous_assignment_review(
         options.sort(key=lambda option: (
             -option["distinct_candidate_edge_count"], option["item_id"]
         ))
+        full_support_by_event[event_id] = sum(len(edges) for edges in targets.values())
         entries.append({
             "event_id": event_id,
             "review_priority": "competing_visible_items" if multiple else "weak_evidence_only",
@@ -90,8 +93,7 @@ def ambiguous_assignment_review(
 
     entries.sort(key=lambda entry: (
         0 if entry["candidate_item_count"] > 1 else 1,
-        -sum(option["distinct_candidate_edge_count"] for option in
-             entry["candidate_items"]),
+        -full_support_by_event[entry["event_id"]],
         entry["event_id"],
     ))
     return {
