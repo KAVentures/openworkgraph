@@ -1178,3 +1178,76 @@ capacity refusal, source switching, prerequisite review revocation during
 and before reads, authentication and privacy. These synthetic tests do not
 establish real provider/customer acceptance; required native CI must pass
 before merge.
+
+
+## Durable local provider-operation evidence ledger (explicit REST, M4 milestone)
+
+The optional local-only ledger in `server/open_work_case_operation_ledger.py`
+is a **server-persisted** history of independent Stripe operation checks for a
+currently human-reviewed case. It complements, rather than replaces, the
+operator-carried `/operation-timeline` token. It is **not** a source status
+cache, verified customer outcome, billing ledger, inferred obligation, or
+permission for an agent to execute.
+
+Three authenticated dashboard-session-only POST operations are available:
+
+- `/v1/open-work/declarations/operation-ledger/check` requires the exact
+  `work_item_ref`, `expected_revision`, `expected_edit_token`,
+  `confirm_source_verification: true`, and an HMAC-sealed `record_link`
+  previously obtained from the explicit `/operation-link` source-joined
+  invoice scan. It independently calls the existing authorized
+  `source_operation_receipt` reader, then commits one paid/unknown observation
+  in a private SQLite transaction. An outage is **unknown**, not unpaid.
+- `/v1/open-work/declarations/operation-ledger/history` requires only the
+  exact current declaration reference, revision and incarnation token. It
+  reads retained history **without calling Stripe**, even if the invoice
+  disappeared from the open-invoice inventory or the original record link
+  expired. Every historical result explicitly reports
+  `current_provider_operation_verified: false`; fresh source verification
+  requires a separate explicit check.
+- `/v1/open-work/declarations/operation-ledger/dispute` requires the same
+  exact owner version, `confirm_dispute: true`, a prior check's
+  `target_sequence`, and one of `source_conflict`, `record_mismatch` or
+  `operator_dispute`. It **appends** an owner dispute without overwriting or
+  erasing the earlier independent provider observation. A disputed latest
+  check projects as unknown, never as fresh paid proof. A second dispute of
+  the same check is refused. This is a human annotation, not a provider-issued
+  refund/correction or verified customer outcome.
+
+The private SQLite file contains only opaque `owg:w:` refs, HMAC-bound
+reviewed dependency graph, source and exact record fingerprints, fixed
+paid/unknown codes, UTC timestamps and HMAC-chained events. No native invoice
+IDs, provider account IDs, customer names, amounts, credentials, raw event
+text, or raw receipts are persisted. A case can have up to 32 append-only
+events, with at most 50 cases; the local database has a 2 MiB admission cap.
+Expiry is bounded by the original owner declaration and the currently
+configured human-history retention (at most seven days). A changed review
+incarnation, dependency, account or retention makes old evidence unavailable;
+a stale graph is never silently rebound to new approval. Explicit review
+removal purges its case evidence; source disconnect/replacement or review
+clear removes the complete local evidence file. Invalid integrity chains
+fail closed rather than silently rewriting evidence. Local storage is
+private (0600 on POSIX), uses SQLite's DELETE journal and has no cloud sync,
+background polling, new provider privileges, or external writes.
+
+Each request requires the existing local dashboard session and independently
+authorized Stripe connection. A current exact reviewed case and its entire
+prerequisite graph are admitted before any provider read, rechecked after it,
+and checked again under the evidence transaction before commit. This narrows
+local revocation races but **does not establish an atomic cross-process
+provider-grant fence, production organization/actor RBAC, or a distributed
+tenant-scoped outcome ledger**. A copied response is historical evidence only
+and cannot grant future reads or business actions. Provider-reported payment
+is not contractual performance, customer satisfaction, achievement of the
+owner's declared expected outcome, or agent causality.
+
+`tests/test_open_work_case_operation_ledger.py` covers the real FastAPI
+session/SQLite path with synthetic Stripe source/receipt adapters: explicit
+paid then unknown persisted checks, independent history retrieval, non-
+destructive disputes, duplicate/invalid disputes, tampering, stale or forged
+links, revocation during a provider call, source-account changes, review
+deletion, consent/retention refusal, and privacy minimization. Native CI,
+signed-client tests, real restricted Stripe TEST account acceptance,
+independent customer-outcome adjudication and held-out A/B/C commercial
+trials remain **unverified** and are mandatory before claiming production
+readiness or commercial benefit.
