@@ -146,3 +146,48 @@ automatic quarantine decision. No new endpoint, background sync or role
 exists. Synthetic tests exercise recorded problems, absent reports, empty
 denominators, legacy transforms, browser rendering, direct inspection and
 untrusted status labels; real-provider/customer validation is still required.
+
+
+## Compare any two reported batches
+
+The **Compare two selected batches** controls in **Event logs → Analyse →
+Data quality → Compare batches** let an analyst choose a baseline import/append
+report and a later target report from the latest 100 displayed stored reports.
+Both controls are keyboard-operable, labeled selects. The panel uses the
+already-loaded, authenticated, counts-only `batch_trends.batches` data; it
+does **not** fetch source rows, issue a new provider request or persist a review
+decision.
+
+For each of the five metrics, the panel shows the baseline and target
+numerator, denominator and rate. It displays a percentage-point difference
+only when **all** of these conditions hold:
+
+1. The baseline precedes the target, and both appear in the displayed window.
+2. Every intermediate batch number has a saved report (no gaps).
+3. Every report from baseline through target has the same valid declared
+   SHA-256 transform digest.
+4. That particular metric has nonnegative integer counts, a positive integer
+   denominator and a numerator not exceeding its denominator.
+
+The future-dated-events metric **never** receives a cross-batch delta because
+its report-time reference instant differs, even when transforms match.
+Unknown counts or denominators suppress only their affected metric deltas.
+Missing intermediate reports, changed/unknown transforms, duplicate batch
+identifiers, reversed selections and comparisons outside the displayed
+100-report window suppress the entire comparison with an explicit reason.
+Rates are recomputed from validated recorded counts, not trusted as arbitrary
+display strings. The existing adjacent-batch REST deltas and CSV export remain
+unchanged; this is an additional local visualization, not a new REST query or
+unbounded event-log scan.
+
+The panel makes no statistical equivalence, completeness, root-cause,
+quarantine, worker-performance or business-action claim. A same-transform
+difference is descriptive only: two supplied batches may still have different
+source populations. Switching logs or rerunning the analysis clears the pair
+selection and results, and a stale response cannot repopulate another log's
+comparison. Node regression tests cover a three-batch baseline, DST-agnostic
+recorded count differences, missing intermediates, transform changes, unknown
+denominators, malicious identifiers, bounded display, fake-DOM keyboard
+selection and stale-log clearing. These synthetic tests and the dashboard
+implementation still require native CI and real consenting-customer validation
+before a release claim.
