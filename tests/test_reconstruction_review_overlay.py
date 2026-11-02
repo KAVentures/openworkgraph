@@ -1071,3 +1071,126 @@ def test_auto_proposal_cli_private_end_to_end(tmp_path: Path):
     event_file.write_text(json.dumps(events[:-1]))
     assert run("propose", "--events", str(event_file), "--packet",
                str(packet_file), "--output", str(tmp_path / "stale.json")).returncode == 2
+
+
+def _seeded_two_hop_proposal_events() -> list[dict]:
+    # Three consecutive clipboard actions have no authoritative record claim.
+    # e03/e05 have direct weak links to A; e04 reaches A only via e03/e05.
+    # The production app-focus linker correctly abstains from copy actions.
+    events = [_event(1, A), _event(2, A), _event(3), _event(4),
+              _event(5), _event(6, A), _event(7, A)]
+    for index in (2, 3, 4):
+        events[index]["event_type"] = "copy"
+    return events
+
+
+def test_seeded_two_hop_proposal_recovers_bounded_copy_fragment_with_real_linker():
+    events = _seeded_two_hop_proposal_events()
+    before = linked_work_items(events)
+    packet = prepare_review_packet(events)
+    direct = {row["event_id"] for row in packet["eligible_candidates"]
+              if row["evidence_hops"] == 1}
+    fragments = {row["event_id"] for row in packet["eligible_candidates"]
+                 if row["evidence_hops"] == 2}
+    assert {"e03", "e05"} <= direct
+    assert "e04" in fragments
+    proposed = propose_automatic_review(events, packet)
+    assert proposed["direct_proposal_count"] == 2
+    assert proposed["two_hop_proposal_count"] == 1
+    assert proposed["proposal_count"] == 3
+    assignments = {row["event_id"]: row for row in proposed["proposed_assignments"]}
+    assert set(assignments) == {"e03", "e04", "e05"}
+    assert len({row["item_id"] for row in assignments.values()}) == 1
+    assert assignments["e04"]["basis"] == (
+        "same_literal_record_brackets_and_anchored_direct_two_hop_seed"
+    )
+    assert proposed["canonical_membership_unchanged"] is True
+    assert proposed["authorizes_business_action"] is False
+    assert linked_work_items(events) == before
+    for private in ("SECRET", "PRIVATE", "private.example", A, "/medical-notes"):
+        assert private not in json.dumps(proposed)
+
+
+@pytest.mark.parametrize("alteration", [
+    "different_record", "foreign_scope", "other_app", "other_source",
+    "tied_timestamp", "missing_second_anchor",
+])
+def test_two_hop_auto_proposals_abstain_on_interruption_and_capture_barriers(alteration):
+    events = _seeded_two_hop_proposal_events()
+    if alteration == "different_record":
+        events[5]["metadata"]["resource_reference"]["resource_ref"] = B
+    elif alteration == "foreign_scope":
+        events[2]["organization_id"] = "tenant-b"
+    elif alteration == "other_app":
+        events[2]["app"] = "Terminal"
+    elif alteration == "other_source":
+        events[2]["source"] = "browser"
+    elif alteration == "tied_timestamp":
+        events[2]["observed_at"] = events[3]["observed_at"]
+    else:
+        events[5]["metadata"].pop("resource_reference")
+        events[6]["metadata"].pop("resource_reference")
+    packet = prepare_review_packet(events)
+    result = propose_automatic_review(events, packet)
+    assert result["two_hop_proposal_count"] == 0, alteration
+    assert result["canonical_membership_unchanged"] is True
+
+
+def test_two_hop_proposal_independent_accuracy_and_stale_evidence_refusal():
+    events = _seeded_two_hop_proposal_events()
+    packet = prepare_review_packet(events)
+    truth = {
+        "workflows": [{"event_ids": [f"e{n:02d}" for n in range(1, 8)]}],
+        "noise_event_ids": [],
+    }
+    report = score_automatic_proposals(events, packet, truth)
+    assert report["direct_proposal_count"] == 2
+    assert report["two_hop_proposal_count"] == 1
+    assert report["experimental_automatic_proposal_overlay"]["workflow_assignment_f1"] == 1.0
+    assert (report["automatic_baseline"]["workflow_assignment_f1"]
+            < report["experimental_automatic_proposal_overlay"]["workflow_assignment_f1"])
+    assert report["production_linker_changed"] is False
+    assert report["preregistered_family_holdout"] is False
+    altered = copy.deepcopy(events)
+    altered[3]["organization_id"] = "tenant-revoked"
+    with pytest.raises(ValueError, match="stale|altered"):
+        propose_automatic_review(altered, packet)
+    forged = copy.deepcopy(packet)
+    fragment = next(row for row in forged["eligible_candidates"]
+                    if row["event_id"] == "e04")
+    fragment["candidate_items"][0]["witness_event_path"][1] = "e99"
+    with pytest.raises(ValueError, match="stale|altered"):
+        propose_automatic_review(events, forged)
+
+
+def test_seeded_two_hop_cli_propose_and_score_private_outputs(tmp_path: Path):
+    root = Path(__file__).resolve().parents[1]
+    events = _seeded_two_hop_proposal_events()
+    events_path = tmp_path / "events.json"
+    packet_path = tmp_path / "packet.json"
+    proposal_path = tmp_path / "proposals.json"
+    score_path = tmp_path / "score.json"
+    truth_path = tmp_path / "truth.json"
+    events_path.write_text(json.dumps(events))
+    truth_path.write_text(json.dumps({
+        "workflows": [{"event_ids": [f"e{n:02d}" for n in range(1, 8)]}],
+        "noise_event_ids": [],
+    }))
+    def run(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run([sys.executable, "-m", "scripts.reconstruction_review",
+                               *args], cwd=root, capture_output=True, text=True, timeout=40)
+    prepared = run("prepare", "--events", str(events_path), "--output", str(packet_path))
+    assert prepared.returncode == 0, prepared.stderr
+    proposed = run("propose", "--events", str(events_path), "--packet", str(packet_path),
+                   "--output", str(proposal_path))
+    assert proposed.returncode == 0, proposed.stderr
+    assert json.loads(proposal_path.read_text())["two_hop_proposal_count"] == 1
+    scored = run("score-proposals", "--events", str(events_path), "--packet", str(packet_path),
+                 "--truth", str(truth_path), "--output", str(score_path))
+    assert scored.returncode == 0, scored.stderr
+    assert json.loads(score_path.read_text())["two_hop_proposal_count"] == 1
+    for output in (proposal_path, score_path):
+        for private in ("SECRET", "PRIVATE", "private.example", A):
+            assert private not in output.read_text()
+        if os.name != "nt":
+            assert output.stat().st_mode & 0o077 == 0
