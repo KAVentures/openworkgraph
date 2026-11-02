@@ -7,10 +7,10 @@ This is a **real, operator-triggered, read-only comparison of two live systems**
 For **1–8 independently mapped Entra / OWG Users** and **1–4 independently mapped Entra / OWG Groups**, the operator supplies each selected user's expected active state and each selected Group's expected **direct membership among the selected users only**. The tool compares:
 
 1. Live Microsoft Graph GET /v1.0/users/{id}?$select=id,accountEnabled with the corresponding live OWG SCIM GET /Users/{id} active state.
-2. Live Graph GET /v1.0/users/{id}/memberOf/microsoft.graph.group?$select=id&$top=100 with the selected Group memberships in OWG's SCIM User groups projection. Microsoft documents **direct**, not transitive, membership: [List a user's direct memberships](https://learn.microsoft.com/en-us/graph/api/user-list-memberof?view=graph-rest-1.0). The read refuses a response with an @odata.nextLink rather than pretending a truncated page is complete.
+2. Live Graph GET /v1.0/users/{id}/memberOf/microsoft.graph.group?$select=id&$top=100&$count=true with the selected Group memberships in OWG's SCIM User groups projection. Microsoft documents **direct**, not transitive, membership: [List a user's direct memberships](https://learn.microsoft.com/en-us/graph/api/user-list-memberof?view=graph-rest-1.0). The read refuses a response with an @odata.nextLink rather than pretending a truncated page is complete.
 3. Live OWG SCIM GET /Groups/{id} member lists against the expected **selected** OWG Users, including the reciprocal User view. Unselected users and groups are never declared absent or equivalent.
 
-The command performs a bounded final reread of the first Graph user's active state and direct memberships, the first OWG Group, and OWG provider authorization. This reduces but does not eliminate read-time races. The systems have **no atomic cross-provider snapshot**. Graph membership reads can be eventually consistent; a transient disagreement is a refusal, not permission to retry writes.
+The command performs a bounded final reread of the first Graph user's active state and direct memberships, the first OWG Group, and OWG provider authorization. This reduces but does not eliminate read-time races. The systems have **no atomic cross-provider snapshot**. Graph OData-cast membership requests include ConsistencyLevel: eventual and $count=true as required by Microsoft Graph, and these indexed reads can be eventually consistent; a transient disagreement is a refusal, not permission to retry writes.
 
 ## Authorization and privacy
 
