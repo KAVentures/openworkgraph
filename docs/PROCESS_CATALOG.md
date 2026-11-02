@@ -53,6 +53,36 @@ reachability, branch rules and paths to a terminal. Loops are supported when
 there is a route to a terminal. Up to 40 activities, 100 transitions and 40 rules
 are allowed. A graph revision request is bounded to 128 KiB.
 
+## Compare immutable saved revisions before handoff
+
+Open a saved process in **Process catalog**, select **Load revision history**,
+then **Compare rN with opened rM** for a different saved revision. This explicitly
+reads the selected historical revision through the existing authenticated local
+revision endpoint. The view pins and displays both exact revision numbers and
+SHA-256 content digests; it never silently compares against the latest revision.
+
+The comparison shows changed process title, goal, owner, AS-IS path and coverage,
+support count, entry/terminal activities, scenario assumptions, activity labels,
+implementation suggestions and declared responsibilities, transitions, business
+rules, decision tables, human-only manual review gates and source-state outcome
+expectations. Identity is based on stable activity/rule/edge IDs rather than
+display labels. Up to 120 changed entries are displayed; larger comparisons
+explicitly report incomplete display. Individual cell previews are bounded and
+truncation is labelled. The original saved snapshots remain untouched.
+
+Use **Open compared revision** to inspect the older immutable design in the
+editor. A fresh comparison is required after navigation or any editor change;
+stale asynchronous responses cannot repopulate a changed editor. Unsaved edits
+are never included in the comparison and cannot be treated as a reviewed
+revision. Deleted, mismatched or unavailable revision responses are refused.
+
+This is a structural review aid for handoff decisions, not an automatic
+approval, source-revalidation, policy attestation, agent authorization or
+verified business outcome. No provider, model or agent is contacted, and no
+business write occurs. A reviewer must still independently inspect evidence,
+approve the exact desired revision, and explicitly authorize any later
+customer-controlled execution under the existing controls.
+
 ## Meaning and limits
 
 Each activity can include an optional **Responsibility** label, such as Case
