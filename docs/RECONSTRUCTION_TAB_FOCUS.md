@@ -84,6 +84,42 @@ it does not scan the entire trace for every loose event. No elapsed-time
 threshold, URL, window title, clipboard contents, inferred handoff or
 permission change is involved.
 
+### Unreferenced application interruptions and observed return
+
+An app switch can be visible even when its business record is **not**. For
+example, Browser tab T shows exact record A, Terminal receives an unreferenced
+action, then Browser tab T records an unreferenced click. Previously, the
+single-record-tab rule could silently attach that click to A. OWG now treats
+a *known named other app* in the same complete organization/actor/device/session
+scope as **negative focus evidence**. Without an observed return to exact A,
+the Browser click remains unassigned; Terminal is **not** inferred to be case B.
+
+A strictly ordered, bounded
+`A (Browser T) → loose T → Terminal (unreferenced) → loose T → A (Browser T)`
+sequence can recover the two Browser-T loose observations, but **never**
+the Terminal observation. This weaker witness has basis
+`same_tab_single_record_unreferenced_app_bracketed`, conservative confidence
+0.54 and a separate
+`observed_single_record_unreferenced_app_focus_links` count in the existing
+read-only workflow-evidence API. Its two-sided anchor, frozen-component,
+competing-target, scope and bounded-span requirements are identical to the
+existing cross-app exact-record return. At most eight Browser loose steps and
+sixteen named foreign-app observations may intervene; no elapsed-time threshold
+establishes a link. If both an exact other-case interruption and an
+unreferenced-app switch occur, the weaker unreferenced-app basis takes
+precedence.
+
+Unknown or malformed app/source labels, incomplete scope, copy/paste/transfer
+claims, timestamp ties and tainted capture do not supply an admissible
+**positive return witness**. A missing/unknown app is not falsely relabeled as
+a named interruption; ordinary legacy tab evidence may still be ambiguous.
+Observed switches are not proof that another case exists or that a handoff
+occurred. This changes only derived, ephemeral membership from retained
+consented events; removal of the final A anchor removes the recovered links.
+The response additionally exposes
+`single_record_tab_unreferenced_app_switch_requires_two_sided_focus` and
+`unreferenced_app_switches_are_negative_not_case_identity` as contract flags.
+
 ### Interruption-aware nominally single-record tabs
 
 A tab showing only exact record A is not proof that all later unreferenced
