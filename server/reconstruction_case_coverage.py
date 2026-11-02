@@ -79,9 +79,9 @@ def observed_record_participant_surfaces(
         witnesses: list[dict[str, Any]] = []
         for (actor, app), (first, last) in pairs.items():
             if actor not in participant_labels:
-                participant_labels[actor] = f"participant_{len(participant_labels) + 1:02d}"
+                participant_labels[actor] = f"coverage_participant_{len(participant_labels) + 1:02d}"
             if app not in surface_labels:
-                surface_labels[app] = f"surface_{len(surface_labels) + 1:02d}"
+                surface_labels[app] = f"coverage_surface_{len(surface_labels) + 1:02d}"
             if len(witnesses) < max_pairs_per_record:
                 witnesses.append({
                     "participant_id": participant_labels[actor],
@@ -94,7 +94,7 @@ def observed_record_participant_surfaces(
                 })
         if len(displayed) < max_records:
             displayed.append({
-                "record_id": f"record_{record_count:02d}",
+                "record_id": f"coverage_record_{record_count:02d}",
                 "distinct_observed_participants": len(participants),
                 "distinct_observed_surfaces": len({app for _actor, app in pairs}),
                 "participant_surface_pair_count": len(pairs),
