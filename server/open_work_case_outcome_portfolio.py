@@ -2,7 +2,7 @@ from __future__ import annotations
 
 """Read-only portfolio triage for separately admitted, retained outcome evidence.
 
-Only the authenticated REST caller can select an account scope. Each case is
+Only the authenticated REST layer derives the current account scope. Each case is
 independently admitted against its complete reviewed dependency graph, and
 both private HMAC ledgers are validated before these projections are built.
 A historical provider payment is never customer completion or a fresh receipt.
@@ -85,7 +85,10 @@ def compose_outcome_portfolio(
         if (h_status not in ("met", "not_met", "unknown") or
                 p_state not in ("paid", "unknown") or
                 any(type(v) is not int or not 0 <= v <= 32
-                    for v in (h_count, p_count, disputed))):
+                    for v in (h_count, p_count, disputed)) or
+                (h_count == 0 and h_status != "unknown") or
+                (p_count == 0 and p_state != "unknown") or
+                disputed > p_count):
             raise CaseDeclarationError("invalid outcome portfolio history state")
         expected = row["expected_outcome_code"]
         reasons = []
