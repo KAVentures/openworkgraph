@@ -100,7 +100,9 @@ without interruption-rejection regression; this feature does not claim it.
 - No provider writes, credentials, model calls, new network sync, cloud upload,
   canonical edits, permissions, business approvals or agent actions.
 - The source is bounded to 10,000 JSON observations / 8 MiB. Packet and
-  decision inputs are separately size-bounded. Malformed, nonfinite or
+  decision inputs are separately size-bounded. Scoring is limited to 500 admitted
+  observations and 12 independently labeled workflows per window to bound the
+  shared scorer's pairwise-order and assignment work. Malformed, nonfinite or
   unsupported JSON is refused. Outputs are newly created private files.
 - Review eligibility comes from the current production linker and its existing
   visible, source-anchored direct weak candidate queue, never from a caller's
