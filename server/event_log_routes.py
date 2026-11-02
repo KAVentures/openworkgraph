@@ -202,6 +202,18 @@ def event_log_quarantine(request: Request, log_id: str, batch: int | None = Quer
     return _respond(quarantine.quarantine, log_id, batch, after, limit)
 
 
+@router.post("/v1/event-logs/{log_id}/quarantine/preview")
+async def event_log_quarantine_preview(request: Request, log_id: str):
+    """Read-only, counts-only release preview under the existing local dashboard session."""
+    _require_dashboard(request)
+    body = await _json_body(request, "preview")
+    try:
+        result = await run_in_threadpool(quarantine.preview, log_id, body)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/{log_id}/quarantine/release")
 async def event_log_quarantine_release(request: Request, log_id: str):
     _require_dashboard(request)
