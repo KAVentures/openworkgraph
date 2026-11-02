@@ -128,6 +128,7 @@ const path=require('node:path');
    await page.locator('#owgCatalogList').getByRole('button',{name:'Saved renewal review · r1',exact:true}).click();
    await page.getByRole('textbox',{name:'Business goal',exact:true}).fill('UNSAVED goal must stay outside the idea');
    await page.getByRole('button',{name:'Add saved revision to automation pipeline',exact:true}).click();
+   await page.locator('#owgPipelineDetail h3').filter({hasText:'Project comparison review'}).waitFor();
    await page.locator('#owgPipelineProcessStatus').filter({hasText:'Current saved revision'}).waitFor();
    assert.match(await page.locator('#owgPipelineDetail').textContent(),/Review the selected renewal/);
    assert.doesNotMatch(await page.locator('#owgPipelineDetail').textContent(),/UNSAVED/);
