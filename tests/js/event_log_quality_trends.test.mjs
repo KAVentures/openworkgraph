@@ -74,6 +74,65 @@ test('malformed rates and counts cannot become misleading zeros or percentages',
   assert.equal(view.change(null),'Not comparable');
 });
 
+
+test('selected baseline and target compare all five metrics across contiguous identical transforms', () => {
+  const digest='a'.repeat(64);
+  const first={...report(0,'first_report',2,0.2,null),transform_sha256:digest};
+  const middle={...report(1,'same_transform',3,0.3,10),transform_sha256:digest};
+  const last={...report(2,'same_transform',4,0.4,10),transform_sha256:digest};
+  const result=view.comparePair({batches:[first,middle,last]},0,2);
+  assert.match(result.status,/Same verified transform across 3 contiguous/);
+  assert.equal(result.baseline,'Import');
+  assert.equal(result.target,'Append 2');
+  assert.equal(result.rows.length,5);
+  assert.equal(result.rows[0].baseline_count,'2');
+  assert.equal(result.rows[0].target_count,'4');
+  assert.equal(result.rows[0].baseline_denominator,'10');
+  assert.equal(result.rows[0].target_rate,'40.00%');
+  assert.equal(result.rows[0].change,'+20.00 pp');
+  assert.equal(result.rows[4].change,'Not comparable');
+  assert.match(result.rows[4].reason,/Different report reference times/);
+  assert.equal(view.comparePair({batches:[first,middle,last]},1,2).rows[0].change,'+10.00 pp');
+});
+
+test('selected batch comparison refuses gaps, changed or unknown mappings and invalid selection', () => {
+  const digest='a'.repeat(64);
+  const first={...report(0,'first_report',2,0.2,null),transform_sha256:digest};
+  const middle={...report(1,'same_transform',3,0.3,10),transform_sha256:digest};
+  const last={...report(2,'same_transform',4,0.4,10),transform_sha256:digest};
+  const compare=(batches,a=0,b=2)=>view.comparePair({batches},a,b);
+  assert.match(compare([first,last]).status,/Missing intermediate/);
+  assert.equal(compare([first,last]).rows.length,0);
+  assert.match(compare([first,{...middle,transform_sha256:'b'.repeat(64)},last]).status,/Mapping changed/);
+  assert.match(compare([first,{...middle,transform_sha256:null},last]).status,/Transform digest unknown/);
+  assert.match(compare([first,middle,last],0,0).status,/different batches/);
+  assert.match(compare([first,middle,last],2,0).status,/earlier baseline/);
+  assert.match(compare([first,middle,last],-1,2).status,/valid stored/);
+  assert.match(compare([first,middle,last],0,9).status,/outside the displayed/);
+  assert.match(compare([first,middle,middle,last]).status,/Duplicate batch/);
+  assert.match(compare([{...first,batch:'0'},middle,last]).status,/outside the displayed/);
+  const large=Array.from({length:102},(_,batch)=>({...report(batch,'same_transform',2,0.2,0),transform_sha256:digest}));
+  assert.match(compare(large,0,101).status,/exceeds the latest/);
+  assert.match(compare(large,1,101).status,/exceeds the latest/);
+  assert.equal(compare(large,2,101).rows.length,5);
+});
+
+test('unknown or invalid denominators suppress only affected selected-pair changes', () => {
+  const digest='a'.repeat(64);
+  const first={...report(0,'first_report',2,0.2,null),transform_sha256:digest};
+  const last={...report(1,'same_transform',4,0.4,20),transform_sha256:digest};
+  last.metrics.rejected_input_rows.denominator=null;
+  last.metrics.events_without_resource.count=11; // cannot exceed denominator 10
+  const result=view.comparePair({batches:[first,last]},0,1);
+  assert.equal(result.rows.length,5);
+  assert.equal(result.rows[0].target_rate,'Unknown');
+  assert.equal(result.rows[0].change,'Not comparable');
+  assert.match(result.rows[0].reason,/Missing or invalid/);
+  assert.equal(result.rows[2].change,'Not comparable');
+  assert.equal(result.rows[1].change,'0.00 pp');
+  assert.equal(view.comparePair(null,0,1).rows.length,0);
+});
+
 test('on-demand local read renders counts as text and rejects stale log responses', async () => {
   const {readFileSync} = await import('node:fs');
   const {runInNewContext} = await import('node:vm');
@@ -120,7 +179,10 @@ test('on-demand local read renders counts as text and rejects stale log response
   picker.value='log_123';
   const second=run.listeners.click();
   resolveFetch({ok:true,json:async()=>({
-    batch_trends:{batches:[report(0,'first_report',2,0.2,null)],batches_without_report:[],
+    batch_trends:{batches:[
+      {...report(0,'first_report',2,0.2,null),transform_sha256:'b'.repeat(64)},
+      {...report(1,'same_transform',3,0.3,10),transform_sha256:'b'.repeat(64)}
+    ],batches_without_report:[],
       review_queue:[{batch:0,status:'recorded_issue',flags:['rejected_input_rows'],unknown_fields:[]}]},
     reports:[{batch:0,created_at:'2026-11-01T18:00:00Z',
       transform:{transform_sha256:'b'.repeat(64)},
@@ -129,6 +191,21 @@ test('on-demand local read renders counts as text and rejects stale log response
   })});
   await second;
   assert.equal(download.disabled,false);
+  const baseline=quality.querySelector('#owgQualityPairBaseline');
+  const target=quality.querySelector('#owgQualityPairTarget');
+  const pair=quality.querySelector('#owgQualityPairRows');
+  assert.ok(baseline && target && pair);
+  assert.equal(baseline.disabled,false);
+  assert.equal(target.disabled,false);
+  assert.equal(baseline.value,'0');
+  assert.equal(target.value,'1');
+  assert.match(pair.children[0].textContent,/Same verified transform/);
+  assert.equal(pair.querySelector('#owgQualityPairTable').children[1].children[0].children[7].textContent,'+10.00 pp');
+  target.value='0';target.listeners.change();
+  assert.match(pair.children[0].textContent,/different batches/);
+  assert.equal(pair.querySelector('#owgQualityPairTable'),null);
+  target.value='1';target.listeners.change();
+  assert.ok(pair.querySelector('#owgQualityPairTable'));
   assert.ok(output.querySelector('#owgQualityTrendsRows'));
   assert.equal(output.querySelector('#owgQualityTrendsRows').children[1].children[0].children[1].textContent,'Rejected input');
   const reviewTable=quality.querySelector('#owgQualityReviewTable');
@@ -151,6 +228,9 @@ test('on-demand local read renders counts as text and rejects stale log response
   picker.listeners.change();
   assert.equal(details.children.length,0);
   assert.equal(select.disabled,true);
+  assert.equal(baseline.disabled,true);
+  assert.equal(target.disabled,true);
+  assert.equal(pair.children.length,0);
   assert.equal(download.disabled,true);
   assert.equal(output.children.length,0);
 });
