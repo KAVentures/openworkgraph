@@ -1605,3 +1605,29 @@ historical evidence, historical paid versus source outage, partial
 prerequisites, forged links and missing confirmation before source IO,
 mid-read review revocation/history changes, privacy and invalid source
 verification. Required native cross-platform CI remains a separate gate.
+
+
+## Portfolio-wide historical outcome triage (Worker D, #247 M4 / #264 Stage 7)
+
+The **authenticated local dashboard** can explicitly review historical outcome evidence across the *currently approved portfolio*, rather than manually opening each case and its prerequisites. This is an additive API; it does not replace case dossier, workflow mapping, Activity, Discovery Mode, MCP or export.
+
+`POST /v1/open-work/declarations/human-outcomes/portfolio-triage` accepts **exactly**:
+
+```json
+{
+  "confirm_historical_review": true,
+  "max_cases": 10,
+  "offset": 0,
+  "expected_portfolio_digest": null
+}
+```
+
+Send the existing `Authorization: OWG-Session <dashboard-session>` header. The first page uses `offset: 0` and a null digest; subsequent pages pass the returned `next_offset` and **unchanged** `portfolio_digest`. The maximum page size is 10 and the retained declaration ledger caps the total at 50. Cases are ordered by opaque `work_item_ref`, not by inferred business urgency. The digest is a local-secret HMAC of the entire currently approved case set, including revisions, incarnation edit tokens, dependency edges, goal/outcome codes and expiries. Any changed/revoked/expired approval rejects stale pagination rather than silently mixing different review snapshots. The response includes each selected case's current exact `expected_revision` and `expected_edit_token` for drilldown through existing owner-review APIs.
+
+Every case is separately re-admitted against its **complete current prerequisite DAG**, and both independent private SQLite ledgers are HMAC-checked with source, retention and review rechecks before and after each read. A portfolio-wide revision digest is rechecked after each case and at the end. This is still **not a cross-process atomic transaction**; production organization-wide grants, actor RBAC and revocation fencing remain unfinished.
+
+For each case, the result exposes owner-declared goal/expected-outcome codes, latest *human-assessed* `met/not_met/unknown`, *historical* provider `paid/unknown`, number of checks/disputes, missing human feedback and bounded `review_attention` reason codes. The operation-receipt-missing reason is emitted **only** when the declared expected outcome is `operation_receipt_reviewed`; a `human_review_recorded` or `source_state_rechecked` case does not require an invoice payment receipt. A human `met` assessment and historical `paid` are distinct facts. Neither proves current provider state, expected business goal, customer completion, agent causality or an obligation. A paid receipt always requires a separately authorized *fresh* provider recheck before making a current provider claim.
+
+The endpoint performs **no Stripe/source read**, background polling, provider write, cloud upload or agent action. It requires an explicit local operator request, returns `Cache-Control: no-store`, never includes native invoice IDs, amounts, customer names, free text or credentials, and uses existing private retention/review/source-disconnect cleanup. Invalid token, authorization loss, source replacement, corrupt ledger or concurrent owner-declaration change fails closed; no partial portfolio page is returned. The historical reads are explicitly labeled non-atomic.
+
+`tests/test_open_work_case_outcome_portfolio.py` contains FastAPI/dashboard-session/private-SQLite integration tests for paginated review, outcome-specific missing-evidence reasons, an actual locally retained synthetic source-confirmed Stripe receipt, token mismatch, revocation during a read, scope/auth/confirmation and privacy. **Synthetic tests and pending native CI are not real Stripe acceptance or independently verified customer outcomes.**
