@@ -140,3 +140,136 @@ def test_retention_removes_source_anchor_without_fabricating_one():
     [unanchored] = linked_work_items(after)["items"]
     assert unanchored["unanchored_unreferenced_member_count"] == 2
     assert all(p["status"] == "no_exact_record_anchor" for p in unanchored["assignment_proofs"])
+
+
+# Ambiguous-assignment review queue: reviewable weak evidence, never a join.
+from server.reconstruction_candidate_review import ambiguous_assignment_review
+
+
+def test_review_queue_groups_real_multiplexed_tab_candidate_without_linking():
+    events = [
+        event(1, A, tab="shared"), event(2, A, tab="shared"),
+        event(3, B, tab="shared"), event(4, B, tab="shared"),
+        event(5, None, tab="shared"),
+    ]
+    result = linked_work_items(events)
+    assert result["total_items"] == 2
+    assert result["unlinked_observation_count"] == 1
+    assert result["ambiguous_assignment_review_total"] == 1
+    assert result["ambiguous_assignment_review_competing_count"] == 0
+    [review] = result["ambiguous_assignment_review_queue"]
+    assert review["event_id"] == "e0005"
+    assert review["review_priority"] == "weak_evidence_only"
+    assert review["auto_assigned"] is False
+    assert review["requires_human_review"] is True
+    assert review["candidate_item_count"] == 1
+    [option] = review["candidate_items"]
+    assert option["weak_relations"] == ["same_tab_multiplexed"]
+    assert option["distinct_candidate_edge_count"] == 1
+    assert option["item_id"] == next(
+        item["item_id"] for item in result["items"] if B in item["resource_refs"]
+    )
+    assert all("e0005" not in item["event_ids"] for item in result["items"])
+    via_api = workflow_evidence.list_workflow_evidence_candidates(_raw_events=events)
+    assert via_api["linked_work_items"]["ambiguous_assignment_review_queue"] == [review]
+    serialized = json.dumps(via_api["linked_work_items"])
+    for secret in ("PRIVATE", "SECRET", "secret-tenant", "secret-device",
+                   "private.atlassian.net", "shared"):
+        assert secret not in serialized
+
+
+def test_review_queue_recomputes_after_retention_without_stale_candidates():
+    events = [
+        event(1, A, tab="shared"), event(2, A, tab="shared"),
+        event(3, B, tab="shared"), event(4, B, tab="shared"),
+        event(5, None, tab="shared"),
+    ]
+    before = linked_work_items(events)
+    assert before["ambiguous_assignment_review_total"] == 1
+    # Revocation/removal of B's independent anchors changes the evidence.
+    after = linked_work_items([events[0], events[1], events[4]])
+    assert after["ambiguous_assignment_review_total"] == 0
+    assert after["ambiguous_assignment_review_queue"] == []
+    assert "e0005" in after["items"][0]["event_ids"]
+
+
+def test_review_queue_competing_targets_dedupe_and_direction_are_deterministic():
+    edges = [
+        {"event_id": "loose", "toward_event_id": "a1",
+         "relation": "same_tab_multiplexed"},
+        {"event_id": "loose", "toward_event_id": "a1",
+         "relation": "same_tab_multiplexed"},
+        {"event_id": "b1", "toward_event_id": "loose",
+         "relation": "surface_continuity"},
+        {"event_id": "loose", "toward_event_id": "b2",
+         "relation": "surface_continuity"},
+        {"event_id": "loose", "toward_event_id": "missing",
+         "relation": "same_tab_multiplexed"},
+        {"event_id": "loose", "toward_event_id": "a1",
+         "relation": "accepted_same_record"},
+        {"event_id": "loose", "toward_event_id": "loose",
+         "relation": "same_tab_multiplexed"},
+    ]
+    kwargs = dict(
+        item_of={"a1": "linked_item_01", "b1": "linked_item_02",
+                 "b2": "linked_item_02"},
+        singleton_ids={"loose", "missing"},
+        anchored_item_ids={"linked_item_01", "linked_item_02"},
+    )
+    first = ambiguous_assignment_review(edges, **kwargs)
+    assert first == ambiguous_assignment_review(list(reversed(edges)), **kwargs)
+    assert first["ambiguous_assignment_review_total"] == 1
+    assert first["ambiguous_assignment_review_competing_count"] == 1
+    [review] = first["ambiguous_assignment_review_queue"]
+    assert review["review_priority"] == "competing_visible_items"
+    assert [item["item_id"] for item in review["candidate_items"]] == [
+        "linked_item_02", "linked_item_01",
+    ]
+    assert [item["distinct_candidate_edge_count"] for item in review["candidate_items"]] == [2, 1]
+    assert review["candidate_item_count"] == 2
+
+
+def test_review_queue_never_discloses_hidden_or_unanchored_linked_components():
+    edges = [
+        {"event_id": "loose", "toward_event_id": "visible",
+         "relation": "same_tab_multiplexed"},
+        {"event_id": "loose", "toward_event_id": "hidden",
+         "relation": "same_tab_multiplexed"},
+        {"event_id": "loose", "toward_event_id": "unanchored",
+         "relation": "surface_continuity"},
+        {"event_id": "hidden", "toward_event_id": "visible",
+         "relation": "surface_continuity"},
+    ]
+    result = ambiguous_assignment_review(
+        edges, {"visible": "linked_item_01", "unanchored": "linked_item_02"},
+        {"loose"}, {"linked_item_01"},
+    )
+    assert result["ambiguous_assignment_review_total"] == 1
+    [review] = result["ambiguous_assignment_review_queue"]
+    assert review["candidate_item_count"] == 1
+    assert review["candidate_items"][0]["item_id"] == "linked_item_01"
+    assert "hidden" not in json.dumps(result)
+    assert "linked_item_02" not in json.dumps(result)
+
+
+def test_review_queue_counts_and_bounded_projection_with_many_ambiguous_rows():
+    edges = [
+        {"event_id": f"loose{i:03d}", "toward_event_id": f"anchor{j}",
+         "relation": "same_tab_multiplexed"}
+        for i in range(30) for j in range(6)
+    ]
+    result = ambiguous_assignment_review(
+        edges, {f"anchor{j}": f"linked_item_{j:02d}" for j in range(6)},
+        {f"loose{i:03d}" for i in range(30)},
+        {f"linked_item_{j:02d}" for j in range(6)},
+    )
+    assert result["ambiguous_assignment_review_total"] == 30
+    assert result["ambiguous_assignment_review_competing_count"] == 30
+    assert result["ambiguous_assignment_review_truncated"] is True
+    assert len(result["ambiguous_assignment_review_queue"]) == 24
+    assert [row["event_id"] for row in result["ambiguous_assignment_review_queue"]] == [
+        f"loose{i:03d}" for i in range(24)
+    ]
+    assert all(row["candidate_item_count"] == 6 for row in result["ambiguous_assignment_review_queue"])
+    assert all(row["candidate_items_truncated"] for row in result["ambiguous_assignment_review_queue"])
+    assert all(len(row["candidate_items"]) == 4 for row in result["ambiguous_assignment_review_queue"])
