@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import json
+import re
 
 from server import workflow_evidence
 from server.reconstruction_assignment_proof import accepted_assignment_proofs
@@ -173,9 +174,11 @@ def test_review_queue_groups_real_multiplexed_tab_candidate_without_linking():
     via_api = workflow_evidence.list_workflow_evidence_candidates(_raw_events=events)
     assert via_api["linked_work_items"]["ambiguous_assignment_review_queue"] == [review]
     serialized = json.dumps(via_api["linked_work_items"])
+    # Whole words only: the tab token "shared" also appears inside contract key
+    # names such as legacy_shared_token_bridges_have_no_observed_direction.
     for secret in ("PRIVATE", "SECRET", "secret-tenant", "secret-device",
                    "private.atlassian.net", "shared"):
-        assert secret not in serialized
+        assert not re.search(r"\b" + re.escape(secret) + r"\b", serialized), secret
 
 
 def test_review_queue_recomputes_after_retention_without_stale_candidates():
