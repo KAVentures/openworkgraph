@@ -335,3 +335,15 @@ def test_single_record_tab_does_not_treat_tabless_record_as_named_foreign_tab():
     result = linked_work_items([event(1, A), event(2, B, tab=None), event(3)])
     assert ("e01", "e03") in groups(result)
     assert result["ambiguous_single_record_tab_interleaving_abstentions"] == 0
+
+
+def test_single_record_tab_tied_foreign_case_abstains_in_both_event_id_orders():
+    for foreign_id, loose_id in ((2, 3), (3, 2)):
+        foreign = event(foreign_id, B, tab="other")
+        loose = event(loose_id)
+        foreign["observed_at"] = loose["observed_at"]
+        trace = [event(1, A), foreign, loose]
+        result = linked_work_items(trace)
+        assert result["observed_single_record_interleaved_focus_links"] == 0
+        assert result["ambiguous_single_record_tab_interleaving_abstentions"] == 1
+        assert ("e01", f"e{loose_id:02d}") not in groups(result)
