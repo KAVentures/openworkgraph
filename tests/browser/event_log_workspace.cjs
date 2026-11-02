@@ -1482,6 +1482,45 @@ const path=require('node:path');
    assert.ok(Math.abs((await savedShare.json()).rows[0][0]-14/124)<1e-12);
    const [shareCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCsv').click()]);
    assert.match(await fs.readFile(await shareCsv.path(),'utf8'),/avg_metric:work_fraction\r\n0\.1129/);
+   // Saved analyses are editable, not just runnable. Loading is explicit and
+   // restores the full ordered typed metric graph, dimensions, filters and measure.
+   const originalDraft=await page.evaluate(spec=>window.__owgEventLogModel.analysisDraft(spec,spec.case_type||''),shareSpec);
+   assert.deepEqual(originalDraft.metrics,sharePure);
+   assert.equal(originalDraft.measure1,'avg:metric:work_fraction');
+   const refusedDraft=await page.evaluate(spec=>{
+     const invalid={...spec,metrics:spec.metrics.map(m=>({...m}))};
+     invalid.metrics[2].left={kind:'metric',name:'not_an_earlier_metric'};
+     try{window.__owgEventLogModel.analysisDraft(invalid,invalid.case_type||'');return 'accepted';}
+     catch(error){return error.message;}
+   },shareSpec);
+   assert.match(refusedDraft,/out-of-order metric dependency/);
+   const refusedFilter=await page.evaluate(spec=>{
+     try{window.__owgEventLogModel.analysisDraft({...spec,where:{source_only:true}},spec.case_type||'');return 'accepted';}
+     catch(error){return error.message;}
+   },shareSpec);
+   assert.match(refusedFilter,/filters not supported/);
+   for(const n of ['work_fraction','work_all','work_selected'])
+     await page.getByRole('button',{name:'Remove metric '+n,exact:true}).click();
+   await page.locator('#owgAnalysisLevel').selectOption('events');
+   await page.locator('#owgAnalysisDim1').selectOption('activity');
+   await page.getByRole('button',{name:'Load saved analysis Observed Work contribution into builder',exact:true}).focus();
+   await page.keyboard.press('Enter');
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Edit and run it, then save under a new name'}).waitFor();
+   assert.equal(await page.locator('#owgAnalysisLevel').inputValue(),'cases');
+   assert.equal(await page.locator('#owgAnalysisMeasure1').inputValue(),'avg:metric:work_fraction');
+   assert.equal(await page.locator('#owgMetricList button').count(),3);
+   assert.equal(await page.locator('#owgAnalysisSave').isDisabled(),true,'loading cannot save a stale result');
+   assert.equal(await page.locator('#owgAnalysisJson').isDisabled(),true,'loading clears stale exports');
+   const [loadedResponse]=await Promise.all([
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
+     page.locator('#owgAnalysisRun').click()]);
+   assert.equal(loadedResponse.status(),200);
+   assert.deepEqual(JSON.parse(loadedResponse.request().postData()).metrics,sharePure);
+   assert.deepEqual((await loadedResponse.json()).rows,shareResult.rows);
+   await page.locator('#owgAnalysisName').fill('Revised Work contribution');
+   await page.locator('#owgAnalysisSave').click();
+   await page.getByRole('button',{name:'Run saved analysis Revised Work contribution',exact:true}).waitFor();
+   await page.getByRole('button',{name:'Run saved analysis Observed Work contribution',exact:true}).waitFor();
    const numericAxe=await page.evaluate(()=>axe.run(document.querySelector('#owgEventLogAnalysis'),{
      runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']},resultTypes:['violations']}));
    assert.deepEqual(numericAxe.violations,[]);
