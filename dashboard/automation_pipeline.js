@@ -382,20 +382,22 @@
             const compareResult=el('div','Select a previously downloaded packet to check for drift.','muted');
             compareResult.id='owgPipelineJourneyCompareResult';
             compareResult.setAttribute('role','status');compareResult.setAttribute('aria-live','polite');
-            priorPacket.onchange=()=>{compareResult.textContent='File selected. Compare explicitly to refresh local references.';};
+            let comparisonSequence=0;
+            priorPacket.onchange=()=>{comparisonSequence++;compareResult.textContent='File selected. Compare explicitly to refresh local references.';};
             comparePacket.onclick=async()=>{
               if(generation!==detailGeneration||choice.value!==p.project_id||
                 !artifact.contains(compareResult))return;
               const file=priorPacket.files?.[0];
               if(!file){compareResult.textContent='Select a review packet JSON file first.';return;}
               if(!file.size||file.size>65536){compareResult.textContent='Review packet must be a non-empty JSON file no larger than 64 KiB.';return;}
+              const requestSequence=++comparisonSequence;
               comparePacket.disabled=true;
               compareResult.textContent='Checking the saved packet against freshly fetched local references…';
               try{
                 const saved=JSON.parse(await file.text());
-                if(generation!==detailGeneration||choice.value!==p.project_id||!artifact.contains(compareResult))return;
+                if(generation!==detailGeneration||choice.value!==p.project_id||!artifact.contains(compareResult)||requestSequence!==comparisonSequence)return;
                 const fresh=await (await api('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/journey')).json();
-                if(generation!==detailGeneration||choice.value!==p.project_id||!artifact.contains(compareResult))return;
+                if(generation!==detailGeneration||choice.value!==p.project_id||!artifact.contains(compareResult)||requestSequence!==comparisonSequence)return;
                 const latest=handoffReviewPacket(fresh,p.project_id,idea.idea_id,new Date().toISOString());
                 const comparison=compareHandoffReviewPackets(saved,latest);
                 compareResult.replaceChildren(el('p',comparison.status==='matching_snapshot'?
@@ -407,7 +409,7 @@
                   compareResult.appendChild(differences);
                 }
               }catch(e){
-                if(generation===detailGeneration&&choice.value===p.project_id&&artifact.contains(compareResult))
+                if(generation===detailGeneration&&choice.value===p.project_id&&artifact.contains(compareResult)&&requestSequence===comparisonSequence)
                   compareResult.textContent='Could not compare review packet: '+(e instanceof SyntaxError?'Invalid JSON.':e.message);
               }finally{
                 if(generation===detailGeneration&&choice.value===p.project_id&&artifact.contains(compareResult))
