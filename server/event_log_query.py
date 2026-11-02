@@ -136,7 +136,7 @@ class EventAttributeStatistic(_Strict):
     kind: Literal["event_attribute_statistic"]
     attribute: AttributeName
     unit: Unit
-    statistic: Literal["average", "minimum", "maximum"]
+    statistic: Literal["average", "minimum", "maximum", "median", "p90"]
     missing_policy: Literal["available", "complete"] = "available"
 
 
@@ -363,12 +363,13 @@ def _metrics(conn, metrics: list[Any]) -> tuple[dict[str, str], list[dict[str, A
             # The input is flattened onto the selected case notion. An OCEL
             # event linked to two objects is counted once in *each* case, not
             # twice in one case. Restrict to selected cases before aggregating.
-            aggregate = {"average": "avg", "minimum": "min", "maximum": "max"}[metric.statistic]
+            aggregate = {"average": "avg(v)", "minimum": "min(v)", "maximum": "max(v)",
+                         "median": "quantile_cont(v, 0.5)", "p90": "quantile_cont(v, 0.9)"}[metric.statistic]
             conn.execute(f"""CREATE OR REPLACE TEMP TABLE qstat AS
                 SELECT case_id, count(*) AS event_rows,
                     count(*) FILTER (WHERE v IS NOT NULL AND isfinite(v)) AS finite_rows,
                     count(*) FILTER (WHERE v IS NULL OR NOT isfinite(v)) AS excluded_rows,
-                    {aggregate}(v) FILTER (WHERE v IS NOT NULL AND isfinite(v)) AS metric_value
+                    {aggregate} FILTER (WHERE v IS NOT NULL AND isfinite(v)) AS metric_value
                 FROM (SELECT case_id, try_cast(json_extract_string(attributes, ?) AS DOUBLE) AS v
                       FROM ce WHERE case_id IN (SELECT case_id FROM qc)) typed
                 GROUP BY case_id""", [_path(metric.attribute)])
