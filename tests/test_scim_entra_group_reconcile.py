@@ -137,7 +137,7 @@ def _run(http, origin, token, raw, *, owg_opener=None, owg_origin=None):
         "127.0.0.1" if owg_origin else "owg.example.test",
         pid, TENANT, token, headers["Authorization"][7:], raw,
         allow_loopback_http=True,
-        owg_opener=owg_opener if owg_opener is not None else _ActualASGIRoutes(client),
+        owg_opener=owg_opener if owg_opener is not None else (None if owg_origin else _ActualASGIRoutes(client)),
     )
 
 
