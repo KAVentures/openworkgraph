@@ -1126,3 +1126,55 @@ After **each** independent source read, the route rechecks the current source ac
 For example, with reviewed A → B → C and previously issued A/B/C links, a confirmed call returning fresh provider-paid receipts for A and C but an outage for B reports `paid, unknown, paid` and `all_declared_case_provider_operations_verified: false`. Supplying only A and C links reports B as `not_checked`. Revoking A's review during the first source read aborts the request without checking B or C. The endpoint does not persist payment status, perform any source write, or give an agent permission to execute.
 
 **Synthetic end-to-end acceptance:** `tests/test_open_work_case_dependency_operations.py` uses actual local FastAPI session authorization, the private SQLite declaration ledger and synthetic Stripe case/receipt adapters. It covers prerequisite order, complete/partial/empty link coverage, outage and conflicting receipts, forged/extra/duplicate links, review revocation, source-account replacement, stale DAG, four-case limit, wrong declared goal, consent and privacy minimization. These committed tests are **not** evidence of live Stripe acceptance or real customer/business outcomes. Exact-head native Ubuntu/macOS/Windows pytest, browser, collaboration, scale, accessibility, starter and packaging/release gates remain mandatory before merging.
+
+
+## Portable operation verification timeline (explicit local REST, M4 milestone)
+
+`POST /v1/open-work/declarations/operation-timeline` lets a currently
+authenticated local dashboard operator explicitly check a previously
+source-joined Stripe invoice record, then carry forward a short signed
+history of independent provider checks. It is **not** a durable server-side
+outcome ledger, a customer-completion certificate, or an agent grant.
+
+Request JSON has **exactly** `work_item_ref`, `expected_revision`,
+`expected_edit_token`, `confirm_source_verification: true`,
+`record_link` (previously issued by `/operation-link`) and
+`prior_timeline` (null on first check; the last response's `timeline`
+on a later check). Each invocation explicitly calls the existing separately
+authorized read-only `source_operation_receipt(resource_ref,
+"stripe_invoice_paid")`; it does **not** rescan the open-invoice inventory.
+The response includes `latest_provider_state` (paid or unknown), a
+privacy-minimized HMAC-sealed `timeline` with up to eight timestamped checks,
+and separate historical paid/unknown observation counts.
+
+An independently reported paid invoice is **provider operational evidence
+only**. If a later read is unavailable, stale or contradictory, the newest
+entry is unknown; a prior paid observation remains in the history but is not
+recast as a fresh paid status, a refund, unpaid status, customer satisfaction,
+contractual obligation, expected business-goal achievement or agent causality.
+A source outage never turns an unknown into paid. All customer/business-outcome
+and agent-authority flags remain false.
+
+The server verifies the record-link seal and any prior timeline **before**
+provider IO, including the current exact declaration revision/incarnation,
+the full reviewed prerequisite DAG, source account binding, record binding,
+monotonic UTC timestamps, HMAC and 24-hour maximum expiry. An expired,
+tampered, foreign, changed-graph, replayed full (8-entry) or otherwise invalid
+history is refused before the read. After the provider call it rechecks source
+scope, current human review/retention and the exact dependency signature
+before appending. The response uses `Cache-Control: no-store` and carries no
+native Stripe ID, invoice amount, customer text, source account, edit token,
+raw OWG event or provider credential.
+
+The timeline is **operator-carried**: OWG does not save it, poll for changes,
+send it to agents or synchronize it. A copied signed timeline cannot be
+remotely erased, but it expires in at most 24 hours and cannot be used for
+new reads after revocation or changed graph. A production durable history
+with correction lifecycle, atomic cross-process grant fencing, independently
+verified customer outcomes and real Stripe acceptance remains **OPEN**.
+`tests/test_open_work_case_operation_timeline.py` exercises actual
+FastAPI/SQLite paths with a fake source for paid→unknown, integrity and
+capacity refusal, source switching, prerequisite review revocation during
+and before reads, authentication and privacy. These synthetic tests do not
+establish real provider/customer acceptance; required native CI must pass
+before merge.
