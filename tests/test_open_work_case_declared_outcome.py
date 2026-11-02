@@ -284,3 +284,105 @@ def test_tampered_retained_evidence_fails_closed_without_provider_read(local, mo
         history = _history(client, headers, saved)
         assert history.status_code in (403, 409, 422)
         assert history.headers.get("cache-control", "no-store") == "no-store"
+
+
+def test_provider_goal_transitions_follow_real_retained_checks(local, monkeypatch):
+    """An operator sees fresh state changes, not inferred nonpayment or success."""
+    with TestClient(app) as client:
+        headers = _auth()
+        saved = _declare(client, headers).json()
+        link = _link(client, headers, saved, monkeypatch)
+        reads = iter([None, _paid(R, "stripe_invoice_paid"), _paid(R, "stripe_invoice_paid"), None, None])
+        monkeypatch.setattr(routes, "source_operation_receipt", lambda *_args: next(reads))
+        expected = [
+            ("first_check", "unknown", 0, False),
+            ("unknown_to_paid", "unknown", 1, True),
+            ("unchanged_paid", "paid", 2, False),
+            ("paid_to_unknown", "paid", 3, True),
+            ("unchanged_unknown", "unknown", 4, False),
+        ]
+        for index, (transition, previous, count, changed) in enumerate(expected):
+            response = _verify(client, headers, saved, link)
+            assert response.status_code == 200, response.text
+            result = response.json()
+            assert result["provider_state_transition"] == transition
+            assert result["prior_historical_provider_state"] == previous
+            assert result["prior_provider_check_count"] == count
+            assert result["provider_check_count"] == index + 1
+            assert result["observed_provider_state_changed"] is changed
+            assert result["transition_based_on_atomically_fenced_local_ledger"] is True
+            assert result["prior_unknown_does_not_mean_unpaid"] is True
+            assert result["paid_to_unknown_does_not_prove_payment_reversal"] is True
+            assert result["customer_outcome_verified"] is False
+            assert result["agent_caused_outcome_verified"] is False
+            assert response.headers["cache-control"] == "no-store"
+            assert all(secret not in response.text for secret in ("acct_PRIVATE", "in_PRIVATE", R))
+        history = _history(client, headers, saved)
+        assert history.json()["provider_check_count"] == 5
+
+
+def test_disputed_prior_paid_check_is_not_a_current_paid_baseline(local, monkeypatch):
+    with TestClient(app) as client:
+        headers = _auth()
+        saved = _declare(client, _auth()).json()
+        link = _link(client, _auth(), saved, monkeypatch)
+        monkeypatch.setattr(routes, "source_operation_receipt", _paid)
+        assert _verify(client, _auth(), saved, link).status_code == 200
+        disputed = client.post(BASE + "/operation-ledger/dispute", headers=_auth(), json={
+            **_cas(saved), "confirm_dispute": True,
+            "target_sequence": 1, "reason_code": "operator_dispute",
+        })
+        assert disputed.status_code == 200, disputed.text
+        response = _verify(client, _auth(), saved, link)
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["provider_state_transition"] == "unknown_to_paid"
+        assert data["prior_last_check_disputed"] is True
+        assert data["prior_historical_provider_state"] == "unknown"
+        assert data["provider_check_count"] == 2
+        assert data["disputed_provider_check_count"] == 1
+
+
+def test_concurrent_ledger_dispute_rejected_atomically_before_new_append(local, monkeypatch):
+    """The source check cannot silently append after another writer disputes history."""
+    with TestClient(app) as client:
+        headers = _auth()
+        saved = _declare(client, headers).json()
+        link = _link(client, headers, saved, monkeypatch)
+        monkeypatch.setattr(routes, "source_operation_receipt", _paid)
+        assert _verify(client, headers, saved, link).status_code == 200
+        original = routes.append_operation_evidence
+        mutations = []
+        def mutate_before_append(admitted, signature, **kw):
+            mutations.append(True)
+            ledger.dispute_operation_evidence(
+                admitted, signature, scope=kw["scope"], secret=kw["secret"],
+                guard=kw["guard"], target_seq=1, reason="operator_dispute",
+            )
+            return original(admitted, signature, **kw)
+        monkeypatch.setattr(routes, "append_operation_evidence", mutate_before_append)
+        rejected = _verify(client, headers, saved, link)
+        assert rejected.status_code == 409, rejected.text
+        assert mutations == [True]
+        history = _history(client, headers, saved).json()
+        assert history["provider_check_count"] == 1
+        assert history["disputed_provider_check_count"] == 1
+        assert history["historical_last_provider_state"] == "unknown"
+
+
+def test_tampered_prior_evidence_refuses_source_read_before_transition(local, monkeypatch):
+    with TestClient(app) as client:
+        headers = _auth()
+        saved = _declare(client, headers).json()
+        link = _link(client, headers, saved, monkeypatch)
+        monkeypatch.setattr(routes, "source_operation_receipt", _paid)
+        assert _verify(client, headers, saved, link).status_code == 200
+        with sqlite3.connect(ledger._path()) as db:
+            db.execute("UPDATE evidence SET provider_state='unknown' WHERE seq=1")
+        monkeypatch.setattr(
+            routes, "source_operation_receipt",
+            lambda *_args: pytest.fail("tampered history must be rejected before source IO"),
+        )
+        rejected = _verify(client, headers, saved, link)
+        assert rejected.status_code in (403, 409, 422)
+        assert rejected.headers.get("cache-control", "no-store") == "no-store"
