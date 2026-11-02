@@ -56,7 +56,10 @@ recover the loose event through two independent A anchors, with a weaker
 A → B → loose with no observed return to A remains unassigned. Foreign B
 is never linked to A merely by switching tabs. A source-confirmed clipboard transfer that already joins
 A and B does not count as a competing component; an unknown/tabless record
-does not masquerade as an explicitly identified other tab.
+does not masquerade as an explicitly identified other tab. A same-instant
+foreign-record observation at a loose step or neighboring anchor is
+ambiguous regardless of deterministic event-ID sort order and therefore
+withholds one-sided tab membership.
 
 The read-only response exposes
 `observed_single_record_interleaved_focus_links` and
