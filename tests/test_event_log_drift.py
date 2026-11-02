@@ -320,6 +320,32 @@ def test_case_count_windows_small_windows_and_validation():
         drift.MAX_WINDOWS = monkey
 
 
+
+@pytest.mark.parametrize(("parameter", "value"), [
+    ("window_cases", 20.5), ("window_cases", float("nan")),
+    ("window_cases", float("inf")), ("window_cases", "20"),
+    ("window_cases", "not-a-number"), ("window_cases", None),
+    ("window_cases", True), ("window_cases", []),
+    ("min_cases", 10.5), ("min_cases", float("nan")),
+    ("min_cases", float("-inf")), ("min_cases", "10"),
+    ("min_cases", "not-a-number"), ("min_cases", None),
+    ("min_cases", False), ("min_cases", {}),
+])
+def test_drift_direct_parameters_reject_nonintegers_before_query(parameter, value, monkeypatch):
+    """Malformed direct-call parameters must fail with the public domain error, not coerce or crash."""
+    monkeypatch.setattr(workspace, "_query", lambda *args: pytest.fail("invalid parameters reached the query"))
+    with pytest.raises(workspace.EventLogWorkspaceError, match=parameter + " must be an integer"):
+        drift.drift("unused-synthetic-log", **{parameter: value})
+
+
+def test_drift_direct_parameters_accept_exact_integer_bounds(monkeypatch):
+    """Typed REST arguments and direct Python callers share the same inclusive integer bounds."""
+    monkeypatch.setattr(workspace, "_query", lambda *args: "validated-without-database")
+    for window_cases, min_cases in ((20, 10), (100_000, 10_000), (500, 30)):
+        assert drift.drift("unused-synthetic-log", window="cases",
+                           window_cases=window_cases, min_cases=min_cases) == "validated-without-database"
+
+
 def test_real_http_route_requires_a_dashboard_session(tmp_path):
     code = r'''
 from fastapi.testclient import TestClient
