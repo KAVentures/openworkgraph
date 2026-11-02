@@ -318,6 +318,8 @@ def _local_case_evidence(*, log_id, port, session, case_key, opener):
             or data["selected_cases"] < 0
             or type(data.get("cases")) is not list
             or len(data["cases"]) > MAX_OWG_CASES
+            or len(data["cases"]) > data["selected_cases"]
+            or (data.get("next_after") is not None and not data["cases"])
             or data.get("case_identity") !=
             "literal supplied key within this imported log and object type"
             or data.get("next_after") is not None
