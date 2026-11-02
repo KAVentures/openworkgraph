@@ -1201,7 +1201,10 @@ const path=require('node:path');
    assert.equal(await page.locator('#owgMetricList').locator('button').count(),1,
      'name collision must leave existing metric untouched');
    await page.getByRole('button',{name:'Remove metric review_first',exact:true}).click();
+   await page.locator('#owgAnalysisLevel').selectOption('events');
    await page.locator('#owgMetricCompareStages').click();
+   assert.equal(await page.locator('#owgAnalysisLevel').inputValue(),'cases',
+     'the comparison must return to case-level analysis even if the user selected Events');
    await page.locator('#owgAnalysisStatus').filter({hasText:'signed last minus first'}).waitFor();
    assert.equal(await page.locator('#owgMetricList').locator('button').count(),3);
    assert.equal(await page.locator('#owgAnalysisMeasure1').inputValue(),'avg:metric:review_delta');
