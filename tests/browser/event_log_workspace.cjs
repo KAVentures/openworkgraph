@@ -662,8 +662,55 @@ const path=require('node:path');
    await page.locator('#owgAnalysisStatus').filter({hasText:'Analysis saved.'}).waitFor();
    await page.getByRole('button',{name:'Remove metric half_wait',exact:true}).click();
    await page.getByRole('button',{name:'Remove metric to_approval',exact:true}).click();
+   // Saved arithmetic templates now restore the complete earlier-first metric
+   // graph from the authenticated per-log library in one atomic UI action.
    await page.getByRole('button',{name:'Add saved metric half_wait',exact:true}).click();
-   await page.locator('#owgAnalysisStatus').filter({hasText:'Add earlier metric to_approval first.'}).waitFor();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Added 2 saved metrics in dependency order'}).waitFor();
+   await page.locator('#owgMetricList').filter({hasText:'to_approval: time from the first Receive to the first Approve'}).waitFor();
+   await page.locator('#owgMetricList').filter({hasText:'half_wait: to_approval ÷ 2 ratio'}).waitFor();
+   await page.locator('#owgAnalysisMeasure1').selectOption('median:metric:half_wait');
+   assert.equal(await page.locator('#owgAnalysisSave').isDisabled(),true);
+   const [bundledResponse]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/analysis')),page.locator('#owgAnalysisRun').click()]);
+   assert.equal(bundledResponse.status(),200);
+   assert.deepEqual((await bundledResponse.json()).rows,arithmeticResult.rows);
+   const [bundledCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCsv').click()]);
+   assert.match(await fs.readFile(await bundledCsv.path(),'utf8'),/rework,21600/);
+   await page.locator('#owgAnalysisName').fill('Bundled approval wait');
+   await page.locator('#owgAnalysisSave').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Analysis saved.'}).waitFor();
+   const [bundledReplay]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/analysis')),page.getByRole('button',{name:'Run saved analysis Bundled approval wait',exact:true}).click()]);
+   assert.deepEqual((await bundledReplay.json()).rows,arithmeticResult.rows);
+   await page.getByRole('button',{name:'Add saved metric to_approval',exact:true}).click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'already has a metric named to_approval'}).waitFor();
+   // Missing, conflicting, cyclic and over-budget dependencies never partially
+   // modify a draft; identical existing definitions are safely reused.
+   const bundleCases=await page.evaluate(()=>{
+     const resolve=window.__owgEventLogModel.savedMetricBundle;
+     const base={name:'base',kind:'activity_count',activity:'Receive'};
+     const derived={name:'derived',kind:'arithmetic',expression_version:'1',operation:'add',
+       left:{kind:'metric',name:'base'},right:{kind:'constant',value:1,unit:'ratio'}};
+     const check=(entries,current=[])=>{try{return resolve(derived,entries,current).map(m=>m.name);}catch(e){return e.message;}};
+     const cycleA={...derived,name:'derived',left:{kind:'metric',name:'base'}};
+     const cycleB={...derived,name:'base',left:{kind:'metric',name:'derived'}};
+     const existing=[{name:'other1',kind:'activity_count',activity:'Start'},
+       {name:'other2',kind:'activity_count',activity:'Start'},
+       {name:'other3',kind:'activity_count',activity:'Start'}];
+     const before=JSON.stringify(existing);
+     const capacity=check([base,derived],existing);
+     return {complete:check([base,derived]),missing:check([derived]),
+       conflict:check([base,derived],[{...base,activity:'Approve'}]),
+       ambiguous:check([base,{...base,activity:'Approve'},derived]),
+       cycle:check([cycleA,cycleB]),capacity,unchanged:JSON.stringify(existing)===before,
+       reuse:check([base,derived],[{activity:'Receive',kind:'activity_count',name:'base'}])};
+   });
+   assert.deepEqual(bundleCases.complete,['base','derived']);
+   assert.deepEqual(bundleCases.reuse,['derived']);
+   assert.match(bundleCases.missing,/Missing saved dependency base/);
+   assert.match(bundleCases.conflict,/different definition/);
+   assert.match(bundleCases.ambiguous,/conflicting templates/);
+   assert.match(bundleCases.cycle,/dependency cycle/);
+   assert.match(bundleCases.capacity,/exceed four case metrics/);
+   assert.equal(bundleCases.unchanged,true);
    const [rerunArithmetic]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/analysis')),page.getByRole('button',{name:'Run saved analysis Half approval wait',exact:true}).click()]);
    assert.deepEqual((await rerunArithmetic.json()).rows,arithmeticResult.rows);
    await page.getByRole('button',{name:'Add saved metric to_approval',exact:true}).click();
