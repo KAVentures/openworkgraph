@@ -275,10 +275,57 @@
     const list=el('div');list.id='owgPipelineList';
     const viewCount=el('div',null,'muted');viewCount.id='owgPipelineViewCount';viewCount.setAttribute('role','status');
     const detail=el('div');detail.id='owgPipelineDetail';
-    card.append(row,tools,status,counts,viewCount,list,detail);
+    const resumeFile=input('owgPipelineResumeBundleFile','file');
+    resumeFile.accept='.json,application/json';
+    const resumeButton=button('Resume exact review from saved bundle','secondary');
+    resumeButton.id='owgPipelineResumeBundle';
+    const resumeStatus=el('div','Choose a previously downloaded OWG review bundle. It stays in this browser; nothing is approved or executed.','muted');
+    resumeStatus.id='owgPipelineResumeStatus';
+    resumeStatus.setAttribute('role','status');resumeStatus.setAttribute('aria-live','polite');
+    const resumeSection=el('section');resumeSection.id='owgPipelineResumeSection';
+    resumeSection.append(el('h3','Resume a previous human review'),
+      field('Local review bundle (JSON, up to 64 KiB)',resumeFile),resumeButton,resumeStatus);
+    card.append(row,resumeSection,tools,status,counts,viewCount,list,detail);
     panel.appendChild(card);
 
-    let latestIdeas=[],refreshGeneration=0;
+    let latestIdeas=[],refreshGeneration=0,resumeGeneration=0;
+    resumeFile.onchange=()=>{
+      resumeGeneration++;
+      resumeStatus.textContent='File selected. Resume explicitly to recheck the exact saved idea and project.';
+    };
+    resumeButton.onclick=async()=>{
+      const file=resumeFile.files?.[0];
+      if(!file||!file.size||file.size>65536){
+        resumeStatus.textContent='Select a non-empty OWG review bundle JSON file no larger than 64 KiB.';
+        return;
+      }
+      const request=++resumeGeneration;
+      resumeButton.disabled=true;
+      resumeStatus.textContent='Validating the local bundle before opening any saved project…';
+      try{
+        const value=JSON.parse(await file.text());
+        if(value?.format!==REVIEW_BUNDLE_FORMAT)
+          throw new Error('Choose an OWG resumable human review bundle, not a standalone review packet.');
+        const {saved,inspectionRecord}=unpackHandoffReviewInput(value);
+        compareHandoffReviewPackets(saved,saved);
+        if(!inspectionRecord||inspectionRecord.idea_id!==saved.idea.idea_id||
+          inspectionRecord.project_id!==saved.project.project_id||
+          inspectionRecord.scope!=='local_human_inspection_only'||
+          inspectionRecord.execution_authorized!==false||
+          inspectionRecord.source_read_authorized!==false||
+          inspectionRecord.human_approval_granted!==false||
+          inspectionRecord.verified_execution!==false||
+          inspectionRecord.verified_business_outcomes!==false)
+          throw new Error('Bundle inspection identity or safety fields do not match the saved review.');
+        if(request!==resumeGeneration)return;
+        resumeStatus.textContent='Opening the exact saved idea and project for a fresh local comparison…';
+        await show(saved.idea.idea_id,{file,projectId:saved.project.project_id,
+          valid:()=>request===resumeGeneration});
+      }catch(e){
+        if(request===resumeGeneration)
+          resumeStatus.textContent='Could not resume review: '+(e instanceof SyntaxError?'Invalid JSON.':e.message);
+      }finally{if(request===resumeGeneration)resumeButton.disabled=false;}
+    };
     function render(){
       const ideas=portfolioView(latestIdeas,{query:search.value,quadrant:quadrant.value,sort:sort.value});
       viewCount.textContent=ideas.length+' shown of '+latestIdeas.length+' in selected state. CSV includes the entire selected state.';
@@ -303,7 +350,8 @@
     }
 
     let detailGeneration=0;
-    async function show(ideaId){
+    async function show(ideaId,resume=null){
+      if(!resume)resumeGeneration++;
       const generation=++detailGeneration;
       const idea=await (await api('/v1/automation-pipeline/'+encodeURIComponent(ideaId))).json();
       if(generation!==detailGeneration)return;
@@ -410,8 +458,14 @@
             guide.insertBefore(next,guideStatus);
             return;
           }
+          if(resume&&!data.projects.some(project=>project.project_id===resume.projectId)){
+            resumeStatus.textContent='Exact saved project is unavailable or deleted. No other project was selected, and no inspection marks were restored.';
+            return;
+          }
           const choice=select('owgPipelineJourneyProject',data.projects.map(p=>[p.project_id,'Idea revision '+p.idea_revision+' · '+p.created_at]));
+          if(resume)choice.value=resume.projectId;
           const artifact=el('div');artifact.id='owgPipelineJourneyArtifact';
+          let resumeCompare=null;
           const render=()=>{
             const p=data.projects.find(item=>item.project_id===choice.value);if(!p)return;
             artifact.replaceChildren();const list=el('dl');
@@ -738,6 +792,14 @@
                   comparePacket.disabled=false;
               }
             };
+            if(resume&&p.project_id===resume.projectId)resumeCompare=async()=>{
+              // Reuse the exact same fresh authenticated comparison and digest
+              // validation as manual import; the file never leaves the browser.
+              const transfer=new DataTransfer();
+              transfer.items.add(resume.file);
+              priorPacket.files=transfer.files;
+              await comparePacket.onclick();
+            };
             actions.append(reportsAction,sourceAction,downloadPacket);
             const packetImport=el('section');packetImport.append(
               field('Previously downloaded review packet or resumable review bundle (local JSON only)',priorPacket),
@@ -747,8 +809,16 @@
               'Historical idea revision: reopen and review the current idea before attempting new checks or report associations.','muted'));
           };
           choice.onchange=render;journeyHost.append(field('Recorded project',choice),artifact);render();
+          if(resume&&resume.valid()&&generation===detailGeneration&&resumeCompare){
+            await resumeCompare();
+            if(resume.valid()&&generation===detailGeneration)
+              resumeStatus.textContent='Opened the exact saved idea and project. Fresh comparison completed; inspect its drift and restoration status below. No approval, consent or execution was granted.';
+          }
           if(data.projects_truncated)journeyHost.appendChild(el('p','Only the first '+data.max_projects+' projects are shown.'));
-        }catch(e){if(generation===detailGeneration)journeyHost.replaceChildren(el('div',e.message,'muted'));}
+        }catch(e){if(generation===detailGeneration){
+          journeyHost.replaceChildren(el('div',e.message,'muted'));
+          if(resume&&resume.valid())resumeStatus.textContent='Could not resume the exact project: '+e.message;
+        }}
         finally{journeyButton.disabled=false;journeyButton.textContent='Refresh evidence journey';}
       };
       box.append(journeyButton,journeyHost);
@@ -931,6 +1001,8 @@
       remove.onclick=async()=>{if(!window.confirm('Delete the idea "'+idea.title+'"? This cannot be undone.'))return;try{await api('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/delete',{method:'POST'});detail.replaceChildren();await refresh();status.textContent='Idea deleted.';}catch(e){status.textContent=e.message;}};
       box.append(el('h4','History'),history,remove);
       detail.replaceChildren(box);
+      if(resume&&resume.valid()&&generation===detailGeneration)
+        await journeyButton.onclick();
     }
 
     window.addEventListener('owg-pipeline-open',event=>{
