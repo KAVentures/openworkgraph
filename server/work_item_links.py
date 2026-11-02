@@ -542,7 +542,10 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
     # work. If an independently observed same-scope foreign record interrupts
     # its one-sided tab evidence, require a bounded two-sided A -> loose -> A
     # witness. Never let the foreign case itself become a membership endpoint.
-    single_record_boundaries = single_record_tab_foreign_case_boundaries(rows, by_tab, pre_tab_root)
+    single_record_boundaries = single_record_tab_foreign_case_boundaries(
+        rows, {key: tab_rows for key, tab_rows in by_tab.items()
+               if key not in tainted_tabs}, pre_tab_root,
+    )
     single_record_tabs = {
         key for key, tab_rows in by_tab.items()
         if key not in tainted_tabs and
