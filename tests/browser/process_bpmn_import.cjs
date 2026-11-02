@@ -141,6 +141,53 @@ assert all('PRIVATE_XML_GATEWAY' not in row[0] and 'PRIVATE_SOURCE_DOC' not in r
 assert c.execute('SELECT COUNT(*) FROM events').fetchone()[0]==0
 `,path.join(scratch,'data','workflow_observer.db')],{encoding:'utf8'});
   assert.equal(disk.status,0,disk.stderr);assert.deepEqual(errors,[]);
+  // Restoration is a new reviewed revision, never an automatic rollback.
+  await page.getByRole('button',{name:'Load revision history',exact:true}).click();
+  await page.getByRole('button',{name:'Compare r1 with opened r2',exact:true}).click();
+  const restoreView=page.locator('#owgCatalogRevisionComparison');await restoreView.waitFor();
+  const restore=restoreView.getByRole('button',{name:'Prepare historical r1 as unsaved restoration draft',exact:true});
+  // A changed latest digest is a hard refusal, even when the comparison was valid.
+  const revisionRoute='**/v1/process-catalog/revision?*';
+  await page.route(revisionRoute,async route=>{
+    if(new URL(route.request().url()).searchParams.has('revision'))return route.continue();
+    const response=await route.fetch(),payload=await response.json();
+    payload.content_sha256='0'.repeat(64);
+    await route.fulfill({response,json:payload});
+  });
+  await restore.click();
+  await page.locator('#owgCatalogStatus').filter({hasText:'The saved revision or latest process changed.'}).waitFor();
+  assert.equal(saves,2);assert.equal(comparisonWrites,0);
+  await page.unroute(revisionRoute);
+  page.once('dialog',dialog=>dialog.accept());
+  await restore.focus();await page.keyboard.press('Enter');
+  await page.locator('#owgCatalogStatus').filter({hasText:'UNSAVED restoration draft from r1 against latest r2.'}).waitFor();
+  assert.equal(saves,2,'preparing a restoration must not persist or execute anything');
+  assert.equal(await page.locator('#owgCatalogReviewed').isChecked(),false);
+  assert.equal(await page.locator('#owgCatalogRevisionComparison').count(),0);
+  await page.locator('#owgCatalogReviewed').check();
+  await page.getByRole('button',{name:'Save new revision',exact:true}).click();
+  await page.locator('#owgCatalogStatus').filter({hasText:'Saved revision 3.'}).waitFor();
+  assert.equal(saves,3,'restoration requires a distinct explicit reviewed save');
+  // Restore r2, whose imported predicate was user-confirmed, and verify that
+  // even a previously confirmed business rule becomes unconfirmed in the draft.
+  await page.getByRole('button',{name:'Load revision history',exact:true}).click();
+  await page.getByRole('button',{name:'Compare r2 with opened r3',exact:true}).click();
+  await page.locator('#owgCatalogRevisionComparison').waitFor();
+  page.once('dialog',dialog=>dialog.accept());
+  await page.getByRole('button',{name:'Prepare historical r2 as unsaved restoration draft',exact:true}).click();
+  await page.locator('#owgCatalogStatus').filter({hasText:'UNSAVED restoration draft from r2 against latest r3.'}).waitFor();
+  const restoredPredicate=editor.locator('.owg-rule-predicate').filter({hasText:'Structured conditions · import_rule_2'});
+  assert.equal(await restoredPredicate.locator('..').getByLabel('User-confirmed rule',{exact:true}).isChecked(),false);
+  assert.equal(await page.locator('#owgCatalogReviewed').isChecked(),false);
+  assert.equal(saves,3);
+  await page.locator('#owgCatalogReviewed').check();
+  await page.getByRole('button',{name:'Save new revision',exact:true}).click();
+  await page.locator('#owgCatalogStatus').filter({hasText:'Saved revision 4.'}).waitFor();
+  assert.equal(saves,4);
+  await page.getByRole('button',{name:'Load revision history',exact:true}).click();
+  for(const revision of [1,2,3,4])
+    assert.equal(await page.getByRole('button',{name:new RegExp('^Open revision '+revision+' ·')}).count(),1);
+  assert.deepEqual(errors,[]);
   console.log('BPMN import browser acceptance passed: explicit preview, unreviewed branch/merge draft, inert annotations, no source IDs/notes in saved model, reviewed save, nonexecuting export, unsupported-semantics rejection and mobile.');
  }finally{
   if(browser)await browser.close();server.kill('SIGTERM');
