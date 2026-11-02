@@ -885,7 +885,9 @@ const path=require('node:path');
    assert.deepEqual(drafts[0].path,['Read A record','Check A exception','Close A']);
    assert.equal(drafts[0].count,7);
    assert.match(await page.locator('#owgCatalogEditor').textContent(),/Read A record → Check A exception → Close A/);
-   assert.equal(await twoSidedDraft.isDisabled(),true,'confirmation is consumed');
+   // Opening the draft switches to the catalog tab, hiding the explorer controls;
+   // role queries skip hidden elements unless asked to include them.
+   assert.equal(await page.getByRole('button',{name:'Open chosen variant as unsaved catalog draft',exact:true,includeHidden:true}).isDisabled(),true,'confirmation is consumed');
    assert.equal(evidenceReads,readsBeforeTwoSided+7,'no implicit reads in comparison or draft');
    await page.locator('[role=tab][data-tab=overview]').click();
    // A distinct, explicitly reviewed observed alternative becomes editable TO-BE,
@@ -911,7 +913,7 @@ const path=require('node:path');
    assert.match(editor,/Read B record → Escalate B → Close B/,'baseline remains chosen AS-IS');
    assert.match(editor,/Read A record/,'editable proposed activities come from other lane');
    assert.match(await page.locator('#owgCatalogStatus').textContent(),/TO-BE activities.*not verified policy/i);
-   assert.equal(await alternativeDraft.isDisabled(),true,'alternative acknowledgement is consumed');
+   assert.equal(await page.getByRole('button',{name:'Open AS-IS and observed alternative as unsaved TO-BE draft',exact:true,includeHidden:true}).isDisabled(),true,'alternative acknowledgement is consumed');
 
    // Functional human clarification: actual process-model edit, reviewed save,
    // then reopen the same revision in a fresh browser session.
@@ -988,7 +990,8 @@ const path=require('node:path');
    });
    try{
      await reopened.goto(base+'/#session='+session);
-     await reopened.locator('#owgProcessCatalog').waitFor();
+     // A fresh page opens on the overview tab; the catalog is mounted on the evidence tab.
+     await reopened.locator('#owgProcessCatalog').waitFor({state:'attached'});
      await reopened.evaluate(()=>window.owgProcessCatalog.openSaved({
        workflow_id:'reviewed_difference_fixture',revision:1,content_sha256:'f'.repeat(64)}));
      assert.equal(await reopened.locator('#owgCatalogEditor').getByLabel('Condition label 1').inputValue(),'Review missing source step');
@@ -1000,7 +1003,7 @@ const path=require('node:path');
    overflow.on('pageerror',error=>errors.push(error.message));
    try{
      await overflow.goto(base+'/#session='+session);
-     await overflow.locator('#owgProcessCatalog').waitFor();
+     await overflow.locator('#owgProcessCatalog').waitFor({state:'attached'});
      await overflow.evaluate(()=>window.owgProcessCatalog.draftObserved({
        basis:'selected_observed_variant',count:1,
        path:Array.from({length:14},(_,i)=>'AS-IS '+i),
