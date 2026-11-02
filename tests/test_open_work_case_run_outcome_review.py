@@ -18,6 +18,7 @@ from server.local_auth import create_dashboard_session
 from server.secure_app import app
 
 CASE = "owg:w:" + "a" * 32
+RESOURCE = "owg:r:" + "f" * 32
 BASE = "/v1/open-work/declarations"
 ENDPOINT = BASE + "/human-outcomes/compare-imported-run"
 
@@ -201,3 +202,84 @@ def test_pure_comparison_never_equates_post_run_paid_receipt_with_causality():
     before = review.compose_run_outcome_review(run, triage, plan)
     assert before["provider_check_vs_reported_run_finish"] == "before_reported_finish"
     assert before["narrow_historical_paid_observed_after_reported_finish"] is False
+
+
+def test_real_provider_ledger_check_after_reported_run_is_historical_not_causal(local, monkeypatch):
+    """Full signed source-link -> synthetic provider receipt -> SQLite -> run review."""
+    dep = monitoring.import_report(_run())["deployment"]["deployment_id"]
+
+    def scan(ref, **_kwargs):
+        return {
+            "format": "openworkgraph.open-work-case-context.v1",
+            "work_item_ref": ref, "availability": "source_reported",
+            "source_evidence": {
+                "provider": "stripe", "source_state": "open",
+                "status_scope": "stripe_invoice_open", "inventory_complete": False,
+                "verified_at": datetime.now(timezone.utc).isoformat(),
+                "native_id": "in_PRIVATE",
+            },
+            "related_owg_evidence": [{
+                "resource_ref": RESOURCE, "observed_event_count": 2,
+                "observed_session_count": 1, "observed_actor_count": 1,
+                "timeline": [{"customer": "PRIVATE@example.invalid"}],
+            }],
+            "related_record_history_incomplete": False,
+        }
+
+    def paid(ref, operation):
+        assert (ref, operation) == (RESOURCE, "stripe_invoice_paid")
+        return {
+            "format": "openworkgraph.source-operation-receipt.v1",
+            "resource_ref": RESOURCE, "expected_operation": operation,
+            "availability": "source_reported", "operation_verified": True,
+            "provider": "stripe", "provider_record_kind": "invoice",
+            "provider_reported_state": "paid",
+            "verification_scope": "authenticated_source_provider_operational_state",
+            "verified_at": datetime.now(timezone.utc).isoformat(),
+            "business_objective_verified": False, "customer_outcome_verified": False,
+            "agent_caused_operation_verified": False,
+            "agent_execution_authorized": False, "read_only": True,
+            "native_id": "in_PRIVATE",
+        }
+
+    with TestClient(app) as client:
+        headers = _auth()
+        saved = _case(client, headers)
+        cas = {
+            "work_item_ref": CASE, "expected_revision": saved["revision"],
+            "expected_edit_token": saved["edit_token"],
+        }
+        monkeypatch.setattr(routes, "stripe_open_work_case_context", scan)
+        link = client.post(BASE + "/operation-link", headers=headers, json={
+            **cas, "confirm_source_scan": True, "max_pages": 2,
+            "resource_ref": RESOURCE,
+        })
+        assert link.status_code == 200, link.text
+        monkeypatch.setattr(routes, "source_operation_receipt", paid)
+        checked = client.post(BASE + "/operation-ledger/check", headers=headers, json={
+            **cas, "confirm_source_verification": True,
+            "record_link": link.json()["record_link"],
+        })
+        assert checked.status_code == 200, checked.text
+        human = client.post(BASE + "/human-outcomes/assess", headers=headers, json={
+            **cas, "confirm_human_assessment": True,
+            "human_status": "met", "reason_code": "owner_review",
+        })
+        assert human.status_code == 200, human.text
+
+        def forbidden(*_args, **_kwargs):
+            pytest.fail("comparison must not re-read Stripe")
+        monkeypatch.setattr(routes, "source_operation_receipt", forbidden)
+        monkeypatch.setattr(routes, "stripe_open_work_case_context", forbidden)
+        result = client.post(ENDPOINT, headers=headers, json=_payload(saved, dep))
+        assert result.status_code == 200, result.text
+        data = result.json()
+        assert data["provider_check_count"] == 1
+        assert data["historical_last_provider_state"] == "paid"
+        assert data["latest_human_assessed_status"] == "met"
+        assert data["provider_check_vs_reported_run_finish"] == "on_or_after_reported_finish"
+        assert data["narrow_historical_paid_observed_after_reported_finish"] is True
+        assert data["run_case_identity_independently_verified"] is False
+        assert data["customer_outcome_verified"] is False
+        assert data["agent_caused_outcome_verified"] is False
+        assert RESOURCE not in result.text and "in_PRIVATE" not in result.text
