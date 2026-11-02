@@ -315,3 +315,23 @@ def test_single_record_tab_two_independent_interleaved_returns_remain_separate()
     assert result["observed_single_record_interleaved_focus_links"] == 2
     assert ("e03", "e05") in groups(result)
     assert not groups(result)[("e03", "e05")]["cross_record_join"]
+
+
+def test_single_record_tab_does_not_veto_independently_witnessed_clipboard_case():
+    first = event(1, A, tab="main", transfer="transfer-1")
+    first["event_type"] = "copy"
+    second = event(2, B, tab="other", transfer="transfer-1")
+    second["event_type"] = "paste"
+    result = linked_work_items([first, second, event(3, tab="main")])
+    item = groups(result)[("e01", "e02", "e03")]
+    assert item["cross_record_join"] is True
+    assert item["link_basis"] == {
+        "clipboard_transfer": 1, "same_tab_single_record": 1,
+    }
+    assert result["ambiguous_single_record_tab_interleaving_abstentions"] == 0
+
+
+def test_single_record_tab_does_not_treat_tabless_record_as_named_foreign_tab():
+    result = linked_work_items([event(1, A), event(2, B, tab=None), event(3)])
+    assert ("e01", "e03") in groups(result)
+    assert result["ambiguous_single_record_tab_interleaving_abstentions"] == 0
