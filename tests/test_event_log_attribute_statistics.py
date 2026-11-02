@@ -78,8 +78,8 @@ def test_complete_policy_withholds_partially_observed_case(log):
     assert run(log, "maximum", "complete")["rows"] == [[20.0]]
 
 
-def test_nonfinite_inputs_do_not_poison_mean_and_empty_cohort_is_unknown(log):
-    all_cases = query.run(log, {"level": "cases", "metrics": [metric()],
+def test_nonfinite_inputs_do_not_poison_extrema_and_empty_cohort_is_unknown(log):
+    all_cases = query.run(log, {"level": "cases", "metrics": [metric("maximum")],
         "measures": [{"fn": "max", "of": "metric:price"}]})
     assert all_cases["rows"] == [[1e308]]
     assert all_cases["metrics"][0]["cases_with_value"] == 3
