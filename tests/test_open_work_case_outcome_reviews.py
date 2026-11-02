@@ -153,9 +153,9 @@ def test_review_deletion_and_source_disconnect_scrub_feedback(local):
         assert _assess(client, headers, saved).status_code == 200
         assert reviews.remove_review_intention(B)
         assert _history(client, headers, saved).status_code in (403, 409, 422)
-        with outcomes._database(create=False) as db:
-            assert db is not None
-            assert db.execute("SELECT COUNT(*) FROM assessments").fetchone()[0] == 0
+        # Deleting a prerequisite can invalidate other reviewed cases;
+        # scrub the whole auxiliary feedback store, not only one row.
+        assert not outcomes._path().exists()
         account["id"] = None
         assert _history(client, headers, saved).status_code == 403
         reviews.clear_review_intentions()
