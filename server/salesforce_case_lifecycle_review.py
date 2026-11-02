@@ -15,6 +15,9 @@ import sys
 from urllib import error, parse, request
 
 from scripts.salesforce_case_history import _key
+from .servicenow_owg_append import (
+    _LOG, _opener, _session, verify_local_target, AppendError,
+)
 from server.salesforce_case_history_live import (
     _instance, _NoRedirect, _unique, _nonfinite, TOKEN,
 )
@@ -275,6 +278,154 @@ def review(*, instance, confirm_host, namespace, cases, token, output,
     return receipt
 
 
+
+# Optional second phase: compare a pinned source lifecycle observation with
+# actual retained evidence in one explicitly selected, local OWG source log.
+IMPACT_FORMAT = "openworkgraph.salesforce-case-owg-impact.v1"
+MAX_OWG_CASES = 100
+
+
+def _local_case_evidence(*, log_id, port, session, case_key, opener):
+    """Read a bounded source_case page; never export raw activities/resources.
+
+    Starting just before the selected key makes this a targeted seek without
+    exposing all retained cases or fetching individual event payloads.
+    """
+    url = (f"http://127.0.0.1:{port}/v1/event-logs/{log_id}/cases/query"
+           "?case_type=source_case")
+    body = _canonical({"after": case_key[:-1], "limit": MAX_OWG_CASES})
+    req = request.Request(url, data=body, method="POST", headers={
+        "Authorization": "OWG-Session " + session,
+        "Content-Type": "application/json", "Accept": "application/json",
+        "Cache-Control": "no-store",
+    })
+    try:
+        with opener.open(req, timeout=15) as response:
+            status = response.status
+            final_url = response.geturl()
+            media = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+            raw = response.read(MAX_BYTES + 1)
+    except (OSError, error.URLError, ValueError):
+        raise LifecycleReviewError("Local OWG case evidence read refused") from None
+    if status != 200 or final_url != url or media != "application/json" or len(raw) > MAX_BYTES:
+        raise LifecycleReviewError("Incomplete local OWG case evidence response")
+    try:
+        data = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique,
+                          parse_constant=_nonfinite)
+    except (ValueError, UnicodeError, TypeError, RecursionError):
+        raise LifecycleReviewError("Invalid local OWG case evidence") from None
+    if (type(data) is not dict or type(data.get("selected_cases")) is not int
+            or data["selected_cases"] < 0
+            or type(data.get("cases")) is not list
+            or len(data["cases"]) > MAX_OWG_CASES
+            or data.get("case_identity") !=
+            "literal supplied key within this imported log and object type"
+            or data.get("next_after") is not None
+            and type(data["next_after"]) is not str):
+        raise LifecycleReviewError("Unverifiable local OWG case page")
+    last = case_key[:-1]
+    observed = None
+    for row in data["cases"]:
+        if (type(row) is not dict or type(row.get("case_id")) is not str
+                or row["case_id"] <= last or type(row.get("events")) is not int
+                or row["events"] < 1):
+            raise LifecycleReviewError("Invalid local OWG case row")
+        last = row["case_id"]
+        if last == case_key:
+            observed = row["events"]
+    if data["next_after"] is not None and data["next_after"] != last:
+        raise LifecycleReviewError("Inconsistent local OWG case cursor")
+    # A page that stops before the selected key cannot establish its absence.
+    if observed is not None:
+        return "observed", observed
+    if data["next_after"] is not None and last < case_key:
+        return "unknown", None
+    return "not_observed", None
+
+
+def impact(*, instance, confirm_host, namespace, cases, previous_review,
+           previous_sha256, output, log_id, confirm_log_id, port, session,
+           consent_local_owg_read=False, consent_private_impact=False,
+           allow_loopback_http=False, opener=None):
+    """Bounded authenticated OWG evidence impact of a pinned source review.
+
+    No Salesforce request, provider/local writes, deletion or checkpoint change.
+    """
+    if consent_local_owg_read is not True or consent_private_impact is not True:
+        raise LifecycleReviewError("Separate local evidence and private review consents required")
+    origin = _instance(instance, confirm_host, allow_loopback_http)
+    scope = _scope_hash(origin, namespace, cases)
+    prior = _previous(previous_review, previous_sha256, scope, namespace, cases)
+    if (type(log_id) is not str or _LOG.fullmatch(log_id) is None
+            or confirm_log_id != log_id or type(port) is not int
+            or not 1 <= port <= 65535):
+        raise LifecycleReviewError("Exact local OWG log and port confirmation required")
+    try:
+        session = _session(session)
+    except AppendError:
+        raise LifecycleReviewError("Current local dashboard session required") from None
+    if not isinstance(output, Path):
+        raise LifecycleReviewError("New private impact review path required")
+    _private_parent(output)
+    if output.exists() or output.is_symlink():
+        raise LifecycleReviewError("Impact review path already exists")
+    transport = _opener() if opener is None else opener
+    source_namespace = "sf_" + scope[:32]
+    try:
+        verify_local_target(log_id, port, source_namespace, session, opener=transport)
+    except AppendError:
+        raise LifecycleReviewError("Selected OWG log source scope or authorization refused") from None
+    rows = []
+    for state in prior["case_states"]:
+        key = "src:" + source_namespace + ":" + state["case_id"]
+        presence, count = _local_case_evidence(
+            log_id=log_id, port=port, session=session, case_key=key,
+            opener=transport)
+        rows.append({
+            "case_id": state["case_id"], "source_state": state["source_state"],
+            "owg_evidence": presence, "owg_events": count,
+        })
+    summary = {
+        "source_soft_deleted_with_owg_evidence": sum(
+            row["source_state"] == "soft_deleted" and row["owg_evidence"] == "observed"
+            for row in rows),
+        "source_unresolved_with_owg_evidence": sum(
+            row["source_state"] == "unresolved" and row["owg_evidence"] == "observed"
+            for row in rows),
+        "owg_cases_observed": sum(row["owg_evidence"] == "observed" for row in rows),
+        "owg_cases_not_observed": sum(row["owg_evidence"] == "not_observed" for row in rows),
+        "owg_cases_unknown": sum(row["owg_evidence"] == "unknown" for row in rows),
+    }
+    artifact = {
+        "format": IMPACT_FORMAT, "scope_sha256": scope,
+        "source_review_sha256": previous_sha256,
+        "source_checked_at_utc": prior["checked_at_utc"],
+        "owg_checked_at_utc": datetime.now(timezone.utc).isoformat(
+            timespec="seconds").replace("+00:00", "Z"),
+        "owg_log_id": log_id, "selected_cases": len(rows),
+        "case_impacts": rows, "counts": summary,
+        "source_completeness": "unknown",
+        "owg_historical_completeness": "unknown",
+        "missing_means_deleted": False,
+        "deletion_or_retention_authorized": False,
+        "owg_deletion_performed": False, "source_writes_performed": False,
+        "checkpoint_advanced": False, "review_required": True,
+    }
+    payload = _canonical(artifact)
+    try:
+        _new_private(output, payload)
+    except (OSError, ValueError):
+        raise LifecycleReviewError("Private impact review creation refused") from None
+    return {
+        "format": IMPACT_FORMAT, "status": "impact_review_created",
+        "selected_cases": len(rows), "counts": summary,
+        "impact_sha256": _digest(payload),
+        "review_required": True, "deletion_or_retention_authorized": False,
+        "owg_deletion_performed": False, "source_writes_performed": False,
+        "checkpoint_advanced": False,
+    }
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--instance", required=True)
@@ -284,6 +435,14 @@ def main(argv=None):
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--max-pages", type=int, default=1)
     parser.add_argument("--previous-review", type=Path)
+    parser.add_argument("--impact-review", type=Path,
+                        help="Pinned lifecycle review for local OWG evidence impact mode")
+    parser.add_argument("--impact-sha256")
+    parser.add_argument("--owg-log-id")
+    parser.add_argument("--confirm-owg-log-id")
+    parser.add_argument("--owg-port", type=int, default=8765)
+    parser.add_argument("--consent-local-owg-read", action="store_true")
+    parser.add_argument("--consent-private-impact", action="store_true")
     parser.add_argument("--previous-sha256")
     parser.add_argument("--consent-compare-previous-review", action="store_true")
     parser.add_argument("--consent-source-lifecycle-read", action="store_true")
@@ -292,6 +451,27 @@ def main(argv=None):
                         help="Disposable local acceptance only")
     args = parser.parse_args(argv)
     try:
+        if args.impact_review is not None:
+            if (args.previous_review is not None or args.previous_sha256 is not None
+                    or args.consent_compare_previous_review
+                    or args.consent_source_lifecycle_read or args.consent_private_review):
+                raise LifecycleReviewError("Source-read and local impact modes must remain separate")
+            result = impact(
+                instance=args.instance, confirm_host=args.confirm_host,
+                namespace=args.namespace, cases=args.cases,
+                previous_review=args.impact_review,
+                previous_sha256=args.impact_sha256, output=args.output,
+                log_id=args.owg_log_id, confirm_log_id=args.confirm_owg_log_id,
+                port=args.owg_port, session=os.environ.get("OWG_DASHBOARD_SESSION"),
+                consent_local_owg_read=args.consent_local_owg_read,
+                consent_private_impact=args.consent_private_impact,
+                allow_loopback_http=args.allow_loopback_http)
+            print(json.dumps(result, sort_keys=True))
+            return 0
+        if (args.impact_sha256 is not None or args.owg_log_id is not None
+                or args.confirm_owg_log_id is not None
+                or args.consent_local_owg_read or args.consent_private_impact):
+            raise LifecycleReviewError("Local impact flags require a pinned impact review")
         if not (args.consent_source_lifecycle_read and args.consent_private_review):
             raise LifecycleReviewError("Explicit source read and review consents required")
         result = review(instance=args.instance, confirm_host=args.confirm_host,
