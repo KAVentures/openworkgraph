@@ -108,4 +108,63 @@ def bracketed_multiplexed_tab_focus(
     return proposals
 
 
-__all__ = ["bracketed_multiplexed_tab_focus"]
+
+def single_record_tab_foreign_case_boundaries(
+    ordered_rows: list[dict[str, Any]],
+    by_tab: dict[tuple[tuple[str, str, str, str], str], list[dict[str, Any]]],
+) -> set[str]:
+    """Loose single-record-tab IDs needing independent two-sided focus evidence.
+
+    A tab's sole observed record is not sufficient when another exact record
+    from the same complete capture scope appears between the loose step and
+    either adjacent same-tab record anchor. The other record is a negative
+    boundary, not a positive link. No time threshold or source text is used.
+    Per-scope and per-record position indexes make this O(n log n).
+    """
+    from bisect import bisect_left, bisect_right
+    from collections import defaultdict
+
+    positions = {row["event_id"]: i for i, row in enumerate(ordered_rows)}
+    all_record_positions: dict[tuple[str, str, str, str], list[int]] = defaultdict(list)
+    exact_record_positions: dict[
+        tuple[tuple[str, str, str, str], str], list[int]
+    ] = defaultdict(list)
+    for position, row in enumerate(ordered_rows):
+        scope = row["scope"]
+        if (row["ref"] and not row["reference_tainted"] and
+                _complete_scope(scope)):
+            all_record_positions[scope].append(position)
+            exact_record_positions[(scope, row["ref"])].append(position)
+
+    def has_foreign(scope: tuple[str, str, str, str], ref: str,
+                    left: int, right: int) -> bool:
+        all_positions = all_record_positions[scope]
+        same_positions = exact_record_positions[(scope, ref)]
+        all_between = bisect_left(all_positions, right) - bisect_right(all_positions, left)
+        same_between = bisect_left(same_positions, right) - bisect_right(same_positions, left)
+        return all_between > same_between
+
+    withheld: set[str] = set()
+    for (scope, _tab), tab_rows in by_tab.items():
+        if not _complete_scope(scope):
+            continue
+        refs = {row["ref"] for row in tab_rows if row["ref"]}
+        if len(refs) != 1:
+            continue
+        sole_ref = next(iter(refs))
+        anchors = [positions[row["event_id"]] for row in tab_rows
+                   if row["ref"] == sole_ref]
+        for row in tab_rows:
+            if row["ref"]:
+                continue
+            position = positions[row["event_id"]]
+            index = bisect_left(anchors, position)
+            left = anchors[index - 1] if index else None
+            right = anchors[index] if index < len(anchors) else None
+            if ((left is not None and has_foreign(scope, sole_ref, left, position))
+                    or (right is not None and
+                        has_foreign(scope, sole_ref, position, right))):
+                withheld.add(row["event_id"])
+    return withheld
+
+__all__ = ["bracketed_multiplexed_tab_focus", "single_record_tab_foreign_case_boundaries"]
