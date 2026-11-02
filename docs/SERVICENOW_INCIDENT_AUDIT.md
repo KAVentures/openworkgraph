@@ -24,7 +24,8 @@ The existing owner-only selected-incident grant remains required. Additionally, 
       "table": "sys_audit",
       "fields": ["state", "priority"],
       "since": "2026-10-30 00:00:00",
-      "until": "2026-10-31 00:00:00"
+      "until": "2026-10-31 00:00:00",
+      "timezone": "UTC"
     }
 
 The separate audit grant does not imply ServiceNow ACLs or OWG write permission. A real authorized operator must supply a least-privilege read-only ServiceNow bearer credential through environment variable OWG_SERVICENOW_TOKEN and an authenticated local dashboard session through OWG_DASHBOARD_SESSION. Never put secrets in the CLI or grant JSON. The target OWG log must already exist with **exactly one matching source/case namespace**, for example seeded by the existing current-state selected-incident import.
