@@ -132,12 +132,15 @@ def single_record_tab_foreign_case_boundaries(
     component_positions: dict[
         tuple[tuple[str, str, str, str], str], list[int]
     ] = defaultdict(list)
+    tied_components: dict[tuple[tuple[str, str, str, str], str], set[str]] = defaultdict(set)
     for position, row in enumerate(ordered_rows):
         scope = row["scope"]
         if (row["ref"] and row["tab"] and not row["reference_tainted"] and
                 _complete_scope(scope)):
+            component = pre_tab_root[row["event_id"]]
             all_record_positions[scope].append(position)
-            component_positions[(scope, pre_tab_root[row["event_id"]])].append(position)
+            component_positions[(scope, component)].append(position)
+            tied_components[(scope, row["observed_at"])].add(component)
 
     def has_foreign(scope: tuple[str, str, str, str], component: str,
                     left: int, right: int) -> bool:
@@ -165,9 +168,20 @@ def single_record_tab_foreign_case_boundaries(
             index = bisect_left(anchors, position)
             left = anchors[index - 1] if index else None
             right = anchors[index] if index < len(anchors) else None
-            if ((left is not None and has_foreign(scope, anchor_component, left, position))
-                    or (right is not None and
-                        has_foreign(scope, anchor_component, position, right))):
+            # An event-ID sort is not evidence of which case was active when
+            # two independently named records share an observation instant.
+            # Treat foreign record ties at either anchor or the loose step as
+            # an unresolved interruption regardless of sort order.
+            tied_foreign = any(
+                tied_components.get((scope, ordered_rows[p]["observed_at"]), set())
+                - {anchor_component}
+                for p in (left, position, right) if p is not None
+            )
+            if (tied_foreign or
+                    (left is not None and
+                     has_foreign(scope, anchor_component, left, position)) or
+                    (right is not None and
+                     has_foreign(scope, anchor_component, position, right))):
                 withheld.add(row["event_id"])
     return withheld
 
