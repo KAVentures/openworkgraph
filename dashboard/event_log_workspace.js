@@ -2211,7 +2211,9 @@
     }
     if(m.kind==='arithmetic'){
       const text=o=>o.kind==='metric'?o.name:String(o.value)+' '+o.unit;
-      return m.name+': '+text(m.left)+' '+({add:'+',subtract:'−',multiply:'×',divide:'÷',minimum:'minimum of',maximum:'maximum of',average:'average of',absolute_difference:'absolute difference of'}[m.operation])+' '+text(m.right);
+      const pair={minimum:'Smaller of',maximum:'Larger of',average:'Average of',absolute_difference:'Absolute difference between'}[m.operation];
+      if(pair)return m.name+': '+pair+' '+text(m.left)+' and '+text(m.right);
+      return m.name+': '+text(m.left)+' '+({add:'+',subtract:'−',multiply:'×',divide:'÷'}[m.operation])+' '+text(m.right);
     }
     return m.name+': '+(m.kind==='event_attribute_sum'?'sum of event attribute ':'case attribute ')+m.attribute+' ('+m.unit+')';
   }
