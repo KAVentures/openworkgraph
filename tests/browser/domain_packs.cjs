@@ -35,7 +35,7 @@ const path=require('node:path');
   await page.locator('#owgDomainPackSetup').click();
   await page.locator('#owgDomainPackStatus').filter({hasText:'Not installed on this log.'}).waitFor();
   // Both packs are offered; switching shows the other pack's roles and switching back restores this one.
-  assert.deepEqual(await page.locator('#owgDomainPackChoice option').allTextContents(),['Order to cash','Procure to pay']);
+  assert.deepEqual(await page.locator('#owgDomainPackChoice option').allTextContents(),['Order to cash','Procure to pay','IT service management']);
   await page.locator('#owgDomainPackChoice').selectOption('procure_to_pay');
   await page.locator('#owgDomainPackRole-purchase_order').waitFor();
   assert.equal(await page.locator('#owgDomainPackRole-order').count(),0);

@@ -44,8 +44,12 @@ jobs:
         run: OWG_TEST_FIRST_POLICY=1 NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_decision_tables.cjs
       - name: Verify bounded SCIM bulk lifecycle and guarded admin sessions
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/scim_provisioning.cjs
+      - name: Verify prediction drift and calibration monitoring with an unapplied recalibration proposal
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/prediction_monitoring.cjs
       - name: Verify overlap-aware waiting boundaries and stale-setting guards
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/waiting_boundary_attribution.cjs
+      - name: Verify before/after intervention impact with control cohorts and placebo checks
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/intervention_impact.cjs
       - name: Verify declared calendar analytics and guarded aggregate downloads
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/working_calendar_analysis.cjs
       - name: Verify selected Jira retention, lifecycle and guarded workspace paths

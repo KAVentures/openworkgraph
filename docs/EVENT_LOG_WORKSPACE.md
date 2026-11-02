@@ -174,6 +174,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-logs/{log_id}/kpis?sla_seconds=&automation_resources=` | Throughput p50/p90/p95, rework rate, SLA breach rate, automation rate and weekly completions. |
 | `POST /v1/event-logs/{log_id}/benchmark` | Compare two case cohorts (JSON body, below). |
 | `POST /v1/event-logs/{log_id}/map-comparison` | Compare the process maps of two cohorts path by path (below). |
+| `POST /v1/event-logs/{log_id}/impact` | Before/after impact of an intervention on cycle time, rework, SLA breaches or an activity count, with bootstrap intervals, an optional control cohort and a placebo check. See [INTERVENTION_IMPACT.md](INTERVENTION_IMPACT.md). |
 | `GET /v1/event-logs/{log_id}/simulation/calibration` | Arrival rate, routing, activity times and resources measured from the log. |
 | `POST /v1/event-logs/{log_id}/simulate` | Run a what-if scenario against the measured baseline (JSON body, below). |
 | `POST /v1/event-logs/{log_id}/conformance` | Align observed variants with a reference model (JSON body, below). |
@@ -971,6 +972,11 @@ Process Mining or Celonis predictive monitoring.
 Remaining time is measured to the last recorded event. Predictions are estimates from this log's
 history, not commitments or targets, and no resources are used. One million events take a few
 seconds (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_predictions.py`).
+
+`POST /v1/event-logs/{log_id}/predictions/monitoring` replays the backtest over rolling windows to show whether
+prediction quality holds over time. It reports error, range coverage and the Brier score per window, flags drift
+in the latest window, and proposes (never applies) a recalibration. See
+[PREDICTION_MONITORING.md](PREDICTION_MONITORING.md).
 
 ### Still-open cases and censoring
 
