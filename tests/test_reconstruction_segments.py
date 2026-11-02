@@ -395,3 +395,21 @@ def test_unreferenced_member_does_not_invent_direct_record_change():
     assert projected["activity_segment_count"] == 1
     assert projected["activity_segments"][0]["event_ids"] == [
         "e0001", "e0002", "e0003"]
+
+
+def test_many_within_item_record_switches_keep_exact_episode_count():
+    observations = [event(n, A if n % 2 else B) for n in range(1, 82)]
+    observations[0]["event_type"] = "copy"
+    observations[1]["event_type"] = "paste"
+    observations[0]["metadata"]["clipboard_transfer_id"] = "bridge-81"
+    observations[1]["metadata"]["clipboard_transfer_id"] = "bridge-81"
+    result = linked_work_items(observations)
+    joined = item(result, A)
+    assert joined["cross_record_join"] is True
+    assert joined["observed_event_count"] == 81
+    assert joined["activity_segment_count"] == 81
+    assert joined["activity_segments_truncated"] is True
+    assert len(joined["activity_segments"]) == 16
+    assert all(segment["boundary_before"] == ["observed_member_record_change"]
+               for segment in joined["activity_segments"][1:])
+    assert "bridge-81" not in json.dumps(result)
