@@ -75,6 +75,9 @@ def _logs(port, session, *, opener):
 
 def _scope_matches(item, namespace):
     identity = item.get("source_identity")
+    # Ordinary unrelated CSV/XES logs may have no declared source identity.
+    if identity is None:
+        return False
     namespaces = identity.get("namespaces") if type(identity) is dict else None
     if type(namespaces) is not list:
         raise BootstrapError("Unverifiable local source identity")
