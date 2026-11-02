@@ -31,8 +31,6 @@ def observed_activity_segments(
     into this item's interruption boundaries. A different, known app without
     a source record can create an *uncertain* boundary only when strictly
     ordered between same-app member anchors in a complete exact capture scope.
-    Independently named other-tab observations can similarly split an observed
-    episode only between same-tab, same-app, same-source member anchors.
     An observed scope change is a separate boundary; missing observation
     coverage is never invented.
     """
@@ -72,32 +70,6 @@ def observed_activity_segments(
     loose_app_indices = {
         scope: [position for position, _, _ in observations]
         for scope, observations in loose_app_positions.items()
-    }
-    # Independent activity in a different, literal tab can interrupt an
-    # observed same-tab episode. It never assigns that activity to a case.
-    loose_tab_positions: dict[
-        tuple[str, str, str, str], list[tuple[int, str, str, str, str]]
-    ] = defaultdict(list)
-    for position, row in enumerate(rows):
-        scope = row["scope"]
-        app, source, tab = row["app"], row["source"], row["tab"]
-        if (scope is not None and all(scope) and row["event_id"] not in member_set
-                and not row["ref"] and not row["transfer"]
-                and not row["reference_tainted"]
-                and not row.get("ephemeral_claim_tainted", False)
-                and not row.get("action_claim_malformed", False)
-                and row["action"] not in ("copy", "paste")
-                and isinstance(tab, str) and bool(tab)
-                and isinstance(app, str) and app not in ("", "unknown", "other",
-                                                         "other app", "unknown app")
-                and not any(ord(char) < 32 or ord(char) == 127 for char in app)
-                and isinstance(source, str) and source not in ("", "unknown", "other")):
-            loose_tab_positions[scope].append(
-                (position, tab, app, source, row["observed_at"])
-            )
-    loose_tab_indices = {
-        scope: [position for position, *_ in observations]
-        for scope, observations in loose_tab_positions.items()
     }
 
     segments: list[dict[str, Any]] = []
@@ -149,39 +121,6 @@ def observed_activity_segments(
                         if (loose_app != anchor_app
                                 and previous_row["observed_at"] < loose_at < row["observed_at"]):
                             reasons.append("observed_other_app_without_record")
-                            break
-                # An independently named different tab in the same known
-                # browser/app and capture source is an uncertain focus
-                # interruption. A reused tab ID by itself is never evidence;
-                # two independently observed matching member anchors are
-                # required and timestamp ties always abstain.
-                anchor_tab = row["tab"]
-                if (not reasons and anchor_tab and anchor_tab == previous_row["tab"]
-                        and row["app"] == previous_row["app"]
-                        and row["source"] == previous_row["source"]
-                        and row["source"] not in ("", "unknown", "other")
-                        and row["app"] not in ("", "unknown", "other",
-                                              "other app", "unknown app")
-                        and not row.get("ephemeral_claim_tainted", False)
-                        and not previous_row.get("ephemeral_claim_tainted", False)
-                        and not row.get("action_claim_malformed", False)
-                        and not previous_row.get("action_claim_malformed", False)
-                        and previous_row["observed_at"] < row["observed_at"]):
-                    scope = row["scope"]
-                    other_tabs = loose_tab_positions.get(scope, [])
-                    start = bisect_right(loose_tab_indices.get(scope, []),
-                                         previous_position)
-                    for index in range(start, len(other_tabs)):
-                        loose_position, loose_tab, loose_app, loose_source, loose_at = (
-                            other_tabs[index]
-                        )
-                        if loose_position >= position:
-                            break
-                        if (loose_tab != anchor_tab and loose_app == row["app"]
-                                and loose_source == row["source"]
-                                and previous_row["observed_at"] < loose_at
-                                < row["observed_at"]):
-                            reasons.append("observed_other_tab_without_record")
                             break
         if not current or reasons:
             if current:
