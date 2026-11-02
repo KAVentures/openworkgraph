@@ -297,3 +297,141 @@ def test_review_queue_does_not_promote_hidden_item_or_cross_tenant_tab():
     isolated = linked_work_items(other_tenant)
     assert isolated["ambiguous_assignment_review_total"] == 0
     assert isolated["ambiguous_assignment_review_queue"] == []
+
+
+# Two-hop review suggestions: actual weak evidence paths, never membership.
+from server.reconstruction_candidate_fragments import ambiguous_fragment_review
+
+
+def test_two_hop_fragment_competition_is_exposed_through_real_linker_and_api():
+    # Two source-anchored items, separated by three unreferenced actions.
+    # Middle e0004 has no direct item candidate; its immediate neighbours do.
+    events = [event(1, A), event(2, A), event(3, None),
+              event(4, None), event(5, None), event(6, B), event(7, B)]
+    for ordered in (events, list(reversed(events))):
+        result = linked_work_items(ordered)
+        assert result["total_items"] == 2
+        assert result["unlinked_observation_count"] == 3
+        assert result["ambiguous_fragment_review_total"] == 1
+        assert result["ambiguous_fragment_review_competing_count"] == 1
+        assert result["ambiguous_fragment_review_scan_complete"] is True
+        [review] = result["ambiguous_fragment_review_queue"]
+        assert review["event_id"] == "e0004"
+        assert review["candidate_item_count"] == 2
+        assert review["review_priority"] == "competing_visible_items"
+        assert review["evidence_hops"] == 2
+        assert review["auto_assigned"] is False
+        assert review["requires_human_review"] is True
+        assert {tuple(c["witness_event_path"]) for c in review["candidate_items"]} == {
+            ("e0004", "e0003", "e0002"),
+            ("e0004", "e0005", "e0006"),
+        }
+        assert all(c["weak_relation_path"] ==
+                   ["surface_continuity", "surface_continuity"]
+                   for c in review["candidate_items"])
+        assert all("e0004" not in item["event_ids"] for item in result["items"])
+        api = workflow_evidence.list_workflow_evidence_candidates(_raw_events=ordered)
+        assert api["linked_work_items"]["ambiguous_fragment_review_queue"] == [review]
+        assert api["linked_work_items"]["link_contract"][
+            "ambiguous_fragment_review_never_creates_membership"
+        ]
+        disclosed = json.dumps(api["linked_work_items"])
+        for secret in ("PRIVATE", "SECRET", "secret-tenant",
+                       "secret-device", "private.atlassian.net"):
+            assert secret not in disclosed
+
+
+def test_two_hop_review_recomputes_after_retention_and_does_not_promote_membership():
+    events = [event(1, A), event(2, A), event(3, None),
+              event(4, None), event(5, None), event(6, B), event(7, B)]
+    assert linked_work_items(events)["ambiguous_fragment_review_competing_count"] == 1
+    after = linked_work_items(events[:5] + [events[6]])
+    # Neither source record now has two admitted observations. There is no
+    # visible source-anchored item, so no review target may be invented.
+    assert after["ambiguous_fragment_review_total"] == 0
+    assert after["ambiguous_fragment_review_queue"] == []
+    assert after["unlinked_observation_count"] == 5
+
+
+def test_two_hop_review_rejects_cross_tenant_session_and_source_changes():
+    base = [event(1, A), event(2, A), event(3, None),
+            event(4, None), event(5, None), event(6, B), event(7, B)]
+    variants = []
+    foreign = [dict(x) for x in base]
+    foreign[3] = event(4, None, tenant="other-tenant")
+    variants.append(foreign)
+    no_session = [dict(x) for x in base]
+    no_session[3].pop("session_id")
+    variants.append(no_session)
+    other_source = [dict(x) for x in base]
+    other_source[3]["source"] = "unknown"
+    variants.append(other_source)
+    other_app = [dict(x) for x in base]
+    other_app[3]["app"] = "Terminal"
+    variants.append(other_app)
+    for rows in variants:
+        result = linked_work_items(rows)
+        assert result["ambiguous_fragment_review_total"] == 0
+        assert result["ambiguous_fragment_review_queue"] == []
+
+
+def test_two_hop_review_refuses_time_only_cycles_and_hidden_targets():
+    scope = ("tenant", "actor", "device", "session")
+    rows = {name: {"scope": scope, "app": "browser", "source": "extension",
+                   "reference_tainted": False, "ephemeral_claim_tainted": False}
+            for name in ("loose", "middle", "anchor", "hidden")}
+    edges = [
+        {"event_id": "loose", "toward_event_id": "middle",
+         "relation": "same_tab_unreferenced"},
+        {"event_id": "middle", "toward_event_id": "loose",
+         "relation": "same_tab_unreferenced"},
+        {"event_id": "middle", "toward_event_id": "anchor",
+         "relation": "surface_continuity"},
+        {"event_id": "middle", "toward_event_id": "hidden",
+         "relation": "surface_continuity"},
+    ]
+    kwargs = dict(rows=rows, singleton_ids={"loose", "middle"},
+                  item_of={"anchor": "linked_item_01"},
+                  anchored_item_ids={"linked_item_01"})
+    a = ambiguous_fragment_review(edges, **kwargs)
+    b = ambiguous_fragment_review(list(reversed(edges)), **kwargs)
+    assert a == b
+    assert a["ambiguous_fragment_review_total"] == 1
+    [review] = a["ambiguous_fragment_review_queue"]
+    assert review["event_id"] == "loose"
+    assert review["candidate_item_count"] == 1
+    assert review["candidate_items"][0]["witness_event_path"] == [
+        "loose", "middle", "anchor"]
+    assert "hidden" not in json.dumps(a)
+    assert ambiguous_fragment_review([], **kwargs)["ambiguous_fragment_review_total"] == 0
+    # An already linked intermediary cannot be used to launder a path.
+    assert ambiguous_fragment_review(edges, rows, {"middle": "linked_item_01",
+        "anchor": "linked_item_01"}, {"loose"}, {"linked_item_01"}
+    )["ambiguous_fragment_review_total"] == 0
+
+
+def test_two_hop_review_bounds_rows_targets_and_expensive_fanout():
+    scope = ("tenant", "actor", "device", "session")
+    def row():
+        return {"scope": scope, "app": "browser", "source": "extension",
+                "reference_tainted": False, "ephemeral_claim_tainted": False}
+    rows = {"mid": row(), "anchor": row()}
+    rows.update({f"loose{i:03d}": row() for i in range(30)})
+    edges = [
+        {"event_id": f"loose{i:03d}", "toward_event_id": "mid",
+         "relation": "same_tab_unreferenced"} for i in range(30)
+    ] + [{"event_id": "mid", "toward_event_id": "anchor",
+          "relation": "surface_continuity"}]
+    result = ambiguous_fragment_review(
+        edges, rows, {"anchor": "linked_item_01"},
+        {"mid"} | {f"loose{i:03d}" for i in range(30)}, {"linked_item_01"})
+    assert result["ambiguous_fragment_review_total"] == 30
+    assert result["ambiguous_fragment_review_truncated"] is True
+    assert len(result["ambiguous_fragment_review_queue"]) == 24
+    assert result["ambiguous_fragment_review_scan_complete"] is True
+    too_many = ambiguous_fragment_review(
+        edges * 400, rows, {"anchor": "linked_item_01"},
+        {"mid"} | {f"loose{i:03d}" for i in range(30)}, {"linked_item_01"})
+    assert too_many["ambiguous_fragment_review_scan_complete"] is False
+    assert too_many["ambiguous_fragment_review_total"] is None
+    assert too_many["ambiguous_fragment_review_queue"] == []
