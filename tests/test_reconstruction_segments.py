@@ -385,16 +385,20 @@ def test_record_context_boundary_abstains_on_ties_and_incomplete_scope():
         [], ["capture_scope_change"]]
 
 
-def test_unreferenced_member_does_not_invent_direct_record_change():
+def test_exact_record_change_after_clean_unreferenced_member_splits_at_new_anchor():
     from server.reconstruction_segments import observed_activity_segments
     from server.work_item_links import link_observations
 
     first, loose, second = event(1, A), event(2), event(3, B)
     rows = link_observations([first, loose, second])["rows"]
     projected = observed_activity_segments(rows, ["e0001", "e0002", "e0003"])
-    assert projected["activity_segment_count"] == 1
-    assert projected["activity_segments"][0]["event_ids"] == [
-        "e0001", "e0002", "e0003"]
+    assert projected["activity_segment_count"] == 2
+    assert [s["event_ids"] for s in projected["activity_segments"]] == [
+        ["e0001", "e0002"], ["e0003"]]
+    assert [s["boundary_before"] for s in projected["activity_segments"]] == [
+        [], ["observed_member_record_change"]]
+    # The unreferenced member has no newly invented source-record identity.
+    assert rows[1]["ref"] is None
 
 
 def test_many_within_item_record_switches_keep_exact_episode_count():
@@ -413,3 +417,92 @@ def test_many_within_item_record_switches_keep_exact_episode_count():
     assert all(segment["boundary_before"] == ["observed_member_record_change"]
                for segment in joined["activity_segments"][1:])
     assert "bridge-81" not in json.dumps(result)
+
+
+def test_cross_record_linker_and_workflow_api_split_after_unreferenced_member():
+    # Clipboard evidence independently links A and B. The same-tab loose
+    # observation is already accepted into that item; it never gains a ref.
+    first, loose, second = event(1, A), event(2), event(3, B)
+    first["event_type"] = "copy"
+    second["event_type"] = "paste"
+    first["metadata"]["clipboard_transfer_id"] = "private-bridge"
+    second["metadata"]["clipboard_transfer_id"] = "private-bridge"
+    first["tab_context_id"] = loose["tab_context_id"] = "tab-a"
+    second.update(app="Terminal", source="desktop_capture")
+    result = linked_work_items([first, loose, second])
+    joined = item(result, A)
+    assert joined["resource_refs"] == [A, B]
+    assert joined["event_ids"] == ["e0001", "e0002", "e0003"]
+    assert joined["activity_segment_count"] == 2
+    assert [s["event_ids"] for s in joined["activity_segments"]] == [
+        ["e0001", "e0002"], ["e0003"]]
+    assert joined["activity_segments"][1]["boundary_before"] == [
+        "observed_member_record_change"]
+    assert "private-bridge" not in json.dumps(result)
+    assert "tab-a" not in json.dumps(result)
+    assert "SECRET" not in json.dumps(result)
+    api = workflow_evidence.list_workflow_evidence_candidates(
+        _raw_events=[first, loose, second])
+    assert item(api["linked_work_items"], A)["activity_segment_count"] == 2
+    # Removing B removes the record-change boundary, without stale state.
+    retained = item(linked_work_items([first, loose]), A)
+    assert retained["activity_segment_count"] == 1
+    assert retained["cross_record_join"] is False
+
+
+def test_unreferenced_record_bridge_rejects_ties_taint_and_transfer_claims():
+    from server.reconstruction_segments import observed_activity_segments
+    from server.work_item_links import link_observations
+
+    def segments(change):
+        first, loose, second = event(1, A), event(2), event(3, B)
+        rows = link_observations([first, loose, second])["rows"]
+        change(rows)
+        return observed_activity_segments(
+            rows, ["e0001", "e0002", "e0003"])["activity_segments"]
+
+    assert len(segments(lambda _rows: None)) == 2
+    assert len(segments(lambda rows: rows[1].update(
+        observed_at=rows[2]["observed_at"]))) == 1
+    assert len(segments(lambda rows: rows[1].update(
+        observed_at=rows[0]["observed_at"]))) == 1
+    assert len(segments(lambda rows: rows[1].update(
+        reference_tainted=True))) == 1
+    assert len(segments(lambda rows: rows[1].update(
+        ephemeral_claim_tainted=True))) == 1
+    assert len(segments(lambda rows: rows[1].update(
+        action_claim_malformed=True))) == 1
+    assert len(segments(lambda rows: rows[1].update(
+        transfer="untrusted-transfer"))) == 1
+    assert len(segments(lambda rows: rows[1].update(
+        action="clipboard_paste"))) == 1
+    assert len(segments(lambda rows: rows[0].update(
+        reference_tainted=True))) == 1
+    assert len(segments(lambda rows: rows[2].update(
+        reference_tainted=True))) == 1
+    assert len(segments(lambda rows: rows[2].update(
+        ref=A))) == 1
+
+
+def test_unreferenced_record_bridge_is_bounded_and_scope_safe():
+    from server.reconstruction_segments import observed_activity_segments
+    from server.work_item_links import link_observations
+
+    def project(count):
+        events = [event(1, A)] + [event(n) for n in range(2, count + 2)]
+        events.append(event(count + 2, B))
+        rows = link_observations(events)["rows"]
+        return observed_activity_segments(
+            rows, [row["event_id"] for row in rows])
+
+    assert project(8)["activity_segment_count"] == 2
+    assert project(9)["activity_segment_count"] == 1
+    first, loose, second = event(1, A), event(2), event(3, B)
+    rows = link_observations([first, loose, second])["rows"]
+    rows[1]["scope"] = ("tenant-b", "actor-a", "device-a", "session-a")
+    result = observed_activity_segments(rows, ["e0001", "e0002", "e0003"])
+    assert not any(
+        "observed_member_record_change" in s["boundary_before"]
+        for s in result["activity_segments"])
+    assert result["activity_segments"][1]["boundary_before"] == [
+        "capture_scope_change"]
