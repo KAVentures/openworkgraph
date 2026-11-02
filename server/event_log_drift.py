@@ -45,16 +45,20 @@ def drift(log_id: str, case_type: str | None = None, *, window: str = "month", w
           min_cases: int = 30, cohort: dict[str, Any] | None = None) -> dict[str, Any]:
     if window not in WINDOWS:
         raise workspace.EventLogWorkspaceError("window must be week, month or cases")
-    if not 20 <= int(window_cases) <= 100_000:
-        raise workspace.EventLogWorkspaceError("window_cases must be between 20 and 100000")
-    if not 10 <= int(min_cases) <= 10_000:
-        raise workspace.EventLogWorkspaceError("min_cases must be between 10 and 10000")
+    # FastAPI validates typed query parameters, but direct callers (including
+    # internal integrations) must receive the same bounded, fail-closed contract.
+    # int(value) would silently truncate fractional values and raise raw
+    # ValueError/TypeError/OverflowError for malformed or nonfinite inputs.
+    if not isinstance(window_cases, int) or isinstance(window_cases, bool) or not 20 <= window_cases <= 100_000:
+        raise workspace.EventLogWorkspaceError("window_cases must be an integer between 20 and 100000")
+    if not isinstance(min_cases, int) or isinstance(min_cases, bool) or not 10 <= min_cases <= 10_000:
+        raise workspace.EventLogWorkspaceError("min_cases must be an integer between 10 and 10000")
     chosen = cohorts.parse_cohort(cohort)
 
     def run(conn):
         cohorts.restrict(conn, chosen, log_id)
         bucket = (f"date_trunc('{window}', min(ts))" if window != "cases"
-                  else f"(row_number() OVER (ORDER BY min(ts), case_id) - 1) // {int(window_cases)}")
+                  else f"(row_number() OVER (ORDER BY min(ts), case_id) - 1) // {window_cases}")
         conn.execute(f"""CREATE OR REPLACE TEMP TABLE dw0 AS SELECT case_id, {bucket} AS bucket,
               epoch(max(ts) - min(ts)) AS duration FROM ce GROUP BY case_id""")
         conn.execute("CREATE OR REPLACE TEMP TABLE dw AS SELECT *, dense_rank() OVER (ORDER BY bucket) - 1 AS w FROM dw0")
@@ -88,7 +92,7 @@ def drift(log_id: str, case_type: str | None = None, *, window: str = "month", w
                    for i, (b, n, med) in enumerate(buckets)]
         if window == "cases":
             for i, w in enumerate(windows):
-                w["window"] = f"cases {i * int(window_cases) + 1}–{i * int(window_cases) + w['cases']}"
+                w["window"] = f"cases {i * window_cases + 1}–{i * window_cases + w['cases']}"
         # The statistical test operates on dcase, not every eligible case in
         # dw. Require min_cases actual sampled cases AND min_cases sampled
         # path-bearing cases per side; single-event cases are not evidence
@@ -193,8 +197,8 @@ def drift(log_id: str, case_type: str | None = None, *, window: str = "month", w
                     entry["paths_that_moved"] = shown
                 boundaries.append(entry)
         return {
-            "settings": {"window": window, "window_cases": int(window_cases) if window == "cases" else None,
-                         "min_cases": int(min_cases), "permutations": PERMUTATIONS,
+            "settings": {"window": window, "window_cases": window_cases if window == "cases" else None,
+                         "min_cases": min_cases, "permutations": PERMUTATIONS,
                          "sample_per_window": SAMPLE_PER_WINDOW, "alpha": ALPHA,
                          "min_distance": MIN_DISTANCE},
             "cohort": cohorts.describe(chosen),

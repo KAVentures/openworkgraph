@@ -174,6 +174,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-logs/{log_id}/kpis?sla_seconds=&automation_resources=` | Throughput p50/p90/p95, rework rate, SLA breach rate, automation rate and weekly completions. |
 | `POST /v1/event-logs/{log_id}/benchmark` | Compare two case cohorts (JSON body, below). |
 | `POST /v1/event-logs/{log_id}/map-comparison` | Compare the process maps of two cohorts path by path (below). |
+| `POST /v1/event-logs/{log_id}/impact` | Before/after impact of an intervention on cycle time, rework, SLA breaches or an activity count, with bootstrap intervals, an optional control cohort and a placebo check. See [INTERVENTION_IMPACT.md](INTERVENTION_IMPACT.md). |
 | `GET /v1/event-logs/{log_id}/simulation/calibration` | Arrival rate, routing, activity times and resources measured from the log. |
 | `POST /v1/event-logs/{log_id}/simulate` | Run a what-if scenario against the measured baseline (JSON body, below). |
 | `POST /v1/event-logs/{log_id}/conformance` | Align observed variants with a reference model (JSON body, below). |
@@ -460,6 +461,51 @@ Erlang C wait of 1/3 h. Each queue serves waiting work in order of arrival at th
 order), so a case returning for a later step is not overtaken by newer arrivals; multi-step and
 re-entrant routes are checked against an independent first-come, first-served reference. The
 dashboard's simulation form defines one shared pool.
+
+#### Priority classes
+
+A scenario can serve some cases first. For example:
+
+```json
+{"priorities": [{"name": "urgent", "share": 0.3, "rank": 0}, {"name": "standard", "share": 0.7, "rank": 1}]}
+```
+
+- **Classes:** 2 to 5 classes, with shares adding up to 1 and ranks from 0 to 9, of which at least two differ.
+  Each simulated case belongs to one class, drawn from a random number of its own, so adding classes never
+  changes any case's arrival or route.
+- **Queueing:** every queue, including shared pools, serves the lowest rank first and first come, first served
+  within a rank. Priority is non-preemptive: work in progress is never interrupted.
+- **Baseline:** the measured baseline keeps one first-come, first-served queue.
+- **Results:** a row per class with its share, rank, median and 90th-percentile cycle time and mean wait per
+  step. The assumptions say that the scenario models priorities.
+- **Check:** one server at load 0.8 with 30% urgent cases is compared with Cobham's non-preemptive formulas
+  (urgent cases wait 0.84 h, the others 4.21 h). The overall mean wait stays at the first-come, first-served
+  3.2 h, because reordering a work-conserving queue keeps it.
+- **Dashboard:** the simulation form takes classes as `urgent 30% 0, standard 70% 1`.
+
+#### Batch processing
+
+A scenario can batch an activity, for example a payment run:
+
+```json
+{"activities": {"Pay": {"batch": {"size": 10, "max_wait_minutes": 1440}}}}
+```
+
+- **How a batch runs:** the activity's cases wait until `size` are waiting, or until the oldest has waited
+  `max_wait_minutes`. A free resource then takes up to `size` of them, lowest priority rank first, and serves
+  the whole batch in one activity time. All members move on together.
+- **No maximum wait:** a batch that never fills holds its cases. They are counted in
+  `cases_waiting_in_unfilled_batches` and per activity, and are not measured as finished.
+- **Offered load:** counts the work of full batches, that is the activity time divided by the size.
+- **Limits:** a batched activity cannot also be in a shared pool. The measured baseline is never batched.
+- **Results:** add `batch` to the activity's row: settings, batches run, mean batch size and cases still waiting.
+- **Checks:**
+  - with a size of 5, 1 case an hour and near-instant service, the mean wait is the expected
+    (K − 1) / (2λ) = 2 h;
+  - with a size of 100 and a 60-minute limit, it is (60 + 30) / 2 = 45 min, and no case waits longer;
+  - members reach the next activity together.
+- **Dashboard:** the simulation form batches one activity, with the cases per batch and an optional longest
+  wait in hours.
 
 #### Seasonal arrivals
 
@@ -950,6 +996,11 @@ Process Mining or Celonis predictive monitoring.
 Remaining time is measured to the last recorded event. Predictions are estimates from this log's
 history, not commitments or targets, and no resources are used. One million events take a few
 seconds (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_predictions.py`).
+
+`POST /v1/event-logs/{log_id}/predictions/monitoring` replays the backtest over rolling windows to show whether
+prediction quality holds over time. It reports error, range coverage and the Brier score per window, flags drift
+in the latest window, and proposes (never applies) a recalibration. See
+[PREDICTION_MONITORING.md](PREDICTION_MONITORING.md).
 
 ### Still-open cases and censoring
 
