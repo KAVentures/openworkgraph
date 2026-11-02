@@ -332,3 +332,38 @@ stage refusal, real local CSV import with an explicitly retained numeric
 attribute, session-authenticated analysis requests, last-completed versus
 first-stage results, saved metrics/analyses, CSV export and WCAG checks.
 Native CI and real consenting customer acceptance remain separate gates.
+
+## Dashboard: compare two typed case metrics without hand-written expressions
+
+The same **Build an analysis → Case metrics** form now exposes all eight
+already-supported version-1 pairwise arithmetic operations. Besides add,
+subtract, multiply and divide, choose **Smaller of two values** (`minimum`),
+**Larger of two values** (`maximum`), **Average of two values** (`average`),
+or **Absolute difference (nonnegative)** (`absolute_difference`).
+Each operand can reference an earlier named metric or a finite typed constant.
+The resulting metric is itself reusable by the same saved-metric library,
+saved analyses, grouped measures, and JSON/CSV export paths.
+
+For example, add `first_review_total` and `last_review_avg` as two
+`event_attribute_statistic` metrics with unit `EUR`, then add
+`review_difference` of kind **Arithmetic on earlier metrics**, operation
+**Absolute difference**, left `first_review_total`, right
+`last_review_avg`. For one case with observed values 6 and 9 EUR, the
+difference is 3 EUR; **Average of two values** would be 7.5 EUR.
+For a case with one missing operand, both results are **unknown**, never
+zero or the surviving operand. The per-metric coverage reports missing
+operands, and division separately reports zero divisors.
+
+All four new form choices require **identical declared units** (no currency
+or physical-unit conversion). The server refuses mismatches before reading
+data. Multiply/divide retain their existing unit composition; every operation
+uses the existing bounded, parameterized, versioned expression planner, not
+user-supplied SQL. This is a comparison of *recorded case values*, not a
+reconciled financial difference or evidence of source completeness.
+
+The Chromium regression uses the actual authenticated analysis endpoint,
+selects all four operations in the form, verifies typed versioned requests,
+observed numeric outputs, missing-case withholding, declared units, a saved
+analysis replay, CSV export, invalid-operation refusal, and a mismatched-unit
+refusal. The tests are committed; they are **not claimed as native-passed**
+until the exact-head GitHub Actions checks execute.
