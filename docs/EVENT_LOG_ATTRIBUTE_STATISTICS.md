@@ -378,7 +378,7 @@ policy, optional activity restriction, and **both** stage start and end.
 Choose **Compare first and last completed stages (3 metrics)** instead of
 adding one metric at a time.
 
-OWG atomically adds `<base>_first`, `<base>_last`, and `<base>_delta`:
+OWG switches the analysis level to **Cases** (stage comparisons are not event-level measures) and atomically adds `<base>_first`, `<base>_last`, and `<base>_delta`:
 the first two evaluate the *same statistic* over the first and last completed
 start→end stage respectively; the third uses the version-1 typed arithmetic
 operation `subtract` with **last minus first**. A negative result therefore
