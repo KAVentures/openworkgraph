@@ -1475,3 +1475,64 @@ history joins, missing/partial DAG, explicit disputes and human corrections,
 source-free reads, authorization, stale CAS, tampering and revocation during
 traversal. Native cross-platform CI, real provider acceptance and held-out
 commercial trials remain mandatory and separate.
+
+
+## Portable historical outcome review packet (explicit local REST, M4)
+
+An operator can now **capture a signed, minimized historical review** and later
+recheck whether that same authorized evidence is still current, without
+contacting Stripe or accepting a human claim as a verified business outcome.
+
+1. Call `POST /v1/open-work/declarations/human-outcomes/review-packet` with
+   an authenticated local `OWG-Session` and the exact same JSON used for
+   `/human-outcomes/evidence-triage` (current `work_item_ref`,
+   `expected_revision`, `expected_edit_token`,
+   `confirm_historical_review: true`, `max_cases: 1..4`).
+   The response contains the minimized `review_summary` and a `packet`.
+2. Retain the packet locally for a later **explicit** reviewer check. Call
+   `POST /v1/open-work/declarations/human-outcomes/verify-review-packet`
+   with the same current case revision/token and the exact packet:
+
+```json
+{
+  "work_item_ref": "owg:w:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "expected_revision": 1,
+  "expected_edit_token": "<current opaque edit token>",
+  "packet": {"format": "openworkgraph.local-outcome-review-packet.v1", "...": "the entire unmodified packet from step 1"}
+}
+```
+
+The verification response reports `comparison: "unchanged"` or
+`comparison: "changed"`, `changed_case_refs`, and the newly admitted
+`review_summary`. For example, after a human correction or provider
+evidence dispute, the changed case appears in `changed_case_refs`. A
+separate `other_review_metadata_changed` flag identifies changes outside
+individual case rows. A partial selection remains explicitly partial; a
+packet for `max_cases: 1` never implies unscanned prerequisites passed.
+
+Packets expire within **one hour** and never outlive the owner-reviewed
+declaration. The seal binds the installation secret, exact reviewed full
+dependency graph, source-account scope, selected case refs, case-level
+SHA-256 digests, aggregate review digest and expiry. Forged, expired,
+foreign-account, revoked or changed-DAG packets are refused before either
+private ledger is read. Verification independently re-admits each selected
+case and its complete prerequisite graph, rechecks the root graph and source
+scope across the two SQLite ledgers, and returns `Cache-Control: no-store`.
+The result is not a distributed atomic revocation fence.
+
+**Meaning and limits:** The packet seal is local integrity evidence, **not
+an independently verifiable Stripe signature or customer outcome**. Even an
+unchanged packet is a snapshot of historical human assertions and historical
+provider-operation checks; it does not prove a current payment, an expected
+business goal, customer satisfaction, an obligation, agent causality or
+execution authority. It contains no native invoice ID, customer information,
+amount, credentials, raw receipt or event text; it is never uploaded by OWG.
+No new provider grants, polling, network reads, business writes or default
+feature activation are introduced.
+
+`tests/test_open_work_case_review_packet.py` exercises the actual
+authenticated FastAPI/private SQLite issue → verify → correction/dispute →
+changed flow, partial prerequisite coverage, forgery/expiry/refusal before
+ledger IO, privacy and source revocation with synthetic provider data.
+Cross-platform exact-head CI and real-provider/customer acceptance remain
+separate requirements.
