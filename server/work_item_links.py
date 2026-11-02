@@ -43,6 +43,7 @@ from .reconstruction_transfer_episodes import disjoint_directional_transfer_epis
 from .reconstruction_link_proof import directional_transfer_witness, observed_record_link_evidence
 from .reconstruction_tab_focus import bracketed_multiplexed_tab_focus
 from .reconstruction_actor_continuity import actor_observation_index, observed_same_record_actor_changes
+from .reconstruction_case_coverage import observed_record_participant_surfaces
 
 _TRANSFER = re.compile(r"^[A-Za-z0-9:._-]{1,120}$")
 _TAB = re.compile(r"^[A-Za-z0-9:._-]{1,160}$")
@@ -658,6 +659,7 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             [rows[i] for i in ids], position_index=actor_positions,
             tenant_positions=actor_tenant_positions,
         )
+        coverage = observed_record_participant_surfaces([rows[i] for i in ids])
         items.append({
             "item_id": item_id,
             "event_ids": ids[:_MAX_EVENT_IDS],
@@ -674,6 +676,7 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             **record_path,
             **bridge_evidence,
             **actor_participation,
+            **coverage,
             "link_basis": basis,
             "cross_record_join": len(refs) > 1,
             "confidence": min(_CONFIDENCE[name] for name in basis) if basis else _CONFIDENCE["same_record"],
@@ -728,6 +731,9 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             "observed_record_paths_are_not_verified_business_transitions": True,
             "record_bridges_are_observed_link_witnesses_not_handoffs": True,
             "same_record_actor_changes_are_observed_not_verified_handoffs": True,
+            "record_participant_surface_coverage_is_presence_not_productivity": True,
+            "record_participant_surface_coverage_requires_complete_scope": True,
+            "record_participant_surface_coverage_does_not_add_membership": True,
             "cross_actor_participation_requires_complete_explicit_capture_scope": True,
             "cross_actor_participation_does_not_add_membership": True,
             "directional_bridges_require_ordered_copy_paste": True,
