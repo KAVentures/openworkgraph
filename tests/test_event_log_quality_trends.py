@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from io import BytesIO
 import json
+import re
 import os
 from pathlib import Path
 import subprocess
@@ -112,7 +113,8 @@ def test_import_append_quality_trends_are_visible_and_counts_only():
     assert result["batch_trends"]["interpretation"]["source_completeness_verified"] is False
     serialized = json.dumps(result["batch_trends"])
     assert "alice" not in serialized and "bob" not in serialized
-    assert "c1" not in serialized and "c2" not in serialized
+    # Whole tokens only: hex digests in the report can contain "c1" or "c2" by chance.
+    assert not re.search(r"\bc[12]\b", serialized)
 
 
 def test_changed_mapping_and_missing_batch_report_refuse_deltas():
