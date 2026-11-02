@@ -565,7 +565,11 @@
         if (!currentComparisonReview(this)) return;
         // The first completed lane remains inspected only while the same comparison
         // is active. A third inspection starts a fresh two-lane review.
-        if (this.inspected.A && this.inspected.B) this.inspected = {A: false, B: false};
+        if (this.inspected.A && this.inspected.B) {
+          this.inspected = {A: false, B: false};
+          noteA.textContent = 'A: Reinspection required after restarting the two-sided review.';
+          noteB.textContent = 'B: Reinspection required after restarting the two-sided review.';
+        }
         this.inspected[label] = false;
         confirm.checked = false; confirm.disabled = true; target.value = ''; target.disabled = true;
         next.disabled = true;
