@@ -134,3 +134,63 @@ without interruption-rejection regression; this feature does not claim it.
   accessibility, starter, installer and release CI must pass at the exact PR
   head before merging. Synthetic tests alone do not establish real-user
   validity.
+
+
+## Compare independent local sessions (score-batch)
+
+The new score-batch command runs the **real production linker and review
+scorer for every selected session**, then reports equal-weight *session macro*
+automatic-versus-human-assisted precision, recall, F1, contamination and
+interruption rejection. It is useful for finding whether a change helps across
+multiple independently annotated local sessions rather than one convenient
+example. It does **not** change the automatic linker or make a model accurate.
+
+First, independently annotate each consented session and generate its packet
+and decisions as above. Freeze the truth labels before looking at predictions;
+avoid reusing the same observation snapshot twice. In a **private local file**,
+create a manifest of 2–24 sessions:
+
+    {
+      "format": "openworkgraph.reconstruction-review-manifest.v1",
+      "sessions": [
+        {
+          "events": "/private/session-a/events.json",
+          "packet": "/private/session-a/packet.json",
+          "decisions": "/private/session-a/decisions.json",
+          "truth": "/private/session-a/truth.json"
+        },
+        {
+          "events": "/private/session-b/events.json",
+          "packet": "/private/session-b/packet.json",
+          "decisions": "/private/session-b/decisions.json",
+          "truth": "/private/session-b/truth.json"
+        }
+      ]
+    }
+
+    python -m scripts.reconstruction_review score-batch \
+      --manifest /private/review-manifest.json \
+      --output /private/reconstruction-audit.json
+
+All source snapshots, review packets, decisions and complete truth partitions
+are **revalidated and rescored**. If any session is stale, revoked, forged,
+incomplete, oversized or duplicated, the entire batch refuses without a partial
+output. A batch is limited to 24 sessions, each with at most 500 admitted
+observations and 12 annotated workflows for the bounded shared scorer. All
+inputs stay local; the output is private, create-only and contains only
+anonymous session indices, counts, numeric metrics and flags. No paths,
+source/event IDs, digests, work text, hostnames or labels are exported.
+
+The report contains session_macro_automatic_baseline,
+session_macro_human_assisted_overlay, their signed differences and
+minimum_automatic_interruption_rejection. Every session receives equal
+weight; this is **not** event-weighted, and independent *scenario families*
+are not automatically identified. local_numeric_thresholds checks whether
+the *observed local automatic* macro F1 reaches 0.90 and contamination is at
+most 0.05, **not** whether the preregistered family holdout passes.
+preregistered_family_holdout_verified and
+real_consenting_user_pilot_verified always remain false. Human-assisted
+gains must never be attributed to automatic linking. The existing frozen
+family-holdout evaluator in evals/reconstruction and independently
+annotated consenting-user pilot remain mandatory, including interruption
+regression and rare interleaved/missing-observation cases.
