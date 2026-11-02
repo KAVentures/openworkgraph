@@ -1154,6 +1154,20 @@ def test_seeded_two_hop_proposal_abstains_on_competing_visible_record_items():
     assert proposed["canonical_membership_unchanged"] is True
 
 
+
+def test_seeded_two_hop_proposal_requires_bounded_direct_seed():
+    events = [_event(1, A), _event(2, A)]
+    events += [_event(number) for number in range(3, 14)]
+    events += [_event(14, A), _event(15, A)]
+    for event in events[2:-2]:
+        event["event_type"] = "copy"
+    packet = prepare_review_packet(events)
+    proposed = propose_automatic_review(events, packet)
+    assert proposed["direct_proposal_count"] == 0
+    assert proposed["two_hop_proposal_count"] == 0
+    assert proposed["canonical_membership_unchanged"] is True
+
+
 def test_two_hop_proposal_independent_accuracy_and_stale_evidence_refusal():
     events = _seeded_two_hop_proposal_events()
     packet = prepare_review_packet(events)
