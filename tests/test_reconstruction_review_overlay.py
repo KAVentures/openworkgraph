@@ -14,6 +14,7 @@ from server.reconstruction_review_overlay import (
     ADJUDICATION_FORMAT, RESOLUTION_FORMAT, DECISION_FORMAT, adjudicate_review,
     resolve_review_disagreement,
     apply_review, prepare_review_packet, score_review,
+    propose_automatic_review, score_automatic_proposals,
 )
 from server.work_item_links import linked_work_items
 
@@ -954,3 +955,119 @@ def test_prepare_cli_exposes_interleaving_context_without_private_work_text(tmp_
         assert forbidden not in output.read_text()
     if os.name != "nt":
         assert output.stat().st_mode & 0o077 == 0
+
+
+def _proposal_events() -> list[dict]:
+    # Production linker leaves the unreferenced copy action unassigned,
+    # while exact source-record A is observed on both sides.
+    events = [_event(1, A), _event(2, A), _event(3),
+              _event(4, A), _event(5, A)]
+    events[2]["event_type"] = "copy"
+    return events
+
+
+def test_conservative_auto_proposal_uses_actual_linker_without_changing_membership():
+    events = _proposal_events()
+    original = linked_work_items(events)
+    packet = prepare_review_packet(events)
+    assert len(packet["eligible_candidates"]) == 1
+    assert packet["eligible_candidates"][0]["evidence_hops"] == 1
+    proposal = propose_automatic_review(events, packet)
+    assert proposal["proposal_count"] == 1
+    [entry] = proposal["proposed_assignments"]
+    assert entry["event_id"] == "e03"
+    assert entry["item_id"] == packet["eligible_candidates"][0]["candidate_items"][0]["item_id"]
+    assert proposal["canonical_membership_unchanged"] is True
+    assert proposal["case_identity_verified"] is False
+    assert proposal["authorizes_business_action"] is False
+    assert linked_work_items(events) == original
+    for private in ("SECRET", "PRIVATE", "private.example", A, "/medical-notes"):
+        assert private not in json.dumps(proposal)
+
+
+def test_conservative_auto_proposal_abstains_on_competing_or_incomplete_evidence():
+    competing = _events()
+    assert propose_automatic_review(
+        competing, prepare_review_packet(competing)
+    )["proposal_count"] == 0
+
+    for altered in ("foreign_scope", "other_app", "tied_time", "different_record"):
+        events = _proposal_events()
+        if altered == "foreign_scope":
+            events[1]["organization_id"] = "tenant-b"
+        elif altered == "other_app":
+            events[1]["app"] = "OtherApp"
+        elif altered == "tied_time":
+            events[1]["observed_at"] = events[2]["observed_at"]
+        else:
+            events[1]["metadata"]["resource_reference"]["resource_ref"] = B
+        packet = prepare_review_packet(events)
+        proposal = propose_automatic_review(events, packet)
+        assert proposal["proposal_count"] == 0, altered
+        assert proposal["canonical_membership_unchanged"] is True
+
+
+def test_automatic_proposal_score_is_separate_from_production_and_human_review():
+    events = _proposal_events()
+    packet = prepare_review_packet(events)
+    truth = {"workflows": [{"event_ids": ["e01", "e02", "e03", "e04", "e05"]}],
+             "noise_event_ids": []}
+    result = score_automatic_proposals(events, packet, truth)
+    assert result["proposal_count"] == 1
+    assert result["automatic_baseline"]["workflow_assignment_f1"] < 1.0
+    assert result["experimental_automatic_proposal_overlay"]["workflow_assignment_f1"] == 1.0
+    assert result["experimental_automatic_proposal_overlay"]["cross_workflow_contamination"] == 0.0
+    assert result["production_linker_changed"] is False
+    assert result["preregistered_family_holdout"] is False
+    with pytest.raises(ValueError, match="partition"):
+        score_automatic_proposals(events, packet, {"workflows": [
+            {"event_ids": ["e01", "e02"]}], "noise_event_ids": []})
+    changed = copy.deepcopy(events)
+    changed[2]["metadata"]["target"]["label"] = "REVOKED"
+    with pytest.raises(ValueError, match="stale|altered"):
+        score_automatic_proposals(changed, packet, truth)
+    with pytest.raises(ValueError, match="stale|altered"):
+        propose_automatic_review(events[:-1], packet)
+
+
+def test_auto_proposal_cli_private_end_to_end(tmp_path: Path):
+    root = Path(__file__).resolve().parents[1]
+    events = _proposal_events()
+    event_file = tmp_path / "events.json"
+    packet_file = tmp_path / "packet.json"
+    proposal_file = tmp_path / "proposals.json"
+    truth_file = tmp_path / "truth.json"
+    score_file = tmp_path / "proposal-score.json"
+    event_file.write_text(json.dumps(events))
+    truth_file.write_text(json.dumps({
+        "workflows": [{"event_ids": ["e01", "e02", "e03", "e04", "e05"]}],
+        "noise_event_ids": [],
+    }))
+
+    def run(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run([sys.executable, "-m", "scripts.reconstruction_review",
+                               *args], cwd=root, capture_output=True, text=True, timeout=40)
+
+    assert run("prepare", "--events", str(event_file),
+               "--output", str(packet_file)).returncode == 0
+    proposed = run("propose", "--events", str(event_file),
+                   "--packet", str(packet_file), "--output", str(proposal_file))
+    assert proposed.returncode == 0, proposed.stderr
+    assert json.loads(proposal_file.read_text())["proposal_count"] == 1
+    scored = run("score-proposals", "--events", str(event_file),
+                 "--packet", str(packet_file), "--truth", str(truth_file),
+                 "--output", str(score_file))
+    assert scored.returncode == 0, scored.stderr
+    report = json.loads(score_file.read_text())
+    assert report["experimental_automatic_proposal_overlay"]["workflow_assignment_f1"] == 1.0
+    for path in (proposal_file, score_file):
+        for private in ("SECRET", "PRIVATE", "private.example", A):
+            assert private not in path.read_text()
+        if os.name != "nt":
+            assert path.stat().st_mode & 0o077 == 0
+    # Output files are create-only; no silent replacement of earlier results.
+    assert run("propose", "--events", str(event_file), "--packet",
+               str(packet_file), "--output", str(proposal_file)).returncode == 2
+    event_file.write_text(json.dumps(events[:-1]))
+    assert run("propose", "--events", str(event_file), "--packet",
+               str(packet_file), "--output", str(tmp_path / "stale.json")).returncode == 2
