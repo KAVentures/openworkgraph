@@ -338,6 +338,8 @@ def _operate(admitted: dict[str, Any], signature: tuple, *, scope: str,
         try:
             now = _clock(None)
             rows = _load(db, admitted, graph, source, key, expiry, now)
+            if mode == "history" and record is not None and rows and rows[0]["record_binding"] != record:
+                raise CaseDeclarationError("conflicting source-joined case record")
             if mode == "check":
                 # The caller captured this exact private history before a potentially
                 # slow source read. Compare inside the SQLite write transaction so
@@ -488,9 +490,10 @@ def append_operation_evidence_batch(
 
 
 def read_operation_evidence(admitted: dict[str, Any], signature: tuple, *,
-                            scope: str, secret: str, guard: Callable[[], None]) -> dict[str, Any]:
+                            scope: str, secret: str, guard: Callable[[], None],
+                            resource_ref: str | None = None) -> dict[str, Any]:
     return _operate(admitted, signature, scope=scope, secret=secret,
-                    guard=guard, mode="history")
+                    guard=guard, mode="history", resource_ref=resource_ref)
 
 
 def dispute_operation_evidence(admitted: dict[str, Any], signature: tuple, *,
