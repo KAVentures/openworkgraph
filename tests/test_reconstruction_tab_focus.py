@@ -518,13 +518,17 @@ def test_unreferenced_app_switch_recovery_recomputes_after_anchor_removal():
         event(4), event(5, A),
     ]
     assert linked_work_items(trace)["observed_single_record_unreferenced_app_focus_links"] == 2
-    # Retention/revocation of the return anchor removes the basis for both
-    # recovered browser observations, without a cached membership artifact.
+    # Removing the return anchor removes the *two-sided recovery basis*.
+    # The pre-switch click may still retain legacy one-sided tab evidence;
+    # the post-switch click must never inherit it.
     retained = [row for row in trace if row["event_id"] != "e05"]
     result = linked_work_items(retained)
     assert result["observed_single_record_unreferenced_app_focus_links"] == 0
-    assert result["ambiguous_single_record_tab_interleaving_abstentions"] == 2
-    assert result["total_items"] == 0
+    assert result["ambiguous_single_record_tab_interleaving_abstentions"] == 1
+    assert groups(result)[("e01", "e02")]["link_basis"] == {
+        "same_tab_single_record": 1,
+    }
+    assert result["unlinked_observation_count"] == 2
 
 
 def test_unreferenced_app_switch_scope_and_clock_ambiguity_do_not_create_witness():
