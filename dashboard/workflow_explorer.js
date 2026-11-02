@@ -16,6 +16,7 @@
   let currentWindow = {};
   let handoffReview = null;
   let designReview = null;
+  let comparisonReview = null;
 
   function element(tag, text, className) {
     const node = document.createElement(tag);
@@ -174,8 +175,12 @@
     else overview.appendChild(card);
   }
 
-  function invalidateEvidence() {
+  function invalidateEvidence(preserveComparison = false) {
     ++latestEvidenceRequest;
+    if (!preserveComparison && comparisonReview) {
+      comparisonReview.invalidate();
+      comparisonReview = null;
+    }
     activeBundle = null;
     const output = document.getElementById('owgExplorerEvidence');
     if (output) output.replaceChildren();
@@ -366,8 +371,15 @@
       const compareButton = button('Compare observed variants', () => {
         const first = lanes.find(lane => String(lane.index) === choiceA.value);
         const second = lanes.find(lane => String(lane.index) === choiceB.value);
+        invalidateEvidence();
         renderVariantComparison(candidate, first, second, result);
       }, true);
+      const resetComparison = () => {
+        invalidateEvidence();
+        result.replaceChildren(element('p', 'Variant selection changed. Compare again before reviewing evidence.', 'muted'));
+      };
+      choiceA.addEventListener('change', resetComparison);
+      choiceB.addEventListener('change', resetComparison);
       append(controls, labelA, labelB, compareButton);
       append(compare, controls, result);
       host.appendChild(compare);
@@ -449,15 +461,16 @@
       (right.index + 1) + '): ' + right.count + ' observed candidate runs. ' + shared +
       ' shared structural steps in order; ' + (left.steps.length - shared) + ' only in A and ' +
       (right.steps.length - shared) + ' only in B. Counts may reflect bounded evidence, not distinct verified cases.', 'muted'));
+    const review = createComparisonReview(candidate, left, right, host);
     const actions = element('div', null, 'owg-explorer-actions');
     for (const [label, lane] of [['A', left], ['B', right]]) {
       actions.appendChild(button('Inspect variant ' + label + ' evidence', () => {
-        invalidateEvidence();
+        if (!currentComparisonReview(review)) return;
         selectedExample = lane;
         const info = document.getElementById('owgExplorerStepInfo');
         if (info) info.textContent = 'Variant ' + (lane.index + 1) +
           ' selected from comparison. Inspecting only its bounded supporting references; this is not an approval.';
-        inspect(candidate, lane);
+        review.inspect(label, lane);
       }, true));
     }
     host.appendChild(actions);
@@ -482,6 +495,118 @@
     host.appendChild(scroll);
     host.appendChild(element('p',
       'Alignment is a deterministic display comparison of normalized structural tokens, not an edit script, causal explanation or verified source trace. Repeated steps can admit multiple alignments. Select and inspect each variant separately before any review or handoff.', 'muted'));
+    host.appendChild(review.panel);
+  }
+
+  function currentComparisonReview(review) {
+    return comparisonReview === review && selectedId === review.candidateId &&
+      JSON.stringify(currentWindow) === review.windowJSON &&
+      document.getElementById('owgExplorerCompareA')?.value === String(review.left.index) &&
+      document.getElementById('owgExplorerCompareB')?.value === String(review.right.index);
+  }
+
+  function createComparisonReview(candidate, left, right, host) {
+    const panel = element('section', null, 'note');
+    panel.id = 'owgExplorerCompareDesignPanel';
+    panel.setAttribute('aria-label', 'Evidence-backed variant design choice');
+    panel.appendChild(element('h4', 'Choose an observed AS-IS variant for process design'));
+    panel.appendChild(element('p',
+      'Inspect both lanes separately before choosing. Evidence reads are bounded, not verified business-case identity or complete source history. The chosen lane alone becomes an UNSAVED process catalog draft; no policy, permission, process or agent is approved.'));
+    const noteA = element('p', 'A: Not inspected.', 'muted');
+    noteA.id = 'owgExplorerCompareEvidenceA'; noteA.setAttribute('role', 'status');
+    const noteB = element('p', 'B: Not inspected.', 'muted');
+    noteB.id = 'owgExplorerCompareEvidenceB'; noteB.setAttribute('role', 'status');
+    panel.append(noteA, noteB);
+    const targetLabel = element('label', 'AS-IS proposal from ');
+    const target = element('select');
+    target.id = 'owgExplorerCompareTarget';
+    for (const [value, label] of [['', 'Choose after inspecting both'], ['A', 'Variant A'], ['B', 'Variant B']]) {
+      const option = element('option', label); option.value = value; target.appendChild(option);
+    }
+    target.value = ''; target.disabled = true; targetLabel.appendChild(target);
+    const confirmLabel = element('label');
+    const confirm = element('input'); confirm.type = 'checkbox';
+    confirm.id = 'owgExplorerCompareConfirmed'; confirm.disabled = true;
+    confirmLabel.append(confirm, document.createTextNode(
+      ' I separately inspected both bounded variants and explicitly chose the AS-IS proposal. I will review its goal, labels, exceptions and omissions before any save.'));
+    const next = button('Open chosen variant as unsaved catalog draft', () => {
+      if (!currentComparisonReview(review) || !confirm.checked || !review.inspected.A ||
+          !review.inspected.B || !['A', 'B'].includes(target.value)) {
+        next.disabled = true;
+        decision.textContent = 'Evidence or selection changed. Inspect both lanes and confirm again.';
+        return;
+      }
+      const lane = target.value === 'A' ? left : right;
+      try {
+        if (!window.owgProcessCatalog?.draftObserved)
+          throw new Error('Process catalog unavailable. Reopen the local dashboard.');
+        window.owgProcessCatalog.draftObserved({path: lane.steps.slice(), count: lane.count,
+          basis: 'selected_observed_variant', evidenceRefs: selectedIds(candidate, lane).slice()});
+        confirm.checked = false; next.disabled = true;
+        decision.textContent = 'Unsaved catalog draft requested for variant ' + target.value +
+          ' only. Inspect the catalog before any separate save. No process, agent or business action ran.';
+      } catch (error) { decision.textContent = 'Catalog draft unavailable: ' + String(error?.message || error); }
+    }, true);
+    next.disabled = true;
+    const decision = element('p', 'No design choice or source authorization recorded.', 'muted');
+    decision.id = 'owgExplorerCompareDesignStatus'; decision.setAttribute('role', 'status');
+    panel.append(targetLabel, confirmLabel, next, decision);
+    const review = {
+      panel, candidateId: candidate.candidate_cluster_id, left, right,
+      windowJSON: JSON.stringify(currentWindow), inspected: {A: false, B: false},
+      invalidate() {
+        this.inspected.A = false; this.inspected.B = false;
+        noteA.textContent = 'A: Inspection invalidated; compare again.';
+        noteB.textContent = 'B: Inspection invalidated; compare again.';
+        confirm.checked = false; confirm.disabled = true; target.value = ''; target.disabled = true;
+        next.disabled = true; decision.textContent = 'Comparison changed. Compare again before a design choice.';
+      },
+      async inspect(label, lane) {
+        if (!currentComparisonReview(this)) return;
+        // The first completed lane remains inspected only while the same comparison
+        // is active. A third inspection starts a fresh two-lane review.
+        if (this.inspected.A && this.inspected.B) this.inspected = {A: false, B: false};
+        this.inspected[label] = false;
+        confirm.checked = false; confirm.disabled = true; target.value = ''; target.disabled = true;
+        next.disabled = true;
+        const note = label === 'A' ? noteA : noteB;
+        note.textContent = label + ': Reading bounded selected evidence…';
+        decision.textContent = 'Both lanes require separate complete selected-reference inspection.';
+        const bundle = await inspect(candidate, lane, true);
+        if (!currentComparisonReview(this)) return;
+        const ids = selectedIds(candidate, lane);
+        const returned = safeArray(bundle?.selector?.execution_ids);
+        const exact = ids.length > 0 && new Set(ids).size === ids.length &&
+          returned.length === ids.length && new Set(returned).size === returned.length &&
+          count(bundle?.selector?.selected_execution_count) === ids.length &&
+          ids.every(id => returned.includes(id)) &&
+          bundle?.provenance?.source_limit_reached !== true &&
+          bundle?.provenance?.truncated !== true;
+        if (!exact) {
+          this.inspected = {A: false, B: false};
+          noteA.textContent = 'A: Evidence incomplete, mismatched, truncated or unavailable. Reinspect both.';
+          noteB.textContent = 'B: Evidence incomplete, mismatched, truncated or unavailable. Reinspect both.';
+          decision.textContent = 'No design choice permitted until both lanes are inspected again.';
+          return;
+        }
+        this.inspected[label] = true;
+        note.textContent = label + ': Inspected ' + ids.length + ' exact selected references in this period; ' +
+          lane.count + ' projected runs. Total source coverage and case identity remain unverified.';
+        if (this.inspected.A && this.inspected.B) {
+          target.disabled = false;
+          confirm.disabled = false;
+          decision.textContent = 'Both bounded lanes inspected. Choose one AS-IS target and explicitly confirm. ' +
+            'This review is ephemeral; it does not persist source proof.';
+        }
+      }
+    };
+    target.addEventListener('change', () => {confirm.checked = false; next.disabled = true;});
+    confirm.addEventListener('change', () => {
+      next.disabled = !(confirm.checked && currentComparisonReview(review) &&
+        review.inspected.A && review.inspected.B && ['A', 'B'].includes(target.value));
+    });
+    comparisonReview = review;
+    return review;
   }
 
   function renderCombinedMap(candidate,lanes,host){
@@ -552,11 +677,11 @@
     const ids = lane ? safeArray(lane.ids) : safeArray(candidate.execution_ids);
     return ids.filter(id => /^execution:[a-zA-Z0-9_-]+$/.test(String(id))).slice(0, 12);
   }
-  async function inspect(candidate, lane) {
+  async function inspect(candidate, lane, preserveComparison = false) {
     const output = document.getElementById('owgExplorerEvidence');
     if (!output) return;
     // A new source inspection invalidates all previously acknowledged reviews.
-    invalidateEvidence();
+    invalidateEvidence(preserveComparison);
     const requestId = latestEvidenceRequest;
     output.replaceChildren(element('p', 'Reading bounded supporting evidence…', 'muted'));
     const ids = selectedIds(candidate, lane);
@@ -593,6 +718,7 @@
         (bundle.provenance && bundle.provenance.source_limit_reached ?
           'Source limit reached; earlier evidence may be absent. ' : '') +
         'Observed completion does not verify the real business outcome. Use the existing Evidence and AI export views for canonical traces.', 'muted'));
+      return bundle;
     } catch (error) {
       if (requestId !== latestEvidenceRequest || selectedId !== candidate.candidate_cluster_id) return;
       output.replaceChildren(element('p', String(error.message || error), 'muted'));
