@@ -246,21 +246,21 @@ def test_invalid_activity_selector_refused_before_dataset_access(monkeypatch, ac
 def test_stage_bounded_statistics_use_ordered_complete_intervals_and_missingness(log):
     # A prior End does not close a later Start; only the first later End does.
     doc = (
-        "case,activity,time,amount\\n"
-        "a,Start,2024-03-01T00:00:00Z,2\\n"
-        "a,Work,2024-03-01T01:00:00Z,4\\n"
-        "a,End,2024-03-01T02:00:00Z,100\\n"
-        "b,End,2024-03-02T00:00:00Z,999\\n"
-        "b,Start,2024-03-02T01:00:00Z,3\\n"
-        "b,Work,2024-03-02T02:00:00Z,5\\n"
-        "b,End,2024-03-02T03:00:00Z,100\\n"
-        "c,Start,2024-03-03T00:00:00Z,1\\n"
-        "c,Work,2024-03-03T01:00:00Z,NaN\\n"
-        "c,End,2024-03-03T02:00:00Z,100\\n"
-        "d,Start,2024-03-04T00:00:00Z,7\\n"
-        "d,Work,2024-03-04T01:00:00Z,9\\n"
-        "e,Work,2024-03-05T00:00:00Z,6\\n"
-        "e,End,2024-03-05T01:00:00Z,10\\n"
+        "case,activity,time,amount\n"
+        "a,Start,2024-03-01T00:00:00Z,2\n"
+        "a,Work,2024-03-01T01:00:00Z,4\n"
+        "a,End,2024-03-01T02:00:00Z,100\n"
+        "b,End,2024-03-02T00:00:00Z,999\n"
+        "b,Start,2024-03-02T01:00:00Z,3\n"
+        "b,Work,2024-03-02T02:00:00Z,5\n"
+        "b,End,2024-03-02T03:00:00Z,100\n"
+        "c,Start,2024-03-03T00:00:00Z,1\n"
+        "c,Work,2024-03-03T01:00:00Z,NaN\n"
+        "c,End,2024-03-03T02:00:00Z,100\n"
+        "d,Start,2024-03-04T00:00:00Z,7\n"
+        "d,Work,2024-03-04T01:00:00Z,9\n"
+        "e,Work,2024-03-05T00:00:00Z,6\n"
+        "e,End,2024-03-05T01:00:00Z,10\n"
     ).encode()
     selected = workspace.import_log(BytesIO(doc), name="stage", source_format="csv", mapping={
         "case_column": "case", "activity_column": "activity", "timestamp_column": "time",
@@ -301,10 +301,10 @@ def test_stage_bounded_statistics_use_ordered_complete_intervals_and_missingness
 
 def test_stage_boundaries_tied_timestamp_are_deterministic(log):
     doc = (
-        "case,activity,time,amount\\n"
-        "a,Start,2024-04-01T00:00:00Z,2\\n"
-        "a,Work,2024-04-01T00:00:00Z,4\\n"
-        "a,End,2024-04-01T00:00:00Z,100\\n"
+        "case,activity,time,amount\n"
+        "a,Start,2024-04-01T00:00:00Z,2\n"
+        "a,Work,2024-04-01T00:00:00Z,4\n"
+        "a,End,2024-04-01T00:00:00Z,100\n"
     ).encode()
     selected = workspace.import_log(BytesIO(doc), name="tied-stage", source_format="csv", mapping={
         "case_column": "case", "activity_column": "activity", "timestamp_column": "time",
