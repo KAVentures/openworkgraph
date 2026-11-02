@@ -291,6 +291,9 @@
     let latestIdeas=[],refreshGeneration=0,resumeGeneration=0;
     resumeFile.onchange=()=>{
       resumeGeneration++;
+      // Cancel a pending resume if the operator changes its file. Existing
+      // authenticated reads may finish, but stale results cannot render.
+      if(resumeButton.disabled)detailGeneration++;
       resumeStatus.textContent='File selected. Resume explicitly to recheck the exact saved idea and project.';
     };
     resumeButton.onclick=async()=>{
@@ -324,7 +327,7 @@
       }catch(e){
         if(request===resumeGeneration)
           resumeStatus.textContent='Could not resume review: '+(e instanceof SyntaxError?'Invalid JSON.':e.message);
-      }finally{if(request===resumeGeneration)resumeButton.disabled=false;}
+      }finally{resumeButton.disabled=false;}
     };
     function render(){
       const ideas=portfolioView(latestIdeas,{query:search.value,quadrant:quadrant.value,sort:sort.value});
@@ -394,7 +397,7 @@
         journeyButton.disabled=true;const progress=el('div','Checking local references…','muted');progress.setAttribute('role','status');journeyHost.replaceChildren(progress);
         try{
           const data=await (await api('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/journey')).json();
-          if(generation!==detailGeneration)return;
+          if(generation!==detailGeneration||(resume&&!resume.valid()))return;
           journeyHost.replaceChildren(el('h4','Evidence journey'));
           const stages=el('ol');
           if(data.dataset_origins?.length){
@@ -450,16 +453,16 @@
           if(data.dataset_origins?.some(origin=>origin.status!=='current')||!data.dataset_origins?.length)
             guide.appendChild(el('p','Source snapshot coverage is missing, changed or unverified. This journey cannot certify original data completeness.','muted'));
           guide.appendChild(guideStatus);journeyHost.appendChild(guide);
+          if(resume&&!data.projects.some(project=>project.project_id===resume.projectId)){
+            resumeStatus.textContent='Exact saved project is unavailable or deleted. No other project was selected, and no inspection marks were restored.';
+            return;
+          }
           if(!data.projects.length){
             journeyHost.appendChild(el('p','No project artifacts recorded.'));
             const next=button('Continue at agent project export','secondary');next.id='owgPipelineJourneyExport';
             next.disabled=!['approved','implemented'].includes(idea.state)||!ref||process.status!=='current';
             next.onclick=()=>navigate('owgPipelineProjectDownload','Agent project export');
             guide.insertBefore(next,guideStatus);
-            return;
-          }
-          if(resume&&!data.projects.some(project=>project.project_id===resume.projectId)){
-            resumeStatus.textContent='Exact saved project is unavailable or deleted. No other project was selected, and no inspection marks were restored.';
             return;
           }
           const choice=select('owgPipelineJourneyProject',data.projects.map(p=>[p.project_id,'Idea revision '+p.idea_revision+' · '+p.created_at]));
