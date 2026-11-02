@@ -1400,6 +1400,88 @@ const path=require('node:path');
    assert.deepEqual((await activitySaved.json()).rows,[[-96]]);
    const [activityCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCsv').click()]);
    assert.match(await fs.readFile(await activityCsv.path(),'utf8'),/avg_metric:step_delta\r\n-96/);
+   // R9: one keyboard action composes the selected activity's contribution
+   // to the whole case from ordinary version-1 typed metrics. A has Work 14
+   // out of all observed 124 EUR; B has no finite Work value, so no fraction.
+   for(const n of ['step_delta','step_b','step_a'])
+     await page.getByRole('button',{name:'Remove metric '+n,exact:true}).click();
+   await page.locator('#owgMetricKind').selectOption('event_attribute_statistic');
+   await page.locator('#owgMetricName').fill('work');
+   await page.locator('#owgMetricStatistic').selectOption('average');
+   await page.locator('#owgMetricStatActivity').selectOption('Work');
+   assert.equal(await page.locator('#owgMetricCompareActivityShare').isVisible(),true);
+   await page.locator('#owgMetricCompareActivityShare').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Choose Total'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList button').count(),0);
+   await page.locator('#owgMetricStatistic').selectOption('total');
+   await page.locator('#owgMetricStatActivity').selectOption('');
+   await page.locator('#owgMetricCompareActivityShare').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Choose Only this activity'}).waitFor();
+   await page.locator('#owgMetricStatActivity').selectOption('Work');
+   await page.locator('#owgMetricStageFrom').selectOption('Start');
+   await page.locator('#owgMetricStageTo').selectOption('End');
+   await page.locator('#owgMetricCompareActivityShare').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Clear stage start and end'}).waitFor();
+   await page.locator('#owgMetricStageFrom').selectOption('');
+   await page.locator('#owgMetricStageTo').selectOption('');
+   await page.locator('#owgMetricName').fill('x'.repeat(32));
+   await page.locator('#owgMetricCompareActivityShare').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'at most 31 characters'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList button').count(),0);
+   await page.locator('#owgMetricName').fill('work_selected');
+   await page.locator('#owgMetricAdd').click();
+   await page.locator('#owgMetricName').fill('work');
+   await page.locator('#owgMetricCompareActivityShare').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'activity fraction metric name already exists'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList button').count(),1,'collision cannot partially add a fraction');
+   await page.getByRole('button',{name:'Remove metric work_selected',exact:true}).click();
+   for(const n of ['fraction_cap_one','fraction_cap_two']){
+     await page.locator('#owgMetricName').fill(n);
+     await page.locator('#owgMetricAdd').click();
+   }
+   await page.locator('#owgMetricName').fill('work');
+   await page.locator('#owgMetricCompareActivityShare').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'three free metric slots'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList button').count(),2,'capacity refusal cannot partially add');
+   for(const n of ['fraction_cap_one','fraction_cap_two'])
+     await page.getByRole('button',{name:'Remove metric '+n,exact:true}).click();
+   const sharePure=await page.evaluate(()=>window.__owgEventLogModel.activityShareMetrics(
+     window.__owgEventLogModel.caseMetric({kind:'event_attribute_statistic',name:'work',
+       attribute:'amount',unit:'EUR',statistic:'total',missingPolicy:'available',statActivity:'Work'})));
+   assert.deepEqual(sharePure.map(m=>m.name),['work_selected','work_all','work_fraction']);
+   assert.equal(sharePure[0].activity,'Work');
+   assert.equal(Object.hasOwn(sharePure[1],'activity'),false);
+   assert.deepEqual(sharePure[2],{name:'work_fraction',kind:'arithmetic',expression_version:'1',
+     operation:'divide',left:{kind:'metric',name:'work_selected'},right:{kind:'metric',name:'work_all'}});
+   await page.locator('#owgAnalysisLevel').selectOption('events');
+   await page.locator('#owgMetricCompareActivityShare').focus();
+   await page.keyboard.press('Enter');
+   await page.locator('#owgAnalysisStatus').filter({hasText:'whole-case total and their fraction'}).waitFor();
+   assert.equal(await page.locator('#owgAnalysisLevel').inputValue(),'cases');
+   assert.equal(await page.locator('#owgMetricList button').count(),3);
+   assert.equal(await page.locator('#owgAnalysisMeasure1').inputValue(),'avg:metric:work_fraction');
+   const [shareResponse]=await Promise.all([
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
+     page.locator('#owgAnalysisRun').click()]);
+   assert.equal(shareResponse.status(),200);
+   const shareSpec=JSON.parse(shareResponse.request().postData());
+   assert.deepEqual(shareSpec.metrics,sharePure);
+   const shareResult=await shareResponse.json();
+   assert.equal(shareResult.rows.length,1);
+   assert.ok(Math.abs(shareResult.rows[0][0]-14/124)<1e-12,'Work contributes 14 of 124 observed EUR in A');
+   assert.equal(shareResult.metrics[2].unit,'ratio');
+   assert.equal(shareResult.metrics[2].cases_with_value,1);
+   assert.equal(shareResult.metrics[2].cases_with_missing_operand,1,'invalid B Work must stay unknown');
+   assert.equal(shareResult.metrics[0].cases_with_no_finite_attribute,1);
+   await page.locator('#owgAnalysisName').fill('Observed Work contribution');
+   await page.locator('#owgAnalysisSave').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Analysis saved.'}).waitFor();
+   const [savedShare]=await Promise.all([
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')),
+     page.getByRole('button',{name:'Run saved analysis Observed Work contribution',exact:true}).click()]);
+   assert.ok(Math.abs((await savedShare.json()).rows[0][0]-14/124)<1e-12);
+   const [shareCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCsv').click()]);
+   assert.match(await fs.readFile(await shareCsv.path(),'utf8'),/avg_metric:work_fraction\r\n0\.1129/);
    const numericAxe=await page.evaluate(()=>axe.run(document.querySelector('#owgEventLogAnalysis'),{
      runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']},resultTypes:['violations']}));
    assert.deepEqual(numericAxe.violations,[]);
