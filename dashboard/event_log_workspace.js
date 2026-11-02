@@ -2217,6 +2217,25 @@
     }
     return [first,last,delta];
   }
+  // Compose an exact-activity A/B comparison from existing typed case metrics.
+  // This does not infer missing business activity or convert declared units.
+  function activityComparisonMetrics(baseMetric,activityA,activityB){
+    if(baseMetric.kind!=='event_attribute_statistic')
+      throw new Error('Choose a numeric event statistic to compare activities.');
+    if(baseMetric.from_activity||baseMetric.to_activity)
+      throw new Error('Clear stage start and end before comparing two activities.');
+    if(baseMetric.activity)
+      throw new Error('Clear Only this activity before choosing two comparison activities.');
+    if(!activityA||!activityB||activityA===activityB)
+      throw new Error('Choose two different activities for the comparison.');
+    if(baseMetric.name.length>34)
+      throw new Error('Use a base metric name of at most 34 characters for the activity comparison.');
+    const first={...baseMetric,name:baseMetric.name+'_a',activity:activityA};
+    const second={...baseMetric,name:baseMetric.name+'_b',activity:activityB};
+    const delta={name:baseMetric.name+'_delta',kind:'arithmetic',expression_version:'1',
+      operation:'subtract',left:{kind:'metric',name:second.name},right:{kind:'metric',name:first.name}};
+    return [first,second,delta];
+  }
   const METRIC_KINDS=[['time_between','Time from one activity to another'],['activity_count','How often an activity occurs'],['event_attribute_statistic','Numeric event values within each case or stage'],['event_attribute_sum','Sum of a numeric event attribute'],['case_attribute_number','A numeric case attribute'],['arithmetic','Arithmetic on earlier metrics']];
   function metricText(m){
     if(m.kind==='time_between')return m.name+': time from the '+m.from_occurrence+' '+m.from_activity+' to the '+m.to_occurrence+' '+m.to_activity;
@@ -2277,6 +2296,8 @@
     const mStageFrom=select('owgMetricStageFrom',[['','(whole case)'],...names]);
     const mStageTo=select('owgMetricStageTo',[['','(whole case)'],...names]);
     const mStageOccurrence=select('owgMetricStageOccurrence',[['first','First observed completed stage'],['last_completed','Last completed stage (ignore unfinished trailing stage)']]);
+    const mCompareActivityA=select('owgMetricCompareActivityA',[['','(choose activity A)'],...names]);
+    const mCompareActivityB=select('owgMetricCompareActivityB',[['','(choose activity B)'],...names]);
     const mOperation=select('owgMetricOperation',[['add','Add'],['subtract','Subtract'],['multiply','Multiply'],['divide','Divide'],['minimum','Smaller of two values'],['maximum','Larger of two values'],['average','Average of two values'],['absolute_difference','Absolute difference (nonnegative)']]);
     const operands={};
     for(const side of ['left','right']){
@@ -2289,17 +2310,20 @@
     const mSave=button('Save metric for reuse','secondary');mSave.id='owgMetricSave';
     const mCompare=button('Compare first and last completed stages (3 metrics)','secondary');mCompare.id='owgMetricCompareStages';
     const mCompareRelative=button('Compare fractional first-to-last change (4 metrics)','secondary');mCompareRelative.id='owgMetricCompareRelative';
+    const mCompareActivities=button('Compare two activities (3 metrics)','secondary');mCompareActivities.id='owgMetricCompareActivities';
     const mf={from:field('From activity',mFrom),fromOcc:field('Occurrence of the from activity',mFromOcc),to:field('To activity',mTo),toOcc:field('Occurrence of the to activity',mToOcc),
       activity:field('Activity to count',mActivity),attribute:field('Attribute',mAttribute),unit:field('Unit of the values',mUnit),
       statistic:field('Statistic within each case',mStatistic),missing:field('Missing numeric values',mMissing),
       statActivity:field('Only this activity (optional)',mStatActivity),stageFrom:field('Stage start (optional)',mStageFrom),
       stageTo:field('Stage end (optional)',mStageTo),stageOccurrence:field('Which completed stage',mStageOccurrence),
+      compareActivityA:field('Comparison activity A',mCompareActivityA),compareActivityB:field('Comparison activity B',mCompareActivityB),
       operation:field('Operation',mOperation)};
     for(const side of ['left','right'])for(const key of ['kind','metric','value','unit'])mf[side+key]=field((side==='left'?'Left':'Right')+' '+({kind:'operand',metric:'metric',value:'constant',unit:'constant unit'}[key]),operands[side][key]);
     const mSync=()=>{const k=mKind.value;show(mf.from,k==='time_between');show(mf.fromOcc,k==='time_between');show(mf.to,k==='time_between');show(mf.toOcc,k==='time_between');
       const numeric=k==='event_attribute_statistic';
       show(mf.activity,k==='activity_count');show(mf.attribute,numeric||k.endsWith('_number')||k.endsWith('_sum'));show(mf.unit,numeric||k.endsWith('_number')||k.endsWith('_sum'));
-      show(mf.statistic,numeric);show(mf.missing,numeric);show(mf.statActivity,numeric);show(mCompare,numeric);show(mCompareRelative,numeric);
+      show(mf.statistic,numeric);show(mf.missing,numeric);show(mf.statActivity,numeric);show(mCompare,numeric);show(mCompareRelative,numeric);show(mCompareActivities,numeric);
+      show(mf.compareActivityA,numeric);show(mf.compareActivityB,numeric);
       show(mf.stageFrom,numeric);show(mf.stageTo,numeric);show(mf.stageOccurrence,numeric&&(!!mStageFrom.value||!!mStageTo.value));
       show(mf.operation,k==='arithmetic');
       for(const side of ['left','right'])for(const key of ['kind','metric','value','unit'])show(mf[side+key],k==='arithmetic'&&(key==='kind'||(key==='metric'?operands[side].kind.value==='metric':operands[side].kind.value==='constant')));
@@ -2307,11 +2331,11 @@
     operands.left.kind.onchange=operands.right.kind.onchange=mSync;
     mKind.onchange=mStageFrom.onchange=mStageTo.onchange=mSync;mSync();
     const metricRow=el('div',null,'row');metricRow.style.alignItems='end';
-    metricRow.append(field('Case metric',mKind),field('Metric name',mName),...Object.values(mf),mAdd,mCompare,mCompareRelative,mSave);
+    metricRow.append(field('Case metric',mKind),field('Metric name',mName),...Object.values(mf),mAdd,mCompare,mCompareRelative,mCompareActivities,mSave);
     const metricList=el('div');metricList.id='owgMetricList';
     const library=el('div');library.id='owgMetricLibrary';
     const metricBox=document.createElement('fieldset');metricBox.style.cssText='border:1px solid var(--line,#ccc);border-radius:6px;padding:8px;margin-top:8px';
-    const legend=el('legend','Case metrics (optional)');metricBox.append(legend,el('div','Define up to four values per case, then choose a measure. Numeric event statistics use only observed finite values; choose available or require all matching rows, optionally one activity and a first or last completed stage. Compare first and last completed stages adds three metrics atomically; fractional first-to-last change adds four, including (last minus first) divided by first, and selects a dimensionless ratio (2 means +200%, not 2%). A zero first-stage value leaves relative change unknown. Unfinished stages are not completed. Times are in seconds; declared units are never converted. Arithmetic uses earlier metrics or typed constants; ratio means dimensionless. Add/subtract need identical units; division by zero is missing. Saved arithmetic templates refer to names: add their dependencies first. Save an analysis to retain all definitions together.','muted'),metricRow,metricList,library);
+    const legend=el('legend','Case metrics (optional)');metricBox.append(legend,el('div','Define up to four values per case, then choose a measure. Numeric event statistics use only observed finite values; choose available or require all matching rows, optionally one activity and a first or last completed stage. Compare first and last completed stages adds three metrics atomically; fractional first-to-last change adds four, including (last minus first) divided by first, and selects a dimensionless ratio (2 means +200%, not 2%). A zero first-stage value leaves relative change unknown. Compare two distinct activities adds A, B, and signed B minus A as three ordinary metrics; absent or invalid matching values remain unknown. Clear stage boundaries and the single-activity filter before comparing. Unfinished stages are not completed. Times are in seconds; declared units are never converted. Arithmetic uses earlier metrics or typed constants; ratio means dimensionless. Add/subtract need identical units; division by zero is missing. Saved arithmetic templates refer to names: add their dependencies first. Save an analysis to retain all definitions together.','muted'),metricRow,metricList,library);
     const readMetric=()=>caseMetric({kind:mKind.value,name:mName.value,from:mFrom.value,to:mTo.value,fromOccurrence:mFromOcc.value,toOccurrence:mToOcc.value,activity:mActivity.value,attribute:mAttribute.value,unit:mUnit.value,statistic:mStatistic.value,missingPolicy:mMissing.value,statActivity:mStatActivity.value,stageFrom:mStageFrom.value,stageTo:mStageTo.value,stageOccurrence:mStageOccurrence.value,operation:mOperation.value,
       ...Object.fromEntries(Object.entries(operands).flatMap(([side,controls])=>Object.entries(controls).map(([key,node])=>[side+key[0].toUpperCase()+key.slice(1),node.value])))});
     function useMetric(metric){
@@ -2397,6 +2421,21 @@
     }
     mCompare.onclick=()=>addStageComparison(false);
     mCompareRelative.onclick=()=>addStageComparison(true);
+    mCompareActivities.onclick=()=>{
+      try{
+        const proposed=activityComparisonMetrics(readMetric(),mCompareActivityA.value,mCompareActivityB.value);
+        if(metrics.length+proposed.length>4)
+          throw new Error('An activity comparison needs three free metric slots (four maximum). Remove other metrics first.');
+        const existing=new Set(metrics.map(m=>m.name));
+        if(proposed.some(m=>existing.has(m.name)))
+          throw new Error('An activity comparison metric name already exists. Choose a different base name.');
+        // Validate the entire batch before mutation, including dependency order.
+        metrics.push(...proposed);renderMetrics();
+        level.value='cases';sync();
+        measure1.value='avg:metric:'+proposed[2].name;measure2.value='';
+        message.textContent='Added activity A, activity B, and signed B minus A metrics. Missing activity values remain unknown, never zero.';
+      }catch(error){message.textContent=error.message;}
+    };
     mSave.onclick=async()=>{try{await api(base()+'/metrics',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({metric:readMetric()})});message.textContent='Metric saved for reuse.';await refreshLibrary();}catch(error){message.textContent=error.message;}};
     async function refreshLibrary(){
       const r=await getJSON(base()+'/metrics');if(generation!==state.generation)return;
@@ -2917,6 +2956,6 @@
         (p.previous_window_coverage_after===null?'.':' and '+pct(p.previous_window_coverage_after)+' of the window before.'):null};
   }
 
-  window.__owgEventLogModel={simBatch,simPriorities,objectModelArcs,objectModelText,visitRows,simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,stageComparisonMetrics,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths,packMapping,packGuess,packReportRows,monitoringRows,impactSpec,impactRows};
+  window.__owgEventLogModel={simBatch,simPriorities,objectModelArcs,objectModelText,visitRows,simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,stageComparisonMetrics,activityComparisonMetrics,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths,packMapping,packGuess,packReportRows,monitoringRows,impactSpec,impactRows};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
