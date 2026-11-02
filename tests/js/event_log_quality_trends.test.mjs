@@ -430,7 +430,7 @@ test('rejection-category comparisons refuse missing reports, mapping drift and i
   assert.equal(check([batch(0),batch(2)],reports).comparablePairs,0);
   assert.equal(check([...good,good[0]],reports).comparablePairs,0);
   assert.equal(check(good,[reports[0],record(1,3,Object.fromEntries(
-    Array.from({length:257},(_,i)=>['reason_'+i,0)))]).comparablePairs,0);
+    Array.from({length:257},(_,i)=>['reason_'+i,0])))]).comparablePairs,0);
   assert.equal(view.rejectionReasonIncreases({batches:good},reports,-1).total,0);
   assert.equal(view.rejectionReasonIncreases({batches:good},reports,NaN).total,0);
   assert.equal(view.rejectionReasonIncreases({batches:good},null,1).total,0);
