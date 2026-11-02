@@ -412,3 +412,44 @@ authenticated API, signed result, incomplete/missing cases, capacity,
 name collision, incomplete stage refusal, saved replay, CSV export, and WCAG
 audit. Passing native CI and real consenting-user validation are separate
 release gates.
+
+## One-action fractional change between completed stages (dashboard)
+
+The same **Numeric event values within each case or stage** form also offers
+**Compare fractional first-to-last change (4 metrics)**. Supply the exact
+numeric attribute, its declared unit, the statistic, missingness policy,
+optional activity, and both stage boundaries. The action adds four ordinary
+version-1 typed case metrics atomically: `<base>_first` (first completed
+stage), `<base>_last` (last completed stage), `<base>_delta` (last minus
+first), and `<base>_relative` (delta divided by first). It switches to
+**Cases** and selects **Average <base>_relative**. The base name must be
+at most 31 characters and all four metric slots must be free.
+
+**Interpretation:** when the first-stage average recorded amount is 3 EUR
+and the last completed stage average is 9 EUR, the signed change is +6 EUR
+and the fractional change is **+2 ratio**, equivalent to **+200%**.
+The stored and exported number is **2**, not 200: no hidden percentage
+scaling occurs. Negative values indicate a decrease. A zero first-stage
+denominator is **unknown**, never infinity or a 0% change. A case missing
+either completed stage or any required numeric values remains unknown,
+not zero. The API's existing per-metric coverage exposes missing operands
+and zero divisors. The outer average includes only cases with an observed
+fractional value, not all imported cases. For cases with negative starting
+values, a fractional ratio is mathematically defined but may be unsuitable
+as a business improvement metric; inspect the underlying stage values.
+
+The action reuses the same authenticated analysis API, saved analysis
+definitions, JSON/CSV exports, declared-unit checks and bounded planner.
+The division of matching declared units produces a dimensionless `ratio`;
+it is not a currency conversion or evidence of source completeness.
+Incomplete stage boundaries, too-long or duplicate derived names and
+insufficient metric capacity refuse **without partially inserting metrics**.
+The four generated metrics can be inspected or removed in dependency order:
+relative, delta, last, first. This is descriptive arithmetic on observed
+events, not verified financial return or causal improvement.
+
+The committed Chromium acceptance exercises the new action against a real
+local CSV import and authenticated analysis, including dimensionless output,
+missing-case coverage, capacity/name/stage refusal, saved replay, CSV and
+accessibility. Native exact-head CI and consenting-user pilot acceptance
+remain separate release requirements.
