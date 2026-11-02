@@ -73,7 +73,7 @@ from .open_work_case_operation_ledger import (
     clear_operation_evidence,
 )
 from .open_work_case_outcome_reviews import (
-    record_human_outcome, correct_human_outcome, read_human_outcomes,
+    record_human_outcome, record_human_outcomes_batch, correct_human_outcome, read_human_outcomes,
     clear_human_outcome_reviews,
 )
 from .open_work_outcomes import source_operation_receipt
@@ -1232,6 +1232,106 @@ async def assess_local_human_case_outcome(request: Request, response: Response):
     await _recheck_source(scope)
     response.headers["Cache-Control"] = "no-store"
     return result
+
+
+
+@router.post("/v1/open-work/declarations/human-outcomes/assess-dependency-batch")
+async def assess_local_dependency_human_outcomes_batch(request: Request, response: Response):
+    """One explicit human assessment per selected DAG case, all-or-none locally.
+
+    This is a reviewed historical human assertion, not a provider/customer
+    completion or agent authority. It never contacts Stripe.
+    """
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_human_assessment", "max_cases", "assessments",
+    })
+    if payload["confirm_human_assessment"] is not True:
+        raise HTTPException(403, "explicit human batch assessment required")
+    count = payload["max_cases"]
+    supplied = payload["assessments"]
+    if (type(count) is not int or not 1 <= count <= 4 or
+            not isinstance(supplied, list) or not 1 <= len(supplied) <= 4):
+        raise HTTPException(422, "invalid bounded human assessment batch")
+    required = {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "human_status", "reason_code", "expected_event_count",
+    }
+    if any(not isinstance(row, dict) or set(row) != required for row in supplied):
+        raise HTTPException(422, "exact per-case assessment fields required")
+    try:
+        before = await asyncio.to_thread(list_case_declarations, scope)
+        admitted, signature = admitted_case_dossier_snapshot(
+            before, work_item_ref=payload["work_item_ref"],
+            expected_revision=payload["expected_revision"],
+            expected_edit_token=payload["expected_edit_token"],
+        )
+        selected, omitted = select_dependency_status_targets(admitted, max_cases=count)
+        if omitted or len(selected) != len(supplied):
+            raise CaseDeclarationError("incomplete reviewed dependency assessment selection")
+        refs = [row["work_item_ref"] for row in selected]
+        if [row["work_item_ref"] for row in supplied] != refs:
+            raise CaseDeclarationError("changed or reordered prerequisite assessment selection")
+        rows = {row["work_item_ref"]: row for row in before["items"]}
+        from functools import partial
+        root_guard = partial(
+            _operation_ledger_guard, scope, payload["work_item_ref"],
+            payload["expected_revision"], payload["expected_edit_token"], signature,
+        )
+        targets = []
+        for item, assessment in zip(selected, supplied):
+            ref = item["work_item_ref"]
+            row = rows[ref]
+            if (assessment["expected_revision"] != row["revision"] or
+                    assessment["expected_edit_token"] != row["edit_token"] or
+                    type(assessment["expected_revision"]) is not int or
+                    not isinstance(assessment["expected_edit_token"], str)):
+                raise CaseDeclarationError("stale dependency assessment CAS")
+            child, child_signature = admitted_case_dossier_snapshot(
+                before, work_item_ref=ref,
+                expected_revision=row["revision"], expected_edit_token=row["edit_token"],
+            )
+            child_guard = partial(
+                _operation_ledger_guard, scope, ref, row["revision"],
+                row["edit_token"], child_signature,
+            )
+            targets.append((
+                child, child_signature, child_guard,
+                assessment["human_status"], assessment["reason_code"],
+                assessment["expected_event_count"],
+            ))
+        secret = await asyncio.to_thread(
+            _read_or_create_secret, ".open_work_reference_key",
+        )
+        await asyncio.to_thread(root_guard)
+        await _recheck_source(scope)
+        histories = await asyncio.to_thread(
+            record_human_outcomes_batch, targets, scope=scope, secret=secret,
+        )
+        await asyncio.to_thread(root_guard)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "format": "openworkgraph.local-dependency-human-assessment-batch.v1",
+        "work_item_ref": payload["work_item_ref"],
+        "case_histories": histories,
+        "assessed_case_count": len(histories),
+        "prerequisite_first": True,
+        "local_sqlite_batch_atomic": True,
+        "historical_human_assertions_only": True,
+        "provider_operation_verified": False,
+        "expected_outcome_verified": False,
+        "customer_outcome_verified": False,
+        "agent_caused_outcome_verified": False,
+        "agent_execution_authorized": False,
+        "source_read_performed": False,
+        "source_write_performed": False,
+        "not_synced": True,
+    }
 
 
 @router.post("/v1/open-work/declarations/human-outcomes/history")
