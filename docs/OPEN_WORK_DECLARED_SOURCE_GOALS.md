@@ -49,6 +49,39 @@ authenticated invoice state is narrower than any of those claims.
    missing provider status or contradiction returns `unknown`, never
    `not_met` or a fabricated customer outcome. No provider write occurs.
 
+### Fresh provider-state transition audit
+
+Every successful explicit `source-goals/verify-payment` now returns an
+**atomically fenced, dispute-aware transition** relative to the prior private
+HMAC-validated operation evidence ledger. The response includes
+`prior_historical_provider_state`, `prior_provider_check_count`,
+`prior_last_check_disputed`, `provider_state_transition`,
+`observed_provider_state_changed` and the new retained check count.
+
+`provider_state_transition` is one of:
+
+| Transition | Meaning |
+| --- | --- |
+| `first_check` | No earlier retained provider check |
+| `unknown_to_paid` | Earlier evidence unknown (including disputed), new independent provider check reports paid |
+| `paid_to_unknown` | Earlier retained check reported paid, latest check is unavailable/unknown |
+| `unchanged_paid` | Both retained previous and newly checked provider state report paid |
+| `unchanged_unknown` | Both prior and fresh provider state are unknown |
+
+**Unknown is not unpaid.** `paid_to_unknown` is not proof that a payment was
+reversed; it may mean source outage or invalid receipt. `unknown_to_paid`
+confirms only the fresh Stripe-reported invoice status, not customer success,
+bank settlement, obligation discharge, or agent causality.
+
+Before provider access the endpoint reads and integrity-checks the existing
+local evidence. Its expected event history is checked again **inside the
+SQLite `BEGIN IMMEDIATE` append transaction**, so a competing check or
+dispute prevents a stale transition and refuses the new append. Existing
+operation-ledger writers without an expected checkpoint keep their original
+API contract. Owner review/source admission is rechecked before and after
+provider IO, but this does **not** create an atomic cross-process revocation
+transaction across all stores.
+
 5. To review retained evidence without a provider request, call
    `POST /v1/open-work/declarations/source-goals/payment-history` with exactly
    `work_item_ref`, `expected_revision`, and `expected_edit_token`.
@@ -80,7 +113,7 @@ test-account acceptance remain separate gates.
 endpoints and private SQLite with a **synthetic** source adapter: paid then
 outage, historical-only reads, dispute, invalid declaration combinations,
 forged links, authentication, review revocation during provider read, source
-account changes, stale CAS, minimization and batch validation. Run all
+account changes, stale CAS, minimization and batch validation. Additional FastAPI/private-SQLite tests cover all five transition states, disputed paid baselines, atomic concurrent-dispute refusal, and tampered prior evidence rejected before source IO. Run all
 repository-required native Ubuntu/macOS/Windows, browser, collaboration,
 scale, accessibility, starter and packaging/release checks on the exact
 head before merging. Synthetic source tests do not certify real Stripe,
