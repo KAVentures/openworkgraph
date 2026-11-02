@@ -1,8 +1,9 @@
-"""Explicit first ServiceNow journal -> local OWG event-log import.
+"""Explicit selected ServiceNow read/journal -> local OWG first import.
 
-The source journal must already have been populated by an opted-in ServiceNow
-read. This module makes no provider request, and never retries an uncertain
-local import. It uses the existing authenticated OWG REST import route.
+By default this imports an existing owner-private journal without contacting
+ServiceNow. A separately consented --read-selected mode performs one bounded
+provider GET and journals it before the same verified OWG REST bootstrap.
+No scheduler, provider write or automatic retry of an uncertain local import.
 """
 from __future__ import annotations
 
