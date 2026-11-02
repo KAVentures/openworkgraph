@@ -1485,6 +1485,17 @@ async def issue_local_outcome_review_progress(request: Request, response: Respon
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
         raise _safe_error(exc) from None
     await _recheck_source(scope)
+    repeated, _a, _s, _secret = await _load_review_triage(scope, payload)
+    if repeated != triage:
+        raise HTTPException(409, "historical review changed during checkpoint")
+    try:
+        await asyncio.to_thread(
+            _operation_ledger_guard, scope, payload["work_item_ref"],
+            payload["expected_revision"], payload["expected_edit_token"], signature,
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
     response.headers["Cache-Control"] = "no-store"
     return result
 
@@ -1524,7 +1535,10 @@ async def compare_local_outcome_review_progress(request: Request, response: Resp
     repeated, _a, _s, _secret = await _load_review_triage(scope, request_payload)
     if repeated != triage:
         raise HTTPException(409, "historical review changed during comparison")
-    await asyncio.to_thread(guard)
+    try:
+        await asyncio.to_thread(guard)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
     await _recheck_source(scope)
     response.headers["Cache-Control"] = "no-store"
     return result
