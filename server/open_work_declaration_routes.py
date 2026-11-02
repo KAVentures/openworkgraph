@@ -32,6 +32,7 @@ from .open_work_case_operation_timeline import (
 )
 from .open_work_case_operation_ledger import (
     append_operation_evidence, read_operation_evidence, dispute_operation_evidence,
+    clear_operation_evidence,
 )
 from .open_work_outcomes import source_operation_receipt
 from .open_work_case_status_checkpoint import (
@@ -131,6 +132,7 @@ async def _recheck_source(scope: str) -> None:
     if await asyncio.to_thread(_source_scope) != scope:
         # Fail closed on disconnect/account replacement during a local write.
         # This is not an atomic cross-process provider-grant transaction.
+        await asyncio.to_thread(clear_operation_evidence)
         await asyncio.to_thread(clear_case_declarations)
         raise HTTPException(409, "local source connection changed")
 
