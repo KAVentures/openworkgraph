@@ -18,6 +18,7 @@ OVERLAY_FORMAT = "openworkgraph.reconstruction-reviewed-overlay.v1"
 MAX_EVENTS = 10_000
 MAX_SOURCE_BYTES = 8 * 1024 * 1024
 MAX_DECISIONS = 24
+ADJUDICATION_FORMAT = "openworkgraph.reconstruction-review-adjudication.v1"
 
 
 def _source_digest(events: Any) -> str:
@@ -107,6 +108,64 @@ def prepare_review_packet(events: list[dict[str, Any]]) -> dict[str, Any]:
     return _snapshot(events)[0]
 
 
+def adjudicate_review(
+    events: list[dict[str, Any]], packet: dict[str, Any],
+    reviewer_a: dict[str, Any], reviewer_b: dict[str, Any],
+) -> dict[str, Any]:
+    """Require two explicit, identical decisions before any reviewed assignment.
+
+    Both input reviews are independently validated against the same fresh
+    production-linker snapshot. Reviewer independence is NOT authenticated;
+    no weak edge is promoted to canonical or source-verified membership.
+    """
+    expected, _linked, _groups = _snapshot(events)
+    if type(packet) is not dict or packet != expected:
+        raise ValueError("review packet is stale or altered; prepare again")
+    for reviewer in (reviewer_a, reviewer_b):
+        if type(reviewer) is not dict or reviewer.get("format") != DECISION_FORMAT:
+            raise ValueError("adjudication requires two original decision documents")
+        # Includes per-reviewer two-hop contradiction, scope and candidate checks.
+        apply_review(events, packet, reviewer)
+    left = {row["event_id"]: row for row in reviewer_a["decisions"]}
+    right = {row["event_id"]: row for row in reviewer_b["decisions"]}
+    accepted = []
+    unresolved = []
+    untouched = 0
+    for candidate in expected["eligible_candidates"]:
+        event_id = candidate["event_id"]
+        a, b = left.get(event_id), right.get(event_id)
+        if a is None and b is None:
+            untouched += 1
+        elif a is not None and b is not None and a == b:
+            accepted.append(dict(a))
+        else:
+            unresolved.append(event_id)
+    consensus = {
+        "format": DECISION_FORMAT,
+        "evidence_sha256": expected["evidence_sha256"],
+        "decisions": accepted,
+    }
+    # A consensus assembled from individually valid decisions must also be
+    # internally coherent when two-hop and intermediary decisions interact.
+    apply_review(events, packet, consensus)
+    return {
+        "format": ADJUDICATION_FORMAT,
+        "evidence_sha256": expected["evidence_sha256"],
+        "reviewer_a": reviewer_a,
+        "reviewer_b": reviewer_b,
+        "consensus_decisions": consensus,
+        "consensus_confirmed_count": sum(row["action"] == "confirm" for row in accepted),
+        "consensus_rejected_count": sum(row["action"] == "reject" for row in accepted),
+        "unresolved_event_ids": unresolved,
+        "unreviewed_visible_count": untouched,
+        "eligible_review_total": expected["eligible_review_total"],
+        "eligible_review_truncated": expected["eligible_review_truncated"],
+        "reviewer_independence_verified": False,
+        "human_consensus_not_source_evidence": True,
+        "canonical_membership_unchanged": True,
+    }
+
+
 def apply_review(
     events: list[dict[str, Any]], packet: dict[str, Any],
     decisions: dict[str, Any],
@@ -120,6 +179,23 @@ def apply_review(
     expected, linked, groups = _snapshot(events)
     if type(packet) is not dict or packet != expected:
         raise ValueError("review packet is stale or altered; prepare again")
+    adjudication = None
+    if type(decisions) is dict and decisions.get("format") == ADJUDICATION_FORMAT:
+        if set(decisions) != {
+            "format", "evidence_sha256", "reviewer_a", "reviewer_b",
+            "consensus_decisions", "consensus_confirmed_count",
+            "consensus_rejected_count", "unresolved_event_ids",
+            "unreviewed_visible_count", "eligible_review_total",
+            "eligible_review_truncated", "reviewer_independence_verified",
+            "human_consensus_not_source_evidence", "canonical_membership_unchanged",
+        }:
+            raise ValueError("invalid adjudication artifact fields")
+        adjudication = adjudicate_review(
+            events, packet, decisions["reviewer_a"], decisions["reviewer_b"],
+        )
+        if decisions != adjudication:
+            raise ValueError("adjudication artifact was altered; re-adjudicate")
+        decisions = adjudication["consensus_decisions"]
     if type(decisions) is not dict or set(decisions) != {
         "format", "evidence_sha256", "decisions",
     }:
@@ -226,6 +302,13 @@ def apply_review(
         "unassigned_event_ids": sorted(singleton_ids - set(confirmations), key=position.__getitem__),
         "canonical_membership_unchanged": True,
         "human_decisions_are_not_source_evidence": True,
+        "review_decision_provenance": (
+            "two_reviewer_consensus" if adjudication else "single_reviewer"
+        ),
+        "unresolved_reviewer_disagreement_count": (
+            len(adjudication["unresolved_event_ids"]) if adjudication else 0
+        ),
+        "reviewer_independence_verified": False,
         "authorizes_business_action": False,
     }
 
@@ -293,6 +376,8 @@ def score_review(
         "human_confirmed_count": overlay["human_confirmed_count"],
         "human_confirmed_direct_count": overlay["human_confirmed_direct_count"],
         "human_confirmed_two_hop_count": overlay["human_confirmed_two_hop_count"],
+        "review_decision_provenance": overlay["review_decision_provenance"],
+        "unresolved_reviewer_disagreement_count": overlay["unresolved_reviewer_disagreement_count"],
         "automatic_baseline": scored(groups),
         "human_assisted_overlay": scored([item["event_ids"] for item in overlay["items"]]),
         "complete_local_annotations_required": True,
@@ -355,7 +440,15 @@ def aggregate_review_scores(scores: list[dict[str, Any]]) -> dict[str, Any]:
         confirmed = report.get("human_confirmed_count")
         if type(confirmed) is not int or not 0 <= confirmed <= count:
             raise ValueError("invalid human confirmation count")
+        provenance = report.get("review_decision_provenance", "single_reviewer")
+        if provenance not in ("single_reviewer", "two_reviewer_consensus"):
+            raise ValueError("invalid review provenance")
+        unresolved = report.get("unresolved_reviewer_disagreement_count", 0)
+        if type(unresolved) is not int or not 0 <= unresolved <= count:
+            raise ValueError("invalid unresolved reviewer disagreement count")
         sessions.append({
+            "review_decision_provenance": provenance,
+            "unresolved_reviewer_disagreement_count": unresolved,
             "session_index": index,
             "annotated_observation_count": count,
             "human_confirmed_count": confirmed,
@@ -376,6 +469,13 @@ def aggregate_review_scores(scores: list[dict[str, Any]]) -> dict[str, Any]:
         ),
         "human_confirmed_count": sum(
             session["human_confirmed_count"] for session in sessions
+        ),
+        "two_reviewer_consensus_session_count": sum(
+            session["review_decision_provenance"] == "two_reviewer_consensus"
+            for session in sessions
+        ),
+        "unresolved_reviewer_disagreement_count": sum(
+            session["unresolved_reviewer_disagreement_count"] for session in sessions
         ),
         "session_macro_automatic_baseline": automatic,
         "session_macro_human_assisted_overlay": assisted,
@@ -405,7 +505,7 @@ def aggregate_review_scores(scores: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 __all__ = [
-    "prepare_review_packet", "apply_review", "score_review",
-    "PACKET_FORMAT", "DECISION_FORMAT", "BATCH_FORMAT",
+    "prepare_review_packet", "apply_review", "score_review", "adjudicate_review",
+    "PACKET_FORMAT", "DECISION_FORMAT", "ADJUDICATION_FORMAT", "BATCH_FORMAT",
     "aggregate_review_scores",
 ]
