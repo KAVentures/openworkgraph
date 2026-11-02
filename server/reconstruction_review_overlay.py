@@ -178,12 +178,16 @@ def score_review(
     overlay = apply_review(events, packet, decisions)
     _packet, linked, groups = _snapshot(events)
     admitted = {row["event_id"] for row in linked["rows"]}
+    # The shared scorer uses pairwise ordering and a truth-workflow subset DP.
+    # Do not let an oversized local annotation turn into unbounded CPU work.
+    if len(admitted) > 500:
+        raise ValueError("score a window of at most 500 admitted observations")
     if type(truth) is not dict or set(truth) != {"workflows", "noise_event_ids"}:
         raise ValueError("truth must contain workflows and noise_event_ids")
     workflows = truth["workflows"]
     noise = truth["noise_event_ids"]
-    if type(workflows) is not list or type(noise) is not list:
-        raise ValueError("malformed independent annotations")
+    if type(workflows) is not list or type(noise) is not list or len(workflows) > 12:
+        raise ValueError("malformed or excessive independent annotations")
     labeled: list[str] = []
     for item in workflows:
         if type(item) is not dict or set(item) != {"event_ids"} or type(item["event_ids"]) is not list:
