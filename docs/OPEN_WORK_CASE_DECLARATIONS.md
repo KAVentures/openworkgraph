@@ -1004,3 +1004,67 @@ provider status, denial before source IO and privacy minimization. Passing
 these tests is **not** real Stripe/customer validation or evidence of
 business-completion uplift; native cross-platform CI and a separately
 authorized real-provider pilot are still required.
+
+
+## Explicit case outcome-evidence graph (M3/M4, experimental)
+
+The authenticated **local dashboard session** can explicitly request
+`POST /v1/open-work/declarations/evidence-graph` with exactly these JSON
+fields:
+
+```json
+{
+  "work_item_ref": "owg:w:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "expected_revision": 1,
+  "expected_edit_token": "<current private incarnation token>",
+  "confirm_source_scan": true,
+  "max_cases": 4,
+  "max_pages": 2
+}
+```
+
+The case must already have a current human review and source-account-scoped
+owner declaration. The operator obtains the revision and private edit token
+from the authenticated declarations API; neither is echoed by this evidence
+graph. The endpoint reuses the **same** durable declaration ledger, existing
+prerequisite-first graph, existing Stripe case-context reader and privacy-
+minimized source dossier as `/dependency-status`. It reads at most four cases
+(target plus a bounded prefix of reviewed prerequisites) and three pages per
+case, **only after explicit confirmation**. Before any provider read, it
+validates exact target incarnation/revision and the entire transitive
+prerequisite signature. After **each** source read, it rechecks source account,
+human review, retention and every dependency revision; a change refuses the
+response and stops further scans. This is not a cross-process atomic grant
+fence or an atomic provider snapshot.
+
+The result is a deterministic, bounded **typed evidence graph**. Reviewed
+case nodes and `declared_prerequisite` / `declared_expected_outcome` edges
+have `explicit_owner_declaration` provenance only. Fresh source-reported
+Stripe-open observations get separate `provider_status_evidence` nodes and
+`source_reported_open` edges, never a declaration or completion edge.
+Missing, partial, unavailable, stale (>15 minutes) or conflicting-clock
+source observations become **unknown** evidence nodes/gaps; unscanned
+prerequisites remain explicitly `not_scanned`. A provider timestamp more
+than five minutes in the future is a clock conflict, not fresh evidence.
+The graph never invents inferred edges, policy obligations, payment,
+customer satisfaction, independently verified expected outcomes, or agent
+causality. A source-open invoice is not proof of a required follow-up; an
+invoice missing from the bounded open inventory is **not** proof of payment.
+`source_checks_sequential_not_atomic` and
+`source_inventory_globally_complete:false` are always explicit.
+
+The response contains only opaque case refs, owner-declared fixed codes and
+revisions, typed edges, bounded source-state evidence, timestamps and
+explicit gaps. It excludes native provider IDs, customer data, amounts,
+raw observed timelines, account scope and incarnation tokens. It is
+`Cache-Control: no-store`, never stored or synced by OWG, and cannot grant
+MCP/agent execution, source permissions or business writes. The feature is
+additive: the existing `/dependency-status` response remains unchanged
+and uses the same consent-pinned scan helper. Synthetic FastAPI/SQLite tests
+cover A→B→C→D, selected/unscanned prerequisites, fresh/unknown/stale/
+clock-conflicted observations, source outage, malformed provider evidence,
+stale CAS, unauthorized requests and mid-scan source/review/prerequisite
+revocation. **These are not real-provider acceptance or proof of commercial
+benefit.** Independent provider operation receipts, actual customer outcomes,
+production org/actor authorization and held-out matched agent trials remain
+outstanding.
