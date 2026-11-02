@@ -520,6 +520,6 @@ def test_cli_previous_review_requires_explicit_separate_consent(private_dir,
         assert main(args + ["--consent-compare-previous-review"]) == 0
         assert len(calls) == 1
     printed = capsys.readouterr().out
-    assert '"changed": 1' in printed
+    assert '"changed": 2' in printed
     for secret in (CASE_A, CASE_B, CASE_C, TOKEN, "sandbox"):
         assert secret not in printed
