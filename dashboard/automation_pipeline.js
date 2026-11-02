@@ -10,6 +10,48 @@
   const button=(text,cls)=>{const node=el('button',text,cls);node.type='button';return node;};
   const select=(id,options)=>{const node=document.createElement('select');node.id=id;options.forEach(([v,l])=>{const o=el('option',l);o.value=v;node.appendChild(o);});return node;};
 
+
+  // A portable review artifact, never an execution grant or independently verified outcome.
+  // Deliberately omit activity labels, raw cases, record refs, receipts and credentials.
+  function handoffReviewPacket(journey,projectId,ideaId,createdAt){
+    const project=(journey.projects||[]).find(item=>item.project_id===projectId);
+    if(!project)throw new Error('Select a recorded project before preparing its review packet.');
+    const process=journey.process_status||{},ref=process.process_reference||null;
+    const origins=(journey.dataset_origins||[]).slice(0,64).map(item=>({
+      status:item.status||'unknown',source_content_sha256:item.source_content_sha256||null,
+      selection_sha256:item.selection_sha256||null
+    }));
+    const reported=(project.reported_specifications||[]).slice(0,64).map(item=>({
+      status:item.status||'unknown',reported_run_count:Number.isSafeInteger(item.reported_run_count)&&item.reported_run_count>=0?item.reported_run_count:null
+    }));
+    const blockers=[];
+    if(!ref)blockers.push('no_exact_saved_process');
+    if(process.status!=='current')blockers.push('process_not_current');
+    if(!origins.length)blockers.push('dataset_origin_not_linked');
+    else if(origins.some(item=>item.status!=='current'))blockers.push('dataset_origin_not_current');
+    if(!['approved','implemented'].includes(journey.idea?.state))blockers.push('idea_not_approved');
+    if(!project.idea_revision_is_current)blockers.push('project_uses_historical_idea_revision');
+    if(!reported.length)blockers.push('no_imported_report');
+    else if(reported.some(item=>item.status!=='matching_reported_specification'))blockers.push('reported_specification_unverified');
+    // A matching reported specification is not a verified execution or business outcome.
+    blockers.push('execution_and_business_outcomes_unverified');
+    return {
+      format:'openworkgraph.evidence-handoff-review.v1',generated_at:createdAt,
+      scope:'human_review_only',execution_authorized:false,source_read_authorized:false,
+      idea:{idea_id:ideaId,revision:journey.idea?.revision??null,state:journey.idea?.state||'unknown'},
+      process:{workflow_id:ref?.workflow_id||null,revision:ref?.revision??null,
+        content_sha256:ref?.content_sha256||null,status:process.status||'unknown'},
+      dataset_origins:origins,
+      project:{project_id:project.project_id,idea_revision:project.idea_revision,
+        idea_revision_is_current:!!project.idea_revision_is_current,
+        spec_sha256:project.spec_sha256,archive_sha256:project.archive_sha256},
+      reported_specifications:reported,
+      source_check_exports:{count:project.source_check_exports?.count||0,
+        last_document_sha256:project.source_check_exports?.last_document_sha256||null},
+      readiness:{human_review_required:true,blockers,verified_execution:false,verified_business_outcomes:false}
+    };
+  }
+
   // Pure helper, exercised by tests: builds an assessment body or throws a readable error.
   function assessmentBody(values,revision){
     const ease={};
@@ -242,7 +284,32 @@
               preferredSourceProjectId=p.project_id;
               navigate('owgPipelineSourceChecks','Source-check form',true);
             };
-            actions.append(reportsAction,sourceAction);artifact.appendChild(actions);
+
+            const packet=handoffReviewPacket(data,p.project_id,idea.idea_id,new Date().toISOString());
+            const review=el('div',null,'muted');review.id='owgPipelineJourneyReadiness';
+            review.appendChild(el('div','Handoff review: '+packet.readiness.blockers.length+' outstanding checks. This is not permission to execute an agent.'));
+            const issues=el('ul');
+            const names={no_exact_saved_process:'Exact saved process missing',process_not_current:'Process revision changed or unavailable',
+              dataset_origin_not_linked:'Source dataset/cohort not linked',dataset_origin_not_current:'Source dataset/cohort changed or unavailable',
+              idea_not_approved:'Human opportunity approval missing',project_uses_historical_idea_revision:'Project based on historical idea revision',
+              no_imported_report:'No imported run report',reported_specification_unverified:'Reported specification unavailable or mismatched',
+              execution_and_business_outcomes_unverified:'Execution, causality and business outcomes not independently verified'};
+            packet.readiness.blockers.forEach(key=>issues.appendChild(el('li',names[key]||key)));
+            review.appendChild(issues);
+            const downloadPacket=button('Download review packet for this exact project','secondary');
+            downloadPacket.id='owgPipelineJourneyReviewPacket';
+            downloadPacket.onclick=()=>{
+              if(generation!==detailGeneration||choice.value!==p.project_id||!journeyHost.contains(downloadPacket))return;
+              const current=handoffReviewPacket(data,p.project_id,idea.idea_id,new Date().toISOString());
+              const blob=new Blob([JSON.stringify(current,null,2)+'\\n'],{type:'application/json'});
+              const url=URL.createObjectURL(blob),link=el('a');
+              link.href=url;link.download='owg-evidence-handoff-review.json';
+              document.body.appendChild(link);link.click();link.remove();
+              setTimeout(()=>URL.revokeObjectURL(url),1000);
+              guideStatus.textContent='Downloaded the selected project review packet. Outstanding checks remain; no approval or execution permission was granted.';
+            };
+            actions.append(reportsAction,sourceAction,downloadPacket);
+            artifact.append(review,actions);
             if(!p.idea_revision_is_current)artifact.appendChild(el('p',
               'Historical idea revision: reopen and review the current idea before attempting new checks or report associations.','muted'));
           };
@@ -453,6 +520,6 @@
     refresh().catch(e=>{status.textContent=e.message;});
   }
 
-  window.__owgPipelineModel={assessmentBody,portfolioView};
+  window.__owgPipelineModel={assessmentBody,portfolioView,handoffReviewPacket};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
