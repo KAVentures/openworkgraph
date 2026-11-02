@@ -529,28 +529,53 @@
     confirm.id = 'owgExplorerCompareConfirmed'; confirm.disabled = true;
     confirmLabel.append(confirm, document.createTextNode(
       ' I separately inspected both bounded variants and explicitly chose the AS-IS proposal. I will review its goal, labels, exceptions and omissions before any save.'));
-    const next = button('Open chosen variant as unsaved catalog draft', () => {
-      if (!currentComparisonReview(review) || !confirm.checked || !review.inspected.A ||
-          !review.inspected.B || !['A', 'B'].includes(target.value)) {
-        next.disabled = true;
-        decision.textContent = 'Evidence or selection changed. Inspect both lanes and confirm again.';
+    // The other observed lane may be an explicitly proposed TO-BE hypothesis.
+    // It is not inferred policy; the catalog still requires a separate review/save.
+    const differentLabels = JSON.stringify(left.steps) !== JSON.stringify(right.steps);
+    const alternativeLabel = element('label');
+    const alternativeConfirm = element('input'); alternativeConfirm.type = 'checkbox';
+    alternativeConfirm.id = 'owgExplorerCompareAlternativeConfirmed';
+    alternativeConfirm.disabled = true;
+    alternativeLabel.append(alternativeConfirm, document.createTextNode(
+      ' I explicitly propose the OTHER observed variant as an editable TO-BE hypothesis, not verified policy or approved automation. I will review every activity and rule before saving.'));
+    const eligible = () => currentComparisonReview(review) && review.inspected.A &&
+      review.inspected.B && ['A', 'B'].includes(target.value) && confirm.checked;
+    const openDraft = useAlternative => {
+      if (!eligible() || (useAlternative && (!differentLabels || !alternativeConfirm.checked))) {
+        next.disabled = true; alternativeNext.disabled = true;
+        decision.textContent = 'Evidence or selection changed. Inspect both lanes and confirm the current proposal again.';
         return;
       }
       const lane = target.value === 'A' ? left : right;
+      const other = target.value === 'A' ? right : left;
       try {
         if (!window.owgProcessCatalog?.draftObserved)
           throw new Error('Process catalog unavailable. Reopen the local dashboard.');
-        window.owgProcessCatalog.draftObserved({path: lane.steps.slice(), count: lane.count,
-          basis: 'selected_observed_variant', evidenceRefs: selectedIds(candidate, lane).slice()});
-        confirm.checked = false; next.disabled = true;
-        decision.textContent = 'Unsaved catalog draft requested for variant ' + target.value +
+        const source = {path: lane.steps.slice(), count: lane.count,
+          basis: 'selected_observed_variant', evidenceRefs: selectedIds(candidate, lane).slice()};
+        if (useAlternative) source.proposedPath = other.steps.slice();
+        const opened = window.owgProcessCatalog.draftObserved(source);
+        if (opened === false) {
+          decision.textContent = 'Existing unsaved catalog edits were kept; no proposal replaced them.';
+          return;
+        }
+        confirm.checked = false; alternativeConfirm.checked = false;
+        next.disabled = true; alternativeNext.disabled = true;
+        decision.textContent = useAlternative ?
+          'UNSAVED AS-IS variant ' + target.value + ' and editable TO-BE alternative opened in the catalog. Only AS-IS references were carried forward; alternative source lineage is not persisted. No policy, process, agent or business action was approved.' :
+          'Unsaved catalog draft requested for variant ' + target.value +
           ' only. Inspect the catalog before any separate save. No process, agent or business action ran.';
       } catch (error) { decision.textContent = 'Catalog draft unavailable: ' + String(error?.message || error); }
-    }, true);
-    next.disabled = true;
+    };
+    const next = button('Open chosen variant as unsaved catalog draft', () => openDraft(false), true);
+    const alternativeNext = button('Open AS-IS and observed alternative as unsaved TO-BE draft',
+      () => openDraft(true), true);
+    next.disabled = true; alternativeNext.disabled = true;
     const decision = element('p', 'No design choice or source authorization recorded.', 'muted');
     decision.id = 'owgExplorerCompareDesignStatus'; decision.setAttribute('role', 'status');
-    panel.append(targetLabel, confirmLabel, next, decision);
+    panel.append(targetLabel, confirmLabel, alternativeLabel, next, alternativeNext, decision);
+    if (!differentLabels) panel.appendChild(element('p',
+      'These lanes have identical displayed activity labels. No distinct TO-BE alternative can be drafted from this comparison.', 'muted'));
     const review = {
       panel, candidateId: candidate.candidate_cluster_id, left, right,
       windowJSON: JSON.stringify(currentWindow), inspected: {A: false, B: false},
@@ -558,8 +583,11 @@
         this.inspected.A = false; this.inspected.B = false;
         noteA.textContent = 'A: Inspection invalidated; compare again.';
         noteB.textContent = 'B: Inspection invalidated; compare again.';
-        confirm.checked = false; confirm.disabled = true; target.value = ''; target.disabled = true;
-        next.disabled = true; decision.textContent = 'Comparison changed. Compare again before a design choice.';
+        confirm.checked = false; confirm.disabled = true;
+        alternativeConfirm.checked = false; alternativeConfirm.disabled = true;
+        target.value = ''; target.disabled = true;
+        next.disabled = true; alternativeNext.disabled = true;
+        decision.textContent = 'Comparison changed. Compare again before a design choice.';
       },
       async inspect(label, lane) {
         if (!currentComparisonReview(this)) return;
@@ -571,8 +599,10 @@
           noteB.textContent = 'B: Reinspection required after restarting the two-sided review.';
         }
         this.inspected[label] = false;
-        confirm.checked = false; confirm.disabled = true; target.value = ''; target.disabled = true;
-        next.disabled = true;
+        confirm.checked = false; confirm.disabled = true;
+        alternativeConfirm.checked = false; alternativeConfirm.disabled = true;
+        target.value = ''; target.disabled = true;
+        next.disabled = true; alternativeNext.disabled = true;
         const note = label === 'A' ? noteA : noteB;
         note.textContent = label + ': Reading bounded selected evidence…';
         decision.textContent = 'Both lanes require separate complete selected-reference inspection.';
@@ -599,16 +629,22 @@
         if (this.inspected.A && this.inspected.B) {
           target.disabled = false;
           confirm.disabled = false;
-          decision.textContent = 'Both bounded lanes inspected. Choose one AS-IS target and explicitly confirm. ' +
+          alternativeConfirm.disabled = !differentLabels;
+          decision.textContent = 'Both bounded lanes inspected. Choose an AS-IS target and explicitly confirm. ' +
+            'Optionally propose the other observed lane as an editable TO-BE hypothesis with a second acknowledgement. ' +
             'This review is ephemeral; it does not persist source proof.';
         }
       }
     };
-    target.addEventListener('change', () => {confirm.checked = false; next.disabled = true;});
-    confirm.addEventListener('change', () => {
-      next.disabled = !(confirm.checked && currentComparisonReview(review) &&
-        review.inspected.A && review.inspected.B && ['A', 'B'].includes(target.value));
+    const updateActions = () => {
+      next.disabled = !eligible();
+      alternativeNext.disabled = !(eligible() && differentLabels && alternativeConfirm.checked);
+    };
+    target.addEventListener('change', () => {
+      confirm.checked = false; alternativeConfirm.checked = false; updateActions();
     });
+    confirm.addEventListener('change', updateActions);
+    alternativeConfirm.addEventListener('change', updateActions);
     comparisonReview = review;
     return review;
   }
