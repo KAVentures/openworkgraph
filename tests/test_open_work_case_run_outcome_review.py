@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from server import automation_monitoring as monitoring
 from server import open_work_case_declarations as declarations
 from server import open_work_case_run_outcome_review as review
+from server import open_work_case_operation_ledger as operation_ledger
 from server import open_work_declaration_routes as routes
 from server import open_work_reviews as reviews
 from server.local_auth import create_dashboard_session
@@ -109,7 +110,7 @@ def test_real_imported_run_and_reviewed_case_are_compared_without_provider_acces
         assert result.headers["cache-control"] == "no-store"
         for private in ("acct_PRIVATE", "private-customer-run-id", "sensitive-private-label"):
             assert private not in result.text
-        assert not (monitoring.DATA_DIR / ".open_work_operation_evidence.sqlite3").exists()
+        assert not operation_ledger._path().exists()
 
 
 def test_invalid_run_or_missing_report_does_not_create_monitoring_database(local):
@@ -125,7 +126,7 @@ def test_invalid_run_or_missing_report_does_not_create_monitoring_database(local
             payload["deployment_id"] = bad
             assert client.post(ENDPOINT, headers=headers, json=payload).status_code in (409, 422)
         payload["deployment_id"] = dep
-        payload["run_id"] = "\\x00invalid"
+        payload["run_id"] = "\x00invalid"
         assert client.post(ENDPOINT, headers=headers, json=payload).status_code in (409, 422)
 
 
