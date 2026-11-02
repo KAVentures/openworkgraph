@@ -1421,3 +1421,57 @@ Synthetic FastAPI/private-SQLite coverage checks full/partial chains,
 corrections, missing feedback, local-session authorization, malformed limits,
 tampering and review revocation. Native cross-platform CI and real customer
 adjudication are separate release gates.
+
+
+## Historical human/provider evidence triage (explicit local REST, M4)
+
+The optional `POST /v1/open-work/declarations/human-outcomes/evidence-triage`
+joins the **two separate private SQLite histories** for a currently reviewed
+case and up to three owner-declared prerequisites. It is an operator review
+queue, **not** a customer-outcome adjudicator, an agent permission, or a
+live Stripe status query. The endpoint requires an authenticated local
+`OWG-Session` and exact JSON:
+
+```json
+{
+  "work_item_ref": "owg:w:<32-lowercase-hex>",
+  "expected_revision": 1,
+  "expected_edit_token": "<current opaque edit token>",
+  "confirm_historical_review": true,
+  "max_cases": 4
+}
+```
+
+Each selected prerequisite must independently pass current source-account,
+retention, consent, owner-review incarnation and **its entire** prerequisite
+DAG admission. The root full-DAG signature is checked before and after each
+human and provider history read; tampered HMAC histories fail closed. Reads
+are sequential, **not an atomic cross-process snapshot**. No source access,
+polling, cloud sync, customer/native identifiers, amounts, free text, business
+writes or agent execution is introduced. Responses are `Cache-Control:
+no-store`.
+
+Each `case_reviews` entry includes the exact reviewed goal/outcome codes,
+latest **human-assessed** `met/not_met/unknown`, latest **historical**
+`paid/unknown` provider operation state, event counts, last recorded times,
+and typed `review_attention` reasons. The bounded output also includes
+selected owner-declared edges, omitted prerequisite count and coverage flags.
+Reasons such as `human_assessment_missing`, `provider_check_missing`,
+`provider_history_unknown_or_disputed`,
+`human_met_without_historical_paid_receipt`, and
+`historical_paid_without_human_met_assessment` are **attention cues**, not
+claims of contradiction, negligence, an unpaid invoice or customer success.
+A human can mark an expected outcome `met` for reasons unrelated to
+payment; a paid provider receipt does not verify that goal or causality.
+Even when both columns say `met` and `paid`, **current provider verification,
+expected-outcome verification, customer-outcome verification and agent
+causality all remain false**. An explicit fresh
+`/operation-ledger/check` is needed for a new source observation; actual
+customer outcome requires separately authorized independent adjudication.
+
+Synthetic FastAPI/private-SQLite tests:
+`tests/test_open_work_case_outcome_reconciliation.py` cover provider/human
+history joins, missing/partial DAG, explicit disputes and human corrections,
+source-free reads, authorization, stale CAS, tampering and revocation during
+traversal. Native cross-platform CI, real provider acceptance and held-out
+commercial trials remain mandatory and separate.
