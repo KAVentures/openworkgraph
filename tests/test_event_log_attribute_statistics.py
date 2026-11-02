@@ -419,22 +419,22 @@ def test_scoped_totals_and_population_spread_across_activity_and_stage(log):
     # Real imported rows: after-stage Pay is excluded from the stage total,
     # missing values remain unknown, and a recorded zero is not unknown.
     doc = (
-        "case,activity,time,amount\\n"
-        "a,Receive,2024-07-01T00:00:00Z,2\\n"
-        "a,Pay,2024-07-01T01:00:00Z,4\\n"
-        "a,Approve,2024-07-01T02:00:00Z,100\\n"
-        "a,Pay,2024-07-01T03:00:00Z,16\\n"
-        "b,Receive,2024-07-02T00:00:00Z,7\\n"
-        "b,Pay,2024-07-02T01:00:00Z,invalid\\n"
-        "b,Approve,2024-07-02T02:00:00Z,100\\n"
-        "c,Receive,2024-07-03T00:00:00Z,5\\n"
-        "c,Approve,2024-07-03T01:00:00Z,100\\n"
-        "d,Receive,2024-07-04T00:00:00Z,NaN\\n"
-        "d,Pay,2024-07-04T01:00:00Z,NaN\\n"
-        "d,Approve,2024-07-04T02:00:00Z,100\\n"
-        "e,Receive,2024-07-05T00:00:00Z,0\\n"
-        "e,Pay,2024-07-05T01:00:00Z,0\\n"
-        "e,Approve,2024-07-05T02:00:00Z,100\\n"
+        "case,activity,time,amount\n"
+        "a,Receive,2024-07-01T00:00:00Z,2\n"
+        "a,Pay,2024-07-01T01:00:00Z,4\n"
+        "a,Approve,2024-07-01T02:00:00Z,100\n"
+        "a,Pay,2024-07-01T03:00:00Z,16\n"
+        "b,Receive,2024-07-02T00:00:00Z,7\n"
+        "b,Pay,2024-07-02T01:00:00Z,invalid\n"
+        "b,Approve,2024-07-02T02:00:00Z,100\n"
+        "c,Receive,2024-07-03T00:00:00Z,5\n"
+        "c,Approve,2024-07-03T01:00:00Z,100\n"
+        "d,Receive,2024-07-04T00:00:00Z,NaN\n"
+        "d,Pay,2024-07-04T01:00:00Z,NaN\n"
+        "d,Approve,2024-07-04T02:00:00Z,100\n"
+        "e,Receive,2024-07-05T00:00:00Z,0\n"
+        "e,Pay,2024-07-05T01:00:00Z,0\n"
+        "e,Approve,2024-07-05T02:00:00Z,100\n"
     ).encode()
     selected = workspace.import_log(BytesIO(doc), name="scoped-total-spread",
         source_format="csv", mapping={"case_column": "case",
@@ -506,7 +506,7 @@ with TestClient(app) as client:
     assert r.status_code == 200 and r.headers["cache-control"] == "no-store", r.text
     assert r.json()["rows"] == [[15.0]]
     assert r.json()["metrics"][0]["cases_excluded_by_complete_policy"] == 1
-    for statistic, expected in (("total", 35.0), ("population_stddev", 5.0)):
+    for statistic, expected in (("total", 30.0), ("population_stddev", 5.0)):  # case b is excluded by the complete policy
         extra = client.post(base + "/analysis", json={**spec, "metrics": [{**m, "statistic": statistic}]}, headers=headers)
         assert extra.status_code == 200, extra.text
         assert extra.json()["rows"] == [[expected]]
