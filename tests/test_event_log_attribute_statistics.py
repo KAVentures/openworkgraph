@@ -328,6 +328,104 @@ def test_stage_contract_requires_both_valid_boundaries_before_dataset(monkeypatc
         query.run("unused", {"level": "cases", "metrics": [{**metric(), **fields}],
             "measures": [{"fn": "sum", "of": "metric:price"}]})
 
+
+def test_last_completed_stage_compares_rework_cycles_and_reports_unfinished_tail(log):
+    doc = (
+        "case,activity,time,amount\\n"
+        "a,Start,2024-05-01T00:00:00Z,1\\n"
+        "a,Work,2024-05-01T01:00:00Z,2\\n"
+        "a,End,2024-05-01T02:00:00Z,100\\n"
+        "a,Start,2024-05-01T03:00:00Z,7\\n"
+        "a,Work,2024-05-01T04:00:00Z,9\\n"
+        "a,End,2024-05-01T05:00:00Z,100\\n"
+        "a,Start,2024-05-01T06:00:00Z,50\\n"
+        "b,Start,2024-05-02T00:00:00Z,3\\n"
+        "b,Work,2024-05-02T01:00:00Z,5\\n"
+        "b,End,2024-05-02T02:00:00Z,100\\n"
+        "b,Start,2024-05-02T03:00:00Z,11\\n"
+        "b,Work,2024-05-02T04:00:00Z,NaN\\n"
+        "b,End,2024-05-02T05:00:00Z,100\\n"
+        "c,Start,2024-05-03T00:00:00Z,4\\n"
+        "c,Work,2024-05-03T01:00:00Z,6\\n"
+        "d,Work,2024-05-04T00:00:00Z,8\\n"
+        "d,End,2024-05-04T01:00:00Z,100\\n"
+        "e,Start,2024-05-05T00:00:00Z,2\\n"
+        "e,Start,2024-05-05T01:00:00Z,10\\n"
+        "e,End,2024-05-05T02:00:00Z,100\\n"
+    ).encode()
+    selected = workspace.import_log(BytesIO(doc), name="rework-stage", source_format="csv", mapping={
+        "case_column": "case", "activity_column": "activity", "timestamp_column": "time",
+        "attribute_columns": ["amount"]})["log_id"]
+    first = {**metric(), "from_activity": "Start", "to_activity": "End"}
+    last = {**first, "stage_occurrence": "last_completed"}
+    def analyze(m):
+        return query.run(selected, {"level": "cases", "metrics": [m],
+            "measures": [{"fn": "sum", "of": "metric:price"}]})
+
+    assert analyze(first)["rows"] == [[11.5]]
+    available = analyze(last)
+    assert available["rows"] == [[29.0]]  # a=8, b=11, e=10; trailing a ignored
+    coverage = available["metrics"][0]
+    assert coverage["definition"]["stage_occurrence"] == "last_completed"
+    assert coverage["cases_without_stage_start"] == 1
+    assert coverage["cases_without_later_stage_end"] == 1
+    assert coverage["cases_without_complete_stage"] == 2
+    assert coverage["cases_with_trailing_unfinished_stage"] == 2  # a, c
+    assert coverage["flattened_case_event_rows_considered"] == 5
+    assert coverage["event_rows_with_finite_attribute"] == 4
+    assert coverage["event_rows_with_missing_invalid_or_nonfinite_attribute"] == 1
+    assert coverage["cases_with_value"] == 3
+    assert coverage["cases_without_value"] == 2
+    assert analyze({**last, "missing_policy": "complete"})["rows"] == [[18.0]]
+    scoped = analyze({**last, "activity": "Work"})
+    assert scoped["rows"] == [[9.0]]
+    assert scoped["metrics"][0]["cases_without_matching_activity"] == 1  # e
+    assert scoped["metrics"][0]["cases_with_trailing_unfinished_stage"] == 2
+
+    spec = {"level": "cases", "metrics": [last],
+            "measures": [{"fn": "sum", "of": "metric:price"}]}
+    saved = query.save(selected, {"name": "Latest complete review cycle", "spec": spec})
+    assert saved["spec"]["metrics"][0]["stage_occurrence"] == "last_completed"
+    assert query.run(selected, query.list_saved(selected)["analyses"][0]["spec"])["rows"] == [[29.0]]
+    template = query.save_metric(selected, {"metric": last})
+    assert query.list_metrics(selected)["metrics"][0]["metric"]["stage_occurrence"] == "last_completed"
+    query.delete_metric(selected, template["metric_id"])
+    json.dumps(available, allow_nan=False)
+
+
+def test_same_activity_stage_last_completed_and_unfinished_final_occurrence(log):
+    doc = (
+        "case,activity,time,amount\\n"
+        "a,Review,2024-06-01T00:00:00Z,1\\n"
+        "a,Review,2024-06-01T01:00:00Z,3\\n"
+        "a,Review,2024-06-01T02:00:00Z,5\\n"
+        "b,Review,2024-06-02T00:00:00Z,7\\n"
+    ).encode()
+    selected = workspace.import_log(BytesIO(doc), name="same-stage", source_format="csv", mapping={
+        "case_column": "case", "activity_column": "activity", "timestamp_column": "time",
+        "attribute_columns": ["amount"]})["log_id"]
+    spec = {"level": "cases", "metrics": [{**metric(), "from_activity": "Review",
+        "to_activity": "Review", "stage_occurrence": "last_completed"}],
+        "measures": [{"fn": "sum", "of": "metric:price"}]}
+    response = query.run(selected, spec)
+    assert response["rows"] == [[3.0]]  # second Review until third Review
+    assert response["metrics"][0]["cases_with_trailing_unfinished_stage"] == 2
+    assert response["metrics"][0]["cases_without_later_stage_end"] == 1
+
+
+@pytest.mark.parametrize("fields", [
+    {"stage_occurrence": "last_completed"},
+    {"stage_occurrence": "unknown", "from_activity": "A", "to_activity": "B"},
+    {"stage_occurrence": 1, "from_activity": "A", "to_activity": "B"},
+    {"stage_occurrence": "last_completed", "from_activity": "A"},
+])
+def test_stage_occurrence_rejects_invalid_contract_before_dataset(monkeypatch, fields):
+    monkeypatch.setattr(workspace, "_query", lambda *a, **kw: pytest.fail("dataset accessed"))
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        query.run("unused", {"level": "cases", "metrics": [{**metric(), **fields}],
+            "measures": [{"fn": "sum", "of": "metric:price"}]})
+
+
 def test_authenticated_http_analysis_save_and_denial(tmp_path):
     code = r'''
 from fastapi.testclient import TestClient
