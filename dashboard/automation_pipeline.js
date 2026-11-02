@@ -510,14 +510,39 @@
     auditStatus.id='owgPipelinePortfolioAuditStatus';
     auditStatus.setAttribute('role','status');auditStatus.setAttribute('aria-live','polite');
     const auditHost=el('div');auditHost.id='owgPipelinePortfolioAuditResults';
+    const auditPrevious=button('Previous 12 opportunities','secondary');
+    auditPrevious.id='owgPipelinePortfolioAuditPrevious';auditPrevious.disabled=true;
+    const auditNext=button('Next 12 opportunities','secondary');
+    auditNext.id='owgPipelinePortfolioAuditNext';auditNext.disabled=true;
+    const auditPage=el('div','No eligible opportunities loaded.','muted');
+    auditPage.id='owgPipelinePortfolioAuditPage';
+    auditPage.setAttribute('role','status');auditPage.setAttribute('aria-live','polite');
+    const auditNavigation=el('div',null,'row');
+    auditNavigation.append(auditPrevious,auditPage,auditNext);
     const auditSection=el('section');auditSection.id='owgPipelinePortfolioAuditSection';
     auditSection.append(el('h3','Human handoff review inbox'),
-      el('p','Explicitly check up to 12 approved or implemented opportunities in the currently loaded state. This is a point-in-time local review, never a portfolio-wide certification, approval or execution grant.','muted'),
-      auditButton,auditStatus,auditHost);
+      el('p','Review approved or implemented opportunities in explicit pages of up to 12. Each page is a fresh, point-in-time local read; other pages are not certified, approved or executed.','muted'),
+      auditNavigation,auditButton,auditStatus,auditHost);
     card.append(row,resumeSection,auditSection,tools,status,counts,viewCount,list,detail);
     panel.appendChild(card);
 
-    let latestIdeas=[],refreshGeneration=0,resumeGeneration=0,auditGeneration=0;
+    let latestIdeas=[],refreshGeneration=0,resumeGeneration=0,auditGeneration=0,auditPageIndex=0;
+    function auditEligible(){
+      return latestIdeas.filter(idea=>['approved','implemented'].includes(idea.state))
+        .sort((a,b)=>String(b.updated_at||'').localeCompare(String(a.updated_at||''))||
+          String(a.idea_id).localeCompare(String(b.idea_id)));
+    }
+    function syncAuditPages(){
+      const count=auditEligible().length,pages=Math.ceil(count/12);
+      auditPageIndex=Math.max(0,Math.min(auditPageIndex,Math.max(0,pages-1)));
+      const start=auditPageIndex*12,end=Math.min(count,start+12);
+      auditPrevious.disabled=auditPageIndex===0;
+      auditNext.disabled=!pages||auditPageIndex>=pages-1;
+      auditPage.textContent=pages?
+        'Page '+(auditPageIndex+1)+' of '+pages+' · opportunities '+(start+1)+'–'+end+
+          ' of '+count+' eligible in the loaded state':
+        'No eligible opportunities loaded.';
+    }
     resumeFile.onchange=()=>{
       resumeGeneration++;
       // Cancel a pending resume if the operator changes its file. Existing
@@ -563,10 +588,12 @@
       const request=++auditGeneration;
       auditButton.disabled=true;
       auditHost.replaceChildren();
-      const eligible=latestIdeas.filter(idea=>['approved','implemented'].includes(idea.state))
-        .sort((a,b)=>String(b.updated_at||'').localeCompare(String(a.updated_at||''))||
-          String(a.idea_id).localeCompare(String(b.idea_id)));
-      const selected=eligible.slice(0,12),omitted=eligible.length-selected.length;
+      const eligible=auditEligible(),start=auditPageIndex*12;
+      const selected=eligible.slice(start,start+12);
+      const unreviewedBefore=start,unreviewedAfter=eligible.length-start-selected.length;
+      const omitted=unreviewedBefore+unreviewedAfter;
+      const pageNumber=auditPageIndex+1,pageCount=Math.ceil(eligible.length/12);
+      syncAuditPages();
       if(!selected.length){
         auditStatus.textContent='No approved or implemented opportunities in the currently loaded state.';
         auditButton.disabled=false;return;
@@ -618,6 +645,10 @@
         const record={format:'openworkgraph.portfolio-handoff-review.v1',
           generated_at:new Date().toISOString(),scope:'read_only_human_review',
           reviewed_count:rows.length,eligible_count:eligible.length,omitted_count:omitted,
+          page_number:pageNumber,page_count:pageCount,
+          page_start_index:start+1,page_end_index:start+rows.length,
+          unreviewed_before_count:unreviewedBefore,
+          unreviewed_after_count:unreviewedAfter,
           complete_coverage:!incomplete,execution_authorized:false,
           source_read_authorized:false,verified_execution:false,
           verified_business_outcomes:false,
@@ -634,10 +665,19 @@
         };
         auditHost.replaceChildren(wrap,exportButton);
         auditStatus.textContent=rows.length+' reviewed of '+eligible.length+' eligible in the currently loaded state. '+
-          (incomplete?'Partial coverage: '+omitted+' omitted by the 12-item budget; unavailable or missing project evidence is not verified.':
+          'Page '+pageNumber+' of '+pageCount+' ('+(start+1)+'–'+(start+rows.length)+'). '+
+          (incomplete?'Partial coverage: '+omitted+' on other pages; unavailable or missing project evidence is not verified.':
             'All loaded eligible journeys checked; execution and business outcomes remain unverified.')+
           ' Refresh after changes; nothing was executed.';
       }finally{if(request===auditGeneration)auditButton.disabled=false;}
+    };
+    auditPrevious.onclick=()=>{
+      if(auditPageIndex===0)return;
+      auditPageIndex--;auditButton.onclick();
+    };
+    auditNext.onclick=()=>{
+      if((auditPageIndex+1)*12>=auditEligible().length)return;
+      auditPageIndex++;auditButton.onclick();
     };
     function render(){
       const ideas=portfolioView(latestIdeas,{query:search.value,quadrant:quadrant.value,sort:sort.value});
@@ -654,14 +694,14 @@
     }
 
     async function refresh(){
-      ++auditGeneration;auditHost.replaceChildren();auditButton.disabled=false;
+      ++auditGeneration;auditPageIndex=0;auditHost.replaceChildren();auditButton.disabled=false;
       auditStatus.textContent='Portfolio review cleared; explicitly check again after the list refresh.';
       const generation=++refreshGeneration;
       const q=filter.value?'?state='+encodeURIComponent(filter.value):'';
       const r=await (await api('/v1/automation-pipeline'+q)).json();
       if(generation!==refreshGeneration)return;
       counts.textContent=Object.entries(r.counts).filter(([,n])=>n).map(([s,n])=>STATE_LABELS[s]+': '+n).join(' · ')||'No ideas yet.';
-      latestIdeas=r.ideas;render();
+      latestIdeas=r.ideas;syncAuditPages();render();
     }
 
     let detailGeneration=0;
