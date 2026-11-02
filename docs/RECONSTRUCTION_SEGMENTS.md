@@ -24,15 +24,19 @@ episodes**, not asserted tasks or completed cases. An episode ends only when:
    known app and capture source**, with the same complete organization, actor,
    device and session. This yields `observed_other_tab_without_record` —
    an **uncertain focus interruption**, not a different business case.
-4. Two **consecutive member observations** name different independently
-   observed exact source records in the **same complete capture scope**, and
-   their UTC timestamps are strictly ordered. This yields
+4. Two independently observed exact source-record anchors within an
+   **already-linked work item** name different records in the **same complete
+   capture scope**, with strictly increasing UTC timestamps. This yields
    `observed_member_record_change`: a *record-context* episode boundary, not
-   a new membership, verified task switch, handoff or outcome. This is useful
-   when an accepted clipboard bridge already links two records into one
-   work item: A → B → A remains one linked item but has three observed
-   record-context episodes. A missing/unreferenced member, tied timestamp,
-   incomplete scope or cross-scope observation cannot supply this boundary.
+   a new membership, verified task switch, handoff or outcome. The anchors
+   may be consecutive (A → B → A gives three observed episodes), or separated
+   by **at most eight clean unreferenced member observations** (A → loose →
+   B gives two episodes, with the loose member retained in A's earlier
+   *episode*, not attributed to source record A). The boundary starts at the
+   independently observed B anchor; no intervening event receives a new
+   record identity. A tied/out-of-order timestamp, incomplete/changed scope,
+   tainted reference or action claim, intervening clipboard transfer, or
+   more than eight unreferenced members prevents the bridged boundary.
    Existing independently observed foreign-record interruptions take precedence.
 5. The two member observations have **different exact capture scopes**.
    This yields `capture_scope_change` (not proof that a person stopped work).
@@ -65,7 +69,10 @@ never silently promoted to an uninterrupted business task.
 The within-item record-context boundary is **presentation-only**: it never
 splits an accepted clipboard-linked work item into separate work items, changes
 its `cross_record_join` or `link_basis`, or uses temporal proximity to infer
-membership. Removing the B observation recomputes A's episode count. It does
+membership. A → unreferenced → B is segmented only when A and B are independently
+observed exact anchors already accepted into the *same linked item*; the
+unreferenced action remains record-unknown. Removing B recomputes the earlier
+episode without retaining a stale boundary. It does
 not expose clipboard tokens, capture identity or foreign-record details beyond
 the existing work-item reference projection. Direct-linker and authenticated
 workflow-evidence response tests exercise the new behavior.
@@ -118,7 +125,7 @@ Run from repository root:
 python -m pytest -q tests/test_reconstruction_segments.py tests/test_work_item_links.py
 ```
 
-Synthetic tests exercise two interleaved cases, unreferenced known-app and independently observed other-tab switches,
+Synthetic tests exercise two interleaved cases, bounded exact-record changes across unreferenced linked members, unreferenced known-app and independently observed other-tab switches,
 strict timestamp ties, same-app anchors, unknown/tainted capture, different
 tenants/actors/devices/sessions, cross-session same-record resumption, clock-only
 gaps, exact counts/truncation, retention recomputation, privacy and existing
