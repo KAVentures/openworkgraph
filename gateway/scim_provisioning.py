@@ -60,6 +60,8 @@ def init_schema(db):
         for statement in SCHEMA.split(';'):
             if statement.strip():
                 conn.execute(statement)
+        from .scim_group_name_policy import SCHEMA as GROUP_NAME_POLICY_SCHEMA
+        conn.execute(GROUP_NAME_POLICY_SCHEMA)
         from .scim_user_names import SCHEMA as USER_NAMES_SCHEMA
         conn.execute(USER_NAMES_SCHEMA)
         from .scim_user_emails import SCHEMA as USER_EMAILS_SCHEMA

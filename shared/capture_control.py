@@ -116,7 +116,10 @@ def initialize_run(run_started_at: str | None = None) -> dict[str, Any]:
     with _LOCK:
         value = _read_unlocked()
         previous_start = str(value.get("run_started_at") or "")
-        if previous_start == start:
+        # A fresh store's synthesized default may have the same timestamp on a
+        # coarse clock. Only a persisted state can make this an idempotent call;
+        # the spool deliberately refuses an absent recording-state file.
+        if previous_start == start and state_path().exists():
             return value
         _close_open_interval(value, start)
         value["state"] = "recording"

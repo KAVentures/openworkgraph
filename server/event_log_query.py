@@ -17,9 +17,10 @@ from datetime import datetime, timezone
 import json
 import math
 import secrets
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, model_serializer
 
 from . import event_log_cohorts as cohorts
 from . import event_log_expressions as expressions
@@ -35,11 +36,43 @@ Name = Annotated[str, Field(min_length=1, max_length=200)]
 _CASE_DIMENSIONS = {
     "start_week": "strftime(date_trunc('week', started), '%Y-%m-%d')",
     "start_month": "strftime(date_trunc('month', started), '%Y-%m')",
+    # Case timestamps are stored in UTC. Prefix weekday with ISO 1..7 so a
+    # two-dimensional day/hour breakdown sorts chronologically by dimensions.
+    "start_weekday_utc": "strftime(started, '%u %A')",
+    "start_hour_utc": "strftime(started, '%H')",
+    # Single bucket preserves the second dimension for case attributes or variants.
+    "start_weekday_hour_utc": "strftime(started, '%u %A %H')",
+    "end_weekday_utc": "strftime(ended, '%u %A')",
+    "end_hour_utc": "strftime(ended, '%H')",
+    "end_weekday_hour_utc": "strftime(ended, '%u %A %H')",
+    # Half-open, disjoint elapsed-time bands; never a local wall-clock estimate.
+    "duration_band": """CASE WHEN duration < 3600 THEN '0: under 1 hour'
+        WHEN duration < 86400 THEN '1: 1 to under 24 hours'
+        WHEN duration < 604800 THEN '2: 1 to under 7 days'
+        ELSE '3: 7 days or more' END""",
     "end_week": "strftime(date_trunc('week', ended), '%Y-%m-%d')",
     "first_activity": "first_activity",
     "last_activity": "last_activity",
     "variant": "variant",
     "has_rework": "CASE WHEN rework THEN 'rework' ELSE 'no rework' END",
+}
+# Explicit IANA-local wall-time dimensions. Stored event instants are UTC-naive;
+# interpret them in UTC first, then convert the instant to the chosen zone.
+# The zone is always a bound SQL parameter, never interpolated user input.
+_LOCAL_CASE_DIMENSIONS = {
+    "start_weekday_local": "strftime(timezone(?, timezone('UTC', started)), '%u %A')",
+    "start_hour_local": "strftime(timezone(?, timezone('UTC', started)), '%H')",
+    "start_weekday_hour_local": "strftime(timezone(?, timezone('UTC', started)), '%u %A %H')",
+    "end_weekday_local": "strftime(timezone(?, timezone('UTC', ended)), '%u %A')",
+    "end_hour_local": "strftime(timezone(?, timezone('UTC', ended)), '%H')",
+    "end_weekday_hour_local": "strftime(timezone(?, timezone('UTC', ended)), '%u %A %H')",
+}
+_LOCAL_EVENT_DIMENSIONS = {
+    # Event timestamps are also stored as UTC-naive instants. Explicit IANA
+    # conversion is needed to group actual observed event volume by local shift.
+    "weekday_local": "strftime(timezone(?, timezone('UTC', ts)), '%u %A')",
+    "hour_local": "strftime(timezone(?, timezone('UTC', ts)), '%H')",
+    "weekday_hour_local": "strftime(timezone(?, timezone('UTC', ts)), '%u %A %H')",
 }
 _EVENT_DIMENSIONS = {
     "activity": "activity",
@@ -48,6 +81,7 @@ _EVENT_DIMENSIONS = {
     "month": "strftime(date_trunc('month', ts), '%Y-%m')",
     "weekday": "dayname(ts)",
     "hour": "CAST(hour(ts) AS VARCHAR)",
+    "weekday_hour_utc": "strftime(ts, '%u %A %H')",
 }
 _CASE_VALUES = {"duration_seconds": "duration", "events": "events", "distinct_activities": "distinct_activities"}
 _FUNCTIONS = {"median": "quantile_cont({x}, 0.5)", "p90": "quantile_cont({x}, 0.9)", "avg": "avg({x})",
@@ -113,6 +147,37 @@ class CaseFilter(_Strict):
     lacks_activity: Name | None = None
 
 
+WeekdayNumber = Annotated[StrictInt, Field(ge=1, le=7)]
+HourNumber = Annotated[StrictInt, Field(ge=0, le=23)]
+
+
+class TimeOfWeekCell(_Strict):
+    """One ISO weekday and 24-hour clock cell, not a cross-product."""
+    weekday: WeekdayNumber
+    hour: HourNumber
+
+
+class TimeOfWeekFilter(_Strict):
+    """Select observations in explicitly chosen ISO weekdays and clock hours."""
+    anchor: Literal["event", "case_start", "case_end"]
+    clock: Literal["utc", "local"] = "utc"
+    weekdays: list[WeekdayNumber] = Field(default_factory=lambda: list(range(1, 8)), min_length=1, max_length=7)
+    hours: list[HourNumber] = Field(default_factory=lambda: list(range(24)), min_length=1, max_length=24)
+    # Explicit disjoint cells for overnight schedules: unlike weekdays × hours,
+    # Sunday 22:00 and Monday 01:00 select only those two clock hours.
+    slots: list[TimeOfWeekCell] | None = Field(default=None, min_length=1, max_length=168)
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if self.slots is not None:
+            # Saved analyses and returned specs must be parseable again.
+            # The implicit Cartesian defaults are not explicit user input.
+            data.pop("weekdays", None)
+            data.pop("hours", None)
+        return data
+
+
 class AnalysisSpec(_Strict):
     level: Literal["cases", "events"]
     dimensions: list[str] = Field(default_factory=list, max_length=2)
@@ -124,6 +189,8 @@ class AnalysisSpec(_Strict):
     order: Literal["first_measure_desc", "first_measure_asc", "dimensions"] = "first_measure_desc"
     limit: StrictInt = Field(default=100, ge=1, le=MAX_ROWS)
     case_type: Name | None = None
+    time_zone: Annotated[str, Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_+./-]+$")] | None = None
+    time_of_week: TimeOfWeekFilter | None = None
 
 
 class SavedAnalysis(_Strict):
@@ -145,7 +212,32 @@ def parse(spec: Any) -> AnalysisSpec:
         raise workspace.EventLogWorkspaceError(
             "analysis is invalid: " + ".".join(str(p) for p in first["loc"]) + " " + first["msg"]) from None
     cohorts.parse_cohort(parsed.cohort)
-    allowed = _CASE_DIMENSIONS if parsed.level == "cases" else _EVENT_DIMENSIONS
+    allowed = ({**_CASE_DIMENSIONS, **_LOCAL_CASE_DIMENSIONS}
+               if parsed.level == "cases" else {**_EVENT_DIMENSIONS, **_LOCAL_EVENT_DIMENSIONS})
+    window = parsed.time_of_week
+    if window is not None:
+        if (parsed.level == "events") != (window.anchor == "event"):
+            raise workspace.EventLogWorkspaceError("time_of_week anchor must be event for events or case_start/case_end for cases")
+        if len(set(window.weekdays)) != len(window.weekdays) or len(set(window.hours)) != len(window.hours):
+            raise workspace.EventLogWorkspaceError("time_of_week weekdays and hours cannot contain duplicates")
+        if window.slots is not None:
+            if {"weekdays", "hours"} & window.model_fields_set:
+                raise workspace.EventLogWorkspaceError(
+                    "time_of_week slots cannot be combined with weekdays or hours")
+            if len({(cell.weekday, cell.hour) for cell in window.slots}) != len(window.slots):
+                raise workspace.EventLogWorkspaceError("time_of_week slots cannot contain duplicates")
+    local_time_requested = (any(d in _LOCAL_CASE_DIMENSIONS or d in _LOCAL_EVENT_DIMENSIONS
+                                for d in parsed.dimensions)
+                            or (window is not None and window.clock == "local"))
+    if local_time_requested:
+        if parsed.time_zone is None:
+            raise workspace.EventLogWorkspaceError("local time dimensions require an explicit IANA time_zone")
+        try:
+            ZoneInfo(parsed.time_zone)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise workspace.EventLogWorkspaceError("time_zone must be a known IANA time zone") from None
+    elif parsed.time_zone is not None:
+        raise workspace.EventLogWorkspaceError("time_zone requires a local time dimension or local time_of_week filter")
     for dimension in parsed.dimensions:
         if dimension not in allowed and _attribute_dimension(dimension) is None:
             raise workspace.EventLogWorkspaceError(
@@ -176,6 +268,36 @@ def parse(spec: Any) -> AnalysisSpec:
     if parsed.level == "events" and parsed.where != CaseFilter():
         raise workspace.EventLogWorkspaceError("case filters apply to case-level analyses; use cohort instead")
     return parsed
+
+
+def _time_of_week_clause(spec: AnalysisSpec) -> tuple[str | None, list[Any]]:
+    """A bounded clock-window predicate with fixed identifiers and bound values.
+
+    ISO weekdays 1..7 and 24-hour clock bins are evaluated on observed UTC
+    instants, optionally converted to an explicitly selected IANA wall clock.
+    A repeated DST hour intentionally combines both source instants.
+    """
+    window = spec.time_of_week
+    if window is None:
+        return None, []
+    column = {"event": "ts", "case_start": "started", "case_end": "ended"}[window.anchor]
+    if window.slots is not None:
+        # A single fixed strftime expression and a bound list preserve the
+        # requested exact weekday-hour pairs. ISO weekday %u is 1..7; %H
+        # is 00..23. Both repeated DST-fold instants share the same cell.
+        cells = [f"{cell.weekday}{cell.hour:02d}" for cell in window.slots]
+        if window.clock == "local":
+            return (f"list_contains(?, strftime(timezone(?, timezone('UTC', {column})), '%u%H'))",
+                    [cells, spec.time_zone])
+        return f"list_contains(?, strftime({column}, '%u%H'))", [cells]
+    if window.clock == "local":
+        instant = f"timezone(?, timezone('UTC', {column}))"
+        params: list[Any] = [window.weekdays, spec.time_zone, window.hours, spec.time_zone]
+    else:
+        instant = column
+        params = [window.weekdays, window.hours]
+    return (f"(list_contains(?, CAST(strftime({instant}, '%u') AS INTEGER)) "
+            f"AND list_contains(?, CAST(strftime({instant}, '%H') AS INTEGER)))"), params
 
 
 def _column(measure: Measure, metric_columns: dict[str, str] | None = None) -> tuple[str, str]:
@@ -293,7 +415,7 @@ def run(log_id: str, spec: Any, *, control=None) -> dict[str, Any]:
             notion = workspace._case_type(conn, log_id, parsed.case_type)
             conn.execute("""CREATE OR REPLACE TEMP TABLE qc AS SELECT c.*, o.attributes AS case_attributes FROM (
                   SELECT case_id, min(ts) AS started, max(ts) AS ended,
-                    date_diff('second', min(ts), max(ts)) AS duration, count(*) AS events,
+                    epoch(max(ts) - min(ts)) AS duration, count(*) AS events,
                     count(DISTINCT activity) AS distinct_activities, count(*) > count(DISTINCT activity) AS rework,
                     arg_min(activity, struct_pack(at := ts, event_order := event_id)) AS first_activity,
                     arg_max(activity, struct_pack(at := ts, event_order := event_id)) AS last_activity,
@@ -318,30 +440,49 @@ def run(log_id: str, spec: Any, *, control=None) -> dict[str, Any]:
             if parsed.activity_in:
                 clauses.append("case_id IN (SELECT case_id FROM ce WHERE list_contains(?, activity))")
                 params.append(parsed.activity_in)
+            clock_clause, clock_params = _time_of_week_clause(parsed)
+            if clock_clause:
+                clauses.append(clock_clause)
+                params.extend(clock_params)
             if parsed.metrics and clauses:
                 # Keep only the selected cases first, so metric coverage describes the analyzed population.
                 conn.execute(f"DELETE FROM qc WHERE NOT coalesce(({' AND '.join(clauses)}), false)", params)
             metric_columns, metric_coverage = _metrics(conn, parsed.metrics)
             dimension_sql = []
+            dimension_params = []
             for dimension in parsed.dimensions:
                 attribute = _attribute_dimension(dimension)
-                if attribute is None:
-                    dimension_sql.append(_CASE_DIMENSIONS[dimension])
-                else:
+                if attribute is not None:
                     dimension_sql.append("""map_extract(json_transform(case_attributes, '"MAP(VARCHAR, VARCHAR)"'), ?)[1]""")
+                    dimension_params.append(attribute)
+                elif dimension in _LOCAL_CASE_DIMENSIONS:
+                    dimension_sql.append(_LOCAL_CASE_DIMENSIONS[dimension])
+                    dimension_params.append(parsed.time_zone)
+                else:
+                    dimension_sql.append(_CASE_DIMENSIONS[dimension])
         else:
             source = "ce"
             clauses = []
             metric_columns, metric_coverage = {}, []
             if parsed.activity_in:
                 clauses.append("list_contains(?, activity)"); params.append(parsed.activity_in)
+            clock_clause, clock_params = _time_of_week_clause(parsed)
+            if clock_clause:
+                clauses.append(clock_clause)
+                params.extend(clock_params)
             dimension_sql = []
+            dimension_params = []
             for dimension in parsed.dimensions:
                 attribute = _attribute_dimension(dimension)
-                dimension_sql.append(_EVENT_DIMENSIONS[dimension] if attribute is None else
-                                     """map_extract(json_transform(attributes, '"MAP(VARCHAR, VARCHAR)"'), ?)[1]""")
-        # Attribute names are parameters of the SELECT list, which precedes WHERE.
-        dimension_params = [a for a in map(_attribute_dimension, parsed.dimensions) if a is not None]
+                if attribute is not None:
+                    dimension_sql.append("""map_extract(json_transform(attributes, '"MAP(VARCHAR, VARCHAR)"'), ?)[1]""")
+                    dimension_params.append(attribute)
+                elif dimension in _LOCAL_EVENT_DIMENSIONS:
+                    dimension_sql.append(_LOCAL_EVENT_DIMENSIONS[dimension])
+                    dimension_params.append(parsed.time_zone)
+                else:
+                    dimension_sql.append(_EVENT_DIMENSIONS[dimension])
+        # SELECT dimension parameters precede WHERE parameters in SQL order.
         measures = [_column(m, metric_columns) for m in parsed.measures]
         select = [f"{sql} AS d{i}" for i, sql in enumerate(dimension_sql)] + [f"{sql} AS m{i}" for i, (_, sql) in enumerate(measures)]
         where_sql = " WHERE " + " AND ".join(clauses) if clauses else ""

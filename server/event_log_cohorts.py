@@ -156,7 +156,7 @@ def median_difference(a: list[float], b: list[float], rounds: int = BOOTSTRAP_RO
 
 def _cohort_stats(conn, table: str, sla_seconds: int | None) -> dict[str, Any]:
     conn.execute(f"""CREATE OR REPLACE TEMP TABLE {table}_cs AS SELECT case_id,
-          date_diff('second', min(ts), max(ts)) AS duration, count(*) > count(DISTINCT activity) AS rework,
+          epoch(max(ts) - min(ts)) AS duration, count(*) > count(DISTINCT activity) AS rework,
           string_agg(activity, '{_SEP}' ORDER BY ts, event_id) AS path
         FROM {table} GROUP BY case_id""")
     cases, q, rework = conn.execute(f"""SELECT count(*), quantile_cont(duration, [0.5, 0.9]),
@@ -179,7 +179,11 @@ def benchmark(log_id: str, cohorts: Any, case_type: str | None = None, sla_secon
     if sla_seconds is not None and (not isinstance(sla_seconds, int) or isinstance(sla_seconds, bool)
                                     or not 0 < sla_seconds <= 10 ** 9):
         raise EventLogWorkspaceError("sla_seconds must be a positive number of seconds")
-    limit = max(1, min(int(limit), 50))
+    # Direct callers must not silently truncate/coerce a malformed display cap.
+    # This is an internal-only parameter; the REST benchmark route does not expose it.
+    if not isinstance(limit, int) or isinstance(limit, bool):
+        raise EventLogWorkspaceError("limit must be an integer")
+    limit = max(1, min(limit, 50))
 
     def run(conn):
         restrict(conn, first, log_id, "ca")
@@ -244,7 +248,7 @@ def benchmark(log_id: str, cohorts: Any, case_type: str | None = None, sla_secon
             "variants": [{"path": p.split(_SEP), "share_in_first": round(na / a["cases"], 6),
                           "share_in_second": round(nb / b["cases"], 6)} for p, na, nb in variants],
             "intervals_assume_independent_cohorts": True,
-            "note": ("cohorts share cases, so intervals overstate certainty" if overlap else
+            "note": ("cohorts share cases; independent-cohort intervals may understate or overstate uncertainty" if overlap else
                      "differences describe these cohorts; they are not explained or caused by the cohort definition"),
         }
     return workspace._query(log_id, case_type, run)

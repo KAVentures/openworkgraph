@@ -70,6 +70,131 @@ def test_conformance_fitness_and_deviations():
     assert analytics.conformance(log_id, alternatives)["fitting_cases"] == 54
 
 
+
+def test_conformance_fitness_uses_the_selected_reference_path_length(monkeypatch):
+    """Synthetic one-variant regression, without requiring a native DuckDB query.
+
+    The shortest model path is A (length 1), but ABCD (length 4) is
+    the minimum-cost alignment for the observed ABC trace. Its fitness
+    denominator is 3 + 4, not 3 + 1.
+    """
+    class OneVariant:
+        def execute(self, sql):
+            self.is_count = "count(DISTINCT case_id)" in sql
+            return self
+
+        def fetchone(self):
+            assert self.is_count
+            return (1,)
+
+        def fetchall(self):
+            assert not self.is_count
+            return [("A\x1fB\x1fC", 1, 1)]
+
+    monkeypatch.setattr(workspace, "_query", lambda log_id, case_type, fn: fn(OneVariant()))
+    long_path = ["A", "B", "C", "D"]
+    short_path = ["A"]
+    model = lambda paths: {"format": "openworkgraph.reference-model.v1", "paths": paths}
+
+    with_short_first = analytics.conformance("synthetic", model([short_path, long_path]))
+    with_long_first = analytics.conformance("synthetic", model([long_path, short_path]))
+    without_short = analytics.conformance("synthetic", model([long_path]))
+
+    expected = round(1 - 1 / (3 + 4), 6)
+    assert with_short_first["fitness"] == expected
+    assert with_long_first["fitness"] == expected
+    assert without_short["fitness"] == expected
+    assert with_short_first["fitting_cases"] == 0
+    assert with_short_first["deviating_variants"] == [{
+        "path": ["A", "B", "C"], "cases": 1, "fitness": expected,
+        "closest_model_path": 1, "deviations": [{"move": "skipped", "activity": "D"}],
+    }]
+    assert with_long_first["deviating_variants"][0]["closest_model_path"] == 0
+    assert with_short_first["skipped_model_activities"] == [
+        {"activity": "D", "cases": 1, "share_of_aligned_cases": 1.0}
+    ]
+
+
+
+def test_conformance_activity_diagnostics_count_cases_not_repeated_moves(monkeypatch):
+    """Synthetic repeated moves must not inflate case prevalence beyond 100%."""
+    assert analytics._align(["A"], ["A", "A", "A"])[1].count(("model", "A")) == 2
+    assert analytics._align(["B", "B", "B"], ["B"])[1].count(("log", "B")) == 2
+
+    class TwoVariants:
+        def execute(self, sql):
+            self.is_count = "count(DISTINCT case_id)" in sql
+            return self
+
+        def fetchone(self):
+            assert self.is_count
+            return (5,)
+
+        def fetchall(self):
+            assert not self.is_count
+            return [("B\x1fB\x1fB", 3, 2), ("A", 2, 2)]
+
+    monkeypatch.setattr(workspace, "_query", lambda log_id, case_type, fn: fn(TwoVariants()))
+    model = {"format": "openworkgraph.reference-model.v1",
+             "paths": [["A", "A", "A"], ["B"]]}
+    result = analytics.conformance("synthetic-repeated-moves", model)
+
+    assert result["cases"] == result["aligned_cases"] == 5
+    assert result["fitness"] == 0.5
+    assert result["fitting_cases"] == 0
+    assert result["skipped_model_activities"] == [
+        {"activity": "A", "cases": 2, "share_of_aligned_cases": 0.4}
+    ]
+    assert result["extra_observed_activities"] == [
+        {"activity": "B", "cases": 3, "share_of_aligned_cases": 0.6}
+    ]
+    assert result["deviating_variants"][0]["cases"] == 3
+    assert result["deviating_variants"][0]["deviations"] == [
+        {"move": "extra", "activity": "B"}, {"move": "extra", "activity": "B"}
+    ]
+    assert result["deviating_variants"][1]["deviations"] == [
+        {"move": "skipped", "activity": "A"}, {"move": "skipped", "activity": "A"}
+    ]
+
+
+@pytest.mark.parametrize("value", [
+    2.5, float("nan"), float("inf"), float("-inf"),
+    "2", "invalid", None, True, False, [], {},
+])
+def test_conformance_direct_variant_cap_rejects_nonintegers_before_query(value, monkeypatch):
+    """Direct callers must receive a domain error, not coercion or a raw Python exception."""
+    monkeypatch.setattr(workspace, "_query", lambda *args: pytest.fail("invalid cap reached the query"))
+    with pytest.raises(workspace.EventLogWorkspaceError, match="max_variants must be an integer"):
+        analytics.conformance("synthetic", MODEL, max_variants=value)
+
+
+def test_conformance_direct_integer_variant_cap_preserves_existing_clamping(monkeypatch):
+    """Genuine integer caps retain their existing inclusive clamp and SQL bound."""
+    queries = []
+
+    class EmptyLog:
+        def execute(self, sql):
+            queries.append(sql)
+            return self
+
+        def fetchone(self):
+            return (0,)
+
+        def fetchall(self):
+            return []
+
+    monkeypatch.setattr(workspace, "_query", lambda log_id, case_type, fn: fn(EmptyLog()))
+    for requested, applied in ((-1, 1), (0, 1), (1, 1), (2, 2),
+                               (analytics.MAX_ALIGNED_VARIANTS, analytics.MAX_ALIGNED_VARIANTS),
+                               (analytics.MAX_ALIGNED_VARIANTS + 1, analytics.MAX_ALIGNED_VARIANTS)):
+        queries.clear()
+        result = analytics.conformance("synthetic-empty-log", MODEL, max_variants=requested)
+        assert result["max_variants_applied"] == applied
+        assert len(queries) == 2
+        assert f"LIMIT {applied}" in queries[1]
+        assert result["cases"] == result["aligned_cases"] == 0
+
+
 def test_conformance_variant_cap_discloses_omitted_cases_separately_from_long_traces():
     """Fitness only covers aligned cases; the two omission reasons partition the rest."""
     model = {"format": "openworkgraph.reference-model.v1", "paths": [["C"]]}
@@ -164,6 +289,51 @@ def test_invalid_reference_models_are_refused(model):
         analytics.conformance(log_id, model)
 
 
+@pytest.mark.parametrize("bad", [
+    0, -1, 10 ** 9 + 1, 1.5, float("nan"), float("inf"),
+    float("-inf"), "3600", "not-a-number", True, False, [], {},
+])
+def test_kpi_direct_sla_rejects_noninteger_or_out_of_range_before_query(bad, monkeypatch):
+    """Direct callers receive a domain validation error, not coercion or Python errors."""
+    monkeypatch.setattr(workspace, "_query", lambda *args: pytest.fail("invalid SLA reached query"))
+    with pytest.raises(workspace.EventLogWorkspaceError, match="sla_seconds must be an integer"):
+        analytics.kpis("unused-synthetic-log", sla_seconds=bad)
+
+
+def test_kpi_direct_sla_accepts_exact_integer_bounds_and_none(monkeypatch):
+    """Existing valid typed REST values and no-SLA requests retain their query path."""
+    monkeypatch.setattr(workspace, "_query", lambda *args: "validated-without-database")
+    for value in (None, 1, 3600, 10 ** 9):
+        assert analytics.kpis("unused-synthetic-log", sla_seconds=value) == "validated-without-database"
+
+
+
+@pytest.mark.parametrize("bad", [
+    "bot", b"bot", 17, True, {"bot": True}, ("bot",),
+    ["bot", None], ["bot", 17], ["bot", []], [["bot"]], [False], [b"bot"],
+])
+def test_kpi_direct_automation_resources_rejects_malformed_names_before_query(bad, monkeypatch):
+    """Malformed direct-call resources must not become characters or Python exceptions."""
+    monkeypatch.setattr(workspace, "_query", lambda *args: pytest.fail("invalid resources reached query"))
+    with pytest.raises(workspace.EventLogWorkspaceError, match="automation_resources must be a list of strings"):
+        analytics.kpis("unused-synthetic-log", automation_resources=bad)
+
+
+def test_kpi_direct_automation_resources_preserves_valid_literal_names(monkeypatch):
+    """REST-shaped lists, duplicates, empty names and whitespace retain their query path."""
+    calls = []
+    def checked_query(log_id, case_type, fn):
+        calls.append((log_id, case_type, fn))
+        return "validated-without-database"
+    monkeypatch.setattr(workspace, "_query", checked_query)
+    for resources in (None, [], ["bot"], ["", "bot", "bot"],
+                      [" bot ", "bot", " bot "], ["x" * 200],
+                      [f"resource-{i}" for i in range(50)]):
+        assert analytics.kpis("synthetic", automation_resources=resources) == "validated-without-database"
+    assert len(calls) == 7
+
+
+
 def test_kpis_throughput_rework_sla_and_declared_automation():
     log_id = _log()
     result = analytics.kpis(log_id, sla_seconds=4 * 3600, automation_resources=["bot"])
@@ -179,6 +349,39 @@ def test_kpis_throughput_rework_sla_and_declared_automation():
         analytics.kpis(log_id, automation_resources=[f"r{i}" for i in range(51)])
     with pytest.raises(workspace.EventLogWorkspaceError):
         analytics.kpis(log_id, sla_seconds=0)
+
+
+
+def test_subsecond_kpi_and_root_cause_duration_thresholds():
+    """Elapsed seconds, not whole-second boundaries, govern strict > thresholds.
+
+    Synthetic import regression only: not provider or customer acceptance.
+    """
+    rows = [
+        "case,activity,time,who",
+        "a,Start,2024-01-01T00:00:00Z,team",
+        "a,End,2024-01-01T00:00:00.500000Z,team",
+        "b,Start,2024-01-01T00:01:00Z,team",
+        "b,End,2024-01-01T00:01:01.000000Z,team",
+        "c,Start,2024-01-01T00:02:00Z,team",
+        "c,End,2024-01-01T00:02:01.500000Z,team",
+        "d,Start,2024-01-01T00:03:00Z,team",
+        "d,End,2024-01-01T00:03:02.750000Z,team",
+    ]
+    log_id = _log("\n".join(rows))
+    result = analytics.kpis(log_id, sla_seconds=1)
+    assert result["cases"] == 4
+    throughput = result["throughput_seconds"]
+    assert throughput["p50"] == pytest.approx(1.25)
+    assert throughput["p90"] == pytest.approx(2.375)
+    assert throughput["p95"] == pytest.approx(2.5625)
+    assert throughput["mean"] == pytest.approx(1.4375)
+    assert result["sla"] == {"seconds": 1, "breached_cases": 2, "breach_rate": 0.5}
+    assert result["completed_per_week"] == [
+        {"week_starting": "2024-01-01", "cases": 4, "median_throughput_seconds": pytest.approx(1.25)}
+    ]
+    assert analytics.root_cause(log_id, "duration_over", threshold_seconds=1)["outcome_cases"] == 2
+    assert analytics.root_cause(log_id, "duration_over", threshold_seconds=2)["outcome_cases"] == 1
 
 
 def test_newcombe_interval_matches_published_example():
@@ -214,6 +417,134 @@ def test_root_cause_outcome_kinds_and_validation():
     for kwargs in ({"outcome": "duration_over"}, {"outcome": "contains_activity"}, {"outcome": "guess"}):
         with pytest.raises(workspace.EventLogWorkspaceError):
             analytics.root_cause(log_id, **kwargs)
+
+
+
+@pytest.mark.parametrize(("outcome", "activity", "expected_outcome_cases"), [
+    ("ends_with", "Close", 60),                 # every case ends with Close
+    ("contains_activity", "NeverObserved", 0), # no case contains the target
+])
+def test_root_cause_constant_outcome_preserves_noncausal_provenance(
+    outcome, activity, expected_outcome_cases,
+):
+    """Even zero-variance results must not omit noncausal/temporal caveats."""
+    result = analytics.root_cause(_log(), outcome, activity=activity)
+    assert result["cases"] == 60
+    assert result["outcome_cases"] == expected_outcome_cases
+    assert result["features_tested"] == 0 and result["associations"] == []
+    assert result["note"] == "the outcome does not vary across cases, so nothing can be associated with it"
+    assert result["associations_are_not_causes"] is True
+    assert result["temporal_order_not_checked"] is True
+    assert result["outcome"] == {
+        "kind": outcome, "threshold_seconds": None, "activity": activity,
+    }
+
+
+@pytest.mark.parametrize("outcome", [
+    [], {}, ["rework"], {"kind": "rework"}, set(),
+    None, False, 123, 1.5, float("nan"),
+])
+def test_root_cause_direct_outcome_rejects_malformed_types_before_query(outcome, monkeypatch):
+    """Unhashable outcomes must fail with the domain error, not raw TypeError."""
+    monkeypatch.setattr(workspace, "_query", lambda *args: pytest.fail("invalid outcome reached query"))
+    with pytest.raises(workspace.EventLogWorkspaceError, match="outcome must be one of"):
+        analytics.root_cause("unused-synthetic-log", outcome)
+
+
+@pytest.mark.parametrize(("outcome", "kwargs"), [
+    ("rework", {}),
+    ("duration_over", {"threshold_seconds": 1}),
+    ("contains_activity", {"activity": "Review"}),
+    ("ends_with", {"activity": "Close"}),
+])
+def test_root_cause_direct_outcome_accepts_valid_names_before_query(outcome, kwargs, monkeypatch):
+    """Keep all four existing outcome contracts valid after strict type checking."""
+    monkeypatch.setattr(workspace, "_query", lambda *args: "validated-without-database")
+    assert analytics.root_cause("unused-synthetic-log", outcome, **kwargs) == "validated-without-database"
+
+
+@pytest.mark.parametrize("value", [
+    0, -1, 10 ** 9 + 1, 1.5, 5.0, float("nan"),
+    float("inf"), float("-inf"), "5", "bad", True, False, [], {},
+])
+@pytest.mark.parametrize("outcome", ["duration_over", "rework"])
+def test_root_cause_direct_threshold_rejects_invalid_values_before_query(
+        value, outcome, monkeypatch):
+    """Even a threshold unused by rework must not be silently coerced."""
+    monkeypatch.setattr(workspace, "_query", lambda *args: pytest.fail("invalid threshold reached query"))
+    with pytest.raises(workspace.EventLogWorkspaceError, match="threshold_seconds must be an integer"):
+        analytics.root_cause("unused-synthetic-log", outcome, threshold_seconds=value)
+
+
+@pytest.mark.parametrize("value", [
+    1.5, 5.0, float("nan"), float("inf"), float("-inf"),
+    "5", "bad", None, True, False, [], {},
+])
+def test_root_cause_direct_limit_rejects_nonintegers_before_query(value, monkeypatch):
+    monkeypatch.setattr(workspace, "_query", lambda *args: pytest.fail("invalid limit reached query"))
+    with pytest.raises(workspace.EventLogWorkspaceError, match="limit must be an integer"):
+        analytics.root_cause("unused-synthetic-log", "rework", limit=value)
+
+
+def test_root_cause_direct_integer_boundaries_and_limit_clamp(monkeypatch):
+    """Preserve historical integer clamping, and accept REST threshold bounds."""
+    calls = []
+    def checked_query(log_id, case_type, fn):
+        calls.append((log_id, case_type, fn))
+        return "validated-without-database"
+    monkeypatch.setattr(workspace, "_query", checked_query)
+    for threshold in (1, 10 ** 9):
+        for limit in (-10, 0, 1, 30, 100, 101, 10 ** 10):
+            assert analytics.root_cause("synthetic", "duration_over",
+                                        threshold_seconds=threshold, limit=limit) == "validated-without-database"
+    assert analytics.root_cause("synthetic", "rework") == "validated-without-database"
+    assert analytics.root_cause("synthetic", "rework", threshold_seconds=1) == "validated-without-database"
+    assert len(calls) == 16
+    with pytest.raises(workspace.EventLogWorkspaceError, match="required for a duration outcome"):
+        analytics.root_cause("synthetic", "duration_over")
+
+
+
+@pytest.mark.parametrize(("outcome", "kwargs"), [
+    ("rework", {}),
+    ("duration_over", {"threshold_seconds": 1}),
+    ("contains_activity", {}),
+    ("ends_with", {}),
+])
+@pytest.mark.parametrize("activity", [
+    [], {}, ["Review"], {"name": "Review"}, 0, False, 1.5,
+    ("Review",), {"Review"}, "x" * 201,
+])
+def test_root_cause_direct_activity_rejects_invalid_metadata_before_query(
+        outcome, kwargs, activity, monkeypatch):
+    """Unused activity is still returned in outcome metadata, so it must be typed and bounded."""
+    monkeypatch.setattr(workspace, "_query", lambda *args: pytest.fail("invalid activity reached saved-log query"))
+    with pytest.raises(workspace.EventLogWorkspaceError, match="activity must be a string"):
+        analytics.root_cause("unused-synthetic-log", outcome, activity=activity, **kwargs)
+
+
+@pytest.mark.parametrize(("outcome", "kwargs", "activity"), [
+    ("rework", {}, None),
+    ("rework", {}, ""),
+    ("rework", {}, " Review "),
+    ("duration_over", {"threshold_seconds": 1}, ""),
+    ("duration_over", {"threshold_seconds": 1}, "x" * 200),
+    ("contains_activity", {}, "Review"),
+    ("ends_with", {}, "x" * 200),
+])
+def test_root_cause_direct_activity_preserves_valid_optional_strings(
+        outcome, kwargs, activity, monkeypatch):
+    """Do not change existing literal names or the empty unused-activity REST contract."""
+    monkeypatch.setattr(workspace, "_query", lambda *args: "validated-without-database")
+    assert analytics.root_cause("unused-synthetic-log", outcome, activity=activity, **kwargs) == "validated-without-database"
+
+
+@pytest.mark.parametrize("outcome", ["contains_activity", "ends_with"])
+def test_root_cause_target_activity_still_requires_nonempty_string(outcome, monkeypatch):
+    monkeypatch.setattr(workspace, "_query", lambda *args: pytest.fail("missing target reached saved-log query"))
+    with pytest.raises(workspace.EventLogWorkspaceError, match="activity is required"):
+        analytics.root_cause("unused-synthetic-log", outcome, activity="")
+
 
 
 def test_root_cause_uses_object_attributes_from_ocel():
