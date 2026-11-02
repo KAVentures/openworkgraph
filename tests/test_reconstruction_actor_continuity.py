@@ -70,7 +70,7 @@ def test_interleaved_foreign_record_does_not_become_handoff_or_new_membership():
     ])
     item = next(item for item in result["items"] if item["resource_refs"] == [A])
     [change] = item["observed_same_record_actor_changes"]
-    assert change["other_tenant_scoped_observations_between"] == 1
+    assert change["intervening_same_tenant_observation_count"] == 1
     assert change["continuity_unverified"] is True
     assert item["event_ids"] == ["evt-001", "evt-003"]
     assert len(result["items"]) == 2
