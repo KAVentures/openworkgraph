@@ -13,7 +13,7 @@ from urllib import parse
 import pytest
 
 from server.salesforce_case_history_live import LiveHistoryError, extract, main
-from server.salesforce_case_history_incremental import prepare
+from server.salesforce_case_history_incremental import prepare, main as incremental_main
 from shared.event_log_formats import EventRecord, ReadStats, read_csv
 
 CASE = "500000000000001"
@@ -220,3 +220,27 @@ def test_cli_requires_explicit_consents_and_pagination_flag(private, monkeypatch
     output = capsys.readouterr().out
     assert '"pages_fetched": 2' in output
     assert TOKEN not in output and CASE not in output
+
+
+def test_incremental_cli_two_page_read_requires_both_consents(private, monkeypatch, capsys):
+    monkeypatch.setenv("OWG_SALESFORCE_READ_TOKEN", TOKEN)
+    with source() as (origin, calls):
+        args = ["prepare", "--instance", origin, "--confirm-host", "127.0.0.1",
+                "--namespace", "sandbox", "--case", CASE,
+                "--bootstrap-since", SINCE, "--until", UNTIL,
+                "--checkpoint", str(private / "checkpoint.json"),
+                "--manifest", str(private / "incremental.json"),
+                "--output", str(private / "incremental.csv"),
+                "--overlap-hours", "24", "--max-pages", "2",
+                "--allow-loopback-http"]
+        assert incremental_main(args) == 2
+        assert not calls
+        assert incremental_main(args + [
+            "--consent-selected-read", "--consent-private-export"]) == 0
+    assert len(calls) == 2
+    assert (private / "incremental.csv").exists()
+    assert (private / "incremental.json").exists()
+    assert not (private / "checkpoint.json").exists()
+    output = capsys.readouterr().out
+    assert '"pages_fetched": 2' in output
+    assert CASE not in output and TOKEN not in output
