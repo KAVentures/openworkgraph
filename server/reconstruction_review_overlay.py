@@ -37,6 +37,85 @@ def _source_digest(events: Any) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
+_MAX_CONTEXT_INTERVENING = 8
+
+
+def _observed_interleaving_context(
+    linked: dict[str, Any], groups: list[list[str]], eligible: list[dict[str, Any]],
+) -> dict[str, int]:
+    """Annotate weak review candidates with bounded *negative* record context.
+
+    Only contiguous same-capture-scope, same-app/source observations can
+    establish a before/after record anchor. This never proposes a membership
+    edge or treats adjacent observations as the same task. A nearer unknown
+    record, timestamp tie, taint or capture boundary stops the search.
+    """
+    rows = linked["rows"]
+    positions = {row["event_id"]: index for index, row in enumerate(rows)}
+    item_of = {
+        event_id: f"linked_item_{number:02d}"
+        for number, members in enumerate(groups, start=1)
+        for event_id in members
+    }
+    counts: dict[str, int] = {}
+    for candidate in eligible:
+        pivot = rows[positions[candidate["event_id"]]]
+        scope = pivot.get("scope")
+        valid = (
+            isinstance(scope, tuple) and len(scope) == 4
+            and all(isinstance(value, str) and value for value in scope)
+            and isinstance(pivot.get("app"), str) and bool(pivot["app"])
+            and isinstance(pivot.get("source"), str)
+            and pivot["source"] not in ("", "unknown")
+            and not pivot.get("reference_tainted")
+            and not pivot.get("ephemeral_claim_tainted")
+        )
+
+        def anchor(direction: int) -> str | None:
+            for distance in range(1, _MAX_CONTEXT_INTERVENING + 2):
+                index = positions[pivot["event_id"]] + direction * distance
+                if index < 0 or index >= len(rows):
+                    break
+                row = rows[index]
+                if (
+                    row.get("scope") != scope
+                    or row.get("app") != pivot["app"]
+                    or row.get("source") != pivot["source"]
+                    or row.get("reference_tainted")
+                    or row.get("ephemeral_claim_tainted")
+                    or (direction < 0 and row["observed_at"] >= pivot["observed_at"])
+                    or (direction > 0 and row["observed_at"] <= pivot["observed_at"])
+                ):
+                    break
+                if row.get("ref"):
+                    # A nearer unlinked record is a hard boundary, not a
+                    # reason to search further for a convenient visible item.
+                    return item_of.get(row["event_id"])
+            return None
+
+        before = anchor(-1) if valid else None
+        after = anchor(1) if valid else None
+        if not valid:
+            status = "insufficient_capture_context"
+        elif before and after:
+            status = ("competing_record_anchors" if before != after
+                      else "matching_linked_item_anchors")
+        elif before or after:
+            status = "one_sided_record_anchor"
+        else:
+            status = "no_bounded_record_anchors"
+        candidate["interleaving_context"] = {
+            "status": status,
+            "preceding_linked_item_id": before,
+            "following_linked_item_id": after,
+            "maximum_intervening_observations_per_side": _MAX_CONTEXT_INTERVENING,
+            "case_identity_verified": False,
+            "auto_assigned": False,
+        }
+        counts[status] = counts.get(status, 0) + 1
+    return dict(sorted(counts.items()))
+
+
 def _snapshot(events: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any], list[list[str]]]:
     digest = _source_digest(events)
     projected = linked_work_items(events, max_items=50)
@@ -82,6 +161,7 @@ def _snapshot(events: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, A
         })
     if len({entry["event_id"] for entry in eligible}) != len(eligible):
         raise ValueError("overlapping direct and fragment review candidates")
+    context_counts = _observed_interleaving_context(linked, groups, eligible[:MAX_DECISIONS])
     direct_total = projected["ambiguous_assignment_review_total"]
     fragment_total = projected["ambiguous_fragment_review_total"]
     packet = {
@@ -98,6 +178,7 @@ def _snapshot(events: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, A
             or len(eligible) > MAX_DECISIONS
         ),
         "eligible_candidates": eligible[:MAX_DECISIONS],
+        "observed_interleaving_context_counts": context_counts,
         "source_content_included": False,
         "canonical_membership_unchanged": True,
     }
