@@ -129,7 +129,7 @@ def test_real_graph_request_contract_and_private_owg_csv(setup):
         message(ID_A, modified="2026-10-30T12:06:00Z"), message(ID_B, read=False),
     ]))
     changed = list(csv.DictReader(io.StringIO(newer["output"].read_text())))
-    assert changed[0]["source_event_id"] != rows[0]["source_event_id"]
+    assert next(row["source_event_id"] for row in changed if row["activity"] == "Observed read status: read") != next(row["source_event_id"] for row in rows if row["activity"] == "Observed read status: read")
 
 
 @pytest.mark.parametrize("failure", [
