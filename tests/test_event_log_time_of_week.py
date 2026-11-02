@@ -536,6 +536,9 @@ def test_exact_weekday_hour_cells_avoid_cross_product_for_observed_events():
     ]
     assert result["matching"] == {"rows": 3, "cases": 3}
     assert result["spec"]["time_of_week"]["slots"] == slots
+    assert "weekdays" not in result["spec"]["time_of_week"]
+    assert "hours" not in result["spec"]["time_of_week"]
+    assert query.parse(result["spec"]).time_of_week.slots is not None
 
     # The older Cartesian-product selector is intentionally unchanged: it
     # includes Sunday 01 and Monday 22, which the exact-cell selector excludes.
