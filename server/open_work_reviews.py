@@ -202,11 +202,15 @@ def remove_review_intention(work_item_ref: str, *, now: datetime | None = None) 
                 purge_case_declaration(work_item_ref)
                 from .open_work_case_operation_ledger import clear_operation_evidence
                 clear_operation_evidence(work_item_ref)
+                from .open_work_case_outcome_reviews import clear_human_outcome_reviews
+                clear_human_outcome_reviews(work_item_ref)
             except (OSError, ValueError, sqlite3.DatabaseError):
                 # If a targeted auxiliary purge fails, erase all retained
                 # operation evidence rather than preserve revoked authority.
                 from .open_work_case_operation_ledger import clear_operation_evidence
                 clear_operation_evidence()
+                from .open_work_case_outcome_reviews import clear_human_outcome_reviews
+                clear_human_outcome_reviews()
                 # A corrupt/unreadable auxiliary ledger must never prevent
                 # explicit deletion of the primary reviewed case. Erase all
                 # auxiliary declarations rather than retain an orphan.
@@ -224,6 +228,8 @@ def clear_review_intentions() -> None:
         from .open_work_case_declarations import clear_case_declarations
         from .open_work_case_operation_ledger import clear_operation_evidence
         clear_operation_evidence()
+        from .open_work_case_outcome_reviews import clear_human_outcome_reviews
+        clear_human_outcome_reviews()
         clear_case_declarations()
         path = _path()
         try:
