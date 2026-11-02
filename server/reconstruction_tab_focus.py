@@ -107,6 +107,7 @@ def bracketed_multiplexed_tab_focus(
                     and bool(row["ref"])
                     and row["app"] not in ("", "unknown", "other")
                     and row["app"] != left["app"]
+                    and row["source"] not in ("", "unknown")
                     and row["scope"] == left["scope"]
                     and _complete_scope(row["scope"])
                     and not row["reference_tainted"]
