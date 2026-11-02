@@ -41,7 +41,9 @@ from .reconstruction_switches import observed_work_switches
 from .reconstruction_surfaces import observed_surface_runs
 from .reconstruction_transfer_episodes import disjoint_directional_transfer_episodes
 from .reconstruction_link_proof import directional_transfer_witness, observed_record_link_evidence
-from .reconstruction_tab_focus import bracketed_multiplexed_tab_focus
+from .reconstruction_tab_focus import (
+    bracketed_multiplexed_tab_focus, single_record_tab_foreign_case_boundaries,
+)
 from .reconstruction_actor_continuity import actor_observation_index, observed_same_record_actor_changes
 from .reconstruction_case_coverage import observed_record_participant_surfaces
 
@@ -51,7 +53,7 @@ _MAX_ITEMS = 50
 _MAX_EVENT_IDS = 50
 _MAX_CANDIDATES = 50
 _MAX_DUPLICATE_PAYLOAD_NODES = 10_000
-_CONFIDENCE = {"same_record": 0.95, "clipboard_transfer": 0.85, "same_tab_single_record": 0.7, "same_tab_bracketed_record": 0.72, "same_tab_interleaved_bracketed_record": 0.68}
+_CONFIDENCE = {"same_record": 0.95, "clipboard_transfer": 0.85, "same_tab_single_record": 0.7, "same_tab_bracketed_record": 0.72, "same_tab_interleaved_bracketed_record": 0.68, "same_tab_single_record_interleaved_bracketed": 0.66}
 _CANDIDATE_CONFIDENCE = {"same_tab_multiplexed": 0.4, "same_tab_unreferenced": 0.35, "surface_continuity": 0.3}
 
 
@@ -536,6 +538,24 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
         if key not in tainted_tabs and len({r["ref"] for r in tab_rows if r["ref"]}) > 1
     }
     focus_proposals = bracketed_multiplexed_tab_focus(rows, multiplexed_tabs)
+    # A tab with only one observed record can still be reused for unrelated
+    # work. If an independently observed same-scope foreign record interrupts
+    # its one-sided tab evidence, require a bounded two-sided A -> loose -> A
+    # witness. Never let the foreign case itself become a membership endpoint.
+    single_record_boundaries = single_record_tab_foreign_case_boundaries(rows, by_tab)
+    single_record_tabs = {
+        key for key, tab_rows in by_tab.items()
+        if key not in tainted_tabs and
+        len({r["ref"] for r in tab_rows if r["ref"]}) == 1
+    }
+    single_focus_proposals = [
+        (anchor, loose, ref, "same_tab_single_record_interleaved_bracketed")
+        for anchor, loose, ref, basis in
+        bracketed_multiplexed_tab_focus(rows, single_record_tabs)
+        if basis == "same_tab_interleaved_bracketed_record"
+        and loose in single_record_boundaries
+    ]
+    focus_proposals.extend(single_focus_proposals)
     for _anchor, loose_id, focus_ref, _basis in focus_proposals:
         targets = tab_targets[pre_tab_root[loose_id]]
         if len(targets) < 2:
@@ -551,6 +571,9 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
         if len(refs) == 1:
             anchor = next(row["event_id"] for row in tab_rows if row["ref"])
             for row in loose:
+                if row["event_id"] in single_record_boundaries:
+                    # Requires a separate, strict two-sided focus witness.
+                    continue
                 if union.find(anchor) == union.find(row["event_id"]):
                     # This observation is already in the anchor component;
                     # no new tab attachment is being considered or withheld.
@@ -586,6 +609,7 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
                                    "relation": "same_tab_unreferenced"})
     bracketed_tab_focus_links = 0
     interleaved_tab_focus_links = 0
+    single_record_interleaved_focus_links = 0
     bracketed_tab_focus_conflicts = 0
     for anchor_id, loose_id, focus_ref, focus_basis in focus_proposals:
         loose_root = pre_tab_root[loose_id]
@@ -597,9 +621,12 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
             continue
         if union.find(anchor_id) != union.find(loose_id):
             join([anchor_id, loose_id], focus_basis)
-            bracketed_tab_focus_links += 1
-            if focus_basis == "same_tab_interleaved_bracketed_record":
-                interleaved_tab_focus_links += 1
+            if focus_basis == "same_tab_single_record_interleaved_bracketed":
+                single_record_interleaved_focus_links += 1
+            else:
+                bracketed_tab_focus_links += 1
+                if focus_basis == "same_tab_interleaved_bracketed_record":
+                    interleaved_tab_focus_links += 1
 
     for index, row in enumerate(rows):
         if (row["reference_tainted"] or row["ephemeral_claim_tainted"] or
@@ -624,6 +651,10 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
             "tab_component_conflicts": tab_component_conflicts,
             "bracketed_tab_focus_links": bracketed_tab_focus_links,
             "interleaved_tab_focus_links": interleaved_tab_focus_links,
+            "single_record_interleaved_focus_links": single_record_interleaved_focus_links,
+            "single_record_interleaving_abstentions": (
+                len(single_record_boundaries) - single_record_interleaved_focus_links
+            ),
             "bracketed_tab_focus_conflicts": bracketed_tab_focus_conflicts}
 
 
@@ -724,6 +755,8 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
         "ambiguous_tab_component_attachments_suppressed": linked["tab_component_conflicts"],
         "observed_bracketed_tab_focus_links": linked["bracketed_tab_focus_links"],
         "observed_interleaved_tab_focus_links": linked["interleaved_tab_focus_links"],
+        "observed_single_record_interleaved_focus_links": linked["single_record_interleaved_focus_links"],
+        "ambiguous_single_record_tab_interleaving_abstentions": linked["single_record_interleaving_abstentions"],
         "ambiguous_bracketed_tab_focus_attachments_suppressed": linked["bracketed_tab_focus_conflicts"],
         "link_contract": {
             "merged_bases": sorted(_CONFIDENCE),
@@ -761,6 +794,7 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             "multiplexed_tab_focus_requires_two_sided_same_tab_record_evidence": True,
             "interleaved_tab_focus_requires_explicit_distinct_tab": True,
             "interleaved_tab_focus_has_bounded_foreign_and_loose_events": True,
+            "single_record_tab_foreign_case_requires_two_sided_focus": True,
             "multiplexed_tab_focus_requires_complete_capture_scope": True,
             "multiplexed_tab_focus_never_uses_elapsed_time_as_link_evidence": True,
             "labels_titles_urls_and_clipboard_contents_read": False,
