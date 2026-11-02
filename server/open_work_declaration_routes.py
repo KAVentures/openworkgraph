@@ -46,6 +46,9 @@ from .open_work_case_declared_dependency_payment import (
     admit_declared_dependency_payment_links, same_admitted_payment_chain,
     compose_declared_dependency_payment_result,
 )
+from .open_work_case_declared_payment_preflight import (
+    issue_payment_preflight, validate_payment_preflight,
+)
 from .open_work_case_declared_portfolio_payment import (
     admit_selected_portfolio_payment_links,
     same_selected_portfolio_payment_reviews,
@@ -132,7 +135,7 @@ def _reject_constant(_value: str) -> None:
     raise ValueError("nonstandard JSON number")
 
 
-async def _body(request: Request, required: set[str]) -> dict[str, Any]:
+async def _body(request: Request, required: set[str], optional: set[str] | None = None) -> dict[str, Any]:
     if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
         raise HTTPException(415, "JSON declaration request required")
     raw = bytearray()
@@ -147,7 +150,9 @@ async def _body(request: Request, required: set[str]) -> dict[str, Any]:
             raise HTTPException(422, "invalid declaration JSON") from None
     finally:
         raw.clear()
-    if not isinstance(data, dict) or set(data) != required:
+    if (not isinstance(data, dict) or
+        (set(data) != required if optional is None else
+         not (required <= set(data) <= required | optional))):
         raise HTTPException(422, "exact declaration fields required")
     return data
 
@@ -705,7 +710,7 @@ async def verify_local_reviewed_dependency_operations(request: Request, response
     payload = await _body(request, {
         "work_item_ref", "expected_revision", "expected_edit_token",
         "confirm_source_verification", "record_links",
-    })
+    }, optional={"expected_preflight"})
     if payload["confirm_source_verification"] is not True:
         raise HTTPException(403, "explicit dependency provider verification required")
     try:
@@ -1741,6 +1746,58 @@ async def read_local_declared_stripe_payment_goal_history(request: Request, resp
     return result
 
 
+@router.post("/v1/open-work/declarations/source-goals/preview-dependency-payments")
+async def preview_local_declared_dependency_payment_goals(request: Request, response: Response):
+    """Plan the exact approved 1–4 case Stripe verification without source IO.
+
+    This is historical evidence only. A signed five-minute checkpoint may be
+    supplied to the existing verify route to reject changed reviews/evidence
+    before ANY provider read; it never grants verification or agent authority.
+    """
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_historical_review", "record_links",
+    })
+    if payload["confirm_historical_review"] is not True:
+        raise HTTPException(403, "explicit payment evidence planning review required")
+    try:
+        secret = await asyncio.to_thread(_read_or_create_secret, ".open_work_reference_key")
+        snapshot = await asyncio.to_thread(list_case_declarations, scope)
+        selected = admit_declared_dependency_payment_links(
+            snapshot, work_item_ref=payload["work_item_ref"],
+            expected_revision=payload["expected_revision"],
+            expected_edit_token=payload["expected_edit_token"],
+            record_links=payload["record_links"], scope=scope, secret=secret,
+        )
+        from functools import partial
+        guard = partial(
+            _operation_ledger_guard, scope, payload["work_item_ref"],
+            payload["expected_revision"], payload["expected_edit_token"],
+            selected["root_signature"],
+        )
+        histories = {}
+        for ref in selected["ordered"]:
+            case = selected["cases"][ref]
+            histories[ref] = await asyncio.to_thread(
+                read_operation_evidence, case["admitted"], case["signature"],
+                scope=scope, secret=secret, guard=guard,
+                resource_ref=case["resource_ref"],
+            )
+            await asyncio.to_thread(guard)
+            await _recheck_source(scope)
+        result = issue_payment_preflight(
+            selected, histories, scope=scope, secret=secret,
+        )
+        await asyncio.to_thread(guard)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
 @router.post("/v1/open-work/declarations/source-goals/verify-dependency-payments")
 async def verify_local_declared_dependency_payment_goals(request: Request, response: Response):
     """Freshly check every approved payment-goal prerequisite; persist atomically.
@@ -1783,6 +1840,11 @@ async def verify_local_declared_dependency_payment_goals(request: Request, respo
                 resource_ref=case["resource_ref"],
             )
         await asyncio.to_thread(guard)
+        if "expected_preflight" in payload:
+            validate_payment_preflight(
+                payload["expected_preflight"], admitted, previous,
+                scope=scope, secret=secret,
+            )
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
         raise _safe_error(exc) from None
     await _recheck_source(scope)
