@@ -971,7 +971,7 @@ def aggregate_review_scores(scores: list[dict[str, Any]]) -> dict[str, Any]:
 
 __all__ = [
     "prepare_review_packet", "apply_review", "score_review", "adjudicate_review",
-    "resolve_review_disagreement",
-    "PACKET_FORMAT", "DECISION_FORMAT", "ADJUDICATION_FORMAT", "RESOLUTION_FORMAT", "BATCH_FORMAT",
+    "resolve_review_disagreement", "provisional_activity_episodes",
+    "EPISODE_FORMAT", "PACKET_FORMAT", "DECISION_FORMAT", "ADJUDICATION_FORMAT", "RESOLUTION_FORMAT", "BATCH_FORMAT",
     "aggregate_review_scores",
 ]
