@@ -24,7 +24,17 @@ episodes**, not asserted tasks or completed cases. An episode ends only when:
    known app and capture source**, with the same complete organization, actor,
    device and session. This yields `observed_other_tab_without_record` —
    an **uncertain focus interruption**, not a different business case.
-4. The two member observations have **different exact capture scopes**.
+4. Two **consecutive member observations** name different independently
+   observed exact source records in the **same complete capture scope**, and
+   their UTC timestamps are strictly ordered. This yields
+   `observed_member_record_change`: a *record-context* episode boundary, not
+   a new membership, verified task switch, handoff or outcome. This is useful
+   when an accepted clipboard bridge already links two records into one
+   work item: A → B → A remains one linked item but has three observed
+   record-context episodes. A missing/unreferenced member, tied timestamp,
+   incomplete scope or cross-scope observation cannot supply this boundary.
+   Existing independently observed foreign-record interruptions take precedence.
+5. The two member observations have **different exact capture scopes**.
    This yields `capture_scope_change` (not proof that a person stopped work).
 
 Both reasons may be represented by a list of reason codes; the first episode
@@ -52,6 +62,14 @@ Cross-app boundaries take precedence over cross-tab boundaries, and the
 `interleaved_other_record` boundary retains precedence when a distinct
 literal source record is actually observed. Unknown observation coverage is
 never silently promoted to an uninterrupted business task.
+The within-item record-context boundary is **presentation-only**: it never
+splits an accepted clipboard-linked work item into separate work items, changes
+its `cross_record_join` or `link_basis`, or uses temporal proximity to infer
+membership. Removing the B observation recomputes A's episode count. It does
+not expose clipboard tokens, capture identity or foreign-record details beyond
+the existing work-item reference projection. Direct-linker and authenticated
+workflow-evidence response tests exercise the new behavior.
+
 The original source-grounded membership, same-record/clipboard/tab link bases,
 uncertainty, ambiguous candidates and item confidence remain unchanged.
 
