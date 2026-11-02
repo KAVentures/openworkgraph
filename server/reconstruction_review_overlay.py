@@ -147,6 +147,7 @@ def apply_review(
     confirmations: dict[str, str] = {}
     confirmation_hops: dict[str, int] = {}
     rejected: list[dict[str, str]] = []
+    review_decisions: dict[str, tuple[str, str]] = {}
     seen: set[str] = set()
     for decision in rows:
         if type(decision) is not dict or set(decision) != {
@@ -162,6 +163,7 @@ def apply_review(
                 or action not in ("confirm", "reject")):
             raise ValueError("duplicate, hidden or unsupported review decision")
         seen.add(event_id)
+        review_decisions[event_id] = (item_id, action)
         if action == "confirm":
             confirmations[event_id] = item_id
             confirmation_hops[event_id] = eligible[event_id][item_id]
@@ -170,6 +172,25 @@ def apply_review(
             reviewed[item_id].append(event_id)
         else:
             rejected.append({"event_id": event_id, "item_id": item_id})
+    # A two-hop review cannot use an intermediary that the same reviewer
+    # explicitly rejected for this item or confirmed for a competing item.
+    # Decisions are checked together, independent of their input ordering.
+    for entry in expected["eligible_candidates"]:
+        loose_id = entry["event_id"]
+        if entry["evidence_hops"] != 2 or loose_id not in confirmations:
+            continue
+        target_id = confirmations[loose_id]
+        witness = next(
+            target for target in entry["candidate_items"]
+            if target["item_id"] == target_id
+        )
+        middle_id = witness["witness_event_path"][1]
+        middle_decision = review_decisions.get(middle_id)
+        if middle_decision is not None and (
+            (middle_decision[1] == "reject" and middle_decision[0] == target_id)
+            or (middle_decision[1] == "confirm" and middle_decision[0] != target_id)
+        ):
+            raise ValueError("conflicting human decisions along two-hop evidence path")
     position = {row["event_id"]: index for index, row in enumerate(linked["rows"])}
     items = []
     for item_id, members in reviewed.items():
