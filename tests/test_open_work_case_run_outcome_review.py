@@ -283,3 +283,27 @@ def test_real_provider_ledger_check_after_reported_run_is_historical_not_causal(
         assert data["customer_outcome_verified"] is False
         assert data["agent_caused_outcome_verified"] is False
         assert RESOURCE not in result.text and "in_PRIVATE" not in result.text
+
+
+def test_reimported_run_steps_invalidate_fingerprint_without_exposing_content(local):
+    imported = monitoring.import_report(_run())
+    dep = imported["deployment"]["deployment_id"]
+    scope = routes._source_scope()
+    assert scope is not None
+    before = review.read_imported_run(
+        deployment_id=dep, run_id="private-customer-run-id",
+        scope=scope, secret="test-run-outcome-" + "x" * 48,
+    )
+    changed = _run()
+    changed["runs"][0]["steps"] = [{
+        "step_id": "step_001", "activity": "PRIVATE customer data",
+        "status": "completed", "at": "2026-11-02T09:02:00Z",
+    }]
+    monitoring.import_report(changed, deployment_id=dep)
+    after = review.read_imported_run(
+        deployment_id=dep, run_id="private-customer-run-id",
+        scope=scope, secret="test-run-outcome-" + "x" * 48,
+    )
+    assert before["run_ref"] == after["run_ref"]
+    assert before["run_snapshot_fingerprint"] != after["run_snapshot_fingerprint"]
+    assert "PRIVATE customer data" not in str(after)
