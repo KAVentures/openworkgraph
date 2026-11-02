@@ -224,3 +224,45 @@ denominator refusals, missing batches, 100-report/50-row bounds and actual
 fake-DOM threshold and inspect interactions. Native exact-head CI, including
 cross-platform and browser jobs, and independent consenting-customer
 acceptance are still required before a shipped-feature claim.
+
+## Rejection-category changes between adjacent batches
+
+In **Event logs → Analyse → Data quality → Compare batches**, the
+**Rejection-category changes between adjacent batches** table identifies
+which *recorded validation categories* increased between adjacent retained
+import/append reports. Choose a minimum increase of 0.1, 1, 5 or 10
+percentage points. The table ranks the largest increases first and shows
+the prior and target category counts, the corresponding supplied-row
+denominators, the recorded rates, the percentage-point difference and an
+**Inspect batch** control that opens the existing stored rejection
+diagnostics for the target batch. No new endpoint or provider read occurs.
+
+A category's rate is **recorded category count divided by accepted +
+rejected + skipped-duplicate supplied rows for that batch**. The rate is
+not the percentage of unique rejected rows. A rejected row may have
+multiple reasons, so categories can overlap and their rates must never be
+summed as an overall failure rate. When both reports contain a recorded
+breakdown, a category omitted from one breakdown is treated as **zero
+recorded instances**, not proof that the source contained none.
+
+Comparisons require consecutive batch IDs, the same valid 64-character
+declared transform digest in both trend entries **and** both stored
+reports, complete reason dictionaries, valid nonzero denominators and
+nonnegative safe-integer reason counts consistent with each batch's
+recorded rejected total. Missing or duplicate reports, mapping drift,
+unknown breakdowns, invalid values and oversized reason dictionaries
+are excluded rather than interpreted as zero. At most the latest 100
+trend entries, 256 reason categories per report and 50 ranked increases
+are processed/displayed. The panel discloses comparable/excluded pair
+counts and total versus shown increases.
+
+All labels are rendered as text. The existing counts-only CSV remains
+unchanged and does not include rejection category names. The feature
+does not infer upstream completeness, a causal deterioration, worker
+performance, a quarantine decision, an alert or authority to perform
+business actions. Node regression tests cover exact-category changes,
+missing evidence, mapping drift, duplicate reports, denominator and
+reason-count validity, bounds, stale selection and the direct inspection
+control. Native exact-head CI, including real Chromium and cross-platform
+tests, is still required before merging; synthetic fixtures are not a
+real-provider or consenting-customer pilot.
