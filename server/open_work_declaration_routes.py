@@ -961,7 +961,7 @@ async def check_local_case_operation_timeline(request: Request, response: Respon
 
 def _operation_ledger_guard(scope: str, work_item_ref: str, revision: int,
                             edit_token: str, signature: tuple) -> None:
-    """Transaction-time local re-admission, not a distributed revocation fence."""
+    """Pre/post-write local re-admission, not a distributed revocation fence."""
     if _source_scope() != scope:
         raise CaseDeclarationError("source scope changed before evidence commit")
     current = list_case_declarations(scope)
