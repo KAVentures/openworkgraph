@@ -561,9 +561,16 @@ the latter and independent consenting-user acceptance remain release gates.
 **Build an analysis → Saved analysis → Load into builder** now reconstructs an
 existing saved analysis as an **editable local draft**. Each metric has an
 **Edit** control that populates the original typed form, followed by **Update
-selected metric**. Renaming a metric that other metrics depend on, creating
-duplicate names or introducing a reference to a later metric is refused
-without changing the draft. An update changes only the in-memory draft; rerun
+selected metric**. **Renaming a metric automatically updates exact-name
+references in downstream typed arithmetic operands and the selected metric
+measures** (for example `avg:metric:old_name` becomes
+`avg:metric:new_name`). The edit is atomic: duplicate names or introducing
+an arithmetic reference to a missing, same or later metric are refused without
+changing any definition. Source attribute names, typed constants and unrelated
+metric identifiers are never text-replaced. A changed metric's declared unit
+is not automatically converted, so an incompatible expression may still be
+rejected by the existing typed analysis API. An update changes only the
+in-memory draft; rerun
 before exporting or saving the new version. This restores its
 case/event level, both grouping dimensions (including named attributes), case
 duration/end-activity filters, ordered typed case metrics and metric
@@ -576,7 +583,12 @@ Loading deliberately clears the previous result, exports and sharing preview:
 those belonged to the *previous* query, not the newly loaded draft. Run the
 loaded draft to obtain fresh results and enable saving/exporting again.
 Existing **Run** and **Delete** buttons retain their original behavior.
-Keyboard users can focus **Load into builder** and press Enter.
+Keyboard users can focus **Load into builder** and press Enter. To rename a
+metric used by another metric, focus **Edit metric**, change **Metric name**,
+then activate **Update selected metric**. Inspect the rewritten arithmetic
+and selected measure before rerunning. A successful edit disables stale
+JSON/CSV exports and reviewed sharing snapshots until the new analysis
+finishes. Save under a new name; the previous saved analysis is unchanged.
 
 The builder refuses a saved definition **without changing the current draft**
 if it cannot represent all of its settings: unsupported dimensions, filters or
