@@ -49,3 +49,63 @@ case classifier, task boundary, handoff, authorization or outcome receipt.
   browser, process-collaboration, accessibility, scale, starter and release
   workflows on the exact PR head before merging. Independent consenting-user
   validation is still required for real-world accuracy claims.
+
+
+## Review unassigned weak candidates (additive API feature)
+
+The same existing authenticated, read-only workflow-evidence response now includes
+`linked_work_items.ambiguous_assignment_review_queue`. This is an **actionable
+analyst review list**, not a new membership decision. It is derived from the
+linker's existing unmerged `candidate_links`, and only lists observations that
+are **genuinely singleton unassigned components** and whose weak evidence
+points to an already visible, source-record-anchored linked item. A component
+omitted by the item-display limit, a non-singleton unanchored component and a
+target without an independently observed exact source record are never
+silently relabeled as eligible singleton/case targets.
+
+For example, two independently observed A actions and two B actions share
+one multiplexed browser tab. A later unreferenced action in that tab remains
+unassigned. Instead of silently joining A or B, the review queue exposes
+the loose event ID, the already visible candidate item ID, the actual weak
+relation `same_tab_multiplexed`, and the number of distinct observed witness
+events. An analyst can inspect the source evidence before making a separate
+human decision; **this API does not itself persist a decision**.
+
+Each row contains `event_id`, `review_priority` (either
+`competing_visible_items` or `weak_evidence_only`),
+`candidate_item_count`, `candidate_items`,
+`candidate_items_truncated`, `auto_assigned: false` and
+`requires_human_review: true`. Each candidate item contains its existing
+`item_id`, `weak_relations`, `distinct_witness_event_count` and
+`distinct_candidate_edge_count`. Duplicate identical candidate edges count
+once. Evidence-volume ordering helps triage; it is **not calibrated confidence,
+case probability or approval**. Rows with multiple candidate items are
+displayed before single-candidate rows, with deterministic event-ID ties.
+
+The top-level `ambiguous_assignment_review_total` and
+`ambiguous_assignment_review_competing_count` are exact over eligible
+observations in the currently admitted, validated evidence and **visible**
+linked items. The response displays at most 24 review rows and four candidate
+items per row; `ambiguous_assignment_review_truncated` and each row's
+`candidate_items_truncated` disclose the display bounds. A missing row is
+not proof that the observation is correctly assigned or that no work occurred.
+Removing an exact-record anchor or revoking retained evidence recomputes the
+queue rather than preserving a stale recommendation.
+
+This is backward-compatible with existing `candidate_links`, accepted
+memberships, evidence paths, record-case lanes, REST/MCP consumers and the
+dashboard. It adds no provider reads, LLM calls, raw text, app names, source
+hosts, tenant/person/device/session IDs, clipboard values or new authorization.
+It does not infer a handoff, verified business outcome, unique case identity
+or human-confirmed assignment.
+
+Run the focused native integration checks:
+
+```bash
+python -m pytest -q tests/test_reconstruction_assignment_proof.py tests/test_work_item_links.py
+```
+
+Full exact-head native cross-platform, browser, collaboration, accessibility,
+scale, starter and packaging/release acceptance and independent consenting-user
+validation are still required. This feature improves **reviewability of
+unassigned work**, not measured F1 or contamination by itself.
