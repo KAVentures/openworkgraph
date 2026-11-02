@@ -140,8 +140,50 @@
       ' contiguous stored reports; descriptive comparison only.',
       baseline:label(baseline),target:label(target),rows:compared};
   }
+  // Ranked, bounded increases from comparable adjacent reports only. An increase
+  // is a descriptive review candidate, not evidence of source degradation.
+  const MAX_INCREASE_ROWS = 50;
+  function rankedIncreases(trends, minimumPoints = 5) {
+    const empty = {rows:[],total:0,examined:0};
+    if (!trends || !Array.isArray(trends.batches) ||
+        !Number.isFinite(minimumPoints) || minimumPoints < 0 || minimumPoints > 100) return empty;
+    const visible = trends.batches.slice(-MAX_VISIBLE);
+    const byId = new Map();
+    for (const item of visible) {
+      if (!item || !Number.isSafeInteger(item.batch) || item.batch < 0 ||
+          byId.has(item.batch)) return {...empty,examined:visible.length};
+      byId.set(item.batch,item);
+    }
+    const validRate = m => {
+      if (!m || !Number.isSafeInteger(m.count) || m.count < 0 ||
+          !Number.isSafeInteger(m.denominator) || m.denominator <= 0 ||
+          m.count > m.denominator) return null;
+      return m.count / m.denominator;
+    };
+    const found = [];
+    for (const item of visible) {
+      const before = byId.get(item.batch - 1);
+      if (!before || typeof item.transform_sha256 !== 'string' ||
+          !SHA256.test(item.transform_sha256) ||
+          item.transform_sha256 !== before.transform_sha256) continue;
+      for (const [key,title] of METRICS) {
+        if (key === 'future_dated_events') continue; // distinct reference instants
+        const oldRate=validRate(before.metrics && before.metrics[key]);
+        const newRate=validRate(item.metrics && item.metrics[key]);
+        if (oldRate === null || newRate === null) continue;
+        const points=(newRate-oldRate)*100;
+        if (points <= 0 || points + 1e-9 < minimumPoints) continue;
+        found.push({batchId:item.batch,batch:label(item.batch),metric:title,
+          before:rate(oldRate),after:rate(newRate),increase:change(points),points});
+      }
+    }
+    found.sort((a,b)=>b.points-a.points || b.batchId-a.batchId ||
+      a.metric.localeCompare(b.metric));
+    return {rows:found.slice(0,MAX_INCREASE_ROWS).map(({points,...rest})=>rest),
+      total:found.length,examined:visible.length};
+  }
   if (typeof module !== 'undefined' && module.exports)
-    module.exports = {rows,csv,csvCell,count,rate,change,status,detail,reviewRows,comparePair,MAX_VISIBLE,MAX_REASONS};
+    module.exports = {rows,csv,csvCell,count,rate,change,status,detail,reviewRows,comparePair,rankedIncreases,MAX_VISIBLE,MAX_REASONS,MAX_INCREASE_ROWS};
   if (typeof document === 'undefined') return;
   const element = (tag,text) => {const e=document.createElement(tag);if(text!==undefined)e.textContent=text;return e;};
   const logId = () => document.getElementById('owgEventLogPick')?.value || '';
@@ -171,6 +213,20 @@
     pairPanel.append(element('h4','Compare two selected batches'),
       element('p','Compare stored counts only. Both reports and every intervening batch must have the same verified mapping.'),
       baselineLabel,targetLabel,pairOutput);
+    const increasePanel=element('section');increasePanel.id='owgQualityIncreases';
+    const increaseLabel=element('label','Minimum recorded rate increase: ');
+    increaseLabel.htmlFor='owgQualityIncreaseThreshold';
+    const increaseThreshold=element('select');increaseThreshold.id='owgQualityIncreaseThreshold';
+    for (const points of [1,5,10,20]) {
+      const option=element('option',points+' percentage points');option.value=String(points);
+      increaseThreshold.appendChild(option);
+    }
+    increaseThreshold.value='5';
+    increaseLabel.appendChild(increaseThreshold);
+    const increaseOutput=element('div');increaseOutput.id='owgQualityIncreaseRows';
+    increasePanel.append(element('h4','Largest adjacent-batch rate increases'),
+      element('p','Recorded counts only; same verified mapping and known denominators required. Increases are descriptive review prompts, not proof of source deterioration.'),
+      increaseLabel,increaseOutput);
     const reviewPanel=element('section');reviewPanel.id='owgQualityReviewQueue';
     const reviewOutput=element('div');reviewOutput.id='owgQualityReviewRows';
     reviewPanel.append(element('h4','Batch quality review queue'),
@@ -182,7 +238,7 @@
     drillLabel.appendChild(drillSelect);
     const drillOutput=element('div');drillOutput.id='owgQualityBatchDetails';
     drill.append(element('h4','Batch rejection diagnostics'),drillLabel,drillOutput);
-    panel.append(element('h4','Import/append quality trends'),intro,run,download,message,pairPanel,reviewPanel,output,drill);
+    panel.append(element('h4','Import/append quality trends'),intro,run,download,message,pairPanel,increasePanel,reviewPanel,output,drill);
     quality.appendChild(panel);
     const selected=logId();let ticket=0,loaded=null,loadedReports=[];
     const current=(id,n)=>panel.isConnected && logId()===id && ticket===n;
@@ -233,9 +289,40 @@
       if(d.omitted)drillOutput.appendChild(element('p',d.omitted+' additional categories omitted (latest '+MAX_REASONS+' shown by count).'));
     }
     drillSelect.addEventListener('change',showDetail);
+    function showIncreases() {
+      increaseOutput.replaceChildren();
+      if (!loaded || logId()!==selected || !panel.isConnected) return;
+      const result=rankedIncreases(loaded,Number(increaseThreshold.value));
+      increaseOutput.appendChild(element('p',result.total+' comparable rate increases at or above '+
+        increaseThreshold.value+' percentage points among the latest '+result.examined+
+        ' displayed reports; '+result.rows.length+' shown (maximum '+MAX_INCREASE_ROWS+').'));
+      if (!result.rows.length) return;
+      const table=element('table');table.id='owgQualityIncreaseTable';
+      const head=element('thead'),hr=element('tr');
+      for (const heading of ['Batch','Metric','Previous rate','Current rate','Increase','Inspect']) {
+        const th=element('th',heading);th.scope='col';hr.appendChild(th);
+      }
+      head.appendChild(hr);const body=element('tbody');
+      for (const item of result.rows) {
+        const tr=element('tr');
+        for (const value of [item.batch,item.metric,item.before,item.after,item.increase])
+          tr.appendChild(element('td',value));
+        const cell=element('td'),inspect=element('button','Inspect batch');
+        inspect.type='button';inspect.className='secondary';
+        inspect.setAttribute('aria-label','Inspect quality diagnostics for '+item.batch);
+        inspect.addEventListener('click',()=>{
+          if (!loaded || logId()!==selected || !panel.isConnected || drillSelect.disabled) return;
+          drillSelect.value=String(item.batchId);showDetail();drillSelect.focus();
+        });
+        cell.appendChild(inspect);tr.appendChild(cell);body.appendChild(tr);
+      }
+      table.append(head,body);const wrap=element('div');wrap.className='table-wrap';
+      wrap.appendChild(table);increaseOutput.appendChild(wrap);
+    }
+    increaseThreshold.addEventListener('change',showIncreases);
     function clearState() {
       ++ticket;loaded=null;loadedReports=[];download.disabled=true;run.disabled=false;
-      output.replaceChildren();reviewOutput.replaceChildren();pairOutput.replaceChildren();
+      output.replaceChildren();reviewOutput.replaceChildren();pairOutput.replaceChildren();increaseOutput.replaceChildren();
       pairBaseline.disabled=true;pairTarget.disabled=true;
       pairBaseline.replaceChildren();pairTarget.replaceChildren();
       drillSelect.disabled=true;drillSelect.replaceChildren();
@@ -260,6 +347,7 @@
         if(!trends || !Array.isArray(trends.batches))throw new Error('Server does not provide batch trends yet.');
         loaded=trends;
         loadedReports=Array.isArray(data.reports)?data.reports:[];
+        showIncreases();
         const available=trends.batches.slice(-MAX_VISIBLE).filter(b=>Number.isSafeInteger(b.batch)&&b.batch>=0);
         for(const batch of available){const option=element('option',label(batch.batch));option.value=String(batch.batch);drillSelect.appendChild(option);}
         drillSelect.disabled=!available.length;
