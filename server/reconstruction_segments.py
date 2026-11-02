@@ -109,6 +109,51 @@ def observed_activity_segments(
         for scope, observations in loose_tab_positions.items()
     }
 
+    # If two independently referenced members bound a short, clean run of
+    # already-linked but unreferenced actions, keep those actions in a separate
+    # *record-unknown* episode. Without this, the display misleadingly places
+    # them in the preceding exact-record episode. This does not relink events.
+    # A strictly contiguous member span excludes unobserved/foreign activity;
+    # anything ambiguous leaves the existing conservative segmentation intact.
+    bridge_starts: set[str] = set()
+    bridge_ends: set[str] = set()
+    for anchor_index, (anchor_position, anchor) in enumerate(members):
+        scope = anchor["scope"]
+        if (not anchor["ref"] or anchor["reference_tainted"]
+                or anchor.get("ephemeral_claim_tainted", False)
+                or scope is None or not all(scope)):
+            continue
+        end_index = anchor_index + 1
+        while (end_index < len(members)
+               and end_index - anchor_index <= 8
+               and not members[end_index][1]["ref"]):
+            end_index += 1
+        loose_count = end_index - anchor_index - 1
+        if not (1 <= loose_count <= 8 and end_index < len(members)):
+            continue
+        end_position, end = members[end_index]
+        if (not end["ref"] or end["ref"] == anchor["ref"]
+                or end["scope"] != scope or end["reference_tainted"]
+                or end.get("ephemeral_claim_tainted", False)
+                or end_position - anchor_position != end_index - anchor_index):
+            continue
+        # Strict timestamps for every member, not just the two anchors.
+        # Invalid/tainted clipboard or identity claims cannot become a bridge.
+        span = [member for _, member in members[anchor_index:end_index + 1]]
+        if any(
+            member["scope"] != scope or member["reference_tainted"]
+            or member.get("ephemeral_claim_tainted", False)
+            or member.get("action_claim_malformed", False)
+            or (index > 0 and member["observed_at"] <= span[index - 1]["observed_at"])
+            for index, member in enumerate(span)
+        ):
+            continue
+        if any(member["transfer"] or _clipboard_action(member["action"])
+               for member in span[1:-1]):
+            continue
+        bridge_starts.add(span[1]["event_id"])
+        bridge_ends.add(end["event_id"])
+
     segments: list[dict[str, Any]] = []
     current: list[dict[str, Any]] = []
     boundary: list[str] = []
@@ -226,6 +271,10 @@ def observed_activity_segments(
                                 < row["observed_at"]):
                             reasons.append("observed_other_tab_without_record")
                             break
+        if not reasons and row["event_id"] in bridge_starts:
+            reasons.append("observed_unreferenced_record_bridge")
+        elif not reasons and row["event_id"] in bridge_ends:
+            reasons.append("observed_member_record_change")
         if not current or reasons:
             if current:
                 emit()
