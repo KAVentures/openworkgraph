@@ -310,6 +310,60 @@
       pages:reviewed};
   }
 
+
+  // An actionable *local* triage index of only pages explicitly reviewed by
+  // the operator. Unreviewed opportunities are never silently counted as clear.
+  const PORTFOLIO_TRIAGE_LABELS={
+    no_recorded_project:'No recorded project',
+    evidence_unavailable:'Local evidence unavailable',
+    no_exact_saved_process:'Exact saved process missing',
+    process_not_current:'Saved process not current',
+    dataset_origin_list_truncated:'Dataset origins truncated',
+    dataset_origin_not_linked:'Dataset origin not linked',
+    dataset_origin_not_current:'Dataset origin not current',
+    idea_not_approved:'Human approval missing',
+    project_uses_historical_idea_revision:'Historical project revision',
+    reported_specification_list_truncated:'Report history truncated',
+    no_imported_report:'No imported run report',
+    reported_specification_unverified:'Reported specification not verified',
+    execution_and_business_outcomes_unverified:'Execution and outcomes unverified'
+  };
+  function portfolioReviewTriage(eligible,pages,filter='all',limit=24){
+    if(!Number.isSafeInteger(limit)||limit<1||limit>24)
+      throw new Error('Invalid bounded triage limit.');
+    const combined=combinedPortfolioHandoffReview(eligible,pages,'local_review');
+    const index=new Map(eligible.map(idea=>[idea.idea_id,idea]));
+    const counts=new Map(),all=[];
+    for(const page of combined.pages){
+      for(const item of page.items){
+        if(!index.has(item.idea_id)||!Array.isArray(item.blockers)||
+          item.blockers.length>32||item.blockers.some(key=>
+            typeof key!=='string'||!Object.hasOwn(PORTFOLIO_TRIAGE_LABELS,key)))
+          throw new Error('A reviewed opportunity has invalid blocker metadata.');
+        const keys=item.status==='unavailable'?['evidence_unavailable']:
+          item.status==='no_export'?['no_recorded_project']:item.blockers;
+        if(!keys.length||new Set(keys).size!==keys.length)
+          throw new Error('A reviewed opportunity has incomplete blocker metadata.');
+        for(const key of keys)counts.set(key,(counts.get(key)||0)+1);
+        all.push({idea_id:item.idea_id,project_id:item.project_id,
+          page_number:page.page_number,blockers:[...keys]});
+      }
+    }
+    if(filter!=='all'&&!counts.has(filter))
+      throw new Error('Select a blocker reported in explicitly reviewed pages.');
+    const matched=filter==='all'?all:all.filter(item=>item.blockers.includes(filter));
+    return {reviewed_count:combined.reviewed_count,
+      unreviewed_count:combined.unreviewed_count,
+      reviewed_page_numbers:combined.reviewed_page_numbers,
+      unreviewed_page_numbers:combined.unreviewed_page_numbers,
+      filter,matching_count:matched.length,omitted_count:Math.max(0,matched.length-limit),
+      categories:[...counts].sort(([a],[b])=>a.localeCompare(b))
+        .map(([key,count])=>({key,label:PORTFOLIO_TRIAGE_LABELS[key],count})),
+      items:matched.slice(0,limit),execution_authorized:false,
+      source_read_authorized:false,verified_execution:false,
+      verified_business_outcomes:false};
+  }
+
   // Compare an imported point-in-time review packet against a freshly fetched local journey.
   // Never restore approval or trust imported fields as execution/verification evidence.
   function compareHandoffReviewPackets(saved,current){
@@ -563,9 +617,20 @@
     auditCombinedDownload.id='owgPipelinePortfolioCombinedDownload';
     auditCombinedDownload.disabled=true;
     const auditSection=el('section');auditSection.id='owgPipelinePortfolioAuditSection';
+    const auditTriageFilter=select('owgPipelinePortfolioTriageFilter',[['all','All explicitly reviewed opportunities']]);
+    auditTriageFilter.disabled=true;
+    const auditTriageSummary=el('div','Review at least one page to triage its blockers.','muted');
+    auditTriageSummary.id='owgPipelinePortfolioTriageSummary';
+    auditTriageSummary.setAttribute('role','status');
+    auditTriageSummary.setAttribute('aria-live','polite');
+    const auditTriageHost=el('div');auditTriageHost.id='owgPipelinePortfolioTriageRows';
+    const auditTriageSection=el('section');auditTriageSection.id='owgPipelinePortfolioTriageSection';
+    auditTriageSection.append(el('h4','Triage outstanding checks from reviewed pages'),
+      el('p','Filter only pages you explicitly checked. Unreviewed pages are unknown, not clear. Opening a check only navigates to local human review.','muted'),
+      field('Outstanding review check',auditTriageFilter),auditTriageSummary,auditTriageHost);
     auditSection.append(el('h3','Human handoff review inbox'),
       el('p','Review approved or implemented opportunities in explicit pages of up to 12. Each page is a fresh, point-in-time local read; other pages are not certified, approved or executed.','muted'),
-      auditNavigation,auditButton,auditStatus,auditHost,auditCumulative,auditCombinedDownload);
+      auditNavigation,auditButton,auditStatus,auditHost,auditCumulative,auditCombinedDownload,auditTriageSection);
     card.append(row,resumeSection,auditSection,tools,status,counts,viewCount,list,detail);
     panel.appendChild(card);
 
@@ -584,7 +649,79 @@
         (combined.incomplete_evidence_count?
           combined.incomplete_evidence_count+' rows have missing/incomplete evidence. ':'')+
         'This does not verify outcomes or authorize handoff.';
+      renderTriage();
     }
+    function renderTriage(){
+      auditTriageHost.replaceChildren();
+      if(!auditPages.size){
+        auditTriageFilter.disabled=true;
+        auditTriageFilter.replaceChildren(new Option('All explicitly reviewed opportunities','all'));
+        auditTriageSummary.textContent='Review at least one page to triage its blockers.';
+        return;
+      }
+      if(auditBasis!==auditSnapshot()){
+        auditTriageFilter.disabled=true;
+        auditTriageSummary.textContent='The loaded opportunity list changed. Refresh and review pages again.';
+        return;
+      }
+      try{
+        const overview=portfolioReviewTriage(auditEligible(),auditPages,'all');
+        const prior=auditTriageFilter.value;
+        const choices=[['all','All explicitly reviewed opportunities'],
+          ...overview.categories.map(item=>[item.key,item.label+' ('+item.count+')'])];
+        auditTriageFilter.replaceChildren(...choices.map(([key,label])=>{
+          const option=el('option',label);option.value=key;return option;
+        }));
+        auditTriageFilter.value=choices.some(([key])=>key===prior)?prior:'all';
+        auditTriageFilter.disabled=false;
+        const selected=portfolioReviewTriage(auditEligible(),auditPages,auditTriageFilter.value);
+        auditTriageSummary.textContent=selected.matching_count+' matching opportunities in '+
+          selected.reviewed_count+' explicitly reviewed; '+selected.unreviewed_count+
+          ' loaded opportunities on unreviewed pages are unknown. Showing '+
+          selected.items.length+(selected.omitted_count?' of '+selected.matching_count+
+          ' matches; '+selected.omitted_count+' omitted from this bounded view.':'.')+
+          ' No independent outcome verification or authorization.';
+        const table=el('table'),head=el('tr'),body=el('tbody');
+        ['Opportunity','Reviewed page','Outstanding checks','Human review'].forEach(name=>
+          head.appendChild(el('th',name)));
+        for(const item of selected.items){
+          const idea=latestIdeas.find(i=>i.idea_id===item.idea_id);
+          const tr=el('tr');
+          [idea?.title||'Opportunity unavailable',String(item.page_number),
+            item.blockers.map(key=>PORTFOLIO_TRIAGE_LABELS[key]).join(' · ')].forEach(value=>
+            tr.appendChild(el('td',value)));
+          const cell=el('td');
+          const action=button(item.project_id?'Open exact project and check':'Open opportunity for review','secondary');
+          action.setAttribute('aria-label','Review '+(auditTriageFilter.value==='all'?
+            'outstanding checks':PORTFOLIO_TRIAGE_LABELS[auditTriageFilter.value])+
+            ' for '+(idea?.title||'selected opportunity'));
+          const request=auditGeneration,filterKey=auditTriageFilter.value;
+          action.onclick=async()=>{
+            if(request!==auditGeneration||auditBasis!==auditSnapshot()||
+              !auditPages.has(item.page_number))return;
+            try{
+              const resume=item.project_id?{projectId:item.project_id,
+                valid:()=>request===auditGeneration&&auditBasis===auditSnapshot()}:null;
+              await show(item.idea_id,resume);
+              if(request!==auditGeneration)return;
+              const key=filterKey==='all'?item.blockers[0]:filterKey;
+              const target=document.getElementById('owgPipelineBlockerItem_'+key)||
+                document.querySelector('#owgPipelineDetail h3');
+              if(target){target.tabIndex=-1;target.scrollIntoView?.({block:'nearest'});target.focus?.();}
+              auditStatus.textContent='Opened a local human-review check for the selected opportunity. No blocker was cleared and no provider or agent action occurred.';
+            }catch(e){if(request===auditGeneration)auditStatus.textContent=e.message;}
+          };
+          cell.appendChild(action);tr.appendChild(cell);body.appendChild(tr);
+        }
+        const thead=el('thead');thead.appendChild(head);table.append(thead,body);
+        const wrap=el('div',null,'table-wrap');wrap.appendChild(table);
+        auditTriageHost.appendChild(wrap);
+      }catch(e){
+        auditTriageFilter.disabled=true;
+        auditTriageSummary.textContent='Cannot triage this review: '+e.message;
+      }
+    }
+    auditTriageFilter.onchange=renderTriage;
     function clearCumulative(reason){
       ++auditGeneration;
       if(auditAbort)auditAbort.abort();
@@ -1091,7 +1228,8 @@
               execution_and_business_outcomes_unverified:'A source-state check alone cannot verify execution, causality, customer benefit or agent authorization. Independent case/outcome validation remains required.'
             };
             packet.readiness.blockers.forEach(key=>{
-              const item=el('li');item.appendChild(el('span',names[key]||'Unresolved review requirement'));
+              const item=el('li');item.id='owgPipelineBlockerItem_'+key;
+              item.appendChild(el('span',names[key]||'Unresolved review requirement'));
               const route=blockerRoutes[key];
               if(route){
                 const [label,target]=route,action=button(label,'secondary');
@@ -1637,6 +1775,6 @@
     refresh().catch(e=>{status.textContent=e.message;});
   }
 
-  window.__owgPipelineModel={assessmentBody,portfolioView,handoffReviewPacket,handoffDependencyReview,compareHandoffReviewPackets,compareRecordedProjects,compareProjectHandoffReadiness,portfolioHandoffRow,combinedPortfolioHandoffReview,handoffInspectionWorklist,handoffInspectionSnapshotDigest,restoreHandoffInspectionKeys};
+  window.__owgPipelineModel={assessmentBody,portfolioView,handoffReviewPacket,handoffDependencyReview,compareHandoffReviewPackets,compareRecordedProjects,compareProjectHandoffReadiness,portfolioHandoffRow,combinedPortfolioHandoffReview,portfolioReviewTriage,handoffInspectionWorklist,handoffInspectionSnapshotDigest,restoreHandoffInspectionKeys};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
