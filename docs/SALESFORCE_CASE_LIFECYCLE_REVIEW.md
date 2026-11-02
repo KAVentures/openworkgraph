@@ -86,6 +86,37 @@ The new mode-0600 private JSON review records each stable hashed Case ID, source
 
 The source lifecycle snapshot and local OWG evidence are **not atomic**; both can change after their respective reads. OWG case presence is only locally retained history, not a live provider verification or a full retention inventory. No absence is evidence of hard deletion. An authorized human must separately assess retention, legal hold, deletion, access controls and the provenance of any requested downstream action. There is deliberately no automated deletion, approval, policy mutation or agent handoff.
 
+## Compare two retained-evidence impact reviews (optional)
+
+The operator can now **re-read actual local OWG evidence** for the same confirmed Salesforce source scope and **same OWG log**, then compare that result with an earlier pinned impact artifact. This closes the review loop for changes in retained event counts or source visibility, without guessing why a record appeared or disappeared. It is useful for checking whether a previously observed soft-deleted Case still has OWG history, whether more events have arrived after an append, and whether an unresolved source Case later becomes visible.
+
+First create a private impact review as above and retain its printed \`impact_sha256\`. Optionally refresh the Salesforce source lifecycle review with a separate source-read command; the comparison accepts a *new* source-review digest provided that its exact selected Case scope is unchanged. Then run:
+
+\`\`\`sh
+export OWG_DASHBOARD_SESSION='<current-local-dashboard-session>'
+python -m server.salesforce_case_lifecycle_review \
+  --instance https://acme.my.salesforce.com \
+  --confirm-host acme.my.salesforce.com \
+  --namespace acme-sandbox \
+  --case 500000000000001 --case 500000000000002 \
+  --impact-review /private/owg-salesforce-lifecycle/review-002.json \
+  --impact-sha256 '<new-source-review-sha256>' \
+  --previous-impact /private/owg-salesforce-lifecycle/impact-001.json \
+  --previous-impact-sha256 '<exact-previous-impact-sha256>' \
+  --owg-log-id log_0123456789abcdef \
+  --confirm-owg-log-id log_0123456789abcdef \
+  --owg-port 8765 \
+  --output /private/owg-salesforce-lifecycle/impact-002.json \
+  --consent-local-owg-read --consent-private-impact \
+  --consent-compare-impact
+\`\`\`
+
+The prior impact must be an owner-private, non-symlink regular file with canonical JSON and the operator-pinned SHA-256. Before making **any OWG HTTP request**, the tool checks its complete schema, safety flags, timestamps, exact source scope, OWG log ID, selected pseudonymous Case IDs, internally consistent case evidence/counts, and any earlier comparison. It rejects changed source scope or OWG log, altered files even with a recomputed digest when the schema is inconsistent, missing separate comparison consent, and missing/revoked dashboard sessions. Current evidence is then read through the same production-authenticated local FastAPI/DuckDB endpoints as a first impact review; authorization and source identity are rechecked after the bounded reads.
+
+The new private JSON contains \`comparison.transitions\` for each selected hashed Case ID: prior/current source state, prior/current OWG presence (\`observed\`, \`not_observed\`, \`unknown\`) and prior/current retained event count (integer only when observed). It also contains \`changed\`, \`unchanged\`, \`source_state_changed\`, \`owg_presence_changed\`, and \`owg_event_count_changed\` totals, with the previous impact/source digests and observation time. The CLI prints only aggregate totals and the new \`impact_sha256\` pin. A comparison review can be reused as the next prior impact with its newly printed digest.
+
+**Interpretation limits:** \`not_observed\` is a bounded local case-query result, not a deletion certificate; \`unknown\` is not zero; a change in event count is not a verified source-side change or retention action. The two reads are non-atomic. Source visibility, OWG log content and authorization can change after each read. Neither digest authenticates the provider or signs the reviewer identity. The comparison performs **no** Salesforce or OWG write, checkpoint advancement, automatic retention/deletion, legal-hold decision, or agent handoff. Customer sandbox acceptance and policy/retention review remain separate gates.
+
 ## Safety and completeness
 
 The tool validates exact Salesforce HTTPS host and namespace/case scope before the request; it does not use system proxies or follow redirects. It defaults to one page; operators must explicitly set `--max-pages 2` through `--max-pages 8` when Salesforce may paginate. Each page is limited to 64 KiB; the entire selection is limited to 8 distinct Cases and 8 requests. A continuation must be a strict relative `/services/data/v60.0/query/<opaque-locator>` or `/services/data/v60.0/queryAll/<opaque-locator>` path on the **same confirmed origin**, with no query, fragment, redirect or path traversal. It requires stable `totalSize`, strictly ordered distinct selected IDs, exact boolean deletion states, nonempty intermediate pages and a final `done=true` page with no cursor and exact cumulative count. It refuses malformed/duplicate JSON keys, foreign rows, changed counts, truncated/over-budget/repeated/unsafe cursors, HTTP errors, revoked credentials, unsafe/private path failures and output overwrite. If a provider returns more pages than the operator approved, the run fails **without creating a review**. The private artifact and counts-only receipt record `pages_fetched` for auditing. No automatic retry. A query returning zero rows is an **all-unresolved review**, not a deletion certificate.
