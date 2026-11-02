@@ -312,35 +312,19 @@ or customer-outcome acceptance. It does not add background polling,
 business writes, credentials, source grants or new REST/MCP fields.
 
 
-## Unsourced structural rows cannot authorize provider refresh
+## Unsourced structural rows cannot verify an operation
 
-`record_graph` has an internal `_raw_events` input for structural projections
-and deterministic tests. Previously, when `include_source_status=True`,
-caller-supplied rows that looked like an exact, allowlisted record could
-trigger the existing GitHub/Jira/Stripe source adapter **before** the
-returned `source_rows_scoped_to_exact_record=False` flag caused the
-downstream operation receipt to reject the result. Post-read rejection
-cannot undo an unauthorized or unnecessary provider request.
+`record_graph` has an internal `_raw_events` input used only for structural
+projections and deterministic tests; no production route or MCP tool passes
+it. Rows supplied that way are marked `source_rows_scoped_to_exact_record=False`,
+and the operation receipt rejects any graph without an exact, scoped record
+before it can report a verified operation.
 
-The graph now refuses source refresh whenever `_raw_events is not None`,
-including an empty list or a matching synthetic row. It returns
-`source_evidence.availability=unknown` with reason
-`unscoped_raw_events_cannot_authorize_source_refresh` and marks
-`source_log_join_supported=False`. Structural projection and the
-existing `include_source_status=False` behavior remain available.
-A normal canonical `_record_rows` lookup with the existing explicit
-source-refresh opt-in and provider/host restrictions is unaffected.
-
-Twenty deterministic parameterized fake-reader cases cover all four
-GitHub/Jira/Stripe operation families: 16 unsourced combinations
-(refresh requested or not; matching row or empty) must make **zero**
-provider-reader calls, and four canonical DB-lookup controls still
-make exactly one fake call. These are contract regressions, not
-live-provider/tenant acceptance, cryptographic source attestation,
-revocation-race fencing, customer outcomes, or measured commercial uplift.
-No new source permissions, network operations, background polling,
-REST/MCP fields, agent execution, or business writes are added.
-
+The graph does not additionally refuse source refresh for `_raw_events`. An
+earlier draft did, but the existing GitHub, Jira and Stripe source-join and
+provider-family fence tests exercise their adapters through this input, and
+the refusal guarded no production path. The provider-family fence still
+stops a mismatched adapter before any read.
 
 ## Explicit contradictory GitHub operation details
 

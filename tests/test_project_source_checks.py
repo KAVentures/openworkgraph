@@ -32,10 +32,14 @@ def prepared(tmp_path,monkeypatch):
     def read(resource,operation):
         def reader(resource_ref,**kwargs):
             calls.append((resource_ref,kwargs))
-            return {'record_observed':True,'record_identity_complete_within_retained_window':True,
+            # The fields production record_graph emits for an exact, scoped GitHub record.
+            return {'resource_ref':resource_ref,'source_rows_scoped_to_exact_record':True,'source_log_join_supported':True,
+                'source_window':{'since':None,'until':None},'source_event_limit_reached':False,
+                'record_observed':True,'record_identity_complete_within_retained_window':True,
                 'record_type':{'provider':'github','kind':'pull_request'},
                 'source_evidence':{'availability':'source_reported','source_state_reported':True,'source_state':'merged',
-                                   'verified_at':datetime.now(timezone.utc).isoformat(),'PRIVATE_FIELD':'PRIVATE_PROVIDER_TEXT'}}
+                                   'verified_at':datetime.now(timezone.utc).isoformat(),'provider':'github','verification_method':'explicit_opt_in_authenticated_local_github_cli_read',
+                                   'PRIVATE_FIELD':'PRIVATE_PROVIDER_TEXT'}}
         receipt=source_operation_receipt(resource,operation,record_reader=reader)
         return {**receipt,'PRIVATE_FIELD':'PRIVATE_FUTURE_RECEIPT_FIELD'}
     monkeypatch.setattr(checks,'_read_receipt',read)
