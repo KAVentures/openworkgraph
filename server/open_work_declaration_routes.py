@@ -1666,6 +1666,13 @@ async def verify_local_declared_stripe_payment_goal(request: Request, response: 
         resource_ref = validate_case_record_link(
             payload["record_link"], admitted, signature, scope=scope, secret=secret,
         )
+        # Read and HMAC-validate the prior private evidence before any source IO.
+        # This snapshot is also an exact optimistic checkpoint for the SQLite
+        # append transaction, not merely an unprotected response comparison.
+        before = await asyncio.to_thread(
+            read_operation_evidence, admitted, signature, scope=scope,
+            secret=secret, guard=guard,
+        )
         await asyncio.to_thread(guard)
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
         raise _safe_error(exc) from None
@@ -1686,8 +1693,11 @@ async def verify_local_declared_stripe_payment_goal(request: Request, response: 
         history = await asyncio.to_thread(
             append_operation_evidence, admitted, signature, scope=scope,
             secret=secret, resource_ref=resource_ref, verification=verified, guard=guard,
+            expected_history=before["events"],
         )
-        result = compose_fresh_declared_payment_goal(admitted, verified, history)
+        result = compose_fresh_declared_payment_goal(
+            admitted, verified, history, prior_history=before,
+        )
         await asyncio.to_thread(guard)
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
         raise _safe_error(exc) from None
