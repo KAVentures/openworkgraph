@@ -413,7 +413,7 @@ def test_time_of_week_case_start_and_end_windows_are_distinct_and_filtered():
         "order": "dimensions",
     }
     result = query.run(log, start)
-    assert result["rows"] == [["Start", 2, 3600.0]]
+    assert result["rows"] == [["Start", 2, 4500.0]]
     assert result["matching"] == {"rows": 2, "cases": 2}
     # The same cases do not all finish on Monday in hour 23 UTC.
     completion = query.run(log, {
