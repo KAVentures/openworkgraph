@@ -17,7 +17,7 @@ LIST = "urn:ietf:params:scim:api:messages:2.0:ListResponse"
 SPC = "urn:ietf:params:scim:schemas:core:2.0:ServiceProviderConfig"
 USER = "urn:ietf:params:scim:schemas:core:2.0:User"
 GROUP = "urn:ietf:params:scim:schemas:core:2.0:Group"
-_PATH = re.compile(r"/scim/v2/[A-Za-z0-9_-]{1,100}\\Z", re.ASCII)
+_PATH = re.compile(r"/scim/v2/[A-Za-z0-9_-]{1,100}\Z", re.ASCII)
 
 class ProbeError(ValueError):
     """Minimized error without credentials or identities."""
