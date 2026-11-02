@@ -233,7 +233,9 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    assert.equal(handoffPacket.process.content_sha256,saved.content_sha256);
    assert.equal(handoffPacket.project.project_id,manifest.project_id);
    assert.equal(handoffPacket.project.spec_sha256,manifest.spec_sha256);
-   assert.equal(handoffPacket.project.archive_sha256,manifest.archive_sha256);
+   // The lineage manifest lives inside the ZIP, so it cannot carry the ZIP's own hash;
+   // compare with the hash of the downloaded archive instead.
+   assert.equal(handoffPacket.project.archive_sha256,projectResponse.headers()['x-owg-archive-sha256']);
    assert(handoffPacket.readiness.blockers.includes('dataset_origin_not_linked'));
    assert(handoffPacket.readiness.blockers.includes('no_imported_report'));
    assert(handoffPacket.readiness.blockers.includes('execution_and_business_outcomes_unverified'));
