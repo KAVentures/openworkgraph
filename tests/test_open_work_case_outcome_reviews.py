@@ -217,3 +217,95 @@ def test_retention_revocation_and_no_default_store(local):
         assert _history(client, headers, saved).status_code in (403, 409, 422)
         reviews.clear_review_intentions()
         assert not outcomes._path().exists()
+
+
+def _dependency_history(client, headers, saved, max_cases=2, confirm=True):
+    return client.post(BASE + "/human-outcomes/dependency-history", headers=headers, json={
+        **_cas(saved), "confirm_historical_review": confirm,
+        "max_cases": max_cases,
+    })
+
+
+def test_human_outcome_dependency_history_is_bounded_and_source_free(local, monkeypatch):
+    def no_provider(*args, **kwargs):
+        raise AssertionError("human outcome dependency history must not read providers")
+    monkeypatch.setattr(routes, "source_operation_receipt", no_provider)
+    monkeypatch.setattr(routes, "stripe_open_work_case_context", no_provider)
+    with TestClient(app) as client:
+        headers = _auth()
+        saved = _cases(client, headers)
+        assert _assess(client, headers, saved, "not_met").status_code == 200
+        assert client.post(BASE + "/human-outcomes/assess", headers=headers, json={
+            **_cas(saved, A), "confirm_human_assessment": True,
+            "human_status": "met", "reason_code": "owner_review",
+        }).status_code == 200
+        assert _correct(client, headers, saved, 1, "met").status_code == 200
+        response = _dependency_history(client, headers, saved)
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["format"] == "openworkgraph.local-reviewed-dependency-human-outcomes.v1"
+        assert data["included_case_count"] == 2
+        assert data["unscanned_prerequisite_count"] == 0
+        assert data["human_feedback_coverage_complete"] is True
+        assert data["every_selected_case_has_human_feedback"] is True
+        assert {row["work_item_ref"] for row in data["case_histories"]} == {A, B}
+        assert all(row["latest_human_assessed_status"] == "met"
+                   for row in data["case_histories"])
+        b = next(row for row in data["case_histories"] if row["work_item_ref"] == B)
+        assert b["human_assessment_count"] == 2
+        assert b["history_events"][-1]["kind"] == "correction"
+        assert b["history_events"][-1]["corrects_sequence"] == 1
+        assert data["selected_dependency_edges"] == [{
+            "prerequisite_ref": A, "dependent_ref": B,
+            "edge_type": "owner_declared_dependency", "source_verified": False,
+        }]
+        assert data["human_assessments_are_not_independent_verification"] is True
+        assert data["separate_local_ledger_reads_not_atomic_snapshot"] is True
+        for key in ("expected_outcome_verified", "customer_outcome_verified",
+                    "current_provider_operation_verified", "business_obligation_verified",
+                    "agent_caused_outcome_verified", "agent_execution_authorized",
+                    "source_read_performed", "source_write_performed"):
+            assert data[key] is False
+        assert response.headers["cache-control"] == "no-store"
+
+
+def test_dependency_human_history_missing_and_omitted_are_not_success(local):
+    with TestClient(app) as client:
+        headers = _auth()
+        saved = _cases(client, headers)
+        assert _assess(client, headers, saved).status_code == 200
+        full = _dependency_history(client, headers, saved).json()
+        assert full["included_case_count"] == 2
+        assert full["human_feedback_coverage_complete"] is False
+        a = next(row for row in full["case_histories"] if row["work_item_ref"] == A)
+        assert a["human_assessment_count"] == 0
+        assert a["latest_human_assessed_status"] == "unknown"
+        partial = _dependency_history(client, headers, saved, max_cases=1)
+        assert partial.status_code == 200, partial.text
+        data = partial.json()
+        assert data["included_case_count"] == 1
+        assert data["unscanned_prerequisite_count"] == 1
+        assert data["all_declared_prerequisites_included"] is False
+        assert data["human_feedback_coverage_complete"] is False
+        assert data["selected_dependency_edges"] == []
+        assert data["case_histories"][0]["work_item_ref"] == B
+
+
+def test_dependency_human_history_requires_review_and_fails_closed(local):
+    with TestClient(app) as client:
+        headers = _auth()
+        saved = _cases(client, headers)
+        assert client.post(BASE + "/human-outcomes/dependency-history",
+                           json={**_cas(saved), "confirm_historical_review": True,
+                                 "max_cases": 2}).status_code == 403
+        assert _dependency_history(client, headers, saved, confirm=False).status_code == 403
+        for count in (0, 5, True, "2"):
+            assert _dependency_history(client, headers, saved, max_cases=count).status_code == 422
+        assert _assess(client, headers, saved).status_code == 200
+        with sqlite3.connect(outcomes._path()) as db:
+            db.execute("UPDATE assessments SET human_status='not_met' WHERE work_item_ref=?", (B,))
+        assert _dependency_history(client, headers, saved).status_code == 422
+        outcomes.clear_human_outcome_reviews()
+        assert _assess(client, headers, saved).status_code == 200
+        assert reviews.remove_review_intention(A)
+        assert _dependency_history(client, headers, saved).status_code in (403, 409, 422)
