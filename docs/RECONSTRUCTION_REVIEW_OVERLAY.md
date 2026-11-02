@@ -78,6 +78,53 @@ altered packets, unsupported targets, duplicate decisions and forged
 approvals are refused. The output is a new private file (0600 on POSIX);
 existing files are never overwritten. No network call is made.
 
+
+## Interleaving-aware negative evidence in review packets
+
+The local `prepare` command now annotates each **visible, reviewable** weak
+candidate with `interleaving_context`. This is a functional review aid for
+interleaved work on multiple records: the operator can distinguish an
+unreferenced action **between two different observed linked-item record
+anchors** from one bracketed by the same already-linked item. It does not
+guess the action's case, task or business outcome.
+
+For each candidate, the algorithm looks backward and forward for the nearest
+**literal, untainted source-record observation** in the exact same complete
+organization/actor/device/session capture scope, application and source. It
+requires strict timestamp ordering and stops at the first incompatible scope,
+app, source, tainted observation, tied timestamp or nearer unlinked record.
+Each direction considers at most **eight intervening observations**. An
+unknown/unlinked nearer record is a boundary, not permission to search past it
+for a more convenient visible target. Hidden, singleton or unanchored records
+are not exposed as linked-item IDs.
+
+The additive `interleaving_context.status` is one of:
+
+- `competing_record_anchors`: two different visible linked items bracket the
+  candidate. This is **negative context**, not evidence that either is correct.
+- `matching_linked_item_anchors`: both anchors belong to the same visible
+  linked item. It still does **not** establish membership for the loose action.
+- `one_sided_record_anchor`: only one qualifying local anchor is visible.
+- `no_bounded_record_anchors`: no qualifying nearby anchor was observed.
+- `insufficient_capture_context`: the candidate lacks complete trusted
+  scope/app/source, so before/after context cannot be established.
+
+The packet also includes `observed_interleaving_context_counts` for the
+visible review window. Every context carries only opaque visible linked-item
+IDs, `case_identity_verified: false` and `auto_assigned: false`; no
+timestamps, raw source references, titles, URL, clipboard contents or private
+work text are added. Counts are **not** complete when
+`eligible_review_truncated: true`; they describe only the visible rows.
+These statuses are not calibrated probabilities or automatic decision rules.
+
+Reviewers still inspect the authorized original evidence and explicitly
+confirm/reject using `apply`, `adjudicate` or `resolve`. The packet is
+rederived from the exact evidence at every use, so a changed/revoked
+observation invalidates the old packet. The automatic linker, source
+membership, REST/MCP/dashboard and agent permissions are unchanged. This
+helps prevent contamination during human review but **does not establish**
+autonomous F1 improvement, independent ground truth or a real consenting pilot.
+
 ## Measure accuracy on independently annotated sessions
 
 For a *fully independently annotated* local session, supply a truth file that
