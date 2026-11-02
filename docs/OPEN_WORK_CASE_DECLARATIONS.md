@@ -928,16 +928,16 @@ not production multi-tenant RBAC or independently verified business outcomes.
 
 ## Atomic reapproval of an existing reviewed dependency graph
 
-\`POST /v1/open-work/declarations/batch-revision\` is a **local dashboard-session-only**, explicitly confirmed mutation of **1–4 existing** reviewed owner declarations. It does not create cases, read a provider, grant execution authority, or assert a business outcome. Send exactly \`confirm_batch_revision:true\`, \`confirm_cascade_invalidation:true\`, \`expected_invalidated_work_item_refs:[...]\` and \`items:[...]\`. Each item has the same six fields as the creation batch, but **must** carry the current positive \`expected_revision\` and exact incarnation \`expected_edit_token\` obtained from a fresh GET. Every item must have a current review and same-source scope. The server topologically reapproves selected dependencies regardless of input order, increments each selected revision exactly once and retains its incarnation token and original creation/expiry ceilings.
+`POST /v1/open-work/declarations/batch-revision` is a **local dashboard-session-only**, explicitly confirmed mutation of **1–4 existing** reviewed owner declarations. It does not create cases, read a provider, grant execution authority, or assert a business outcome. Send exactly `confirm_batch_revision:true`, `confirm_cascade_invalidation:true`, `expected_invalidated_work_item_refs:[...]` and `items:[...]`. Each item has the same six fields as the creation batch, but **must** carry the current positive `expected_revision` and exact incarnation `expected_edit_token` obtained from a fresh GET. Every item must have a current review and same-source scope. The server topologically reapproves selected dependencies regardless of input order, increments each selected revision exactly once and retains its incarnation token and original creation/expiry ceilings.
 
-**Cascade is never implicit:** any prior dependent of a changed case that is not included in the same reapproval must be named exactly in \`expected_invalidated_work_item_refs\` (opaque refs only). To obtain that list, inspect the current \`GET /v1/open-work/declarations/graph\` and take the union of transitive dependents of all selected cases, excluding selected cases. The server recomputes the closure **under the SQLite write lock**; if a dependent appeared, disappeared, changed scope or is unexpectedly included, the whole write fails rather than silently deleting an unacknowledged approval. A selected dependent is explicitly reapproved in the same transaction and survives; an omitted acknowledged dependent is deleted, not silently made independent. An unrelated case remains. If the revised full graph contains a cycle, stale CAS, missing or foreign prerequisite, expired approval, changed review/retention or unacknowledged dependent, **no revised/deleted rows commit**. Existing single-case edits retain their conservative cascading behavior.
+**Cascade is never implicit:** any prior dependent of a changed case that is not included in the same reapproval must be named exactly in `expected_invalidated_work_item_refs` (opaque refs only). To obtain that list, inspect the current `GET /v1/open-work/declarations/graph` and take the union of transitive dependents of all selected cases, excluding selected cases. The server recomputes the closure **under the SQLite write lock**; if a dependent appeared, disappeared, changed scope or is unexpectedly included, the whole write fails rather than silently deleting an unacknowledged approval. A selected dependent is explicitly reapproved in the same transaction and survives; an omitted acknowledged dependent is deleted, not silently made independent. An unrelated case remains. If the revised full graph contains a cycle, stale CAS, missing or foreign prerequisite, expired approval, changed review/retention or unacknowledged dependent, **no revised/deleted rows commit**. Existing single-case edits retain their conservative cascading behavior.
 
-Example: A ← B ← C and independent D; reapprove A and B with C omitted, and acknowledge \`expected_invalidated_work_item_refs:[C]\`. A and B advance their revisions together, C's old declaration disappears, and D remains untouched. Reapproving A/B/C together with an empty invalidation list preserves all three only after each owner's explicit exact-version reapproval. This is a local point-in-time commit, not an atomic cross-process provider-grant/revocation fence. Re-read before relying on current authority. The response exposes only opaque refs, fixed owner codes, exact revisions, and unverified source/customer/agent outcome flags. The feature is synthetic/local until native CI and real authorized pilot acceptance.
+Example: A ← B ← C and independent D; reapprove A and B with C omitted, and acknowledge `expected_invalidated_work_item_refs:[C]`. A and B advance their revisions together, C's old declaration disappears, and D remains untouched. Reapproving A/B/C together with an empty invalidation list preserves all three only after each owner's explicit exact-version reapproval. This is a local point-in-time commit, not an atomic cross-process provider-grant/revocation fence. Re-read before relying on current authority. The response exposes only opaque refs, fixed owner codes, exact revisions, and unverified source/customer/agent outcome flags. The feature is synthetic/local until native CI and real authorized pilot acceptance.
 
 
 ### Preview the exact cascade before confirmation
 
-Call \`POST /v1/open-work/declarations/batch-revision-impact\` with \`{"cases":[{"work_item_ref":"owg:w:…","expected_revision":1,"expected_edit_token":"…"}]}\` for 1–4 current reviewed cases. The authenticated local endpoint reuses the existing graph/change-impact projection to return the **union** of omitted transitive dependent refs as \`expected_invalidated_work_item_refs\`, plus the selected reapproval refs. No provider call or mutation occurs. Pass that list unchanged into the separately confirmed \`batch-revision\` write with full proposed owner codes/dependencies. Preview is advisory: it does not validate proposed new edges, lock the graph, or authorize a write. The write repeats all review, CAS, dependency, cycle and cascade checks under SQLite lock; a stale preview fails rather than deleting an unexpected case. Native CI and real-account acceptance remain pending.
+Call `POST /v1/open-work/declarations/batch-revision-impact` with `{"cases":[{"work_item_ref":"owg:w:…","expected_revision":1,"expected_edit_token":"…"}]}` for 1–4 current reviewed cases. The authenticated local endpoint reuses the existing graph/change-impact projection to return the **union** of omitted transitive dependent refs as `expected_invalidated_work_item_refs`, plus the selected reapproval refs. No provider call or mutation occurs. Pass that list unchanged into the separately confirmed `batch-revision` write with full proposed owner codes/dependencies. Preview is advisory: it does not validate proposed new edges, lock the graph, or authorize a write. The write repeats all review, CAS, dependency, cycle and cascade checks under SQLite lock; a stale preview fails rather than deleting an unexpected case. Native CI and real-account acceptance remain pending.
 
 
 ## Portable, source-scoped case status checkpoint and conservative comparison
@@ -1310,29 +1310,29 @@ authorize an agent, or change any source system.
 
 Three dashboard-session-only JSON POST endpoints are available:
 
-- \`/v1/open-work/declarations/human-outcomes/assess\`: exact current
-  \`work_item_ref\`, \`expected_revision\`, \`expected_edit_token\`,
-  \`confirm_human_assessment: true\`, \`human_status\` (\`met\`, \`not_met\`,
-  \`unknown\`), and \`reason_code\` (\`owner_review\`,
-  \`customer_feedback_reviewed\`, \`external_evidence_reviewed\`).
+- `/v1/open-work/declarations/human-outcomes/assess`: exact current
+  `work_item_ref`, `expected_revision`, `expected_edit_token`,
+  `confirm_human_assessment: true`, `human_status` (`met`, `not_met`,
+  `unknown`), and `reason_code` (`owner_review`,
+  `customer_feedback_reviewed`, `external_evidence_reviewed`).
   These are **reason labels**, not submitted or independently verified
   customer records. A human can explicitly record a status only after
   reviewing the currently approved goal and full prerequisite graph.
-- \`/v1/open-work/declarations/human-outcomes/history\`: only the exact
+- `/v1/open-work/declarations/human-outcomes/history`: only the exact
   case ref/revision/edit token. Returns bounded, retained assessments
   without a Stripe/provider read, with
-  \`provenance: explicit_local_human_assessment_not_independently_verified\`
+  `provenance: explicit_local_human_assessment_not_independently_verified`
   and all provider/customer/outcome verification flags **false**.
-- \`/v1/open-work/declarations/human-outcomes/correct\`: exact case CAS,
-  \`confirm_human_correction: true\`, \`target_sequence\` (the **latest**
-  assessment/correction event sequence), and replacement \`human_status\`.
-  Appends a \`correction\` event referencing that sequence; the previous
+- `/v1/open-work/declarations/human-outcomes/correct`: exact case CAS,
+  `confirm_human_correction: true`, `target_sequence` (the **latest**
+  assessment/correction event sequence), and replacement `human_status`.
+  Appends a `correction` event referencing that sequence; the previous
   assessment remains visible and unmodified. A stale correction target is
   rejected rather than silently overwriting another operator's review.
 
 Example assessment body (opaque refs shown as placeholders):
 
-\`\`\`json
+```json
 {
   "work_item_ref": "owg:w:<32-lowercase-hex>",
   "expected_revision": 1,
@@ -1341,7 +1341,7 @@ Example assessment body (opaque refs shown as placeholders):
   "human_status": "unknown",
   "reason_code": "owner_review"
 }
-\`\`\`
+```
 
 The private SQLite store is capped at 50 cases, 32 append-only events per
 case and 2 MiB. Each event carries only an opaque case ref, HMAC-bound
@@ -1362,12 +1362,12 @@ source connection is used only as a scope/consent boundary. The backend
 re-admits that scope and graph before and after local storage operations,
 but this does not constitute production multi-tenant RBAC or an atomic
 cross-process revocation fence. All responses are no-store and contain
-\`expected_outcome_verified: false\`,
-\`customer_outcome_verified: false\`,
-\`provider_operation_verified: false\`, and
-\`agent_execution_authorized: false\`.
+`expected_outcome_verified: false`,
+`customer_outcome_verified: false`,
+`provider_operation_verified: false`, and
+`agent_execution_authorized: false`.
 
-\`tests/test_open_work_case_outcome_reviews.py\` exercises authenticated
+`tests/test_open_work_case_outcome_reviews.py` exercises authenticated
 FastAPI + private SQLite persistence, correction history, stale-target
 refusal, integrity tampering, prerequisite invalidation, review deletion,
 source disconnect, retention and privacy with synthetic local cases.
