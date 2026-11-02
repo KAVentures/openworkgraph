@@ -240,6 +240,22 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    assert(handoffPacket.readiness.blockers.includes('no_imported_report'));
    assert(handoffPacket.readiness.blockers.includes('execution_and_business_outcomes_unverified'));
    assert.equal(handoffPacket.readiness.verified_business_outcomes,false);
+   // The first project view (without importing a packet) must offer actual
+   // blocker-specific human review routes, never claim to resolve a blocker.
+   const blockers=page.locator('#owgPipelineJourneyReadiness');
+   assert.match(await blockers.textContent(),/Return to the originating event-log workspace/);
+   assert.equal(await blockers.locator('#owgPipelineBlocker_no_imported_report').count(),1);
+   await blockers.locator('#owgPipelineBlocker_no_imported_report').focus();
+   await page.keyboard.press('Enter');
+   await page.locator('#owgPipelineReportProject').waitFor();
+   assert.equal(await page.locator('#owgPipelineReportProject').inputValue(),manifest.project_id);
+   await blockers.locator('#owgPipelineBlocker_execution_and_business_outcomes_unverified').click();
+   await page.locator('#owgPipelineSourceProject').waitFor();
+   assert.equal(await page.locator('#owgPipelineSourceProject').inputValue(),manifest.project_id);
+   assert.equal(await page.locator('#owgPipelineSourceConsent').isChecked(),false);
+   assert.match(await blockers.locator('#owgPipelineJourneyBlockerStatus').textContent(),/blocker remains outstanding/);
+   assert.match(await blockers.textContent(),/Execution, causality and business outcomes not independently verified/);
+   assert.equal(guidedWrites,writesBeforePacket,'first-view blocker routes are navigation only');
    assert.equal(guidedWrites,writesBeforePacket,'review packet must not write or read a provider');
    assert(!JSON.stringify(handoffPacket).includes('PRIVATE_RAW_CASE_VALUE'));
    assert(!JSON.stringify(handoffPacket).includes('owg:r:'));
@@ -669,6 +685,12 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    const changedPacket=JSON.parse(await fs.readFile(await changedDownload.path(),'utf8'));
    assert.equal(changedPacket.process.status,'changed');
    assert(changedPacket.readiness.blockers.includes('process_not_current'));
+   assert(await page.locator('#owgPipelineBlocker_process_not_current').isEnabled(),
+     'changed but retained exact revision can be reviewed');
+   page.once('dialog',dialog=>dialog.accept());
+   await page.locator('#owgPipelineBlocker_process_not_current').focus();
+   await page.keyboard.press('Enter');
+   await page.locator('#owgCatalogStatus').filter({hasText:'Opened immutable revision 1.'}).waitFor();
    await page.locator('#owgPipelineJourneyPriorPacket').setInputFiles({
      name:'original-review.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(handoffPacket))
    });
@@ -704,6 +726,9 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    const deletedPacket=JSON.parse(await fs.readFile(await deletedDownload.path(),'utf8'));
    assert.equal(deletedPacket.process.status,'unavailable');
    assert(deletedPacket.readiness.blockers.includes('process_not_current'));
+   assert(await page.locator('#owgPipelineBlocker_process_not_current').isDisabled(),
+     'deleted exact revision must not route to a newer or invented process');
+   assert.match(await page.locator('#owgPipelineJourneyReadiness').textContent(),/Unavailable for this historical or uncheckable reference/);
    await page.locator('#owgPipelineJourneyPriorPacket').setInputFiles({
      name:'original-review.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(handoffPacket))
    });
