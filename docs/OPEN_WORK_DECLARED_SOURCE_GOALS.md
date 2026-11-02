@@ -238,3 +238,48 @@ bank settlement or commercial uplift. The cross-process owner/connector
 revocation boundary is not a distributed transaction. Production acceptance
 still requires an authorized restricted Stripe TEST account and signed-client
 tests; synthetic FastAPI/SQLite acceptance is not that evidence.
+
+
+## Preview a reviewed dependency payment check before Stripe I/O
+
+An authenticated local dashboard operator can preview the **same exact 1–4
+reviewed case/prerequisite DAG** used by the atomic dependency verifier.
+This is useful when checking multiple invoices: stale approval, missing
+source-joined invoice links, duplicate invoice identities, conflicting private
+evidence, or exhausted 32-event case history are rejected **before** any
+provider request.
+
+1. Obtain current owner CAS fields and one signed `record_link` for each
+   selected case using the existing explicit review and operation-link flows.
+2. POST `/v1/open-work/declarations/source-goals/preview-dependency-payments`
+   with exactly `work_item_ref`, `expected_revision`,
+   `expected_edit_token`, `record_links` (prerequisite-first array of
+   complete signed link objects), and `confirm_historical_review: true`.
+3. Inspect the response's per-case historical provider state, number of
+   retained checks, disputed checks, last-check dispute, and remaining ledger
+   event slots. The response is `Cache-Control: no-store` and contains no
+   native Stripe invoice/customer identifiers.
+4. Optionally pass the returned `expected_preflight` object **unchanged** in
+   the existing
+   `POST /v1/open-work/declarations/source-goals/verify-dependency-payments`
+   body, alongside the original fields and
+   `confirm_source_verification: true`. A changed owner/DAG/source scope,
+   expired preview (maximum five minutes), appended/disputed evidence or
+   forged token is rejected before the first Stripe request. Legacy explicit
+   verification without a preview token remains supported.
+
+This checkpoint is **not** a guarantee that the eventual provider reads will
+succeed. The verification endpoint still re-admits the graph after each
+sequential Stripe read and uses the SQLite history compare-and-swap inside one
+atomic evidence transaction. A dispute arriving after the preview is issued
+invalidates it; a dispute arriving during provider I/O still aborts the batch.
+Read-side retention pruning may remove expired private history, but preview
+does not append checks, perform provider reads or authorize business writes.
+
+Historical `paid` is never represented as current payment; `unknown` does
+not mean unpaid, and a dispute is not evidence of reversal. Neither the
+preview nor a subsequently paid Stripe receipt verifies bank settlement,
+customer success, a discharged business obligation, or agent causality. No
+agent execution grant, default polling, cloud upload or new source permission
+is created. Synthetic FastAPI/private-SQLite tests are not live restricted
+Stripe/customer acceptance; exact-head native CI remains a separate gate.
