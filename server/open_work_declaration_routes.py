@@ -30,6 +30,9 @@ from .open_work_case_dependency_operations import (
 from .open_work_case_operation_timeline import (
     validate_prior_operation_timeline, append_operation_timeline,
 )
+from .open_work_case_operation_ledger import (
+    append_operation_evidence, read_operation_evidence, dispute_operation_evidence,
+)
 from .open_work_outcomes import source_operation_receipt
 from .open_work_case_status_checkpoint import (
     validate_prior_checkpoint, issue_status_checkpoint,
@@ -946,6 +949,127 @@ async def check_local_case_operation_timeline(request: Request, response: Respon
             project_case_operation_verification(current, resource_ref, receipt),
             scope=scope, secret=secret, link_expires_at=link["expires_at"],
             prior=prior,
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+def _operation_ledger_guard(scope: str, work_item_ref: str, revision: int,
+                            edit_token: str, signature: tuple) -> None:
+    """Transaction-time local re-admission, not a distributed revocation fence."""
+    if _source_scope() != scope:
+        raise CaseDeclarationError("source scope changed before evidence commit")
+    current = list_case_declarations(scope)
+    _admitted, current_signature = admitted_case_dossier_snapshot(
+        current, work_item_ref=work_item_ref,
+        expected_revision=revision, expected_edit_token=edit_token,
+    )
+    if current_signature != signature:
+        raise CaseDeclarationError("reviewed dependency graph changed before evidence commit")
+
+
+async def _operation_ledger_admission(scope: str, payload: dict[str, Any]):
+    before = await asyncio.to_thread(list_case_declarations, scope)
+    admitted, signature = admitted_case_dossier_snapshot(
+        before, work_item_ref=payload["work_item_ref"],
+        expected_revision=payload["expected_revision"],
+        expected_edit_token=payload["expected_edit_token"],
+    )
+    secret = await asyncio.to_thread(_read_or_create_secret, ".open_work_reference_key")
+    from functools import partial
+    guard = partial(
+        _operation_ledger_guard, scope, payload["work_item_ref"],
+        payload["expected_revision"], payload["expected_edit_token"], signature,
+    )
+    return admitted, signature, secret, guard
+
+
+@router.post("/v1/open-work/declarations/operation-ledger/check")
+async def check_local_operation_evidence_ledger(request: Request, response: Response):
+    """Explicit source verification, followed by durable local evidence append."""
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_source_verification", "record_link",
+    })
+    if payload["confirm_source_verification"] is not True:
+        raise HTTPException(403, "explicit independent provider verification required")
+    try:
+        admitted, signature, secret, guard = await _operation_ledger_admission(scope, payload)
+        resource_ref = validate_case_record_link(
+            payload["record_link"], admitted, signature, scope=scope, secret=secret,
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    try:
+        receipt = await asyncio.to_thread(
+            source_operation_receipt, resource_ref, "stripe_invoice_paid",
+        )
+    except (ValueError, OSError, TypeError, CaseDeclarationError, sqlite3.DatabaseError):
+        receipt = None
+    await _recheck_source(scope)
+    try:
+        guard()
+        validate_case_record_link(
+            payload["record_link"], admitted, signature, scope=scope, secret=secret,
+        )
+        verified = project_case_operation_verification(admitted, resource_ref, receipt)
+        result = await asyncio.to_thread(
+            append_operation_evidence, admitted, signature, scope=scope,
+            secret=secret, resource_ref=resource_ref, verification=verified, guard=guard,
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/v1/open-work/declarations/operation-ledger/history")
+async def read_local_operation_evidence_ledger(request: Request, response: Response):
+    """Read previously retained provider evidence, without a provider call."""
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+    })
+    try:
+        admitted, signature, secret, guard = await _operation_ledger_admission(scope, payload)
+        await _recheck_source(scope)
+        result = await asyncio.to_thread(
+            read_operation_evidence, admitted, signature, scope=scope,
+            secret=secret, guard=guard,
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/v1/open-work/declarations/operation-ledger/dispute")
+async def dispute_local_operation_evidence_ledger(request: Request, response: Response):
+    """Append a reviewer's non-destructive dispute, not a provider correction."""
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_dispute", "target_sequence", "reason_code",
+    })
+    if payload["confirm_dispute"] is not True:
+        raise HTTPException(403, "explicit human dispute confirmation required")
+    try:
+        admitted, signature, secret, guard = await _operation_ledger_admission(scope, payload)
+        await _recheck_source(scope)
+        result = await asyncio.to_thread(
+            dispute_operation_evidence, admitted, signature, scope=scope,
+            secret=secret, guard=guard, target_seq=payload["target_sequence"],
+            reason=payload["reason_code"],
         )
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
         raise _safe_error(exc) from None
