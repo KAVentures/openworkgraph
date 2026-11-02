@@ -464,3 +464,120 @@ def test_cross_app_interruption_is_bounded_and_recomputed_after_retention():
     result = linked_work_items(retained)
     assert result["observed_single_record_cross_app_focus_links"] == 0
     assert result["ambiguous_single_record_tab_interleaving_abstentions"] == 1
+
+
+def test_unreferenced_named_app_switch_blocks_one_sided_browser_assignment():
+    # No business record is claimed by Terminal. Its observed focus change is
+    # still negative evidence against silently extending Browser case A.
+    trace = [
+        event(1, A),
+        event(2, tab=None, app="Terminal", source="desktop"),
+        event(3),
+    ]
+    response = workflow_evidence.list_workflow_evidence_candidates(_raw_events=trace)
+    linked = response["linked_work_items"]
+    assert linked["total_items"] == 0
+    assert linked["unlinked_observation_count"] == 3
+    assert linked["ambiguous_single_record_tab_interleaving_abstentions"] == 1
+    assert linked["observed_single_record_unreferenced_app_focus_links"] == 0
+    assert linked["link_contract"]["single_record_tab_unreferenced_app_switch_requires_two_sided_focus"]
+    assert linked["link_contract"]["unreferenced_app_switches_are_negative_not_case_identity"]
+    assert "PRIVATE" not in json.dumps(response)
+    assert "tenant-a" not in json.dumps(response)
+
+
+def test_unreferenced_app_interruption_two_sided_return_recovers_only_browser_steps():
+    trace = [
+        event(1, A), event(2),
+        event(3, tab=None, app="Terminal", source="desktop"),
+        event(4), event(5, A),
+    ]
+    response = workflow_evidence.list_workflow_evidence_candidates(_raw_events=trace)
+    result = response["linked_work_items"]
+    item = groups(result)[("e01", "e02", "e04", "e05")]
+    assert item["link_basis"] == {
+        "same_record": 1,
+        "same_tab_single_record_unreferenced_app_bracketed": 2,
+    }
+    assert item["confidence"] == 0.54
+    assert item["cross_record_join"] is False
+    assert result["observed_single_record_unreferenced_app_focus_links"] == 2
+    assert result["ambiguous_single_record_tab_interleaving_abstentions"] == 0
+    assert result["unlinked_observation_count"] == 1
+    assert "e03" not in item["event_ids"]
+    assert result["read_only"] and not result["authoritative"]
+    serialized = json.dumps(response)
+    for secret in ("PRIVATE", "tenant-a", "actor-a", "device-a", "session-a", "atlassian"):
+        assert secret not in serialized
+
+
+def test_unreferenced_app_switch_recovery_recomputes_after_anchor_removal():
+    trace = [
+        event(1, A), event(2),
+        event(3, tab=None, app="Terminal", source="desktop"),
+        event(4), event(5, A),
+    ]
+    assert linked_work_items(trace)["observed_single_record_unreferenced_app_focus_links"] == 2
+    # Retention/revocation of the return anchor removes the basis for both
+    # recovered browser observations, without a cached membership artifact.
+    retained = [row for row in trace if row["event_id"] != "e05"]
+    result = linked_work_items(retained)
+    assert result["observed_single_record_unreferenced_app_focus_links"] == 0
+    assert result["ambiguous_single_record_tab_interleaving_abstentions"] == 2
+    assert result["total_items"] == 0
+
+
+def test_unreferenced_app_switch_scope_and_clock_ambiguity_do_not_create_witness():
+    other_tenant = event(3, tab=None, app="Terminal", source="desktop")
+    other_tenant["organization_id"] = "tenant-b"
+    trace = [event(1, A), event(2), other_tenant, event(4), event(5, A)]
+    result = linked_work_items(trace)
+    assert result["observed_single_record_unreferenced_app_focus_links"] == 0
+    assert ("e01", "e02", "e04", "e05") in groups(result)
+    # Same-instant app switch is not an observed before/after order.
+    tied = [
+        event(1, A), event(2),
+        event(3, tab=None, app="Terminal", source="desktop"),
+        event(4), event(5, A),
+    ]
+    tied[2]["observed_at"] = tied[1]["observed_at"]
+    result = linked_work_items(tied)
+    assert result["observed_single_record_unreferenced_app_focus_links"] == 0
+    assert result["ambiguous_single_record_tab_interleaving_abstentions"] >= 1
+
+
+def test_unreferenced_app_switch_rejects_untrusted_and_unbounded_interruption():
+    cases = []
+    clipboard = event(3, tab=None, app="Terminal", source="desktop", transfer="x")
+    cases.append([event(1, A), event(2), clipboard, event(4), event(5, A)])
+    malformed = event(3, tab=None, app="Terminal", source="desktop")
+    malformed["event_type"] = None
+    cases.append([event(1, A), event(2), malformed, event(4), event(5, A)])
+    unknown = event(3, tab=None, app="unknown", source="desktop")
+    cases.append([event(1, A), event(2), unknown, event(4), event(5, A)])
+    unknown_source = event(3, tab=None, app="Terminal", source="unknown")
+    cases.append([event(1, A), event(2), unknown_source, event(4), event(5, A)])
+    for trace in cases:
+        result = linked_work_items(trace)
+        assert result["observed_single_record_unreferenced_app_focus_links"] == 0
+    too_many = ([event(1, A), event(2)]
+                + [event(i, tab=None, app="Terminal", source="desktop")
+                   for i in range(3, 20)]
+                + [event(20), event(21, A)])
+    result = linked_work_items(too_many)
+    assert result["observed_single_record_unreferenced_app_focus_links"] == 0
+    assert result["ambiguous_single_record_tab_interleaving_abstentions"] >= 1
+
+
+def test_unreferenced_app_switch_cannot_override_competing_exact_record():
+    # An independent exact B on the same browser tab is a hard boundary;
+    # the unrelated Terminal switch cannot turn it into an A continuation.
+    trace = [
+        event(1, A), event(2),
+        event(3, tab=None, app="Terminal", source="desktop"),
+        event(4, B), event(5), event(6, A),
+    ]
+    result = linked_work_items(trace)
+    assert result["observed_single_record_unreferenced_app_focus_links"] == 0
+    assert ("e01", "e02", "e05", "e06") not in groups(result)
+    assert result["unlinked_observation_count"] >= 2
