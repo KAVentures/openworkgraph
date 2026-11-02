@@ -526,7 +526,7 @@
     card.append(row,resumeSection,auditSection,tools,status,counts,viewCount,list,detail);
     panel.appendChild(card);
 
-    let latestIdeas=[],refreshGeneration=0,resumeGeneration=0,auditGeneration=0,auditPageIndex=0;
+    let latestIdeas=[],refreshGeneration=0,resumeGeneration=0,auditGeneration=0,auditPageIndex=0,auditAbort=null;
     function auditEligible(){
       return latestIdeas.filter(idea=>['approved','implemented'].includes(idea.state))
         .sort((a,b)=>String(b.updated_at||'').localeCompare(String(a.updated_at||''))||
@@ -585,6 +585,10 @@
     };
 
     auditButton.onclick=async()=>{
+      // Cancel superseded page reads instead of allowing stacked page batches.
+      // The generation check also guards a response already in flight.
+      if(auditAbort)auditAbort.abort();
+      const controller=new AbortController();auditAbort=controller;
       const request=++auditGeneration;
       auditButton.disabled=true;
       auditHost.replaceChildren();
@@ -605,7 +609,7 @@
           const batch=await Promise.all(selected.slice(offset,offset+3).map(async idea=>{
             try{
               const journey=await (await api('/v1/automation-pipeline/'+
-                encodeURIComponent(idea.idea_id)+'/journey')).json();
+                encodeURIComponent(idea.idea_id)+'/journey',{signal:controller.signal})).json();
               return portfolioHandoffRow(idea,journey);
             }catch(_){
               return {idea_id:idea.idea_id,project_id:null,status:'unavailable',
@@ -669,7 +673,7 @@
           (incomplete?'Partial coverage: '+omitted+' on other pages; unavailable or missing project evidence is not verified.':
             'All loaded eligible journeys checked; execution and business outcomes remain unverified.')+
           ' Refresh after changes; nothing was executed.';
-      }finally{if(request===auditGeneration)auditButton.disabled=false;}
+      }finally{if(request===auditGeneration){auditAbort=null;auditButton.disabled=false;}}
     };
     auditPrevious.onclick=()=>{
       if(auditPageIndex===0)return;
@@ -694,7 +698,8 @@
     }
 
     async function refresh(){
-      ++auditGeneration;auditPageIndex=0;auditHost.replaceChildren();auditButton.disabled=false;
+      ++auditGeneration;if(auditAbort)auditAbort.abort();auditAbort=null;
+      auditPageIndex=0;auditHost.replaceChildren();auditButton.disabled=false;
       auditStatus.textContent='Portfolio review cleared; explicitly check again after the list refresh.';
       const generation=++refreshGeneration;
       const q=filter.value?'?state='+encodeURIComponent(filter.value):'';
