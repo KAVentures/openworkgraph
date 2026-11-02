@@ -928,16 +928,16 @@ not production multi-tenant RBAC or independently verified business outcomes.
 
 ## Atomic reapproval of an existing reviewed dependency graph
 
-\`POST /v1/open-work/declarations/batch-revision\` is a **local dashboard-session-only**, explicitly confirmed mutation of **1–4 existing** reviewed owner declarations. It does not create cases, read a provider, grant execution authority, or assert a business outcome. Send exactly \`confirm_batch_revision:true\`, \`confirm_cascade_invalidation:true\`, \`expected_invalidated_work_item_refs:[...]\` and \`items:[...]\`. Each item has the same six fields as the creation batch, but **must** carry the current positive \`expected_revision\` and exact incarnation \`expected_edit_token\` obtained from a fresh GET. Every item must have a current review and same-source scope. The server topologically reapproves selected dependencies regardless of input order, increments each selected revision exactly once and retains its incarnation token and original creation/expiry ceilings.
+`POST /v1/open-work/declarations/batch-revision` is a **local dashboard-session-only**, explicitly confirmed mutation of **1–4 existing** reviewed owner declarations. It does not create cases, read a provider, grant execution authority, or assert a business outcome. Send exactly `confirm_batch_revision:true`, `confirm_cascade_invalidation:true`, `expected_invalidated_work_item_refs:[...]` and `items:[...]`. Each item has the same six fields as the creation batch, but **must** carry the current positive `expected_revision` and exact incarnation `expected_edit_token` obtained from a fresh GET. Every item must have a current review and same-source scope. The server topologically reapproves selected dependencies regardless of input order, increments each selected revision exactly once and retains its incarnation token and original creation/expiry ceilings.
 
-**Cascade is never implicit:** any prior dependent of a changed case that is not included in the same reapproval must be named exactly in \`expected_invalidated_work_item_refs\` (opaque refs only). To obtain that list, inspect the current \`GET /v1/open-work/declarations/graph\` and take the union of transitive dependents of all selected cases, excluding selected cases. The server recomputes the closure **under the SQLite write lock**; if a dependent appeared, disappeared, changed scope or is unexpectedly included, the whole write fails rather than silently deleting an unacknowledged approval. A selected dependent is explicitly reapproved in the same transaction and survives; an omitted acknowledged dependent is deleted, not silently made independent. An unrelated case remains. If the revised full graph contains a cycle, stale CAS, missing or foreign prerequisite, expired approval, changed review/retention or unacknowledged dependent, **no revised/deleted rows commit**. Existing single-case edits retain their conservative cascading behavior.
+**Cascade is never implicit:** any prior dependent of a changed case that is not included in the same reapproval must be named exactly in `expected_invalidated_work_item_refs` (opaque refs only). To obtain that list, inspect the current `GET /v1/open-work/declarations/graph` and take the union of transitive dependents of all selected cases, excluding selected cases. The server recomputes the closure **under the SQLite write lock**; if a dependent appeared, disappeared, changed scope or is unexpectedly included, the whole write fails rather than silently deleting an unacknowledged approval. A selected dependent is explicitly reapproved in the same transaction and survives; an omitted acknowledged dependent is deleted, not silently made independent. An unrelated case remains. If the revised full graph contains a cycle, stale CAS, missing or foreign prerequisite, expired approval, changed review/retention or unacknowledged dependent, **no revised/deleted rows commit**. Existing single-case edits retain their conservative cascading behavior.
 
-Example: A ← B ← C and independent D; reapprove A and B with C omitted, and acknowledge \`expected_invalidated_work_item_refs:[C]\`. A and B advance their revisions together, C's old declaration disappears, and D remains untouched. Reapproving A/B/C together with an empty invalidation list preserves all three only after each owner's explicit exact-version reapproval. This is a local point-in-time commit, not an atomic cross-process provider-grant/revocation fence. Re-read before relying on current authority. The response exposes only opaque refs, fixed owner codes, exact revisions, and unverified source/customer/agent outcome flags. The feature is synthetic/local until native CI and real authorized pilot acceptance.
+Example: A ← B ← C and independent D; reapprove A and B with C omitted, and acknowledge `expected_invalidated_work_item_refs:[C]`. A and B advance their revisions together, C's old declaration disappears, and D remains untouched. Reapproving A/B/C together with an empty invalidation list preserves all three only after each owner's explicit exact-version reapproval. This is a local point-in-time commit, not an atomic cross-process provider-grant/revocation fence. Re-read before relying on current authority. The response exposes only opaque refs, fixed owner codes, exact revisions, and unverified source/customer/agent outcome flags. The feature is synthetic/local until native CI and real authorized pilot acceptance.
 
 
 ### Preview the exact cascade before confirmation
 
-Call \`POST /v1/open-work/declarations/batch-revision-impact\` with \`{"cases":[{"work_item_ref":"owg:w:…","expected_revision":1,"expected_edit_token":"…"}]}\` for 1–4 current reviewed cases. The authenticated local endpoint reuses the existing graph/change-impact projection to return the **union** of omitted transitive dependent refs as \`expected_invalidated_work_item_refs\`, plus the selected reapproval refs. No provider call or mutation occurs. Pass that list unchanged into the separately confirmed \`batch-revision\` write with full proposed owner codes/dependencies. Preview is advisory: it does not validate proposed new edges, lock the graph, or authorize a write. The write repeats all review, CAS, dependency, cycle and cascade checks under SQLite lock; a stale preview fails rather than deleting an unexpected case. Native CI and real-account acceptance remain pending.
+Call `POST /v1/open-work/declarations/batch-revision-impact` with `{"cases":[{"work_item_ref":"owg:w:…","expected_revision":1,"expected_edit_token":"…"}]}` for 1–4 current reviewed cases. The authenticated local endpoint reuses the existing graph/change-impact projection to return the **union** of omitted transitive dependent refs as `expected_invalidated_work_item_refs`, plus the selected reapproval refs. No provider call or mutation occurs. Pass that list unchanged into the separately confirmed `batch-revision` write with full proposed owner codes/dependencies. Preview is advisory: it does not validate proposed new edges, lock the graph, or authorize a write. The write repeats all review, CAS, dependency, cycle and cascade checks under SQLite lock; a stale preview fails rather than deleting an unexpected case. Native CI and real-account acceptance remain pending.
 
 
 ## Portable, source-scoped case status checkpoint and conservative comparison
@@ -1297,3 +1297,337 @@ FastAPI/private-SQLite integration coverage is in
 fixtures, including no-source reads, partial histories, disputes, privacy,
 revocation during traversal, tampering, and exact-CAS/authorization refusal.
 Native CI and real-provider/customer acceptance remain separate gates.
+
+
+## Explicit human-assessed business outcome feedback (local M4 milestone)
+
+A reviewed case's **declared expected outcome** is not the same as a
+source-reported invoice payment, a completed agent action, or the actual
+customer/business outcome. The optional local **human assessment history**
+adds an explicit feedback channel, while preserving that distinction. It
+does not certify a customer outcome, independently verify a business goal,
+authorize an agent, or change any source system.
+
+Three dashboard-session-only JSON POST endpoints are available:
+
+- `/v1/open-work/declarations/human-outcomes/assess`: exact current
+  `work_item_ref`, `expected_revision`, `expected_edit_token`,
+  `confirm_human_assessment: true`, `human_status` (`met`, `not_met`,
+  `unknown`), and `reason_code` (`owner_review`,
+  `customer_feedback_reviewed`, `external_evidence_reviewed`).
+  These are **reason labels**, not submitted or independently verified
+  customer records. A human can explicitly record a status only after
+  reviewing the currently approved goal and full prerequisite graph.
+- `/v1/open-work/declarations/human-outcomes/history`: only the exact
+  case ref/revision/edit token. Returns bounded, retained assessments
+  without a Stripe/provider read, with
+  `provenance: explicit_local_human_assessment_not_independently_verified`
+  and all provider/customer/outcome verification flags **false**.
+- `/v1/open-work/declarations/human-outcomes/correct`: exact case CAS,
+  `confirm_human_correction: true`, `target_sequence` (the **latest**
+  assessment/correction event sequence), and replacement `human_status`.
+  Appends a `correction` event referencing that sequence; the previous
+  assessment remains visible and unmodified. A stale correction target is
+  rejected rather than silently overwriting another operator's review.
+
+Example assessment body (opaque refs shown as placeholders):
+
+```json
+{
+  "work_item_ref": "owg:w:<32-lowercase-hex>",
+  "expected_revision": 1,
+  "expected_edit_token": "<current-32-hex-incarnation>",
+  "confirm_human_assessment": true,
+  "human_status": "unknown",
+  "reason_code": "owner_review"
+}
+```
+
+The private SQLite store is capped at 50 cases, 32 append-only events per
+case and 2 MiB. Each event carries only an opaque case ref, HMAC-bound
+source/reviewed-DAG fingerprints, fixed human status and reason codes,
+monotonic UTC timestamp, expiry, and HMAC-chained event integrity. It does
+not store customer names, native IDs, free-text reasons, receipts, amounts,
+credentials or raw activity. Retention never exceeds the owner's original
+review expiry, configured human-history retention, or seven days. Changed
+source account, review incarnation or prerequisite graph cannot rebind an
+old assessment. Explicit review deletion and declaration deletion scrub assessments for
+the invalidated dependency closure while preserving unrelated reviewed
+cases; source disconnect/clear scrubs the whole private store. Default-OFF use creates no store.
+
+Each call requires a local dashboard session, a separately configured
+Stripe source scope, the exact current owner declaration and entire
+reviewed dependency DAG. The source is **not contacted** by these APIs;
+source connection is used only as a scope/consent boundary. The backend
+re-admits that scope and graph before and after local storage operations,
+but this does not constitute production multi-tenant RBAC or an atomic
+cross-process revocation fence. All responses are no-store and contain
+`expected_outcome_verified: false`,
+`customer_outcome_verified: false`,
+`provider_operation_verified: false`, and
+`agent_execution_authorized: false`.
+
+`tests/test_open_work_case_outcome_reviews.py` exercises authenticated
+FastAPI + private SQLite persistence, correction history, stale-target
+refusal, integrity tampering, prerequisite invalidation, review deletion,
+source disconnect, retention and privacy with synthetic local cases.
+Native CI, signed-client acceptance, independent customer outcome
+adjudication, real-provider testing and held-out A/B/C commercial trials
+are **not established** by those synthetic tests.
+
+
+## Reviewed dependency-wide HUMAN outcome history (experimental)
+
+The local dashboard operator may explicitly inspect the latest retained **human
+assessments**, including non-destructive corrections, for a reviewed case and
+up to three prerequisites in one response. This is separate from the
+provider-operation evidence ledger and never implies verified payment,
+customer success, agent causality, or a verified business obligation.
+
+`POST /v1/open-work/declarations/human-outcomes/dependency-history` requires
+an authenticated `OWG-Session`, the current root `work_item_ref`,
+`expected_revision` and `expected_edit_token`, plus
+`"confirm_historical_review": true` and `"max_cases": 1..4`. Example:
+
+```json
+{
+  "work_item_ref": "owg:w:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "expected_revision": 1,
+  "expected_edit_token": "<current owner review token>",
+  "confirm_historical_review": true,
+  "max_cases": 4
+}
+```
+
+The response includes typed owner-declared dependency edges, each selected
+case's goal/outcome codes and revision, chronological human assessment and
+correction events, and the latest **human-assessed** `met`/`not_met`/`unknown`
+status. It reports missing feedback, omitted prerequisites and
+`human_feedback_coverage_complete` separately. A complete set of human
+assessments is **not** independently verified completion. A smaller
+`max_cases` truncates the prerequisite selection explicitly rather than
+silently treating omitted cases as successful.
+
+Each selected case must independently pass current source scope, review,
+retention and exact dependency-version checks. The root graph is re-admitted
+before and after every private SQLite read. Any revoked, changed or
+integrity-invalid selected history fails closed; no partial trusted response
+is returned. Reads are bounded and provider-free, but the separate SQLite
+reads are **not an atomic cross-process snapshot**. The API does not perform
+source checks, writes, polling, network sync or agent execution. It preserves
+the original local workflow mapping and dashboard experiences.
+
+Synthetic FastAPI/private-SQLite coverage checks full/partial chains,
+corrections, missing feedback, local-session authorization, malformed limits,
+tampering and review revocation. Native cross-platform CI and real customer
+adjudication are separate release gates.
+
+
+## Historical human/provider evidence triage (explicit local REST, M4)
+
+The optional `POST /v1/open-work/declarations/human-outcomes/evidence-triage`
+joins the **two separate private SQLite histories** for a currently reviewed
+case and up to three owner-declared prerequisites. It is an operator review
+queue, **not** a customer-outcome adjudicator, an agent permission, or a
+live Stripe status query. The endpoint requires an authenticated local
+`OWG-Session` and exact JSON:
+
+```json
+{
+  "work_item_ref": "owg:w:<32-lowercase-hex>",
+  "expected_revision": 1,
+  "expected_edit_token": "<current opaque edit token>",
+  "confirm_historical_review": true,
+  "max_cases": 4
+}
+```
+
+Each selected prerequisite must independently pass current source-account,
+retention, consent, owner-review incarnation and **its entire** prerequisite
+DAG admission. The root full-DAG signature is checked before and after each
+human and provider history read; tampered HMAC histories fail closed. Reads
+are sequential, **not an atomic cross-process snapshot**. No source access,
+polling, cloud sync, customer/native identifiers, amounts, free text, business
+writes or agent execution is introduced. Responses are `Cache-Control:
+no-store`.
+
+Each `case_reviews` entry includes the exact reviewed goal/outcome codes,
+latest **human-assessed** `met/not_met/unknown`, latest **historical**
+`paid/unknown` provider operation state, event counts, last recorded times,
+and typed `review_attention` reasons. The bounded output also includes
+selected owner-declared edges, omitted prerequisite count and coverage flags.
+Reasons such as `human_assessment_missing`, `provider_check_missing`,
+`provider_history_unknown_or_disputed`,
+`human_met_without_historical_paid_receipt`, and
+`historical_paid_without_human_met_assessment` are **attention cues**, not
+claims of contradiction, negligence, an unpaid invoice or customer success.
+A human can mark an expected outcome `met` for reasons unrelated to
+payment; a paid provider receipt does not verify that goal or causality.
+Even when both columns say `met` and `paid`, **current provider verification,
+expected-outcome verification, customer-outcome verification and agent
+causality all remain false**. An explicit fresh
+`/operation-ledger/check` is needed for a new source observation; actual
+customer outcome requires separately authorized independent adjudication.
+
+Synthetic FastAPI/private-SQLite tests:
+`tests/test_open_work_case_outcome_reconciliation.py` cover provider/human
+history joins, missing/partial DAG, explicit disputes and human corrections,
+source-free reads, authorization, stale CAS, tampering and revocation during
+traversal. Native cross-platform CI, real provider acceptance and held-out
+commercial trials remain mandatory and separate.
+
+
+## Portable historical outcome review packet (explicit local REST, M4)
+
+An operator can now **capture a signed, minimized historical review** and later
+recheck whether that same authorized evidence is still current, without
+contacting Stripe or accepting a human claim as a verified business outcome.
+
+1. Call `POST /v1/open-work/declarations/human-outcomes/review-packet` with
+   an authenticated local `OWG-Session` and the exact same JSON used for
+   `/human-outcomes/evidence-triage` (current `work_item_ref`,
+   `expected_revision`, `expected_edit_token`,
+   `confirm_historical_review: true`, `max_cases: 1..4`).
+   The response contains the minimized `review_summary` and a `packet`.
+2. Retain the packet locally for a later **explicit** reviewer check. Call
+   `POST /v1/open-work/declarations/human-outcomes/verify-review-packet`
+   with the same current case revision/token and the exact packet:
+
+```json
+{
+  "work_item_ref": "owg:w:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "expected_revision": 1,
+  "expected_edit_token": "<current opaque edit token>",
+  "packet": {"format": "openworkgraph.local-outcome-review-packet.v1", "...": "the entire unmodified packet from step 1"}
+}
+```
+
+The verification response reports `comparison: "unchanged"` or
+`comparison: "changed"`, `changed_case_refs`, and the newly admitted
+`review_summary`. For example, after a human correction or provider
+evidence dispute, the changed case appears in `changed_case_refs`. A
+separate `other_review_metadata_changed` flag identifies changes outside
+individual case rows. A partial selection remains explicitly partial; a
+packet for `max_cases: 1` never implies unscanned prerequisites passed.
+
+Packets expire within **one hour** and never outlive the owner-reviewed
+declaration. The seal binds the installation secret, exact reviewed full
+dependency graph, source-account scope, selected case refs, case-level
+SHA-256 digests, aggregate review digest and expiry. Forged, expired,
+foreign-account, revoked or changed-DAG packets are refused before either
+private ledger is read. Verification independently re-admits each selected
+case and its complete prerequisite graph, rechecks the root graph and source
+scope across the two SQLite ledgers, and returns `Cache-Control: no-store`.
+The result is not a distributed atomic revocation fence.
+
+**Meaning and limits:** The packet seal is local integrity evidence, **not
+an independently verifiable Stripe signature or customer outcome**. Even an
+unchanged packet is a snapshot of historical human assertions and historical
+provider-operation checks; it does not prove a current payment, an expected
+business goal, customer satisfaction, an obligation, agent causality or
+execution authority. It contains no native invoice ID, customer information,
+amount, credentials, raw receipt or event text; it is never uploaded by OWG.
+No new provider grants, polling, network reads, business writes or default
+feature activation are introduced.
+
+`tests/test_open_work_case_review_packet.py` exercises the actual
+authenticated FastAPI/private SQLite issue → verify → correction/dispute →
+changed flow, partial prerequisite coverage, forgery/expiry/refusal before
+ledger IO, privacy and source revocation with synthetic provider data.
+Cross-platform exact-head CI and real-provider/customer acceptance remain
+separate requirements.
+
+
+## Fresh provider operation + reviewed human outcome triage (explicit local REST, M4)
+
+The opt-in `POST /v1/open-work/declarations/human-outcomes/fresh-evidence-triage`
+provides one operator-facing check that **does not mistake a historical paid
+receipt for a current source state**. It combines the existing separately
+integrity-checked private human/provider histories across a reviewed root case
+and up to three prerequisites with **one fresh independent Stripe operation
+receipt for the root case only**. This is an actual authorized source-read path,
+not another locally derived historical status.
+
+First explicitly issue an exact source-joined `record_link` through
+`POST /v1/open-work/declarations/operation-link` (see above). Then send an
+authenticated local `OWG-Session` with exact JSON:
+
+```json
+{
+  "work_item_ref": "owg:w:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "expected_revision": 1,
+  "expected_edit_token": "<current opaque edit token>",
+  "confirm_historical_review": true,
+  "confirm_source_verification": true,
+  "max_cases": 4,
+  "record_link": {"format": "openworkgraph.local-case-record-link.v1", "...": "entire unmodified signed link"}
+}
+```
+
+Both confirmations are required. The signed link, exact owner revision and
+entire reviewed dependency DAG are checked before the provider request.
+The local source account, every selected child's independent review and
+retention, and both HMAC-protected histories are admitted. After the source
+request, the same source, root DAG, signed link and historical review are
+rechecked; any intervening correction, dispute, revocation, disconnect or
+graph edit fails closed. This is still not an atomic cross-process provider
+transaction, and the read may have occurred before a subsequent revocation.
+
+The response contains `historical_review` (human assessments/corrections,
+historical provider checks/disputes, declared dependency edges, missing
+coverage) and `fresh_root_provider` (current source-confirmed
+`paid` or `unknown`, timestamp when verified, typed review-attention
+reasons). `historical_paid_not_freshly_reconfirmed` explicitly distinguishes
+a previous paid observation from an unavailable/invalid fresh receipt.
+`fresh_paid_differs_from_retained_provider_history` does not automatically
+rewrite a historical ledger. Prerequisites are **historical-only** in this
+call; `all_prerequisites_freshly_checked` is always false, even if every
+historical prerequisite is included.
+
+The fresh source read is explicit, bounded to **one** previously source-joined
+invoice, and read-only. A source outage, stale/contradictory receipt or invalid
+provider evidence yields `unknown`, never an inferred unpaid status. The
+fresh result is not persisted; repeat the explicit request to recheck.
+No customer/native IDs, invoice amounts, free text, credentials or raw
+receipts enter the response; no automatic polling, cloud sync or business
+writes are introduced. `Cache-Control: no-store` is set.
+
+**Critical outcome boundary:** even `fresh paid` plus human `met` proves
+neither that the owner-declared expected business outcome was achieved nor
+customer satisfaction, agent causality, an obligation or agent execution
+authorization. Those fields remain false. Real restricted Stripe test-account
+acceptance and independent customer adjudication are not established by
+synthetic FastAPI/private-SQLite integration tests.
+
+`tests/test_open_work_case_fresh_outcome_triage.py` covers the real
+authenticated route and local SQLite history, fresh paid versus absent
+historical evidence, historical paid versus source outage, partial
+prerequisites, forged links and missing confirmation before source IO,
+mid-read review revocation/history changes, privacy and invalid source
+verification. Required native cross-platform CI remains a separate gate.
+
+
+## Portfolio-wide historical outcome triage (Worker D, #247 M4 / #264 Stage 7)
+
+The **authenticated local dashboard** can explicitly review historical outcome evidence across the *currently approved portfolio*, rather than manually opening each case and its prerequisites. This is an additive API; it does not replace case dossier, workflow mapping, Activity, Discovery Mode, MCP or export.
+
+`POST /v1/open-work/declarations/human-outcomes/portfolio-triage` accepts **exactly**:
+
+```json
+{
+  "confirm_historical_review": true,
+  "max_cases": 10,
+  "offset": 0,
+  "expected_portfolio_digest": null
+}
+```
+
+Send the existing `Authorization: OWG-Session <dashboard-session>` header. The first page uses `offset: 0` and a null digest; subsequent pages pass the returned `next_offset` and **unchanged** `portfolio_digest`. The maximum page size is 10 and the retained declaration ledger caps the total at 50. Cases are ordered by opaque `work_item_ref`, not by inferred business urgency. The digest is a local-secret HMAC of the entire currently approved case set, including revisions, incarnation edit tokens, dependency edges, goal/outcome codes and expiries. Any changed/revoked/expired approval rejects stale pagination rather than silently mixing different review snapshots. The response includes each selected case's current exact `expected_revision` and `expected_edit_token` for drilldown through existing owner-review APIs.
+
+Every case is separately re-admitted against its **complete current prerequisite DAG**, and both independent private SQLite ledgers are HMAC-checked with source, retention and review rechecks before and after each read. A portfolio-wide revision digest is rechecked after each case and at the end. This is still **not a cross-process atomic transaction**; production organization-wide grants, actor RBAC and revocation fencing remain unfinished.
+
+For each case, the result exposes owner-declared goal/expected-outcome codes, latest *human-assessed* `met/not_met/unknown`, *historical* provider `paid/unknown`, number of checks/disputes, missing human feedback and bounded `review_attention` reason codes. The operation-receipt-missing reason is emitted **only** when the declared expected outcome is `operation_receipt_reviewed`; a `human_review_recorded` or `source_state_rechecked` case does not require an invoice payment receipt. A human `met` assessment and historical `paid` are distinct facts. Neither proves current provider state, expected business goal, customer completion, agent causality or an obligation. A paid receipt always requires a separately authorized *fresh* provider recheck before making a current provider claim.
+
+The endpoint performs **no Stripe/source read**, background polling, provider write, cloud upload or agent action. It requires an explicit local operator request, returns `Cache-Control: no-store`, never includes native invoice IDs, amounts, customer names, free text or credentials, and uses existing private retention/review/source-disconnect cleanup. Invalid token, authorization loss, source replacement, corrupt ledger or concurrent owner-declaration change fails closed; no partial portfolio page is returned. The historical reads are explicitly labeled non-atomic.
+
+`tests/test_open_work_case_outcome_portfolio.py` contains FastAPI/dashboard-session/private-SQLite integration tests for paginated review, outcome-specific missing-evidence reasons, an actual locally retained synthetic source-confirmed Stripe receipt, token mismatch, revocation during a read, scope/auth/confirmation and privacy. **Synthetic tests and pending native CI are not real Stripe acceptance or independently verified customer outcomes.**

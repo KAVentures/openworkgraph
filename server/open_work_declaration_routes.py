@@ -32,9 +32,22 @@ from .open_work_case_operation_timeline import (
     validate_prior_operation_timeline, append_operation_timeline,
 )
 from .open_work_case_dependency_history import compose_dependency_operation_history
+from .open_work_case_human_dependency_history import compose_dependency_human_outcomes
+from .open_work_case_outcome_reconciliation import compose_outcome_evidence_triage
+from .open_work_case_fresh_outcome_triage import compose_fresh_outcome_triage
+from .open_work_case_outcome_portfolio import (
+    portfolio_fingerprint, validate_page_token, compose_outcome_portfolio,
+)
+from .open_work_case_review_packet import (
+    issue_review_packet, validate_review_packet, compare_review_packet,
+)
 from .open_work_case_operation_ledger import (
     append_operation_evidence, read_operation_evidence, dispute_operation_evidence,
     clear_operation_evidence,
+)
+from .open_work_case_outcome_reviews import (
+    record_human_outcome, correct_human_outcome, read_human_outcomes,
+    clear_human_outcome_reviews,
 )
 from .open_work_outcomes import source_operation_receipt
 from .open_work_case_status_checkpoint import (
@@ -85,7 +98,8 @@ def _safe_error(exc: Exception) -> HTTPException:
         if "stale" in message or "scope" in message or "changed" in message:
             return HTTPException(409, "declaration version, scope or review changed")
         # Whole words: "reviewed" in a validation message is not a missing review.
-        if re.search(r"\b(review|retention)\b", message):
+        # "review packet" names the sealed packet object, not a missing review.
+        if re.search(r"\b(review|retention)\b", message.replace("review packet", "packet")):
             return HTTPException(403, "explicit current review and retained history required")
         return HTTPException(422, "invalid or unavailable owner declaration")
     return HTTPException(409, "local declaration store unavailable")
@@ -136,6 +150,7 @@ async def _recheck_source(scope: str) -> None:
         # Fail closed on disconnect/account replacement during a local write.
         # This is not an atomic cross-process provider-grant transaction.
         await asyncio.to_thread(clear_operation_evidence)
+        await asyncio.to_thread(clear_human_outcome_reviews)
         await asyncio.to_thread(clear_case_declarations)
         raise HTTPException(409, "local source connection changed")
 
@@ -1156,6 +1171,468 @@ async def read_local_dependency_operation_history(request: Request, response: Re
         result = compose_dependency_operation_history(
             admitted, signature, selected, histories,
             unscanned_prerequisites=omitted,
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/v1/open-work/declarations/human-outcomes/assess")
+async def assess_local_human_case_outcome(request: Request, response: Response):
+    """Record explicit human feedback; NOT independently verified completion."""
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_human_assessment", "human_status", "reason_code",
+    })
+    if payload["confirm_human_assessment"] is not True:
+        raise HTTPException(403, "explicit human outcome assessment required")
+    try:
+        admitted, signature, secret, guard = await _operation_ledger_admission(scope, payload)
+        await _recheck_source(scope)
+        result = await asyncio.to_thread(
+            record_human_outcome, admitted, signature, scope=scope,
+            secret=secret, guard=guard, human_status=payload["human_status"],
+            reason_code=payload["reason_code"],
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/v1/open-work/declarations/human-outcomes/history")
+async def read_local_human_case_outcomes(request: Request, response: Response):
+    """Read retained human assessments without contacting any provider."""
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+    })
+    try:
+        admitted, signature, secret, guard = await _operation_ledger_admission(scope, payload)
+        await _recheck_source(scope)
+        result = await asyncio.to_thread(
+            read_human_outcomes, admitted, signature, scope=scope,
+            secret=secret, guard=guard,
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/v1/open-work/declarations/human-outcomes/correct")
+async def correct_local_human_case_outcome(request: Request, response: Response):
+    """Append an explicit correction to the latest human assessment."""
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_human_correction", "target_sequence", "human_status",
+    })
+    if payload["confirm_human_correction"] is not True:
+        raise HTTPException(403, "explicit human outcome correction required")
+    try:
+        admitted, signature, secret, guard = await _operation_ledger_admission(scope, payload)
+        await _recheck_source(scope)
+        result = await asyncio.to_thread(
+            correct_human_outcome, admitted, signature, scope=scope,
+            secret=secret, guard=guard, target_seq=payload["target_sequence"],
+            human_status=payload["human_status"],
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/v1/open-work/declarations/human-outcomes/dependency-history")
+async def read_local_dependency_human_outcomes(request: Request, response: Response):
+    """Inspect human feedback across a reviewed DAG, never verified completion.
+
+    Every selected prerequisite is separately admitted. Root admission is
+    rechecked before and after each local SQLite read; separate reads are
+    expressly not an atomic cross-process source-grant snapshot.
+    """
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_historical_review", "max_cases",
+    })
+    if payload["confirm_historical_review"] is not True:
+        raise HTTPException(403, "explicit human outcome history review required")
+    count = payload["max_cases"]
+    if type(count) is not int or not 1 <= count <= 4:
+        raise HTTPException(422, "max_cases must be between 1 and 4")
+    try:
+        before = await asyncio.to_thread(list_case_declarations, scope)
+        admitted, signature = admitted_case_dossier_snapshot(
+            before, work_item_ref=payload["work_item_ref"],
+            expected_revision=payload["expected_revision"],
+            expected_edit_token=payload["expected_edit_token"],
+        )
+        selected, omitted = select_dependency_status_targets(admitted, max_cases=count)
+        rows = {row["work_item_ref"]: row for row in before["items"]}
+        from functools import partial
+        root_guard = partial(
+            _operation_ledger_guard, scope, payload["work_item_ref"],
+            payload["expected_revision"], payload["expected_edit_token"], signature,
+        )
+        secret = await asyncio.to_thread(
+            _read_or_create_secret, ".open_work_reference_key",
+        )
+        targets = []
+        for item in selected:
+            ref = item["work_item_ref"]
+            row = rows[ref]
+            child, child_signature = admitted_case_dossier_snapshot(
+                before, work_item_ref=ref,
+                expected_revision=row["revision"],
+                expected_edit_token=row["edit_token"],
+            )
+            child_guard = partial(
+                _operation_ledger_guard, scope, ref, row["revision"],
+                row["edit_token"], child_signature,
+            )
+            targets.append((child, child_signature, child_guard))
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    histories = []
+    for child, child_signature, child_guard in targets:
+        try:
+            await asyncio.to_thread(root_guard)
+            history = await asyncio.to_thread(
+                read_human_outcomes, child, child_signature,
+                scope=scope, secret=secret, guard=child_guard,
+            )
+            await asyncio.to_thread(root_guard)
+        except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+            raise _safe_error(exc) from None
+        histories.append(history)
+        await _recheck_source(scope)
+    try:
+        await asyncio.to_thread(root_guard)
+        result = compose_dependency_human_outcomes(
+            admitted, signature, selected, histories,
+            unscanned_prerequisites=omitted,
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+async def _load_review_triage(scope: str, payload: dict[str, Any]):
+    """Re-admit each case and independently verify both retained histories."""
+    count = payload["max_cases"]
+    if type(count) is not int or not 1 <= count <= 4:
+        raise HTTPException(422, "max_cases must be between 1 and 4")
+    try:
+        before = await asyncio.to_thread(list_case_declarations, scope)
+        admitted, signature = admitted_case_dossier_snapshot(
+            before, work_item_ref=payload["work_item_ref"],
+            expected_revision=payload["expected_revision"],
+            expected_edit_token=payload["expected_edit_token"],
+        )
+        selected, omitted = select_dependency_status_targets(admitted, max_cases=count)
+        rows = {row["work_item_ref"]: row for row in before["items"]}
+        from functools import partial
+        root_guard = partial(
+            _operation_ledger_guard, scope, payload["work_item_ref"],
+            payload["expected_revision"], payload["expected_edit_token"], signature,
+        )
+        secret = await asyncio.to_thread(
+            _read_or_create_secret, ".open_work_reference_key",
+        )
+        targets = []
+        for item in selected:
+            ref = item["work_item_ref"]
+            row = rows[ref]
+            child, child_signature = admitted_case_dossier_snapshot(
+                before, work_item_ref=ref,
+                expected_revision=row["revision"], expected_edit_token=row["edit_token"],
+            )
+            child_guard = partial(
+                _operation_ledger_guard, scope, ref, row["revision"],
+                row["edit_token"], child_signature,
+            )
+            targets.append((child, child_signature, child_guard))
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    provider_histories = []
+    human_histories = []
+    for child, child_signature, child_guard in targets:
+        try:
+            await asyncio.to_thread(root_guard)
+            provider = await asyncio.to_thread(
+                read_operation_evidence, child, child_signature,
+                scope=scope, secret=secret, guard=child_guard,
+            )
+            await asyncio.to_thread(root_guard)
+            await _recheck_source(scope)
+            human = await asyncio.to_thread(
+                read_human_outcomes, child, child_signature,
+                scope=scope, secret=secret, guard=child_guard,
+            )
+            await asyncio.to_thread(root_guard)
+        except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+            raise _safe_error(exc) from None
+        provider_histories.append(provider)
+        human_histories.append(human)
+        await _recheck_source(scope)
+    try:
+        await asyncio.to_thread(root_guard)
+        result = compose_outcome_evidence_triage(
+            admitted, signature, selected, provider_histories, human_histories,
+            unscanned_prerequisites=omitted,
+        )
+        await asyncio.to_thread(root_guard)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    return result, admitted, signature, secret
+
+
+@router.post("/v1/open-work/declarations/human-outcomes/evidence-triage")
+async def read_local_outcome_evidence_triage(request: Request, response: Response):
+    """Explicit review of both historical ledgers for a bounded reviewed DAG.
+
+    A provider payment receipt and a human assessment are distinct facts.
+    This endpoint neither calls a provider nor verifies customer completion.
+    """
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_historical_review", "max_cases",
+    })
+    if payload["confirm_historical_review"] is not True:
+        raise HTTPException(403, "explicit outcome evidence history review required")
+    count = payload["max_cases"]
+    if type(count) is not int or not 1 <= count <= 4:
+        raise HTTPException(422, "max_cases must be between 1 and 4")
+    result, _admitted, _signature, _secret = await _load_review_triage(scope, payload)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/v1/open-work/declarations/human-outcomes/review-packet")
+async def issue_local_outcome_review_packet(request: Request, response: Response):
+    """Explicitly seal the current minimized historical review for later comparison."""
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_historical_review", "max_cases",
+    })
+    if payload["confirm_historical_review"] is not True:
+        raise HTTPException(403, "explicit historical outcome review required")
+    triage, admitted, signature, secret = await _load_review_triage(scope, payload)
+    try:
+        result = issue_review_packet(
+            triage, admitted, signature, scope=scope, secret=secret,
+            max_cases=payload["max_cases"],
+        )
+        await asyncio.to_thread(_operation_ledger_guard, scope,
+            payload["work_item_ref"], payload["expected_revision"],
+            payload["expected_edit_token"], signature)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/v1/open-work/declarations/human-outcomes/verify-review-packet")
+async def verify_local_outcome_review_packet(request: Request, response: Response):
+    """Re-admit exact review and both ledgers; never recheck provider or infer success."""
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token", "packet",
+    })
+    try:
+        admitted, signature, secret, guard = await _operation_ledger_admission(scope, payload)
+        validated = validate_review_packet(
+            payload["packet"], admitted, signature, scope=scope, secret=secret,
+        )
+        # Reject a forged or stale packet before reading either private ledger.
+        await asyncio.to_thread(guard)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    triage, refreshed, current_signature, current_secret = await _load_review_triage(
+        scope, {**payload, "max_cases": validated["max_cases"]},
+    )
+    try:
+        validate_review_packet(
+            payload["packet"], refreshed, current_signature,
+            scope=scope, secret=current_secret,
+        )
+        result = compare_review_packet(payload["packet"], triage)
+        await asyncio.to_thread(guard)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/v1/open-work/declarations/human-outcomes/fresh-evidence-triage")
+async def check_local_fresh_outcome_evidence_triage(request: Request, response: Response):
+    """One explicitly authorized fresh Stripe operation check + historical review.
+
+    The signed record link is validated before the source read. A provider
+    receipt proves only its narrowly scoped operation, not customer success.
+    """
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_historical_review", "confirm_source_verification",
+        "record_link", "max_cases",
+    })
+    if payload["confirm_historical_review"] is not True or payload["confirm_source_verification"] is not True:
+        raise HTTPException(403, "explicit history review and source verification required")
+    if type(payload["max_cases"]) is not int or not 1 <= payload["max_cases"] <= 4:
+        raise HTTPException(422, "max_cases must be between 1 and 4")
+    try:
+        admitted, signature, secret, guard = await _operation_ledger_admission(scope, payload)
+        resource_ref = validate_case_record_link(
+            payload["record_link"], admitted, signature, scope=scope, secret=secret,
+        )
+        await asyncio.to_thread(guard)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    # Independently read both HMAC-protected histories for each selected case.
+    # An invalid link or revoked declaration must not cause provider access.
+    historical_before, before_case, before_signature, _ = await _load_review_triage(scope, payload)
+    try:
+        if before_signature != signature or before_case["work_item_ref"] != admitted["work_item_ref"]:
+            raise CaseDeclarationError("reviewed outcome dependency graph changed")
+        await asyncio.to_thread(guard)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    try:
+        receipt = await asyncio.to_thread(
+            source_operation_receipt, resource_ref, "stripe_invoice_paid",
+        )
+    except (ValueError, OSError, TypeError, CaseDeclarationError, sqlite3.DatabaseError):
+        receipt = None
+    await _recheck_source(scope)
+    try:
+        await asyncio.to_thread(guard)
+        validate_case_record_link(
+            payload["record_link"], admitted, signature, scope=scope, secret=secret,
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    # Re-read the full selected history after source IO. A concurrent human
+    # correction or provider dispute invalidates this combined review.
+    historical_after, after_case, after_signature, _ = await _load_review_triage(scope, payload)
+    try:
+        if (after_signature != signature
+                or after_case["work_item_ref"] != admitted["work_item_ref"]
+                or historical_after != historical_before):
+            raise CaseDeclarationError("historical outcome review changed during source verification")
+        verified = project_case_operation_verification(admitted, resource_ref, receipt)
+        result = compose_fresh_outcome_triage(historical_after, verified)
+        await asyncio.to_thread(guard)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/v1/open-work/declarations/human-outcomes/portfolio-triage")
+async def read_local_outcome_portfolio_triage(request: Request, response: Response):
+    """Review the bounded CURRENT owner-declared portfolio, not one case DAG.
+
+    Page tokens bind the entire approved portfolio's incarnation/revisions,
+    not just the returned page. Each case's full prerequisite DAG is admitted
+    independently before its two HMAC-validated historical ledger reads.
+    """
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "confirm_historical_review", "max_cases", "offset",
+        "expected_portfolio_digest",
+    })
+    if payload["confirm_historical_review"] is not True:
+        raise HTTPException(403, "explicit portfolio outcome history review required")
+    count, offset = payload["max_cases"], payload["offset"]
+    if (type(count) is not int or not 1 <= count <= 10 or
+            type(offset) is not int or not 0 <= offset <= 50):
+        raise HTTPException(422, "bounded portfolio page required")
+    try:
+        before = await asyncio.to_thread(list_case_declarations, scope)
+        secret = await asyncio.to_thread(
+            _read_or_create_secret, ".open_work_reference_key",
+        )
+        digest = portfolio_fingerprint(before, scope=scope, secret=secret)
+        validate_page_token(payload["expected_portfolio_digest"], digest, offset=offset)
+        rows = sorted(before["items"], key=lambda row: row["work_item_ref"])
+        if offset > len(rows):
+            raise CaseDeclarationError("stale portfolio page offset")
+        from functools import partial
+        targets = []
+        for row in rows[offset:offset + count]:
+            ref = row["work_item_ref"]
+            admitted, signature = admitted_case_dossier_snapshot(
+                before, work_item_ref=ref,
+                expected_revision=row["revision"],
+                expected_edit_token=row["edit_token"],
+            )
+            guard = partial(
+                _operation_ledger_guard, scope, ref,
+                row["revision"], row["edit_token"], signature,
+            )
+            targets.append((row, admitted, signature, guard))
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    entries = []
+    for row, admitted, signature, guard in targets:
+        try:
+            await asyncio.to_thread(guard)
+            provider = await asyncio.to_thread(
+                read_operation_evidence, admitted, signature,
+                scope=scope, secret=secret, guard=guard,
+            )
+            await asyncio.to_thread(guard)
+            await _recheck_source(scope)
+            human = await asyncio.to_thread(
+                read_human_outcomes, admitted, signature,
+                scope=scope, secret=secret, guard=guard,
+            )
+            await asyncio.to_thread(guard)
+            current = await asyncio.to_thread(list_case_declarations, scope)
+            if portfolio_fingerprint(current, scope=scope, secret=secret) != digest:
+                raise CaseDeclarationError("stale reviewed portfolio changed during history read")
+        except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+            raise _safe_error(exc) from None
+        await _recheck_source(scope)
+        entries.append((row, provider, human))
+    try:
+        current = await asyncio.to_thread(list_case_declarations, scope)
+        if portfolio_fingerprint(current, scope=scope, secret=secret) != digest:
+            raise CaseDeclarationError("stale reviewed portfolio changed during history read")
+        result = compose_outcome_portfolio(
+            entries, total=len(rows), offset=offset, fingerprint=digest,
         )
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
         raise _safe_error(exc) from None
