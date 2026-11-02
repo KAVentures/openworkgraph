@@ -176,3 +176,134 @@ def test_cli_missing_consent_no_network_or_sensitive_output(context, monkeypatch
     assert json.loads(output)["possible_local_import"] is False
     assert SESSION not in output and INCIDENT not in output
     assert workspace.list_logs()["logs"] == []
+
+
+def _grant_without_journal(private):
+    grant = private / "grant.json"
+    grant.write_text(json.dumps({
+        "version": 1, "enabled": True, "consented": True,
+        "host": HOST, "tenant_scope": "team-a", "sys_ids": [INCIDENT],
+    }), encoding="utf-8")
+    if os.name == "posix":
+        grant.chmod(0o600)
+    return grant, private / "selected.sqlite"
+
+
+def test_selected_provider_read_to_durable_journal_to_real_owg_http(context):
+    """One operator invocation traverses the real journal and OWG REST paths."""
+    from test_servicenow_incident_journal import FakeTransport, TOKEN
+    private, port, workspace = context
+    grant, journal = _grant_without_journal(private)
+    provider = FakeTransport()
+    receipt = bootstrap(
+        **approved(private, port), read_selected=True, consent_source_read=True,
+        token=TOKEN, provider_opener=provider,
+    )
+    assert len(provider.calls) == 1
+    assert journal.exists()
+    assert receipt["status"] == "bootstrapped"
+    assert receipt["provider_read_performed"] is True
+    assert receipt["new_journal_snapshots"] == 1
+    assert receipt["replayed_journal_snapshots"] == 0
+    assert receipt["owg_import_readback_verified"] is True
+    assert receipt["journal_snapshots"] == receipt["events"] == 1
+    assert receipt["source_writes_performed"] is False
+    assert len(workspace.list_logs()["logs"]) == 1
+    assert workspace.list_logs()["logs"][0]["log_id"] == receipt["log_id"]
+    # A subsequent request for the same source is refused before another
+    # provider GET, not merely after an unnecessary second extraction.
+    second = FakeTransport()
+    with pytest.raises(BootstrapError, match="already has a local log"):
+        bootstrap(
+            **approved(private, port), read_selected=True,
+            consent_source_read=True, token=TOKEN, provider_opener=second,
+        )
+    assert not second.calls
+    assert len(workspace.list_logs()["logs"]) == 1
+
+
+def test_selected_read_requires_all_three_consents_before_provider_network(context):
+    from test_servicenow_incident_journal import FakeTransport, TOKEN
+    private, port, workspace = context
+    _grant_without_journal(private)
+    for changes in (
+        {"read_selected": True, "consent_source_read": False},
+        {"read_selected": False, "consent_source_read": True},
+        {"read_selected": True, "consent_source_read": True,
+         "consent_journal_read": False},
+        {"read_selected": True, "consent_source_read": True,
+         "consent_local_import": False},
+        {"read_selected": False, "since": "2026-10-30 00:00:00"},
+    ):
+        provider = FakeTransport()
+        with pytest.raises(BootstrapError):
+            bootstrap(**{**approved(private, port), **changes,
+                         "token": TOKEN, "provider_opener": provider})
+        assert not provider.calls
+    assert not (private / "selected.sqlite").exists()
+    assert workspace.list_logs()["logs"] == []
+
+
+def test_selected_read_rejects_invalid_existing_journal_scope_before_network(context):
+    from test_servicenow_incident_journal import FakeTransport, TOKEN
+    private, port, workspace = context
+    make_journal(private)
+    provider = FakeTransport()
+    with pytest.raises(ValueError):
+        bootstrap(**{**approved(private, port), "timezone_name": "Europe/Stockholm"},
+                  read_selected=True, consent_source_read=True, token=TOKEN,
+                  provider_opener=provider)
+    assert not provider.calls
+    assert workspace.list_logs()["logs"] == []
+
+
+def test_selected_read_revocation_during_provider_get_refuses_without_journal(context):
+    from test_servicenow_incident_journal import FakeTransport, TOKEN
+    private, port, workspace = context
+    grant, journal = _grant_without_journal(private)
+    provider = FakeTransport(on_open=grant.unlink)
+    with pytest.raises(ValueError):
+        bootstrap(**approved(private, port), read_selected=True,
+                  consent_source_read=True, token=TOKEN, provider_opener=provider)
+    assert len(provider.calls) == 1
+    assert not journal.exists()
+    assert workspace.list_logs()["logs"] == []
+
+
+def test_selected_read_refuses_invalid_dashboard_session_before_provider_get(context, monkeypatch):
+    from test_servicenow_incident_journal import FakeTransport, TOKEN
+    private, port, workspace = context
+    _grant_without_journal(private)
+    from server import event_log_routes as routes
+    monkeypatch.setattr(routes, "dashboard_session_valid", lambda _: False)
+    provider = FakeTransport()
+    with pytest.raises(BootstrapError):
+        bootstrap(**approved(private, port), read_selected=True,
+                  consent_source_read=True, token=TOKEN, provider_opener=provider)
+    assert not provider.calls
+    assert workspace.list_logs()["logs"] == []
+
+
+def test_selected_read_cli_uses_env_credentials_and_emits_counts_only(
+        context, monkeypatch, capsys):
+    from test_servicenow_incident_journal import FakeTransport, TOKEN
+    private, port, workspace = context
+    grant, journal = _grant_without_journal(private)
+    monkeypatch.setenv("OWG_DASHBOARD_SESSION", SESSION)
+    monkeypatch.setenv("OWG_SERVICENOW_TOKEN", TOKEN)
+    provider = FakeTransport()
+    cli = ["--instance", HOST, "--tenant", "team-a", "--incident-id", INCIDENT,
+           "--grant-file", str(grant), "--timezone", "UTC",
+           "--journal", str(journal), "--log-name", "Reviewed ServiceNow incidents",
+           "--confirm-log-name", "Reviewed ServiceNow incidents", "--port", str(port),
+           "--read-selected", "--consent-selected-read",
+           "--consent-local-journal-read", "--consent-local-import"]
+    assert main(cli, provider_opener=provider) == 0
+    output = capsys.readouterr().out
+    receipt = json.loads(output)
+    assert receipt["provider_read_performed"] is True
+    assert receipt["owg_import_readback_verified"] is True
+    assert len(provider.calls) == 1
+    assert len(workspace.list_logs()["logs"]) == 1
+    assert TOKEN not in output and SESSION not in output and INCIDENT not in output
+    assert "PRIVATE" not in output
