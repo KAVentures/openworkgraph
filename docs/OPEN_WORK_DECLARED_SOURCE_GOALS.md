@@ -468,3 +468,76 @@ An authenticated local dashboard operator can take a **time-separated snapshot o
 The checkpoint contains only opaque `owg:w:` references, minimized historical status/count/action codes and a local HMAC. It has **no raw Stripe invoice IDs, account IDs, customer names, email bodies or provider credentials**. It is intended for short-lived operator review; do not send it to an untrusted service or treat it as a transferable source signature. Counts that decrease due to retention, reset or revocation are rejected rather than reported as improvement. The original `review-packet` and `verify-review-packet` APIs remain unchanged.
 
 **Interpretation:** a resolved action code means an operator's *historical review worklist* changed. A provider-reported paid invoice is not bank settlement, customer success, discharge of a declared obligation or agent-caused benefit. A remaining `fresh_declared_payment_check` is an action suggestion, not an automatic permission or an inferred obligation. No source reads, ledger writes, polling, cloud sync or business actions occur in either progress endpoint. Independent real-account and held-out customer acceptance remain required.
+
+
+## Atomic prerequisite-first human assessment of a reviewed dependency chain
+
+An operator who has explicitly reviewed the complete owner-approved dependency
+DAG (at most four cases) can now submit **separate human assessments** for all
+cases with one authenticated local REST call. This does not call Stripe, infer
+an obligation, verify a provider state, or authorize an agent. It is useful
+when a parent case must be reviewed alongside its prerequisites, and avoids
+partial local assessments if a later case fails validation or persistence.
+
+1. Read the current approved declarations and each selected case's existing
+   `POST /v1/open-work/declarations/human-outcomes/history` to obtain its
+   `event_count`. Confirm the prerequisite-first order of the complete DAG.
+2. `POST /v1/open-work/declarations/human-outcomes/assess-dependency-batch`
+   using the current root `work_item_ref`, `expected_revision`,
+   `expected_edit_token`, `confirm_human_assessment: true`,
+   `max_cases: 1..4`, and `assessments` in **prerequisite-first order**.
+   Each assessment has exactly `work_item_ref`, `expected_revision`,
+   `expected_edit_token`, `human_status` (`met`, `not_met`, `unknown`),
+   `reason_code` (`owner_review`, `customer_feedback_reviewed`, or
+   `external_evidence_reviewed`), and `expected_event_count`.
+   These are explicit **per-case** decisions, never one status copied to
+   prerequisites. Omitted or duplicated cases are refused.
+3. The response returns `case_histories` in prerequisite-first order, with
+   each case's updated, HMAC-validated retained assessment history. Existing
+   single-case history and correction endpoints continue to work unchanged.
+
+Example body for a two-case dependency A → B (replace refs/CAS values with
+the exact current private review values, never a provider invoice ID):
+
+```json
+{
+  "work_item_ref": "owg:w:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "expected_revision": 1,
+  "expected_edit_token": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "confirm_human_assessment": true,
+  "max_cases": 2,
+  "assessments": [
+    {
+      "work_item_ref": "owg:w:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected_revision": 1,
+      "expected_edit_token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "human_status": "unknown",
+      "reason_code": "owner_review",
+      "expected_event_count": 0
+    },
+    {
+      "work_item_ref": "owg:w:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "expected_revision": 1,
+      "expected_edit_token": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "human_status": "not_met",
+      "reason_code": "customer_feedback_reviewed",
+      "expected_event_count": 0
+    }
+  ]
+}
+```
+
+The backend validates current owner CAS, exact source scope, retention, DAG
+selection, all existing signed histories, each expected event count, and
+bounded capacity before inserting any event. All assessments are appended
+in **one local SQLite transaction**, or none are committed. Replaying an
+uncertain request with stale event counts refuses instead of duplicating the
+assessment; re-read histories before deciding whether to submit again.
+
+This is **local SQLite atomicity**, not a distributed source-grant/retention
+transaction. A post-commit revocation check fails closed and scrubs the
+human-outcome ledger if it detects invalidated access, consistent with the
+existing single-case path. Provider evidence and human assessments remain
+independent, and even a human `met` assessment is not proof of customer
+success, financial settlement, or agent causality. Native CI, real source
+acceptance, and held-out business-outcome trials remain separate gates.
