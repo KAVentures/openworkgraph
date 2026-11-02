@@ -1287,6 +1287,31 @@ const path=require('node:path');
    assert.deepEqual((await replayedRelative.json()).rows,[[2]]);
    const [relativeCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCsv').click()]);
    assert.match(await fs.readFile(await relativeCsv.path(),'utf8'),/avg_metric:review_relative\r\n2/);
+   // The same production divide operator must withhold a zero denominator
+   // rather than emit infinity or falsely report a zero-percent change.
+   for(const n of ['review_relative','review_delta','review_last','review_first'])
+     await page.getByRole('button',{name:'Remove metric '+n,exact:true}).click();
+   await page.locator('#owgMetricKind').selectOption('arithmetic');
+   await page.locator('#owgMetricName').fill('zero_denominator');
+   await page.locator('#owgMetricOperation').selectOption('divide');
+   await page.locator('#owgMetricLeftKind').selectOption('constant');
+   await page.locator('#owgMetricLeftValue').fill('2');
+   await page.locator('#owgMetricLeftUnit').fill('EUR');
+   await page.locator('#owgMetricRightKind').selectOption('constant');
+   await page.locator('#owgMetricRightValue').fill('0');
+   await page.locator('#owgMetricRightUnit').fill('EUR');
+   await page.locator('#owgMetricAdd').click();
+   await page.locator('#owgAnalysisMeasure1').selectOption('avg:metric:zero_denominator');
+   const [zeroResponse]=await Promise.all([
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
+     page.locator('#owgAnalysisRun').click()]);
+   assert.equal(zeroResponse.status(),200);
+   const zeroResult=await zeroResponse.json();
+   assert.equal(zeroResult.metrics[0].unit,'ratio');
+   assert.equal(zeroResult.metrics[0].cases_with_value,0);
+   assert.equal(zeroResult.metrics[0].cases_with_zero_divisor,2);
+   assert.ok(!JSON.stringify(zeroResult.rows).includes('Infinity'));
+   assert.ok(!JSON.stringify(zeroResult.rows).includes('NaN'));
    const numericAxe=await page.evaluate(()=>axe.run(document.querySelector('#owgEventLogAnalysis'),{
      runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']},resultTypes:['violations']}));
    assert.deepEqual(numericAxe.violations,[]);
