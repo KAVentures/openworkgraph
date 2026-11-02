@@ -826,6 +826,113 @@ with zipfile.ZipFile(sys.argv[1]) as z:
 
 
    assert(await page.getByRole('button',{name:'Open linked saved process',exact:true}).isDisabled());
+   // Two real immutable project exports from distinct approved idea revisions.
+   // The comparison is an explicit read-only dashboard action, not a synthetic
+   // fixture or an agent deployment.
+   await page.evaluate(async()=>{
+     const process_model={goal:'Review a comparison case',baseline_source:'user_declared',
+       baseline_coverage:'user_declared_design',baseline_path:['Review'],
+       activities:[{id:'review',label:'Review'}],transitions:[],
+       entry_activity_id:'review',terminal_activity_ids:['review'],
+       outcome_expectations:[{terminal_activity_id:'review',operation:'github_pr_merged',user_confirmed:true}]};
+     const response=await fetch('/v1/process-catalog',{method:'POST',
+       headers:{'Content-Type':'application/json'},
+       body:JSON.stringify({workflow_id:'project_comparison_review',title:'Project comparison review',
+         process_model,user_confirmed:true,expected_revision:0})});
+     assert(response.ok);
+   });
+   await page.getByRole('button',{name:'Load saved designs',exact:true}).click();
+   await page.locator('#owgCatalogList').getByRole('button',{name:'Project comparison review · r1',exact:true}).click();
+   await page.getByRole('button',{name:'Add saved revision to automation pipeline',exact:true}).click();
+   await page.locator('#owgPipelineProcessStatus').filter({hasText:'Current saved revision'}).waitFor();
+   await page.getByRole('button',{name:'Move to Assessing',exact:true}).click();
+   await page.locator('#owgPipelineStatus').filter({hasText:'Moved to Assessing.'}).waitFor();
+   for(const key of ['rules_based','structured_inputs','process_stability','digital_inputs','low_exception_rate'])
+     await page.locator('#owgPipelineQ_'+key).selectOption('4');
+   await page.locator('#owgPipelineCases').fill('100');
+   await page.locator('#owgPipelineMinutes').fill('10');
+   await page.locator('#owgPipelineShare').fill('50');
+   await page.locator('#owgPipelineAssess').click();
+   await page.locator('#owgPipelineStatus').filter({hasText:'Assessment saved.'}).waitFor();
+   await page.getByRole('button',{name:'Move to Approved',exact:true}).click();
+   await page.locator('#owgPipelineStatus').filter({hasText:'Moved to Approved.'}).waitFor();
+   const [baselineExport,baselineResponse]=await Promise.all([
+     page.waitForEvent('download'),
+     page.waitForResponse(r=>r.url().endsWith('/agent-project')&&r.request().method()==='POST'),
+     page.locator('#owgPipelineProjectDownload').click()
+   ]);
+   await fs.readFile(await baselineExport.path());
+   const baselineId=baselineResponse.headers()['x-owg-project-id'];
+   await page.locator('#owgPipelineProjects').getByRole('status').filter({hasText:'Project downloaded.'}).waitFor();
+   await page.locator('#owgPipelineMinutes').fill('8');
+   await page.locator('#owgPipelineAssess').click();
+   await page.locator('#owgPipelineStatus').filter({hasText:'Approval cleared; review the new assessment.'}).waitFor();
+   await page.getByRole('button',{name:'Move to Approved',exact:true}).click();
+   await page.locator('#owgPipelineStatus').filter({hasText:'Moved to Approved.'}).waitFor();
+   const [candidateExport,candidateResponse]=await Promise.all([
+     page.waitForEvent('download'),
+     page.waitForResponse(r=>r.url().endsWith('/agent-project')&&r.request().method()==='POST'),
+     page.locator('#owgPipelineProjectDownload').click()
+   ]);
+   await fs.readFile(await candidateExport.path());
+   const candidateId=candidateResponse.headers()['x-owg-project-id'];
+   assert.notEqual(baselineId,candidateId,'different approved revisions create different pinned projects');
+   await page.locator('#owgPipelineProjects').getByRole('status').filter({hasText:'Project downloaded.'}).waitFor();
+   await page.locator('#owgPipelineJourney').click();
+   await page.locator('#owgPipelineProjectComparison').waitFor();
+   const comparePanel=page.locator('#owgPipelineProjectComparison');
+   assert(await comparePanel.locator('#owgPipelineCompareProjects').isEnabled());
+   let comparisonWrites=0;
+   const observeComparison=request=>{
+     if(request.url().startsWith(base+'/v1/')&&!['GET','HEAD','OPTIONS'].includes(request.method()))
+       comparisonWrites++;
+   };
+   page.on('request',observeComparison);
+   await comparePanel.locator('#owgPipelineCompareBaseline').selectOption(baselineId);
+   await comparePanel.locator('#owgPipelineCompareCandidate').selectOption(candidateId);
+   await comparePanel.locator('#owgPipelineCompareProjects').focus();
+   await page.keyboard.press('Enter');
+   await comparePanel.locator('#owgPipelineProjectComparisonResult')
+     .filter({hasText:/recorded artifact\/metadata differences/}).waitFor();
+   const comparisonRows=comparePanel.locator('tbody tr');
+   assert.equal(await comparisonRows.count(),7);
+   assert.match(await comparisonRows.filter({hasText:'Idea revision'}).first().textContent(),/Changed/);
+   assert.match(await comparisonRows.filter({hasText:'Specification SHA-256'}).textContent(),/Changed/);
+   assert.match(await comparisonRows.filter({hasText:'ZIP SHA-256'}).textContent(),/Changed/);
+   assert.match(await comparisonRows.filter({hasText:'Reported specification status counts'}).textContent(),/None recorded/);
+   assert.match(await comparePanel.textContent(),/Execution and business outcomes remain unverified/);
+   await comparePanel.getByRole('button',{name:'Inspect baseline exact project'}).focus();
+   await page.keyboard.press('Enter');
+   assert.equal(await page.locator('#owgPipelineJourneyProject').inputValue(),baselineId);
+   assert.match(await page.locator('#owgPipelineJourneyArtifact').textContent(),/historical idea revision/);
+   assert.equal(await comparePanel.getByRole('button',{name:'Inspect candidate exact project'}).count(),0,
+     'changing the selected project invalidates old comparison navigation');
+   await comparePanel.locator('#owgPipelineCompareProjects').click();
+   await comparePanel.getByRole('button',{name:'Inspect candidate exact project'}).click();
+   assert.equal(await page.locator('#owgPipelineJourneyProject').inputValue(),candidateId);
+   assert.equal(await page.locator('#owgPipelineSourceConsent').count(),0,
+     'comparison never opens source consent');
+   await comparePanel.locator('#owgPipelineCompareCandidate').selectOption(baselineId);
+   await comparePanel.locator('#owgPipelineCompareProjects').click();
+   await comparePanel.locator('#owgPipelineProjectComparisonResult')
+     .filter({hasText:'Select two different recorded projects.'}).waitFor();
+   assert.equal(await comparePanel.locator('tbody tr').count(),0);
+   const refusal=await page.evaluate(()=>{
+     const model=window.__owgPipelineModel;
+     const project={project_id:'a',idea_revision:1,idea_revision_is_current:true,
+       spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),
+       reported_specifications:[],source_check_exports:{count:0,last_document_sha256:null}};
+     const data={projects:[project,{...project,project_id:'b'}],projects_truncated:true};
+     try{model.compareRecordedProjects(data,'a','b');return false;}catch{return true;}
+   });
+   assert(refusal,'truncated project list refuses apparently complete comparison');
+   const compareAudit=await page.evaluate(async()=>window.axe.run(
+     document.querySelector('#owgPipelineProjectComparison'),
+     {runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},
+       resultTypes:['violations']}));
+   assert.deepEqual(compareAudit.violations.map(v=>v.id),[]);
+   page.off('request',observeComparison);
+   assert.equal(comparisonWrites,0,'comparison and pinned-project navigation never write');
    await page.setViewportSize({width:390,height:844});
    assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false,'no horizontal overflow at phone width');
    assert.deepEqual(errors,[]);
