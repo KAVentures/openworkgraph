@@ -100,7 +100,7 @@ def compose_outcome_portfolio(
             reasons.append("human_assessed_unknown")
         # Only operation-receipt goals require a historical operation check.
         # A human-review or source-recheck goal does NOT require payment.
-        if expected == "operation_receipt_reviewed":
+        if expected in ("operation_receipt_reviewed", "stripe_invoice_paid_reported"):
             if p_count == 0:
                 reasons.append("historical_operation_receipt_missing")
             elif p_state == "unknown":
@@ -116,6 +116,7 @@ def compose_outcome_portfolio(
             "latest_human_assessed_status": h_status,
             "human_assessment_event_count": h_count,
             "historical_last_provider_state": p_state,
+            "source_declared_payment_goal_requires_fresh_verification": expected == "stripe_invoice_paid_reported",
             "provider_check_count": p_count,
             "disputed_provider_check_count": disputed,
             "review_attention": reasons,
