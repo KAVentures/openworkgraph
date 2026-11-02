@@ -24,6 +24,9 @@ from .open_work_case_operation_verification import (
     issue_case_record_link, validate_case_record_link,
     project_case_operation_verification,
 )
+from .open_work_case_dependency_operations import (
+    admit_dependency_operation_links, compose_dependency_operation_result,
+)
 from .open_work_outcomes import source_operation_receipt
 from .open_work_case_status_checkpoint import (
     validate_prior_checkpoint, issue_status_checkpoint,
@@ -647,6 +650,84 @@ async def verify_local_case_provider_operation(request: Request, response: Respo
             payload["record_link"], admitted, signature, scope=scope, secret=secret,
         )
         result = project_case_operation_verification(admitted, resource_ref, receipt)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/v1/open-work/declarations/dependency-operations")
+async def verify_local_reviewed_dependency_operations(request: Request, response: Response):
+    """Explicitly check independently source-joined invoices in a reviewed DAG."""
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_source_verification", "record_links",
+    })
+    if payload["confirm_source_verification"] is not True:
+        raise HTTPException(403, "explicit dependency provider verification required")
+    try:
+        before = await asyncio.to_thread(list_case_declarations, scope)
+        secret = await asyncio.to_thread(_read_or_create_secret, ".open_work_reference_key")
+        signature, ordered, resources = admit_dependency_operation_links(
+            before, work_item_ref=payload["work_item_ref"],
+            expected_revision=payload["expected_revision"],
+            expected_edit_token=payload["expected_edit_token"],
+            record_links=payload["record_links"], scope=scope, secret=secret,
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    # All links, scopes and exact prerequisite versions are validated before
+    # the FIRST provider read. Re-admit the whole graph after EACH provider
+    # read so a revoked dependency cannot authorize a subsequent source read.
+    await _recheck_source(scope)
+    verifications: dict[str, dict[str, Any]] = {}
+    for ref in ordered:
+        if ref not in resources:
+            continue
+        await _recheck_source(scope)
+        try:
+            receipt = await asyncio.to_thread(
+                source_operation_receipt, resources[ref], "stripe_invoice_paid",
+            )
+        except (ValueError, OSError, TypeError, CaseDeclarationError, sqlite3.DatabaseError):
+            receipt = None
+        await _recheck_source(scope)
+        try:
+            current = await asyncio.to_thread(list_case_declarations, scope)
+            current_signature, current_order, current_resources = admit_dependency_operation_links(
+                current, work_item_ref=payload["work_item_ref"],
+                expected_revision=payload["expected_revision"],
+                expected_edit_token=payload["expected_edit_token"],
+                record_links=payload["record_links"], scope=scope, secret=secret,
+            )
+            if (current_signature != signature or current_order != ordered
+                or current_resources != resources):
+                raise CaseDeclarationError("stale dependency operation graph changed")
+            verifications[ref] = project_case_operation_verification(
+                {"work_item_ref": ref}, resources[ref], receipt,
+            )
+        except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+            raise _safe_error(exc) from None
+    # Even a zero-link preview must not return a stale owner declaration.
+    await _recheck_source(scope)
+    try:
+        current = await asyncio.to_thread(list_case_declarations, scope)
+        current_signature, current_order, current_resources = admit_dependency_operation_links(
+            current, work_item_ref=payload["work_item_ref"],
+            expected_revision=payload["expected_revision"],
+            expected_edit_token=payload["expected_edit_token"],
+            record_links=payload["record_links"], scope=scope, secret=secret,
+        )
+        if (current_signature != signature or current_order != ordered
+            or current_resources != resources):
+            raise CaseDeclarationError("stale dependency operation graph changed")
+        result = compose_dependency_operation_result(
+            work_item_ref=payload["work_item_ref"], ordered=ordered,
+            resources=resources, verifications=verifications,
+        )
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
         raise _safe_error(exc) from None
     await _recheck_source(scope)
