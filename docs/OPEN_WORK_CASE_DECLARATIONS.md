@@ -1252,3 +1252,48 @@ signed-client tests, real restricted Stripe TEST account acceptance,
 independent customer-outcome adjudication and held-out A/B/C commercial
 trials remain **unverified** and are mandatory before claiming production
 readiness or commercial benefit.
+
+
+## Retained dependency-operation history (local dashboard, explicit review)
+
+An authenticated dashboard operator can inspect the **historical provider checks** of a
+reviewed case and up to three declared prerequisites without calling Stripe:
+
+`POST /v1/open-work/declarations/operation-ledger/dependency-history`
+
+```json
+{
+  "work_item_ref": "owg:w:<32-lowercase-hex>",
+  "expected_revision": 1,
+  "expected_edit_token": "<current-32-hex-incarnation>",
+  "confirm_historical_review": true,
+  "max_cases": 4
+}
+```
+
+The response returns prerequisite-first `case_histories` with the owner's goal,
+expected-outcome code, exact review revision, historical `paid`/`unknown`
+checks and subsequent explicit disputes. `selected_dependency_edges` are
+**owner-declared**, never source-proven. `unscanned_prerequisite_count` identifies
+cases outside the four-case bound; cases without checks have empty histories.
+`historical_provider_evidence_coverage_complete` means **only** that every
+selected case has at least one retained provider check and no prerequisite was
+omitted; it does not establish payment now or business-goal completion. A
+disputed latest paid check projects as `unknown`.
+
+The endpoint validates the root's entire current dependency graph and
+incarnation, then admits each selected case against its own reviewed DAG.
+The existing private SQLite ledger validates HMAC integrity, retention, account
+scope and revocation on each read; the root DAG/source are rechecked after
+each read. Historical reads are separate, not an atomic source snapshot, and
+cross-process revocation is not an atomic distributed grant fence. It does not
+refresh Stripe, disclose native invoice IDs/customer details, grant an agent
+access, modify source systems, or claim independent customer outcomes.
+Fresh provider verification still requires a separate explicitly authorized
+`/operation-ledger/check` request. No cloud sync or background polling is added.
+
+FastAPI/private-SQLite integration coverage is in
+`tests/test_open_work_case_dependency_history.py` with synthetic provider
+fixtures, including no-source reads, partial histories, disputes, privacy,
+revocation during traversal, tampering, and exact-CAS/authorization refusal.
+Native CI and real-provider/customer acceptance remain separate gates.
