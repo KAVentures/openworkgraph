@@ -139,6 +139,16 @@ def observed_activity_segments(
                 at = bisect_right(positions, previous_position)
                 if at < len(positions) and positions[at] < position:
                     reasons.append("interleaved_other_record")
+                elif (all(row["scope"]) and row["ref"] and previous_row["ref"]
+                        and row["ref"] != previous_row["ref"]
+                        and not row["reference_tainted"]
+                        and not previous_row["reference_tainted"]
+                        and previous_row["observed_at"] < row["observed_at"]):
+                    # A clipboard-linked component may contain several literal
+                    # source records. Keep the membership, but distinguish
+                    # independently observed record-context episodes. Neither
+                    # this boundary nor the transfer proves a task handoff.
+                    reasons.append("observed_member_record_change")
                 # A known different app strictly between two same-app anchors
                 # bounds an uncertain episode, NOT a verified case switch.
                 # Timestamp ties cannot be ordered by event ID alone.
