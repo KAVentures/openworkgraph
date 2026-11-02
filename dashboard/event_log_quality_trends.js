@@ -182,8 +182,84 @@
     return {rows:found.slice(0,MAX_INCREASE_ROWS).map(({points,...rest})=>rest),
       total:found.length,examined:visible.length};
   }
+
+  // Compare recorded rejection categories between adjacent, same-transform batches.
+  // A missing category in an otherwise present breakdown means zero *recorded*
+  // instances; a missing breakdown never means zero. Reason counts may overlap.
+  const MAX_REASON_CATEGORIES = 256;
+  const MAX_REASON_INCREASE_ROWS = 50;
+  function rejectionReasonIncreases(trends, reports, minimumPoints = 1) {
+    const empty={rows:[],total:0,examined:0,comparablePairs:0,skippedPairs:0};
+    if (!trends || !Array.isArray(trends.batches) || !Array.isArray(reports) ||
+        !Number.isFinite(minimumPoints) || minimumPoints < 0 || minimumPoints > 100)
+      return empty;
+    const visible=trends.batches.slice(-MAX_VISIBLE);
+    const byBatch=new Map();
+    for (const item of visible) {
+      if (!item || !Number.isSafeInteger(item.batch) || item.batch<0 ||
+          byBatch.has(item.batch)) return {...empty,examined:visible.length};
+      byBatch.set(item.batch,item);
+    }
+    const reportByBatch=new Map(), duplicateReports=new Set();
+    for (const r of reports) {
+      if (!r || !byBatch.has(r.batch)) continue;
+      if (reportByBatch.has(r.batch)) duplicateReports.add(r.batch);
+      else reportByBatch.set(r.batch,r);
+    }
+    function breakdown(item) {
+      if (duplicateReports.has(item.batch)) return null;
+      const r=reportByBatch.get(item.batch);
+      const digest=r && r.transform && r.transform.transform_sha256;
+      if (!r || typeof digest!=='string' || !SHA256.test(digest) ||
+          digest!==item.transform_sha256) return null;
+      const metric=item.metrics && item.metrics.rejected_input_rows;
+      const denominator=metric && metric.denominator, rejected=metric && metric.count;
+      const rows=r.rows, reasons=rows && rows.rejected_by_reason;
+      if (!Number.isSafeInteger(denominator) || denominator<=0 ||
+          !Number.isSafeInteger(rejected) || rejected<0 || rejected>denominator ||
+          !rows || rows.rejected!==rejected || !reasons ||
+          typeof reasons!=='object' || Array.isArray(reasons)) return null;
+      const entries=Object.entries(reasons);
+      if (entries.length>MAX_REASON_CATEGORIES) return null;
+      const values=new Map();
+      for (const [name,n] of entries) {
+        if (!name || name.length>160 || !Number.isSafeInteger(n) ||
+            n<0 || n>rejected) return null;
+        values.set(name,n);
+      }
+      return {denominator,values};
+    }
+    const found=[];let comparablePairs=0,skippedPairs=0;
+    for (const item of visible) {
+      const beforeItem=byBatch.get(item.batch-1);
+      if (!beforeItem) {if(item.batch>0)skippedPairs++;continue;}
+      if (typeof item.transform_sha256!=='string' ||
+          !SHA256.test(item.transform_sha256) ||
+          item.transform_sha256!==beforeItem.transform_sha256) {
+        skippedPairs++;continue;
+      }
+      const before=breakdown(beforeItem),after=breakdown(item);
+      if (!before || !after) {skippedPairs++;continue;}
+      comparablePairs++;
+      for (const name of new Set([...before.values.keys(),...after.values.keys()])) {
+        const prior=before.values.get(name)||0,now=after.values.get(name)||0;
+        const oldRate=prior/before.denominator,newRate=now/after.denominator;
+        const points=(newRate-oldRate)*100;
+        if (points<=0 || points+1e-9<minimumPoints) continue;
+        found.push({batchId:item.batch,batch:label(item.batch),category:name,
+          before:count(prior)+' / '+count(before.denominator)+' ('+rate(oldRate)+')',
+          after:count(now)+' / '+count(after.denominator)+' ('+rate(newRate)+')',
+          increase:change(points),points});
+      }
+    }
+    found.sort((a,b)=>b.points-a.points || b.batchId-a.batchId ||
+      a.category.localeCompare(b.category));
+    return {rows:found.slice(0,MAX_REASON_INCREASE_ROWS).map(({points,...rest})=>rest),
+      total:found.length,examined:visible.length,comparablePairs,skippedPairs};
+  }
+
   if (typeof module !== 'undefined' && module.exports)
-    module.exports = {rows,csv,csvCell,count,rate,change,status,detail,reviewRows,comparePair,rankedIncreases,MAX_VISIBLE,MAX_REASONS,MAX_INCREASE_ROWS};
+    module.exports = {rows,csv,csvCell,count,rate,change,status,detail,reviewRows,comparePair,rankedIncreases,rejectionReasonIncreases,MAX_VISIBLE,MAX_REASONS,MAX_INCREASE_ROWS,MAX_REASON_INCREASE_ROWS};
   if (typeof document === 'undefined') return;
   const element = (tag,text) => {const e=document.createElement(tag);if(text!==undefined)e.textContent=text;return e;};
   const logId = () => document.getElementById('owgEventLogPick')?.value || '';
@@ -227,6 +303,19 @@
     increasePanel.append(element('h4','Largest adjacent-batch rate increases'),
       element('p','Recorded counts only; same verified mapping and known denominators required. Increases are descriptive review prompts, not proof of source deterioration.'),
       increaseLabel,increaseOutput);
+    const reasonPanel=element('section');reasonPanel.id='owgQualityReasonTrends';
+    const reasonLabel=element('label','Minimum rejection-category rate increase: ');
+    reasonLabel.htmlFor='owgQualityReasonThreshold';
+    const reasonThreshold=element('select');reasonThreshold.id='owgQualityReasonThreshold';
+    for (const points of [0.1,1,5,10]) {
+      const option=element('option',points+' percentage points');option.value=String(points);
+      reasonThreshold.appendChild(option);
+    }
+    reasonThreshold.value='1';reasonLabel.appendChild(reasonThreshold);
+    const reasonOutput=element('div');reasonOutput.id='owgQualityReasonRows';
+    reasonPanel.append(element('h4','Rejection-category changes between adjacent batches'),
+      element('p','Recorded reason counts per supplied row, not percentages of unique rejected rows. Missing breakdowns, unknown denominators, changed mappings and report gaps are excluded. Descriptive only; categories may overlap.'),
+      reasonLabel,reasonOutput);
     const reviewPanel=element('section');reviewPanel.id='owgQualityReviewQueue';
     const reviewOutput=element('div');reviewOutput.id='owgQualityReviewRows';
     reviewPanel.append(element('h4','Batch quality review queue'),
@@ -238,7 +327,7 @@
     drillLabel.appendChild(drillSelect);
     const drillOutput=element('div');drillOutput.id='owgQualityBatchDetails';
     drill.append(element('h4','Batch rejection diagnostics'),drillLabel,drillOutput);
-    panel.append(element('h4','Import/append quality trends'),intro,run,download,message,pairPanel,increasePanel,reviewPanel,output,drill);
+    panel.append(element('h4','Import/append quality trends'),intro,run,download,message,pairPanel,increasePanel,reasonPanel,reviewPanel,output,drill);
     quality.appendChild(panel);
     const selected=logId();let ticket=0,loaded=null,loadedReports=[];
     const current=(id,n)=>panel.isConnected && logId()===id && ticket===n;
@@ -320,9 +409,43 @@
       wrap.appendChild(table);increaseOutput.appendChild(wrap);
     }
     increaseThreshold.addEventListener('change',showIncreases);
+    function showReasons() {
+      reasonOutput.replaceChildren();
+      if (!loaded || logId()!==selected || !panel.isConnected) return;
+      const result=rejectionReasonIncreases(loaded,loadedReports,Number(reasonThreshold.value));
+      reasonOutput.appendChild(element('p',result.total+' recorded category increases at or above '+
+        reasonThreshold.value+' percentage points across '+result.comparablePairs+
+        ' comparable adjacent pairs; '+result.skippedPairs+' pairs excluded among the latest '+
+        result.examined+' displayed reports; '+result.rows.length+' shown (maximum '+
+        MAX_REASON_INCREASE_ROWS+').'));
+      if (!result.rows.length) return;
+      const table=element('table');table.id='owgQualityReasonTable';
+      const head=element('thead'),hr=element('tr');
+      for (const heading of ['Target batch','Rejection category','Previous recorded count / supplied rows',
+        'Current recorded count / supplied rows','Increase','Inspect']) {
+        const th=element('th',heading);th.scope='col';hr.appendChild(th);
+      }
+      head.appendChild(hr);const body=element('tbody');
+      for (const item of result.rows) {
+        const tr=element('tr');
+        for (const value of [item.batch,item.category,item.before,item.after,item.increase])
+          tr.appendChild(element('td',value));
+        const cell=element('td'),inspect=element('button','Inspect batch');
+        inspect.type='button';inspect.className='secondary';
+        inspect.setAttribute('aria-label','Inspect rejection diagnostics for '+item.batch);
+        inspect.addEventListener('click',()=>{
+          if (!loaded || logId()!==selected || !panel.isConnected || drillSelect.disabled) return;
+          drillSelect.value=String(item.batchId);showDetail();drillSelect.focus();
+        });
+        cell.appendChild(inspect);tr.appendChild(cell);body.appendChild(tr);
+      }
+      table.append(head,body);const wrap=element('div');wrap.className='table-wrap';
+      wrap.appendChild(table);reasonOutput.appendChild(wrap);
+    }
+    reasonThreshold.addEventListener('change',showReasons);
     function clearState() {
       ++ticket;loaded=null;loadedReports=[];download.disabled=true;run.disabled=false;
-      output.replaceChildren();reviewOutput.replaceChildren();pairOutput.replaceChildren();increaseOutput.replaceChildren();
+      output.replaceChildren();reviewOutput.replaceChildren();pairOutput.replaceChildren();increaseOutput.replaceChildren();reasonOutput.replaceChildren();
       pairBaseline.disabled=true;pairTarget.disabled=true;
       pairBaseline.replaceChildren();pairTarget.replaceChildren();
       drillSelect.disabled=true;drillSelect.replaceChildren();
@@ -352,6 +475,7 @@
         for(const batch of available){const option=element('option',label(batch.batch));option.value=String(batch.batch);drillSelect.appendChild(option);}
         drillSelect.disabled=!available.length;
         if(available.length){drillSelect.value=String(available[available.length-1].batch);showDetail();}
+        showReasons();
         for(const batch of available) {
           for(const select of [pairBaseline,pairTarget]) {
             const option=element('option',label(batch.batch));option.value=String(batch.batch);
