@@ -36,6 +36,10 @@ from .open_work_case_operation_ledger import (
     append_operation_evidence, read_operation_evidence, dispute_operation_evidence,
     clear_operation_evidence,
 )
+from .open_work_case_outcome_reviews import (
+    record_human_outcome, correct_human_outcome, read_human_outcomes,
+    clear_human_outcome_reviews,
+)
 from .open_work_outcomes import source_operation_receipt
 from .open_work_case_status_checkpoint import (
     validate_prior_checkpoint, issue_status_checkpoint,
@@ -136,6 +140,7 @@ async def _recheck_source(scope: str) -> None:
         # Fail closed on disconnect/account replacement during a local write.
         # This is not an atomic cross-process provider-grant transaction.
         await asyncio.to_thread(clear_operation_evidence)
+        await asyncio.to_thread(clear_human_outcome_reviews)
         await asyncio.to_thread(clear_case_declarations)
         raise HTTPException(409, "local source connection changed")
 
@@ -1156,6 +1161,80 @@ async def read_local_dependency_operation_history(request: Request, response: Re
         result = compose_dependency_operation_history(
             admitted, signature, selected, histories,
             unscanned_prerequisites=omitted,
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/v1/open-work/declarations/human-outcomes/assess")
+async def assess_local_human_case_outcome(request: Request, response: Response):
+    """Record explicit human feedback; NOT independently verified completion."""
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_human_assessment", "human_status", "reason_code",
+    })
+    if payload["confirm_human_assessment"] is not True:
+        raise HTTPException(403, "explicit human outcome assessment required")
+    try:
+        admitted, signature, secret, guard = await _operation_ledger_admission(scope, payload)
+        await _recheck_source(scope)
+        result = await asyncio.to_thread(
+            record_human_outcome, admitted, signature, scope=scope,
+            secret=secret, guard=guard, human_status=payload["human_status"],
+            reason_code=payload["reason_code"],
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/v1/open-work/declarations/human-outcomes/history")
+async def read_local_human_case_outcomes(request: Request, response: Response):
+    """Read retained human assessments without contacting any provider."""
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+    })
+    try:
+        admitted, signature, secret, guard = await _operation_ledger_admission(scope, payload)
+        await _recheck_source(scope)
+        result = await asyncio.to_thread(
+            read_human_outcomes, admitted, signature, scope=scope,
+            secret=secret, guard=guard,
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/v1/open-work/declarations/human-outcomes/correct")
+async def correct_local_human_case_outcome(request: Request, response: Response):
+    """Append an explicit correction to the latest human assessment."""
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_human_correction", "target_sequence", "human_status",
+    })
+    if payload["confirm_human_correction"] is not True:
+        raise HTTPException(403, "explicit human outcome correction required")
+    try:
+        admitted, signature, secret, guard = await _operation_ledger_admission(scope, payload)
+        await _recheck_source(scope)
+        result = await asyncio.to_thread(
+            correct_human_outcome, admitted, signature, scope=scope,
+            secret=secret, guard=guard, target_seq=payload["target_sequence"],
+            human_status=payload["human_status"],
         )
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
         raise _safe_error(exc) from None
