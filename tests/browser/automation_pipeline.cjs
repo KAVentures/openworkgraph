@@ -1237,6 +1237,20 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    assert.equal(firstPage.execution_authorized,false);
    assert.equal(firstPage.source_read_authorized,false);
    assert.equal(firstPage.verified_business_outcomes,false);
+   assert.match(await page.locator('#owgPipelinePortfolioCumulativeStatus').textContent(),
+     /1 of 2 pages explicitly reviewed/);
+   const [partialCombinedDownload]=await Promise.all([
+     page.waitForEvent('download'),
+     page.locator('#owgPipelinePortfolioCombinedDownload').click()]);
+   const partialCombined=JSON.parse(await fs.readFile(await partialCombinedDownload.path(),'utf8'));
+   assert.equal(partialCombined.format,'openworkgraph.portfolio-handoff-multipage-review.v1');
+   assert.deepEqual(partialCombined.reviewed_page_numbers,[1]);
+   assert.deepEqual(partialCombined.unreviewed_page_numbers,[2]);
+   assert.equal(partialCombined.reviewed_count,12);
+   assert.equal(partialCombined.complete_coverage,false);
+   assert.equal(partialCombined.execution_authorized,false);
+   assert.equal(partialCombined.source_read_authorized,false);
+   assert.equal(partialCombined.verified_business_outcomes,false);
    await page.locator('#owgPipelinePortfolioAuditNext').focus();
    await page.keyboard.press('Enter');
    await page.locator('#owgPipelinePortfolioAuditStatus')
@@ -1258,6 +1272,34 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    for(const id of pagedIdeaIds)
      assert([...firstPage.items,...secondPage.items].some(item=>item.idea_id===id));
    assert.equal(pagedReviewWrites,0,'reviewing and downloading pages must never write');
+   const [combinedDownload]=await Promise.all([
+     page.waitForEvent('download'),
+     page.locator('#owgPipelinePortfolioCombinedDownload').focus().then(()=>page.keyboard.press('Enter'))]);
+   const combined=JSON.parse(await fs.readFile(await combinedDownload.path(),'utf8'));
+   assert.deepEqual(combined.reviewed_page_numbers,[1,2]);
+   assert.deepEqual(combined.unreviewed_page_numbers,[]);
+   assert.equal(combined.reviewed_count,firstPage.eligible_count);
+   assert.equal(combined.unreviewed_count,0);
+   assert.equal(combined.pages.length,2);
+   assert.equal(combined.pages[0].start_index,1);
+   assert.equal(combined.pages[1].start_index,13);
+   assert(combined.pages.every(p=>typeof p.reviewed_at==='string'&&p.reviewed_at.includes('T')));
+   assert.equal(combined.complete_coverage,false,
+     'missing projects must not become complete evidence just because both pages were read');
+   assert.equal(combined.verified_execution,false);
+   assert.equal(combined.verified_business_outcomes,false);
+   assert.equal(new Set(combined.pages.flatMap(p=>p.items.map(i=>i.idea_id))).size,
+     firstPage.eligible_count);
+   const invalidCombined=await page.evaluate(()=>{
+     const combine=window.__owgPipelineModel.combinedPortfolioHandoffReview;
+     const ids=[{idea_id:'same'},{idea_id:'same'}];
+     const wrong=new Map([[1,{reviewed_at:'2026-11-02T22:00:00Z',
+       items:[{idea_id:'wrong',status:'human_review_required'}]}]]);
+     const fails=(basis,pages)=>{try{combine(basis,pages,'now');return false;}catch{return true;}};
+     return [fails(ids,new Map()),fails([{idea_id:'expected'}],wrong)];
+   });
+   assert.deepEqual(invalidCombined,[true,true],
+     'duplicate identities and mismatched page records must refuse combination');
 
    // Switching pages immediately revokes the prior page's export and row actions.
    // A held response from the previous page cannot repopulate the new page.
@@ -1287,6 +1329,14 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    assert.deepEqual(pagedAxe.violations.map(v=>v.id),[]);
    page.off('request',observePagedReview);
    assert.equal(pagedReviewWrites,0);
+   await page.locator('#owgPipelineSearch').fill('changed filter invalidates review');
+   assert(await page.locator('#owgPipelinePortfolioCombinedDownload').isDisabled());
+   assert.match(await page.locator('#owgPipelinePortfolioCumulativeStatus').textContent(),
+     /0 of 2 pages explicitly reviewed/);
+   assert.equal(await page.locator('#owgPipelinePortfolioAuditResults tbody tr').count(),0);
+   await page.locator('#owgPipelineSearch').fill('');
+   assert(await page.locator('#owgPipelinePortfolioCombinedDownload').isDisabled());
+   assert.equal(pagedReviewWrites,0,'combined export and invalidation must not write');
 
    await page.setViewportSize({width:390,height:844});
    assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false,'no horizontal overflow at phone width');
