@@ -20,6 +20,11 @@ from .open_work_case_dossier import admitted_case_dossier_snapshot, compose_revi
 from .open_work_case_context import stripe_open_work_case_context
 from .open_work_case_portfolio import admit_portfolio, compose_portfolio_status
 from .open_work_case_evidence_graph import compose_case_evidence_graph
+from .open_work_case_operation_verification import (
+    issue_case_record_link, validate_case_record_link,
+    project_case_operation_verification,
+)
+from .open_work_outcomes import source_operation_receipt
 from .open_work_case_status_checkpoint import (
     validate_prior_checkpoint, issue_status_checkpoint,
 )
@@ -526,6 +531,122 @@ async def get_local_reviewed_case_status_checkpoint(request: Request, response: 
         result = issue_status_checkpoint(
             admitted, signature, minimized, scope=scope,
             secret=secret, prior_state=prior_state)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+
+@router.post("/v1/open-work/declarations/operation-link")
+async def issue_local_case_operation_link(request: Request, response: Response):
+    """Explicitly source-join a reviewed Stripe case to one retained invoice record."""
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_source_scan", "max_pages", "resource_ref",
+    })
+    if payload["confirm_source_scan"] is not True:
+        raise HTTPException(403, "explicit source record-link scan required")
+    pages = payload["max_pages"]
+    if type(pages) is not int or not 1 <= pages <= 3:
+        raise HTTPException(422, "max_pages must be between 1 and 3")
+    try:
+        # Reject an invalid record reference before source IO.
+        from .open_work_case_operation_verification import _record_ref
+        _record_ref(payload["resource_ref"])
+        before = await asyncio.to_thread(list_case_declarations, scope)
+        admitted, signature = admitted_case_dossier_snapshot(
+            before, work_item_ref=payload["work_item_ref"],
+            expected_revision=payload["expected_revision"],
+            expected_edit_token=payload["expected_edit_token"],
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    try:
+        scanned = await asyncio.to_thread(
+            stripe_open_work_case_context, payload["work_item_ref"],
+            explicit_scan_authorized=True, max_pages=pages,
+        )
+    except (ValueError, OSError, TypeError, sqlite3.DatabaseError):
+        scanned = {
+            "format": "openworkgraph.open-work-case-context.v1",
+            "work_item_ref": payload["work_item_ref"],
+            "availability": "unknown", "reason": "source_unavailable",
+            "source_evidence": {"source_state": "unknown"},
+        }
+    await _recheck_source(scope)
+    try:
+        after = await asyncio.to_thread(list_case_declarations, scope)
+        _current, current_signature = admitted_case_dossier_snapshot(
+            after, work_item_ref=payload["work_item_ref"],
+            expected_revision=payload["expected_revision"],
+            expected_edit_token=payload["expected_edit_token"],
+        )
+        if current_signature != signature:
+            raise CaseDeclarationError("stale case record-link prerequisite review changed")
+        minimized = compose_reviewed_case_dossier(admitted, scanned)
+        secret = await asyncio.to_thread(_read_or_create_secret, ".open_work_reference_key")
+        result = issue_case_record_link(
+            admitted, signature, minimized, resource_ref=payload["resource_ref"],
+            scope=scope, secret=secret,
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/v1/open-work/declarations/verify-operation")
+async def verify_local_case_provider_operation(request: Request, response: Response):
+    """Independently recheck an exact previously joined invoice's provider state."""
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_source_verification", "record_link",
+    })
+    if payload["confirm_source_verification"] is not True:
+        raise HTTPException(403, "explicit independent provider verification required")
+    try:
+        before = await asyncio.to_thread(list_case_declarations, scope)
+        admitted, signature = admitted_case_dossier_snapshot(
+            before, work_item_ref=payload["work_item_ref"],
+            expected_revision=payload["expected_revision"],
+            expected_edit_token=payload["expected_edit_token"],
+        )
+        secret = await asyncio.to_thread(_read_or_create_secret, ".open_work_reference_key")
+        resource_ref = validate_case_record_link(
+            payload["record_link"], admitted, signature, scope=scope, secret=secret,
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    # Invalid/revoked/stale link must never trigger a provider read.
+    await _recheck_source(scope)
+    try:
+        receipt = await asyncio.to_thread(
+            source_operation_receipt, resource_ref, "stripe_invoice_paid",
+        )
+    except (ValueError, OSError, TypeError, sqlite3.DatabaseError):
+        receipt = None
+    await _recheck_source(scope)
+    try:
+        after = await asyncio.to_thread(list_case_declarations, scope)
+        _current, current_signature = admitted_case_dossier_snapshot(
+            after, work_item_ref=payload["work_item_ref"],
+            expected_revision=payload["expected_revision"],
+            expected_edit_token=payload["expected_edit_token"],
+        )
+        if current_signature != signature:
+            raise CaseDeclarationError("stale case operation verification graph changed")
+        validate_case_record_link(
+            payload["record_link"], admitted, signature, scope=scope, secret=secret,
+        )
+        result = project_case_operation_verification(admitted, resource_ref, receipt)
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
         raise _safe_error(exc) from None
     await _recheck_source(scope)

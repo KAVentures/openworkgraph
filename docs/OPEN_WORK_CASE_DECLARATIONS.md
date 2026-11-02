@@ -1068,3 +1068,46 @@ revocation. **These are not real-provider acceptance or proof of commercial
 benefit.** Independent provider operation receipts, actual customer outcomes,
 production org/actor authorization and held-out matched agent trials remain
 outstanding.
+
+
+## Independently verified Stripe provider operation from a prior exact case join (experimental)
+
+This two-step **dashboard-session-only** workflow addresses a limitation of the
+open-invoice inventory: an invoice disappearing from that inventory is **not**
+evidence that it was paid. First, while the reviewed invoice is still reported
+open, the operator explicitly calls `POST /v1/open-work/declarations/operation-link`
+with exactly `work_item_ref`, `expected_revision`, `expected_edit_token`,
+`confirm_source_scan: true`, `max_pages: 1..3`, and one `resource_ref`
+(`owg:r:` opaque ID) previously obtained from that exact case's retained
+observation summary. The source scan must positively join that observed record
+to the native Stripe invoice ID, with complete retained record identity and
+fresh source evidence. Cases without an exact retained record cannot use this
+workflow; no join is invented. The server returns an operator-carried HMAC-
+sealed `record_link` valid for at most 24 hours and never beyond the case's
+review/retention expiry. It binds the exact source account and the **entire**
+reviewed prerequisite DAG, including incarnation tokens. No native IDs,
+customer details, amounts, raw events, or source-account IDs are exported.
+
+Later, even if the invoice is no longer present in the open inventory, the
+operator explicitly calls `POST /v1/open-work/declarations/verify-operation`
+with exactly the same three case CAS fields, `confirm_source_verification:
+true`, and the prior `record_link`. Invalid, expired, altered, wrong-account
+or stale-DAG links are rejected **before** independent provider IO. The
+backend calls the **existing** authorized
+`source_operation_receipt(resource_ref, "stripe_invoice_paid")` reader,
+then rechecks source scope, current human review, retention, full DAG and link.
+Only a fresh, independently source-reported Stripe invoice `paid` receipt
+with a complete exact retained record identity is returned as
+`provider_operation_verified: true`. Missing/partial/outage/conflicting
+receipts return `unknown`, never paid. Neither step persists source status,
+creates a connector/grant, polls automatically, authorizes agent execution,
+performs a business write, or verifies a customer outcome, contractual
+obligation, expected business goal, or that an agent caused payment.
+
+This is a local single-installation, manually carried link. It cannot verify
+never-observed invoices, does not support multi-tenant organization RBAC or
+atomic cross-process source-grant fencing, and is not a durable independent
+customer-outcome ledger. Synthetic FastAPI/SQLite + fake-provider acceptance
+covers source join, later paid receipt, forged links, stale prerequisite
+approval, outage, revocation during read, consent and privacy; native CI and
+an authorized real Stripe test-account pilot remain mandatory.
