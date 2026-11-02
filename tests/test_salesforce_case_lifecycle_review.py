@@ -27,7 +27,7 @@ TOKEN = "salesforce-local-test-token-only"
 
 
 @contextmanager
-def provider(rows=None, *, failure=None):
+def provider(rows=None, *, failure=None, port=0):
     calls = []
     if rows is None:
         rows = [{"Id": CASE_A, "IsDeleted": True},
@@ -86,7 +86,7 @@ def provider(rows=None, *, failure=None):
         def log_message(self, *args):
             pass
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -410,7 +410,7 @@ def test_two_real_source_snapshots_expose_case_transitions_without_writes(privat
         {"Id": CASE_A, "IsDeleted": False},
         {"Id": CASE_B, "IsDeleted": True},
         {"Id": CASE_C, "IsDeleted": False},
-    ]) as (origin, calls):
+    ], port=int(origin.rsplit(":", 1)[1])) as (origin, calls):  # same instance URL as the first snapshot
         receipt2 = _compare(origin, second, first, receipt1["review_sha256"])
     assert len(calls) == 1 and all(call[0] == "GET" for call in calls)
     assert first.read_bytes() == baseline
@@ -436,7 +436,7 @@ def test_two_real_source_snapshots_expose_case_transitions_without_writes(privat
     with provider([
         {"Id": CASE_A, "IsDeleted": False},
         {"Id": CASE_B, "IsDeleted": True},
-    ]) as (origin, calls):
+    ], port=int(origin.rsplit(":", 1)[1])) as (origin, calls):  # same instance URL as the first snapshot
         receipt3 = _compare(origin, third, second, receipt2["review_sha256"])
     assert len(calls) == 1
     assert receipt3["comparison"]["changed"] == 1
@@ -510,7 +510,8 @@ def test_cli_previous_review_requires_explicit_separate_consent(private_dir,
     first = private_dir / "first.json"
     with provider() as (origin, _):
         receipt = run(origin, first)
-    with provider([{"Id": CASE_A, "IsDeleted": False}]) as (origin, calls):
+    # Reuse the first snapshot's port: the instance URL is part of the review scope.
+    with provider([{"Id": CASE_A, "IsDeleted": False}], port=int(origin.rsplit(":", 1)[1])) as (origin, calls):
         args = ["--instance", origin, "--confirm-host", "127.0.0.1",
                 "--namespace", "sandbox", "--case", CASE_A, "--case", CASE_B,
                 "--case", CASE_C, "--output", str(private_dir / "second.json"),
