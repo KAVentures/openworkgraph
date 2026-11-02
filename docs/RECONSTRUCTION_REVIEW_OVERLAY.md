@@ -399,3 +399,49 @@ competing A/B records, scope and app barriers, tied timestamps, record
 mismatches, complete independent labels, revocation, private CLI output and
 nonreplacement. Exact-head Ubuntu/macOS/Windows and all other required native
 CI jobs remain the release gate.
+
+
+### Seeded two-hop proposals across interrupted unreferenced actions
+
+The same local `propose` and `score-proposals` commands now support one
+**nonrecursive** additional reconstruction step. Consider the observed sequence:
+
+    record A → record A → copy X → copy Y → copy Z → record A → record A
+
+The shipped linker can leave all three copy actions unassigned: a copy is not
+an authoritative source-record membership claim. X and Z may each have a
+direct weak candidate to A, while Y only has a two-edge weak path through X
+or Z. Previously `propose` could suggest X and Z but always abstained on Y.
+
+The experimental second stage can now propose Y **only if** the actual
+production-linker fragment queue reports exactly one complete visible target
+and its exact witnessed intermediary was independently proposed by the
+first-stage direct rule to the **same item and literal source record**.
+Y must also have its own two independently observed matching literal
+source-record anchors, within eight intervening observations per side.
+Every scan requires the same complete tenant/actor/device/session,
+application and source, strict timestamp order and no conflicting record,
+taint, malformed action or unknown capture scope. An intermediary suggested
+only through another fragment is **never** a seed. The proposal is based on
+witnessed weak evidence and exact-record brackets, not time alone.
+
+`propose` now returns `direct_proposal_count` and
+`two_hop_proposal_count`, with separate refusal categories such as
+`two_hop_missing_anchored_direct_seed` and
+`two_hop_missing_or_conflicting_record_brackets`.
+`score-proposals` reports the same split and compares the actual
+production-linker baseline with the experimental direct-plus-seeded overlay
+using complete independent event labels. It does not silently count this
+as a production or human-reviewed improvement. Both commands rederive the
+complete evidence-bound packet; stale or revoked observations fail closed.
+
+This remains **experimental and noncanonical**. Even an A–X–Y–Z–A
+bracket may contain unrelated work, and source-record identity is not a
+verified task identity. No source record reference, work text, provider
+credential, new grant or business write is exported. Do not promote the rule
+to the production linker before frozen-family holdout F1/contamination,
+interruption rejection, and real consenting-user acceptance pass. The
+real-linker and CLI regression cases exercise positive two-hop propagation,
+conflicting record, foreign scope, changed app/source, tied timestamp,
+missing second anchor, packet forgery and private create-only outputs;
+native exact-head CI remains required.
