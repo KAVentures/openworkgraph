@@ -919,6 +919,11 @@ const path=require('node:path');
    await differencePanel.waitFor();
    assert.match(await differencePanel.textContent(),/6 unmatched ordered steps/);
    assert.equal(await differencePanel.locator('fieldset').count(),6);
+   const repeated=await page.evaluate(()=>window.__owgProcessCatalogModel.designPathDifferences(
+     ['A','B','A'],[{label:'A'},{label:'A'},{label:'B'}]));
+   assert.deepEqual(repeated,[{kind:'as_is_only',label:'B',position:2},
+     {kind:'to_be_only',label:'B',position:3}],
+     'repeated labels are aligned in order, not deduplicated into a set');
    await audit(page,'#owgCatalogDifferenceReview','Human AS-IS to TO-BE clarification');
    let catalogWrites=0,savedCatalog;
    page.on('request',r=>{if(r.method()==='POST'&&new URL(r.url()).pathname==='/v1/process-catalog')catalogWrites++;});
@@ -990,6 +995,22 @@ const path=require('node:path');
      assert.match(await reopened.locator('#owgCatalogStatus').textContent(),/Opened immutable revision 1/);
      await audit(reopened,'#owgCatalogDifferenceReview','Reopened human clarification');
    }finally{await reopened.close();}
+   const overflow=await browser.newPage();
+   overflow.on('pageerror',error=>errors.push(error.message));
+   try{
+     await overflow.goto(base+'/#session='+session);
+     await overflow.locator('#owgProcessCatalog').waitFor();
+     await overflow.evaluate(()=>window.owgProcessCatalog.draftObserved({
+       basis:'selected_observed_variant',count:1,
+       path:Array.from({length:14},(_,i)=>'AS-IS '+i),
+       proposedPath:Array.from({length:14},(_,i)=>'TO-BE '+i),
+       evidenceRefs:[]}));
+     assert.match(await overflow.locator('#owgCatalogDifferenceReview').textContent(),
+       /More than 12 unmatched steps/);
+     assert.equal(await overflow.getByRole('button',{name:'Add selected human review gates'}).count(),0,
+       'over-limit differences must not create a misleading partial ledger');
+     await audit(overflow,'#owgCatalogDifferenceReview','Over-limit clarification refusal');
+   }finally{await overflow.close();}
 
    await page.locator('[role=tab][data-tab=overview]').click();
    await audit(page,'#owgWorkflowExplorer','Two-sided AS-IS and proposed TO-BE catalog handoff');
