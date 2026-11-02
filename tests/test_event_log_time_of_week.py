@@ -402,3 +402,112 @@ def test_composite_time_buckets_reject_implicit_zone_and_cross_level_scope():
     for spec in invalid:
         with pytest.raises(workspace.EventLogWorkspaceError):
             query.parse({**spec, "measures": [{"fn": "count"}]})
+
+
+def test_time_of_week_case_start_and_end_windows_are_distinct_and_filtered():
+    log = _cases()
+    start = {
+        "level": "cases", "dimensions": ["first_activity"],
+        "measures": [{"fn": "count"}, {"fn": "median", "of": "duration_seconds"}],
+        "time_of_week": {"anchor": "case_start", "weekdays": [1], "hours": [22]},
+        "order": "dimensions",
+    }
+    result = query.run(log, start)
+    assert result["rows"] == [["Start", 2, 3600.0]]
+    assert result["matching"] == {"rows": 2, "cases": 2}
+    # The same cases do not all finish on Monday in hour 23 UTC.
+    completion = query.run(log, {
+        **start, "time_of_week": {"anchor": "case_end", "weekdays": [1], "hours": [23]},
+    })
+    assert completion["rows"] == [["Start", 1, 1800.0]]
+    assert completion["matching"] == {"rows": 1, "cases": 1}
+    # Existing case filters are composed with the time window.
+    narrowed = query.run(log, {
+        **start, "where": {"duration_over_seconds": 2000},
+    })
+    assert narrowed["rows"] == [["Start", 1, 7200.0]]
+    assert narrowed["matching"]["cases"] == 1
+
+
+def test_time_of_week_event_window_combines_dst_fold_and_activity_filter():
+    log = _import([
+        ("a", "Seen", "2024-03-31T00:30:00Z"),  # Sunday 01 Stockholm
+        ("b", "Seen", "2024-03-31T01:30:00Z"),  # Sunday 03 Stockholm
+        ("c", "Seen", "2024-10-27T00:30:00Z"),  # Sunday 02 CEST
+        ("d", "Seen", "2024-10-27T01:30:00Z"),  # Sunday 02 CET
+        ("e", "Other", "2024-10-27T01:45:00Z"),
+    ])
+    spec = {
+        "level": "events", "dimensions": ["activity"],
+        "time_zone": "Europe/Stockholm",
+        "time_of_week": {"anchor": "event", "clock": "local",
+                         "weekdays": [7], "hours": [2]},
+        "activity_in": ["Seen"],
+        "measures": [{"fn": "count"}, {"fn": "cases"}, {"fn": "share"}],
+        "order": "dimensions",
+    }
+    result = query.run(log, spec)
+    assert result["rows"] == [["Seen", 2, 2, 1.0]]
+    assert result["matching"] == {"rows": 2, "cases": 2}
+    saved = query.save(log, {"name": "Observed Sunday 02 activity", "spec": spec})
+    listed = query.list_saved(log)["analyses"][0]
+    assert listed["analysis_id"] == saved["analysis_id"]
+    assert listed["spec"]["time_of_week"]["hours"] == [2]
+    assert query.run(log, listed["spec"])["rows"] == result["rows"]
+    utc = query.run(log, {
+        **spec, "time_zone": None,
+        "time_of_week": {"anchor": "event", "weekdays": [7], "hours": [0]},
+    })
+    assert utc["rows"] == [["Seen", 2, 2, 1.0]]
+    assert utc["matching"]["cases"] == 2
+
+
+def test_time_of_week_case_local_window_can_combine_with_utc_dimension():
+    log = _import([
+        ("a", "Intake", "2024-01-07T23:30:00Z"),
+        ("a", "Done", "2024-01-08T01:30:00Z"),
+        ("b", "Review", "2024-01-08T00:30:00Z"),
+        ("b", "Done", "2024-01-08T01:40:00Z"),
+    ])
+    spec = {
+        "level": "cases", "dimensions": ["start_weekday_hour_utc"],
+        "time_zone": "Europe/Stockholm",
+        "time_of_week": {"anchor": "case_start", "clock": "local",
+                         "weekdays": [1], "hours": [0]},
+        "measures": [{"fn": "count"}], "order": "dimensions",
+    }
+    result = query.run(log, spec)
+    assert result["rows"] == [["7 Sunday 23", 1]]
+    assert result["matching"]["cases"] == 1
+    completion = query.run(log, {
+        **spec, "dimensions": ["first_activity"],
+        "time_of_week": {"anchor": "case_end", "clock": "local",
+                         "weekdays": [1], "hours": [2]},
+    })
+    assert completion["rows"] == [["Intake", 1], ["Review", 1]]
+    assert completion["matching"]["cases"] == 2
+
+
+@pytest.mark.parametrize("level,window,zone", [
+    ("events", {"anchor": "case_start"}, None),
+    ("cases", {"anchor": "event"}, None),
+    ("events", {"anchor": "event", "clock": "local"}, None),
+    ("events", {"anchor": "event", "clock": "local"}, "Invalid/Zone"),
+    ("events", {"anchor": "event", "clock": "utc"}, "Europe/Stockholm"),
+    ("cases", {"anchor": "case_end", "weekdays": []}, None),
+    ("cases", {"anchor": "case_end", "weekdays": [1, 1]}, None),
+    ("cases", {"anchor": "case_start", "weekdays": [0]}, None),
+    ("cases", {"anchor": "case_start", "weekdays": [True]}, None),
+    ("events", {"anchor": "event", "hours": [24]}, None),
+    ("events", {"anchor": "event", "hours": [-1]}, None),
+    ("events", {"anchor": "event", "hours": [1, 1]}, None),
+    ("events", {"anchor": "event", "hours": ["02"]}, None),
+    ("events", {"anchor": "event", "clock": "wrong"}, None),
+    ("events", {"anchor": "event", "extra_sql": "DROP TABLE ce"}, None),
+])
+def test_time_of_week_rejects_invalid_or_ambiguous_windows(level, window, zone):
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        query.parse({
+            "level": level, "dimensions": [], "measures": [{"fn": "count"}],
+            "time_of_week": window, **({"time_zone": zone} if zone else {}),
+        })
