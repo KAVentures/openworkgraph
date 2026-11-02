@@ -132,7 +132,7 @@ def test_authenticated_http_analysis_save_and_denial(tmp_path):
 from fastapi.testclient import TestClient
 from server.secure_app import app
 from server import local_auth
-doc = b"case,activity,time,amount\\na,A,2024-01-01T00:00:00Z,10\\na,B,2024-01-01T01:00:00Z,20\\nb,A,2024-01-02T00:00:00Z,5\\nb,B,2024-01-02T01:00:00Z,invalid\\n"
+doc = b"case,activity,time,amount\na,A,2024-01-01T00:00:00Z,10\na,B,2024-01-01T01:00:00Z,20\nb,A,2024-01-02T00:00:00Z,5\nb,B,2024-01-02T01:00:00Z,invalid\n"
 with TestClient(app) as client:
     headers = {"Authorization": "OWG-Session " + local_auth.create_dashboard_session()}
     made = client.post("/v1/event-logs/import?format=csv&name=stats&case_column=case&activity_column=activity&timestamp_column=time&attribute_column=amount",
