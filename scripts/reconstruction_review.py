@@ -15,6 +15,7 @@ from typing import Any
 from server.reconstruction_review_overlay import (
     BATCH_FORMAT, MAX_BATCH_SESSIONS, aggregate_review_scores,
     adjudicate_review, apply_review, prepare_review_packet, score_review,
+    resolve_review_disagreement,
 )
 
 _MAX_JSON = 8 * 1024 * 1024
@@ -95,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Human-reviewed, evidence-bound local reconstruction overlay"
     )
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("prepare", "adjudicate", "apply", "score", "score-batch"):
+    for name in ("prepare", "adjudicate", "resolve", "apply", "score", "score-batch"):
         command = sub.add_parser(name)
         if name == "score-batch":
             command.add_argument("--manifest", required=True,
@@ -104,14 +105,19 @@ def main(argv: list[str] | None = None) -> int:
             command.add_argument("--events", required=True,
                                  help="consented local JSON event array")
         command.add_argument("--output", required=True, help="new local private JSON file")
-        if name in ("adjudicate", "apply", "score"):
+        if name in ("adjudicate", "resolve", "apply", "score"):
             command.add_argument("--packet", required=True)
         if name in ("apply", "score"):
             command.add_argument("--decisions", required=True,
-                                 help="single review or two-reviewer adjudication artifact")
+                                 help="single review, consensus or third-reviewer resolution artifact")
         if name == "adjudicate":
             command.add_argument("--reviewer-a", required=True)
             command.add_argument("--reviewer-b", required=True)
+        if name == "resolve":
+            command.add_argument("--adjudication", required=True,
+                                 help="original exact-evidence two-reviewer artifact")
+            command.add_argument("--third-reviewer", required=True,
+                                 help="explicit decisions for disputed events only")
         if name == "score":
             command.add_argument("--truth", required=True,
                                  help="independent complete local annotations")
@@ -129,6 +135,10 @@ def main(argv: list[str] | None = None) -> int:
                 first = _read_json(args.reviewer_a, max_bytes=128 * 1024)
                 second = _read_json(args.reviewer_b, max_bytes=128 * 1024)
                 result = adjudicate_review(events, packet, first, second)
+            elif args.command == "resolve":
+                adjudication = _read_json(args.adjudication, max_bytes=128 * 1024)
+                third = _read_json(args.third_reviewer, max_bytes=128 * 1024)
+                result = resolve_review_disagreement(events, packet, adjudication, third)
             else:
                 decisions = _read_json(args.decisions, max_bytes=128 * 1024)
                 if args.command == "apply":
