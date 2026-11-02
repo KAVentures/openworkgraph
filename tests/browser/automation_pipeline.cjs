@@ -1176,6 +1176,114 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    assert.deepEqual(compareAudit.violations.map(v=>v.id),[]);
    page.off('request',observeComparison);
    assert.equal(comparisonWrites,0,'comparison and pinned-project navigation never write');
+
+   // Real backend, >12 approved opportunities: explicitly review every page,
+   // not just the 12 most recently updated ideas. Audit reads must stay GET-only.
+   const pagedIdeaIds=await page.evaluate(async()=>{
+     const post=async(url,body)=>{
+       const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+         body:JSON.stringify(body)});
+       if(!r.ok)throw new Error('Paged audit setup failed: '+url+' '+r.status+' '+await r.text());
+       return r.json();
+     };
+     const ids=[];
+     for(let i=0;i<13;i++){
+       const created=await post('/v1/automation-pipeline',{
+         title:'Paged handoff candidate '+String(i+1).padStart(2,'0'),
+         description:'Explicit local portfolio review test',
+         source:{kind:'manual',reference:'paged-acceptance'}});
+       const assessing=await post('/v1/automation-pipeline/'+created.idea_id+'/transition',
+         {to:'assessing',expected_revision:created.revision});
+       const assessed=await post('/v1/automation-pipeline/'+created.idea_id+'/assess',{
+         ease:{rules_based:4,structured_inputs:4,process_stability:4,
+           digital_inputs:4,low_exception_rate:4},
+         cases_per_month:10,minutes_per_case:2,eligible_share:0.5,
+         compliance_review_needed:false,expected_revision:assessing.revision});
+       const approved=await post('/v1/automation-pipeline/'+created.idea_id+'/transition',
+         {to:'approved',note:'Human approved for review only',
+           expected_revision:assessed.revision});
+       if(approved.state!=='approved')throw new Error('Expected approved idea');
+       ids.push(created.idea_id);
+     }
+     return ids;
+   });
+   await page.locator('#owgPipelineFilter').selectOption('approved');
+   await page.waitForFunction(()=>document.querySelector('#owgPipelinePortfolioAuditPage')?.textContent.includes('Page 1 of 2'));
+   assert(await page.locator('#owgPipelinePortfolioAuditPrevious').isDisabled());
+   assert(await page.locator('#owgPipelinePortfolioAuditNext').isEnabled());
+   let pagedReviewWrites=0;
+   const observePagedReview=request=>{
+     if(request.method()!=='GET'&&/\/v1\/automation-pipeline/.test(request.url()))
+       pagedReviewWrites++;
+   };
+   page.on('request',observePagedReview);
+   await page.locator('#owgPipelinePortfolioAudit').focus();
+   await page.keyboard.press('Enter');
+   await page.locator('#owgPipelinePortfolioAuditStatus')
+     .filter({hasText:'Page 1 of 2 (1–12)'}).waitFor();
+   const [firstPageDownload]=await Promise.all([
+     page.waitForEvent('download'),page.locator('#owgPipelinePortfolioAuditDownload').click()]);
+   const firstPage=JSON.parse(await fs.readFile(await firstPageDownload.path(),'utf8'));
+   assert.equal(firstPage.page_number,1);
+   assert.equal(firstPage.page_count,2);
+   assert.equal(firstPage.page_start_index,1);
+   assert.equal(firstPage.page_end_index,12);
+   assert.equal(firstPage.reviewed_count,12);
+   assert.equal(firstPage.unreviewed_before_count,0);
+   assert.equal(firstPage.unreviewed_after_count,firstPage.eligible_count-12);
+   assert.equal(firstPage.complete_coverage,false);
+   assert.equal(firstPage.execution_authorized,false);
+   assert.equal(firstPage.source_read_authorized,false);
+   assert.equal(firstPage.verified_business_outcomes,false);
+   await page.locator('#owgPipelinePortfolioAuditNext').focus();
+   await page.keyboard.press('Enter');
+   await page.locator('#owgPipelinePortfolioAuditStatus')
+     .filter({hasText:'Page 2 of 2 (13–'}).waitFor();
+   assert(await page.locator('#owgPipelinePortfolioAuditNext').isDisabled());
+   assert(await page.locator('#owgPipelinePortfolioAuditPrevious').isEnabled());
+   const [secondPageDownload]=await Promise.all([
+     page.waitForEvent('download'),page.locator('#owgPipelinePortfolioAuditDownload').click()]);
+   const secondPage=JSON.parse(await fs.readFile(await secondPageDownload.path(),'utf8'));
+   assert.equal(secondPage.page_number,2);
+   assert.equal(secondPage.page_start_index,13);
+   assert.equal(secondPage.page_end_index,secondPage.eligible_count);
+   assert.equal(secondPage.unreviewed_before_count,12);
+   assert.equal(secondPage.unreviewed_after_count,0);
+   assert.equal(secondPage.omitted_count,12);
+   assert.equal(secondPage.complete_coverage,false);
+   assert.equal(new Set([...firstPage.items,...secondPage.items].map(x=>x.idea_id)).size,
+     firstPage.eligible_count,'no opportunity duplicated or omitted between pages');
+   for(const id of pagedIdeaIds)
+     assert([...firstPage.items,...secondPage.items].some(item=>item.idea_id===id));
+   assert.equal(pagedReviewWrites,0,'reviewing and downloading pages must never write');
+
+   // Switching pages immediately revokes the prior page's export and row actions.
+   // A held response from the previous page cannot repopulate the new page.
+   let heldPageRoute,notifyHeld;
+   const routeHeld=new Promise(resolve=>{notifyHeld=resolve;});
+   await page.route('**/v1/automation-pipeline/*/journey',async route=>{
+     if(!heldPageRoute){heldPageRoute=route;notifyHeld();}
+     else await route.continue();
+   });
+   await page.locator('#owgPipelinePortfolioAuditPrevious').click();
+   await routeHeld;
+   assert.equal(await page.locator('#owgPipelinePortfolioAuditDownload').count(),0);
+   await page.locator('#owgPipelinePortfolioAuditNext').click();
+   await page.locator('#owgPipelinePortfolioAuditStatus')
+     .filter({hasText:'Page 2 of 2 (13–'}).waitFor();
+   await heldPageRoute.continue();
+   await page.unroute('**/v1/automation-pipeline/*/journey');
+   assert.match(await page.locator('#owgPipelinePortfolioAuditPage').textContent(),/Page 2 of 2/);
+   assert.equal(await page.locator('#owgPipelinePortfolioAuditResults tbody tr').count(),
+     secondPage.reviewed_count,'stale previous-page response must not render');
+   const pagedAxe=await page.evaluate(async()=>window.axe.run(
+     document.querySelector('#owgPipelinePortfolioAuditSection'),
+     {runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},
+       resultTypes:['violations']}));
+   assert.deepEqual(pagedAxe.violations.map(v=>v.id),[]);
+   page.off('request',observePagedReview);
+   assert.equal(pagedReviewWrites,0);
+
    await page.setViewportSize({width:390,height:844});
    assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false,'no horizontal overflow at phone width');
    assert.deepEqual(errors,[]);
