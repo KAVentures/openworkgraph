@@ -34,6 +34,9 @@ from .open_work_case_operation_timeline import (
 from .open_work_case_dependency_history import compose_dependency_operation_history
 from .open_work_case_human_dependency_history import compose_dependency_human_outcomes
 from .open_work_case_outcome_reconciliation import compose_outcome_evidence_triage
+from .open_work_case_review_packet import (
+    issue_review_packet, validate_review_packet, compare_review_packet,
+)
 from .open_work_case_operation_ledger import (
     append_operation_evidence, read_operation_evidence, dispute_operation_evidence,
     clear_operation_evidence,
@@ -1324,21 +1327,8 @@ async def read_local_dependency_human_outcomes(request: Request, response: Respo
     return result
 
 
-@router.post("/v1/open-work/declarations/human-outcomes/evidence-triage")
-async def read_local_outcome_evidence_triage(request: Request, response: Response):
-    """Explicit review of both historical ledgers for a bounded reviewed DAG.
-
-    A provider payment receipt and a human assessment are distinct facts.
-    This endpoint neither calls a provider nor verifies customer completion.
-    """
-    _dashboard_only(request)
-    scope = await _require_scope()
-    payload = await _body(request, {
-        "work_item_ref", "expected_revision", "expected_edit_token",
-        "confirm_historical_review", "max_cases",
-    })
-    if payload["confirm_historical_review"] is not True:
-        raise HTTPException(403, "explicit outcome evidence history review required")
+async def _load_review_triage(scope: str, payload: dict[str, Any]):
+    """Re-admit each case and independently verify both retained histories."""
     count = payload["max_cases"]
     if type(count) is not int or not 1 <= count <= 4:
         raise HTTPException(422, "max_cases must be between 1 and 4")
@@ -1403,6 +1393,90 @@ async def read_local_outcome_evidence_triage(request: Request, response: Respons
             unscanned_prerequisites=omitted,
         )
         await asyncio.to_thread(root_guard)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    return result, admitted, signature, secret
+
+
+@router.post("/v1/open-work/declarations/human-outcomes/evidence-triage")
+async def read_local_outcome_evidence_triage(request: Request, response: Response):
+    """Explicit review of both historical ledgers for a bounded reviewed DAG.
+
+    A provider payment receipt and a human assessment are distinct facts.
+    This endpoint neither calls a provider nor verifies customer completion.
+    """
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_historical_review", "max_cases",
+    })
+    if payload["confirm_historical_review"] is not True:
+        raise HTTPException(403, "explicit outcome evidence history review required")
+    count = payload["max_cases"]
+    if type(count) is not int or not 1 <= count <= 4:
+        raise HTTPException(422, "max_cases must be between 1 and 4")
+    result, _admitted, _signature, _secret = await _load_review_triage(scope, payload)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/v1/open-work/declarations/human-outcomes/review-packet")
+async def issue_local_outcome_review_packet(request: Request, response: Response):
+    """Explicitly seal the current minimized historical review for later comparison."""
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_historical_review", "max_cases",
+    })
+    if payload["confirm_historical_review"] is not True:
+        raise HTTPException(403, "explicit historical outcome review required")
+    triage, admitted, signature, secret = await _load_review_triage(scope, payload)
+    try:
+        result = issue_review_packet(
+            triage, admitted, signature, scope=scope, secret=secret,
+            max_cases=payload["max_cases"],
+        )
+        await asyncio.to_thread(_operation_ledger_guard, scope,
+            payload["work_item_ref"], payload["expected_revision"],
+            payload["expected_edit_token"], signature)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/v1/open-work/declarations/human-outcomes/verify-review-packet")
+async def verify_local_outcome_review_packet(request: Request, response: Response):
+    """Re-admit exact review and both ledgers; never recheck provider or infer success."""
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token", "packet",
+    })
+    try:
+        admitted, signature, secret, guard = await _operation_ledger_admission(scope, payload)
+        validated = validate_review_packet(
+            payload["packet"], admitted, signature, scope=scope, secret=secret,
+        )
+        # Reject a forged or stale packet before reading either private ledger.
+        await asyncio.to_thread(guard)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    triage, refreshed, current_signature, current_secret = await _load_review_triage(
+        scope, {**payload, "max_cases": validated["max_cases"]},
+    )
+    try:
+        validate_review_packet(
+            payload["packet"], refreshed, current_signature,
+            scope=scope, secret=current_secret,
+        )
+        result = compare_review_packet(payload["packet"], triage)
+        await asyncio.to_thread(guard)
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
         raise _safe_error(exc) from None
     await _recheck_source(scope)
