@@ -1,7 +1,7 @@
 /* Explicit local process catalog. Same reviewed knowledge store, immutable revisions. */
 (() => {
   'use strict';
-  let record=null, model=null, reviewed=false, busy=false, after='';
+  let record=null, model=null, reviewed=false, busy=false, after='', restorationDraft=null;
   let shadowGeneration=0;
   let importGeneration=0,importDraft=null;
   let ruleCheckGeneration=0,sourceRuleGeneration=0;
@@ -52,7 +52,7 @@
       const draft=window.owgProcessDesigner.reviewedDraft();
       const saved=await request('/v1/process-catalog',{title:draft.business_goal_declared_by_user.slice(0,240),
         expected_revision:0,user_confirmed:true,process_model:linearModel(draft)});
-      record=saved;model=copy(saved.process_model);reviewed=false;renderEditor();
+      record=saved;model=copy(saved.process_model);restorationDraft=null;reviewed=false;renderEditor();
       status('Saved locally as revision '+saved.revision+'. Source CSV and native case IDs were not retained.');
       document.getElementById('owgProcessCatalog')?.scrollIntoView({block:'start'});
       return saved;
@@ -82,6 +82,7 @@
       activities,transitions:activities.slice(1).map((activity,i)=>({source:activities[i].id,target:activity.id,rule_id:null})),
       business_rules:[],entry_activity_id:activities[0].id,terminal_activity_ids:[activities.at(-1).id],
       outcome_expectations:[],opportunity_scenario:null,observed_path_is_policy:false,execution_authorized:false,outcomes_verified:false};
+    restorationDraft=null;
     record={workflow_id:null,revision:0,title:'Observed workflow proposal',process_model:copy(model),
       evidence_refs:(source.evidenceRefs||[]).filter(ref=>typeof ref==='string'&&/^execution:[A-Za-z0-9_-]+$/.test(ref)).slice(0,100)};
     reviewed=false;renderEditor();
@@ -112,7 +113,7 @@
       const params=new URLSearchParams({workflow_id:id});if(revision)params.set('revision',String(revision));
       const result=await request('/v1/process-catalog/revision?'+params);
       if(expectedHash&&result.content_sha256!==expectedHash)throw new Error('Linked process revision no longer matches its saved reference.');
-      record=result;model=copy(result.process_model);reviewed=false;renderEditor();
+      record=result;model=copy(result.process_model);restorationDraft=null;reviewed=false;renderEditor();
       status('Opened immutable revision '+record.revision+'. Saving requires review and the same latest revision.');
     });
   }
@@ -126,7 +127,7 @@
       if(JSON.stringify(model)!==JSON.stringify(submitted)||record.title!==title){
         record={...result,title:record.title};changed();renderEditor();status('Snapshot saved; newer local edits remain unsaved.');return;
       }
-      record=result;model=copy(result.process_model);reviewed=false;renderEditor();
+      record=result;model=copy(result.process_model);restorationDraft=null;reviewed=false;renderEditor();
       status('Saved revision '+record.revision+'. Earlier revisions remain available.');
     });
   }
@@ -209,6 +210,7 @@
       // but never attach old/current evidence references to the restored model.
       record={...latest,evidence_refs:[]};
       model=clearHistoricalConfirmations(copy(historical.process_model));
+      restorationDraft={from:historical.revision,base:latest.revision};
       changed();renderEditor();
       status('UNSAVED restoration draft from r'+historical.revision+
         ' against latest r'+latest.revision+'. Prior confirmations and evidence references were cleared. '+
@@ -451,6 +453,12 @@
     clearShadowReview();
     const host=document.getElementById('owgCatalogEditor');if(!host||!model)return;
     host.replaceChildren(el('h3',record.revision?'Review process · revision '+record.revision:'Review process · unsaved observed proposal'));
+    if(restorationDraft){
+      const warning=el('p','UNSAVED restoration draft from historical r'+restorationDraft.from+
+        ' against latest r'+restorationDraft.base+'. Earlier approvals and evidence references were cleared. ' +
+        'Source state remains unverified. Review and explicitly save a new revision.');
+      warning.id='owgCatalogRestorationDraft';warning.setAttribute('role','status');host.appendChild(warning);
+    }
     host.appendChild(el('p','Edits create a new revision. These are proposed designs and declared rules; they do not authorize an agent or establish company policy.'));
     if((record.evidence_refs||[]).some(ref=>ref.startsWith('urn:openworkgraph:local-log-discovery:'))){
       const origin=el('div');origin.id='owgCatalogOriginResult';origin.style.overflowWrap='anywhere';
@@ -641,7 +649,7 @@
     actions.appendChild(button('Delete all revisions',()=>locked(async()=>{
       if(!window.confirm('Delete this saved process and ALL revisions from local reviewed knowledge?'))return;
       await request('/v1/process-catalog/forget',{workflow_id:record.workflow_id,user_confirmed:true});
-      record=null;model=null;reviewed=false;host.replaceChildren();status('Process revisions deleted locally. Downloaded exports are separate copies.');
+      record=null;model=null;restorationDraft=null;reviewed=false;host.replaceChildren();status('Process revisions deleted locally. Downloaded exports are separate copies.');
     })));
     }
     host.appendChild(actions);
@@ -849,7 +857,7 @@
     if(!value||!Array.isArray(value.activities)||!value.activities.length||!Array.isArray(value.transitions))
       throw new Error('A discovered process model is required.');
     if(!replaceDraft())return false;
-    model=copy(value);
+    restorationDraft=null;model=copy(value);
     record={workflow_id:null,revision:0,title:String(source.logName?'Discovered from '+source.logName:'Discovered process draft').slice(0,240),
       process_model:copy(model),evidence_refs:typeof source.sourceReference==='string'&&/^urn:openworkgraph:local-log-discovery:[0-9a-f]{64}$/.test(source.sourceReference)?[source.sourceReference]:[]};
     reviewed=false;renderEditor();
@@ -862,7 +870,7 @@
     if(busy)throw new Error('Wait for the current process request.');
     if(value!==importDraft)throw new Error('Preview the selected BPMN again before opening its draft.');
     if(!replaceDraft())return;
-    record={workflow_id:null,revision:0,title:'Imported BPMN design',evidence_refs:[]};
+    restorationDraft=null;record={workflow_id:null,revision:0,title:'Imported BPMN design',evidence_refs:[]};
     model=copy(value.process_model);record.process_model=copy(model);reviewed=false;renderEditor();
     status('Opened an unsaved declared BPMN design. Review its goal, labels, branch rules and source documentation before saving. No observations, permissions or executable implementations were imported.');
     document.getElementById('owgCatalogEditor')?.scrollIntoView({block:'start'});
