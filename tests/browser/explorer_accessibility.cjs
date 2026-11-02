@@ -660,6 +660,76 @@ const path=require('node:path');
    assert.equal(await downloadPlan.isDisabled(),true,'editing imported criteria revokes approval');
    await audit(page,'#owgWorkflowExplorer','Edited reopened shadow plan');
    await audit(page,'#owgWorkflowExplorer','Confirmed shadow-plan handoff');
+
+   // Vertical product journey: exact observed variant -> fresh bounded evidence
+   // -> explicit human design review -> existing UNSAVED process catalog editor.
+   // It never creates a process or executes an agent merely by navigating.
+   await page.unroute('**/v1/workflow-evidence?*');
+   await page.evaluate(()=>{
+     window.owgWorkflowExplorer.showReviewedGroup({
+       label:'Design review fixture',workflow_id:'design_fixture',revision:3,
+       bundle:{selector:{execution_ids:['execution:design_ref'],selected_execution_count:1},
+         structural_alignment:{structural_sequence_variants:[{exact_variants:[{
+           readable_steps:['Read case','Check exception'],
+           structural_steps:['action:read','action:check'],
+           execution_count:4,execution_ids:['execution:design_ref']
+         }]}]}}
+     });
+   });
+   await page.locator('#owgExplorerDetail svg g[role=button]').first().click();
+   const openDesign=page.getByRole('button',{name:'Review variant for process design',exact:true});
+   const continueDesign=page.getByRole('button',{name:'Continue to unsaved process catalog draft',exact:true});
+   await openDesign.focus();await page.keyboard.press('Enter');
+   assert.equal(await continueDesign.isDisabled(),true,'a reviewed group alone cannot bypass fresh evidence inspection');
+   assert.match(await page.locator('#owgExplorerDesignStatus').textContent(),/Inspect this variant/);
+   const readsBeforeDesign=evidenceReads;
+   const designResponse=(ids,limited=false)=>({selector:{execution_ids:ids,selected_execution_count:ids.length},
+     structural_alignment:{high_support_steps:[]},provenance:{source_limit_reached:limited}});
+   await page.route('**/v1/workflow-evidence?*',route=>route.fulfill({
+     status:200,contentType:'application/json',
+     body:JSON.stringify(designResponse(['execution:unrelated']))
+   }));
+   await page.getByRole('button',{name:'Review selected examples',exact:true}).click();
+   await page.locator('#owgExplorerEvidence h4').waitFor();
+   assert.equal(await page.locator('#owgExplorerDesignPanel').count(),0,'new inspection revokes design review');
+   await openDesign.click();
+   assert.match(await page.locator('#owgExplorerDesignStatus').textContent(),/does not exactly match/);
+   assert.equal(await continueDesign.isDisabled(),true);
+   await page.unroute('**/v1/workflow-evidence?*');
+   await page.route('**/v1/workflow-evidence?*',route=>route.fulfill({
+     status:200,contentType:'application/json',
+     body:JSON.stringify(designResponse(['execution:design_ref'],true))
+   }));
+   await page.getByRole('button',{name:'Review selected examples',exact:true}).click();
+   await page.locator('#owgExplorerEvidence h4').waitFor();
+   await openDesign.click();
+   assert.match(await page.locator('#owgExplorerDesignStatus').textContent(),/Source limit or truncation/);
+   assert.equal(await continueDesign.isDisabled(),true);
+   await page.unroute('**/v1/workflow-evidence?*');
+   await page.route('**/v1/workflow-evidence?*',route=>route.fulfill({
+     status:200,contentType:'application/json',
+     body:JSON.stringify(designResponse(['execution:design_ref']))
+   }));
+   await page.getByRole('button',{name:'Review selected examples',exact:true}).click();
+   await page.locator('#owgExplorerEvidence h4').waitFor();
+   await openDesign.click();
+   assert.equal(await continueDesign.isDisabled(),true,'current evidence still requires human confirmation');
+   assert.match(await page.locator('#owgExplorerDesignPanel').textContent(),/Source identity, total coverage/);
+   await audit(page,'#owgWorkflowExplorer','Explicit source-backed design review');
+   await page.locator('#owgExplorerDesignConfirmed').check();
+   assert.equal(await continueDesign.isDisabled(),false);
+   const writesBeforeDesign=writes;
+   await continueDesign.focus();await page.keyboard.press('Enter');
+   assert.equal(writes,writesBeforeDesign,'catalog draft navigation is not a process save or business write');
+   assert.match(await page.locator('#owgCatalogEditor').textContent(),/Review process · unsaved observed proposal/);
+   assert.match(await page.locator('#owgCatalogStatus').textContent(),/Unsaved proposal from a bounded observation/);
+   assert.equal(evidenceReads,readsBeforeDesign+3,'only three explicit bounded evidence inspections read sources');
+   await page.locator('[role=tab][data-tab=overview]').click();
+   await page.locator('#owgExplorerDetail svg g[role=button]').last().click();
+   assert.equal(await page.locator('#owgExplorerDesignPanel').count(),0,'switching steps invalidates design approval');
+   await openDesign.click();
+   assert.equal(await continueDesign.isDisabled(),true,'another selection needs another inspection');
+   await audit(page,'#owgWorkflowExplorer','Design review after selection change');
    await page.unroute('**/v1/workflow-evidence?*');
    await period.selectOption('7');
    assert.equal(await page.locator('#owgExplorerHandoffPanel').count(),0,'period change invalidates reviewed copy and JSON download');

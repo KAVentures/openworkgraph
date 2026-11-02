@@ -15,6 +15,7 @@
   let activeBundle = null;
   let currentWindow = {};
   let handoffReview = null;
+  let designReview = null;
 
   function element(tag, text, className) {
     const node = document.createElement(tag);
@@ -181,6 +182,9 @@
     handoffReview = null;
     const review = document.getElementById('owgExplorerHandoffReview');
     if (review) review.replaceChildren();
+    designReview = null;
+    const design = document.getElementById('owgExplorerDesignReview');
+    if (design) design.replaceChildren();
   }
 
   async function load() {
@@ -382,19 +386,16 @@
     regroup.disabled=!!candidate.reviewed_label;
     if(regroup.disabled)regroup.title='Use the reviewed group editor to rename, split or move these classifications.';
     actions.appendChild(regroup);
-    actions.appendChild(button('Draft selected variant in process catalog',()=>{
-      const lane=selectedExample;
-      if(!lane||!lane.exact||lane.omittedSteps){status('Select a node in a complete displayed exact variant before drafting. Core summaries and clipped lanes cannot be used.');return;}
-      try{
-        if(!window.owgProcessCatalog?.draftObserved)throw new Error('Open the current local process catalog first.');
-        window.owgProcessCatalog.draftObserved({path:lane.steps,count:lane.count,basis:'selected_observed_variant',evidenceRefs:lane.ids});
-      }catch(error){status(String(error.message||'Could not draft this selected variant.'));}
-    },true));
+    actions.appendChild(button('Review variant for process design', () =>
+      openDesignReview(candidate, selectedExample), true));
     actions.appendChild(button('Review safe agent handoff', () => openHandoffReview(candidate, selectedExample), true));
     host.appendChild(actions);
     const handoffHost = element('div');
     handoffHost.id = 'owgExplorerHandoffReview';
     host.appendChild(handoffHost);
+    const designHost = element('div');
+    designHost.id = 'owgExplorerDesignReview';
+    host.appendChild(designHost);
     const stepInfo = element('div', 'Select a map node to inspect its supporting variant.', 'muted');
     stepInfo.id = 'owgExplorerStepInfo';
     stepInfo.setAttribute('role', 'status');
@@ -554,8 +555,9 @@
   async function inspect(candidate, lane) {
     const output = document.getElementById('owgExplorerEvidence');
     if (!output) return;
-    const requestId = ++latestEvidenceRequest;
-    activeBundle = null;
+    // A new source inspection invalidates all previously acknowledged reviews.
+    invalidateEvidence();
+    const requestId = latestEvidenceRequest;
     output.replaceChildren(element('p', 'Reading bounded supporting evidence…', 'muted'));
     const ids = selectedIds(candidate, lane);
     if (!ids.length) {
@@ -760,6 +762,123 @@
 
   // Review and handoff are separate actions. The only export is an explicit
   // browser-local plan-only JSON download; no server export or execution occurs.
+
+  function completeDesignEvidence(lane, ids) {
+    const returned = safeArray(activeBundle?.selector?.execution_ids);
+    return !!(lane && lane.exact && !lane.omittedSteps && lane.steps.length &&
+      lane.structural.length === lane.steps.length &&
+      lane.structural.every(step => typeof step === 'string' && step.length > 0) &&
+      ids.length > 0 && activeBundle &&
+      returned.length === ids.length &&
+      count(activeBundle.selector?.selected_execution_count) === ids.length &&
+      ids.every(id => returned.includes(id)) &&
+      activeBundle.provenance?.source_limit_reached !== true &&
+      activeBundle.provenance?.truncated !== true);
+  }
+
+  function currentDesignReview(state) {
+    return designReview === state && selectedId === state.candidateId &&
+      selectedExample === state.lane && latestEvidenceRequest === state.evidenceGeneration &&
+      JSON.stringify(currentWindow) === state.windowJSON &&
+      completeDesignEvidence(state.lane, state.ids);
+  }
+
+  function openDesignReview(candidate, lane) {
+    const host = document.getElementById('owgExplorerDesignReview');
+    if (!host || selectedId !== candidate.candidate_cluster_id || selectedExample !== lane) return;
+    const ids = selectedIds(candidate, lane);
+    const exact = !!(lane && lane.exact && !lane.omittedSteps && lane.steps.length &&
+      lane.structural.length === lane.steps.length &&
+      lane.structural.every(step => typeof step === 'string' && step.length > 0));
+    const returned = safeArray(activeBundle?.selector?.execution_ids);
+    const inspected = !!(activeBundle && ids.length &&
+      returned.length === ids.length &&
+      count(activeBundle.selector?.selected_execution_count) === ids.length &&
+      ids.every(id => returned.includes(id)));
+    const limited = activeBundle?.provenance?.source_limit_reached === true ||
+      activeBundle?.provenance?.truncated === true;
+    const eligible = completeDesignEvidence(lane, ids);
+    const state = {candidateId: candidate.candidate_cluster_id, lane, ids: [...ids],
+      windowJSON: JSON.stringify(currentWindow), evidenceGeneration: latestEvidenceRequest};
+    designReview = state;
+    host.replaceChildren();
+    const panel = element('section', null, 'note');
+    panel.id = 'owgExplorerDesignPanel';
+    panel.setAttribute('aria-label', 'Review observed evidence before process design');
+    panel.appendChild(element('h4', 'Review evidence before drafting an AS-IS process'));
+    panel.appendChild(element('p',
+      'This is a human design decision, not approval of business policy. Continuing opens an UNSAVED proposal in the existing process catalog; it does not create a process, call an AI, or execute a tool.'));
+    panel.appendChild(element('p', 'Evidence window: ' +
+      (currentWindow.since || 'all retained history') +
+      (currentWindow.until ? ' to ' + currentWindow.until + ' (exclusive)' :
+        ' to latest retained evidence at inspection') +
+      '. Any new inspection, period or variant selection revokes this review.'));
+    panel.appendChild(element('p', lane ?
+      'Exact variant ' + (lane.index + 1) + ' · ' + lane.count + ' candidate runs · ' +
+      lane.steps.length + ' displayed steps · ' + lane.omittedSteps + ' omitted displayed steps.' :
+      'No exact variant selected.'));
+    if (lane) {
+      const list = element('ol');
+      lane.steps.forEach(step => list.appendChild(element('li', step)));
+      panel.appendChild(list);
+    }
+    panel.appendChild(element('p', ids.length + ' selected retained execution references. ' +
+      'The observed count can exceed this bounded sample. Source identity, total coverage, ' +
+      'business outcome and policy remain unverified.' +
+      (candidate.reviewed_workflow_id ?
+        ' Saved grouping revision ' + count(candidate.reviewed_revision) +
+        ' is a user classification, not independent verification.' :
+        ' No saved classification revision is attached.')));
+    const reason = !lane ? 'Select a step in an exact variant first.' :
+      !exact ? 'Only complete exact structural variants may be drafted; summaries, clipped or mismatched steps are refused.' :
+      !ids.length ? 'No retained execution references for this variant; another variant’s refs cannot be borrowed.' :
+      !activeBundle ? 'Inspect this variant using Review selected examples before drafting.' :
+      !inspected ? 'Returned evidence does not exactly match the selected variant references. Inspect again.' :
+      limited ? 'Source limit or truncation reached; this inspection is insufficient for a design handoff.' :
+      'Selected references were inspected in this bounded window. This is not proof of complete source coverage.';
+    const note = element('p', reason, 'muted');
+    note.id = 'owgExplorerDesignStatus';
+    note.setAttribute('role', 'status');
+    panel.appendChild(note);
+    const confirmLabel = element('label');
+    const checkbox = element('input');
+    checkbox.type = 'checkbox';
+    checkbox.id = 'owgExplorerDesignConfirmed';
+    checkbox.disabled = !eligible;
+    confirmLabel.append(checkbox, document.createTextNode(
+      ' I inspected this exact observed variant and accept an unsaved, unverified AS-IS design proposal. I will separately review its labels, goal, rules and omissions before saving.'));
+    panel.appendChild(confirmLabel);
+    const next = button('Continue to unsaved process catalog draft', () => {
+      if (!checkbox.checked || !currentDesignReview(state)) {
+        note.textContent = 'Review or evidence changed. Inspect the exact variant again and explicitly confirm.';
+        next.disabled = true;
+        return;
+      }
+      try {
+        if (!window.owgProcessCatalog?.draftObserved)
+          throw new Error('Process catalog unavailable; reopen the local dashboard.');
+        // The existing catalog opens a local unsaved draft; its own explicit save
+        // and review boundaries remain unchanged. Never borrow candidate-wide refs.
+        window.owgProcessCatalog.draftObserved({
+          path: lane.steps.slice(), count: lane.count,
+          basis: 'selected_observed_variant', evidenceRefs: ids.slice()
+        });
+        checkbox.checked = false;
+        next.disabled = true;
+        note.textContent = 'Catalog draft requested. If you kept an existing unsaved draft, it was not replaced. ' +
+          'Inspect the catalog before any separate reviewed save; no process or agent was executed.';
+      } catch (error) {
+        note.textContent = String(error?.message || 'Catalog draft unavailable.');
+      }
+    }, true);
+    next.disabled = true;
+    checkbox.addEventListener('change', () => {
+      next.disabled = !checkbox.checked || !currentDesignReview(state);
+    });
+    panel.appendChild(next);
+    host.appendChild(panel);
+  }
+
   function openHandoffReview(candidate, lane) {
     const host = document.getElementById('owgExplorerHandoffReview');
     if (!host || selectedId !== candidate.candidate_cluster_id || selectedExample !== lane) return;
