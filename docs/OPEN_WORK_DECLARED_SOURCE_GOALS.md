@@ -118,3 +118,55 @@ repository-required native Ubuntu/macOS/Windows, browser, collaboration,
 scale, accessibility, starter and packaging/release checks on the exact
 head before merging. Synthetic source tests do not certify real Stripe,
 independently adjudicated customer outcomes or commercial uplift.
+
+
+## Reviewed prerequisite payment checks (explicit, atomic local history)
+
+`POST /v1/open-work/declarations/source-goals/verify-dependency-payments`
+accepts an authenticated **local dashboard session** and a JSON object with
+exactly `work_item_ref`, `expected_revision`, `expected_edit_token`,
+`confirm_source_verification: true`, and `record_links`. The latter must
+contain **one previously issued signed source-joined invoice link per case**
+for the root and **all** transitive prerequisites, with a maximum of four
+reviewed cases. Every case must already declare
+`goal_code=verify_operation` and
+`expected_outcome_code=stripe_invoice_paid_reported`.
+This is an explicit on-demand action; no automatic scan or polling is enabled.
+
+The operator first reviews each case and issues its individual
+`/operation-link` using the existing separately authorized Stripe open-invoice
+source scan and exact retained record join. For a root A depending on B, issue
+B's link against B's own reviewed revision and A's link against A's reviewed
+revision. Send both links (order does not grant authority) in one request
+with A's current revision and incarnation edit token. The API processes B
+before A and returns a minimized `cases` array of fresh `met`/`unknown`
+provider-goal states and transitions, together with counts.
+
+**Before the first Stripe request**, the API verifies all current reviewed
+declarations, transitive dependencies, link seals, account scope, distinct
+source records and existing private HMAC evidence histories. After **each**
+read it re-admits the entire owner DAG and source scope. Unknown/outage is
+retained as unknown; it never establishes nonpayment or a reversal. Once all
+reads finish, the checked states are appended in **one SQLite transaction**.
+Every prior history is compared again under the write lock; a concurrent
+check/dispute, capacity limit or write error rolls back **all** new batch
+events. Source reads themselves are sequential, **not** an atomic Stripe
+snapshot, and a source/review revocation after a local commit remains subject
+to the documented best-effort cross-store fencing limitations.
+
+The response explicitly separates `all_declared_provider_goals_met_at_individual_checks`
+from true business success. Even when every case was freshly reported paid,
+this does **not** prove bank settlement, customer satisfaction, obligation
+discharge, causality from an agent run, or authorization to execute anything.
+No native invoice IDs, customer names, amounts, credentials or raw provider
+receipts are persisted. Local source disconnect/review revocation and retention
+continue to govern the underlying operation evidence ledger.
+
+Synthetic FastAPI/private-SQLite coverage lives in
+`tests/test_open_work_case_declared_dependency_payment.py` and exercises
+mixed paid/unknown results, all-paid transitions, invalid/duplicate/missing
+links, incompatible goals, mid-read revocation, and an intervening dispute
+that forces atomic batch refusal. Run the repository's full exact-head
+cross-platform, browser, collaboration, scale, accessibility, starter and
+packaging matrix before merge. Real restricted Stripe test-account and
+independent customer-outcome acceptance remain outstanding.
