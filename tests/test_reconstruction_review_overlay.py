@@ -883,6 +883,7 @@ def test_review_interleaving_context_matching_anchors_and_scope_barriers():
     # crossed to reach an older matching record in the same tenant.
     scoped = [_event(1, A), _event(2, B, tenant="tenant-b"), _event(3),
               _event(4, A), _event(5, A)]
+    scoped[2]["event_type"] = "copy"
     packet = prepare_review_packet(scoped)
     context = next(x for x in packet["eligible_candidates"] if x["event_id"] == "e03")[
         "interleaving_context"
