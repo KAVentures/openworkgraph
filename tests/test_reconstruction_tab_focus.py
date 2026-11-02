@@ -347,3 +347,115 @@ def test_single_record_tab_tied_foreign_case_abstains_in_both_event_id_orders():
         assert result["observed_single_record_interleaved_focus_links"] == 0
         assert result["ambiguous_single_record_tab_interleaving_abstentions"] == 1
         assert ("e01", f"e{loose_id:02d}") not in groups(result)
+
+
+def test_cross_app_exact_case_abstains_without_browser_return():
+    # A single-record browser tab is not enough after an independently
+    # observed Terminal case B in the same complete capture scope.
+    trace = [
+        event(1, A),
+        event(2, B, tab=None, app="Terminal", source="desktop"),
+        event(3),
+    ]
+    response = workflow_evidence.list_workflow_evidence_candidates(_raw_events=trace)
+    result = response["linked_work_items"]
+    assert result["total_items"] == 0
+    assert result["unlinked_observation_count"] == 3
+    assert result["ambiguous_single_record_tab_interleaving_abstentions"] == 1
+    assert result["observed_single_record_cross_app_focus_links"] == 0
+    assert result["link_contract"]["single_record_tab_cross_app_case_requires_two_sided_focus"]
+    assert result["link_contract"]["cross_app_interruptions_do_not_create_record_membership"]
+
+
+def test_cross_app_bracketed_browser_return_recovers_only_browser_loose_steps():
+    trace = [
+        event(1, A), event(2),
+        event(3, B, tab=None, app="Terminal", source="desktop"),
+        event(4), event(5, A),
+    ]
+    response = workflow_evidence.list_workflow_evidence_candidates(_raw_events=trace)
+    result = response["linked_work_items"]
+    item = groups(result)[("e01", "e02", "e04", "e05")]
+    assert item["link_basis"] == {
+        "same_record": 1, "same_tab_single_record_cross_app_bracketed": 2,
+    }
+    assert item["confidence"] == 0.62
+    assert item["cross_record_join"] is False
+    assert result["observed_single_record_cross_app_focus_links"] == 2
+    assert result["observed_single_record_interleaved_focus_links"] == 0
+    assert result["ambiguous_single_record_tab_interleaving_abstentions"] == 0
+    assert result["unlinked_observation_count"] == 1
+    assert result["read_only"] and not result["authoritative"]
+    serialized = json.dumps(response)
+    for secret in ("PRIVATE", "tenant-a", "actor-a", "device-a", "session-a", "atlassian"):
+        assert secret not in serialized
+
+
+def test_cross_app_other_tenant_and_unknown_surface_cannot_veto():
+    foreign_tenant = event(2, B, tab=None, app="Terminal", source="desktop")
+    foreign_tenant["organization_id"] = "tenant-b"
+    unknown_app = event(2, B, tab=None, app="unknown", source="desktop")
+    for foreign in (foreign_tenant, unknown_app):
+        result = linked_work_items([event(1, A), foreign, event(3)])
+        assert ("e01", "e03") in groups(result)
+        assert result["observed_single_record_cross_app_focus_links"] == 0
+        assert result["ambiguous_single_record_tab_interleaving_abstentions"] == 0
+
+
+def test_cross_app_same_source_confirmed_clipboard_case_is_not_false_boundary():
+    copy = event(1, A, transfer="x")
+    copy["event_type"] = "copy"
+    paste = event(2, B, tab=None, app="Terminal", source="desktop", transfer="x")
+    paste["event_type"] = "paste"
+    result = linked_work_items([copy, paste, event(3)])
+    item = groups(result)[("e01", "e02", "e03")]
+    assert item["cross_record_join"]
+    assert item["link_basis"] == {
+        "clipboard_transfer": 1, "same_tab_single_record": 1,
+    }
+    assert result["observed_single_record_cross_app_focus_links"] == 0
+    assert result["ambiguous_single_record_tab_interleaving_abstentions"] == 0
+
+
+def test_cross_app_tied_order_or_ambiguous_transfer_abstains():
+    tied = [
+        event(1, A), event(2),
+        event(3, B, tab=None, app="Terminal", source="desktop"),
+        event(4, A),
+    ]
+    tied[2]["observed_at"] = tied[1]["observed_at"]
+    transfer = [
+        event(1, A), event(2),
+        event(3, B, tab=None, app="Terminal", source="desktop", transfer="x"),
+        event(4, A),
+    ]
+    malformed = [
+        event(1, A), event(2),
+        event(3, B, tab=None, app="Terminal", source="desktop"),
+        event(4, A),
+    ]
+    malformed[2]["event_type"] = None
+    for trace in (tied, transfer, malformed):
+        result = linked_work_items(trace)
+        assert result["observed_single_record_cross_app_focus_links"] == 0
+        assert result["ambiguous_single_record_tab_interleaving_abstentions"] >= 1
+
+
+def test_cross_app_interruption_is_bounded_and_recomputed_after_retention():
+    trace = ([event(1, A), event(2)]
+             + [event(i, B, tab=None, app="Terminal", source="desktop")
+                for i in range(3, 20)]
+             + [event(20, A)])
+    result = linked_work_items(trace)
+    assert result["observed_single_record_cross_app_focus_links"] == 0
+    assert result["ambiguous_single_record_tab_interleaving_abstentions"] >= 1
+    short = [
+        event(1, A), event(2),
+        event(3, B, tab=None, app="Terminal", source="desktop"),
+        event(4, A),
+    ]
+    assert linked_work_items(short)["observed_single_record_cross_app_focus_links"] == 1
+    retained = [row for row in short if row["event_id"] != "e04"]
+    result = linked_work_items(retained)
+    assert result["observed_single_record_cross_app_focus_links"] == 0
+    assert result["ambiguous_single_record_tab_interleaving_abstentions"] == 1
