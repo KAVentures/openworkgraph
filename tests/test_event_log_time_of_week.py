@@ -511,3 +511,129 @@ def test_time_of_week_rejects_invalid_or_ambiguous_windows(level, window, zone):
             "level": level, "dimensions": [], "measures": [{"fn": "count"}],
             "time_of_week": window, **({"time_zone": zone} if zone else {}),
         })
+
+
+def test_exact_weekday_hour_cells_avoid_cross_product_for_observed_events():
+    log = _import([
+        ("s22", "Sunday22", "2024-01-07T22:15:00Z"),
+        ("s01", "Sunday01", "2024-01-07T01:15:00Z"),
+        ("m01", "Monday01", "2024-01-08T01:15:00Z"),
+        ("m05", "Monday05", "2024-01-08T05:15:00Z"),
+        ("m22", "Monday22", "2024-01-08T22:15:00Z"),
+        ("t01", "Tuesday01", "2024-01-09T01:15:00Z"),
+    ])
+    slots = [{"weekday": 7, "hour": 22}, {"weekday": 1, "hour": 1},
+             {"weekday": 1, "hour": 5}]
+    spec = {
+        "level": "events", "dimensions": ["activity"],
+        "time_of_week": {"anchor": "event", "slots": slots},
+        "measures": [{"fn": "count"}, {"fn": "cases"}],
+        "order": "dimensions",
+    }
+    result = query.run(log, spec)
+    assert result["rows"] == [
+        ["Monday01", 1, 1], ["Monday05", 1, 1], ["Sunday22", 1, 1],
+    ]
+    assert result["matching"] == {"rows": 3, "cases": 3}
+    assert result["spec"]["time_of_week"]["slots"] == slots
+
+    # The older Cartesian-product selector is intentionally unchanged: it
+    # includes Sunday 01 and Monday 22, which the exact-cell selector excludes.
+    legacy = query.run(log, {
+        **spec, "time_of_week": {"anchor": "event",
+                                "weekdays": [7, 1], "hours": [22, 1, 5]},
+    })
+    assert legacy["matching"] == {"rows": 5, "cases": 5}
+
+
+def test_exact_cells_select_case_intake_or_completion_and_survive_save():
+    log = _import([
+        ("a", "Intake", "2024-01-07T22:10:00Z"),
+        ("a", "Done", "2024-01-08T01:15:00Z"),
+        ("b", "Intake", "2024-01-08T22:10:00Z"),
+        ("b", "Done", "2024-01-09T01:15:00Z"),
+    ])
+    spec = {
+        "level": "cases", "dimensions": ["duration_band"],
+        "time_of_week": {"anchor": "case_start",
+                         "slots": [{"weekday": 7, "hour": 22}]},
+        "measures": [{"fn": "count"}], "order": "dimensions",
+    }
+    start = query.run(log, spec)
+    assert start["rows"] == [["1: 1 to under 24 hours", 1]]
+    assert start["matching"]["cases"] == 1
+    completion = query.run(log, {
+        **spec, "time_of_week": {"anchor": "case_end",
+                                "slots": [{"weekday": 1, "hour": 1}]},
+    })
+    assert completion["matching"]["cases"] == 1
+    saved = query.save(log, {"name": "Observed Sunday overnight intake", "spec": spec})
+    listed = query.list_saved(log)["analyses"][0]
+    assert listed["analysis_id"] == saved["analysis_id"]
+    assert query.run(log, listed["spec"])["rows"] == start["rows"]
+
+
+def test_exact_cells_in_local_clock_include_both_dst_fold_instants_not_gap():
+    log = _import([
+        ("fall_a", "Seen", "2024-10-27T00:30:00Z"),
+        ("fall_b", "Seen", "2024-10-27T01:30:00Z"),
+        ("spring_a", "Seen", "2024-03-31T00:30:00Z"),
+        ("spring_b", "Seen", "2024-03-31T01:30:00Z"),
+        ("other", "Seen", "2024-10-28T01:30:00Z"),
+        ("excluded", "Other", "2024-10-27T01:45:00Z"),
+    ])
+    spec = {
+        "level": "events", "dimensions": ["activity"],
+        "activity_in": ["Seen"], "time_zone": "Europe/Stockholm",
+        "time_of_week": {"anchor": "event", "clock": "local",
+                         "slots": [{"weekday": 7, "hour": 2}]},
+        "measures": [{"fn": "count"}, {"fn": "cases"}],
+        "order": "dimensions",
+    }
+    result = query.run(log, spec)
+    assert result["rows"] == [["Seen", 2, 2]]
+    assert result["matching"] == {"rows": 2, "cases": 2}
+    assert query.run(log, {
+        **spec, "time_of_week": {"anchor": "event", "clock": "local",
+                                "slots": [{"weekday": 7, "hour": 1}]},
+    })["matching"]["rows"] == 1  # Spring's 01:30 CET; no spring 02:xx
+
+
+def test_exact_cells_compile_to_fixed_sql_and_bound_values():
+    utc = query.parse({
+        "level": "events", "dimensions": [], "measures": [{"fn": "count"}],
+        "time_of_week": {"anchor": "event", "slots": [{"weekday": 7, "hour": 22}]},
+    })
+    sql, params = query._time_of_week_clause(utc)
+    assert sql == "list_contains(?, strftime(ts, '%u%H'))"
+    assert params == [["722"]]
+    local = query.parse({
+        "level": "cases", "dimensions": [], "measures": [{"fn": "count"}],
+        "time_zone": "Europe/Stockholm",
+        "time_of_week": {"anchor": "case_end", "clock": "local",
+                         "slots": [{"weekday": 1, "hour": 0},
+                                   {"weekday": 7, "hour": 23}]},
+    })
+    sql, params = query._time_of_week_clause(local)
+    assert sql == "list_contains(?, strftime(timezone(?, timezone('UTC', ended)), '%u%H'))"
+    assert params == [["100", "723"], "Europe/Stockholm"]
+
+
+@pytest.mark.parametrize("window", [
+    {"anchor": "event", "slots": []},
+    {"anchor": "event", "slots": [{"weekday": 7, "hour": 22}] * 2},
+    {"anchor": "event", "slots": [{"weekday": 7, "hour": 22}], "weekdays": [7]},
+    {"anchor": "event", "slots": [{"weekday": 7, "hour": 22}], "hours": [22]},
+    {"anchor": "event", "slots": [{"weekday": 0, "hour": 22}]},
+    {"anchor": "event", "slots": [{"weekday": 7, "hour": 24}]},
+    {"anchor": "event", "slots": [{"weekday": True, "hour": 22}]},
+    {"anchor": "event", "slots": [{"weekday": 7, "hour": "22"}]},
+    {"anchor": "event", "slots": [{"weekday": 7, "hour": 22, "sql": "x"}]},
+    {"anchor": "event", "slots": [{"weekday": 7, "hour": 22}] * 169},
+])
+def test_exact_cells_reject_mixed_duplicate_malformed_or_unbounded_input(window):
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        query.parse({
+            "level": "events", "dimensions": [], "measures": [{"fn": "count"}],
+            "time_of_week": window,
+        })
