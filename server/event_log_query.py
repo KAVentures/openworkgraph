@@ -137,6 +137,9 @@ class EventAttributeStatistic(_Strict):
     attribute: AttributeName
     unit: Unit
     statistic: Literal["average", "minimum", "maximum", "median", "p90"]
+    # Optional exact activity selector. Only matching event rows contribute;
+    # unmatched cases remain unknown rather than becoming zero.
+    activity: Name | None = None
     missing_policy: Literal["available", "complete"] = "available"
 
 
@@ -365,14 +368,16 @@ def _metrics(conn, metrics: list[Any]) -> tuple[dict[str, str], list[dict[str, A
             # twice in one case. Restrict to selected cases before aggregating.
             aggregate = {"average": "avg(v)", "minimum": "min(v)", "maximum": "max(v)",
                          "median": "quantile_cont(v, 0.5)", "p90": "quantile_cont(v, 0.9)"}[metric.statistic]
+            activity_clause = " AND activity = ?" if metric.activity is not None else ""
+            bound = [_path(metric.attribute)] + ([metric.activity] if metric.activity is not None else [])
             conn.execute(f"""CREATE OR REPLACE TEMP TABLE qstat AS
                 SELECT case_id, count(*) AS event_rows,
                     count(*) FILTER (WHERE v IS NOT NULL AND isfinite(v)) AS finite_rows,
                     count(*) FILTER (WHERE v IS NULL OR NOT isfinite(v)) AS excluded_rows,
                     {aggregate} FILTER (WHERE v IS NOT NULL AND isfinite(v)) AS metric_value
                 FROM (SELECT case_id, try_cast(json_extract_string(attributes, ?) AS DOUBLE) AS v
-                      FROM ce WHERE case_id IN (SELECT case_id FROM qc)) typed
-                GROUP BY case_id""", [_path(metric.attribute)])
+                      FROM ce WHERE case_id IN (SELECT case_id FROM qc){activity_clause}) typed
+                GROUP BY case_id""", bound)
             stats = conn.execute("""SELECT coalesce(sum(event_rows), 0),
                     coalesce(sum(finite_rows), 0), coalesce(sum(excluded_rows), 0),
                     count(*) FILTER (WHERE finite_rows > 0 AND excluded_rows > 0),
@@ -383,9 +388,17 @@ def _metrics(conn, metrics: list[Any]) -> tuple[dict[str, str], list[dict[str, A
                               "event_rows_with_missing_invalid_or_nonfinite_attribute",
                               "cases_with_partial_attribute_coverage",
                               "cases_with_no_finite_attribute"), (int(v or 0) for v in stats)))
+            # No matching activity is not a zero-valued metric or a complete
+            # observation; it is a missing case, even with complete policy.
+            absent = int(conn.execute("""SELECT count(*) FROM qc q
+                WHERE NOT EXISTS (SELECT 1 FROM qstat s WHERE s.case_id = q.case_id)""").fetchone()[0])
+            extra["cases_without_matching_activity"] = absent if metric.activity is not None else 0
+            extra["cases_with_no_finite_attribute"] += absent
             extra["cases_excluded_by_complete_policy"] = (
                 extra["cases_with_partial_attribute_coverage"] if metric.missing_policy == "complete" else 0)
-            extra["coverage_scope"] = "selected_full_cases_flattened_case_event_rows"
+            extra["coverage_scope"] = ("selected_full_cases_matching_activity_flattened_case_event_rows"
+                                       if metric.activity is not None else
+                                       "selected_full_cases_flattened_case_event_rows")
             conn.execute(f"""UPDATE qc SET {column} =
                 CASE WHEN qstat.finite_rows = 0 THEN NULL
                      WHEN ? = 'complete' AND qstat.excluded_rows > 0 THEN NULL
