@@ -43,7 +43,7 @@ MAX_WINDOW = timedelta(days=7)
 _ID = re.compile(r"[0-9a-f]{32}\Z", re.ASCII)
 _GRANT_KEYS = frozenset({
     "version", "enabled", "consented", "host", "tenant_scope", "sys_ids",
-    "table", "fields", "since", "until",
+    "table", "fields", "since", "until", "timezone",
 })
 _ROW_KEYS = frozenset({
     "sys_id", "documentkey", "fieldname", "sys_created_on", "tablename",
@@ -71,7 +71,8 @@ def _window(since: str, until: str, zone_name: str) -> None:
 
 
 def _check_audit_grant(path: Path, scope: SelectedIncidents, *,
-                       fields: tuple[str, ...], since: str, until: str) -> None:
+                       fields: tuple[str, ...], since: str, until: str,
+                       zone_name: str) -> None:
     """Independent owner-only grant for sys_audit, not inherited incident access."""
     try:
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
@@ -99,7 +100,8 @@ def _check_audit_grant(path: Path, scope: SelectedIncidents, *,
             or type(grant["fields"]) is not list
             or any(type(x) is not str for x in grant["fields"])
             or sorted(grant["fields"]) != sorted(fields)
-            or grant["since"] != since or grant["until"] != until):
+            or grant["since"] != since or grant["until"] != until
+            or grant["timezone"] != zone_name):
         raise AuditError("Audit grant revoked or does not match exact scope")
 
 
@@ -170,7 +172,7 @@ def _read_audit(scope: SelectedIncidents, *, grant_file: Path,
     for page in range(MAX_PAGES):
         _check_grant(grant_file, scope)
         _check_audit_grant(audit_grant_file, scope, fields=fields,
-                           since=since, until=until)
+                           since=since, until=until, zone_name=zone_name)
         url = _url(scope, fields=fields, since=since, until=until, offset=page * PAGE_SIZE)
         req = request.Request(url, method="GET", headers={
             "Authorization": "Bearer " + bearer,
@@ -191,7 +193,7 @@ def _read_audit(scope: SelectedIncidents, *, grant_file: Path,
                            until=until, zone_name=zone_name)
         _check_grant(grant_file, scope)
         _check_audit_grant(audit_grant_file, scope, fields=fields,
-                           since=since, until=until)
+                           since=since, until=until, zone_name=zone_name)
         for row in rows:
             if row[3] in events:
                 # Offset pagination can shift during concurrent source writes.
@@ -266,7 +268,7 @@ def main(argv: list[str] | None = None, *, provider_opener=None,
             raise AuditError("Recovery output already exists")
         _check_grant(args.grant_file, scope)
         _check_audit_grant(args.audit_grant_file, scope, fields=fields,
-                           since=args.since, until=args.until)
+                           since=args.since, until=args.until, zone_name=args.timezone)
         session = _session(os.environ.get("OWG_DASHBOARD_SESSION"))
         namespace = "snow_" + _scope_digest(scope, args.timezone)[:32]
         # Refuse a wrong target before the first provider GET.
@@ -274,7 +276,7 @@ def main(argv: list[str] | None = None, *, provider_opener=None,
                             opener=local_opener)
         _check_grant(args.grant_file, scope)
         _check_audit_grant(args.audit_grant_file, scope, fields=fields,
-                           since=args.since, until=args.until)
+                           since=args.since, until=args.until, zone_name=args.timezone)
         rows = _read_audit(
             scope, grant_file=args.grant_file, audit_grant_file=args.audit_grant_file,
             fields=fields, since=args.since, until=args.until,
@@ -283,17 +285,17 @@ def main(argv: list[str] | None = None, *, provider_opener=None,
         )
         body = _csv_bytes(rows)
         _check_audit_grant(args.audit_grant_file, scope, fields=fields,
-                           since=args.since, until=args.until)
+                           since=args.since, until=args.until, zone_name=args.timezone)
         _publish_new(args.output, body.decode("utf-8"),
                      grant_file=args.grant_file, scope=scope)
         output_created = True
         _check_audit_grant(args.audit_grant_file, scope, fields=fields,
-                           since=args.since, until=args.until)
+                           since=args.since, until=args.until, zone_name=args.timezone)
         _check_grant(args.grant_file, scope)
         verify_local_target(args.log_id, args.port, namespace, session,
                             opener=local_opener)
         _check_audit_grant(args.audit_grant_file, scope, fields=fields,
-                           since=args.since, until=args.until)
+                           since=args.since, until=args.until, zone_name=args.timezone)
         _check_grant(args.grant_file, scope)
         result = None
         if rows:
@@ -303,7 +305,7 @@ def main(argv: list[str] | None = None, *, provider_opener=None,
                 opener=local_opener,
             )
             _check_audit_grant(args.audit_grant_file, scope, fields=fields,
-                               since=args.since, until=args.until)
+                               since=args.since, until=args.until, zone_name=args.timezone)
             _check_grant(args.grant_file, scope)
         if result is not None and result["rejected_events"]:
             raise AuditError("Local append reported rejected events")
