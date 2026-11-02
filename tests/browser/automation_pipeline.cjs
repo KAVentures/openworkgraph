@@ -215,6 +215,43 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    // source-check forms. The latter still requires fresh explicit consent.
    await page.locator('#owgPipelineJourney').click();
    await page.locator('#owgPipelineJourneyProject').selectOption(manifest.project_id);
+   // Explicit, bounded review packet is reconstructed from persisted references,
+   // not an approval or a new source/provider read. It never includes raw case data.
+   const writesBeforePacket=guidedWrites;
+   const [handoffDownload]=await Promise.all([
+     page.waitForEvent('download'),
+     page.locator('#owgPipelineJourneyReviewPacket').click()
+   ]);
+   assert.equal(handoffDownload.suggestedFilename(),'owg-evidence-handoff-review.json');
+   const handoffPacket=JSON.parse(await fs.readFile(await handoffDownload.path(),'utf8'));
+   assert.equal(handoffPacket.format,'openworkgraph.evidence-handoff-review.v1');
+   assert.equal(handoffPacket.scope,'human_review_only');
+   assert.equal(handoffPacket.execution_authorized,false);
+   assert.equal(handoffPacket.source_read_authorized,false);
+   assert.equal(handoffPacket.idea.idea_id,linked.idea_id);
+   assert.equal(handoffPacket.idea.revision,linkedBeforeExport.revision);
+   assert.equal(handoffPacket.process.content_sha256,saved.content_sha256);
+   assert.equal(handoffPacket.project.project_id,manifest.project_id);
+   assert.equal(handoffPacket.project.spec_sha256,manifest.spec_sha256);
+   assert.equal(handoffPacket.project.archive_sha256,manifest.archive_sha256);
+   assert(handoffPacket.readiness.blockers.includes('dataset_origin_not_linked'));
+   assert(handoffPacket.readiness.blockers.includes('no_imported_report'));
+   assert(handoffPacket.readiness.blockers.includes('execution_and_business_outcomes_unverified'));
+   assert.equal(handoffPacket.readiness.verified_business_outcomes,false);
+   assert.equal(guidedWrites,writesBeforePacket,'review packet must not write or read a provider');
+   assert(!JSON.stringify(handoffPacket).includes('PRIVATE_RAW_CASE_VALUE'));
+   assert(!JSON.stringify(handoffPacket).includes('owg:r:'));
+   // A different selected project must not inherit the first project's hashes.
+   const secondPacket=await page.evaluate((packet)=>{
+     const model=window.__owgPipelineModel;
+     const journey={idea:{revision:packet.idea.revision,state:'approved'},process_status:{status:'current',process_reference:packet.process},
+       projects:[{...packet.project,project_id:'second-project',spec_sha256:'b'.repeat(64),archive_sha256:'c'.repeat(64),
+         reported_specifications:[],source_check_exports:{count:0}}]};
+     return model.handoffReviewPacket(journey,'second-project',packet.idea.idea_id,'2026-11-02T00:00:00Z');
+   },handoffPacket);
+   assert.equal(secondPacket.project.project_id,'second-project');
+   assert.equal(secondPacket.project.spec_sha256,'b'.repeat(64));
+   assert.notEqual(secondPacket.project.spec_sha256,handoffPacket.project.spec_sha256);
    const writesBeforeNavigation=guidedWrites;
    await page.locator('#owgPipelineJourneyReports').click();
    await page.locator('#owgPipelineReportProject').waitFor();
@@ -299,6 +336,15 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await resumed.locator('#owgPipelineJourneyGuide').waitFor();
    await resumed.locator('#owgPipelineJourneyProject').selectOption(manifest.project_id);
    await resumed.locator('#owgPipelineJourneyArtifact').getByText(/Matching reported specification/).waitFor();
+   const [resumedDownload]=await Promise.all([resumed.waitForEvent('download'),
+     resumed.locator('#owgPipelineJourneyReviewPacket').click()]);
+   const resumedPacket=JSON.parse(await fs.readFile(await resumedDownload.path(),'utf8'));
+   assert.equal(resumedPacket.project.project_id,manifest.project_id);
+   assert.equal(resumedPacket.project.spec_sha256,manifest.spec_sha256);
+   assert.equal(resumedPacket.reported_specifications[0].status,'matching_reported_specification');
+   assert(!resumedPacket.readiness.blockers.includes('no_imported_report'));
+   assert(resumedPacket.readiness.blockers.includes('execution_and_business_outcomes_unverified'));
+
    assert((await resumed.locator('#owgPipelineJourneyResult').textContent()).includes(manifest.spec_sha256));
    await resumed.close();
    await page.locator('#owgPipelineJourney').click();
@@ -330,6 +376,12 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await page.locator('#owgPipelineJourney').click();
    await journey.getByText(/Saved process renewal_review · revision 1 · changed since this idea/).waitFor();
    await guide.getByText(/Process basis is changed/).waitFor();
+   const [changedDownload]=await Promise.all([page.waitForEvent('download'),
+     page.locator('#owgPipelineJourneyReviewPacket').click()]);
+   const changedPacket=JSON.parse(await fs.readFile(await changedDownload.path(),'utf8'));
+   assert.equal(changedPacket.process.status,'changed');
+   assert(changedPacket.readiness.blockers.includes('process_not_current'));
+
    assert(await guide.locator('#owgPipelineJourneyOpenProcess').isEnabled());
    page.once('dialog',dialog=>dialog.accept());
    await guide.locator('#owgPipelineJourneyOpenProcess').click();
@@ -352,6 +404,12 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await page.locator('#owgPipelineJourney').click();
    await journey.getByText(/Saved process renewal_review · revision 1 · unavailable/).waitFor();
    assert(await guide.locator('#owgPipelineJourneyOpenProcess').isDisabled());
+   const [deletedDownload]=await Promise.all([page.waitForEvent('download'),
+     page.locator('#owgPipelineJourneyReviewPacket').click()]);
+   const deletedPacket=JSON.parse(await fs.readFile(await deletedDownload.path(),'utf8'));
+   assert.equal(deletedPacket.process.status,'unavailable');
+   assert(deletedPacket.readiness.blockers.includes('process_not_current'));
+
    assert(await page.getByRole('button',{name:'Open linked saved process',exact:true}).isDisabled());
    await page.setViewportSize({width:390,height:844});
    assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false,'no horizontal overflow at phone width');
