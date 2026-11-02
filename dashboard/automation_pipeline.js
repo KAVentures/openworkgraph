@@ -116,6 +116,40 @@
       execution_authorized:false,verified_execution:false,verified_business_outcomes:false};
   }
 
+  // Portable, minimized human-inspection notes for a freshly compared exact project.
+  // Checked means locally inspected, never approved, resolved, source-verified or executed.
+  function handoffInspectionWorklist(saved,current,inspectedKeys,createdAt){
+    const comparison=compareHandoffReviewPackets(saved,current);
+    const entries=[
+      ...comparison.changes.map(label=>({kind:'changed_area',key:'change:'+label,label})),
+      ...current.readiness.blockers.map(key=>({kind:'outstanding_blocker',key:'blocker:'+key,label:key}))
+    ];
+    const allowed=new Set(entries.map(item=>item.key));
+    if(entries.length>40||!Array.isArray(inspectedKeys)||inspectedKeys.length>40||
+      new Set(inspectedKeys).size!==inspectedKeys.length||
+      inspectedKeys.some(key=>typeof key!=='string'||!allowed.has(key)))
+      throw new Error('Inspection selections do not match this fresh project comparison.');
+    const inspected=new Set(inspectedKeys);
+    return {
+      format:'openworkgraph.handoff-human-inspection.v1',generated_at:createdAt,
+      scope:'local_human_inspection_only',execution_authorized:false,
+      source_read_authorized:false,human_approval_granted:false,
+      verified_execution:false,verified_business_outcomes:false,
+      idea_id:current.idea.idea_id,project_id:current.project.project_id,
+      saved_basis:{process_revision:saved.process.revision,process_sha256:saved.process.content_sha256,
+        idea_revision:saved.idea.revision,project_spec_sha256:saved.project.spec_sha256,
+        project_archive_sha256:saved.project.archive_sha256},
+      current_basis:{process_revision:current.process.revision,process_sha256:current.process.content_sha256,
+        idea_revision:current.idea.revision,project_spec_sha256:current.project.spec_sha256,
+        project_archive_sha256:current.project.archive_sha256},
+      comparison_status:comparison.status,
+      items:entries.map(item=>({kind:item.kind,key:item.key,
+        inspected_locally:inspected.has(item.key)})),
+      inspected_count:inspected.size,pending_inspection_count:entries.length-inspected.size,
+      source_and_outcome_verification:'not_established'
+    };
+  }
+
   // Pure helper, exercised by tests: builds an assessment body or throws a readable error.
   function assessmentBody(values,revision){
     const ease={};
@@ -403,6 +437,45 @@
                 compareResult.replaceChildren(el('p',comparison.status==='matching_snapshot'?
                   'Recorded fields match the current local references. Execution, causality and business outcomes remain unverified.':
                   'Recorded fields changed since the saved packet. Re-review these areas before any further decision.'));
+                // Explicit, ephemeral human inspection record: only hard-coded
+                // categories and current blocker keys, never imported free text.
+                const inspection=el('section');inspection.id='owgPipelineJourneyInspectionWorklist';
+                inspection.appendChild(el('h6','Human inspection worklist'));
+                inspection.appendChild(el('p','Mark items you inspected locally. This is not approval, resolution, source verification or permission to run an agent.','muted'));
+                const inspectionItems=[
+                  ...comparison.changes.map(label=>({key:'change:'+label,label:'Changed: '+label})),
+                  ...latest.readiness.blockers.map(key=>({key:'blocker:'+key,label:'Outstanding: '+(names[key]||'Additional human review requirement')}))
+                ];
+                const inspected=new Set(),inspectionList=el('ul');
+                const inspectionStatus=el('div',null,'muted');
+                inspectionStatus.setAttribute('role','status');
+                const updateInspectionStatus=()=>{inspectionStatus.textContent=inspected.size+' of '+inspectionItems.length+
+                  ' items inspected locally. All approval and verification gates remain open.';};
+                inspectionItems.forEach((item,index)=>{
+                  const check=input('owgPipelineInspection'+index,'checkbox');
+                  const label=el('label',item.label);label.prepend(check);
+                  const line=el('li');line.appendChild(label);inspectionList.appendChild(line);
+                  check.onchange=()=>{
+                    if(check.checked)inspected.add(item.key);else inspected.delete(item.key);
+                    updateInspectionStatus();
+                  };
+                });
+                updateInspectionStatus();
+                const exportInspection=button('Download human inspection worklist','secondary');
+                exportInspection.id='owgPipelineJourneyInspectionDownload';
+                exportInspection.onclick=()=>{
+                  if(generation!==detailGeneration||choice.value!==p.project_id||
+                    requestSequence!==comparisonSequence||!compareResult.contains(exportInspection))return;
+                  const record=handoffInspectionWorklist(saved,latest,[...inspected],new Date().toISOString());
+                  const blob=new Blob([JSON.stringify(record,null,2)+'\\n'],{type:'application/json'});
+                  const url=URL.createObjectURL(blob),link=el('a');
+                  link.href=url;link.download='owg-human-inspection-worklist.json';
+                  document.body.appendChild(link);link.click();link.remove();
+                  setTimeout(()=>URL.revokeObjectURL(url),1000);
+                  guideStatus.textContent='Downloaded local inspection notes for this exact comparison. No approval or execution permission was granted.';
+                };
+                inspection.append(inspectionList,inspectionStatus,exportInspection);
+                compareResult.appendChild(inspection);
                 if(comparison.changes.length){
                   const differences=el('ul');
                   comparison.changes.forEach(name=>differences.appendChild(el('li',name)));
@@ -673,6 +746,6 @@
     refresh().catch(e=>{status.textContent=e.message;});
   }
 
-  window.__owgPipelineModel={assessmentBody,portfolioView,handoffReviewPacket,compareHandoffReviewPackets};
+  window.__owgPipelineModel={assessmentBody,portfolioView,handoffReviewPacket,compareHandoffReviewPackets,handoffInspectionWorklist};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
