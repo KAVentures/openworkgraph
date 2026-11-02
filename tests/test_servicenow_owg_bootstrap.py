@@ -307,3 +307,51 @@ def test_selected_read_cli_uses_env_credentials_and_emits_counts_only(
     assert len(workspace.list_logs()["logs"]) == 1
     assert TOKEN not in output and SESSION not in output and INCIDENT not in output
     assert "PRIVATE" not in output
+
+
+def test_selected_read_journal_survives_uncertain_import_and_replays_after_review(
+        context, monkeypatch):
+    """A provider read is journaled once even if the local POST outcome is lost."""
+    from test_servicenow_incident_journal import FakeTransport, TOKEN
+    from server import servicenow_owg_bootstrap as module
+    private, port, workspace = context
+    _, journal = _grant_without_journal(private)
+    original_import = module._import
+    attempts = 0
+
+    def lost_response(*args):
+        nonlocal attempts
+        attempts += 1
+        raise BootstrapError("Simulated missing local receipt")
+
+    monkeypatch.setattr(module, "_import", lost_response)
+    with pytest.raises(UncertainBootstrap):
+        bootstrap(**approved(private, port), read_selected=True,
+                  consent_source_read=True, token=TOKEN,
+                  provider_opener=FakeTransport())
+    assert attempts == 1
+    assert journal.exists()
+    # The operator independently inspects OWG before deciding to retry.
+    assert workspace.list_logs()["logs"] == []
+    monkeypatch.setattr(module, "_import", original_import)
+    receipt = bootstrap(**approved(private, port), read_selected=True,
+                        consent_source_read=True, token=TOKEN,
+                        provider_opener=FakeTransport())
+    assert receipt["new_journal_snapshots"] == 0
+    assert receipt["replayed_journal_snapshots"] == 1
+    assert receipt["events"] == 1
+    assert len(workspace.list_logs()["logs"]) == 1
+
+
+def test_selected_read_empty_provider_snapshot_never_creates_log_or_journal(context):
+    from test_servicenow_incident_journal import FakeTransport, TOKEN
+    private, port, workspace = context
+    _grant_without_journal(private)
+    provider = FakeTransport(rows=[])
+    with pytest.raises(BootstrapError, match="no importable snapshots"):
+        bootstrap(**approved(private, port), read_selected=True,
+                  consent_source_read=True, token=TOKEN,
+                  provider_opener=provider)
+    assert len(provider.calls) == 1
+    assert not (private / "selected.sqlite").exists()
+    assert workspace.list_logs()["logs"] == []
