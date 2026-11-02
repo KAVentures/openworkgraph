@@ -407,6 +407,44 @@
                   const differences=el('ul');
                   comparison.changes.forEach(name=>differences.appendChild(el('li',name)));
                   compareResult.appendChild(differences);
+                  // Drift review is navigation only. Never infer authorization from a
+                  // matching packet, and never substitute a newer process revision.
+                  const followups=el('section');followups.id='owgPipelineJourneyDriftActions';
+                  followups.appendChild(el('h6','Review changed areas'));
+                  const changed=new Set(comparison.changes);
+                  const offer=(label,action,disabled=false,explanation='')=>{
+                    const control=button(label,'secondary');
+                    control.disabled=disabled;
+                    control.onclick=()=>{
+                      if(generation!==detailGeneration||choice.value!==p.project_id||
+                        !artifact.contains(followups)||control.disabled)return;
+                      action();
+                    };
+                    followups.appendChild(control);
+                    if(disabled&&explanation)followups.appendChild(el('p',explanation,'muted'));
+                  };
+                  if(changed.has('Saved process revision and digest')||changed.has('Saved process availability'))
+                    offer('Inspect exact saved process revision',()=>processAction.click(),
+                      processAction.disabled,'The linked saved revision is unavailable or uncheckable. No newer revision will be substituted.');
+                  if(changed.has('Opportunity revision and state'))
+                    offer('Review opportunity assessment and decision',()=>ideaAction.click());
+                  if(changed.has('Project revision and artifact hashes'))
+                    offer('Inspect selected immutable project',()=>{
+                      choice.focus();guideStatus.textContent='Review the selected project ID and recorded hashes. Changing project requires an explicit selection; no export was started.';
+                    });
+                  if(changed.has('Imported report status'))
+                    offer('Review imported reports for this project',()=>reportsAction.click());
+                  if(changed.has('Recorded source-check exports'))
+                    offer('Prepare separate source review for this project',()=>sourceAction.click(),
+                      sourceAction.disabled,'Historical projects cannot prepare a source read. Review the current idea and project first.');
+                  if(changed.has('Dataset and cohort source checks'))
+                    followups.appendChild(el('p','Dataset or cohort evidence changed. Review the source origin and consent in its original workspace; this journey cannot repair or independently verify it.','muted'));
+                  if(changed.has('Human review blockers'))
+                    offer('Inspect outstanding human review checks',()=>{
+                      review.scrollIntoView?.({block:'nearest'});review.focus?.();
+                      guideStatus.textContent='Review the outstanding checks for this exact project. No approval or execution permission was granted.';
+                    });
+                  compareResult.appendChild(followups);
                 }
               }catch(e){
                 if(generation===detailGeneration&&choice.value===p.project_id&&artifact.contains(compareResult)&&requestSequence===comparisonSequence)
