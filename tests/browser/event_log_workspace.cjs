@@ -57,6 +57,16 @@ const path=require('node:path');
    await page.locator('#owgEventLogAnalyze').click();
    const qualityPayload=await (await qualityResponsePromise).json();
    await page.locator('#owgEventLogResults h3',{hasText:'Most common variants'}).waitFor();
+   const [coverageResponse]=await Promise.all([page.waitForResponse(r=>r.url().includes('/variant-coverage')),page.locator('#owgVariantCoverageRun').click()]);
+   const coverageResult=await coverageResponse.json();
+   assert.equal(coverageResult.cases,60);
+   assert.equal(coverageResult.displayed_variants.at(-1).cumulative_cases,60);
+   const coverageBox=page.locator('#owgVariantCoverageRun').locator('..');
+   await coverageBox.getByText('Target case coverage').waitFor();
+   const [coverageJson]=await Promise.all([page.waitForEvent('download'),page.locator('#owgVariantCoverageJson').click()]);
+   const coveragePacket=JSON.parse(await fs.readFile(await coverageJson.path(),'utf8'));
+   assert.deepEqual(coveragePacket.coverage_targets,coverageResult.coverage_targets);
+
    assert.match(await page.locator('#owgEventLogResults').textContent(),/Receive → Check → Approve → Close/);
    await page.locator('#owgQuality summary').click();
    await page.locator('#owgQualityResults table').first().waitFor();
@@ -383,6 +393,19 @@ const path=require('node:path');
    const special=(await simulationResponse.json()).result.activities.find(a=>a.activity==='__proto__');
    assert.equal(special.minutes,7);assert.equal(special.resources,2);
    await page.getByText('Simulated baseline').waitFor();
+   const [simJson]=await Promise.all([page.waitForEvent('download'),page.locator('#owgEventLogSimulationJson').click()]);
+   const simReport=JSON.parse(await fs.readFile(await simJson.path(),'utf8'));
+   assert.equal(simReport.format,'openworkgraph.simulation-report.v1');
+   assert.equal(simReport.submitted_scenario.label,'Validate first');
+   assert.equal(simReport.analysis.scenario.cases,500);
+   assert.ok(simReport.analysis.assumptions.length);
+   assert.match(simReport.interpretation,/not measured savings/);
+   const [simCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgEventLogSimulationCsv').click()]);
+   const simCsvText=await fs.readFile(await simCsv.path(),'utf8');
+   assert.match(simCsvText,/^section,run,metric,value,unit\r\n/);
+   assert.match(simCsvText,/cycle_time,baseline,p50,/);
+   assert.match(simCsvText,/assumption,both,/);
+
    const simulated=await page.locator('#owgEventLogSimRun').locator('xpath=../..').textContent();
    assert.match(simulated,/Validate first/);assert.match(simulated,/Median cycle time change/);assert.match(simulated,/not forecasts/);assert.match(simulated,/Poisson/);
    // Held-out validation: calibrate on earlier cases only and compare with the later ones.
@@ -436,6 +459,25 @@ const path=require('node:path');
    await page.getByRole('cell',{name:'Check, Approve',exact:true}).waitFor();
    const badPool=await page.evaluate(()=>{try{window.__owgEventLogModel.simPool({name:'Team',resources:'2',activities:['Check']});return 'accepted';}catch(e){return e.message;}});
    assert.match(badPool,/at least two activities/);
+   // Priority classes in the scenario: urgent cases are served first; the baseline stays first come, first served.
+   await page.locator('#owgEventLogSimPriorities').fill('urgent 30% 0, standard 70% 1');
+   const [rankedResponse]=await Promise.all([page.waitForResponse(r=>r.url().includes('/simulate')),page.locator('#owgEventLogSimRun').click()]);
+   const ranked=await rankedResponse.json();
+   assert.deepEqual(ranked.scenario.priorities,[{name:'urgent',share:0.3,rank:0},{name:'standard',share:0.7,rank:1}]);
+   assert.equal(ranked.baseline.priority_classes,undefined);assert.equal(ranked.result.priority_classes.length,2);
+   await page.getByRole('cell',{name:'urgent',exact:true}).waitFor();
+   await page.locator('#owgEventLogSimPriorities').fill('');
+   // Batch one activity in the scenario (one outside the shared pool, which a batch cannot join).
+   const batchable=(await page.locator('#owgEventLogSimBatchActivity option').evaluateAll(o=>o.map(x=>x.value))).find(v=>v&&!['Check','Approve'].includes(v));
+   await page.locator('#owgEventLogSimBatchActivity').selectOption(batchable);
+   await page.locator('#owgEventLogSimBatchSize').fill('3');await page.locator('#owgEventLogSimBatchWait').fill('8');
+   const [batchResponse]=await Promise.all([page.waitForResponse(r=>r.url().includes('/simulate')),page.locator('#owgEventLogSimRun').click()]);
+   const batchedRun=await batchResponse.json();
+   assert.equal(batchResponse.status(),200,JSON.stringify(batchedRun));
+   assert.deepEqual(batchedRun.scenario.activities[batchable].batch,{size:3,max_wait_minutes:480});
+   assert.equal(batchedRun.baseline.activities.find(a=>a.activity===batchable).batch,undefined);
+   await page.getByRole('columnheader',{name:'Batched activity',exact:true}).waitFor();
+   await page.locator('#owgEventLogSimBatchActivity').selectOption('');
    // Seasonal arrivals for both runs: weekday office hours entered as weights, then measured from this log.
    await page.locator('#owgEventLogSimDays').selectOption('');
    assert.equal(await page.locator('#owgEventLogSimHourly').isVisible(),false,'weight fields appear only for entered weights');
@@ -523,6 +565,10 @@ const path=require('node:path');
    // Manual reviews belong to the current evaluated state. They do not grant
    // business-action authority and cannot occur before an explicit check.
    const reviewPanel=page.locator('#owgSignalInbox');
+   await reviewPanel.getByRole('button',{name:'Snooze 1 hour for signal Skipped approval'}).click();
+   await reviewPanel.getByText('snoozed',{exact:true}).waitFor();
+   await reviewPanel.getByRole('button',{name:'Resume review for signal Skipped approval'}).click();
+   await reviewPanel.getByText('unreviewed',{exact:true}).waitFor();
    await reviewPanel.getByRole('button',{name:'Acknowledge signal Skipped approval'}).click();
    await reviewPanel.getByText('acknowledged',{exact:true}).waitFor();
    assert.match(await reviewPanel.textContent(),/No automatic actions or delivery/);

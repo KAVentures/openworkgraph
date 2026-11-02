@@ -144,12 +144,212 @@ answer key, with no model involved:
     python -m evals.reconstruction.owg_native --split holdout
 
 Lanes publish no event IDs; for scoring only, each published lane is projected
-back to the events carrying its opaque reference. A lane means "same record",
-never "same task", so a record shared by several true workflows is reported as
-contamination rather than hidden. `tests/test_reconstruction_owg_native.py`
-holds regression floors on all and holdout cases and requires that lanes never
-merge different records, fail closed when references are missing, and never
-republish deleted evidence.
+back to **admitted, visible** events carrying its opaque reference. The adapter
+uses the shipped record-lane identity and UTC timestamp admission rules, retains
+the first valid occurrence of a repeated (record, event ID), and does not score
+invalid timestamps, nonliteral/malformed event IDs or source-only rows absent
+from `presented_evidence`. The source lane's duplicate admission normalizes
+an ID before reserving its (record, ID) slot: for example, source numeric `17`
+consumes the slot of a later string `"17"`, but the numeric observation is
+not scoreable as a visible literal ID. The evaluator mirrors that ordering
+without inventing a string-ID assignment; a falsey numeric `0` does not
+consume the literal `"0"` slot because production treats it as an empty ID. A reused event ID admitted under two distinct
+records is withheld from both rather than assigned to an arbitrary lane.
+A matching ID alone is insufficient: the visible event must also carry a
+single consistent normalized (opaque reference, provider, resource kind, host)
+identity **and the same admitted UTC observation instant** as the source row.
+Different timezone offsets representing the same instant are equivalent; a
+microsecond difference is not. Visible record identity components must be
+**literal strings when present**, before case-insensitive normalization:
+boolean providers/kinds and numeric or null hosts cannot impersonate source
+strings such as `"true"` or `"123"`, or a missing host. Valid literal
+case variants and legacy absent hosts remain accepted. This visible-only
+admission check does not rewrite the shipped source engine's identity rules
+or independently authenticate a provider. Missing, malformed, contradictory or
+cross-provider visible identity or timestamp is withheld, not silently
+replaced with source-only provenance. Repeated visible IDs with the same
+identity are allowed only when one visible timestamp matches the first
+source-admitted observation; a later duplicate cannot stand in for it.
+The rich evidence format intentionally omits organization identity, so the
+adapter cannot independently verify a tenant from the presented row; the
+production lane's source-side organization/identity checks still apply.
+Source rows without a usable literal event ID may still contribute to the
+shipped lane's aggregate count but cannot be assigned to a visible event ID
+in this evaluation. This is a measurement-integrity correction, **not** a
+change to production record grouping, synthetic truth, family split, scoring
+formula, thresholds or a demonstrated improvement in held-out F1.
+
+A lane means "same record", never "same task", so a record shared by several
+true workflows is reported as contamination rather than hidden.
+`tests/test_reconstruction_owg_native.py` holds regression floors on all and
+holdout cases and adds adversarial projection checks for invalid timestamps,
+duplicate IDs, cross-record collisions, source-only rows, offset ordering,
+conflicting source identity, source-versus-visible provenance mismatches,
+contradictory visible IDs, mismatched/malformed UTC observation instants,
+first-admitted duplicate timestamps, and normalized positive controls.
+
+### Linked-item evaluator visibility and revocation boundary
+
+The `linked_items` and diagnostic `linked_items_accepting_candidates`
+conditions now admit source observations **before** invoking the existing
+production linker only when their literal event ID is present in the supplied
+`presented_evidence`, with the same UTC observation instant, app, event type,
+source, session and link-authorizing reference/tab/clipboard/action metadata.
+Offset-equivalent instants are accepted; missing or contradictory evidence,
+reused IDs with conflicting source or visible claims, and source-only rows are
+withheld. Exact duplicate source JSON claims remain idempotent; bounded
+canonical JSON comparisons distinguish booleans from integers and refuse
+malformed or oversized duplicate claims. The linked-item evaluator also mirrors
+the shipped linker's **first valid-timestamp, normalized event-ID admission**:
+an earlier numeric `17`, boolean `True` or float `1.0` reserves the same
+source duplicate slot as its later literal string ID. That later string is
+withheld rather than scored from a source row the production linker suppressed.
+The nonliteral row never becomes visible membership. Reversed source order
+preserves the literal first-admitted event; malformed timestamps and falsey
+nonliteral IDs do not consume an ID slot. Conflicting **timestamp-valid** literal duplicate claims
+remain conservatively withheld. The production linker ignores malformed
+timestamps before first-ID admission; the evaluator now likewise ignores
+invalid-timestamp source duplicates when selecting the first admitted literal
+row and checking duplicate conflicts. Thus an invalid earlier or later replay
+cannot veto or substitute for a valid observed transfer, while a conflicting
+valid replay still fails closed. Synthetic regressions check both source orders
+and the candidate-accepting diagnostic. These are evaluator-only parity and
+provenance checks, not a change to production deduplication or a held-out
+score claim.
+**Literal top-level tab/clipboard provenance (2026-11-01):** The shipped
+linker accepts valid `tab_context_id` and `clipboard_transfer_id` from
+either canonical metadata or a top-level observation field. The evaluator now
+recognizes the same literal token in either location **only if it is actually
+presented** and agrees with the source observation. Valid metadata-only and
+top-level-only copies of the same token canonicalize identically; contradictory
+dual claims, non-string/invalid tokens, and source-only top-level fields remain
+unassignable. The normal `rich_evidence_row` output derives its convenience
+fields from metadata, so a top-level-only source token is **not** automatically
+made visible by that projection; the evaluator does not invent it. Single-record
+tab linking and observed clipboard transfers remain evidence-dependent; time,
+app adjacency and multiplexed tabs never become automatic links. This is
+measurement parity for alternative presented-evidence shapes, not a change to
+the production linker, a new source entitlement, or a measured held-out gain.
+
+**Evaluator duplicate-claim preflight (2026-11-01):** The source replay
+canonicalizer now validates JSON shape *before* calling `json.dumps`, rather
+than allocating an arbitrarily large serialized string and checking its size
+afterward. It caps traversed nodes at 10,000 and the serialized result at
+65,536 characters, with an early raw-string budget. Non-string object keys,
+nonfinite floats, unsupported Python objects, oversized integers, cycles and
+reused in-memory container identities are withheld. Distinct but structurally
+equal JSON containers, key-order variations and ordinary literal JSON replays
+remain admissible. A rejected duplicate withholds that event ID from
+evaluator-only linking, including the candidate-accepting diagnostic; it does
+not authorize a time-only join. These are synthetic provenance and resource
+bounds, not production-linker validation, a held-out accuracy result or
+customer-scale performance proof. The separate unmerged #500 production-linker
+draft must not be treated as current `main` behavior.
+
+In the standard rich-evidence format, top-level tab/transfer fields are
+convenience copies of metadata, not independent source claims. Alternative
+explicitly presented top-level-only tokens are admitted only when the matching
+source token is also observed. Both locations, when present, require
+**literal, pattern-valid matching strings**: Python equality
+(`True == 1`) and the current linker's coercion of booleans/numbers into
+opaque-looking token strings cannot establish a transfer or tab link.
+Malformed metadata-only claims are withheld too; valid legacy metadata-only
+strings remain accepted. An unpresented source-only copy/paste row must not
+bridge two visible records or create a candidate link.
+
+Explicit record-identity components (`resource_ref`, `provider`, `resource_kind`,
+`host`) must also be **literal strings** when present, and an explicitly
+present `resource_reference` must be an object. Otherwise the current linker
+could stringify a boolean provider, numeric host or malformed reference into
+plausible same-record evidence even when the visible and source copies match.
+Non-null app labels must likewise be literal strings: a boolean, number or
+object cannot authorize a same-app continuity candidate in the diagnostic
+mode. Missing references and null/absent app labels retain their no-signal
+semantics; valid literal record identity and same-app ambiguity still work.
+These are evaluator admission checks, not changes to production grouping or
+claims that the identity is provider-verified.
+
+For **valid literal** record identities, linked-item visible/source admission
+now compares only the production linker's normalized opaque reference,
+provider, kind and host. Case-only differences in those strings and extra
+reference annotations that the linker does not use are not reasons to discard
+an otherwise identical visible observation. Distinct normalized providers,
+kinds, hosts or refs still fail closed; invalid/nonliteral identity claims
+remain raw or rejected, never silently converted into valid authority. Rich evidence omits organization/actor/device, so this evaluator
+cannot independently attest those scope boundaries. It retains the original
+source rows and does not grant permission or claim that production scope
+isolation has passed acceptance; separate production-linker hardening is under
+review in draft #500. This corrects evaluator-only false-negative admission,
+not verified provider identity, cross-record semantic linking, or the
+preregistered holdout score.
+
+An explicit `source_events: []` (or null) is authoritative: if source
+evidence has been revoked/deleted, neither the record-lane nor linked-item
+evaluation may fall back to a stale `presented_evidence` snapshot and
+resurrect membership. All still-presented IDs remain unassigned in that
+scenario, including diagnostic candidate-acceptance mode. Only an *absent*
+`source_events` key retains backward-compatible presented-only evaluation.
+Synthetic tests exercise both cases; they do not establish end-to-end
+revocation propagation, live source deletion or held-out reconstruction quality.
+
+Visible exact-record lane evidence now has a **single-instant event-ID rule**.
+An event ID can be admitted to a source-record lane only if every presented
+occurrence has the same normalized UTC observation instant and the same public
+resource identity. Equivalent timezone offsets (including fractional seconds)
+are valid replays. A second distinct instant, malformed timestamp or changed
+identity permanently withholds that ID, even if one visible occurrence matches
+the first source-admitted row. Source-only duplicate rows remain governed by
+the shipped first-valid admission behavior: a later suppressed source duplicate
+does not by itself make a uniquely presented event ambiguous. This prevents a
+reused visible ID from lending one event's evidence to a different instant or
+record, without changing production grouping or inventing a time-only join.
+Synthetic regression tests exercise both orders, malformed late replays and
+offset-equivalent duplicates; they are not a held-out score or native CI proof.
+
+Duplicate replay admission is now bounded by **unique literal event IDs** rather
+than the number of repeated visible/source observations. For each ID, the
+evaluator retains one first-valid source row, one first visible projection and
+an irreversible contradiction state. It canonicalizes complete source JSON
+only if a second timestamp-valid literal row with the same ID appears; a
+malformed/oversized or contradictory replay still withholds the ID. An earlier
+valid-timestamp nonliteral ID continues to reserve the production duplicate
+slot, and malformed-timestamp rows do not. This reduces evaluator-only
+duplicate bookkeeping, **not** the size of the already-loaded synthetic corpus,
+the production linker's memory use or any source retention. Large synthetic
+replay regressions check idempotence, late contradictions and admission order
+without asserting hardware-dependent memory/timing thresholds. These tests do
+not demonstrate held-out F1, contamination, or real-world scale.
+
+The linked-item evaluator's **internal visible projection is JSON-native at
+every nesting level**: a list of link-authorizing fields, with normalized
+record identity represented as a nested list. This matters because the strict,
+bounded duplicate-source JSON preflight intentionally rejects Python tuples.
+Using tuples for the evaluator's own projection would reject every otherwise
+valid linked observation and silently turn accepted memberships into empty
+predictions. A direct regression checks nonempty projections, valid observed
+clipboard links and same-record membership in both candidate modes, plus
+fail-closed contradictory source duplicates. This fixes evaluator-only
+admission, not the production linker, and does not establish any held-out
+threshold or native CI result.
+
+The filter retains the original authorized source rows for the linker's own
+organization/actor/device/session checks. These identities are deliberately
+absent from the rich evidence and cannot be independently verified from its
+projection. This is an **evaluation admission boundary**, not a new capture,
+privacy, source-authentication or production-linking engine. It never upgrades
+ambiguous candidates into verified membership; the accepting-candidates mode
+remains an explicitly unsafe diagnostic upper bound.
+
+Synthetic regressions cover hidden transfer bridges, changed visible
+provenance, exact UTC offsets, duplicate IDs, malformed dual-location and
+metadata-only transfer tokens, and legitimate literal visible transfer linking.
+Both OWG-native scoring projections also enumerate only **unique literal,
+pattern-valid presented event IDs**: booleans, numbers, missing IDs, invalid
+strings and repeated visible IDs cannot become fabricated unassigned scoring
+items. Such invalid rows never gain workflow membership. This affects only
+the evaluator's input hygiene, not the corpus truth or production linker. They do not replace preregistered held-out scoring, real consenting
+pilots or native CI. No assignment F1 ≥ 0.90 or contamination ≤ 0.05
+achievement is asserted.
 
 ### Multi-signal linked items
 

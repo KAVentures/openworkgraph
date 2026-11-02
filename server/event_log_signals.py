@@ -141,6 +141,7 @@ def delete_rule(log_id: str, rule_id: str) -> dict[str, Any]:
                                  [log_id, str(rule_id)]).fetchone()[0]
             if not found:
                 raise workspace.EventLogWorkspaceError("unknown signal rule")
+            conn.execute("DELETE FROM signal_snoozes WHERE log_id = ? AND rule_id = ?", [log_id, str(rule_id)])
             conn.execute("DELETE FROM signal_reviews WHERE log_id = ? AND rule_id = ?", [log_id, str(rule_id)])
             conn.execute("DELETE FROM signal_rules WHERE log_id = ? AND rule_id = ?", [log_id, str(rule_id)])
         finally:
@@ -149,7 +150,7 @@ def delete_rule(log_id: str, rule_id: str) -> dict[str, Any]:
 
 
 _PER_CASE = """CREATE OR REPLACE TEMP TABLE sc AS SELECT case_id, count(*) AS events,
-    date_diff('second', min(ts), max(ts)) AS duration, count(*) > count(DISTINCT activity) AS rework,
+    epoch(max(ts) - min(ts)) AS duration, count(*) > count(DISTINCT activity) AS rework,
     arg_max(activity, struct_pack(at := ts, event_order := event_id)) AS last_activity,
     min(ts) AS first_ts, max(ts) AS last_ts, list(DISTINCT activity) AS acts
   FROM rc GROUP BY case_id"""
@@ -266,6 +267,7 @@ def evaluate(log_id: str) -> dict[str, Any]:
                 # A new state is a new review event even if it later cycles
                 # back to an old value. Do not resurrect an obsolete approval.
                 if previous is None or previous != state:
+                    conn.execute("DELETE FROM signal_snoozes WHERE log_id=? AND rule_id=?", [log_id, rule_id])
                     conn.execute("DELETE FROM signal_reviews WHERE log_id=? AND rule_id=?", [log_id, rule_id])
                 conn.execute("UPDATE signal_rules SET last_evaluated_at = ?, last_state = ? WHERE log_id = ? AND rule_id = ?",
                              [now, json.dumps(state), log_id, rule_id])
