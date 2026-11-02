@@ -90,9 +90,9 @@ The source lifecycle snapshot and local OWG evidence are **not atomic**; both ca
 
 The operator can now **re-read actual local OWG evidence** for the same confirmed Salesforce source scope and **same OWG log**, then compare that result with an earlier pinned impact artifact. This closes the review loop for changes in retained event counts or source visibility, without guessing why a record appeared or disappeared. It is useful for checking whether a previously observed soft-deleted Case still has OWG history, whether more events have arrived after an append, and whether an unresolved source Case later becomes visible.
 
-First create a private impact review as above and retain its printed \`impact_sha256\`. Optionally refresh the Salesforce source lifecycle review with a separate source-read command; the comparison accepts a *new* source-review digest provided that its exact selected Case scope is unchanged. Then run:
+First create a private impact review as above and retain its printed `impact_sha256`. Optionally refresh the Salesforce source lifecycle review with a separate source-read command; the comparison accepts a *new* source-review digest provided that its exact selected Case scope is unchanged. Then run:
 
-\`\`\`sh
+```sh
 export OWG_DASHBOARD_SESSION='<current-local-dashboard-session>'
 python -m server.salesforce_case_lifecycle_review \
   --instance https://acme.my.salesforce.com \
@@ -109,13 +109,13 @@ python -m server.salesforce_case_lifecycle_review \
   --output /private/owg-salesforce-lifecycle/impact-002.json \
   --consent-local-owg-read --consent-private-impact \
   --consent-compare-impact
-\`\`\`
+```
 
 The prior impact must be an owner-private, non-symlink regular file with canonical JSON and the operator-pinned SHA-256. Before making **any OWG HTTP request**, the tool checks its complete schema, safety flags, timestamps, exact source scope, OWG log ID, selected pseudonymous Case IDs, internally consistent case evidence/counts, and any earlier comparison. It rejects changed source scope or OWG log, altered files even with a recomputed digest when the schema is inconsistent, missing separate comparison consent, and missing/revoked dashboard sessions. Current evidence is then read through the same production-authenticated local FastAPI/DuckDB endpoints as a first impact review; authorization and source identity are rechecked after the bounded reads.
 
-The new private JSON contains \`comparison.transitions\` for each selected hashed Case ID: prior/current source state, prior/current OWG presence (\`observed\`, \`not_observed\`, \`unknown\`) and prior/current retained event count (integer only when observed). It also contains \`changed\`, \`unchanged\`, \`source_state_changed\`, \`owg_presence_changed\`, and \`owg_event_count_changed\` totals, with the previous impact/source digests and observation time. The CLI prints only aggregate totals and the new \`impact_sha256\` pin. A comparison review can be reused as the next prior impact with its newly printed digest.
+The new private JSON contains `comparison.transitions` for each selected hashed Case ID: prior/current source state, prior/current OWG presence (`observed`, `not_observed`, `unknown`) and prior/current retained event count (integer only when observed). It also contains `changed`, `unchanged`, `source_state_changed`, `owg_presence_changed`, and `owg_event_count_changed` totals, with the previous impact/source digests and observation time. The CLI prints only aggregate totals and the new `impact_sha256` pin. A comparison review can be reused as the next prior impact with its newly printed digest.
 
-**Interpretation limits:** \`not_observed\` is a bounded local case-query result, not a deletion certificate; \`unknown\` is not zero; a change in event count is not a verified source-side change or retention action. The two reads are non-atomic. Source visibility, OWG log content and authorization can change after each read. Neither digest authenticates the provider or signs the reviewer identity. The comparison performs **no** Salesforce or OWG write, checkpoint advancement, automatic retention/deletion, legal-hold decision, or agent handoff. Customer sandbox acceptance and policy/retention review remain separate gates.
+**Interpretation limits:** `not_observed` is a bounded local case-query result, not a deletion certificate; `unknown` is not zero; a change in event count is not a verified source-side change or retention action. The two reads are non-atomic. Source visibility, OWG log content and authorization can change after each read. Neither digest authenticates the provider or signs the reviewer identity. The comparison performs **no** Salesforce or OWG write, checkpoint advancement, automatic retention/deletion, legal-hold decision, or agent handoff. Customer sandbox acceptance and policy/retention review remain separate gates.
 
 ## Safety and completeness
 
