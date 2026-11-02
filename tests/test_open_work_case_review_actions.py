@@ -232,3 +232,40 @@ def test_composer_refuses_conflicting_edges_and_unsafe_trust_flags():
     }]
     with pytest.raises(CaseDeclarationError):
         compose_outcome_review_action_plan(sample)
+
+
+def test_transitive_review_blocker_and_no_false_human_only_provider_duty():
+    refs = ["owg:w:" + ch * 32 for ch in "abc"]
+    rows = []
+    for i, ref in enumerate(refs):
+        rows.append({
+            "work_item_ref": ref, "role": "root" if i == 2 else "prerequisite",
+            "owner_declared_expected_outcome_code": "human_review_recorded",
+            "owner_declaration_revision": 1,
+            "latest_human_assessed_status": "unknown" if i == 0 else "met",
+            "historical_last_provider_state": "unknown",
+            "human_assessment_count": 0 if i == 0 else 1,
+            "provider_check_count": 0, "disputed_check_count": 0,
+        })
+    triage = {
+        "format": "openworkgraph.local-reviewed-outcome-evidence-triage.v1",
+        "work_item_ref": refs[-1], "included_case_count": 3,
+        "unscanned_prerequisite_count": 0,
+        "selected_dependency_edges": [
+            {"prerequisite_ref": refs[0], "dependent_ref": refs[1],
+             "edge_type": "owner_declared_dependency", "source_verified": False},
+            {"prerequisite_ref": refs[1], "dependent_ref": refs[2],
+             "edge_type": "owner_declared_dependency", "source_verified": False},
+        ],
+        "customer_outcome_verified": False, "source_read_performed": False,
+        "agent_execution_authorized": False, "case_reviews": rows,
+    }
+    plan = compose_outcome_review_action_plan(triage)
+    assert plan["cases"][0]["operator_action_codes"] == ["record_human_assessment"]
+    assert plan["cases"][1]["operator_action_codes"] == []
+    assert plan["cases"][1]["prerequisites_with_unresolved_review"] == [refs[0]]
+    assert plan["cases"][2]["prerequisites_with_unresolved_review"] == [refs[1]]
+    assert plan["cases"][2]["prerequisite_review_pending"] is True
+    assert plan["cases"][2]["review_state"] == "historical_evidence_present"
+    assert plan["cases_needing_human_review"] == 1
+    assert plan["operator_action_count"] == 1
