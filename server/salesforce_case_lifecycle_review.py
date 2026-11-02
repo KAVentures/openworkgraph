@@ -387,6 +387,13 @@ def impact(*, instance, confirm_host, namespace, cases, previous_review,
             "case_id": state["case_id"], "source_state": state["source_state"],
             "owg_evidence": presence, "owg_events": count,
         })
+    # Recheck authorization and namespace after the bounded reads. This does
+    # not make the snapshot atomic, but refuses observed mid-read revocation or
+    # scope changes before the private review is committed.
+    try:
+        verify_local_target(log_id, port, source_namespace, session, opener=transport)
+    except AppendError:
+        raise LifecycleReviewError("Local OWG session or source scope changed during review") from None
     summary = {
         "source_soft_deleted_with_owg_evidence": sum(
             row["source_state"] == "soft_deleted" and row["owg_evidence"] == "observed"
