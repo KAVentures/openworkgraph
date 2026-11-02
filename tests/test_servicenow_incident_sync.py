@@ -245,9 +245,14 @@ def test_namespace_isolation_and_unknown_missing_selected_incident(tmp_path):
     assert report_b["unobserved_selected_incidents"] == 1
 
 
-def test_transport_defaults_to_pinned_https_no_proxy_and_no_redirect():
+def test_transport_defaults_to_pinned_https_no_proxy_and_no_redirect(monkeypatch):
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:3128")
+    # An ambient proxy would add a ProxyHandler with an https route to a default opener.
+    assert any(type(handler) is request.ProxyHandler for handler in request.build_opener().handlers)
     opener = _http_opener()
-    assert any(type(handler) is request.ProxyHandler and handler.proxies == {} for handler in opener.handlers)
+    # The explicit empty ProxyHandler replaces that default; having no proxy routes it registers
+    # no open methods, so urllib leaves it out and no handler can route through a proxy.
+    assert not any(isinstance(handler, request.ProxyHandler) for handler in opener.handlers)
     assert any(type(handler).__name__ == "_NoRedirect" for handler in opener.handlers)
     assert any(type(handler) is request.HTTPSHandler for handler in opener.handlers)
 
