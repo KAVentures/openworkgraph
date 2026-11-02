@@ -151,11 +151,16 @@ def test_review_deletion_and_source_disconnect_scrub_feedback(local):
         headers = _auth()
         saved = _cases(client, headers)
         assert _assess(client, headers, saved).status_code == 200
+        assert client.post(BASE + "/human-outcomes/assess", headers=headers, json={
+            **_cas(saved, A), "confirm_human_assessment": True,
+            "human_status": "unknown", "reason_code": "owner_review",
+        }).status_code == 200
         assert reviews.remove_review_intention(B)
         assert _history(client, headers, saved).status_code in (403, 409, 422)
-        # Deleting a prerequisite can invalidate other reviewed cases;
-        # scrub the whole auxiliary feedback store, not only one row.
-        assert not outcomes._path().exists()
+        # Revoking B must not erase independent A's assessment.
+        with outcomes._database(create=False) as db:
+            assert db is not None
+            assert db.execute("SELECT work_item_ref FROM assessments").fetchall() == [(A,)]
         account["id"] = None
         assert _history(client, headers, saved).status_code == 403
         reviews.clear_review_intentions()
@@ -172,7 +177,9 @@ def test_owner_declaration_deletion_scrubs_all_dependent_feedback(local):
             expected_revision=saved[A]["revision"],
             expected_edit_token=saved[A]["edit_token"],
         )["invalidated_declaration_count"] == 2
-        assert not outcomes._path().exists()
+        with outcomes._database(create=False) as db:
+            assert db is not None
+            assert db.execute("SELECT COUNT(*) FROM assessments").fetchone()[0] == 0
         assert _history(client, headers, saved).status_code in (403, 409, 422)
 
 
