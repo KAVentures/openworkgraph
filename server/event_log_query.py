@@ -151,12 +151,21 @@ WeekdayNumber = Annotated[StrictInt, Field(ge=1, le=7)]
 HourNumber = Annotated[StrictInt, Field(ge=0, le=23)]
 
 
+class TimeOfWeekCell(_Strict):
+    """One ISO weekday and 24-hour clock cell, not a cross-product."""
+    weekday: WeekdayNumber
+    hour: HourNumber
+
+
 class TimeOfWeekFilter(_Strict):
     """Select observations in explicitly chosen ISO weekdays and clock hours."""
     anchor: Literal["event", "case_start", "case_end"]
     clock: Literal["utc", "local"] = "utc"
     weekdays: list[WeekdayNumber] = Field(default_factory=lambda: list(range(1, 8)), min_length=1, max_length=7)
     hours: list[HourNumber] = Field(default_factory=lambda: list(range(24)), min_length=1, max_length=24)
+    # Explicit disjoint cells for overnight schedules: unlike weekdays × hours,
+    # Sunday 22:00 and Monday 01:00 select only those two clock hours.
+    slots: list[TimeOfWeekCell] | None = Field(default=None, min_length=1, max_length=168)
 
 
 class AnalysisSpec(_Strict):
@@ -201,6 +210,12 @@ def parse(spec: Any) -> AnalysisSpec:
             raise workspace.EventLogWorkspaceError("time_of_week anchor must be event for events or case_start/case_end for cases")
         if len(set(window.weekdays)) != len(window.weekdays) or len(set(window.hours)) != len(window.hours):
             raise workspace.EventLogWorkspaceError("time_of_week weekdays and hours cannot contain duplicates")
+        if window.slots is not None:
+            if {"weekdays", "hours"} & window.model_fields_set:
+                raise workspace.EventLogWorkspaceError(
+                    "time_of_week slots cannot be combined with weekdays or hours")
+            if len({(cell.weekday, cell.hour) for cell in window.slots}) != len(window.slots):
+                raise workspace.EventLogWorkspaceError("time_of_week slots cannot contain duplicates")
     local_time_requested = (any(d in _LOCAL_CASE_DIMENSIONS or d in _LOCAL_EVENT_DIMENSIONS
                                 for d in parsed.dimensions)
                             or (window is not None and window.clock == "local"))
@@ -256,6 +271,15 @@ def _time_of_week_clause(spec: AnalysisSpec) -> tuple[str | None, list[Any]]:
     if window is None:
         return None, []
     column = {"event": "ts", "case_start": "started", "case_end": "ended"}[window.anchor]
+    if window.slots is not None:
+        # A single fixed strftime expression and a bound list preserve the
+        # requested exact weekday-hour pairs. ISO weekday %u is 1..7; %H
+        # is 00..23. Both repeated DST-fold instants share the same cell.
+        cells = [f"{cell.weekday}{cell.hour:02d}" for cell in window.slots]
+        if window.clock == "local":
+            return (f"list_contains(?, strftime(timezone(?, timezone('UTC', {column})), '%u%H'))",
+                    [cells, spec.time_zone])
+        return f"list_contains(?, strftime({column}, '%u%H'))", [cells]
     if window.clock == "local":
         instant = f"timezone(?, timezone('UTC', {column}))"
         params: list[Any] = [window.weekdays, spec.time_zone, window.hours, spec.time_zone]
