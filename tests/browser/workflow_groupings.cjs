@@ -66,10 +66,11 @@ const path=require('node:path');
    await page.getByRole('button',{name:'Inspect group revision history',exact:true}).click();
    await page.locator('#owgGroupHistory').filter({hasText:'Revision 1 · Invoice review'}).waitFor();
    assert.match(await page.locator('#owgExplorerDetail h3').textContent(),/Reviewed group · Accounts review/);
-   await page.evaluate(()=>{window.copyText=text=>{window.groupingHandoffForTest=text;};});
-   await page.getByRole('button',{name:'Copy AI handoff request',exact:true}).click();
-   const handoff=await page.evaluate(()=>window.groupingHandoffForTest);
-   assert.match(handoff,/get_workflow_knowledge/);assert.match(handoff,/require revision 4/);
+   // Reviewed classifications and their history are not AI handoff approvals.
+   // Safe handoff requires a separate explicit explorer review, not an implicit
+   // copy action from the group editor.
+   assert.match(await page.locator('#owgGroupHistory').textContent(),/Revision 4 · Accounts review/);
+   assert.equal(await page.locator('#owgWorkflowGroups').getByRole('button',{name:/^Copy /}).count(),0);
    await page.setViewportSize({width:390,height:844});
    assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false);
    await page.locator('#owgGroupConfirmed').check();page.once('dialog',dialog=>dialog.accept());
