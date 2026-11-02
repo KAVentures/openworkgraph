@@ -186,3 +186,48 @@ def test_real_cli_private_prepare_apply_score_and_stale_refusal(tmp_path: Path):
                   "--decisions", str(decisions_path), "--output", str(refused_path))
     assert refused.returncode == 2
     assert not refused_path.exists()
+
+
+def test_cli_scoring_and_duplicate_decision_keys_are_refused(tmp_path: Path):
+    events = _events()
+    events_path = tmp_path / "events.json"
+    events_path.write_text(json.dumps(events))
+    packet_path = tmp_path / "packet.json"
+    def run(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, "-m", "scripts.reconstruction_review", *args],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True, text=True, timeout=30,
+        )
+    assert run("prepare", "--events", str(events_path),
+               "--output", str(packet_path)).returncode == 0
+    packet = json.loads(packet_path.read_text())
+    b_item = next(item["item_id"] for item in linked_work_items(events)["items"]
+                  if "e02" in item["event_ids"])
+    decisions_path = tmp_path / "decisions.json"
+    decisions_path.write_text(json.dumps(_decision(packet, "e03", b_item, "confirm")))
+    truth_path = tmp_path / "truth.json"
+    truth_path.write_text(json.dumps({
+        "workflows": [{"event_ids": ["e01", "e04"]},
+                      {"event_ids": ["e02", "e03", "e05"]}],
+        "noise_event_ids": [],
+    }))
+    score_path = tmp_path / "score.json"
+    scored = run("score", "--events", str(events_path),
+                 "--packet", str(packet_path), "--decisions", str(decisions_path),
+                 "--truth", str(truth_path), "--output", str(score_path))
+    assert scored.returncode == 0, scored.stderr
+    result = json.loads(score_path.read_text())
+    assert result["automatic_baseline"]["workflow_assignment_f1"] < 1
+    assert result["human_assisted_overlay"]["workflow_assignment_f1"] == 1
+    assert "PRIVATE" not in score_path.read_text()
+    decisions_path.write_text(
+        '{"format":"openworkgraph.reconstruction-review-decisions.v1",'
+        '"evidence_sha256":"x","decisions":[],"decisions":[]}'
+    )
+    invalid_output = tmp_path / "invalid.json"
+    refused = run("apply", "--events", str(events_path),
+                  "--packet", str(packet_path), "--decisions", str(decisions_path),
+                  "--output", str(invalid_output))
+    assert refused.returncode == 2
+    assert not invalid_output.exists()
