@@ -580,13 +580,13 @@ def _retained_log(workspace, source_review, *, wrong_namespace=False):
     ns = "sf_" + scope[:32]
     if wrong_namespace:
         ns = "sf_" + "f" * 32 if ns != "sf_" + "f" * 32 else "sf_" + "e" * 32
-    csv = ("case_id,activity,timestamp,source_event_id\\n"
+    csv = ("case_id,activity,timestamp,source_event_id\n"
            + _key("sandbox", "case", CASE_A)
            + ",Case created,2026-10-01T01:00:00+00:00,"
-           + _key("sandbox", "history", "017000000000001") + "\\n"
+           + _key("sandbox", "history", "017000000000001") + "\n"
            + _key("sandbox", "case", CASE_B)
            + ",Status: Open,2026-10-02T01:00:00+00:00,"
-           + _key("sandbox", "history", "017000000000002") + "\\n").encode()
+           + _key("sandbox", "history", "017000000000002") + "\n").encode()
     result = workspace.import_log(BytesIO(csv), name="Selected Salesforce evidence",
                                   source_format="csv", mapping={
                                       "case_column": "case_id",
