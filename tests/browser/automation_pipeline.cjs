@@ -881,6 +881,85 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await page.locator('#owgPipelineProjects').getByRole('status').filter({hasText:'Project downloaded.'}).waitFor();
    await page.locator('#owgPipelineJourney').click();
    await page.locator('#owgPipelineProjectComparison').waitFor();
+   // Real backend process + approved opportunity + two immutable exported projects.
+   // Read-only dependency coverage is a reviewer aid, not an authorization.
+   let dependencyWrites=0;
+   const observeDependency=request=>{
+     if(request.url().startsWith(base+'/v1/')&&!['GET','HEAD','OPTIONS'].includes(request.method()))
+       dependencyWrites++;
+   };
+   page.on('request',observeDependency);
+   await page.locator('#owgPipelineJourneyProject').selectOption(candidateId);
+   await page.locator('#owgPipelineDependencyReview').focus();
+   await page.keyboard.press('Enter');
+   const dependencyPanel=page.locator('#owgPipelineDependencyResult');
+   await dependencyPanel.getByText('Evidence dependency and coverage review').waitFor();
+   assert.equal(await dependencyPanel.locator('tbody tr').count(),7);
+   assert.match(await dependencyPanel.locator('tbody tr').filter({hasText:'Dataset / cohort origin'}).textContent(),/missing/);
+   assert.match(await dependencyPanel.locator('tbody tr').filter({hasText:'Immutable agent project export'}).textContent(),/Earlier unresolved basis: dataset/);
+   assert.match(await dependencyPanel.textContent(),/independent outcome and execution gates remain unverified/i);
+   const [dependencyDownload]=await Promise.all([
+     page.waitForEvent('download'),
+     dependencyPanel.locator('#owgPipelineDependencyDownload').click()
+   ]);
+   assert.equal(dependencyDownload.suggestedFilename(),'owg-handoff-dependency-review.json');
+   const dependencyArtifact=JSON.parse(await fs.readFile(await dependencyDownload.path(),'utf8'));
+   assert.equal(dependencyArtifact.format,'openworkgraph.handoff-dependency-review.v1');
+   assert.equal(dependencyArtifact.scope,'read_only_human_review');
+   assert.equal(dependencyArtifact.project_id,candidateId);
+   assert.equal(dependencyArtifact.execution_authorized,false);
+   assert.equal(dependencyArtifact.source_read_authorized,false);
+   assert.equal(dependencyArtifact.handoff_review_complete,false);
+   assert.equal(dependencyArtifact.verified_business_outcomes,false);
+   assert.equal(dependencyArtifact.coverage.stages,7);
+   assert.equal(dependencyArtifact.coverage.upstream_basis_current,false);
+   assert(dependencyArtifact.stages.find(s=>s.id==='project').affected_by.includes('dataset'));
+   assert(!JSON.stringify(dependencyArtifact).includes('PRIVATE_RAW_CASE_VALUE'));
+   assert(!JSON.stringify(dependencyArtifact).includes('owg:r:'));
+   const dependencyAudit=await page.evaluate(async()=>window.axe.run(
+     document.querySelector('#owgPipelineDependencyResult'),
+     {runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},
+       resultTypes:['violations']}));
+   assert.deepEqual(dependencyAudit.violations.map(v=>v.id),[]);
+   await page.locator('#owgPipelineJourneyProject').selectOption(baselineId);
+   assert.equal(await page.locator('#owgPipelineDependencyResult tbody tr').count(),0,
+     'switching project must discard old dependency evidence');
+   await page.locator('#owgPipelineDependencyReview').click();
+   assert.match(await page.locator('#owgPipelineDependencyResult tbody tr')
+     .filter({hasText:'Immutable agent project export'}).textContent(),/historical/);
+   const dependencyRefusal=await page.evaluate(()=>{
+     const model=window.__owgPipelineModel;
+     const sha=x=>x.repeat(64);
+     const journey={
+       idea:{idea_id:'i',revision:2,state:'approved'},
+       process_status:{status:'changed',process_reference:{
+         workflow_id:'w',revision:1,content_sha256:sha('a')}},
+       dataset_origins:[{status:'unavailable',source_content_sha256:sha('b'),selection_sha256:sha('c')}],
+       projects:[{project_id:'p',idea_revision:1,idea_revision_is_current:false,
+         spec_sha256:sha('d'),archive_sha256:sha('e'),
+         reported_specifications:[{status:'matching_reported_specification',reported_run_count:4}],
+         source_check_exports:{count:1,last_document_sha256:sha('f')}}]
+     };
+     const review=model.handoffDependencyReview(journey,'p','i','2026-11-02T00:00:00Z');
+     let wrongProjectRejected=false;
+     try{model.handoffDependencyReview(journey,'another','i','2026-11-02T00:00:00Z');}
+     catch{wrongProjectRejected=true;}
+     return {wrongProjectRejected,coverage:review.coverage,
+       process:review.stages.find(s=>s.id==='process'),
+       project:review.stages.find(s=>s.id==='project'),
+       report:review.stages.find(s=>s.id==='reports'),
+       outcome:review.stages.find(s=>s.id==='outcomes')};
+   });
+   assert(dependencyRefusal.wrongProjectRejected,'unavailable exact project must refuse');
+   assert.equal(dependencyRefusal.process.status,'needs_review');
+   assert.equal(dependencyRefusal.project.status,'historical');
+   assert(dependencyRefusal.project.affected_by.includes('dataset'));
+   assert(dependencyRefusal.project.affected_by.includes('process'));
+   assert.equal(dependencyRefusal.report.status,'customer_reported_only');
+   assert.equal(dependencyRefusal.outcome.status,'unverified');
+   assert.equal(dependencyRefusal.coverage.upstream_basis_current,false);
+   assert.equal(dependencyWrites,0,'dependency review, download and project navigation never write');
+   page.off('request',observeDependency);
    const comparePanel=page.locator('#owgPipelineProjectComparison');
    assert(await comparePanel.locator('#owgPipelineCompareProjects').isEnabled());
    let comparisonWrites=0;
