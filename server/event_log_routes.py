@@ -19,6 +19,7 @@ from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
 from . import event_log_analytics as analytics
+from . import event_log_variant_coverage as variant_coverage
 from . import event_log_cases as case_pages
 from . import event_log_cohorts as cohorts
 from . import event_log_compliance as compliance
@@ -31,6 +32,7 @@ from . import process_discovery_provenance as discovery_provenance
 from . import event_log_object_attributes as object_attributes
 from . import event_log_object_constraints as object_constraints
 from . import event_log_object_process_model as object_process_model
+from . import event_log_impact as impact
 from . import event_log_domain_packs as domain_packs
 from . import event_log_object_diagnostics as object_diagnostics
 from . import event_log_objects as objects
@@ -39,6 +41,7 @@ from . import event_log_organization as organization
 from . import event_log_playback as playback
 from . import event_log_process_map as process_maps
 from . import event_log_predictions as predictions
+from . import event_log_prediction_monitoring as prediction_monitoring
 from . import event_log_quality as quality
 from . import event_log_quarantine as quarantine
 from . import event_log_query as analysis
@@ -281,6 +284,15 @@ def event_log_variants(request: Request, log_id: str, case_type: str | None = Qu
     return _respond(workspace.variants, log_id, case_type, limit, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/variant-coverage")
+def event_log_variant_coverage(request: Request, log_id: str,
+                               case_type: str | None = Query(default=None, max_length=200),
+                               limit: int = Query(default=20, ge=1, le=200),
+                               cohort: dict[str, Any] = Depends(_case_filter)):
+    _require_dashboard(request)
+    return _respond(variant_coverage.coverage, log_id, case_type, limit, cohort=cohort)
+
+
 @router.get("/v1/event-logs/{log_id}/directly-follows")
 def event_log_directly_follows(request: Request, log_id: str,
                                case_type: str | None = Query(default=None, max_length=200),
@@ -450,6 +462,17 @@ async def event_log_object_process_model_conformance(request: Request, log_id: s
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/impact")
+async def event_log_impact(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "impact analysis", strict=True)
+    try:
+        result = await run_in_threadpool(impact.analyze, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 _PACK_ID = r"^[a-z][a-z0-9_]{0,39}$"
 
 
@@ -515,6 +538,17 @@ async def event_log_predictions(request: Request, log_id: str):
     spec = await _json_body(request, "prediction settings")
     try:
         result = await run_in_threadpool(predictions.predict, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/predictions/monitoring")
+async def event_log_prediction_monitoring(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "monitoring settings", strict=True)
+    try:
+        result = await run_in_threadpool(prediction_monitoring.monitor, log_id, spec)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
@@ -638,6 +672,13 @@ def event_log_delete_signal_rule(request: Request, log_id: str, rule_id: str):
 def event_log_signal_inbox(request: Request, log_id: str):
     _require_dashboard(request)
     return _respond(signal_inbox.list_inbox, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/signal-inbox/{rule_id}/snooze")
+async def event_log_signal_snooze(request: Request, log_id: str, rule_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "signal snooze", strict=True)
+    return _respond(signal_inbox.snooze, log_id, rule_id, spec)
 
 
 @router.post("/v1/event-logs/{log_id}/signal-inbox/{rule_id}/acknowledge")
