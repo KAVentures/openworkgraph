@@ -635,7 +635,7 @@
     panel.appendChild(card);
 
     let latestIdeas=[],refreshGeneration=0,resumeGeneration=0,auditGeneration=0,auditPageIndex=0,auditAbort=null;
-    const auditPages=new Map();let auditBasis=null;
+    const auditPages=new Map();let auditBasis=null,triageGeneration=0;
     const auditSnapshot=()=>JSON.stringify(auditEligible().map(i=>
       [i.idea_id,i.revision,i.state,i.updated_at||'']));
     function updateCumulative(){
@@ -652,10 +652,12 @@
       renderTriage();
     }
     function renderTriage(){
+      const triageRequest=++triageGeneration;
       auditTriageHost.replaceChildren();
       if(!auditPages.size){
         auditTriageFilter.disabled=true;
-        auditTriageFilter.replaceChildren(new Option('All explicitly reviewed opportunities','all'));
+        const emptyOption=el('option','All explicitly reviewed opportunities');emptyOption.value='all';
+        auditTriageFilter.replaceChildren(emptyOption);
         auditTriageSummary.textContent='Review at least one page to triage its blockers.';
         return;
       }
@@ -697,13 +699,18 @@
             ' for '+(idea?.title||'selected opportunity'));
           const request=auditGeneration,filterKey=auditTriageFilter.value;
           action.onclick=async()=>{
-            if(request!==auditGeneration||auditBasis!==auditSnapshot()||
-              !auditPages.has(item.page_number))return;
+            if(request!==auditGeneration||triageRequest!==triageGeneration||
+              auditBasis!==auditSnapshot()||!auditPages.has(item.page_number))return;
             try{
               const resume=item.project_id?{projectId:item.project_id,
-                valid:()=>request===auditGeneration&&auditBasis===auditSnapshot()}:null;
+                valid:()=>request===auditGeneration&&triageRequest===triageGeneration&&
+                  auditBasis===auditSnapshot()}:null;
               await show(item.idea_id,resume);
-              if(request!==auditGeneration)return;
+              if(request!==auditGeneration||triageRequest!==triageGeneration)return;
+              if(item.project_id&&!document.getElementById('owgPipelineJourneyProject')){
+                auditStatus.textContent='The exact recorded project is unavailable. No other export was substituted.';
+                return;
+              }
               const key=filterKey==='all'?item.blockers[0]:filterKey;
               const target=document.getElementById('owgPipelineBlockerItem_'+key)||
                 document.querySelector('#owgPipelineDetail h3');
