@@ -296,7 +296,7 @@ def test_explicit_confirmation_and_dashboard_session_required(local, monkeypatch
     monkeypatch.setattr(routes, "source_operation_receipt",
                         lambda *_a: pytest.fail("unauthorized provider read"))
     assert _verify(client, headers, saved, [], confirm_source_verification=False).status_code == 403
-    assert _verify(client, {}, saved, []).status_code == 403
+    assert _verify(client, {}, saved, []).status_code == 401  # no credentials: global auth refuses first
 
 
 def test_non_operation_goal_cannot_be_verified_as_invoice_paid(local, monkeypatch):

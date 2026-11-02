@@ -217,4 +217,4 @@ def test_explicit_consent_and_session_required_without_provider_read(local, monk
             "confirm_source_verification": False}
     assert client.post(BASE + "/operation-timeline", headers=headers, json=body).status_code == 403
     body["confirm_source_verification"] = True
-    assert client.post(BASE + "/operation-timeline", json=body).status_code == 403
+    assert client.post(BASE + "/operation-timeline", json=body).status_code == 401  # no credentials

@@ -250,7 +250,7 @@ def test_auth_and_confirmation_refuse_before_source_io(local, monkeypatch):
     data = {**_payload(saved), "confirm_source_scan": False,
             "max_pages": 2, "resource_ref": R}
     assert client.post(LINK, headers=headers, json=data).status_code == 403
-    assert client.post(LINK, json={**data, "confirm_source_scan": True}).status_code == 403
+    assert client.post(LINK, json={**data, "confirm_source_scan": True}).status_code == 401  # no credentials: global auth refuses first
 
 
 def test_source_account_switch_invalidates_link_before_provider_io(local, monkeypatch):

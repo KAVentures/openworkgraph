@@ -222,7 +222,7 @@ def test_invalid_link_and_missing_confirmation_refuse_before_source_read(local, 
         **_payload(saved), "confirm_source_verification": False,
         "record_link": link,
     }).status_code == 403
-    assert _history(client, {}, saved).status_code == 403
+    assert _history(client, {}, saved).status_code == 401  # no credentials: global auth refuses first
     assert not ledger._path().exists()
 
 

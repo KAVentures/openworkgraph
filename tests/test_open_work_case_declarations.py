@@ -1370,7 +1370,9 @@ def test_persisted_dependency_approval_window_fails_closed(local, corruption):
     with facts._database(create=False) as db:
         if corruption == "prerequisite_revised_after_dependent":
             # A later owner approval cannot silently rebind an older B -> A.
-            db.execute("UPDATE declarations SET updated_at=? WHERE work_item_ref=?",
+            # A real revision also bumps the revision; a revision-1 row with a
+            # later updated_at is itself invalid and would hide A as well.
+            db.execute("UPDATE declarations SET updated_at=?, revision=revision+1 WHERE work_item_ref=?",
                        ((NOW + timedelta(minutes=15)).isoformat(), A))
         else:
             # B's review itself allows this later deadline, but its declared
