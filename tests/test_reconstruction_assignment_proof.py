@@ -209,6 +209,8 @@ def test_review_queue_competing_targets_dedupe_and_direction_are_deterministic()
          "relation": "accepted_same_record"},
         {"event_id": "loose", "toward_event_id": "loose",
          "relation": "same_tab_multiplexed"},
+        {"event_id": "loose", "toward_event_id": "a1",
+         "relation": ["malformed", "unhashable"]},
     ]
     kwargs = dict(
         item_of={"a1": "linked_item_01", "b1": "linked_item_02",
@@ -273,3 +275,25 @@ def test_review_queue_counts_and_bounded_projection_with_many_ambiguous_rows():
     assert all(row["candidate_item_count"] == 6 for row in result["ambiguous_assignment_review_queue"])
     assert all(row["candidate_items_truncated"] for row in result["ambiguous_assignment_review_queue"])
     assert all(len(row["candidate_items"]) == 4 for row in result["ambiguous_assignment_review_queue"])
+
+
+def test_review_queue_does_not_promote_hidden_item_or_cross_tenant_tab():
+    events = [
+        event(1, A, tab="shared"), event(2, A, tab="shared"),
+        event(3, B, tab="shared"), event(4, B, tab="shared"),
+        event(5, None, tab="shared"),
+    ]
+    # B is a genuine linked component but not visible at max_items=1.
+    # The candidate toward B must not be shown as an unlinked case target.
+    limited = linked_work_items(events, max_items=1)
+    assert limited["total_items"] == 2
+    assert limited["ambiguous_assignment_review_total"] == 0
+    assert limited["ambiguous_assignment_review_queue"] == []
+    # A foreign tenant cannot introduce a competing tab reference.
+    other_tenant = [event(1, A, tab="shared"),
+                    event(2, B, tab="shared", tenant="another-tenant"),
+                    event(3, A, tab="shared"),
+                    event(4, None, tab="shared")]
+    isolated = linked_work_items(other_tenant)
+    assert isolated["ambiguous_assignment_review_total"] == 0
+    assert isolated["ambiguous_assignment_review_queue"] == []
