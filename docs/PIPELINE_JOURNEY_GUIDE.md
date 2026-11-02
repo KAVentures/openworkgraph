@@ -73,6 +73,16 @@ After explicitly comparing an earlier review packet and marking the changed area
 
 If a source, imported report, process revision, project, blocker or coverage state has changed, the drift comparison remains visible but the bundle's old inspection marks are **not** restored. Reinspect the changed evidence and download a new bundle. A forged execution/consent flag, unrelated project, unexpected wrapper field or oversized file is refused. Import never uploads the file, grants source access, records approval, verifies business outcomes, contacts a provider or executes an agent. A fingerprint is only a change detector, not a signature, and inspection is never an authorization.
 
+## Compare two recorded agent-project exports before handoff
+
+When an opportunity has **at least two separately recorded project exports**, open **View evidence journey** and use **Compare two recorded project exports**. Explicitly choose the baseline and candidate project IDs and press **Compare recorded project exports** (keyboard Enter). The comparison is a read-only view of the authenticated, locally stored journey; it does not export another project, contact a source/provider or run an agent.
+
+The side-by-side table identifies each exact project's idea revision and whether it is current, specification and ZIP SHA-256, status counts of its recorded reported specifications, recorded source-check export count and most recent source-check document SHA-256. Each row is marked changed or matching. Reported specification counts are **not** per-run attribution, and source-check document hashes are **not** verified receipt results. Neither matching hashes nor differing hashes establish execution, causality, business benefit or permission to execute.
+
+After comparison, **Inspect baseline exact project** and **Inspect candidate exact project** are explicit keyboard-operable navigation controls. Each selects only that recorded project in the existing evidence journey, revealing its own immutable artifact details, outstanding blockers and separately consent-gated review actions. Navigation invalidates the old comparison, and changing either comparison selector or refreshing the journey requires a new explicit comparison. Nothing automatically approves an idea, restores old approval, grants source access or initiates an agent handoff.
+
+Comparison refuses the same project on both sides, missing project IDs, invalid/incomplete artifact metadata, and a truncated project list. A journey with fewer than two recorded projects cannot compare. Refresh the journey after another export or any report/source-check change; the table is a point-in-time local record comparison, not a live provider read or independent customer acceptance.
+
 ## Safety and limitations
 
 - The guide adds **navigation only**. It never automatically saves a process, approves an opportunity, exports a project, links a report, reads a provider, grants tool permissions or executes an agent. Existing REST/MCP and dashboard controls retain their behavior.
