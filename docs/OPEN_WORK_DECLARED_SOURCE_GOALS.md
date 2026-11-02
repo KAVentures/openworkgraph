@@ -340,3 +340,63 @@ revocation transaction or establishes bank settlement, customer satisfaction,
 business obligation discharge, or agent causality. Restricted Stripe TEST
 account acceptance, signed native client validation and held-out independent
 customer-outcome adjudication remain outstanding.
+
+
+## Renew a historically source-joined invoice link (no open-inventory rescan)
+
+A source-joined `record_link` expires after at most 24 hours. Once an invoice
+is paid it can disappear from Stripe's **open** inventory, so re-running
+`operation-link` may no longer find it. A previously verified payment-goal
+case can now explicitly renew its signed link **from retained, undisputed local
+provider-check evidence**, without pretending that an old open-invoice scan is
+a current one.
+
+1. Keep the exact original `record_link` returned by
+   `POST /v1/open-work/declarations/operation-link`, even if it expires.
+   Complete at least one explicit `source-goals/verify-payment` check while
+   that original link is valid, so the exact invoice has a private
+   HMAC-validated provider-check history.
+2. With a current authenticated local dashboard session and current case
+   revision/incarnation, explicitly call
+   `POST /v1/open-work/declarations/source-goals/renew-record-link`:
+
+   ```json
+   {
+     "work_item_ref": "owg:w:<32 lowercase hex characters>",
+     "expected_revision": 1,
+     "expected_edit_token": "<current owner edit token>",
+     "confirm_historical_review": true,
+     "record_link": {"format": "openworkgraph.local-case-record-link.v1", "...": "the complete original signed link"}
+   }
+   ```
+
+   The placeholders are not valid credentials. The server authenticates the
+   original link seal, original source account, exact owner revision and
+   dependency graph, retained record identity and original issuance window.
+   It requires a **nonempty, entirely undisputed** current private
+   HMAC-validated provider-check ledger for that exact record. Forged,
+   unverified, disputed, changed-owner, expired-review, source-disconnected,
+   cross-account and more-than-seven-day-old links are refused. A renewed link
+   is never issued beyond the current owner declaration's retention expiry.
+3. Keep the returned `record_link` locally. It uses the **same** link format
+   and validator as the existing fresh
+   `POST /v1/open-work/declarations/source-goals/verify-payment` endpoint,
+   and lasts at most another 24 hours (often less, bounded by retention).
+   **Only that separate, explicitly confirmed verification call** reads the
+   authenticated Stripe source and appends a new provider check.
+
+Renewal does **not** query Stripe, require the invoice to remain open, append
+a new ledger event, save native invoice/customer identifiers, create a
+server-side link store, grant agent execution, send cloud data, or perform a
+provider write. The response's historical `paid` or `unknown` is never
+promoted to current payment; a renewed link is an identity bridge, not a
+provider receipt, bank settlement, discharged obligation, independently
+adjudicated customer success, or evidence of agent causality.
+
+`tests/test_open_work_case_declared_link_renewal.py` covers the actual
+session-authenticated FastAPI → private SQLite source-link → synthetic check
+→ expired-link renewal → subsequent explicit fresh check journey, including
+disputed histories, no prior check, forgery, stale CAS, source-account
+replacement, revocation and no provider I/O during renewal. These committed
+synthetic tests are **not** real restricted-Stripe acceptance. Full exact-head
+native CI and a consenting live test-account pilot remain release gates.
