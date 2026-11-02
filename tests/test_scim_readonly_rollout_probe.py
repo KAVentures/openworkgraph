@@ -11,7 +11,8 @@ import pytest
 from scripts.scim_readonly_rollout_probe import (
     GROUP, LIST, SPC, USER, ProbeError, main, probe,
 )
-from test_scim_routes import http, user
+from test_process_collaboration import store  # noqa: F401  (fixture used by http)
+from test_scim_routes import http, user  # noqa: F401  (pytest fixtures)
 
 TOKEN = "owned-disposable-provider-token"
 

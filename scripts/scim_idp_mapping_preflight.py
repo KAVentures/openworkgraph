@@ -133,7 +133,10 @@ def _attributes(value: Any, path: str, *, minimum: int, max_path: int = 128,
         # shipped attribute parser's lower(), not Unicode casefold(), so
         # long-s Unicode names cannot impersonate ASCII SCIM attributes.
         folded.append(item if "[" in item else item.lower())
-    if check_duplicates and len({item.casefold() for item in folded}) != len(folded):
+    # Plain names are already lower()ed like the shipped parser; casefolding them
+    # again would merge a long-s alias into the real ASCII name. Selector paths
+    # keep the case-insensitive comparison they had.
+    if check_duplicates and len({item.casefold() if "[" in item else item for item in folded}) != len(folded):
         raise InvalidMapping(f"{path} contains duplicate paths")
     return folded
 

@@ -9,7 +9,9 @@ from threading import Thread
 import pytest
 
 from scripts.scim_provider_isolation_probe import isolation_probe, main, ProbeError
+from test_process_collaboration import store  # noqa: F401  (fixture used by http)
 from test_scim_readonly_rollout_probe import _ActualASGIRoutes, _Response
+from test_scim_routes import http  # noqa: F401  (pytest fixture)
 
 
 def _second(http):
