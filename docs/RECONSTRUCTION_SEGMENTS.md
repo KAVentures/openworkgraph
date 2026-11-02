@@ -19,7 +19,12 @@ episodes**, not asserted tasks or completed cases. An episode ends only when:
    with a known capture source and the same **complete** organization, actor,
    device and session. This yields `observed_other_app_without_record` — an
    **uncertain observed interruption**, not proof of another business case.
-3. The two member observations have **different exact capture scopes**.
+3. An **independently observed, different browser tab without a source record**
+   appears strictly between two member observations in the **same exact tab,
+   known app and capture source**, with the same complete organization, actor,
+   device and session. This yields `observed_other_tab_without_record` —
+   an **uncertain focus interruption**, not a different business case.
+4. The two member observations have **different exact capture scopes**.
    This yields `capture_scope_change` (not proof that a person stopped work).
 
 Both reasons may be represented by a list of reason codes; the first episode
@@ -37,7 +42,14 @@ Timestamp ties, missing/incomplete capture scope, other tenants/actors/devices/
 sessions, unknown/placeholder or control-bearing app names, missing/unknown
 source, contradictory tab/transfer claims, tainted record identities, same-app
 loose actions and already-member app activity do not establish this boundary.
-The `interleaved_other_record` boundary retains precedence when a distinct
+A different-tab event cannot establish a boundary if either anchor has an
+unknown or conflicting tab, if its source/app differs, if timestamps tie, or
+if it carries a clipboard transfer/copy-paste action, malformed action/ephemeral
+claims or an invalid resource reference. A same-tab unreferenced event is not
+negative focus evidence. The tab token, app, capture identity and other-tab
+event ID are not returned; the other-tab observation remains unassigned.
+Cross-app boundaries take precedence over cross-tab boundaries, and the
+`interleaved_other_record` boundary retains precedence when a distinct
 literal source record is actually observed. Unknown observation coverage is
 never silently promoted to an uninterrupted business task.
 The original source-grounded membership, same-record/clipboard/tab link bases,
@@ -88,7 +100,7 @@ Run from repository root:
 python -m pytest -q tests/test_reconstruction_segments.py tests/test_work_item_links.py
 ```
 
-Synthetic tests exercise two interleaved cases, unreferenced known-app switches,
+Synthetic tests exercise two interleaved cases, unreferenced known-app and independently observed other-tab switches,
 strict timestamp ties, same-app anchors, unknown/tainted capture, different
 tenants/actors/devices/sessions, cross-session same-record resumption, clock-only
 gaps, exact counts/truncation, retention recomputation, privacy and existing
@@ -96,6 +108,13 @@ workflow-evidence integration.
 Cross-platform native pytest, browser/accessibility, scale, packaging and
 release checks must pass on the exact PR head before merge. These synthetic
 checks do not constitute real consenting-user validation.
+
+For example, Browser tab A / Case A → Browser tab B / no record → Browser
+tab A / Case A produces **two** observed Case A episodes with the uncertain
+`observed_other_tab_without_record` boundary, without assigning tab B to A.
+Removing the middle observation recomputes one episode. The existing
+`linked_work_items` and `workflow_evidence` APIs expose this without new
+permissions, new membership edges or a changed response format.
 
 This improves reviewable **segmentation of observed evidence**, not assignment
 F1 by itself. The uncertain other-app boundary must not be treated as a
