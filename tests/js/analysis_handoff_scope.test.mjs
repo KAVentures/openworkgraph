@@ -1,0 +1,3741 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import vm from 'node:vm';
+
+const source = fs.readFileSync(new URL('../../dashboard/analysis_handoff.js', import.meta.url), 'utf8');
+const deferred = () => {
+  let resolve, reject;
+  const promise = new Promise((ok, fail) => { resolve = ok; reject = fail; });
+  return {promise, resolve, reject};
+};
+const settle = async () => {
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+};
+
+// The dashboard selects local calendar days. Keep fixture observations inside
+// that selected week on every CI date and timezone, not only October 2026.
+const fixtureDay = new Date();
+const observedStart = new Date(fixtureDay.getFullYear(), fixtureDay.getMonth(),
+  fixtureDay.getDate(), 10, 0, 0).toISOString();
+const observedEnd = new Date(fixtureDay.getFullYear(), fixtureDay.getMonth(),
+  fixtureDay.getDate(), 10, 1, 0).toISOString();
+const dayLabel = delta => {
+  const d = new Date(fixtureDay.getFullYear(), fixtureDay.getMonth(), fixtureDay.getDate());
+  d.setDate(d.getDate() + delta);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+// A controllable local clock exercises midnight rollover without waiting or
+// changing the runner's timezone. Date.parse/UTC retain native behavior.
+function adjustableClock() {
+  let time = new Date(fixtureDay.getFullYear(), fixtureDay.getMonth(),
+    fixtureDay.getDate(), 23, 59, 0).getTime();
+  class ClockDate extends Date {
+    constructor(...args) { super(...(args.length ? args : [time])); }
+    static now() { return time; }
+  }
+  return {Date: ClockDate, advance() { time += 2 * 60 * 1000; }};
+}
+function harness(auth = Promise.resolve(true), clipboardWrite = null, clockDate = null) {
+  const reads = [], tickets = [], copied = [], toasts = [], summaries = [], bars = [];
+  let downloads = 0, modals = 0, modalHtml = '', modalTitle = '', modalSubtitle = '';
+  const modal = Object.fromEntries(['#analysisRequest', '#analysisCopy', '#analysisDownload',
+    '#analysisDetailed', '#analysisReviewedDetailed', '#analysisActionStatus'].map(key => [key, {textContent: '', checked: false}]));
+  function element(tag) {
+    return {
+      tagName: tag.toUpperCase(), value: '', textContent: '', hidden: false, attributes: {},
+      setAttribute(key, value) { this.attributes[key] = String(value); },
+      removeAttribute(key) { delete this.attributes[key]; },
+      appendChild() {}, remove() {},
+      click() { if (tag === 'a') downloads++; }
+    };
+  }
+  function bar() {
+    const node = element('div');
+    const select = element('select'), custom = element('span');
+    const start = element('input'), end = element('input'), button = element('button');
+    node.querySelector = key => ({select, '[data-custom]': custom,
+      '[data-start]': start, '[data-end]': end, button})[key] || null;
+    node.querySelectorAll = key => key === 'input' ? [start, end] : [];
+    node.controls = {select, custom, start, end, button};
+    return node;
+  }
+  const panel = {firstChild: null, insertBefore(node) {bars.push(node);}};
+  const document = {
+    readyState: 'loading',
+    addEventListener(event, callback) { if (event === 'DOMContentLoaded') this.ready = callback; },
+    createElement(tag) {return tag === 'div' ? bar() : element(tag);},
+    querySelector(key) {return key === '#panel-overview' ? panel : modal[key] || null;},
+    querySelectorAll(key) {
+      if (key === '.owg-period') return bars;
+      if (key === '[data-period-summary]') return summaries;
+      return [];
+    },
+    dispatchEvent() {},
+    head: {appendChild() {}}, body: {appendChild() {}}
+  };
+  const summary = element('span'); summaries.push(summary);
+  const window = {
+    location: {origin: 'http://localhost:8765'},
+    __owgAuthReady: auth,
+    toast(message) {toasts.push(message);},
+    openModal(title, subtitle, html) {modals++; modalTitle = title; modalSubtitle = subtitle; modalHtml = html;}
+  };
+  const fetch = (url, options = {}) => {
+    const item = {...deferred(), url: String(url), options};
+    if (String(url).startsWith('/v1/analysis-preview?')) reads.push(item);
+    else if (String(url) === '/v1/export-ticket') tickets.push(item);
+    else throw new Error('Unexpected request: ' + url);
+    return item.promise;
+  };
+  const navigator = {clipboard: {async writeText(value) {
+    if (clipboardWrite) return clipboardWrite(value);
+    copied.push(value);
+  }}};
+  vm.runInNewContext(source, {window, document, fetch, navigator, Date: clockDate || Date, Intl,
+    URL, URLSearchParams, AbortController, Event: class Event {}, setTimeout});
+  document.ready();
+  const reply = (item, data, {preserveWindow = false, preserveTicket = false} = {}) => {
+    // The real backend echoes the selected scope and normalizes UTC Z to +00:00.
+    // Preserve deliberately forged windows only for adversarial response tests.
+    if (!preserveWindow && item.url.startsWith('/v1/analysis-preview?')) {
+      const params = new URLSearchParams(item.url.split('?')[1]);
+      const scope = params.get('scope');
+      const bound = key => params.get(key)?.replace(/Z$/, '+00:00');
+      data = {...data, window: scope === 'range'
+        ? {scope, since: bound('since'), until: bound('until')} : {scope}};
+    }
+    if (!preserveTicket && item.url === '/v1/export-ticket') {
+      const body = JSON.parse(item.options.body), ticket = 'synthetic-ticket';
+      const params = {scope: body.scope, include_raw: String(body.include_raw),
+        redact_names: String(body.redact_names), ticket};
+      if (body.scope === 'range') {
+        params.since = body.since;
+        params.until = body.until;
+      }
+      data = {...data, ticket, url: '/v1/export/' + body.format + '?' +
+        new URLSearchParams(params)};
+    }
+    item.resolve({ok: true, async json() {return data;}});
+  };
+  const preview = (scope, request = scope) => ({
+    request_text: 'request-' + request,
+    canonical_rows: 2, retained_rows: 2,
+    first_observed_at: observedStart,
+    last_observed_at: observedEnd,
+    window: scope === 'all' ? {scope: 'all'} :
+      {scope: 'range', since: '2026-10-23T00:00:00Z', until: '2026-10-30T00:00:00Z'},
+    event_types: {focus_span: 2, capture_gap: 0}, sources: {desktop: 2},
+    redacted_examples: [], analysis_plan: {date_chunks: []},
+    work_evidence: {}, local_ai_enabled: false
+  });
+  return {reads, tickets, copied, toasts, modal, bars, summary, window,
+    get modals() {return modals;}, get downloads() {return downloads;},
+    get modalHtml() {return modalHtml;},
+    get modalTitle() {return modalTitle;}, get modalSubtitle() {return modalSubtitle;},
+    reply, preview};
+}
+
+function assertCopyEvidenceWarning(copied, base, healthOnly = false) {
+  assert.equal(copied.length, 1);
+  assert.ok(copied[0].startsWith(base + '\n\nEvidence limitation:'));
+  assert.match(copied[0], healthOnly
+    ? /only capture-health or gap records, not ordinary work events/
+    : /No recorded events in this local preview's selected period/);
+  assert.match(copied[0], /Do not infer a workflow, business completion, time savings, or ROI/);
+  assert.match(copied[0], /otherwise report insufficient evidence/);
+}
+
+
+test('superseded prepare never opens a modal using a newer period response', async () => {
+  const h = harness();
+  await settle();
+  h.reply(h.reads[0], h.preview('range', 'initial'));
+  await settle();
+  const prepare = h.bars[0].controls.button.onclick();
+  await settle();
+  assert.equal(h.reads.length, 2);
+  h.bars[0].controls.select.value = 'all';
+  h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+  await settle();
+  assert.equal(h.reads.length, 3);
+  h.reply(h.reads[2], h.preview('all', 'new-period'));
+  await settle();
+  h.reply(h.reads[1], h.preview('range', 'old-click'));
+  await prepare;
+  assert.equal(h.modals, 0);
+  assert.equal(h.summary.textContent.includes('recorded events'), true);
+  assert.deepEqual(h.toasts, []);
+});
+
+test('changing period invalidates modal copy and download; current scope can still export', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed-week')); await open;
+  assert.equal(h.modals, 1);
+  assert.equal(h.modal['#analysisRequest'].textContent, 'request-reviewed-week');
+  h.bars[0].controls.select.value = 'all';
+  h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+  await settle();
+  await h.modal['#analysisCopy'].onclick();
+  await h.modal['#analysisDownload'].onclick();
+  assert.deepEqual(h.copied, []);
+  assert.equal(h.tickets.length, 0);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /period changed/i);
+  h.reply(h.reads[2], h.preview('all', 'all-period')); await settle();
+  const current = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[3], h.preview('all', 'current')); await current;
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-current']);
+  const download = h.modal['#analysisDownload'].onclick();
+  await settle();
+  assert.equal(h.tickets.length, 1);
+  const posted = JSON.parse(h.tickets[0].options.body);
+  assert.equal(posted.scope, 'all');
+  assert.equal(posted.include_raw, false);
+  h.reply(h.tickets[0], {url: '/v1/download-ticket/owned'});
+  await download;
+  assert.equal(h.downloads, 1);
+});
+
+test('late ticket cannot start download after scope change', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'week')); await open;
+  const download = h.modal['#analysisDownload'].onclick();
+  await settle(); assert.equal(h.tickets.length, 1);
+  h.bars[0].controls.select.value = 'all';
+  h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+  await settle();
+  h.reply(h.tickets[0], {url: '/v1/download-ticket/old'});
+  await download;
+  assert.equal(h.downloads, 0);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /period changed/i);
+  h.reply(h.reads[2], h.preview('all', 'new')); await settle();
+});
+
+test('old auth wait does not start a superseded evidence request', async () => {
+  const auth = deferred();
+  const h = harness(auth.promise);
+  await settle();
+  assert.equal(h.reads.length, 0);
+  h.bars[0].controls.select.value = 'all';
+  h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+  await settle();
+  auth.resolve(true); await settle();
+  assert.equal(h.reads.length, 1);
+  assert.match(h.reads[0].url, /scope=all/);
+  h.reply(h.reads[0], h.preview('all', 'authorized')); await settle();
+  assert.equal(h.summary.textContent.includes('recorded events'), true);
+});
+
+test('open handoff is proactively disabled and announced stale before any click', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed-week')); await open;
+  assert.equal(h.modal['#analysisCopy'].disabled, false);
+  assert.equal(h.modal['#analysisDownload'].disabled, false);
+  h.bars[0].controls.select.value = 'all';
+  h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+  // This is synchronous; a slow preview cannot leave old export controls active.
+  assert.equal(h.modal['#analysisCopy'].disabled, true);
+  assert.equal(h.modal['#analysisDownload'].disabled, true);
+  assert.equal(h.modal['#analysisDetailed'].disabled, true);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /period changed/i);
+  assert.equal(h.modal['#analysisRequest'].textContent, 'request-reviewed-week');
+  assert.equal(h.tickets.length, 0);
+  await settle(); // the current preview begins after the async local-auth gate
+  assert.equal(h.reads.length, 3);
+  h.reply(h.reads[2], h.preview('all', 'all-period')); await settle();
+  const again = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[3], h.preview('all', 'new-request')); await again;
+  assert.equal(h.modal['#analysisCopy'].disabled, false);
+  assert.equal(h.modal['#analysisDownload'].disabled, false);
+  assert.equal(h.modal['#analysisRequest'].textContent, 'request-new-request');
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-new-request']);
+});
+
+test('preview for a different scope is refused before opening or exporting', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const prepare = h.bars[0].controls.button.onclick();
+  await settle();
+  h.reply(h.reads[1], h.preview('all', 'wrong-scope'), {preserveWindow: true});
+  await prepare;
+  assert.equal(h.modals, 0);
+  assert.equal(h.tickets.length, 0);
+  assert.match(h.summary.textContent, /period did not match/i);
+  assert.equal(h.toasts.length, 1);
+});
+
+test('shifted range bounds are refused but UTC-equivalent server bounds pass', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const bad = h.bars[0].controls.button.onclick();
+  await settle();
+  const selected = new URLSearchParams(h.reads[1].url.split('?')[1]);
+  const shifted = new Date(Date.parse(selected.get('since')) + 3600_000).toISOString();
+  h.reply(h.reads[1], {...h.preview('range', 'wrong-range'), window: {
+    scope: 'range', since: shifted, until: selected.get('until')
+  }}, {preserveWindow: true});
+  await bad;
+  assert.equal(h.modals, 0);
+  assert.match(h.summary.textContent, /period did not match/i);
+  const good = h.bars[0].controls.button.onclick();
+  await settle();
+  h.reply(h.reads[2], h.preview('range', 'correct-range'));
+  await good;
+  assert.equal(h.modals, 1);
+  assert.equal(h.modal['#analysisRequest'].textContent, 'request-correct-range');
+});
+
+test('impossible custom dates cannot silently roll into another evidence period', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const controls = h.bars[0].controls;
+  controls.select.value = 'custom';
+  controls.select.onchange({target: controls.select});
+  await settle();
+  const previousReads = h.reads.length;
+  controls.start.value = '2026-02-30';
+  controls.end.value = '2026-03-03';
+  controls.start.onchange();
+  await settle();
+  assert.equal(h.reads.length, previousReads);
+  assert.match(h.summary.textContent, /valid dates/i);
+  assert.throws(() => h.window.owgEvidenceSelection(), /valid dates/i);
+  assert.equal(h.tickets.length, 0);
+});
+
+test('double-clicking Download issues one ticket and announces local pending work', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await open;
+  const first = h.modal['#analysisDownload'].onclick();
+  const second = h.modal['#analysisDownload'].onclick();
+  await settle();
+  assert.equal(h.tickets.length, 1);
+  assert.equal(h.modal['#analysisDownload'].disabled, true);
+  assert.equal(h.modal['#analysisDetailed'].disabled, true);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /preparing.*without detailed chronological evidence.*locally/i);
+  h.reply(h.tickets[0], {url: '/v1/download-ticket/single'});
+  await Promise.all([first, second]);
+  assert.equal(h.downloads, 1);
+  assert.equal(h.modal['#analysisDownload'].disabled, false);
+  assert.equal(h.modal['#analysisDetailed'].disabled, false);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /summary evidence only/i);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /download started/i);
+});
+
+test('detailed-evidence choice is frozen and accurately reported for a pending ticket', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await open;
+  h.modal['#analysisDetailed'].checked = true;
+  h.modal['#analysisDetailed'].onchange();
+  h.modal['#analysisReviewedDetailed'].checked = true;
+  const download = h.modal['#analysisDownload'].onclick();
+  await settle();
+  assert.equal(h.tickets.length, 1);
+  assert.equal(JSON.parse(h.tickets[0].options.body).include_raw, true);
+  assert.equal(h.modal['#analysisDetailed'].disabled, true);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /with detailed chronological evidence locally/i);
+  // Even a programmatic DOM mutation cannot rewrite the already-issued ticket.
+  h.modal['#analysisDetailed'].checked = false;
+  h.reply(h.tickets[0], {url: '/ignored-by-valid-fixture'});
+  await download;
+  assert.equal(h.downloads, 1);
+  assert.equal(h.modal['#analysisDetailed'].disabled, false);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /detailed chronology included/i);
+});
+
+test('stale pending download never re-enables detailed-evidence option', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await open;
+  h.modal['#analysisDetailed'].checked = true;
+  h.modal['#analysisDetailed'].onchange();
+  h.modal['#analysisReviewedDetailed'].checked = true;
+  const download = h.modal['#analysisDownload'].onclick();
+  await settle();
+  h.bars[0].controls.select.value = 'all';
+  h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+  assert.equal(h.modal['#analysisDetailed'].disabled, true);
+  h.reply(h.tickets[0], {url: '/ignored-by-stale-response'});
+  await download;
+  assert.equal(h.downloads, 0);
+  assert.equal(h.modal['#analysisDetailed'].disabled, true);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /period changed/i);
+  await settle(); h.reply(h.reads[2], h.preview('all', 'new')); await settle();
+  const again = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[3], h.preview('all', 'new-request')); await again;
+  assert.equal(h.modal['#analysisDetailed'].disabled, false);
+  assert.equal(h.modal['#analysisDetailed'].checked, false);
+});
+
+test('failed export ticket restores retry without duplicate downloads', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await open;
+  const first = h.modal['#analysisDownload'].onclick();
+  await settle(); assert.equal(h.tickets.length, 1);
+  h.tickets[0].reject(new Error('Ticket unavailable'));
+  await first;
+  assert.equal(h.downloads, 0);
+  assert.equal(h.modal['#analysisDownload'].disabled, false);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /ticket unavailable/i);
+  const retry = h.modal['#analysisDownload'].onclick();
+  await settle(); assert.equal(h.tickets.length, 2);
+  h.reply(h.tickets[1], {url: '/v1/download-ticket/retry'});
+  await retry;
+  assert.equal(h.downloads, 1);
+});
+
+test('late clipboard rejection cannot replace a period-change warning', async () => {
+  const pendingClipboard = deferred();
+  const h = harness(Promise.resolve(true), () => pendingClipboard.promise);
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await open;
+  const copy = h.modal['#analysisCopy'].onclick();
+  h.bars[0].controls.select.value = 'all';
+  h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+  assert.equal(h.modal['#analysisCopy'].disabled, true);
+  pendingClipboard.reject(new Error('Clipboard permission denied'));
+  await copy;
+  assert.match(h.modal['#analysisActionStatus'].textContent, /period changed/i);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /clipboard write failed/i);
+  assert.deepEqual(h.copied, []);
+  assert.equal(h.tickets.length, 0);
+});
+
+
+test('pending Copy blocks Download until the same-scope clipboard settles', async () => {
+  const pendingClipboard = deferred(), writes = [];
+  const h = harness(Promise.resolve(true), value => {
+    writes.push(value);
+    return pendingClipboard.promise;
+  });
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await open;
+  const copy = h.modal['#analysisCopy'].onclick();
+  assert.equal(h.modal['#analysisCopy'].disabled, true);
+  assert.equal(h.modal['#analysisDownload'].disabled, true);
+  await h.modal['#analysisDownload'].onclick();
+  assert.equal(h.tickets.length, 0);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /copying.*locally/i);
+  pendingClipboard.resolve();
+  await copy;
+  assert.deepEqual(writes, ['request-reviewed']);
+  assert.equal(h.modal['#analysisCopy'].disabled, false);
+  assert.equal(h.modal['#analysisDownload'].disabled, false);
+  const download = h.modal['#analysisDownload'].onclick();
+  await settle();
+  assert.equal(h.tickets.length, 1);
+  h.reply(h.tickets[0], {});
+  await download;
+  assert.equal(h.downloads, 1);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /download started/i);
+});
+
+test('pending Download blocks Copy without replacing ticket progress', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await open;
+  const download = h.modal['#analysisDownload'].onclick();
+  await settle();
+  assert.equal(h.tickets.length, 1);
+  assert.equal(h.modal['#analysisCopy'].disabled, true);
+  assert.equal(h.modal['#analysisDownload'].disabled, true);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, []);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /preparing.*locally/i);
+  h.tickets[0].reject(new Error('Ticket unavailable'));
+  await download;
+  assert.equal(h.downloads, 0);
+  assert.equal(h.modal['#analysisCopy'].disabled, false);
+  assert.equal(h.modal['#analysisDownload'].disabled, false);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-reviewed']);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /Only the prepared request text was copied\. No evidence file was attached or sent/);
+});
+
+test('period change during pending Copy keeps both actions disabled after completion', async () => {
+  const pendingClipboard = deferred();
+  const h = harness(Promise.resolve(true), () => pendingClipboard.promise);
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await open;
+  const copy = h.modal['#analysisCopy'].onclick();
+  h.bars[0].controls.select.value = 'all';
+  h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+  pendingClipboard.resolve();
+  await copy;
+  assert.equal(h.modal['#analysisCopy'].disabled, true);
+  assert.equal(h.modal['#analysisDownload'].disabled, true);
+  assert.equal(h.tickets.length, 0);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /previous period/i);
+});
+
+test('ticket URL must preserve exact selected scope, privacy flags and local endpoint', async t => {
+  const attacks = [
+    ['external origin', url => 'https://example.invalid' + url],
+    ['protocol-relative origin', url => '//example.invalid' + url],
+    ['wrong scope', url => url.replace('scope=range', 'scope=all')],
+    ['unredacted export', url => url.replace('redact_names=true', 'redact_names=false')],
+    ['unexpected detailed export', url => url.replace('include_raw=false', 'include_raw=true')],
+    ['wrong date bound', url => {
+      const u = new URL(url, 'http://localhost:8765');
+      u.searchParams.set('since', new Date(Date.parse(u.searchParams.get('since')) + 3600000).toISOString());
+      return u.pathname + u.search;
+    }],
+    ['duplicate scope parameter', url => url + '&scope=range'],
+    ['unexpected parameter', url => url + '&redirect=https%3A%2F%2Fexample.invalid'],
+    ['wrong endpoint', url => url.replace('/v1/export/csvzip?', '/v1/export/json?')],
+    ['fragment', url => url + '#other']
+  ];
+  for (const [name, mutate] of attacks) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const open = h.bars[0].controls.button.onclick();
+    await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await open;
+    const download = h.modal['#analysisDownload'].onclick();
+    await settle(); assert.equal(h.tickets.length, 1);
+    const body = JSON.parse(h.tickets[0].options.body);
+    const params = {scope: body.scope, include_raw: String(body.include_raw),
+      redact_names: String(body.redact_names), ticket: 'synthetic-ticket',
+      since: body.since, until: body.until};
+    const valid = '/v1/export/csvzip?' + new URLSearchParams(params);
+    h.reply(h.tickets[0], {ticket: 'synthetic-ticket', url: mutate(valid)},
+      {preserveTicket: true});
+    await download;
+    assert.equal(h.downloads, 0);
+    assert.equal(h.modal['#analysisDownload'].disabled, false);
+    assert.match(h.modal['#analysisActionStatus'].textContent, /ticket did not match/i);
+  });
+});
+
+test('ticket token disagreement fails closed, while UTC-equivalent detailed export works', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await open;
+  h.modal['#analysisDetailed'].checked = true;
+  h.modal['#analysisDetailed'].onchange();
+  h.modal['#analysisReviewedDetailed'].checked = true;
+  const first = h.modal['#analysisDownload'].onclick();
+  await settle();
+  const body = JSON.parse(h.tickets[0].options.body);
+  assert.equal(body.include_raw, true);
+  assert.equal(body.redact_names, true);
+  const params = {scope: body.scope, include_raw: 'true', redact_names: 'true',
+    ticket: 'token-in-url', since: body.since, until: body.until};
+  h.reply(h.tickets[0], {ticket: 'different-token',
+    url: '/v1/export/csvzip?' + new URLSearchParams(params)}, {preserveTicket: true});
+  await first;
+  assert.equal(h.downloads, 0);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /ticket did not match/i);
+  const retry = h.modal['#analysisDownload'].onclick();
+  await settle();
+  const secondBody = JSON.parse(h.tickets[1].options.body);
+  const second = new URLSearchParams({scope: secondBody.scope, include_raw: 'true',
+    redact_names: 'true', ticket: 'matching-token',
+    since: new Date(secondBody.since).toISOString(),
+    until: new Date(secondBody.until).toISOString()});
+  h.reply(h.tickets[1], {ticket: 'matching-token',
+    url: '/v1/export/csvzip?' + second}, {preserveTicket: true});
+  await retry;
+  assert.equal(h.downloads, 1);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /download started/i);
+});
+
+test('repeated Copy clicks issue one pending clipboard write and announce local progress', async () => {
+  const pendingClipboard = deferred(), writes = [];
+  const h = harness(Promise.resolve(true), value => {
+    writes.push(value);
+    return pendingClipboard.promise;
+  });
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await open;
+  const first = h.modal['#analysisCopy'].onclick();
+  const second = h.modal['#analysisCopy'].onclick();
+  await settle();
+  assert.deepEqual(writes, ['request-reviewed']);
+  assert.equal(h.modal['#analysisCopy'].disabled, true);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /copying.*locally.*no ai was invoked/i);
+  pendingClipboard.resolve();
+  await Promise.all([first, second]);
+  assert.equal(h.modal['#analysisCopy'].disabled, false);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /Only the prepared request text was copied\. No evidence file was attached or sent/);
+  assert.equal(h.tickets.length, 0);
+});
+
+test('clipboard rejection allows deliberate single-flight retry for current scope', async () => {
+  const writes = [], attempts = [deferred(), deferred()];
+  const h = harness(Promise.resolve(true), value => {
+    writes.push(value);
+    return attempts[writes.length - 1].promise;
+  });
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await open;
+  const first = h.modal['#analysisCopy'].onclick();
+  await settle();
+  attempts[0].reject(new Error('clipboard denied'));
+  await first;
+  assert.equal(h.modal['#analysisCopy'].disabled, false);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /clipboard unavailable/i);
+  const retry = h.modal['#analysisCopy'].onclick();
+  const duplicate = h.modal['#analysisCopy'].onclick();
+  await settle();
+  assert.deepEqual(writes, ['request-reviewed', 'request-reviewed']);
+  assert.equal(h.modal['#analysisCopy'].disabled, true);
+  attempts[1].resolve();
+  await Promise.all([retry, duplicate]);
+  assert.equal(h.modal['#analysisCopy'].disabled, false);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /Only the prepared request text was copied\. No evidence file was attached or sent/);
+  assert.equal(h.tickets.length, 0);
+});
+
+test('successful pending Copy after period change remains disabled and discloses old scope', async () => {
+  const pendingClipboard = deferred(), writes = [];
+  const h = harness(Promise.resolve(true), value => {
+    writes.push(value);
+    return pendingClipboard.promise;
+  });
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await open;
+  const copy = h.modal['#analysisCopy'].onclick();
+  await settle();
+  h.bars[0].controls.select.value = 'all';
+  h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+  assert.equal(h.modal['#analysisCopy'].disabled, true);
+  pendingClipboard.resolve();
+  await copy;
+  assert.deepEqual(writes, ['request-reviewed']);
+  assert.equal(h.modal['#analysisCopy'].disabled, true);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /period changed during copying/i);
+  assert.equal(h.tickets.length, 0);
+});
+
+test('malformed counts and source maps refuse a misleading handoff', async t => {
+  const mutations = [
+    ['string zero', d => ({...d, canonical_rows: '0'})],
+    ['negative count', d => ({...d, canonical_rows: -1})],
+    ['unsafe integer', d => ({...d, retained_rows: Number.MAX_SAFE_INTEGER + 1})],
+    ['negative event count', d => ({...d, event_types: {focus_span: -1}})],
+    ['non-numeric source count', d => ({...d, sources: {desktop: '2'}})]
+  ];
+  for (const [name, mutate] of mutations) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const open = h.bars[0].controls.button.onclick();
+    await settle(); h.reply(h.reads[1], mutate(h.preview('range', 'bad')));
+    await open;
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+    assert.equal(h.toasts.length, 1);
+  });
+});
+
+test('missing request and malformed examples or chunks fail closed', async t => {
+  const mutations = [
+    ['missing request', d => ({...d, request_text: undefined})],
+    ['blank request', d => ({...d, request_text: '   '})],
+    ['missing examples', d => ({...d, redacted_examples: undefined})],
+    ['null example', d => ({...d, redacted_examples: [null]})],
+    ['bad chunks', d => ({...d, analysis_plan: {date_chunks: {since: 'x'}}})],
+    ['null chunk', d => ({...d, analysis_plan: {date_chunks: [null]}})]
+  ];
+  for (const [name, mutate] of mutations) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const open = h.bars[0].controls.button.onclick();
+    await settle(); h.reply(h.reads[1], mutate(h.preview('range', 'bad')));
+    await open;
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+  });
+});
+
+test('valid empty evidence and absent optional plan retain safe copy-only handoff', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle();
+  h.reply(h.reads[1], {...h.preview('range', 'empty'), canonical_rows: 0,
+    retained_rows: 0, event_types: {}, sources: {}, redacted_examples: [],
+    first_observed_at: null, last_observed_at: null, analysis_plan: undefined});
+  await open;
+  assert.equal(h.modals, 1);
+  assert.equal(h.modal['#analysisDownload'].disabled, true);
+  await h.modal['#analysisDownload'].onclick();
+  assert.equal(h.tickets.length, 0);
+  await h.modal['#analysisCopy'].onclick();
+  assertCopyEvidenceWarning(h.copied, 'request-empty');
+});
+
+test('nonzero observed evidence requires real chronological ISO timestamps', async t => {
+  const mutations = [
+    ['missing first', d => ({...d, first_observed_at: null})],
+    ['missing pair', d => ({...d, first_observed_at: null, last_observed_at: null})],
+    ['invalid timestamp', d => ({...d, first_observed_at: 'not-a-date'})],
+    ['impossible day', d => ({...d, first_observed_at: '2026-02-30T10:00:00Z'})],
+    ['reversed', d => ({...d, last_observed_at: utc(Date.parse(d.first_observed_at) - 60_000)})],
+    ['locale timestamp', d => ({...d, last_observed_at: '10/29/2026'})]
+  ];
+  for (const [name, mutate] of mutations) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const open = h.bars[0].controls.button.onclick();
+    await settle(); h.reply(h.reads[1], mutate(h.preview('range', 'bad')));
+    await open;
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+  });
+});
+
+test('date chunks require valid labels and safe integer event counts', async t => {
+  const chunk = {since: dayLabel(-1), until: dayLabel(0), event_rows: 2};
+  const mutations = [
+    ['missing since', x => ({...x, since: undefined})],
+    ['impossible day', x => ({...x, since: '2026-02-30'})],
+    ['invalid until', x => ({...x, until: 'nonsense'})],
+    ['missing count', x => ({...x, event_rows: undefined})],
+    ['string count', x => ({...x, event_rows: '2'})],
+    ['negative count', x => ({...x, event_rows: -1})],
+    ['unsafe count', x => ({...x, event_rows: Number.MAX_SAFE_INTEGER + 1})]
+  ];
+  for (const [name, mutate] of mutations) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const open = h.bars[0].controls.button.onclick();
+    await settle(); h.reply(h.reads[1], {...h.preview('range', 'bad'),
+      analysis_plan: {date_chunks: [mutate(chunk)]}});
+    await open;
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+  });
+});
+
+test('valid offset observations and date-only chunks preserve safe copy', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], {...h.preview('range', 'valid'),
+    first_observed_at: asOffset(Date.parse(observedStart), 2),
+    last_observed_at: observedEnd,
+    analysis_plan: {date_chunks: [
+      {since: dayLabel(0), until: dayLabel(1), event_rows: 2}],
+      more_dates_not_listed: false}});
+  await open;
+  assert.equal(h.modals, 1);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-valid']);
+  assert.equal(h.tickets.length, 0);
+});
+
+test('date chunks refuse reversed, overlapping, duplicated and out-of-order coverage', async t => {
+  const a = {since: dayLabel(-3), until: dayLabel(-2), event_rows: 1};
+  const b = {since: dayLabel(-2), until: dayLabel(-1), event_rows: 2};
+  const mutations = [
+    ['reversed bounds', [{...a, since: dayLabel(-1)}]],
+    ['zero-length window', [{...a, until: a.since}]],
+    ['overlapping windows', [a, {...b, since: dayLabel(-3)}]],
+    ['duplicate window', [a, {...a}]],
+    ['out-of-order windows', [b, a]],
+    ['UTC-equivalent duplicate', [
+      {since: dayLabel(-3) + 'T00:00:00Z', until: dayLabel(-2) + 'T00:00:00Z', event_rows: 1},
+      {since: dayLabel(-3) + 'T02:00:00+02:00', until: dayLabel(-2) + 'T02:00:00+02:00', event_rows: 1}
+    ]]
+  ];
+  for (const [name, chunks] of mutations) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const open = h.bars[0].controls.button.onclick();
+    await settle(); h.reply(h.reads[1], {...h.preview('range', 'invalid-plan'),
+      analysis_plan: {date_chunks: chunks}});
+    await open;
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+  });
+});
+
+// Derive fixtures from the actual selected range, not the wall clock of CI.
+const selectedBounds = read => {
+  const params = new URLSearchParams(read.url.split('?')[1]);
+  return [Date.parse(params.get('since')), Date.parse(params.get('until'))];
+};
+const utc = ms => new Date(ms).toISOString();
+const asOffset = (ms, hours) => {
+  const local = utc(ms + hours * 3600_000).replace(/Z$/, '');
+  return local + (hours >= 0 ? '+' : '-') + String(Math.abs(hours)).padStart(2, '0') + ':00';
+};
+
+test('contiguous date chunks and equivalent UTC-offset boundaries remain copy-only safe', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle();
+  const [start] = selectedBounds(h.reads[1]), day = 86400_000;
+  h.reply(h.reads[1], {...h.preview('range', 'ordered-plan'),
+    canonical_rows: 7, retained_rows: 7,
+    first_observed_at: utc(start + 3600_000),
+    last_observed_at: utc(start + 3 * day + 3600_000),
+    event_types: {focus_span: 7}, sources: {desktop: 7},
+    analysis_plan: {date_chunks: [
+      {since: utc(start), until: utc(start + day), event_rows: 1},
+      {since: utc(start + day), until: utc(start + 2 * day), event_rows: 2},
+      {since: utc(start + 2 * day), until: utc(start + 3 * day), event_rows: 3},
+      {since: asOffset(start + 3 * day, 2),
+        until: asOffset(start + 4 * day, 2), event_rows: 1}
+    ], more_dates_not_listed: false}});
+  await open;
+  assert.equal(h.modals, 1);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-ordered-plan']);
+  assert.equal(h.tickets.length, 0);
+});
+
+test('date chunks outside the selected range are refused even with conserved counts', async t => {
+  const bad = [
+    ['before selected start', start => ({since: utc(start - 60_000),
+      until: utc(start + 60_000), event_rows: 1})],
+    ['after selected end', (_, end) => ({since: utc(end - 60_000),
+      until: utc(end + 60_000), event_rows: 1})],
+    ['offset before start', start => ({since: asOffset(start - 60_000, 2),
+      until: asOffset(start + 60_000, 2), event_rows: 1})],
+    ['offset after end', (_, end) => ({since: asOffset(end - 60_000, 1),
+      until: asOffset(end + 60_000, 1), event_rows: 1})]
+  ];
+  for (const [name, makeChunk] of bad) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range')); await settle();
+    const open = h.bars[0].controls.button.onclick();
+    await settle();
+    const [start, end] = selectedBounds(h.reads[1]);
+    h.reply(h.reads[1], {...h.preview('range'),
+      analysis_plan: {date_chunks: [makeChunk(start, end)]}});
+    await open;
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+  });
+});
+
+test('UTC-equivalent date chunks at both selected boundaries remain valid', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle();
+  const [start, end] = selectedBounds(h.reads[1]);
+  h.reply(h.reads[1], {...h.preview('range', 'boundary-plan'),
+    first_observed_at: utc(start + 1800_000),
+    last_observed_at: utc(end - 1800_000),
+    analysis_plan: {date_chunks: [
+      {since: asOffset(start, 2), until: utc(start + 3600_000), event_rows: 1},
+      {since: utc(end - 3600_000), until: asOffset(end, 1), event_rows: 1}
+    ]}});
+  await open;
+  assert.equal(h.modals, 1);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-boundary-plan']);
+  assert.equal(h.tickets.length, 0);
+});
+
+test('unbounded all scope refuses injected date bounds', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range')); await settle();
+  h.bars[0].controls.select.value = 'all';
+  h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+  await settle(); h.reply(h.reads[1], h.preview('all')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[2], {...h.preview('all'),
+    window: {scope: 'all', since: '2026-10-29T00:00:00Z'}}, {preserveWindow: true});
+  await open;
+  assert.equal(h.modals, 0);
+  assert.equal(h.tickets.length, 0);
+  assert.match(h.summary.textContent, /incomplete or malformed/i);
+});
+
+test('partition and planned-row inconsistencies refuse the handoff before any copy or ticket', async t => {
+  const mutations = [
+    ['event type total too small', d => ({...d, event_types: {focus_span: 1}})],
+    ['event type total too large', d => ({...d, event_types: {focus_span: 3}})],
+    ['source total too small', d => ({...d, sources: {desktop: 1}})],
+    ['source total too large', d => ({...d, sources: {desktop: 3}})],
+    ['selected rows exceed retained rows', d => ({...d, retained_rows: 1})],
+    ['partition addition overflows safe integer', d => ({...d,
+      event_types: {focus_span: Number.MAX_SAFE_INTEGER, capture_gap: 1}})],
+    ['listed date chunks exceed selected rows', d => ({...d, analysis_plan: {
+      date_chunks: [
+        {since: dayLabel(-2), until: dayLabel(-1), event_rows: 2},
+        {since: dayLabel(-1), until: dayLabel(0), event_rows: 1}
+      ]}})],
+    ['zero selected rows with positive planned rows', d => ({...d,
+      canonical_rows: 0, first_observed_at: null, last_observed_at: null,
+      event_types: {}, sources: {}, analysis_plan: {date_chunks: [
+        {since: dayLabel(-1), until: dayLabel(0), event_rows: 1}]}})]
+  ];
+  for (const [name, mutate] of mutations) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const open = h.bars[0].controls.button.onclick();
+    await settle(); h.reply(h.reads[1], mutate(h.preview('range', 'inconsistent')));
+    await open;
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+    assert.equal(h.toasts.length, 1);
+  });
+});
+
+test('a legacy partial date plan without explicit coverage metadata remains usable', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], {...h.preview('range', 'partial-plan'),
+    analysis_plan: {date_chunks: [
+      {since: dayLabel(0), until: dayLabel(1), event_rows: 1}
+    ]}});
+  await open;
+  assert.equal(h.modals, 1);
+  assert.equal(h.modal['#analysisCopy'].disabled, false);
+  assert.equal(h.modal['#analysisDownload'].disabled, false);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-partial-plan']);
+  assert.equal(h.tickets.length, 0);
+});
+
+test('explicit daily-plan coverage flags reconcile selected rows and 31-date truncation', async t => {
+  const day = 86400_000;
+  const lastDay = Math.floor(Date.parse(observedStart) / day) * day;
+  const firstDay = lastDay - 31 * day;
+  const chunks = Array.from({length: 31}, (_, i) => ({
+    since: utc(firstDay + i * day),
+    until: utc(firstDay + (i + 1) * day),
+    event_rows: 1
+  }));
+  const cases = [
+    ['valid 31-day prefix with a later 32nd observed day', true, 31,
+      utc(lastDay + 3600_000), true],
+    ['explicit no-omission claim with an unlisted selected row', false, 31,
+      utc(lastDay + 3600_000), false],
+    ['truncation claim with only 30 listed days', true, 30,
+      utc(lastDay + 3600_000), false],
+    ['truncation claim without a later observed day', true, 31,
+      utc(lastDay - day + 3600_000), false]
+  ];
+  for (const [name, flag, count, lastObserved, accepted] of cases)
+    await t.test(name, async () => {
+      const h = harness();
+      await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+      h.bars[0].controls.select.value = 'all';
+      h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+      await settle(); h.reply(h.reads[1], h.preview('all', 'selected-all')); await settle();
+      const opening = h.bars[0].controls.button.onclick();
+      await settle();
+      h.reply(h.reads[2], {...h.preview('all', 'coverage-reconciled'),
+        canonical_rows: 32, retained_rows: 32,
+        first_observed_at: utc(firstDay + 3600_000),
+        last_observed_at: lastObserved,
+        event_types: {focus_span: 32}, sources: {desktop: 32},
+        analysis_plan: {date_chunks: chunks.slice(0, count),
+          more_dates_not_listed: flag, complete_history_claimed: false}});
+      await opening;
+      assert.equal(h.modals, accepted ? 1 : 0, name);
+      assert.equal(h.tickets.length, 0);
+      if (accepted) {
+        await h.modal['#analysisCopy'].onclick();
+        assert.deepEqual(h.copied, ['request-coverage-reconciled']);
+        assert.match(h.modalHtml, /Only the first 31 observed UTC dates are listed/);
+      } else {
+        assert.deepEqual(h.copied, []);
+        assert.match(h.summary.textContent, /incomplete or malformed/i);
+      }
+    });
+  // A clipped 31st chunk can end before midnight. An event later on that
+  // SAME UTC day is not a 32nd distinct date, even when the omission flag,
+  // selected row totals and last-observation-after-chunk-end all agree.
+  await t.test('truncation requires a later distinct UTC date, not a later hour', async t2 => {
+    const clipped = chunks.map((chunk, i) => i === 30
+      ? {...chunk, until: utc(lastDay - day + 10 * 3600_000)}
+      : chunk);
+    const variants = [
+      ['later hour on 31st UTC day is not a 32nd date',
+        asOffset(lastDay - day + 12 * 3600_000, 5), false],
+      ['32nd UTC day remains valid with previous-day local offset label',
+        asOffset(lastDay + 3600_000, -5), true]
+    ];
+    for (const [name, lastObserved, accepted] of variants)
+      await t2.test(name, async () => {
+        const h = harness();
+        await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+        h.bars[0].controls.select.value = 'all';
+        h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+        await settle(); h.reply(h.reads[1], h.preview('all', 'selected-all')); await settle();
+        const opening = h.bars[0].controls.button.onclick();
+        await settle();
+        h.reply(h.reads[2], {...h.preview('all', 'clipped-last-date'),
+          canonical_rows: 32, retained_rows: 32,
+          first_observed_at: utc(firstDay + 3600_000),
+          last_observed_at: lastObserved,
+          event_types: {focus_span: 32}, sources: {desktop: 32},
+          analysis_plan: {date_chunks: clipped,
+            more_dates_not_listed: true, complete_history_claimed: false}});
+        await opening;
+        assert.equal(h.modals, accepted ? 1 : 0, name);
+        assert.equal(h.tickets.length, 0);
+        if (accepted) {
+          await h.modal['#analysisCopy'].onclick();
+          assert.deepEqual(h.copied, ['request-clipped-last-date']);
+        } else {
+          assert.deepEqual(h.copied, []);
+          assert.match(h.summary.textContent, /incomplete or malformed/i);
+        }
+      });
+  });
+  await t.test('explicitly no omitted dates cannot hide all selected events', async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle(); h.reply(h.reads[1], {...h.preview('range', 'empty-list'),
+      analysis_plan: {date_chunks: [], more_dates_not_listed: false}});
+    await opening;
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+  });
+});
+
+test('work evidence totals, capture-health partition and liveness metadata fail closed', async () => {
+  const base = {ordinary_event_rows: 2, health_event_rows: 0,
+    last_work_observed_at: observedStart,
+    recorder_liveness_verified: false};
+  const invalid = [
+    {ordinary_event_rows: 3, health_event_rows: 0}, // exceeds selected rows
+    {ordinary_event_rows: 1, health_event_rows: 0}, // undercounts selected rows
+    {ordinary_event_rows: 1, health_event_rows: 1}, // no health event in partition
+    {ordinary_event_rows: Number.MAX_SAFE_INTEGER, health_event_rows: 1},
+    {ordinary_event_rows: -1, health_event_rows: 3},
+    {health_event_rows: undefined}, // a supplied partition cannot be partial
+    {recorder_liveness_verified: 'false'},
+    {last_work_observed_at: utc(Date.parse(observedStart) - 1000)},
+    {last_work_observed_at: utc(Date.parse(observedEnd) + 1000)},
+    {last_work_observed_at: '2026-02-30T10:00:00Z'}
+  ];
+  for (const change of invalid) {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], {...h.preview('range'), work_evidence: {...base, ...change}});
+    await opening;
+    assert.equal(h.modals, 0, 'invalid work evidence must not open handoff: ' + JSON.stringify(change));
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+  }
+});
+
+test('unsupported affirmative recorder-liveness claims never become reviewable evidence', async t => {
+  const cases = [
+    ['ordinary events with forged affirmative liveness', true, false, false],
+    ['health-only diagnostics with forged affirmative liveness', true, true, false],
+    ['explicit unverified liveness', false, false, true],
+    ['legacy absent liveness', undefined, false, true],
+    ['legacy null liveness', null, false, true]
+  ];
+  for (const [name, flag, healthOnly, accepted] of cases) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    const work_evidence = {
+      ordinary_event_rows: healthOnly ? 0 : 2,
+      health_event_rows: healthOnly ? 2 : 0,
+      last_work_observed_at: healthOnly ? null : observedStart,
+      ...(flag === undefined ? {} : {recorder_liveness_verified: flag})
+    };
+    const preview = {...h.preview('range', 'liveness-review'), work_evidence,
+      ...(healthOnly ? {event_types: {capture_health: 2}} : {})};
+    h.reply(h.reads[1], preview);
+    await opening;
+    assert.equal(h.modals, accepted ? 1 : 0, name);
+    assert.equal(h.tickets.length, 0, name);
+    assert.equal(h.downloads, 0, name);
+    if (!accepted) {
+      assert.deepEqual(h.copied, [], name);
+      assert.match(h.summary.textContent, /incomplete or malformed/i, name);
+      return;
+    }
+    assert.match(h.modalHtml, /do not confirm the recorder is running/, name);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-liveness-review'], name);
+    assert.equal(h.tickets.length, 0, name);
+    assert.equal(h.downloads, 0, name);
+  });
+});
+
+test('valid selected work/health partition and optional legacy metadata still prepare safely', async () => {
+  const valid = [
+    {work_evidence: {ordinary_event_rows: 1, health_event_rows: 1,
+      last_work_observed_at: asOffset(Date.parse(observedStart), 0),
+      recorder_liveness_verified: false},
+      event_types: {focus_span: 1, capture_gap: 1}},
+    {work_evidence: {ordinary_event_rows: 0, health_event_rows: 2,
+      last_work_observed_at: null, recorder_liveness_verified: false},
+      event_types: {capture_health: 2}},
+    {work_evidence: {}},
+    {work_evidence: undefined}
+  ];
+  for (const variant of valid) {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], {...h.preview('range'), ...variant});
+    await opening;
+    assert.equal(h.modals, 1, 'valid/legacy evidence should open: ' + JSON.stringify(variant));
+    assert.equal(h.modal['#analysisCopy'].disabled, false);
+  }
+});
+
+test('out-of-window observed timestamps refuse copy and export', async t => {
+  const bad = [
+    ['before start', (s) => ({first_observed_at: utc(s - 1000), last_observed_at: utc(s + 60000)})],
+    ['offset before start', (s) => ({first_observed_at: asOffset(s - 1000, 2), last_observed_at: utc(s + 60000)})],
+    ['at exclusive end', (_, e) => ({first_observed_at: utc(e - 60000), last_observed_at: utc(e)})],
+    ['offset after end', (_, e) => ({first_observed_at: utc(e - 60000), last_observed_at: asOffset(e + 1000, -3)})]
+  ];
+  for (const [name, mutation] of bad) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    const [start, end] = selectedBounds(h.reads[1]);
+    h.reply(h.reads[1], {...h.preview('range', 'forged-observations'), ...mutation(start, end)});
+    await opening;
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+  });
+});
+
+test('inclusive first and pre-exclusive last observations accept equivalent offsets', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range')); await settle();
+  const opening = h.bars[0].controls.button.onclick();
+  await settle();
+  const [start, end] = selectedBounds(h.reads[1]);
+  h.reply(h.reads[1], {...h.preview('range', 'valid-observed-bounds'),
+    first_observed_at: asOffset(start, 2), last_observed_at: asOffset(end - 1000, -3)});
+  await opening;
+  assert.equal(h.modals, 1);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-valid-observed-bounds']);
+  assert.equal(h.tickets.length, 0);
+});
+
+test('current-run lower bound rejects older observations; all remains unbounded', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range')); await settle();
+  h.bars[0].controls.select.value = 'current';
+  h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+  await settle(); h.reply(h.reads[1], h.preview('current')); await settle();
+  const opening = h.bars[0].controls.button.onclick();
+  await settle();
+  h.reply(h.reads[2], {...h.preview('current'),
+    window: {scope: 'current', since: utc(Date.parse(observedStart) + 30000)}},
+    {preserveWindow: true});
+  await opening;
+  assert.equal(h.modals, 0);
+  assert.equal(h.tickets.length, 0);
+  assert.match(h.summary.textContent, /incomplete or malformed/i);
+  h.bars[0].controls.select.value = 'all';
+  h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+  await settle(); h.reply(h.reads[3], h.preview('all')); await settle();
+  const all = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[4], {...h.preview('all', 'unbounded'),
+    first_observed_at: '2020-01-01T10:00:00Z',
+    last_observed_at: '2020-01-01T10:01:00Z'});
+  await all;
+  assert.equal(h.modals, 1);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-unbounded']);
+});
+
+test('positive date chunks must intersect the actual observed evidence span', async t => {
+  const first = Date.parse(observedStart), last = Date.parse(observedEnd);
+  const impossible = [
+    ['earlier observed day inside the selected week',
+      {since: dayLabel(-2), until: dayLabel(-1), event_rows: 1}],
+    ['chunk ends exactly at first observation (exclusive end)',
+      {since: utc(first - 3600_000), until: asOffset(first, 2), event_rows: 1}],
+    ['later time on the same observed day',
+      {since: asOffset(last + 1000, -3), until: utc(last + 60_000), event_rows: 1}],
+    ['later day inside the selected week is not needed: last event bounds the evidence',
+      {since: utc(last + 60_000), until: utc(last + 120_000), event_rows: 2}]
+  ];
+  for (const [name, chunk] of impossible) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], {...h.preview('range', 'false-chunk-coverage'),
+      analysis_plan: {date_chunks: [chunk]}});
+    await opening;
+    assert.equal(h.modals, 0, 'out-of-observation positive chunk must be withheld');
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+  });
+});
+
+test('calendar-covering, boundary and zero-count optional chunks preserve safe handoff', async t => {
+  const first = Date.parse(observedStart), last = Date.parse(observedEnd);
+  const allowed = [
+    ['full observed local day', {since: dayLabel(0), until: dayLabel(1), event_rows: 2}],
+    ['offset-equivalent exact first and last bounds',
+      {since: asOffset(first, 2), until: asOffset(last + 1000, -3), event_rows: 1}],
+    ['chunk begins at the last observed event',
+      {since: asOffset(last, 2), until: utc(last + 1000), event_rows: 1}],
+    ['legacy empty chunk outside observed events',
+      {since: dayLabel(-2), until: dayLabel(-1), event_rows: 0}]
+  ];
+  for (const [name, chunk] of allowed) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], {...h.preview('range', 'observed-intersection'),
+      analysis_plan: {date_chunks: [chunk],
+        ...(chunk.event_rows === 2 ? {more_dates_not_listed: false} : {})}});
+    await opening;
+    assert.equal(h.modals, 1, 'valid/partial plan should remain usable');
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-observed-intersection']);
+    assert.equal(h.tickets.length, 0);
+  });
+});
+
+test('redacted focus examples cannot contradict selected counts or observation span', async t => {
+  const sample = observed_at => ({app: 'Editor', window_title: 'Redacted',
+    ...(observed_at === undefined ? {} : {observed_at})});
+  const cases = [
+    ['no selected focus', d => {d.event_types = {capture_gap: 2}; d.redacted_examples = [sample(observedStart)];}],
+    ['too many for selected focus', d => {d.event_types = {focus_span: 1, capture_gap: 1}; d.redacted_examples = [sample(observedStart), sample(observedEnd)];}],
+    ['over six-row cap', d => {d.canonical_rows = 8; d.retained_rows = 8; d.event_types = {focus_span: 8}; d.sources = {desktop: 8}; d.redacted_examples = Array.from({length: 7}, () => sample(observedStart));}],
+    ['before observed span', d => {d.redacted_examples = [sample(new Date(Date.parse(observedStart)-1000).toISOString())];}],
+    ['after observed span', d => {d.redacted_examples = [sample(new Date(Date.parse(observedEnd)+1000).toISOString())];}],
+    ['malformed timestamp', d => {d.redacted_examples = [sample('not-a-timestamp')];}],
+    ['numeric timestamp', d => {d.redacted_examples = [sample(123)];}]
+  ];
+  for (const [name, mutate] of cases) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const open = h.bars[0].controls.button.onclick(); await settle();
+    const d = h.preview('range', 'reviewed'); mutate(d);
+    h.reply(h.reads[1], d); await open;
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /preview evidence was incomplete or malformed/i);
+    assert.equal(h.toasts.length, 1);
+  });
+});
+
+test('malformed redacted sample labels cannot masquerade as observed app or title', async t => {
+  const cases = [
+    ['object app', {app: {name: 'Editor'}, window_title: 'Redacted'}],
+    ['array app', {app: ['Editor'], window_title: 'Redacted'}],
+    ['numeric app', {app: 42, window_title: 'Redacted'}],
+    ['empty app', {app: '', window_title: 'Redacted'}],
+    ['whitespace app', {app: '  ', window_title: 'Redacted'}],
+    ['object title', {app: 'Editor', window_title: {text: 'Redacted'}}],
+    ['array title', {app: 'Editor', window_title: ['Redacted']}],
+    ['numeric title', {app: 'Editor', window_title: 42}]
+  ];
+  for (const [name, sample] of cases) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const open = h.bars[0].controls.button.onclick(); await settle();
+    h.reply(h.reads[1], {...h.preview('range', 'malformed-label'),
+      redacted_examples: [{...sample, observed_at: observedStart}]});
+    await open;
+    assert.equal(h.modals, 0, 'malformed labels must not be shown as evidence');
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+  });
+});
+
+test('valid redacted sample text is escaped and missing labels stay explicitly unreported', async t => {
+  const cases = [
+    ['HTML-looking labels', {app: '<script>alert(1)</script>',
+      window_title: '<img src=x onerror=1>'}, '&lt;script&gt;', '&lt;img src=x onerror=1&gt;'],
+    ['null app and title', {app: null, window_title: null},
+      'app not supplied', 'title not supplied'],
+    ['legacy missing app and title', {}, 'app not supplied', 'title not supplied']
+  ];
+  for (const [name, sample, expectedApp, expectedTitle] of cases)
+    await t.test(name, async () => {
+      const h = harness();
+      await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+      const open = h.bars[0].controls.button.onclick(); await settle();
+      h.reply(h.reads[1], {...h.preview('range', 'valid-label'),
+        redacted_examples: [{...sample, observed_at: observedStart}]});
+      await open;
+      assert.equal(h.modals, 1);
+      assert.ok(h.modalHtml.includes(expectedApp));
+      assert.ok(h.modalHtml.includes(expectedTitle));
+      assert.ok(!h.modalHtml.includes('<script>'));
+      assert.ok(!h.modalHtml.includes('<img src=x onerror=1>'));
+      await h.modal['#analysisCopy'].onclick();
+      assert.deepEqual(h.copied, ['request-valid-label']);
+      assert.equal(h.tickets.length, 0);
+    });
+});
+
+test('focus example review separates absent labels, literal fallback strings and blank titles', async t => {
+  const cases = [
+    ['absent metadata', {}, /<li>app not supplied · title not supplied · observed at/],
+    ['explicit null metadata', {app: null, window_title: null},
+      /<li>app not supplied · title not supplied · observed at/],
+    ['literal fallback-looking labels', {app: 'Unknown app', window_title: 'Untitled activity'},
+      /<li>reported app: Unknown app · reported title: Untitled activity · observed at/],
+    ['explicit empty title', {app: 'Editor', window_title: ''},
+      /<li>reported app: Editor · reported title: \[empty title label\] · observed at/],
+    ['whitespace-only title', {app: 'Editor', window_title: '   '},
+      /<li>reported app: Editor · reported title: \[whitespace-only title label\] · observed at/],
+    ['literal missing-label-looking title', {app: 'Editor', window_title: 'title not supplied'},
+      /<li>reported app: Editor · reported title: title not supplied · observed at/]
+  ];
+  for (const [name, sample, expected] of cases) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick(); await settle();
+    h.reply(h.reads[1], {...h.preview('range', 'focus-provenance'),
+      redacted_examples: [{...sample, observed_at: observedStart}]});
+    await opening;
+    assert.equal(h.modals, 1);
+    assert.match(h.modalHtml, expected);
+    assert.doesNotMatch(h.modalHtml, /<li>Unknown app · Untitled activity/);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-focus-provenance']);
+    assert.equal(h.tickets.length, 0, 'Copy must not request an export ticket');
+    assert.equal(h.downloads, 0, 'Copy must not download evidence');
+  });
+});
+
+test('valid redacted focus examples preserve offset and legacy compatibility', async t => {
+  const cases = [
+    ['UTC-offset equivalent observations', d => {d.redacted_examples = [{app: 'Editor', observed_at: observedStart.replace(/Z$/, '+00:00')}, {app: 'Browser', observed_at: observedEnd}];}],
+    ['legacy examples without timestamps', d => {d.redacted_examples = [{app: 'Editor'}];}],
+    ['health-only without focus examples', d => {d.event_types = {capture_gap: 2}; d.redacted_examples = [];}]
+  ];
+  for (const [name, mutate] of cases) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const open = h.bars[0].controls.button.onclick(); await settle();
+    const d = h.preview('range', 'reviewed'); mutate(d);
+    h.reply(h.reads[1], d); await open;
+    assert.equal(h.modals, 1);
+    await h.modal['#analysisCopy'].onclick();
+    if (name === 'health-only without focus examples')
+      assertCopyEvidenceWarning(h.copied, 'request-reviewed', true);
+    else assert.deepEqual(h.copied, ['request-reviewed']);
+    assert.equal(h.tickets.length, 0);
+  });
+});
+
+
+
+test('redacted focus samples distinguish observed instants from missing provenance time', async t => {
+  for (const {name, sample, expectedTime} of [
+    {
+      name: 'explicit UTC observation',
+      sample: {app: 'Editor', window_title: 'Case', observed_at: observedStart},
+      expectedTime: observedStart
+    },
+    {
+      name: 'UTC-equivalent offset retains its original spelling',
+      sample: {app: 'Editor', window_title: 'Case',
+        observed_at: observedStart.replace(/Z$/, '+00:00')},
+      expectedTime: observedStart.replace(/Z$/, '+00:00')
+    },
+    {
+      name: 'legacy sample without timestamp',
+      sample: {app: 'Editor', window_title: 'Case'},
+      expectedTime: null
+    },
+    {
+      name: 'explicit null timestamp',
+      sample: {app: 'Editor', window_title: 'Case', observed_at: null},
+      expectedTime: null
+    }
+  ]) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], {...h.preview('range', 'sample-provenance'),
+      redacted_examples: [sample]});
+    await opening;
+    assert.equal(h.modals, 1);
+    if (expectedTime) {
+      assert.ok(h.modalHtml.includes('<time datetime="' + expectedTime + '">' +
+        expectedTime + '</time>'), 'show validated original offset-aware instant');
+      assert.match(h.modalHtml, /observed at <time datetime=/);
+      assert.doesNotMatch(h.modalHtml, /observation time not supplied/);
+    } else {
+      assert.match(h.modalHtml, /observation time not supplied/);
+      assert.doesNotMatch(h.modalHtml, /observed at <time datetime=/);
+    }
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-sample-provenance']);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+  });
+});
+
+test('zero selected events cannot claim an observed first/last span', async t => {
+  for (const retained of [0, 2]) await t.test('retained=' + retained, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const open = h.bars[0].controls.button.onclick();
+    await settle(); h.reply(h.reads[1], {...h.preview('range', 'false-observation'),
+      canonical_rows: 0, retained_rows: retained, event_types: {}, sources: {},
+      redacted_examples: [], analysis_plan: {date_chunks: []},
+      // A zero-row SQL selection cannot have first/last observed rows.
+      first_observed_at: observedStart, last_observed_at: observedEnd,
+      work_evidence: {ordinary_event_rows: 0, health_event_rows: 0,
+        last_work_observed_at: null}});
+    await open;
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+  });
+});
+
+test('health-only evidence cannot claim a latest ordinary work event', async t => {
+  for (const counts of ['explicit', 'legacy-omitted']) await t.test(counts, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const open = h.bars[0].controls.button.onclick();
+    await settle(); h.reply(h.reads[1], {...h.preview('range', 'false-work'),
+      event_types: {capture_gap: 1, capture_health: 1},
+      work_evidence: counts === 'explicit'
+        ? {ordinary_event_rows: 0, health_event_rows: 2,
+          last_work_observed_at: observedStart}
+        : {last_work_observed_at: observedStart}});
+    await open;
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+  });
+});
+
+test('health-only evidence with unknown work timestamp remains reviewable', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], {...h.preview('range', 'health-only'),
+    event_types: {capture_gap: 1, capture_health: 1},
+    work_evidence: {ordinary_event_rows: 0, health_event_rows: 2,
+      last_work_observed_at: null, recorder_liveness_verified: false}});
+  await open;
+  assert.equal(h.modals, 1);
+  await h.modal['#analysisCopy'].onclick();
+  assertCopyEvidenceWarning(h.copied, 'request-health-only', true);
+  assert.equal(h.tickets.length, 0);
+});
+
+test('ordinary events may lack a latest work timestamp for excluded apps', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], {...h.preview('range', 'excluded'),
+    work_evidence: {ordinary_event_rows: 2, health_event_rows: 0,
+      last_work_observed_at: null, recorder_liveness_verified: false}});
+  await open;
+  assert.equal(h.modals, 1);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-excluded']);
+  assert.equal(h.tickets.length, 0);
+});
+
+test('daily evidence plan rejects disjoint fragments of the same UTC day', async t => {
+  const first = Date.parse(observedStart);
+  const earlier = {since: utc(first - 60_000), until: utc(first + 30_000), event_rows: 1};
+  const later = {since: utc(first + 30_000), until: utc(first + 120_000), event_rows: 1};
+  const cases = [
+    ['two non-overlapping pieces of the same UTC day', [earlier, later]],
+    ['same-day split with an equivalent UTC-offset boundary', [
+      earlier, {...later, since: asOffset(first + 30_000, 2),
+        until: asOffset(first + 120_000, 2)}]],
+    ['zero-row fragment still cannot create a second daily step', [
+      {...earlier, event_rows: 2}, {...later, event_rows: 0}]]
+  ];
+  for (const [name, chunks] of cases) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], {...h.preview('range', 'split-utc-day'),
+      analysis_plan: {date_chunks: chunks, more_dates_not_listed: false}});
+    await opening;
+    assert.equal(h.modals, 0, name);
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+  });
+});
+
+test('handoff date plan refuses more than 31 displayed UTC days without truncating silently', async t => {
+  // Use actual distinct UTC days over all retained history. A plan with 31
+  // one-second fragments of one day would contradict the server contract.
+  for (const [name, rows, accepted] of [
+    ['31 distinct UTC days is the maximum supported plan', 31, true],
+    ['32 distinct UTC days is not a trustworthy server preview', 32, false]
+  ]) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    h.bars[0].controls.select.value = 'all';
+    h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+    await settle(); h.reply(h.reads[1], h.preview('all', 'selected-all')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    const day = 86400_000;
+    const lastDay = Math.floor(Date.parse(observedStart) / day) * day;
+    const firstDay = lastDay - (rows - 1) * day;
+    const d = h.preview('all', 'bounded-date-plan');
+    d.canonical_rows = rows;
+    d.retained_rows = rows;
+    d.first_observed_at = utc(firstDay + 3600_000);
+    d.last_observed_at = utc(lastDay + 3600_000);
+    d.event_types = {focus_span: rows};
+    d.sources = {desktop: rows};
+    d.analysis_plan = {
+      date_chunks: Array.from({length: rows}, (_, i) => ({
+        since: utc(firstDay + i * day),
+        until: utc(firstDay + (i + 1) * day),
+        event_rows: 1
+      })),
+      more_dates_not_listed: false
+    };
+    h.reply(h.reads[2], d);
+    await opening;
+    assert.equal(h.modals, accepted ? 1 : 0);
+    assert.equal(h.tickets.length, 0);
+    if (accepted) {
+      await h.modal['#analysisCopy'].onclick();
+      assert.deepEqual(h.copied, ['request-bounded-date-plan']);
+    } else {
+      assert.deepEqual(h.copied, []);
+      assert.match(h.summary.textContent, /incomplete or malformed/i);
+      assert.equal(h.toasts.length, 1);
+    }
+  });
+});
+
+test('handoff refuses unsupported completeness and contradictory omission claims', async t => {
+  const selectedDay = {since: dayLabel(0), until: dayLabel(1), event_rows: 2};
+  const partialDay = {since: dayLabel(0), until: dayLabel(1), event_rows: 1};
+  const cases = [
+    ['unverified complete-history assertion', d => {d.analysis_plan = {
+      date_chunks: [], complete_history_claimed: true};}, false],
+    ['string false is not a verified boolean', d => {d.analysis_plan = {
+      date_chunks: [], complete_history_claimed: 'false'};}, false],
+    ['omission flag with all selected rows listed', d => {d.analysis_plan = {
+      date_chunks: [selectedDay], more_dates_not_listed: true,
+      complete_history_claimed: false};}, false],
+    ['omission flag without a listed plan', d => {d.analysis_plan = {
+      more_dates_not_listed: true, complete_history_claimed: false};}, false],
+    ['one-day plan cannot claim 31-date truncation', d => {d.analysis_plan = {
+      date_chunks: [partialDay], more_dates_not_listed: true,
+      complete_history_claimed: false};}, false],
+    ['explicitly complete listing cannot omit selected rows', d => {d.analysis_plan = {
+      date_chunks: [partialDay], more_dates_not_listed: false,
+      complete_history_claimed: false};}, false],
+    ['legacy partial listing without coverage flag remains reviewable', d => {d.analysis_plan = {
+      date_chunks: [partialDay], complete_history_claimed: false};}, true],
+    ['legacy absent coverage flags', d => {d.analysis_plan = {
+      date_chunks: [selectedDay]};}, true],
+    ['explicitly unverified full listed plan', d => {d.analysis_plan = {
+      date_chunks: [selectedDay], more_dates_not_listed: false,
+      complete_history_claimed: false};}, true]
+  ];
+  for (const [name, mutate, accepted] of cases) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    const d = h.preview('range', 'coverage-flags'); mutate(d);
+    h.reply(h.reads[1], d); await opening;
+    assert.equal(h.modals, accepted ? 1 : 0);
+    assert.equal(h.tickets.length, 0);
+    if (accepted) {
+      await h.modal['#analysisCopy'].onclick();
+      assert.deepEqual(h.copied, ['request-coverage-flags']);
+    } else {
+      assert.deepEqual(h.copied, []);
+      assert.match(h.summary.textContent, /incomplete or malformed/i);
+      assert.equal(h.toasts.length, 1);
+    }
+  });
+});
+
+
+test('selected-range AI history grant shows exact bounds, expiry and export distinction', async () => {
+  const futureExpiry = new Date(Date.now() + 24 * 3600_000).toISOString();
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle();
+  h.reply(h.reads[1], {...h.preview('range', 'selected-grant'),
+    local_ai_enabled: true,
+    local_ai_history_access: {mode: 'selected_range',
+      since: '2026-10-20T00:00:00Z', until: '2026-10-25T00:00:00+00:00',
+      expires_at: futureExpiry}});
+  await open;
+  assert.equal(h.modals, 1);
+  assert.match(h.modalHtml, /Local saved-history grant: 2026-10-20T00:00:00\.000Z to 2026-10-25T00:00:00\.000Z/);
+  assert.match(h.modalHtml, /end exclusive; snapshot only, may not cover this selected work period/);
+  assert.ok(h.modalHtml.includes('Grant expiry: ' + futureExpiry));
+  assert.match(h.modalHtml, /Preparing or downloading a local file does not grant AI history access/);
+  assert.match(h.modalHtml, /Name redaction is best effort, not anonymization/);
+  assert.match(h.modalHtml, /detailed chronology adds raw local evidence/);
+  h.modal['#analysisDetailed'].checked = true;
+  h.modal['#analysisDetailed'].onchange();
+  h.modal['#analysisReviewedDetailed'].checked = true;
+  const downloading = h.modal['#analysisDownload'].onclick();
+  await settle();
+  assert.equal(JSON.parse(h.tickets[0].options.body).include_raw, true);
+  h.reply(h.tickets[0], {});
+  await downloading;
+  assert.equal(h.downloads, 1);
+});
+
+test('selected AI history grant retains microsecond UTC bounds instead of hiding a valid short lease', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const open = h.bars[0].controls.button.onclick();
+  await settle();
+  h.reply(h.reads[1], {...h.preview('range', 'precise-grant'),
+    local_ai_enabled: true,
+    local_ai_history_access: {mode: 'selected_range',
+      since: '2026-10-20T00:00:00.000001Z',
+      until: '2026-10-20T02:00:00.000002+02:00',
+      expires_at: new Date(Date.now() + 86400_000).toISOString()}});
+  await open;
+  assert.equal(h.modals, 1);
+  assert.ok(h.modalHtml.includes(
+    'Local saved-history grant: 2026-10-20T00:00:00.000001Z to 2026-10-20T00:00:00.000002Z'));
+  assert.match(h.modalHtml, /snapshot only, may not cover this selected work period/);
+  assert.match(h.modalHtml, /Preparing or downloading a local file does not grant AI history access/);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-precise-grant']);
+  assert.equal(h.tickets.length, 0);
+  assert.equal(h.downloads, 0);
+});
+
+test('AI grant expiry uses full fractional precision against the local clock', async t => {
+  const localNow = new Date(fixtureDay.getFullYear(), fixtureDay.getMonth(),
+    fixtureDay.getDate(), 23, 59, 0).toISOString();
+  const futureByMicrosecond = localNow.replace(/\.000Z$/, '.000001Z');
+  for (const [name, expiry, valid] of [
+    ['one microsecond ahead', futureByMicrosecond, true],
+    ['equal to current millisecond', localNow, false],
+    ['invalid rollover', localNow.replace(/T[0-9]{2}:/, 'T24:'), false]
+  ]) await t.test(name, async () => {
+    const h = harness(Promise.resolve(true), null, adjustableClock().Date);
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const open = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], {...h.preview('range', 'expiry-check'),
+      local_ai_enabled: true,
+      local_ai_history_access: {mode: 'all_saved', expires_at: expiry}});
+    await open;
+    assert.equal(h.modals, 1);
+    if (valid) {
+      assert.match(h.modalHtml, /Local saved-history grant: all saved work/);
+      assert.ok(h.modalHtml.includes('Grant expiry: ' + futureByMicrosecond));
+    } else {
+      assert.match(h.modalHtml, /permission could not be verified from this preview/);
+      assert.doesNotMatch(h.modalHtml, /Local saved-history grant:/);
+    }
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-expiry-check']);
+    assert.equal(h.tickets.length, 0);
+  });
+});
+
+test('AI grant disclosure fails conservatively for malformed or unrecognized lease metadata', async t => {
+  const cases = [
+    ['invalid selected start', true, {mode:'selected_range',
+      since:'2026-02-30T00:00:00Z', until:'2026-03-10T00:00:00Z'}],
+    ['reversed selected bounds', true, {mode:'selected_range',
+      since:'2026-10-25T00:00:00Z', until:'2026-10-20T00:00:00Z'}],
+    ['invalid expiry', true, {mode:'all_saved', expires_at:'not-a-date'}],
+    ['expired grant', true, {mode:'all_saved', expires_at:'2001-01-01T00:00:00Z'}],
+    ['unrecognized grant', true, {mode:'<img src=x onerror=alert(1)>'}],
+    ['non-boolean enabled flag', 'false', {mode:'all_saved'}],
+    ['missing grant', true, undefined]
+  ];
+  for(const [name, enabled, access] of cases) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const open = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], {...h.preview('range', 'unknown'),
+      local_ai_enabled: enabled, local_ai_history_access: access});
+    await open;
+    assert.equal(h.modals, 1);
+    assert.match(h.modalHtml, /permission could not be verified from this preview/);
+    assert.doesNotMatch(h.modalHtml, /Local saved-history grant:/);
+    assert.doesNotMatch(h.modalHtml, /<img src=x onerror/);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-unknown']);
+    assert.equal(h.tickets.length, 0);
+  });
+});
+
+test('off and all-saved AI modes remain distinguishable from local file exports', async t => {
+  for(const [name, enabled, access, expected] of [
+    ['disabled AI', false, {mode:'all_saved'}, /Local AI access is off/],
+    ['saved access off', true, {mode:'off'}, /saved-history access is off/],
+    ['all saved', true, {mode:'all_saved'}, /all saved work \(snapshot only/]
+  ]) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const open = h.bars[0].controls.button.onclick();
+    await settle(); h.reply(h.reads[1], {...h.preview('range', 'mode'),
+      local_ai_enabled: enabled, local_ai_history_access: access}); await open;
+    assert.match(h.modalHtml, expected);
+    assert.match(h.modalHtml, /Preparing or downloading a local file does not grant AI history access/);
+    assert.equal(h.modals, 1);
+  });
+});
+
+test('date-plan chunks must fit one UTC calendar day, including offset and clipped cases', async t => {
+  const today = dayLabel(0), yesterday = dayLabel(-1), tomorrow = dayLabel(1);
+  const ordinaryFirst = today + 'T10:00:00Z', ordinaryLast = today + 'T10:01:00Z';
+  const cases = [
+    ['two-day span falsely presented as one daily chunk',
+      {since: yesterday, until: tomorrow, event_rows: 2},
+      ordinaryFirst, ordinaryLast, false],
+    ['short chunk crossing UTC midnight despite being under 24 hours',
+      {since: yesterday + 'T23:30:00Z', until: today + 'T00:30:00Z', event_rows: 2},
+      yesterday + 'T23:45:00Z', today + 'T00:15:00Z', false],
+    ['clipped same-day chunk with UTC-equivalent offsets',
+      {since: asOffset(Date.parse(today + 'T09:00:00Z'), 2),
+        until: asOffset(Date.parse(today + 'T11:00:00Z'), 2), event_rows: 2},
+      ordinaryFirst, ordinaryLast, true],
+    ['one-day chunk ending exactly at next UTC midnight',
+      {since: yesterday + 'T23:59:00Z', until: today + 'T00:00:00Z', event_rows: 2},
+      yesterday + 'T23:59:20Z', yesterday + 'T23:59:50Z', true]
+  ];
+  for (const [name, chunk, first, last, accepted] of cases) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], {...h.preview('range', 'daily-plan'),
+      first_observed_at: first, last_observed_at: last,
+      analysis_plan: {page_size: 200, chunks_respect_selected_window: true,
+        date_chunks: [chunk], complete_history_claimed: false}});
+    await opening;
+    assert.equal(h.modals, accepted ? 1 : 0, name);
+    if (accepted) {
+      await h.modal['#analysisCopy'].onclick();
+      assert.deepEqual(h.copied, ['request-daily-plan']);
+    } else {
+      assert.equal(h.tickets.length, 0);
+      assert.deepEqual(h.copied, []);
+      assert.match(h.summary.textContent, /incomplete or malformed/i);
+    }
+  });
+});
+
+test('optional date-plan provenance metadata fails closed on contradictions', async t => {
+  const cases = [
+    ['zero page size', {page_size: 0}, false],
+    ['negative page size', {page_size: -1}, false],
+    ['fractional page size', {page_size: 1.5}, false],
+    ['boolean page size', {page_size: true}, false],
+    ['string page size', {page_size: '200'}, false],
+    ['unsafe page size', {page_size: Number.MAX_SAFE_INTEGER + 1}, false],
+    ['explicit false window-respect claim', {chunks_respect_selected_window: false}, false],
+    ['string true window-respect claim', {chunks_respect_selected_window: 'true'}, false],
+    ['valid backend plan metadata', {page_size: 200, chunks_respect_selected_window: true}, true],
+    ['legacy absent metadata', {}, true]
+  ];
+  for (const [name, metadata, accepted] of cases) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], {...h.preview('range', 'plan-metadata'),
+      analysis_plan: {date_chunks: [], complete_history_claimed: false, ...metadata}});
+    await opening;
+    assert.equal(h.modals, accepted ? 1 : 0, name);
+    if (accepted) {
+      await h.modal['#analysisCopy'].onclick();
+      assert.deepEqual(h.copied, ['request-plan-metadata']);
+    } else {
+      assert.equal(h.tickets.length, 0);
+      assert.deepEqual(h.copied, []);
+      assert.match(h.summary.textContent, /incomplete or malformed/i);
+    }
+  });
+});
+
+test('contradictory work-text disclosure refuses a handoff before copy or export', async t => {
+  const invalid = [
+    ['text explicitly included', {included_in_activity_package: true}],
+    ['string false is not a verified exclusion', {included_in_activity_package: 'false'}],
+    ['numeric inclusion is not a verified exclusion', {included_in_activity_package: 0}],
+    ['malformed capture consent flag', {included_in_activity_package: false,
+      local_capture_enabled: 'false'}],
+    ['non-object work-text metadata', []],
+    ['string work-text metadata', 'excluded']
+  ];
+  for (const [name, work_text] of invalid) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle(); h.reply(h.reads[1], {...h.preview('range', 'contradictory'),
+      work_text});
+    await opening;
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+  });
+});
+
+test('explicitly excluded work text preserves accurate privacy notice and safe copy', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const opening = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], {...h.preview('range', 'text-excluded'),
+    work_text: {included_in_activity_package: false, local_capture_enabled: true}});
+  await opening;
+  assert.equal(h.modals, 1);
+  assert.match(h.modalHtml, /Visible work text is not included in this activity package/);
+  assert.doesNotMatch(h.modalHtml, /does not confirm that visible work text/);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-text-excluded']);
+  assert.equal(h.tickets.length, 0);
+});
+
+test('legacy or unknown work-text exclusion is disclosed as uncertain, not verified', async t => {
+  const variants = [
+    ['missing legacy metadata', undefined],
+    ['legacy empty object', {}],
+    ['unknown inclusion value', {included_in_activity_package: null}],
+    ['null legacy metadata', null]
+  ];
+  for (const [name, work_text] of variants) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle(); h.reply(h.reads[1], {...h.preview('range', 'text-unknown'),
+      work_text});
+    await opening;
+    assert.equal(h.modals, 1);
+    assert.match(h.modalHtml, /does not confirm that visible work text, typed values or clipboard contents are excluded/);
+    assert.doesNotMatch(h.modalHtml, /Visible work text is not included in this activity package/);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-text-unknown']);
+    assert.equal(h.tickets.length, 0);
+  });
+});
+
+
+// Date.parse accepts T24:00:00 and silently shifts the date. This helper
+// isolates the response validation from the local-week selection boundary.
+async function openAllRetainedPreview(mutate) {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  h.bars[0].controls.select.value = 'all';
+  h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+  await settle(); h.reply(h.reads[1], h.preview('all', 'all-selected')); await settle();
+  const opening = h.bars[0].controls.button.onclick();
+  await settle();
+  h.reply(h.reads[2], mutate(h.preview('all', 'rollover')));
+  await opening;
+  return h;
+}
+
+test('ISO rollover hour is refused for observed evidence and UTC daily plan', async t => {
+  const today = dayLabel(0), tomorrow = dayLabel(1);
+  const cases = [
+    ['observed last timestamp rolls into next UTC day', d => ({
+      ...d, last_observed_at: today + 'T24:00:00Z'
+    })],
+    ['daily chunk start rolls into next UTC day', d => ({
+      ...d,
+      first_observed_at: tomorrow + 'T00:30:00Z',
+      last_observed_at: tomorrow + 'T00:45:00Z',
+      analysis_plan: {date_chunks: [{
+        since: today + 'T24:00:00Z', until: tomorrow + 'T01:00:00Z',
+        event_rows: 2
+      }]}
+    })]
+  ];
+  for (const [name, mutate] of cases) await t.test(name, async () => {
+    const h = await openAllRetainedPreview(mutate);
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+  });
+});
+
+test('rollover clock in an AI history lease never becomes an affirmative grant', async () => {
+  const h = await openAllRetainedPreview(d => ({
+    ...d, local_ai_enabled: true,
+    local_ai_history_access: {mode: 'all_saved', expires_at: '2099-01-01T24:00:00Z'}
+  }));
+  assert.equal(h.modals, 1);
+  assert.match(h.modalHtml, /permission could not be verified from this preview/);
+  assert.doesNotMatch(h.modalHtml, /Local saved-history grant:/);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-rollover']);
+  assert.equal(h.tickets.length, 0);
+});
+
+test('ticket bound with equivalent parsed instant but rollover hour is rejected', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const opening = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await opening;
+  const downloading = h.modal['#analysisDownload'].onclick();
+  await settle();
+  const body = JSON.parse(h.tickets[0].options.body);
+  const selected = new Date(body.since);
+  const eastMinutes = -selected.getTimezoneOffset();
+  const sign = eastMinutes >= 0 ? '+' : '-';
+  const magnitude = Math.abs(eastMinutes);
+  const offset = sign + String(Math.floor(magnitude / 60)).padStart(2, '0') +
+    ':' + String(magnitude % 60).padStart(2, '0');
+  const priorDate = new Date(+selected + eastMinutes * 60000 - 86400000)
+    .toISOString().slice(0, 10);
+  const rollover = priorDate + 'T24:00:00' + offset;
+  // Demonstrates the bypass that existed with Date.parse-only comparison.
+  assert.equal(Date.parse(rollover), Date.parse(body.since));
+  const params = new URLSearchParams({scope: body.scope,
+    include_raw: String(body.include_raw), redact_names: String(body.redact_names),
+    ticket: 'synthetic-ticket', since: rollover, until: body.until});
+  h.reply(h.tickets[0], {ticket: 'synthetic-ticket',
+    url: '/v1/export/csvzip?' + params}, {preserveTicket: true});
+  await downloading;
+  assert.equal(h.downloads, 0);
+  assert.equal(h.modal['#analysisDownload'].disabled, false);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /ticket did not match/i);
+});
+
+
+test('ticket impossible calendar day cannot alias a selected valid custom date', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  h.bars[0].controls.select.value = 'custom';
+  h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+  await settle();
+  const observed = {...h.preview('range', 'custom'),
+    first_observed_at: '2026-03-02T12:00:00Z',
+    last_observed_at: '2026-03-02T12:01:00Z'};
+  h.reply(h.reads.at(-1), observed); await settle();
+  h.bars[0].controls.start.value = '2026-03-02';
+  h.bars[0].controls.end.value = '2026-03-02';
+  h.bars[0].controls.start.onchange();
+  await settle(); h.reply(h.reads.at(-1), observed); await settle();
+  const opening = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads.at(-1), observed); await opening;
+  assert.equal(h.modals, 1);
+  const downloading = h.modal['#analysisDownload'].onclick();
+  await settle();
+  const body = JSON.parse(h.tickets[0].options.body);
+  const selected = new Date(body.since);
+  const eastMinutes = -selected.getTimezoneOffset();
+  const sign = eastMinutes >= 0 ? '+' : '-';
+  const magnitude = Math.abs(eastMinutes);
+  const offset = sign + String(Math.floor(magnitude / 60)).padStart(2, '0') +
+    ':' + String(magnitude % 60).padStart(2, '0');
+  const impossible = '2026-02-30T00:00:00' + offset;
+  assert.equal(Date.parse(impossible), Date.parse(body.since));
+  const params = new URLSearchParams({scope: body.scope,
+    include_raw: String(body.include_raw), redact_names: String(body.redact_names),
+    ticket: 'synthetic-ticket', since: impossible, until: body.until});
+  h.reply(h.tickets[0], {ticket: 'synthetic-ticket',
+    url: '/v1/export/csvzip?' + params}, {preserveTicket: true});
+  await downloading;
+  assert.equal(h.downloads, 0);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /ticket did not match/i);
+});
+
+
+test('explicit daily-plan endpoints must include observed evidence, not merely conserve counts', async t => {
+  const firstDay = dayLabel(-40);
+  const listedFirstDay = dayLabel(-39);
+  const lastDay = dayLabel(-7);
+  const chunks = Array.from({length: 31}, (_, i) => ({
+    since: dayLabel(-39 + i), until: dayLabel(-38 + i), event_rows: 1
+  }));
+  // The server lists the first 31 distinct UTC dates. An otherwise plausible
+  // 31-row page must not silently omit the earliest selected date.
+  for (const [name, first, accepted] of [
+    ['first selected day omitted despite 31 chunks', firstDay + 'T12:00:00Z', false],
+    ['first selected day included; 32nd date is genuinely unlisted',
+      listedFirstDay + 'T12:00:00Z', true]
+  ]) await t.test(name, async () => {
+    const h = await openAllRetainedPreview(d => ({
+      ...d, canonical_rows: 32, retained_rows: 32,
+      first_observed_at: first, last_observed_at: lastDay + 'T12:00:00Z',
+      event_types: {focus_span: 32}, sources: {desktop: 32},
+      analysis_plan: {date_chunks: chunks, more_dates_not_listed: true}
+    }));
+    assert.equal(h.modals, accepted ? 1 : 0, name);
+    assert.equal(h.tickets.length, 0);
+    if (accepted) {
+      await h.modal['#analysisCopy'].onclick();
+      assert.deepEqual(h.copied, ['request-rollover']);
+    } else {
+      assert.deepEqual(h.copied, []);
+      assert.match(h.summary.textContent, /incomplete or malformed/i);
+    }
+  });
+
+  const completeChunks = [
+    {since: dayLabel(-4), until: dayLabel(-3), event_rows: 1},
+    {since: dayLabel(-3), until: dayLabel(-2), event_rows: 1}
+  ];
+  for (const [name, last, flag, accepted] of [
+    ['explicit full plan omits the latest selected date',
+      dayLabel(-1) + 'T12:00:00Z', false, false],
+    ['explicit full plan includes the latest observed date',
+      dayLabel(-3) + 'T12:00:00Z', false, true],
+    ['legacy plan with absent coverage flag remains unverified but reviewable',
+      dayLabel(-1) + 'T12:00:00Z', undefined, true]
+  ]) await t.test(name, async () => {
+    const h = await openAllRetainedPreview(d => ({
+      ...d, first_observed_at: dayLabel(-4) + 'T12:00:00Z',
+      last_observed_at: last,
+      analysis_plan: {date_chunks: completeChunks,
+        ...(flag === undefined ? {} : {more_dates_not_listed: flag})}
+    }));
+    assert.equal(h.modals, accepted ? 1 : 0, name);
+    assert.equal(h.tickets.length, 0);
+    if (accepted) {
+      await h.modal['#analysisCopy'].onclick();
+      assert.deepEqual(h.copied, ['request-rollover']);
+    } else {
+      assert.deepEqual(h.copied, []);
+      assert.match(h.summary.textContent, /incomplete or malformed/i);
+    }
+  });
+});
+
+
+test('explicit daily coverage refuses invented empty dates without breaking legacy previews', async t => {
+  const day = 86400_000;
+  const base = Date.parse('2026-01-01T00:00:00Z');
+  const first = utc(base + 3600_000);
+  const second = utc(base + day + 3600_000);
+  const twoDays = [
+    {since: utc(base), until: utc(base + day), event_rows: 0},
+    {since: utc(base + day), until: utc(base + 2 * day), event_rows: 2}
+  ];
+  const clipped = Array.from({length: 31}, (_, i) => ({
+    since: utc(base + i * day),
+    until: utc(base + (i + 1) * day),
+    event_rows: i === 1 ? 0 : i === 2 ? 2 : 1
+  }));
+  const cases = [
+    ['explicit complete plan with fabricated empty first date', {
+      canonical_rows: 2, retained_rows: 2, first_observed_at: first,
+      last_observed_at: second, event_types: {focus_span: 2},
+      sources: {desktop: 2},
+      analysis_plan: {date_chunks: twoDays, more_dates_not_listed: false}
+    }, false],
+    ['explicit truncated plan with fabricated empty interior date', {
+      canonical_rows: 32, retained_rows: 32, first_observed_at: first,
+      last_observed_at: utc(base + 31 * day + 3600_000),
+      event_types: {focus_span: 32}, sources: {desktop: 32},
+      analysis_plan: {date_chunks: clipped, more_dates_not_listed: true}
+    }, false],
+    ['explicit zero-event plan cannot fabricate an empty date', {
+      canonical_rows: 0, retained_rows: 2, first_observed_at: null,
+      last_observed_at: null, event_types: {}, sources: {},
+      analysis_plan: {date_chunks: [twoDays[0]], more_dates_not_listed: false}
+    }, false],
+    ['legacy partial plan may retain an empty date without a coverage claim', {
+      canonical_rows: 2, retained_rows: 2, first_observed_at: first,
+      last_observed_at: second, event_types: {focus_span: 2},
+      sources: {desktop: 2}, analysis_plan: {date_chunks: twoDays}
+    }, true],
+    ['explicit complete positive-count date remains valid', {
+      canonical_rows: 2, retained_rows: 2, first_observed_at: first,
+      last_observed_at: utc(base + 2 * 3600_000),
+      event_types: {focus_span: 2}, sources: {desktop: 2},
+      analysis_plan: {date_chunks: [
+        {since: utc(base), until: utc(base + day), event_rows: 2}
+      ], more_dates_not_listed: false}
+    }, true],
+    ['explicit zero-event empty plan remains copy-only', {
+      canonical_rows: 0, retained_rows: 2, first_observed_at: null,
+      last_observed_at: null, event_types: {}, sources: {},
+      analysis_plan: {date_chunks: [], more_dates_not_listed: false}
+    }, true]
+  ];
+  for (const [name, variant, accepted] of cases) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    h.bars[0].controls.select.value = 'all';
+    h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+    await settle(); h.reply(h.reads[1], h.preview('all', 'all-selected')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[2], {...h.preview('all', 'daily-coverage'), ...variant});
+    await opening;
+    assert.equal(h.modals, accepted ? 1 : 0, name);
+    assert.equal(h.tickets.length, 0, name);
+    if (accepted) {
+      await h.modal['#analysisCopy'].onclick();
+      if (variant.canonical_rows === 0)
+        assertCopyEvidenceWarning(h.copied, 'request-daily-coverage');
+      else assert.deepEqual(h.copied, ['request-daily-coverage']);
+      assert.equal(h.modal['#analysisDownload'].disabled, variant.canonical_rows === 0);
+    } else {
+      assert.deepEqual(h.copied, []);
+      assert.match(h.summary.textContent, /incomplete or malformed/i);
+    }
+  });
+});
+
+
+test('handoff labels current-run and all-history scope without conflating them', async t => {
+  const oneMinuteBeforeObserved = new Date(Date.parse(observedStart) - 60_000).toISOString();
+  const variants = [
+    {name: 'current run without start metadata', scope: 'current',
+      expected: /Current recorder run \(start not supplied by preview\)/,
+      forbidden: /all available history|All retained history/},
+    {name: 'current run with explicit recorder start', scope: 'current',
+      since: oneMinuteBeforeObserved,
+      expected: /Current recorder run \(from /,
+      forbidden: /all available history|All retained history/},
+    {name: 'all retained history', scope: 'all',
+      expected: /All retained history \(unbounded date selection\)/,
+      forbidden: /Current recorder run/}
+  ];
+  for (const variant of variants) await t.test(variant.name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const select = h.bars[0].controls.select;
+    select.value = variant.scope;
+    select.onchange({target: select});
+    await settle();
+    const data = {...h.preview(variant.scope, 'reviewed'),
+      ...(variant.since ? {window: {scope: variant.scope, since: variant.since}} : {})};
+    const preserveWindow = !!variant.since;
+    h.reply(h.reads[1], data, {preserveWindow});
+    await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[2], data, {preserveWindow});
+    await opening;
+    assert.equal(h.modals, 1);
+    assert.match(h.modalHtml, variant.expected);
+    assert.doesNotMatch(h.modalHtml, variant.forbidden);
+    if (variant.since) assert.match(h.modalHtml, new RegExp(variant.since.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-reviewed']);
+    assert.equal(h.tickets.length, 0);
+  });
+});
+
+test('missing daily plan and empty daily list are labelled as unknown, not zero evidence', async t => {
+  const variants = [
+    {name: 'absent daily plan', plan: undefined,
+      expected: /No daily breakdown was provided; date coverage is unknown/},
+    {name: 'empty daily plan', plan: {date_chunks: []},
+      expected: /No daily chunks were listed; this does not prove complete recording or zero events/}
+  ];
+  for (const variant of variants) await t.test(variant.name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], {...h.preview('range', 'two-observed-events'),
+      analysis_plan: variant.plan});
+    await opening;
+    assert.equal(h.modals, 1);
+    assert.match(h.modalHtml, variant.expected);
+    assert.match(h.modalHtml, /2 recorded events/);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-two-observed-events']);
+    assert.equal(h.tickets.length, 0);
+  });
+});
+
+test('latest-work disclosure distinguishes known, missing and health-only evidence', async t => {
+  const cases = [
+    {name: 'known latest work timestamp', patch: {
+      work_evidence: {ordinary_event_rows: 2, health_event_rows: 0,
+        last_work_observed_at: observedStart}},
+    expected: /Latest work event: /, forbidden: /timestamp not supplied|No ordinary work events recorded/},
+    {name: 'ordinary events but missing timestamp', patch: {
+      work_evidence: {ordinary_event_rows: 2, health_event_rows: 0,
+        last_work_observed_at: null}},
+    expected: /Latest work event timestamp not supplied \(2 ordinary selected events\); this does not imply no work occurred/,
+    forbidden: /Latest work event: none in this period|No ordinary work events recorded/},
+    {name: 'legacy preview omits work metadata', patch: {work_evidence: undefined},
+    expected: /Latest work event timestamp not supplied \(2 ordinary selected events\)/,
+    forbidden: /Latest work event: none in this period|No ordinary work events recorded/},
+    {name: 'health-only selected evidence', patch: {
+      event_types: {capture_gap: 1, capture_health: 1},
+      work_evidence: {ordinary_event_rows: 0, health_event_rows: 2,
+        last_work_observed_at: null}},
+    expected: /No ordinary work events recorded in this selection; this does not establish that no work occurred/,
+    forbidden: /Latest work event: none in this period|timestamp not supplied/},
+    {name: 'zero selected events', patch: {
+      canonical_rows: 0, retained_rows: 2,
+      first_observed_at: null, last_observed_at: null,
+      event_types: {}, sources: {},
+      work_evidence: {ordinary_event_rows: 0, health_event_rows: 0,
+        last_work_observed_at: null}},
+    expected: /No ordinary work events recorded in this selection; this does not establish that no work occurred/,
+    forbidden: /Latest work event: none in this period|timestamp not supplied/}
+  ];
+  for (const {name, patch, expected, forbidden} of cases) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle(); h.reply(h.reads[1], {...h.preview('range', name), ...patch});
+    await opening;
+    assert.equal(h.modals, 1, name);
+    assert.match(h.modalHtml, expected, name);
+    assert.doesNotMatch(h.modalHtml, forbidden, name);
+    assert.match(h.modalHtml, /do not confirm the recorder is running/, name);
+    assert.equal(h.modal['#analysisDownload'].disabled, patch.canonical_rows === 0, name);
+    await h.modal['#analysisCopy'].onclick();
+    if (name === 'health-only selected evidence' || name === 'zero selected events')
+      assertCopyEvidenceWarning(h.copied, 'request-' + name,
+        name === 'health-only selected evidence');
+    else assert.deepEqual(h.copied, ['request-' + name], name);
+    assert.equal(h.tickets.length, 0, name);
+  });
+});
+
+test('zero recorded events never become a claim of inactivity or recorder consent', async t => {
+  const cases = [
+    {name: 'selected period empty while retained history exists', retained: 2,
+      expected: /No events recorded in this selection\. Other retained evidence exists; inactivity and capture completeness are unverified/},
+    {name: 'no retained events reported', retained: 0,
+      expected: /No retained events reported\. Recording and consent status are unverified; this does not establish inactivity/}
+  ];
+  for (const {name, retained, expected} of cases) await t.test(name, async () => {
+    const h = harness();
+    const empty = {
+      ...h.preview('range', name),
+      canonical_rows: 0, retained_rows: retained,
+      first_observed_at: null, last_observed_at: null,
+      event_types: {}, sources: {}, redacted_examples: [],
+      analysis_plan: {date_chunks: []},
+      work_evidence: {ordinary_event_rows: 0, health_event_rows: 0,
+        last_work_observed_at: null}
+    };
+    await settle();
+    h.reply(h.reads[0], empty);
+    await settle();
+    assert.match(h.summary.textContent, expected, name);
+    assert.doesNotMatch(h.summary.textContent, /No activity in this selection|Work normally after enabling recording/i, name);
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], empty);
+    await opening;
+    assert.equal(h.modals, 1, name);
+    assert.match(h.summary.textContent, expected, name);
+    assert.match(h.modalHtml, /No ordinary work events recorded in this selection; this does not establish that no work occurred/, name);
+    assert.equal(h.modal['#analysisDownload'].disabled, true, name);
+    await h.modal['#analysisCopy'].onclick();
+    assertCopyEvidenceWarning(h.copied, 'request-' + name);
+    assert.equal(h.tickets.length, 0, name);
+    assert.equal(h.downloads, 0, name);
+  });
+});
+
+test('copyable AI request discloses absent ordinary evidence without inventing workflows', async t => {
+  const cases = [
+    {name: 'no retained events', patch: {
+      canonical_rows: 0, retained_rows: 0, first_observed_at: null,
+      last_observed_at: null, event_types: {}, sources: {},
+      work_evidence: {ordinary_event_rows: 0, health_event_rows: 0,
+        last_work_observed_at: null}
+    }, expected: /No recorded events in this local preview's selected period/,
+    forbidden: /only capture-health or gap records/},
+    {name: 'empty selected period with other retained events', patch: {
+      canonical_rows: 0, retained_rows: 2, first_observed_at: null,
+      last_observed_at: null, event_types: {}, sources: {},
+      work_evidence: {ordinary_event_rows: 0, health_event_rows: 0,
+        last_work_observed_at: null}
+    }, expected: /No recorded events in this local preview's selected period/,
+    forbidden: /only capture-health or gap records/},
+    {name: 'only health and gap rows', patch: {
+      event_types: {capture_gap: 1, capture_health: 1},
+      work_evidence: {ordinary_event_rows: 0, health_event_rows: 2,
+        last_work_observed_at: null}
+    }, expected: /only capture-health or gap records, not ordinary work events/,
+    forbidden: /No recorded events in this local preview's selected period/},
+    {name: 'ordinary work evidence', patch: {},
+      expected: null, forbidden: /Evidence limitation:/}
+  ];
+  for (const {name, patch, expected, forbidden} of cases) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], {...h.preview('range', 'reviewed'), ...patch});
+    await opening;
+    assert.equal(h.modals, 1, name);
+    const request = h.modal['#analysisRequest'].textContent;
+    if (expected) {
+      assert.match(request, expected, name);
+      assert.match(request, /This is not proof of inactivity or complete capture|Health and gap records are not workflow steps/, name);
+      assert.match(request, /Do not infer a workflow, business completion, time savings, or ROI/, name);
+      assert.match(request, /other currently authorized evidence.*disclose its source and limits; otherwise report insufficient evidence/, name);
+      assert.ok(request.startsWith('request-reviewed\n\nEvidence limitation:'), name);
+    } else {
+      assert.equal(request, 'request-reviewed', name);
+    }
+    assert.doesNotMatch(request, forbidden, name);
+    assert.equal(h.modal['#analysisDownload'].disabled, patch.canonical_rows === 0, name);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, [request], name);
+    assert.equal(h.tickets.length, 0, name);
+    assert.equal(h.downloads, 0, name);
+  });
+});
+
+
+test('relative-period preview crossing local midnight fails closed before handoff', async () => {
+  const clock = adjustableClock();
+  const h = harness(Promise.resolve(true), null, clock.Date);
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const controls = h.bars[0].controls;
+  controls.select.value = 'today'; controls.select.onchange({target: controls.select});
+  await settle(); h.reply(h.reads.at(-1), h.preview('range', 'today')); await settle();
+  const opening = controls.button.onclick();
+  await settle();
+  const pending = h.reads.at(-1);
+  assert.match(pending.url, /scope=range/);
+  clock.advance();
+  h.reply(pending, h.preview('range', 'old-today'));
+  await opening;
+  assert.equal(h.modals, 0);
+  assert.match(h.summary.textContent, /Work period changed while evidence was loading/i);
+  assert.equal(h.tickets.length, 0);
+  assert.equal(h.downloads, 0);
+});
+
+test('relative-period modal cannot copy or request an export after midnight', async () => {
+  const clock = adjustableClock();
+  const h = harness(Promise.resolve(true), null, clock.Date);
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const controls = h.bars[0].controls;
+  controls.select.value = 'today'; controls.select.onchange({target: controls.select});
+  await settle(); h.reply(h.reads.at(-1), h.preview('range', 'today')); await settle();
+  const opening = controls.button.onclick();
+  await settle(); h.reply(h.reads.at(-1), h.preview('range', 'reviewed')); await opening;
+  assert.equal(h.modals, 1);
+  clock.advance();
+  await h.modal['#analysisCopy'].onclick();
+  await h.modal['#analysisDownload'].onclick();
+  assert.deepEqual(h.copied, []);
+  assert.equal(h.tickets.length, 0);
+  assert.equal(h.modal['#analysisCopy'].disabled, true);
+  assert.equal(h.modal['#analysisDownload'].disabled, true);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /period changed/i);
+});
+
+test('late export ticket cannot download a relative period that rolled over', async () => {
+  const clock = adjustableClock();
+  const h = harness(Promise.resolve(true), null, clock.Date);
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const controls = h.bars[0].controls;
+  controls.select.value = 'today'; controls.select.onchange({target: controls.select});
+  await settle(); h.reply(h.reads.at(-1), h.preview('range', 'today')); await settle();
+  const opening = controls.button.onclick();
+  await settle(); h.reply(h.reads.at(-1), h.preview('range', 'reviewed')); await opening;
+  const downloading = h.modal['#analysisDownload'].onclick();
+  await settle(); assert.equal(h.tickets.length, 1);
+  clock.advance();
+  h.reply(h.tickets[0], {});
+  await downloading;
+  assert.equal(h.downloads, 0);
+  assert.equal(h.modal['#analysisDownload'].disabled, true);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /period changed/i);
+});
+
+test('explicit all-history and fixed custom periods remain valid after midnight', async t => {
+  for (const scope of ['all', 'custom']) await t.test(scope, async () => {
+    const clock = adjustableClock();
+    const h = harness(Promise.resolve(true), null, clock.Date);
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const controls = h.bars[0].controls;
+    controls.select.value = scope; controls.select.onchange({target: controls.select});
+    if (scope === 'custom') {
+      controls.start.value = dayLabel(-1);
+      controls.end.value = dayLabel(0);
+      controls.start.onchange();
+    }
+    await settle(); h.reply(h.reads.at(-1), h.preview(scope === 'all' ? 'all' : 'range', 'selected'));
+    await settle();
+    const opening = controls.button.onclick();
+    await settle(); h.reply(h.reads.at(-1), h.preview(scope === 'all' ? 'all' : 'range', 'reviewed'));
+    await opening;
+    assert.equal(h.modals, 1);
+    clock.advance();
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-reviewed']);
+    assert.equal(h.modal['#analysisCopy'].disabled, false);
+    assert.equal(h.tickets.length, 0);
+  });
+});
+
+
+test('zero-event handoffs do not offer or promise a downloadable chronology', async t => {
+  for (const retained of [0, 2]) await t.test('retained=' + retained, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], {
+      ...h.preview('range', 'zero-events'), canonical_rows: 0, retained_rows: retained,
+      first_observed_at: null, last_observed_at: null,
+      event_types: {}, sources: {}, redacted_examples: [],
+      work_evidence: {ordinary_event_rows: 0, health_event_rows: 0,
+        last_work_observed_at: null}
+    });
+    await opening;
+    assert.equal(h.modals, 1);
+    assert.equal(h.modal['#analysisDownload'].disabled, true);
+    assert.equal(h.modal['#analysisDetailed'].disabled, true);
+    assert.match(h.modalHtml, /id="analysisDetailed" type="checkbox" aria-describedby="analysisSensitiveWarning" disabled/);
+    assert.match(h.modalHtml, /No recorded events in the selected period/);
+    assert.match(h.modalHtml, /only the explanatory request can be copied/);
+    assert.match(h.modalHtml, /There is no recorded-event package to download/);
+    assert.doesNotMatch(h.modalHtml, /The file download still contains the full selected period/);
+    await h.modal['#analysisCopy'].onclick();
+    assert.equal(h.copied.length, 1);
+    assert.match(h.copied[0], /Evidence limitation: No recorded events/);
+    // A synthetic DOM can mutate disabled inputs; the action guard still
+    // refuses to issue a ticket for an empty selected period.
+    h.modal['#analysisDetailed'].checked = true;
+    await h.modal['#analysisDownload'].onclick();
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+  });
+});
+
+test('ordinary and health-only selected rows retain explicit diagnostic exports', async t => {
+  for (const kind of ['ordinary', 'health-only']) await t.test(kind, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    const d = h.preview('range', kind);
+    if (kind === 'health-only') {
+      d.event_types = {capture_gap: 1, capture_health: 1};
+      d.work_evidence = {ordinary_event_rows: 0, health_event_rows: 2,
+        last_work_observed_at: null};
+    }
+    h.reply(h.reads[1], d);
+    await opening;
+    assert.equal(h.modals, 1);
+    assert.equal(h.modal['#analysisDetailed'].disabled, false);
+    assert.equal(h.modal['#analysisDownload'].disabled, false);
+    assert.match(h.modalHtml, /(?:An optional diagnostic download|A download) requests the selected period again, subject to current consent, retention and access/);
+    assert.doesNotMatch(h.modalHtml, /An evidence package is unavailable/);
+    h.modal['#analysisDetailed'].checked = true;
+    h.modal['#analysisDetailed'].onchange();
+    h.modal['#analysisReviewedDetailed'].checked = true;
+    const downloading = h.modal['#analysisDownload'].onclick();
+    await settle();
+    assert.equal(h.tickets.length, 1);
+    assert.equal(JSON.parse(h.tickets[0].options.body).include_raw, true);
+    h.reply(h.tickets[0], {});
+    await downloading;
+    assert.equal(h.downloads, 1);
+    assert.equal(h.modal['#analysisDetailed'].disabled, false);
+  });
+});
+
+
+test('range handoff accepts equivalent UTC offsets but rejects a changed instant', async t => {
+  const offset = (iso, hours) => new Date(Date.parse(iso) + hours * 3600_000)
+    .toISOString().replace(/Z$/, hours ? '+02:00' : '+00:00');
+  for (const hours of [0, 2]) await t.test('offset=' + hours, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    const requested = new URLSearchParams(h.reads[1].url.split('?')[1]);
+    h.reply(h.reads[1], {...h.preview('range', 'equivalent'),
+      window: {scope: 'range', since: offset(requested.get('since'), hours),
+        until: offset(requested.get('until'), hours)}}, {preserveWindow: true});
+    await opening;
+    assert.equal(h.modals, 1);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-equivalent']);
+    const downloading = h.modal['#analysisDownload'].onclick();
+    await settle();
+    assert.equal(h.tickets.length, 1);
+    h.reply(h.tickets[0], {});
+    await downloading;
+    assert.equal(h.downloads, 1);
+  });
+  await t.test('changed UTC instant', async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    const requested = new URLSearchParams(h.reads[1].url.split('?')[1]);
+    h.reply(h.reads[1], {...h.preview('range', 'wrong-instant'),
+      window: {scope: 'range',
+        since: new Date(Date.parse(requested.get('since')) + 60_000).toISOString(),
+        until: requested.get('until')}}, {preserveWindow: true});
+    await opening;
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+    assert.match(h.summary.textContent, /Preview period did not match/i);
+  });
+});
+// Source-category counts can grow with imported or locally captured sources.
+// The review remains bounded, explicitly discloses omissions, and never treats
+// displayed source labels as verified provider identities.
+async function openSourceSummaryPreview(sources, count) {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const opening = h.bars[0].controls.button.onclick();
+  await settle();
+  h.reply(h.reads[1], {
+    ...h.preview('range', 'source-breakdown'),
+    canonical_rows: count, retained_rows: count,
+    event_types: {focus_span: count, capture_gap: 0},
+    sources
+  });
+  await opening;
+  return h;
+}
+
+test('many reported source categories disclose omitted category and event totals', async () => {
+  const sources = Object.fromEntries(Array.from({length: 12}, (_, i) =>
+    ['source-' + String(i + 1).padStart(2, '0'), 1]));
+  const h = await openSourceSummaryPreview(sources, 12);
+  assert.equal(h.modals, 1);
+  assert.match(h.modalHtml, /12 recorded events/);
+  assert.match(h.modalHtml, /Reported sources \(bounded preview; labels are not verified identities\)/);
+  assert.match(h.modalHtml, /source-01: 1/);
+  assert.match(h.modalHtml, /source-08: 1/);
+  assert.doesNotMatch(h.modalHtml, /source-09: 1/);
+  assert.doesNotMatch(h.modalHtml, /source-12: 1/);
+  assert.match(h.modalHtml,
+    /4 additional source categories \(4 selected events\) omitted from this preview/);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-source-breakdown']);
+  assert.equal(h.tickets.length, 0);
+});
+
+test('long or HTML-looking source labels are safely shortened without losing provenance warnings', async t => {
+  await t.test('HTML-looking long label', async () => {
+    const name = '<svg onload=alert(1)>' + 'A'.repeat(160);
+    const h = await openSourceSummaryPreview({[name]: 2}, 2);
+    assert.equal(h.modals, 1);
+    assert.match(h.modalHtml, /&lt;svg onload=alert\(1\)&gt;/);
+    assert.doesNotMatch(h.modalHtml, /<svg onload/);
+    assert.match(h.modalHtml, /… \[source label truncated\]/);
+    assert.doesNotMatch(h.modalHtml, /A{100}/);
+    assert.doesNotMatch(h.modalHtml, /additional source categories/);
+  });
+  await t.test('Unicode codepoint boundary', async () => {
+    const name = 'x'.repeat(95) + '🧩' + 'sensitive-suffix';
+    const h = await openSourceSummaryPreview({[name]: 2}, 2);
+    assert.equal(h.modals, 1);
+    assert.match(h.modalHtml, /🧩… \[source label truncated\]/);
+    assert.doesNotMatch(h.modalHtml, /sensitive-suffix/);
+  });
+});
+
+test('ordinary single-source and blank-source previews remain explicit and copy-only safe', async t => {
+  for (const [name, sources, expected] of [
+    ['ordinary', {desktop: 2}, 'desktop: 2'],
+    ['blank label', {'   ': 2}, '[blank source label]: 2']
+  ]) await t.test(name, async () => {
+    const h = await openSourceSummaryPreview(sources, 2);
+    assert.equal(h.modals, 1);
+    assert.ok(h.modalHtml.includes(expected));
+    assert.doesNotMatch(h.modalHtml, /additional source categories/);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-source-breakdown']);
+    assert.equal(h.tickets.length, 0);
+  });
+});
+
+
+test('source preview exposes bidi and control formatting instead of visually spoofed identities', async t => {
+  for (const [name, source, marker] of [
+    ['right-to-left override', 'desktop\u202Espoof', '[U+202E]'],
+    ['embedded newline', 'desktop\nother: 999', '[U+000A]'],
+    ['directional isolate', 'desktop\u2066hidden\u2069', '[U+2066]'],
+    ['C1 control', 'desktop\u0085hidden', '[U+0085]']
+  ]) await t.test(name, async () => {
+    const h = await openSourceSummaryPreview({[source]: 2}, 2);
+    assert.equal(h.modals, 1);
+    assert.ok(h.modalHtml.includes(marker));
+    assert.ok(!h.modalHtml.includes(source));
+    assert.doesNotMatch(h.modalHtml, /[\u202a-\u202e\u2066-\u2069\u007f-\u009f]/);
+    assert.match(h.modalHtml, /2 recorded events/);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-source-breakdown']);
+    assert.equal(h.tickets.length, 0);
+  });
+});
+
+test('redacted focus labels expose bidi controls and bound long untrusted samples', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const opening = h.bars[0].controls.button.onclick();
+  await settle();
+  h.reply(h.reads[1], {...h.preview('range', 'sample-formatting'),
+    redacted_examples: [{
+      app: 'App\u202Efake\nnext',
+      window_title: 'Case\u2067masked\u2069\u0000' + 'x'.repeat(130)
+    }]
+  });
+  await opening;
+  assert.equal(h.modals, 1);
+  assert.match(h.modalHtml, /App\[U\+202E\]fake\[U\+000A\]next/);
+  assert.match(h.modalHtml, /Case\[U\+2067\]masked\[U\+2069\]\[U\+0000\]/);
+  assert.match(h.modalHtml, /… \[sample label truncated\]/);
+  assert.ok(!h.modalHtml.includes('App\u202Efake\nnext'));
+  assert.doesNotMatch(h.modalHtml, /x{100}/);
+  assert.doesNotMatch(h.modalHtml, /[\u202a-\u202e\u2066-\u2069\u007f-\u009f]/);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-sample-formatting']);
+  assert.equal(h.tickets.length, 0);
+});
+
+test('ordinary Unicode and HTML-like source labels preserve counts and escaping', async () => {
+  const h = await openSourceSummaryPreview({'مرحبا <strong>🧩</strong>': 2}, 2);
+  assert.equal(h.modals, 1);
+  assert.match(h.modalHtml, /مرحبا &lt;strong&gt;🧩&lt;\/strong&gt;: 2/);
+  assert.doesNotMatch(h.modalHtml, /<strong>🧩<\/strong>/);
+  assert.doesNotMatch(h.modalHtml, /\[U\+/);
+  assert.match(h.modalHtml, /labels are not verified identities/);
+});
+
+
+test('one source label cannot impersonate source counts or the omission disclosure', async () => {
+  const forged = 'desktop: 1, Salesforce: 999; 4 additional source categories';
+  const h = await openSourceSummaryPreview({[forged]: 2}, 2);
+  assert.equal(h.modals, 1);
+  assert.match(h.modalHtml, /desktop\[U\+003A\] 1\[U\+002C\] Salesforce\[U\+003A\] 999\[U\+003B\] 4 additional source categories: 2/);
+  assert.ok(!h.modalHtml.includes(forged));
+  assert.doesNotMatch(h.modalHtml, /additional source categories \(\d+ selected events\) omitted/);
+  assert.match(h.modalHtml, /2 recorded events/);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-source-breakdown']);
+  assert.equal(h.tickets.length, 0);
+});
+
+test('invisible source separators are disclosed while ordinary source labels remain unchanged', async t => {
+  for (const [name, source, expected] of [
+    ['zero-width space and word joiner', 'desk\u200Btop\u2060', 'desk[U+200B]top[U+2060]: 2'],
+    ['soft hyphen and BOM', 'desk\u00ADtop\uFEFF', 'desk[U+00AD]top[U+FEFF]: 2'],
+    ['zero-width joiner and combining grapheme joiner', 'desk\u200Dtop\u034F', 'desk[U+200D]top[U+034F]: 2'],
+    ['ordinary source', 'desktop', 'desktop: 2']
+  ]) await t.test(name, async () => {
+    const h = await openSourceSummaryPreview({[source]: 2}, 2);
+    assert.equal(h.modals, 1);
+    assert.ok(h.modalHtml.includes(expected));
+    if (source !== 'desktop') assert.ok(!h.modalHtml.includes(source));
+    assert.match(h.modalHtml, /labels are not verified identities/);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-source-breakdown']);
+    assert.equal(h.tickets.length, 0);
+  });
+});
+
+
+test('redacted example omissions never erase counted focus evidence', async t => {
+  const cases = [
+    {
+      name: 'two focus events but no samples supplied',
+      mutate: d => d,
+      expected: /No redacted context examples were supplied, although 2 selected focus-span events are counted/,
+      warning: false
+    },
+    {
+      name: 'one redacted sample does not claim complete coverage',
+      mutate: d => ({...d, redacted_examples: [{app: 'Editor', window_title: '<redacted>'}]}),
+      expected: /1 redacted context example\(s\) supplied; 2 selected focus-span events counted/,
+      warning: false
+    },
+    {
+      name: 'two redacted samples still do not certify capture completeness',
+      mutate: d => ({...d, redacted_examples: [
+        {app: 'Editor', window_title: 'First'},
+        {app: 'Browser', window_title: 'Second'}
+      ]}),
+      expected: /2 redacted context example\(s\) supplied; 2 selected focus-span events counted/,
+      warning: false
+    },
+    {
+      name: 'health-only selection truthfully has zero focus events',
+      mutate: d => ({...d, event_types: {capture_gap: 2}, redacted_examples: []}),
+      expected: /No focus-span events recorded in this selection; this does not prove inactivity or complete capture/,
+      warning: true
+    }
+  ];
+  for (const {name, mutate, expected, warning} of cases) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], mutate(h.preview('range', 'focus-omission')));
+    await opening;
+    assert.equal(h.modals, 1);
+    assert.match(h.modalHtml, expected);
+    assert.doesNotMatch(h.modalHtml, /No focus spans in this selection/);
+    if (name.includes('one redacted sample')) {
+      assert.match(h.modalHtml, /reported app: Editor · reported title: &lt;redacted&gt;/);
+      assert.doesNotMatch(h.modalHtml, /<redacted>/);
+    }
+    assert.match(h.modalHtml, /Examples are a bounded sample|Missing examples do not mean no focus was observed|does not prove inactivity or complete capture/);
+    await h.modal['#analysisCopy'].onclick();
+    if (warning) assertCopyEvidenceWarning(h.copied, 'request-focus-omission', true);
+    else assert.deepEqual(h.copied, ['request-focus-omission']);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+  });
+});
+
+
+test('Unicode line separators and invisible format controls cannot spoof source-count rows', async t => {
+  for (const [name, source, expected] of [
+    ['line separator', 'desktop\u2028Salesforce: 999', 'desktop[U+2028]Salesforce[U+003A] 999: 2'],
+    ['paragraph separator', 'desktop\u2029other: 999', 'desktop[U+2029]other[U+003A] 999: 2'],
+    ['invisible mathematical controls', 'desk\u2061top\u2064', 'desk[U+2061]top[U+2064]: 2'],
+    ['deprecated directional controls', 'desk\u206Atop\u206F', 'desk[U+206A]top[U+206F]: 2'],
+    ['ordinary source remains unchanged', 'desktop', 'desktop: 2']
+  ]) await t.test(name, async () => {
+    const h = await openSourceSummaryPreview({[source]: 2}, 2);
+    assert.equal(h.modals, 1);
+    assert.ok(h.modalHtml.includes(expected));
+    if (source !== 'desktop') {
+      assert.ok(!h.modalHtml.includes(source));
+      assert.doesNotMatch(h.modalHtml, /[\u2028\u2029\u2061-\u2064\u206a-\u206f]/i);
+    }
+    assert.match(h.modalHtml, /labels are not verified identities/);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-source-breakdown']);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+  });
+});
+
+test('Unicode separators and invisible formatting in redacted focus samples stay visible as markers', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const opening = h.bars[0].controls.button.onclick();
+  await settle();
+  h.reply(h.reads[1], {...h.preview('range', 'sample-unicode-separators'),
+    redacted_examples: [{
+      app: 'Editor\u2028fake\u2062',
+      window_title: 'Case\u2029hidden\u206B'
+    }]
+  });
+  await opening;
+  assert.equal(h.modals, 1);
+  assert.match(h.modalHtml, /Editor\[U\+2028\]fake\[U\+2062\]/);
+  assert.match(h.modalHtml, /Case\[U\+2029\]hidden\[U\+206B\]/);
+  assert.doesNotMatch(h.modalHtml, /[\u2028\u2029\u2061-\u2064\u206a-\u206f]/i);
+  assert.match(h.modalHtml, /1 redacted context example\(s\) supplied; 2 selected focus-span events counted/);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-sample-unicode-separators']);
+  assert.equal(h.tickets.length, 0);
+  assert.equal(h.downloads, 0);
+});
+
+
+test('prepared handoff distinguishes request-only copy from mutable local evidence', async t => {
+  for (const {name, scope, expected} of [
+    {
+      name: 'fixed calendar bounds do not freeze retained rows or consent',
+      scope: 'range',
+      expected: /The selected date bounds are fixed, but retained events and access can change/
+    },
+    {
+      name: 'current recorder run may change after preview',
+      scope: 'current',
+      expected: /This recorder-run selection can change as events arrive or the recorder restarts/
+    },
+    {
+      name: 'all retained history may change after preview',
+      scope: 'all',
+      expected: /All retained history can change as events arrive, are deleted, or become inaccessible/
+    }
+  ]) await t.test(name, async () => {
+    const h = harness();
+    await settle();
+    h.reply(h.reads[0], h.preview('range', 'initial'));
+    await settle();
+    if (scope !== 'range') {
+      const select = h.bars[0].controls.select;
+      select.value = scope;
+      select.onchange({target: select});
+      await settle();
+      h.reply(h.reads.at(-1), h.preview(scope, 'selected'));
+      await settle();
+    }
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads.at(-1), h.preview(scope, 'scope-disclosure'));
+    await opening;
+    assert.equal(h.modals, 1);
+    assert.match(h.modalHtml, /Selected local evidence preview — not sent to an AI/);
+    assert.doesNotMatch(h.modalHtml, /What the AI will receive/);
+    assert.match(h.modalHtml, expected);
+    assert.match(h.modalHtml, /The downloaded file may differ from this preview; review it before sharing/);
+    assert.match(h.modalHtml, /This preview is not an immutable export snapshot or proof of complete capture/);
+    assert.match(h.modalHtml, /Copy request copies only the prepared request text/);
+    assert.match(h.modalHtml, /an AI will not receive that file unless you inspect and attach or share it yourself/);
+    assert.equal(h.copied.length, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-scope-disclosure']);
+    assert.match(h.modal['#analysisActionStatus'].textContent, /Only the prepared request text was copied/);
+    assert.match(h.modal['#analysisActionStatus'].textContent, /No evidence file was attached or sent/);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+  });
+});
+
+
+test('preview range does not alias a submillisecond-shifted server window', async t => {
+  for (const [name, mutate] of [
+    ['start shifted by one microsecond', (since, until) =>
+      [since.replace(/\.000Z$/, '.000001Z'), until]],
+    ['end shifted by one microsecond', (since, until) =>
+      [since, until.replace(/\.000Z$/, '.000001Z')]]
+  ]) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    const requested = new URLSearchParams(h.reads[1].url.split('?')[1]);
+    const [since, until] = mutate(requested.get('since'), requested.get('until'));
+    assert.notEqual(since + until, requested.get('since') + requested.get('until'));
+    assert.equal(Date.parse(since), Date.parse(requested.get('since')));
+    assert.equal(Date.parse(until), Date.parse(requested.get('until')));
+    h.reply(h.reads[1], {...h.preview('range', 'shifted'),
+      window: {scope: 'range', since, until}}, {preserveWindow: true});
+    await opening;
+    assert.equal(h.modals, 0);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+    assert.deepEqual(h.copied, []);
+    assert.match(h.summary.textContent, /Preview period did not match/i);
+  });
+});
+
+test('ticket bounds reject submillisecond changes but accept exact offset equivalents', async t => {
+  for (const [name, valid] of [
+    ['microsecond-shifted ticket', false],
+    ['six-digit equivalent UTC fraction and +02:00 offset', true]
+  ]) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    const requested = new URLSearchParams(h.reads[1].url.split('?')[1]);
+    h.reply(h.reads[1], {...h.preview('range', 'precise'),
+      window: {scope: 'range',
+        since: requested.get('since').replace(/\.000Z$/, '.000000Z'),
+        until: requested.get('until').replace(/\.000Z$/, '.000000+00:00')}},
+      {preserveWindow: true});
+    await opening;
+    assert.equal(h.modals, 1);
+    const downloading = h.modal['#analysisDownload'].onclick();
+    await settle();
+    assert.equal(h.tickets.length, 1);
+    const body = JSON.parse(h.tickets[0].options.body);
+    const since = valid
+      ? asOffset(Date.parse(body.since), 2).replace(/\.000\+02:00$/, '.000000+02:00')
+      : body.since.replace(/\.\d+(?=Z|\+00:00$)/, '.000001');
+    const until = body.until.replace(/\.\d+(?=Z|\+00:00$)/, '.000000');
+    // The server may echo +00:00 rather than Z and six fractional digits.
+    // A negative test must actually shift the exact instant in either form.
+    assert.equal(valid || since !== body.since, true);
+    assert.equal(Date.parse(since), Date.parse(body.since));
+    const params = new URLSearchParams({scope: 'range', include_raw: 'false',
+      redact_names: 'true', ticket: 'synthetic-ticket', since, until});
+    h.reply(h.tickets[0], {ticket: 'synthetic-ticket',
+      url: '/v1/export/csvzip?' + params}, {preserveTicket: true});
+    await downloading;
+    assert.equal(h.downloads, valid ? 1 : 0);
+    assert.match(h.modal['#analysisActionStatus'].textContent,
+      valid ? /download started/i : /ticket did not match/i);
+    assert.equal(h.modal['#analysisDownload'].disabled, false);
+    assert.equal(h.tickets.length, 1);
+  });
+});
+
+
+test('submillisecond observation ordering and sample provenance fail closed', async t => {
+  const micro = (stamp, digits) => stamp.replace(/\.000Z$/, '.' + digits + 'Z');
+  for (const [name, changes] of [
+    ['reversed first/last within one millisecond', {
+      first_observed_at: micro(observedStart, '000002'),
+      last_observed_at: micro(observedStart, '000001')
+    }],
+    ['sample precedes first observed event by one microsecond', {
+      first_observed_at: micro(observedStart, '000002'),
+      redacted_examples: [{app: 'Editor', window_title: 'Redacted',
+        observed_at: micro(observedStart, '000001')}]
+    }],
+    ['sample follows last observed event by one microsecond', {
+      last_observed_at: micro(observedEnd, '000001'),
+      redacted_examples: [{app: 'Editor', window_title: 'Redacted',
+        observed_at: micro(observedEnd, '000002')}]
+    }],
+    ['latest work timestamp exceeds last observed by one microsecond', {
+      last_observed_at: micro(observedEnd, '000001'),
+      work_evidence: {last_work_observed_at: micro(observedEnd, '000002')}
+    }]
+  ]) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], {...h.preview('range', 'untrustworthy'), ...changes});
+    await opening;
+    assert.equal(h.modals, 0);
+    assert.match(h.summary.textContent, /incomplete or malformed/i);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+    assert.deepEqual(h.copied, []);
+  });
+});
+
+test('current-run start excludes a microsecond-earlier observation', async t => {
+  const micro = (stamp, digits) => stamp.replace(/\.000Z$/, '.' + digits + 'Z');
+  for (const [name, first, accepted] of [
+    ['event before current-run start', micro(observedStart, '000001'), false],
+    ['event after current-run start', micro(observedStart, '000003'), true]
+  ]) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const select = h.bars[0].controls.select;
+    select.value = 'current';
+    select.onchange({target: select});
+    await settle(); h.reply(h.reads[1], h.preview('current', 'selected')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[2], {...h.preview('current', 'microsecond-boundary'),
+      first_observed_at: first,
+      window: {scope: 'current', since: micro(observedStart, '000002')}},
+    {preserveWindow: true});
+    await opening;
+    assert.equal(h.modals, accepted ? 1 : 0);
+    if (accepted) {
+      assert.match(h.modalHtml, /Current recorder run/);
+      await h.modal['#analysisCopy'].onclick();
+      assert.deepEqual(h.copied, ['request-microsecond-boundary']);
+    } else {
+      assert.match(h.summary.textContent, /incomplete or malformed/i);
+      assert.deepEqual(h.copied, []);
+    }
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+  });
+});
+
+test('valid submillisecond observation and sample order accepts offset-equivalent instants', async () => {
+  const micro = (stamp, digits) => stamp.replace(/\.000Z$/, '.' + digits + 'Z');
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const opening = h.bars[0].controls.button.onclick();
+  await settle();
+  const first = micro(observedStart, '000001');
+  const last = micro(observedStart, '000003');
+  h.reply(h.reads[1], {...h.preview('range', 'precise-observation'),
+    first_observed_at: first, last_observed_at: last,
+    redacted_examples: [{app: 'Editor', window_title: 'Redacted',
+      observed_at: micro(observedStart, '000002000')}],
+    work_evidence: {last_work_observed_at: last}});
+  await opening;
+  assert.equal(h.modals, 1);
+  assert.match(h.modalHtml, /000002000Z/);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-precise-observation']);
+  assert.equal(h.tickets.length, 0);
+  assert.equal(h.downloads, 0);
+});
+
+
+test('daily evidence chunks enforce exact microsecond coverage and UTC-day ceilings', async t => {
+  const first = '2026-10-01T10:00:00.000001Z';
+  const last = '2026-10-01T10:00:00.000003Z';
+  const cases = [
+    ['complete plan omits first observation by one microsecond',
+      {since: '2026-10-01T10:00:00.000002Z',
+        until: '2026-10-01T10:00:01Z', event_rows: 2}, false],
+    ['positive-count chunk starts one microsecond after last observation',
+      {since: '2026-10-01T10:00:00.000004Z',
+        until: '2026-10-01T10:00:01Z', event_rows: 2}, false],
+    ['chunk crosses UTC midnight by one microsecond',
+      {since: '2026-10-01T23:59:59Z',
+        until: '2026-10-02T00:00:00.000001Z', event_rows: 2}, false,
+      '2026-10-01T23:59:59.500Z', '2026-10-01T23:59:59.800Z'],
+    ['exact submillisecond span with UTC-equivalent offset is covered',
+      {since: '2026-10-01T12:00:00.000001+02:00',
+        until: '2026-10-01T10:00:00.000004Z', event_rows: 2}, true]
+  ];
+  for (const [name, chunk, accepted, start = first, end = last] of cases)
+    await t.test(name, async () => {
+    const h = await openAllRetainedPreview(d => ({
+      ...d, first_observed_at: start, last_observed_at: end,
+      analysis_plan: {date_chunks: [chunk], more_dates_not_listed: false}
+    }));
+    assert.equal(h.modals, accepted ? 1 : 0);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+    if (accepted) {
+      await h.modal['#analysisCopy'].onclick();
+      assert.deepEqual(h.copied, ['request-rollover']);
+      assert.equal(h.tickets.length, 0);
+    } else {
+      assert.deepEqual(h.copied, []);
+      assert.match(h.summary.textContent, /incomplete or malformed/i);
+    }
+  });
+});
+
+test('daily chunk clipping refuses a one-microsecond extension beyond the selected range', async t => {
+  for (const [name, extraMicrosecond, accepted] of [
+    ['one microsecond beyond selected end', true, false],
+    ['exact selected end with equivalent UTC offset', false, true]
+  ]) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    const selected = new URLSearchParams(h.reads[1].url.split('?')[1]);
+    const end = selected.get('until');
+    const endMs = Date.parse(end);
+    const chunkEnd = extraMicrosecond
+      ? end.replace(/\.000Z$/, '.000001Z')
+      : end.replace(/Z$/, '+00:00');
+    assert.equal(Date.parse(chunkEnd), endMs);
+    h.reply(h.reads[1], {...h.preview('range', 'clipped-daily-plan'),
+      first_observed_at: new Date(endMs - 45000).toISOString(),
+      last_observed_at: new Date(endMs - 30000).toISOString(),
+      analysis_plan: {date_chunks: [{
+        since: new Date(endMs - 60000).toISOString(),
+        until: chunkEnd, event_rows: 2
+      }], more_dates_not_listed: false}});
+    await opening;
+    assert.equal(h.modals, accepted ? 1 : 0);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+    if (accepted) {
+      await h.modal['#analysisCopy'].onclick();
+      assert.deepEqual(h.copied, ['request-clipped-daily-plan']);
+      assert.equal(h.tickets.length, 0);
+    } else {
+      assert.deepEqual(h.copied, []);
+      assert.match(h.summary.textContent, /incomplete or malformed/i);
+    }
+  });
+});
+
+
+test('period summary preserves exact source-reported microsecond observations and offsets', async t => {
+  const oneMicrosecond = stamp => stamp.replace(/\.000Z$/, '.000001Z');
+  const twoMicroseconds = stamp => stamp.replace(/\.000Z$/, '.000002Z');
+  const offsetFirst = asOffset(Date.parse(observedStart), 2)
+    .replace(/\.000\+02:00$/, '.000001+02:00');
+  for (const [name, first, last] of [
+    ['two distinct observations in the same displayed local second',
+      oneMicrosecond(observedStart), twoMicroseconds(observedStart)],
+    ['offset-aware source timestamp remains verbatim',
+      offsetFirst, twoMicroseconds(observedStart)]
+  ]) await t.test(name, async () => {
+    // Date/locale rendering alone cannot distinguish these observations.
+    assert.equal(Date.parse(first), Date.parse(last));
+    assert.equal(new Date(first).toLocaleString(), new Date(last).toLocaleString());
+    const h = await openAllRetainedPreview(d => ({
+      ...d, first_observed_at: first, last_observed_at: last
+    }));
+    assert.equal(h.modals, 1);
+    assert.match(h.summary.textContent, /2 recorded events.*observed locally/);
+    assert.match(h.summary.textContent, /reported ISO times/);
+    assert.ok(h.summary.textContent.includes(first), 'first source instant is not rounded');
+    assert.ok(h.summary.textContent.includes(last), 'last source instant is not rounded');
+    assert.match(h.summary.textContent, /offsets preserved/);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-rollover']);
+    assert.equal(h.tickets.length, 0);
+  });
+});
+
+test('zero-event summary keeps uncertainty rather than inventing observed timestamps', async () => {
+  const h = await openAllRetainedPreview(d => ({
+    ...d, canonical_rows: 0, retained_rows: 0,
+    first_observed_at: null, last_observed_at: null,
+    event_types: {}, sources: {}, redacted_examples: [],
+    analysis_plan: {date_chunks: []}, work_evidence: {}
+  }));
+  assert.equal(h.modals, 1);
+  assert.match(h.summary.textContent, /No retained events reported/);
+  assert.match(h.summary.textContent, /consent status are unverified/);
+  assert.doesNotMatch(h.summary.textContent, /reported ISO times/);
+  assert.equal(h.modal['#analysisDownload'].disabled, true);
+  assert.equal(h.tickets.length, 0);
+  await h.modal['#analysisCopy'].onclick();
+  assertCopyEvidenceWarning(h.copied, 'request-rollover');
+  assert.equal(h.downloads, 0);
+});
+
+
+test('handoff grades no evidence, health diagnostics and unverified ordinary work separately', async t => {
+  const cases = [
+    ['ordinary observations', d => ({...d,
+      work_evidence: {ordinary_event_rows: 2, health_event_rows: 0}}),
+      /ordinary work observations are present, but no workflow, business completion, or automation opportunity is verified/,
+      /Review selected work evidence \(workflow unverified\)/,
+      /Download AI evidence package/],
+    ['health-only diagnostics', d => ({...d,
+      event_types: {capture_gap: 1, capture_health: 1},
+      work_evidence: {ordinary_event_rows: 0, health_event_rows: 2,
+        last_work_observed_at: null}}),
+      /insufficient for workflow review — only capture-health or gap records are present/,
+      /Review evidence limitations \(no verified workflow\)/,
+      /Download capture-health diagnostic package/],
+    ['no recorded events', d => ({...d,
+      canonical_rows: 0, retained_rows: 2,
+      first_observed_at: null, last_observed_at: null,
+      event_types: {}, sources: {}, redacted_examples: [],
+      work_evidence: {ordinary_event_rows: 0, health_event_rows: 0,
+        last_work_observed_at: null}}),
+      /insufficient for workflow review — no recorded events in this selection/,
+      /Review evidence limitations \(no verified workflow\)/,
+      /Evidence download unavailable/]
+  ];
+  for (const [name, mutate, grade, subtitle, downloadLabel] of cases) {
+    await t.test(name, async () => {
+      const h = await openAllRetainedPreview(mutate);
+      assert.equal(h.modals, 1);
+      assert.equal(h.modalTitle, 'Prepare for AI');
+      assert.match(h.modalSubtitle, subtitle);
+      assert.match(h.modalHtml, grade);
+      assert.match(h.modalHtml, downloadLabel);
+      if (name === 'ordinary observations') {
+        assert.match(h.modalHtml, /An AI may help review observations after you explicitly share evidence/);
+        assert.match(h.modalHtml, /Analyze a large history in smaller parts/);
+        assert.match(h.modalHtml, /may ask an AI to review one date at a time/);
+        assert.match(h.modalHtml, /(?:An optional diagnostic download|A download) requests the selected period again, subject to current consent, retention and access/);
+      } else {
+        assert.match(h.modalHtml, /Do not infer a workflow from missing observations or capture-health diagnostics/);
+        assert.doesNotMatch(h.modalHtml, /An AI may help review observations/);
+        assert.doesNotMatch(h.modalHtml, /Ask your AI to process one day at a time/);
+        assert.doesNotMatch(h.modalHtml, /Analyze a large history in smaller parts/);
+        if (name === 'health-only diagnostics') {
+          assert.match(h.modalHtml, /Review capture-health diagnostic dates/);
+          assert.match(h.modalHtml, /capture-health\/gap diagnostics only, not workflow steps/);
+          assert.match(h.modalHtml, /An optional diagnostic download requests the selected period again, subject to current consent, retention and access/);
+        } else {
+          assert.match(h.modalHtml, /Review missing date coverage/);
+          assert.match(h.modalHtml, /No recorded events are available to analyze/);
+          assert.doesNotMatch(h.modalHtml, /optional diagnostic download/);
+        }
+      }
+      assert.doesNotMatch(h.modalHtml, /Discover opportunities from recorded work/);
+      assert.match(h.modalHtml, /Selected local evidence preview — not sent to an AI/);
+      assert.equal(h.modal['#analysisDownload'].disabled, name === 'no recorded events');
+      await h.modal['#analysisCopy'].onclick();
+      assert.equal(h.tickets.length, 0, 'Copy must not request a download ticket');
+      assert.equal(h.downloads, 0, 'Copy must not download evidence');
+      assert.equal(h.copied.length, 1);
+      if (name === 'ordinary observations') assert.equal(h.copied[0], 'request-rollover');
+      else assertCopyEvidenceWarning(h.copied, 'request-rollover', name === 'health-only diagnostics');
+      if (name === 'no recorded events') {
+        await h.modal['#analysisDownload'].onclick();
+        assert.equal(h.tickets.length, 0);
+      }
+    });
+  }
+});
+
+
+test('health-only daily chunks remain visible as diagnostics, never AI workflow guidance', async () => {
+  const utcDay = observedStart.slice(0, 10);
+  const dayStart = utcDay + 'T00:00:00Z';
+  const dayEnd = new Date(Date.parse(dayStart) + 86400000).toISOString();
+  const h = await openAllRetainedPreview(d => ({
+    ...d,
+    event_types: {capture_gap: 1, capture_health: 1},
+    work_evidence: {ordinary_event_rows: 0, health_event_rows: 2},
+    analysis_plan: {date_chunks: [{since: dayStart, until: dayEnd, event_rows: 2}],
+      more_dates_not_listed: false}
+  }));
+  assert.equal(h.modals, 1);
+  assert.match(h.modalHtml, /Review capture-health diagnostic dates/);
+  assert.ok(h.modalHtml.includes(dayStart), 'diagnostic UTC day is still visible');
+  assert.match(h.modalHtml, /2 events<\/li>/);
+  assert.match(h.modalHtml, /capture-health\/gap diagnostics only, not workflow steps/);
+  assert.doesNotMatch(h.modalHtml, /Ask your AI to process one day at a time/);
+  assert.doesNotMatch(h.modalHtml, /Repeated-work maps are optional/);
+  assert.equal(h.modal['#analysisDownload'].disabled, false,
+    'existing explicitly requested diagnostic download remains available');
+  await h.modal['#analysisCopy'].onclick();
+  assertCopyEvidenceWarning(h.copied, 'request-rollover', true);
+  assert.equal(h.tickets.length, 0, 'copy must not initiate an export');
+  assert.equal(h.downloads, 0);
+});
+
+test('dominant reported source remains visible even when many zero-count labels precede it', async () => {
+  const sources = Object.fromEntries(Array.from({length: 8}, (_, i) =>
+    ['zero-' + String(i + 1).padStart(2, '0'), 0]));
+  sources['dominant-late'] = 12;
+  sources['runner-up-late'] = 2;
+  const h = await openSourceSummaryPreview(sources, 14);
+  assert.equal(h.modals, 1);
+  assert.match(h.modalHtml, /dominant-late: 12, runner-up-late: 2, zero-01: 0/);
+  assert.doesNotMatch(h.modalHtml, /zero-07: 0|zero-08: 0/);
+  assert.match(h.modalHtml,
+    /2 additional source categories \(0 selected events\) omitted from this preview/);
+  assert.match(h.modalHtml, /Highest selected-event counts appear first/);
+  assert.match(h.modalHtml, /labels are not verified identities/);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-source-breakdown']);
+  assert.equal(h.tickets.length, 0);
+  assert.equal(h.downloads, 0);
+});
+
+test('source summary counts omissions from the low-volume tail rather than import order', async () => {
+  const sources = Object.fromEntries(Array.from({length: 8}, (_, i) =>
+    ['small-' + String(i + 1).padStart(2, '0'), 1]));
+  sources['dominant-late'] = 25;
+  sources['runner-up-late'] = 10;
+  sources['third-late'] = 5;
+  const h = await openSourceSummaryPreview(sources, 48);
+  assert.equal(h.modals, 1);
+  assert.match(h.modalHtml,
+    /dominant-late: 25, runner-up-late: 10, third-late: 5, small-01: 1/);
+  assert.doesNotMatch(h.modalHtml, /small-06: 1|small-07: 1|small-08: 1/);
+  assert.match(h.modalHtml,
+    /3 additional source categories \(3 selected events\) omitted from this preview/);
+  assert.match(h.modalHtml, /48 recorded events/);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-source-breakdown']);
+  assert.equal(h.tickets.length, 0);
+});
+
+test('equal-count source labels use deterministic literal-name tie ordering', async () => {
+  const names = ['zeta', 'gamma', 'alpha', 'theta', 'beta', 'eta',
+    'delta', 'iota', 'epsilon', 'kappa'];
+  const sources = Object.fromEntries(names.map(name => [name, 1]));
+  const h = await openSourceSummaryPreview(sources, 10);
+  assert.equal(h.modals, 1);
+  assert.match(h.modalHtml,
+    /alpha: 1, beta: 1, delta: 1, epsilon: 1, eta: 1, gamma: 1, iota: 1, kappa: 1/);
+  assert.doesNotMatch(h.modalHtml, /theta: 1|zeta: 1/);
+  assert.match(h.modalHtml,
+    /2 additional source categories \(2 selected events\) omitted from this preview/);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-source-breakdown']);
+  assert.equal(h.tickets.length, 0);
+});
+
+
+test('large source maps preserve exact top-eight ranking, literal keys and omitted totals', async t => {
+  // A large import may have thousands of low-volume source labels. Its local
+  // review must not sort/render them all or lose a late dominant category.
+  // JSON source maps can contain own "__proto__" and "constructor" keys.
+  const noise = Array.from({length: 2048}, (_, i) =>
+    ['noise-' + String(i).padStart(4, '0'), 1]);
+  const entries = [...noise,
+    ['zz-top', 50], ['aa-runner', 10], ['constructor', 3], ['__proto__', 2]];
+  const total = 2048 + 50 + 10 + 3 + 2;
+  for (const [name, ordered] of [
+    ['late dominant categories', entries],
+    ['reversed import order', [...entries].reverse()]
+  ]) await t.test(name, async () => {
+    const sources = Object.fromEntries(ordered);
+    assert.equal(Object.hasOwn(sources, '__proto__'), true);
+    const h = await openSourceSummaryPreview(sources, total);
+    assert.equal(h.modals, 1);
+    assert.match(h.modalHtml,
+      /zz-top: 50, aa-runner: 10, constructor: 3, __proto__: 2, noise-0000: 1, noise-0001: 1, noise-0002: 1, noise-0003: 1/);
+    assert.doesNotMatch(h.modalHtml, /noise-0004: 1|noise-2047: 1/);
+    assert.match(h.modalHtml,
+      /2044 additional source categories \(2044 selected events\) omitted from this preview/);
+    assert.match(h.modalHtml, /labels are not verified identities/);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-source-breakdown']);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+  });
+});
+
+test('distinct long source labels remain distinguishable after the 96-codepoint preview bound', async () => {
+  const prefix = 'long-'.padEnd(96, 'x');
+  const sources = {[prefix + '-first']: 3, [prefix + '-second']: 2};
+  const h = await openSourceSummaryPreview(sources, 5);
+  const visible = prefix + '… [source label truncated]';
+  assert.equal(h.modals, 1);
+  assert.ok(h.modalHtml.includes(visible + ' [distinct reported category 1/2]: 3'));
+  assert.ok(h.modalHtml.includes(visible + ' [distinct reported category 2/2]: 2'));
+  assert.doesNotMatch(h.modalHtml, /-first|-second/,
+    'bounded preview must not leak hidden suffixes');
+  assert.match(h.modalHtml, /labels are not verified identities/);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-source-breakdown']);
+  assert.equal(h.tickets.length, 0);
+  assert.equal(h.downloads, 0);
+});
+
+test('escaped bidi control and literal codepoint text are distinct reported source categories', async () => {
+  const rendered = 'team[U+202E]ops';
+  const sources = {'team\u202Eops': 2, [rendered]: 2};
+  const h = await openSourceSummaryPreview(sources, 4);
+  assert.equal(h.modals, 1);
+  assert.ok(h.modalHtml.includes(rendered + ' [distinct reported category 1/2]: 2'));
+  assert.ok(h.modalHtml.includes(rendered + ' [distinct reported category 2/2]: 2'));
+  assert.doesNotMatch(h.modalHtml, /\u202E/, 'raw bidi override must not enter rendered HTML');
+  assert.doesNotMatch(h.modalHtml, /additional source categories/);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-source-breakdown']);
+  assert.equal(h.tickets.length, 0);
+  assert.equal(h.downloads, 0);
+});
+
+test('distinct empty and whitespace-only source keys do not collapse in review', async () => {
+  const h = await openSourceSummaryPreview({'': 2, '   ': 1}, 3);
+  assert.equal(h.modals, 1);
+  assert.ok(h.modalHtml.includes('[blank source label] [distinct reported category 1/2]: 2'));
+  assert.ok(h.modalHtml.includes('[blank source label] [distinct reported category 2/2]: 1'));
+  assert.match(h.modalHtml, /labels are not verified identities/);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-source-breakdown']);
+  assert.equal(h.tickets.length, 0);
+  assert.equal(h.downloads, 0);
+});
+
+test('selected evidence count discloses larger retained history without inventing missing work', async () => {
+  const h = harness();
+  await settle();
+  h.reply(h.reads[0], {...h.preview('range', 'initial'), retained_rows: 12});
+  await settle();
+  assert.match(h.summary.textContent,
+    /2 recorded events selected \(12 retained rows reported; capture completeness unverified\)/);
+  const open = h.bars[0].controls.button.onclick();
+  await settle();
+  h.reply(h.reads[1], {...h.preview('range', 'selected'), retained_rows: 12});
+  await open;
+  assert.equal(h.modals, 1);
+  assert.match(h.modalHtml, /Coverage accounting: 2 selected recorded events out of 12 retained rows reported/);
+  assert.match(h.modalHtml, /not proof of inactivity or missed work/);
+  assert.match(h.modalHtml, /Retained rows do not prove complete capture/);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-selected']);
+  assert.equal(h.tickets.length, 0);
+  assert.equal(h.downloads, 0);
+});
+
+test('equal selected and retained counts still do not claim complete capture', async () => {
+  const h = harness();
+  await settle();
+  h.reply(h.reads[0], h.preview('range', 'initial'));
+  await settle();
+  assert.match(h.summary.textContent,
+    /2 recorded events selected \(2 retained rows reported; capture completeness unverified\)/);
+  const open = h.bars[0].controls.button.onclick();
+  await settle();
+  h.reply(h.reads[1], h.preview('range', 'equal'));
+  await open;
+  assert.match(h.modalHtml, /Coverage accounting: 2 selected recorded events out of 2 retained rows reported/);
+  assert.match(h.modalHtml, /Retained rows do not prove complete capture/);
+  assert.doesNotMatch(h.modalHtml, /all work (?:was|has been) captured/i);
+  assert.equal(h.tickets.length, 0);
+  assert.equal(h.downloads, 0);
+});
+
+
+test('AI saved-history grant disclosure checks supplied grant provenance without widening access', async t => {
+  const now = Date.now();
+  const futureExpiry = new Date(now + 86_400_000).toISOString();
+  const validPast = new Date(now - 60_000).toISOString().replace(/Z$/, '001+00:00');
+  const cases = [
+    ['malformed supplied grant time', {granted_at: 'yesterday', expires_at: futureExpiry}, false],
+    ['future supplied grant time', {
+      granted_at: new Date(now + 60_000).toISOString(), expires_at: futureExpiry}, false],
+    ['future fractional grant time', {
+      granted_at: new Date(now + 60_000).toISOString().replace(/Z$/, '000001Z'),
+      expires_at: futureExpiry}, false],
+    ['grant later than expiration', {
+      granted_at: new Date(now + 120_000).toISOString(),
+      expires_at: new Date(now + 60_000).toISOString()}, false],
+    ['valid past offset and microsecond grant', {
+      granted_at: validPast, expires_at: futureExpiry}, true],
+    ['valid indefinite grant', {granted_at: validPast, expires_at: null}, true],
+    ['legacy absent grant timestamp', {expires_at: futureExpiry}, true],
+    ['legacy null grant timestamp', {granted_at: null, expires_at: futureExpiry}, true]
+  ];
+  for (const [name, metadata, verified] of cases) await t.test(name, async () => {
+    const h = harness();
+    await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+    const opening = h.bars[0].controls.button.onclick();
+    await settle();
+    h.reply(h.reads[1], {...h.preview('range', 'grant-provenance'),
+      local_ai_enabled: true,
+      local_ai_history_access: {mode: 'all_saved', ...metadata}});
+    await opening;
+    assert.equal(h.modals, 1);
+    if (verified) {
+      assert.match(h.modalHtml, /Local saved-history grant: all saved work/);
+      assert.match(h.modalHtml, /snapshot only; current consent still applies/);
+    } else {
+      assert.match(h.modalHtml, /permission could not be verified from this preview/);
+      assert.doesNotMatch(h.modalHtml, /Local saved-history grant:/);
+    }
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-grant-provenance']);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+  });
+});
+
+
+test('truncated UTC date review states exact omitted selected events without inventing pagination', async t => {
+  const utcDay = n => new Date(Date.UTC(2026, 0, 1 + n)).toISOString();
+  const listed = Array.from({length: 31}, (_, i) => ({
+    since: utcDay(i), until: utcDay(i + 1), event_rows: 1
+  }));
+  for (const kind of ['ordinary', 'health-only']) await t.test(kind, async () => {
+    const healthOnly = kind === 'health-only';
+    const h = await openAllRetainedPreview(d => ({
+      ...d,
+      canonical_rows: 38, retained_rows: 40,
+      first_observed_at: '2026-01-01T12:00:00Z',
+      last_observed_at: '2026-02-01T12:00:00Z',
+      event_types: healthOnly ? {capture_health: 38} : {focus_span: 38},
+      sources: {desktop: 38},
+      redacted_examples: [],
+      work_evidence: {ordinary_event_rows: healthOnly ? 0 : 38,
+        health_event_rows: healthOnly ? 38 : 0},
+      analysis_plan: {page_size: 200, date_chunks: listed,
+        more_dates_not_listed: true, chunks_respect_selected_window: true}
+    }));
+    assert.equal(h.modals, 1);
+    assert.match(h.modalHtml, /Only the first 31 observed UTC dates are listed/);
+    assert.match(h.modalHtml, /7 additional selected recorded events occur on unlisted later dates/);
+    assert.match(h.modalHtml, /This panel cannot page those dates/);
+    assert.match(h.modalHtml, /neither proves complete capture/);
+    assert.doesNotMatch(h.modalHtml, /Continue through the remaining selected dates/);
+    assert.doesNotMatch(h.modalHtml, /7 additional dates/);
+    if (healthOnly) {
+      assert.match(h.modalHtml, /Review capture-health diagnostic dates/);
+      assert.doesNotMatch(h.modalHtml, /Ask your AI to process one day at a time/);
+    } else {
+      assert.match(h.modalHtml, /ordinary work observations are present/);
+    }
+    await h.modal['#analysisCopy'].onclick();
+    assert.equal(h.copied.length, 1);
+    if (healthOnly) assertCopyEvidenceWarning(h.copied, 'request-rollover', true);
+    else assert.deepEqual(h.copied, ['request-rollover']);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+  });
+});
+
+test('complete and legacy UTC date plans do not invent omitted rows or pagination', async t => {
+  const day = n => new Date(Date.UTC(2026, 0, 1 + n)).toISOString();
+  for (const coverage of ['complete', 'legacy']) await t.test(coverage, async () => {
+    const h = await openAllRetainedPreview(d => ({
+      ...d,
+      canonical_rows: 4, retained_rows: 4,
+      first_observed_at: '2026-01-01T12:00:00Z',
+      last_observed_at: coverage === 'complete'
+        ? '2026-01-02T12:00:00Z' : '2026-01-01T13:00:00Z',
+      event_types: {focus_span: 4}, sources: {desktop: 4},
+      analysis_plan: {date_chunks: coverage === 'complete'
+        ? [{since: day(0), until: day(1), event_rows: 2},
+          {since: day(1), until: day(2), event_rows: 2}]
+        : [{since: day(0), until: day(1), event_rows: 4}],
+      ...(coverage === 'complete' ? {more_dates_not_listed: false} : {})}
+    }));
+    assert.equal(h.modals, 1);
+    assert.doesNotMatch(h.modalHtml, /additional selected recorded events occur on unlisted later dates/);
+    assert.doesNotMatch(h.modalHtml, /This panel cannot page those dates/);
+    await h.modal['#analysisCopy'].onclick();
+    assert.deepEqual(h.copied, ['request-rollover']);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+  });
+});
+
+
+test('non-paginated review does not promise full export coverage or AI pages', async t => {
+  for (const kind of ['ordinary', 'health-only']) await t.test(kind, async () => {
+    const healthOnly = kind === 'health-only';
+    const h = await openAllRetainedPreview(d => ({
+      ...d,
+      event_types: healthOnly ? {capture_health: 2} : {focus_span: 2},
+      work_evidence: {ordinary_event_rows: healthOnly ? 0 : 2,
+        health_event_rows: healthOnly ? 2 : 0}
+    }));
+    assert.equal(h.modals, 1);
+    assert.doesNotMatch(h.modalHtml, /follow every page|file download still contains the full selected period/i);
+    if (healthOnly) {
+      assert.match(h.modalHtml, /Review capture-health diagnostic dates/);
+      assert.match(h.modalHtml, /An optional diagnostic download requests the selected period again, subject to current consent, retention and access/);
+      assert.match(h.modalHtml, /not a verified workflow or guaranteed complete capture/);
+      assert.doesNotMatch(h.modalHtml, /ask an AI to review one date at a time/i);
+    } else {
+      assert.match(h.modalHtml, /bounded list of observed UTC dates, not a paginated chronology/);
+      assert.match(h.modalHtml, /may ask an AI to review one date at a time/);
+      assert.match(h.modalHtml, /disclose gaps and unknown coverage/);
+      assert.match(h.modalHtml, /A download requests the selected period again, subject to current consent, retention and access/);
+      assert.match(h.modalHtml, /Without detailed chronology selected, it is a summary package rather than raw event rows/);
+    }
+    await h.modal['#analysisCopy'].onclick();
+    if (healthOnly) assertCopyEvidenceWarning(h.copied, 'request-rollover', true);
+    else assert.deepEqual(h.copied, ['request-rollover']);
+    assert.equal(h.tickets.length, 0);
+    assert.equal(h.downloads, 0);
+  });
+});
+
+test('zero-event review never implies pagination, export coverage or available download', async () => {
+  const h = await openAllRetainedPreview(d => ({
+    ...d,
+    canonical_rows: 0, retained_rows: 3,
+    first_observed_at: null, last_observed_at: null,
+    event_types: {}, sources: {}, redacted_examples: [],
+    work_evidence: {ordinary_event_rows: 0, health_event_rows: 0},
+    analysis_plan: {date_chunks: [], more_dates_not_listed: false}
+  }));
+  assert.equal(h.modals, 1);
+  assert.match(h.modalHtml, /No evidence package is available for this zero-event selection/);
+  assert.match(h.modalHtml, /Evidence download unavailable/);
+  assert.doesNotMatch(h.modalHtml, /follow every page|download requests the selected period again/i);
+  assert.equal(h.modal['#analysisDownload'].disabled, true);
+  await h.modal['#analysisCopy'].onclick();
+  assertCopyEvidenceWarning(h.copied, 'request-rollover');
+  assert.equal(h.tickets.length, 0);
+  assert.equal(h.downloads, 0);
+});
+
+test('mixed daily event totals cannot be mistaken for dated workflow observations', async t => {
+  const utcDay = observedStart.slice(0, 10) + 'T00:00:00Z';
+  const nextUtcDay = new Date(Date.parse(utcDay) + 86400000).toISOString();
+  for (const kind of ['mixed', 'ordinary-only', 'diagnostic-only']) {
+    await t.test(kind, async () => {
+      const mixed = kind === 'mixed', diagnosticOnly = kind === 'diagnostic-only';
+      const ordinary = diagnosticOnly ? 0 : mixed ? 2 : 4;
+      const health = 4 - ordinary;
+      const h = await openAllRetainedPreview(d => ({
+        ...d,
+        canonical_rows: 4, retained_rows: 4,
+        event_types: diagnosticOnly ? {capture_health: 4}
+          : mixed ? {focus_span: 2, capture_health: 1, capture_gap: 1}
+            : {focus_span: 4},
+        sources: {desktop: 4},
+        work_evidence: {ordinary_event_rows: ordinary, health_event_rows: health},
+        analysis_plan: {date_chunks: [{
+          since: utcDay, until: nextUtcDay, event_rows: 4
+        }], more_dates_not_listed: false}
+      }));
+      assert.equal(h.modals, 1);
+      assert.match(h.modalHtml, /4 events<\/li>/);
+      if (mixed) {
+        assert.match(h.modalHtml, /Mixed selected evidence: 2 ordinary work observations and 2 capture-health\/gap records/);
+        assert.match(h.modalHtml, /Daily totals do not distinguish their event types/);
+        assert.match(h.modalHtml, /a listed date may contain diagnostics only/);
+        assert.match(h.modalHtml, /Inspect event-level evidence before treating any date as workflow evidence/);
+        assert.match(h.modalHtml, /Review selected work evidence \(workflow unverified\)|bounded list of observed UTC dates/);
+      } else {
+        assert.doesNotMatch(h.modalHtml, /Mixed selected evidence:/);
+        if (diagnosticOnly) {
+          assert.match(h.modalHtml, /Review capture-health diagnostic dates/);
+          assert.doesNotMatch(h.modalHtml, /may ask an AI to review one date at a time/);
+        }
+      }
+      await h.modal['#analysisCopy'].onclick();
+      if (diagnosticOnly) assertCopyEvidenceWarning(h.copied, 'request-rollover', true);
+      else if (mixed) {
+        assert.equal(h.copied.length, 1);
+        assert.match(h.copied[0], /^request-rollover\n\nEvidence limitation: This selected local period contains 2 ordinary work observations and 2 capture-health\/gap records/);
+        assert.match(h.copied[0], /UTC daily totals are untyped: a listed date may contain only diagnostics, not workflow steps/);
+        assert.match(h.copied[0], /Inspect event-level evidence and source provenance before inferring any workflow/);
+        assert.match(h.copied[0], /do not treat diagnostic records as work, or claim verified business completion, savings, or ROI/);
+        assert.match(h.copied[0], /Capture completeness is unverified/);
+      } else assert.deepEqual(h.copied, ['request-rollover']);
+      assert.equal(h.tickets.length, 0);
+      assert.equal(h.downloads, 0);
+    });
+  }
+});
+
+
+test('mixed legacy evidence still carries diagnostic provenance into copied agent request', async () => {
+  const h = await openAllRetainedPreview(d => ({
+    ...d, canonical_rows: 3, retained_rows: 3,
+    event_types: {focus_span: 1, capture_health: 2},
+    sources: {desktop: 3}, work_evidence: undefined, analysis_plan: undefined
+  }));
+  assert.equal(h.modals, 1);
+  assert.match(h.modalHtml, /Mixed selected evidence: 1 ordinary work observation and 2 capture-health\/gap records/);
+  assert.match(h.modalHtml, /No daily breakdown was provided; date coverage is unknown/);
+  await h.modal['#analysisCopy'].onclick();
+  assert.equal(h.copied.length, 1);
+  assert.match(h.copied[0], /^request-rollover\n\nEvidence limitation: This selected local period contains 1 ordinary work observation and 2 capture-health\/gap records/);
+  assert.match(h.copied[0], /UTC daily totals are untyped/);
+  assert.match(h.copied[0], /Capture completeness is unverified/);
+  assert.equal(h.tickets.length, 0);
+  assert.equal(h.downloads, 0);
+});
+
+test('sensitive-data warning precedes raw choice and is associated with both checkboxes', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const opening = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await opening;
+
+  const html = h.modalHtml;
+  const warning = html.indexOf('<p id="analysisSensitiveWarning">');
+  const choice = html.indexOf('id="analysisDetailed"');
+  const acknowledgement = html.indexOf('id="analysisReviewedDetailed"');
+  assert.ok(warning >= 0 && warning < choice && choice < acknowledgement,
+    'readable privacy warning must precede both high-risk controls');
+  assert.match(html, /id="analysisSensitiveWarning">Name redaction is best effort, not anonymization/);
+  assert.match(html, /id="analysisDetailed" type="checkbox" aria-describedby="analysisSensitiveWarning"/);
+  assert.match(html, /id="analysisReviewedDetailed" type="checkbox" aria-describedby="analysisSensitiveWarning"/);
+
+  h.modal['#analysisDetailed'].checked = true;
+  h.modal['#analysisDetailed'].onchange();
+  await h.modal['#analysisDownload'].onclick();
+  assert.equal(h.tickets.length, 0, 'an accessible warning never substitutes for explicit acknowledgement');
+  assert.equal(h.downloads, 0);
+});
+
+test('detailed chronology requires explicit period-local acknowledgement before ticket creation', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const opening = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'reviewed')); await opening;
+  const detailed = h.modal['#analysisDetailed'];
+  const reviewed = h.modal['#analysisReviewedDetailed'];
+  assert.match(h.modalHtml, /id="analysisReviewedDetailed" type="checkbox"/);
+  assert.match(h.modalHtml, /This does not authorize sharing or AI access/);
+  assert.equal(reviewed.checked, false);
+  assert.equal(reviewed.disabled, true, 'raw-data acknowledgement is unavailable for summary-only selection');
+  detailed.checked = true;
+  detailed.onchange();
+  assert.equal(reviewed.disabled, false);
+  await h.modal['#analysisDownload'].onclick();
+  assert.equal(h.tickets.length, 0, 'unreviewed raw evidence must not request a ticket');
+  assert.equal(h.downloads, 0);
+  assert.match(h.modal['#analysisActionStatus'].textContent, /Detailed chronology was not requested/);
+  assert.equal(h.modal['#analysisDownload'].disabled, false);
+  await h.modal['#analysisCopy'].onclick();
+  assert.deepEqual(h.copied, ['request-reviewed'], 'copy is a separate, non-export action');
+  reviewed.checked = true;
+  const accepted = h.modal['#analysisDownload'].onclick();
+  await settle();
+  assert.equal(h.tickets.length, 1);
+  assert.equal(JSON.parse(h.tickets[0].options.body).include_raw, true);
+  assert.equal(reviewed.disabled, true);
+  h.reply(h.tickets[0], {});
+  await accepted;
+  assert.equal(h.downloads, 1);
+  assert.equal(reviewed.disabled, false);
+  detailed.checked = false;
+  detailed.onchange();
+  detailed.checked = true;
+  detailed.onchange();
+  assert.equal(reviewed.checked, false, 'changing detail choice revokes the local acknowledgement');
+  await h.modal['#analysisDownload'].onclick();
+  assert.equal(h.tickets.length, 1);
+  detailed.checked = false;
+  detailed.onchange();
+  const summary = h.modal['#analysisDownload'].onclick();
+  await settle();
+  assert.equal(h.tickets.length, 2, 'summary download does not require raw-data acknowledgement');
+  assert.equal(JSON.parse(h.tickets[1].options.body).include_raw, false);
+  h.reply(h.tickets[1], {});
+  await summary;
+  assert.equal(h.downloads, 2);
+});
+
+test('detailed-evidence acknowledgement is disabled on stale scope and never carries to new review', async () => {
+  const h = harness();
+  await settle(); h.reply(h.reads[0], h.preview('range', 'initial')); await settle();
+  const opening = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[1], h.preview('range', 'old')); await opening;
+  h.modal['#analysisDetailed'].checked = true;
+  h.modal['#analysisDetailed'].onchange();
+  h.modal['#analysisReviewedDetailed'].checked = true;
+  h.bars[0].controls.select.value = 'all';
+  h.bars[0].controls.select.onchange({target: h.bars[0].controls.select});
+  assert.equal(h.modal['#analysisReviewedDetailed'].disabled, true);
+  await h.modal['#analysisDownload'].onclick();
+  assert.equal(h.tickets.length, 0);
+  assert.equal(h.downloads, 0);
+  await settle(); h.reply(h.reads[2], h.preview('all', 'new-period')); await settle();
+  const next = h.bars[0].controls.button.onclick();
+  await settle(); h.reply(h.reads[3], h.preview('all', 'fresh')); await next;
+  assert.equal(h.modal['#analysisReviewedDetailed'].disabled, true,
+    'fresh summary-only review cannot pre-acknowledge raw chronology');
+  assert.equal(h.modal['#analysisReviewedDetailed'].checked, false);
+  assert.equal(h.modal['#analysisDetailed'].checked, false);
+  h.modal['#analysisDetailed'].checked = true;
+  await h.modal['#analysisDownload'].onclick();
+  assert.equal(h.tickets.length, 0, 'old acknowledgement must not permit a new-period ticket');
+  assert.match(h.modal['#analysisActionStatus'].textContent, /check the detailed-evidence acknowledgement/);
+});
