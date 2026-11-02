@@ -4,6 +4,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import hashlib
 import os
 from threading import Thread
 from urllib import parse
@@ -383,3 +384,142 @@ def test_two_page_cli_requires_consents_and_explicit_page_budget(
     printed = capsys.readouterr().out
     assert '"pages_fetched": 2' in printed
     assert all(secret not in printed for secret in (CASE_A, CASE_B, CASE_C, TOKEN, "sandbox"))
+
+
+def _compare(origin, output, previous, previous_sha, *, namespace="sandbox", consent=True):
+    return review(
+        instance=origin, confirm_host="127.0.0.1", namespace=namespace,
+        cases=[CASE_A, CASE_B, CASE_C], token=TOKEN, output=output,
+        allow_loopback_http=True, previous_review=previous,
+        previous_sha256=previous_sha, consent_compare_previous=consent,
+    )
+
+
+def test_two_real_source_snapshots_expose_case_transitions_without_writes(private_dir):
+    first = private_dir / "first.json"
+    second = private_dir / "second.json"
+    third = private_dir / "third.json"
+    with provider() as (origin, calls):
+        receipt1 = run(origin, first)
+    assert len(calls) == 1
+    baseline = first.read_bytes()
+    with provider([
+        {"Id": CASE_A, "IsDeleted": False},
+        {"Id": CASE_B, "IsDeleted": True},
+        {"Id": CASE_C, "IsDeleted": False},
+    ]) as (origin, calls):
+        receipt2 = _compare(origin, second, first, receipt1["review_sha256"])
+    assert len(calls) == 1 and all(call[0] == "GET" for call in calls)
+    assert first.read_bytes() == baseline
+    assert receipt2["comparison"] == {
+        "changed": 3, "unchanged": 0,
+        "previous_review_sha256": receipt1["review_sha256"],
+    }
+    artifact = json.loads(second.read_text())
+    assert artifact["comparison"]["previous_checked_at_utc"] == json.loads(
+        baseline)["checked_at_utc"]
+    assert artifact["comparison"]["transitions"] == [
+        {"case_id": _key("sandbox", "case", case), "previous_state": old,
+         "current_state": new}
+        for case, old, new in sorted([
+            (CASE_A, "soft_deleted", "active"),
+            (CASE_B, "active", "soft_deleted"),
+            (CASE_C, "unresolved", "active"),
+        ], key=lambda row: _key("sandbox", "case", row[0]))
+    ]
+    assert artifact["missing_means_deleted"] is False
+    assert artifact["owg_deletion_performed"] is False
+    assert artifact["checkpoint_advanced"] is False
+    with provider([
+        {"Id": CASE_A, "IsDeleted": False},
+        {"Id": CASE_B, "IsDeleted": True},
+    ]) as (origin, calls):
+        receipt3 = _compare(origin, third, second, receipt2["review_sha256"])
+    assert len(calls) == 1
+    assert receipt3["comparison"]["changed"] == 1
+    assert receipt3["comparison"]["unchanged"] == 2
+    assert json.loads(third.read_text())["comparison"]["transitions"]
+    for secret in (CASE_A, CASE_B, CASE_C, TOKEN, "sandbox"):
+        assert secret not in first.read_text() + second.read_text() + third.read_text()
+        assert secret not in json.dumps(receipt2) + json.dumps(receipt3)
+    if os.name == "posix":
+        assert second.stat().st_mode & 0o077 == 0
+        assert third.stat().st_mode & 0o077 == 0
+
+
+@pytest.mark.parametrize("kind", [
+    "missing_digest", "wrong_digest", "no_consent", "wrong_namespace",
+    "altered_state", "altered_counts", "altered_flags", "noncanonical",
+    "symlink", "wrong_case", "unknown_key",
+])
+def test_previous_review_refusal_happens_before_provider_get(private_dir, kind):
+    first = private_dir / "baseline.json"
+    with provider() as (origin, _):
+        original = run(origin, first)
+    digest = original["review_sha256"]
+    previous = first
+    namespace = "sandbox"
+    consent = True
+    if kind == "missing_digest":
+        digest = None
+    elif kind == "wrong_digest":
+        digest = "a" * 64
+    elif kind == "no_consent":
+        consent = False
+    elif kind == "wrong_namespace":
+        namespace = "different"
+    elif kind == "symlink":
+        previous = private_dir / "linked.json"
+        previous.symlink_to(first)
+    elif kind in ("altered_state", "altered_counts", "altered_flags",
+                  "noncanonical", "wrong_case", "unknown_key"):
+        prior = json.loads(first.read_text())
+        if kind == "altered_state":
+            prior["case_states"][0]["source_state"] = "purged"
+        elif kind == "altered_counts":
+            prior["counts"]["active"] = 99
+        elif kind == "altered_flags":
+            prior["owg_deletion_performed"] = True
+        elif kind == "wrong_case":
+            prior["case_states"][0]["case_id"] = "a" * 64
+        elif kind == "unknown_key":
+            prior["source_token"] = "must-refuse"
+        previous = private_dir / "altered.json"
+        if kind == "noncanonical":
+            previous.write_text(json.dumps(prior, indent=2))
+        else:
+            previous.write_text(json.dumps(prior, sort_keys=True,
+                                           separators=(",", ":")) + "\n")
+        if os.name == "posix":
+            previous.chmod(0o600)
+        digest = hashlib.sha256(previous.read_bytes()).hexdigest()
+    with provider() as (origin, calls):
+        with pytest.raises(LifecycleReviewError):
+            _compare(origin, private_dir / "not-created.json", previous, digest,
+                     namespace=namespace, consent=consent)
+    assert calls == []
+    assert not (private_dir / "not-created.json").exists()
+
+
+def test_cli_previous_review_requires_explicit_separate_consent(private_dir,
+                                                                monkeypatch, capsys):
+    monkeypatch.setenv("OWG_SALESFORCE_READ_TOKEN", TOKEN)
+    first = private_dir / "first.json"
+    with provider() as (origin, _):
+        receipt = run(origin, first)
+    with provider([{"Id": CASE_A, "IsDeleted": False}]) as (origin, calls):
+        args = ["--instance", origin, "--confirm-host", "127.0.0.1",
+                "--namespace", "sandbox", "--case", CASE_A, "--case", CASE_B,
+                "--case", CASE_C, "--output", str(private_dir / "second.json"),
+                "--previous-review", str(first),
+                "--previous-sha256", receipt["review_sha256"],
+                "--allow-loopback-http", "--consent-source-lifecycle-read",
+                "--consent-private-review"]
+        assert main(args) == 2
+        assert calls == []
+        assert main(args + ["--consent-compare-previous-review"]) == 0
+        assert len(calls) == 1
+    printed = capsys.readouterr().out
+    assert '"changed": 1' in printed
+    for secret in (CASE_A, CASE_B, CASE_C, TOKEN, "sandbox"):
+        assert secret not in printed
