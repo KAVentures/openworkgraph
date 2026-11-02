@@ -1775,6 +1775,7 @@ async def verify_local_declared_dependency_payment_goals(request: Request, respo
             previous[ref] = await asyncio.to_thread(
                 read_operation_evidence, case["admitted"], case["signature"],
                 scope=scope, secret=secret, guard=guard,
+                resource_ref=case["resource_ref"],
             )
         await asyncio.to_thread(guard)
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
