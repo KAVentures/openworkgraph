@@ -228,3 +228,57 @@ def test_auth_confirmation_scope_and_mid_read_revocation(local, monkeypatch):
         denied = _page(client, headers)
         assert denied.status_code in (403, 409, 422)
         assert calls
+
+
+def test_disputed_provider_receipt_does_not_count_as_verified_portfolio_outcome(local, monkeypatch):
+    with TestClient(app) as client:
+        headers = _auth()
+        saved = _cases(client, headers)
+        _assess(client, headers, saved, A, "met")
+        monkeypatch.setattr(routes, "stripe_open_work_case_context", _scan)
+        link = client.post(BASE + "/operation-link", headers=headers, json={
+            **_cas(saved, A), "confirm_source_scan": True,
+            "max_pages": 2, "resource_ref": R,
+        })
+        assert link.status_code == 200, link.text
+        monkeypatch.setattr(routes, "source_operation_receipt", _paid)
+        checked = client.post(BASE + "/operation-ledger/check", headers=headers, json={
+            **_cas(saved, A), "confirm_source_verification": True,
+            "record_link": link.json()["record_link"],
+        })
+        assert checked.status_code == 200, checked.text
+        disputed = client.post(BASE + "/operation-ledger/dispute", headers=headers, json={
+            **_cas(saved, A), "confirm_dispute": True,
+            "target_sequence": 1, "reason_code": "operator_dispute",
+        })
+        assert disputed.status_code == 200, disputed.text
+        page = _page(client, headers, max_cases=3)
+        assert page.status_code == 200, page.text
+        a = page.json()["cases"][0]
+        assert a["provider_check_count"] == 1
+        assert a["disputed_provider_check_count"] == 1
+        assert a["historical_last_provider_state"] == "unknown"
+        assert "historical_operation_receipt_unknown_or_disputed" in a["review_attention"]
+        assert a["customer_outcome_verified"] is False
+
+
+def test_mid_read_account_switch_fails_closed_without_cross_account_rows(local, monkeypatch):
+    with TestClient(app) as client:
+        headers = _auth()
+        _cases(client, headers)
+        original = routes.read_human_outcomes
+        calls = []
+        def switch(*args, **kwargs):
+            calls.append(True)
+            result = original(*args, **kwargs)
+            local["id"] = "acct_OTHER_PRIVATE"
+            return result
+        monkeypatch.setattr(routes, "read_human_outcomes", switch)
+        denied = _page(client, headers)
+        assert denied.status_code in (403, 409, 422)
+        assert calls
+        assert "acct_PRIVATE" not in denied.text
+        # A different source scope cannot enumerate the former reviewed rows.
+        new_page = _page(client, headers)
+        assert new_page.status_code == 200, new_page.text
+        assert new_page.json()["total_reviewed_cases"] == 0
