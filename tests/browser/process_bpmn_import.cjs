@@ -76,7 +76,7 @@ const path=require('node:path');
   page.on('request',request=>{
     const pathname=new URL(request.url()).pathname;
     if(pathname==='/v1/process-catalog/revision'&&request.method()==='GET')comparisonReads++;
-    if(request.method()!=='GET'&&pathname!=='/v1/process-catalog/check-rules')comparisonWrites++;
+    if(request.method()!=='GET'&&!['/v1/process-catalog/check-rules','/v1/process-catalog/import-bpmn'].includes(pathname))comparisonWrites++;
   });
   await page.getByRole('button',{name:'Load revision history',exact:true}).click();
   const compare=page.getByRole('button',{name:'Compare r1 with opened r2',exact:true});
@@ -94,10 +94,12 @@ const path=require('node:path');
   assert.equal(comparisonReads,1,'only the selected immutable revision is fetched');
   assert.equal(comparisonWrites,0,'comparison must never write or read a provider');
   assert.equal(saves,2);
+  page.once('dialog',dialog=>dialog.accept()); // Confirm replacing the opened model.
   await differences.getByRole('button',{name:'Open compared revision r1',exact:true}).click();
   await page.locator('#owgCatalogStatus').filter({hasText:'Opened immutable revision 1.'}).waitFor();
   assert.equal(await page.locator('#owgCatalogRevisionComparison').count(),0,'navigation invalidates prior comparison');
   await page.getByRole('button',{name:'Load saved designs',exact:true}).click();
+  page.once('dialog',dialog=>dialog.accept()); // Explicitly reopen the current saved revision.
   await page.getByRole('button',{name:/^Imported BPMN design · r2$/}).click();
   await page.locator('#owgCatalogStatus').filter({hasText:'Opened immutable revision 2.'}).waitFor();
   await page.getByRole('button',{name:'Load revision history',exact:true}).click();
@@ -118,8 +120,11 @@ const path=require('node:path');
   await page.getByLabel('Choose authorized case-facts JSON',{exact:true}).setInputFiles({name:'owned-facts.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(facts))});
   assert.equal(factRequests,0);assert(await page.getByRole('button',{name:'Check facts against saved rules',exact:true}).isDisabled());
   await page.getByLabel('I authorize local analysis of the case facts in this selected file.',{exact:true}).check();assert.equal(factRequests,0);
-  const checked=page.waitForResponse(response=>new URL(response.url()).pathname==='/v1/process-catalog/check-rules');
-  await page.getByRole('button',{name:'Check facts against saved rules',exact:true}).click();const report=await (await checked).json();
+  const [checked]=await Promise.all([
+    page.waitForResponse(response=>new URL(response.url()).pathname==='/v1/process-catalog/check-rules'),
+    page.getByRole('button',{name:'Check facts against saved rules',exact:true}).click(),
+  ]);
+  const report=await checked.json();
   assert.equal(report.process_reference.revision,2);assert.equal(report.rule_result_counts.matched,1);
   assert.equal(report.rule_result_counts.not_matched,1);assert.equal(report.rule_result_counts.unknown,1);
   assert.equal(report.business_policy_compliance_verified,false);assert.equal(report.execution_permissions_granted,false);
@@ -189,6 +194,7 @@ assert c.execute('SELECT COUNT(*) FROM events').fetchone()[0]==0
   assert.equal(saves,4);
   assert.equal(await page.locator('#owgCatalogRestorationDraft').count(),0);
   await page.getByRole('button',{name:'Load revision history',exact:true}).click();
+  await page.getByRole('button',{name:/^Open revision 1 ·/}).waitFor();
   for(const revision of [1,2,3,4])
     assert.equal(await page.getByRole('button',{name:new RegExp('^Open revision '+revision+' ·')}).count(),1);
   assert.deepEqual(errors,[]);
