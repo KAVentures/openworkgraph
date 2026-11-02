@@ -450,6 +450,7 @@ events, not verified financial return or causal improvement.
 
 The committed Chromium acceptance exercises the new action against a real
 local CSV import and authenticated analysis, including dimensionless output,
-missing-case coverage, capacity/name/stage refusal, saved replay, CSV and
-accessibility. Native exact-head CI and consenting-user pilot acceptance
+missing-case coverage, capacity/name/stage refusal, saved replay, CSV,
+zero-denominator withholding through the same authenticated divide operator,
+and accessibility. Native exact-head CI and consenting-user pilot acceptance
 remain separate release requirements.
