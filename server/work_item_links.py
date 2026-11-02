@@ -53,7 +53,7 @@ _MAX_ITEMS = 50
 _MAX_EVENT_IDS = 50
 _MAX_CANDIDATES = 50
 _MAX_DUPLICATE_PAYLOAD_NODES = 10_000
-_CONFIDENCE = {"same_record": 0.95, "clipboard_transfer": 0.85, "same_tab_single_record": 0.7, "same_tab_bracketed_record": 0.72, "same_tab_interleaved_bracketed_record": 0.68, "same_tab_single_record_interleaved_bracketed": 0.66}
+_CONFIDENCE = {"same_record": 0.95, "clipboard_transfer": 0.85, "same_tab_single_record": 0.7, "same_tab_bracketed_record": 0.72, "same_tab_interleaved_bracketed_record": 0.68, "same_tab_single_record_interleaved_bracketed": 0.66, "same_tab_single_record_cross_app_bracketed": 0.62}
 _CANDIDATE_CONFIDENCE = {"same_tab_multiplexed": 0.4, "same_tab_unreferenced": 0.35, "surface_continuity": 0.3}
 
 
@@ -552,10 +552,16 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
         len({r["ref"] for r in tab_rows if r["ref"]}) == 1
     }
     single_focus_proposals = [
-        (anchor, loose, ref, "same_tab_single_record_interleaved_bracketed")
+        (anchor, loose, ref,
+         "same_tab_single_record_cross_app_bracketed"
+         if basis == "same_tab_cross_app_interleaved_bracketed_record"
+         else "same_tab_single_record_interleaved_bracketed")
         for anchor, loose, ref, basis in
-        bracketed_multiplexed_tab_focus(rows, single_record_tabs)
-        if basis == "same_tab_interleaved_bracketed_record"
+        bracketed_multiplexed_tab_focus(
+            rows, single_record_tabs, cross_app_components=pre_tab_root,
+        )
+        if basis in ("same_tab_interleaved_bracketed_record",
+                     "same_tab_cross_app_interleaved_bracketed_record")
         and loose in single_record_boundaries
     ]
     focus_proposals.extend(single_focus_proposals)
@@ -613,6 +619,7 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
     bracketed_tab_focus_links = 0
     interleaved_tab_focus_links = 0
     single_record_interleaved_focus_links = 0
+    single_record_cross_app_focus_links = 0
     bracketed_tab_focus_conflicts = 0
     for anchor_id, loose_id, focus_ref, focus_basis in focus_proposals:
         loose_root = pre_tab_root[loose_id]
@@ -624,7 +631,9 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
             continue
         if union.find(anchor_id) != union.find(loose_id):
             join([anchor_id, loose_id], focus_basis)
-            if focus_basis == "same_tab_single_record_interleaved_bracketed":
+            if focus_basis == "same_tab_single_record_cross_app_bracketed":
+                single_record_cross_app_focus_links += 1
+            elif focus_basis == "same_tab_single_record_interleaved_bracketed":
                 single_record_interleaved_focus_links += 1
             else:
                 bracketed_tab_focus_links += 1
@@ -655,8 +664,10 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
             "bracketed_tab_focus_links": bracketed_tab_focus_links,
             "interleaved_tab_focus_links": interleaved_tab_focus_links,
             "single_record_interleaved_focus_links": single_record_interleaved_focus_links,
+            "single_record_cross_app_focus_links": single_record_cross_app_focus_links,
             "single_record_interleaving_abstentions": (
                 len(single_record_boundaries) - single_record_interleaved_focus_links
+                - single_record_cross_app_focus_links
             ),
             "bracketed_tab_focus_conflicts": bracketed_tab_focus_conflicts}
 
@@ -759,6 +770,7 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
         "observed_bracketed_tab_focus_links": linked["bracketed_tab_focus_links"],
         "observed_interleaved_tab_focus_links": linked["interleaved_tab_focus_links"],
         "observed_single_record_interleaved_focus_links": linked["single_record_interleaved_focus_links"],
+        "observed_single_record_cross_app_focus_links": linked["single_record_cross_app_focus_links"],
         "ambiguous_single_record_tab_interleaving_abstentions": linked["single_record_interleaving_abstentions"],
         "ambiguous_bracketed_tab_focus_attachments_suppressed": linked["bracketed_tab_focus_conflicts"],
         "link_contract": {
@@ -798,6 +810,8 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             "interleaved_tab_focus_requires_explicit_distinct_tab": True,
             "interleaved_tab_focus_has_bounded_foreign_and_loose_events": True,
             "single_record_tab_foreign_case_requires_two_sided_focus": True,
+            "single_record_tab_cross_app_case_requires_two_sided_focus": True,
+            "cross_app_interruptions_do_not_create_record_membership": True,
             "multiplexed_tab_focus_requires_complete_capture_scope": True,
             "multiplexed_tab_focus_never_uses_elapsed_time_as_link_evidence": True,
             "labels_titles_urls_and_clipboard_contents_read": False,
