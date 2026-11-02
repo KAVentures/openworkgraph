@@ -1350,9 +1350,7 @@ with zipfile.ZipFile(sys.argv[1]) as z:
      triageModel.missing.items.length);
    await page.locator('#owgPipelinePortfolioTriageRows tbody button').first().focus();
    await page.keyboard.press('Enter');
-   await page.locator('#owgPipelineDetail h3').waitFor();
-   assert.match(await page.locator('#owgPipelineDetail h3').textContent(),
-     /Paged handoff candidate/);
+   await page.locator('#owgPipelineDetail h3').filter({hasText:/Paged handoff candidate/}).waitFor();
    assert.equal(pagedReviewWrites,0,'triage navigation and filtering must not write');
    if(combined.pages.some(p=>p.items.some(item=>item.status==='human_review_required'))){
      await page.locator('#owgPipelinePortfolioTriageFilter')
