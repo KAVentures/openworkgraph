@@ -142,7 +142,7 @@ const path=require('node:path');
    // creating a project or reading a provider.
    let guidedWrites=0;
    page.on('request',request=>{if(request.method()!=='GET'&&
-     /\\/agent-project|\\/source-check-export|\\/project-reports/.test(request.url()))guidedWrites++;});
+     /(agent-project|source-check-export|project-reports)/.test(request.url()))guidedWrites++;});
    await page.locator('#owgPipelineJourney').click();
    const guide=page.locator('#owgPipelineJourneyGuide');
    await guide.getByRole('heading',{name:'Resume this evidence-to-implementation journey'}).waitFor();
