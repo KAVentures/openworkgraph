@@ -410,6 +410,20 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    assert.equal(resumedPacket.reported_specifications[0].status,'matching_reported_specification');
    assert(!resumedPacket.readiness.blockers.includes('no_imported_report'));
    assert(resumedPacket.readiness.blockers.includes('execution_and_business_outcomes_unverified'));
+   // A previously saved pre-report packet now reveals a real report-status drift.
+   await resumed.locator('#owgPipelineJourneyPriorPacket').setInputFiles({
+     name:'before-report.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(handoffPacket))
+   });
+   await resumed.locator('#owgPipelineJourneyComparePacket').click();
+   await resumed.locator('#owgPipelineJourneyCompareResult').getByText(/Recorded fields changed since the saved packet/).waitFor();
+   const resumedDrift=resumed.locator('#owgPipelineJourneyDriftActions');
+   await resumedDrift.getByRole('button',{name:'Review imported reports for this project'}).click();
+   await resumed.locator('#owgPipelineReportProject').waitFor();
+   assert.equal(await resumed.locator('#owgPipelineReportProject').inputValue(),manifest.project_id);
+   await resumedDrift.getByRole('button',{name:'Prepare separate source review for this project'}).click();
+   await resumed.locator('#owgPipelineSourceProject').waitFor();
+   assert.equal(await resumed.locator('#owgPipelineSourceProject').inputValue(),manifest.project_id);
+   assert.equal(await resumed.locator('#owgPipelineSourceConsent').isChecked(),false);
 
    assert((await resumed.locator('#owgPipelineJourneyResult').textContent()).includes(manifest.spec_sha256));
    await resumed.close();
@@ -453,13 +467,7 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await page.locator('#owgPipelineJourneyComparePacket').click();
    await page.locator('#owgPipelineJourneyCompareResult').getByText(/Recorded fields changed since the saved packet/).waitFor();
    assert((await page.locator('#owgPipelineJourneyCompareResult').textContent()).includes('Saved process availability'));
-   // Report drift leads to the selected project's existing report-review controls.
-   const changedActions=page.locator('#owgPipelineJourneyDriftActions');
-   const writesBeforeDriftReview=guidedWrites;
-   await changedActions.getByRole('button',{name:'Review imported reports for this project'}).click();
-   await page.locator('#owgPipelineReportProject').waitFor();
-   assert.equal(await page.locator('#owgPipelineReportProject').inputValue(),manifest.project_id);
-   assert.equal(guidedWrites,writesBeforeDriftReview,'drift navigation must not create report links or source reads');
+   assert(await page.locator('#owgPipelineJourneyDriftActions').getByRole('button',{name:'Inspect exact saved process revision'}).isEnabled());
 
    assert(await guide.locator('#owgPipelineJourneyOpenProcess').isEnabled());
    page.once('dialog',dialog=>dialog.accept());
