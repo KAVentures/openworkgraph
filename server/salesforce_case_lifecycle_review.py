@@ -345,10 +345,182 @@ def _local_case_evidence(*, log_id, port, session, case_key, opener):
     return "not_observed", None
 
 
+
+# A second review can compare real retained OWG case evidence against an earlier
+# explicitly pinned local read. Neither source nor OWG absence proves deletion.
+IMPACT_KEYS = frozenset({
+    "format", "scope_sha256", "source_review_sha256",
+    "source_checked_at_utc", "owg_checked_at_utc", "owg_log_id",
+    "selected_cases", "case_impacts", "counts", "source_completeness",
+    "owg_historical_completeness", "missing_means_deleted",
+    "deletion_or_retention_authorized", "owg_deletion_performed",
+    "source_writes_performed", "checkpoint_advanced", "review_required",
+})
+IMPACT_STATES = ("observed", "not_observed", "unknown")
+IMPACT_COUNT_KEYS = frozenset({
+    "source_soft_deleted_with_owg_evidence",
+    "source_unresolved_with_owg_evidence", "owg_cases_observed",
+    "owg_cases_not_observed", "owg_cases_unknown",
+})
+IMPACT_TRANSITION_KEYS = frozenset({
+    "case_id", "previous_source_state", "current_source_state",
+    "previous_owg_evidence", "current_owg_evidence",
+    "previous_owg_events", "current_owg_events",
+})
+IMPACT_COMPARISON_KEYS = frozenset({
+    "previous_impact_sha256", "previous_owg_checked_at_utc",
+    "previous_source_review_sha256", "transitions", "changed", "unchanged",
+    "source_state_changed", "owg_presence_changed", "owg_event_count_changed",
+})
+
+
+def _stamp(value):
+    if type(value) is not str or re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", value) is None:
+        return False
+    try:
+        datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return False
+    return True
+
+
+def _impact_counts(rows):
+    return {
+        "source_soft_deleted_with_owg_evidence": sum(
+            row["source_state"] == "soft_deleted" and row["owg_evidence"] == "observed"
+            for row in rows),
+        "source_unresolved_with_owg_evidence": sum(
+            row["source_state"] == "unresolved" and row["owg_evidence"] == "observed"
+            for row in rows),
+        "owg_cases_observed": sum(row["owg_evidence"] == "observed" for row in rows),
+        "owg_cases_not_observed": sum(row["owg_evidence"] == "not_observed" for row in rows),
+        "owg_cases_unknown": sum(row["owg_evidence"] == "unknown" for row in rows),
+    }
+
+
+def _transition_counts(transitions):
+    return {
+        "changed": sum(any(row["previous_" + key] != row["current_" + key]
+                           for key in ("source_state", "owg_evidence", "owg_events"))
+                       for row in transitions),
+        "unchanged": sum(all(row["previous_" + key] == row["current_" + key]
+                             for key in ("source_state", "owg_evidence", "owg_events"))
+                         for row in transitions),
+        "source_state_changed": sum(row["previous_source_state"] != row["current_source_state"]
+                                    for row in transitions),
+        "owg_presence_changed": sum(row["previous_owg_evidence"] != row["current_owg_evidence"]
+                                    for row in transitions),
+        "owg_event_count_changed": sum(row["previous_owg_events"] != row["current_owg_events"]
+                                       for row in transitions),
+    }
+
+
+def _previous_impact(path, digest, scope, log_id, case_ids):
+    """Validate an owner-private prior impact before any OWG HTTP request."""
+    if (not isinstance(path, Path) or type(digest) is not str
+            or re.fullmatch(r"[a-f0-9]{64}", digest) is None):
+        raise LifecycleReviewError("Pinned previous impact and exact digest required")
+    try:
+        raw = _read_private(path, MAX_BYTES)
+        data = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique,
+                          parse_constant=_nonfinite)
+        if (type(data) is not dict or raw != _canonical(data) or _digest(raw) != digest
+                or set(data) not in (IMPACT_KEYS, IMPACT_KEYS | {"comparison"})
+                or data["format"] != IMPACT_FORMAT
+                or data["scope_sha256"] != scope or data["owg_log_id"] != log_id
+                or type(data["source_review_sha256"]) is not str
+                or re.fullmatch(r"[a-f0-9]{64}", data["source_review_sha256"]) is None
+                or not _stamp(data["source_checked_at_utc"])
+                or not _stamp(data["owg_checked_at_utc"])
+                or data["source_checked_at_utc"] > data["owg_checked_at_utc"]
+                or type(data["selected_cases"]) is not int
+                or data["selected_cases"] != len(case_ids)
+                or data["source_completeness"] != "unknown"
+                or data["owg_historical_completeness"] != "unknown"
+                or any(data[key] is not value for key, value in (
+                    ("missing_means_deleted", False),
+                    ("deletion_or_retention_authorized", False),
+                    ("owg_deletion_performed", False),
+                    ("source_writes_performed", False),
+                    ("checkpoint_advanced", False), ("review_required", True)))):
+            raise ValueError("invalid prior impact envelope")
+        rows = data["case_impacts"]
+        if (type(rows) is not list or len(rows) != len(case_ids)
+                or [row["case_id"] for row in rows] != case_ids):
+            raise ValueError("invalid impact cases")
+        for row in rows:
+            if (type(row) is not dict
+                    or set(row) != {"case_id", "source_state", "owg_evidence", "owg_events"}
+                    or row["source_state"] not in STATES
+                    or row["owg_evidence"] not in IMPACT_STATES
+                    or (row["owg_evidence"] == "observed") !=
+                       (type(row["owg_events"]) is int and row["owg_events"] >= 1)
+                    or (row["owg_evidence"] != "observed" and row["owg_events"] is not None)):
+                raise ValueError("invalid impact case state")
+        if (type(data["counts"]) is not dict or set(data["counts"]) != IMPACT_COUNT_KEYS
+                or data["counts"] != _impact_counts(rows)):
+            raise ValueError("invalid impact counts")
+        if "comparison" in data:
+            comp = data["comparison"]
+            if (type(comp) is not dict or set(comp) != IMPACT_COMPARISON_KEYS
+                    or type(comp["previous_impact_sha256"]) is not str
+                    or re.fullmatch(r"[a-f0-9]{64}", comp["previous_impact_sha256"]) is None
+                    or type(comp["previous_source_review_sha256"]) is not str
+                    or re.fullmatch(r"[a-f0-9]{64}", comp["previous_source_review_sha256"]) is None
+                    or not _stamp(comp["previous_owg_checked_at_utc"])
+                    or comp["previous_owg_checked_at_utc"] > data["owg_checked_at_utc"]
+                    or type(comp["transitions"]) is not list
+                    or len(comp["transitions"]) != len(rows)):
+                raise ValueError("invalid impact comparison")
+            for current, transition in zip(rows, comp["transitions"]):
+                if (type(transition) is not dict or set(transition) != IMPACT_TRANSITION_KEYS
+                        or transition["case_id"] != current["case_id"]
+                        or any(transition["current_" + key] != current[field]
+                               for key, field in (("source_state", "source_state"),
+                                                  ("owg_evidence", "owg_evidence"),
+                                                  ("owg_events", "owg_events")))
+                        or transition["previous_source_state"] not in STATES
+                        or transition["previous_owg_evidence"] not in IMPACT_STATES
+                        or (transition["previous_owg_evidence"] == "observed") !=
+                           (type(transition["previous_owg_events"]) is int
+                            and transition["previous_owg_events"] >= 1)
+                        or (transition["previous_owg_evidence"] != "observed"
+                            and transition["previous_owg_events"] is not None)):
+                    raise ValueError("invalid impact transitions")
+            expected = _transition_counts(comp["transitions"])
+            if any(type(comp[key]) is not int or comp[key] != value
+                   for key, value in expected.items()):
+                raise ValueError("invalid impact transition counts")
+        return data
+    except (OSError, ValueError, UnicodeError, TypeError, KeyError, IndexError, RecursionError):
+        raise LifecycleReviewError("Previous impact integrity, scope or schema refused") from None
+
+
+def _compare_impacts(prior, rows, previous_sha256):
+    old = {row["case_id"]: row for row in prior["case_impacts"]}
+    transitions = [{
+        "case_id": row["case_id"],
+        "previous_source_state": old[row["case_id"]]["source_state"],
+        "current_source_state": row["source_state"],
+        "previous_owg_evidence": old[row["case_id"]]["owg_evidence"],
+        "current_owg_evidence": row["owg_evidence"],
+        "previous_owg_events": old[row["case_id"]]["owg_events"],
+        "current_owg_events": row["owg_events"],
+    } for row in rows]
+    return {
+        "previous_impact_sha256": previous_sha256,
+        "previous_owg_checked_at_utc": prior["owg_checked_at_utc"],
+        "previous_source_review_sha256": prior["source_review_sha256"],
+        "transitions": transitions, **_transition_counts(transitions),
+    }
+
+
 def impact(*, instance, confirm_host, namespace, cases, previous_review,
            previous_sha256, output, log_id, confirm_log_id, port, session,
            consent_local_owg_read=False, consent_private_impact=False,
-           allow_loopback_http=False, opener=None):
+           allow_loopback_http=False, opener=None, previous_impact=None,
+           previous_impact_sha256=None, consent_compare_impact=False):
     """Bounded authenticated OWG evidence impact of a pinned source review.
 
     No Salesforce request, provider/local writes, deletion or checkpoint change.
@@ -371,6 +543,16 @@ def impact(*, instance, confirm_host, namespace, cases, previous_review,
     _private_parent(output)
     if output.exists() or output.is_symlink():
         raise LifecycleReviewError("Impact review path already exists")
+    if previous_impact is None:
+        if previous_impact_sha256 is not None or consent_compare_impact:
+            raise LifecycleReviewError("Previous impact and comparison consent must agree")
+        prior_impact = None
+    else:
+        if consent_compare_impact is not True:
+            raise LifecycleReviewError("Separate impact comparison consent required")
+        case_ids = sorted(_key(namespace, "case", case) for case in cases)
+        prior_impact = _previous_impact(
+            previous_impact, previous_impact_sha256, scope, log_id, case_ids)
     transport = _opener() if opener is None else opener
     source_namespace = "sf_" + scope[:32]
     try:
@@ -420,12 +602,18 @@ def impact(*, instance, confirm_host, namespace, cases, previous_review,
         "owg_deletion_performed": False, "source_writes_performed": False,
         "checkpoint_advanced": False, "review_required": True,
     }
+    if prior_impact is not None:
+        if (prior_impact["owg_checked_at_utc"] > artifact["owg_checked_at_utc"]
+                or prior_impact["source_checked_at_utc"] > artifact["source_checked_at_utc"]):
+            raise LifecycleReviewError("Previous impact observation is newer than current")
+        artifact["comparison"] = _compare_impacts(
+            prior_impact, rows, previous_impact_sha256)
     payload = _canonical(artifact)
     try:
         _new_private(output, payload)
     except (OSError, ValueError):
         raise LifecycleReviewError("Private impact review creation refused") from None
-    return {
+    receipt = {
         "format": IMPACT_FORMAT, "status": "impact_review_created",
         "selected_cases": len(rows), "counts": summary,
         "impact_sha256": _digest(payload),
@@ -433,6 +621,14 @@ def impact(*, instance, confirm_host, namespace, cases, previous_review,
         "owg_deletion_performed": False, "source_writes_performed": False,
         "checkpoint_advanced": False,
     }
+    if prior_impact is not None:
+        receipt["comparison"] = {
+            key: artifact["comparison"][key]
+            for key in ("changed", "unchanged", "source_state_changed",
+                        "owg_presence_changed", "owg_event_count_changed",
+                        "previous_impact_sha256")
+        }
+    return receipt
 
 
 def main(argv=None):
@@ -447,6 +643,9 @@ def main(argv=None):
     parser.add_argument("--impact-review", type=Path,
                         help="Pinned lifecycle review for local OWG evidence impact mode")
     parser.add_argument("--impact-sha256")
+    parser.add_argument("--previous-impact", type=Path)
+    parser.add_argument("--previous-impact-sha256")
+    parser.add_argument("--consent-compare-impact", action="store_true")
     parser.add_argument("--owg-log-id")
     parser.add_argument("--confirm-owg-log-id")
     parser.add_argument("--owg-port", type=int, default=8765)
@@ -474,9 +673,15 @@ def main(argv=None):
                 port=args.owg_port, session=os.environ.get("OWG_DASHBOARD_SESSION"),
                 consent_local_owg_read=args.consent_local_owg_read,
                 consent_private_impact=args.consent_private_impact,
+                previous_impact=args.previous_impact,
+                previous_impact_sha256=args.previous_impact_sha256,
+                consent_compare_impact=args.consent_compare_impact,
                 allow_loopback_http=args.allow_loopback_http)
             print(json.dumps(result, sort_keys=True))
             return 0
+        if (args.previous_impact is not None or args.previous_impact_sha256 is not None
+                or args.consent_compare_impact):
+            raise LifecycleReviewError("Impact comparison requires local impact mode")
         if (args.impact_sha256 is not None or args.owg_log_id is not None
                 or args.confirm_owg_log_id is not None
                 or args.consent_local_owg_read or args.consent_private_impact):
