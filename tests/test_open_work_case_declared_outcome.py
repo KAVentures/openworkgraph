@@ -324,16 +324,17 @@ def test_provider_goal_transitions_follow_real_retained_checks(local, monkeypatc
 def test_disputed_prior_paid_check_is_not_a_current_paid_baseline(local, monkeypatch):
     with TestClient(app) as client:
         headers = _auth()
-        saved = _declare(client, _auth()).json()
-        link = _link(client, _auth(), saved, monkeypatch)
+        headers = _auth()
+        saved = _declare(client, headers).json()
+        link = _link(client, headers, saved, monkeypatch)
         monkeypatch.setattr(routes, "source_operation_receipt", _paid)
-        assert _verify(client, _auth(), saved, link).status_code == 200
-        disputed = client.post(BASE + "/operation-ledger/dispute", headers=_auth(), json={
+        assert _verify(client, headers, saved, link).status_code == 200
+        disputed = client.post(BASE + "/operation-ledger/dispute", headers=headers, json={
             **_cas(saved), "confirm_dispute": True,
             "target_sequence": 1, "reason_code": "operator_dispute",
         })
         assert disputed.status_code == 200, disputed.text
-        response = _verify(client, _auth(), saved, link)
+        response = _verify(client, headers, saved, link)
         assert response.status_code == 200, response.text
         data = response.json()
         assert data["provider_state_transition"] == "unknown_to_paid"
