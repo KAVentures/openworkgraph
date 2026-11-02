@@ -46,6 +46,11 @@ from .open_work_case_declared_dependency_payment import (
     admit_declared_dependency_payment_links, same_admitted_payment_chain,
     compose_declared_dependency_payment_result,
 )
+from .open_work_case_declared_portfolio_payment import (
+    admit_selected_portfolio_payment_links,
+    same_selected_portfolio_payment_reviews,
+    compose_selected_portfolio_payment_result,
+)
 from .open_work_case_review_packet import (
     issue_review_packet, validate_review_packet, compare_review_packet,
 )
@@ -1824,6 +1829,93 @@ async def verify_local_declared_dependency_payment_goals(request: Request, respo
             root_ref=payload["work_item_ref"], admitted=admitted,
             previous=previous, current=current_histories,
             verifications=verifications,
+        )
+        await asyncio.to_thread(guard)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/v1/open-work/declarations/source-goals/verify-portfolio-payments")
+async def verify_local_declared_portfolio_payment_goals(request: Request, response: Response):
+    """Check 2–4 independently selected reviewed invoices, then commit atomically.
+
+    This is an explicit operator action, not a scheduled portfolio scan. Every
+    selected root and full reviewed prerequisite DAG, signed invoice link and
+    private ledger must pass preflight before the first Stripe provider read.
+    """
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {"confirm_source_verification", "selections"})
+    if payload["confirm_source_verification"] is not True:
+        raise HTTPException(403, "explicit portfolio source verification required")
+    try:
+        secret = await asyncio.to_thread(_read_or_create_secret, ".open_work_reference_key")
+        before = await asyncio.to_thread(list_case_declarations, scope)
+        selected = admit_selected_portfolio_payment_links(
+            before, selections=payload["selections"], scope=scope, secret=secret,
+        )
+
+        def guard() -> None:
+            if _source_scope() != scope:
+                raise CaseDeclarationError("source scope changed during portfolio verification")
+            current = list_case_declarations(scope)
+            rechecked = admit_selected_portfolio_payment_links(
+                current, selections=payload["selections"], scope=scope, secret=secret,
+            )
+            if not same_selected_portfolio_payment_reviews(selected, rechecked):
+                raise CaseDeclarationError("stale selected portfolio reviews changed")
+
+        # Validate ALL HMAC histories and exact record bindings before provider IO.
+        previous = {}
+        for ref in selected["ordered"]:
+            case = selected["cases"][ref]
+            previous[ref] = await asyncio.to_thread(
+                read_operation_evidence, case["admitted"], case["signature"],
+                scope=scope, secret=secret, guard=guard,
+                resource_ref=case["resource_ref"],
+            )
+        await asyncio.to_thread(guard)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+
+    verifications = {}
+    for ref in selected["ordered"]:
+        case = selected["cases"][ref]
+        try:
+            receipt = await asyncio.to_thread(
+                source_operation_receipt, case["resource_ref"], "stripe_invoice_paid",
+            )
+        except (ValueError, OSError, TypeError, CaseDeclarationError, sqlite3.DatabaseError):
+            receipt = None
+        await _recheck_source(scope)
+        try:
+            await asyncio.to_thread(guard)
+            verifications[ref] = project_case_operation_verification(
+                case["admitted"], case["resource_ref"], receipt,
+            )
+        except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+            raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    try:
+        await asyncio.to_thread(guard)
+        entries = [{
+            "admitted": selected["cases"][ref]["admitted"],
+            "signature": selected["cases"][ref]["signature"],
+            "resource_ref": selected["cases"][ref]["resource_ref"],
+            "verification": verifications[ref],
+            "expected_history": previous[ref]["events"],
+        } for ref in selected["ordered"]]
+        current_histories = await asyncio.to_thread(
+            append_operation_evidence_batch, entries,
+            scope=scope, secret=secret, guard=guard,
+        )
+        result = compose_selected_portfolio_payment_result(
+            selected=selected, previous=previous,
+            current=current_histories, verifications=verifications,
         )
         await asyncio.to_thread(guard)
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
