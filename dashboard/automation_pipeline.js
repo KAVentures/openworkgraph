@@ -138,6 +138,8 @@
       }else if(idea.source.kind==='process_catalog'){
         box.appendChild(el('div','This source is a descriptive reference only; no saved process revision is linked.','muted'));
       }
+      // These selections are navigation hints only, never an authorization or a source read.
+      let preferredReportProjectId=null,preferredSourceProjectId=null;
       const journeyButton=button('View evidence journey','secondary');journeyButton.id='owgPipelineJourney';
       const journeyHost=el('div');journeyHost.id='owgPipelineJourneyResult';journeyHost.style.overflowWrap='anywhere';
       journeyButton.onclick=async()=>{
@@ -159,7 +161,56 @@
           stages.appendChild(el('li',ref?'Saved process '+ref.workflow_id+' · revision '+ref.revision+' · '+(sourceLabels[process.status]||'unknown status')+' · SHA-256 '+ref.content_sha256:'Saved process: no exact revision linked.'));
           stages.appendChild(el('li','Opportunity revision '+data.idea.revision+' · '+(STATE_LABELS[data.idea.state]||data.idea.state)+'. Review state does not grant execution authority.'));
           journeyHost.append(stages,el('div','Checked local references now, across separate stores. Refresh after changes. Reported specifications do not prove which artifact ran; source-check results are not retained here.','muted'));
-          if(!data.projects.length){journeyHost.appendChild(el('p','No project artifacts recorded.'));return;}
+          const guide=el('section');guide.id='owgPipelineJourneyGuide';
+          guide.appendChild(el('h5','Resume this evidence-to-implementation journey'));
+          const guideStatus=el('div',null,'muted');guideStatus.id='owgPipelineJourneyGuideStatus';
+          guideStatus.setAttribute('role','status');guideStatus.setAttribute('aria-live','polite');
+          const navigate=(id,description,activate=false)=>{
+            if(generation!==detailGeneration)return;
+            const target=box.querySelector('#'+id);
+            if(!target||target.disabled){guideStatus.textContent=description+' is unavailable for this idea or revision.';return;}
+            if(activate)target.click();
+            target.scrollIntoView?.({block:'nearest'});
+            target.focus?.();
+            guideStatus.textContent=description+' opened for this selected idea. No decision or business action was made.';
+          };
+          const processAction=button('Open exact saved process revision','secondary');
+          processAction.id='owgPipelineJourneyOpenProcess';
+          processAction.disabled=!ref||!['current','changed'].includes(process.status)||
+            typeof ref.content_sha256!=='string'||!ref.content_sha256;
+          processAction.onclick=async()=>{
+            if(generation!==detailGeneration||processAction.disabled)return;
+            processAction.disabled=true;
+            try{
+              if(!window.owgProcessCatalog?.openSaved)throw new Error('Process catalog unavailable.');
+              const opened=await window.owgProcessCatalog.openSaved(ref);
+              if(generation!==detailGeneration)return;
+              if(opened===false){guideStatus.textContent='Existing unsaved catalog edits were kept. No revision was opened.';return;}
+              document.getElementById('owgCatalogEditor')?.scrollIntoView?.({block:'start'});
+              guideStatus.textContent='Opened the exact linked revision '+ref.revision+'. '+(process.status==='changed'?
+                'A newer process exists; this historical revision is not current.':'Review is still required for any further decision.');
+            }catch(e){if(generation===detailGeneration)guideStatus.textContent='Could not reopen pinned revision: '+e.message;}
+            finally{if(generation===detailGeneration)processAction.disabled=false;}
+          };
+          guide.appendChild(processAction);
+          if(process.status!=='current')guide.appendChild(el('p',
+            'Process basis is '+String(process.status).replaceAll('_',' ')+'. Historical references are not silently replaced; review changes before any new project.','muted'));
+          const ideaAction=button('Continue at idea assessment or decision','secondary');
+          ideaAction.id='owgPipelineJourneyReviewIdea';
+          ideaAction.onclick=()=>navigate(box.querySelector('#owgPipelineAssess')?'owgPipelineAssess':'owgPipelineNote',
+            'Idea assessment or decision');
+          guide.appendChild(ideaAction);
+          if(data.dataset_origins?.some(origin=>origin.status!=='current')||!data.dataset_origins?.length)
+            guide.appendChild(el('p','Source snapshot coverage is missing, changed or unverified. This journey cannot certify original data completeness.','muted'));
+          guide.appendChild(guideStatus);journeyHost.appendChild(guide);
+          if(!data.projects.length){
+            journeyHost.appendChild(el('p','No project artifacts recorded.'));
+            const next=button('Continue at agent project export','secondary');next.id='owgPipelineJourneyExport';
+            next.disabled=!['approved','implemented'].includes(idea.state)||!ref||process.status!=='current';
+            next.onclick=()=>navigate('owgPipelineProjectDownload','Agent project export');
+            guide.insertBefore(next,guideStatus);
+            return;
+          }
           const choice=select('owgPipelineJourneyProject',data.projects.map(p=>[p.project_id,'Idea revision '+p.idea_revision+' · '+p.created_at]));
           const artifact=el('div');artifact.id='owgPipelineJourneyArtifact';
           const render=()=>{
@@ -176,6 +227,26 @@
             const checks=p.source_check_exports;
             artifact.append(el('h5','Source-check exports'),el('p',checks.count?checks.count+' recorded · latest '+checks.last_export_at+' · document SHA-256 '+checks.last_document_sha256+'. Receipt and result are not retained; no outcome can be inferred from this record.':'No source-check exports recorded.'));
             artifact.appendChild(el('p','Business outcomes and agent causality remain unverified.'));
+            const actions=el('div',null,'row');
+            const reportsAction=button('Review reports for this exact project','secondary');
+            reportsAction.id='owgPipelineJourneyReports';
+            reportsAction.disabled=!p.idea_revision_is_current;
+            reportsAction.onclick=()=>{
+              if(generation!==detailGeneration)return;
+              preferredReportProjectId=p.project_id;
+              navigate('owgPipelineReviewReports','Report-link review',true);
+            };
+            const sourceAction=button('Prepare source check for this exact project','secondary');
+            sourceAction.id='owgPipelineJourneySource';
+            sourceAction.disabled=!p.idea_revision_is_current;
+            sourceAction.onclick=()=>{
+              if(generation!==detailGeneration)return;
+              preferredSourceProjectId=p.project_id;
+              navigate('owgPipelineSourceChecks','Source-check form',true);
+            };
+            actions.append(reportsAction,sourceAction);artifact.appendChild(actions);
+            if(!p.idea_revision_is_current)artifact.appendChild(el('p',
+              'Historical idea revision: reopen and review the current idea before attempting new checks or report associations.','muted'));
           };
           choice.onchange=render;journeyHost.append(field('Recorded project',choice),artifact);render();
           if(data.projects_truncated)journeyHost.appendChild(el('p','Only the first '+data.max_projects+' projects are shown.'));
@@ -218,6 +289,8 @@
           const note=el('div');note.setAttribute('role','status');
           const help=el('div','Link a selected imported report only when its reported specification and attached design both match this exported project. These remain customer reports: individual runs, execution and outcomes are not independently verified.','muted');
           const artifact=select('owgPipelineReportProject',data.projects.map(p=>[p.project_id,'Idea revision '+p.idea_revision+' · '+p.created_at+' · '+p.spec_sha256.slice(0,12)+'…']));
+          if(preferredReportProjectId&&data.projects.some(p=>p.project_id===preferredReportProjectId))
+            artifact.value=preferredReportProjectId;
           const deployment=select('owgPipelineReportDeployment',data.deployments.map(d=>[d.deployment_id,d.name+' · '+d.runtime+' · '+d.reported_run_count+' reported runs']));
           const add=button('Link selected report','secondary');add.id='owgPipelineLinkReport';
           add.disabled=!data.monitoring_metadata_available||!data.projects.length||!data.deployments.length;
@@ -259,6 +332,8 @@
             const saved=await (await api('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/projects')).json();
             if(generation!==detailGeneration||view!==sourceView)return;
             const selected=select('owgPipelineSourceProject',saved.projects.map(p=>[p.project_id,'Idea revision '+p.idea_revision+' · '+p.created_at]));
+            if(preferredSourceProjectId&&saved.projects.some(p=>p.project_id===preferredSourceProjectId))
+              selected.value=preferredSourceProjectId;
             const expectation=select('owgPipelineSourceExpectation',[]);
             const sourceRef=input('owgPipelineSourceRecord','text','owg:r:…');sourceRef.maxLength=38;sourceRef.autocomplete='off';sourceRef.spellcheck=false;
             const confirmed=input('owgPipelineSourceConsent','checkbox');const consentText=el('label');consentText.append(confirmed,document.createTextNode(' Read this exact observed record and download the minimized source-check document. Existing provider opt-ins still apply.'));
