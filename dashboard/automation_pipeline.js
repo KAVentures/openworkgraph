@@ -56,6 +56,66 @@
     };
   }
 
+
+  // Compare an imported point-in-time review packet against a freshly fetched local journey.
+  // Never restore approval or trust imported fields as execution/verification evidence.
+  function compareHandoffReviewPackets(saved,current){
+    const object=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
+    const sha=v=>v===null||(typeof v==='string'&&/^[a-f0-9]{64}$/.test(v));
+    const revision=v=>Number.isSafeInteger(v)&&v>=1;
+    const status=v=>typeof v==='string'&&/^[a-z_]{1,64}$/.test(v);
+    const fail=()=>{throw new Error('Invalid or unsupported review packet. Select a previously downloaded OWG handoff review JSON file.');};
+    const validate=packet=>{
+      if(!object(packet)||packet.format!=='openworkgraph.evidence-handoff-review.v1'||
+        packet.scope!=='human_review_only'||packet.execution_authorized!==false||
+        packet.source_read_authorized!==false||!object(packet.idea)||!object(packet.process)||
+        !object(packet.project)||!object(packet.readiness)||!object(packet.source_check_exports)||
+        !Array.isArray(packet.dataset_origins)||packet.dataset_origins.length>64||
+        !Array.isArray(packet.reported_specifications)||packet.reported_specifications.length>64||
+        typeof packet.dataset_origins_truncated!=='boolean'||
+        typeof packet.reported_specifications_truncated!=='boolean'||
+        !Array.isArray(packet.readiness.blockers)||packet.readiness.blockers.length>32||
+        packet.readiness.human_review_required!==true||
+        packet.readiness.verified_execution!==false||packet.readiness.verified_business_outcomes!==false||
+        typeof packet.idea.idea_id!=='string'||!packet.idea.idea_id||packet.idea.idea_id.length>128||
+        !revision(packet.idea.revision)||!status(packet.idea.state)||
+        typeof packet.project.project_id!=='string'||!packet.project.project_id||
+        packet.project.project_id.length>128||!revision(packet.project.idea_revision)||
+        typeof packet.project.idea_revision_is_current!=='boolean'||
+        !sha(packet.project.spec_sha256)||packet.project.spec_sha256===null||
+        !sha(packet.project.archive_sha256)||packet.project.archive_sha256===null||
+        (packet.process.workflow_id!==null&&(typeof packet.process.workflow_id!=='string'||packet.process.workflow_id.length>128))||
+        (packet.process.revision!==null&&!revision(packet.process.revision))||
+        !sha(packet.process.content_sha256)||!status(packet.process.status)||
+        !Number.isSafeInteger(packet.source_check_exports.count)||packet.source_check_exports.count<0||
+        !sha(packet.source_check_exports.last_document_sha256)||
+        packet.readiness.blockers.some(b=>!status(b))||
+        packet.dataset_origins.some(o=>!object(o)||!status(o.status)||!sha(o.source_content_sha256)||!sha(o.selection_sha256))||
+        packet.reported_specifications.some(o=>!object(o)||!status(o.status)||
+          (o.reported_run_count!==null&&(!Number.isSafeInteger(o.reported_run_count)||o.reported_run_count<0))))fail();
+    };
+    validate(saved);validate(current);
+    if(saved.idea.idea_id!==current.idea.idea_id||saved.project.project_id!==current.project.project_id)
+      throw new Error('Review packet belongs to another idea or project. Nothing was imported or approved.');
+    const fields=[
+      ['Saved process revision and digest',[saved.process.workflow_id,saved.process.revision,saved.process.content_sha256],
+        [current.process.workflow_id,current.process.revision,current.process.content_sha256]],
+      ['Saved process availability',saved.process.status,current.process.status],
+      ['Opportunity revision and state',[saved.idea.revision,saved.idea.state],[current.idea.revision,current.idea.state]],
+      ['Project revision and artifact hashes',[saved.project.idea_revision,saved.project.idea_revision_is_current,saved.project.spec_sha256,saved.project.archive_sha256],
+        [current.project.idea_revision,current.project.idea_revision_is_current,current.project.spec_sha256,current.project.archive_sha256]],
+      ['Dataset and cohort source checks',[saved.dataset_origins,saved.dataset_origins_truncated],
+        [current.dataset_origins,current.dataset_origins_truncated]],
+      ['Imported report status',[saved.reported_specifications,saved.reported_specifications_truncated],
+        [current.reported_specifications,current.reported_specifications_truncated]],
+      ['Recorded source-check exports',saved.source_check_exports,current.source_check_exports],
+      ['Human review blockers',saved.readiness.blockers,current.readiness.blockers]
+    ];
+    const changes=fields.filter(([,before,after])=>JSON.stringify(before)!==JSON.stringify(after)).map(([name])=>name);
+    return {status:changes.length?'changed':'matching_snapshot',changes,
+      execution_authorized:false,verified_execution:false,verified_business_outcomes:false};
+  }
+
   // Pure helper, exercised by tests: builds an assessment body or throws a readable error.
   function assessmentBody(values,revision){
     const ease={};
@@ -313,8 +373,52 @@
               setTimeout(()=>URL.revokeObjectURL(url),1000);
               guideStatus.textContent='Downloaded the selected project review packet. Outstanding checks remain; no approval or execution permission was granted.';
             };
+
+            // Local file read + explicit fresh authenticated journey fetch. No packet upload.
+            const priorPacket=input('owgPipelineJourneyPriorPacket','file');
+            priorPacket.accept='.json,application/json';
+            const comparePacket=button('Compare saved packet with current local evidence','secondary');
+            comparePacket.id='owgPipelineJourneyComparePacket';
+            const compareResult=el('div','Select a previously downloaded packet to check for drift.','muted');
+            compareResult.id='owgPipelineJourneyCompareResult';
+            compareResult.setAttribute('role','status');compareResult.setAttribute('aria-live','polite');
+            priorPacket.onchange=()=>{compareResult.textContent='File selected. Compare explicitly to refresh local references.';};
+            comparePacket.onclick=async()=>{
+              if(generation!==detailGeneration||choice.value!==p.project_id||
+                !artifact.contains(compareResult))return;
+              const file=priorPacket.files?.[0];
+              if(!file){compareResult.textContent='Select a review packet JSON file first.';return;}
+              if(!file.size||file.size>65536){compareResult.textContent='Review packet must be a non-empty JSON file no larger than 64 KiB.';return;}
+              comparePacket.disabled=true;
+              compareResult.textContent='Checking the saved packet against freshly fetched local references…';
+              try{
+                const saved=JSON.parse(await file.text());
+                if(generation!==detailGeneration||choice.value!==p.project_id||!artifact.contains(compareResult))return;
+                const fresh=await (await api('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/journey')).json();
+                if(generation!==detailGeneration||choice.value!==p.project_id||!artifact.contains(compareResult))return;
+                const latest=handoffReviewPacket(fresh,p.project_id,idea.idea_id,new Date().toISOString());
+                const comparison=compareHandoffReviewPackets(saved,latest);
+                compareResult.replaceChildren(el('p',comparison.status==='matching_snapshot'?
+                  'Recorded fields match the current local references. Execution, causality and business outcomes remain unverified.':
+                  'Recorded fields changed since the saved packet. Re-review these areas before any further decision.'));
+                if(comparison.changes.length){
+                  const differences=el('ul');
+                  comparison.changes.forEach(name=>differences.appendChild(el('li',name)));
+                  compareResult.appendChild(differences);
+                }
+              }catch(e){
+                if(generation===detailGeneration&&choice.value===p.project_id&&artifact.contains(compareResult))
+                  compareResult.textContent='Could not compare review packet: '+(e instanceof SyntaxError?'Invalid JSON.':e.message);
+              }finally{
+                if(generation===detailGeneration&&choice.value===p.project_id&&artifact.contains(compareResult))
+                  comparePacket.disabled=false;
+              }
+            };
             actions.append(reportsAction,sourceAction,downloadPacket);
-            artifact.append(review,actions);
+            const packetImport=el('section');packetImport.append(
+              field('Previously downloaded review packet (local JSON only)',priorPacket),
+              comparePacket,compareResult);
+            artifact.append(review,actions,packetImport);
             if(!p.idea_revision_is_current)artifact.appendChild(el('p',
               'Historical idea revision: reopen and review the current idea before attempting new checks or report associations.','muted'));
           };
@@ -525,6 +629,6 @@
     refresh().catch(e=>{status.textContent=e.message;});
   }
 
-  window.__owgPipelineModel={assessmentBody,portfolioView,handoffReviewPacket};
+  window.__owgPipelineModel={assessmentBody,portfolioView,handoffReviewPacket,compareHandoffReviewPackets};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
