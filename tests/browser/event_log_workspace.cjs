@@ -1170,6 +1170,66 @@ const path=require('node:path');
    await page.locator('#owgMetricKind').selectOption('arithmetic');
    assert.equal(await page.locator('#owgMetricStatistic').isVisible(),false);
    await page.locator('#owgMetricKind').selectOption('event_attribute_statistic');
+   // R9: one user action builds a signed, same-unit first/last completed stage
+   // comparison from the selected numeric attribute and missing-value policy.
+   await page.locator('#owgMetricName').fill('review');
+   await page.locator('#owgMetricStatistic').selectOption('average');
+   await page.locator('#owgMetricMissingPolicy').selectOption('available');
+   await page.locator('#owgMetricStageFrom').selectOption('Start');
+   await page.locator('#owgMetricStageTo').selectOption('End');
+   assert.equal(await page.locator('#owgMetricCompareStages').isVisible(),true);
+   await page.locator('#owgMetricCompareStages').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'three free metric slots'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList').locator('button').count(),2,
+     'capacity refusal must not insert any comparison metrics');
+   await page.getByRole('button',{name:'Remove metric first_review_total',exact:true}).click();
+   await page.getByRole('button',{name:'Remove metric last_review_avg',exact:true}).click();
+   await page.locator('#owgMetricStageTo').selectOption('');
+   await page.locator('#owgMetricCompareStages').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Choose both stage start and end'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList').locator('button').count(),0);
+   await page.locator('#owgMetricStageTo').selectOption('End');
+   await page.locator('#owgMetricName').fill('a'.repeat(35));
+   await page.locator('#owgMetricCompareStages').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'at most 34 characters'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList').locator('button').count(),0);
+   await page.locator('#owgMetricName').fill('review_first');
+   await page.locator('#owgMetricAdd').click();
+   await page.locator('#owgMetricName').fill('review');
+   await page.locator('#owgMetricCompareStages').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'comparison metric name already exists'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList').locator('button').count(),1,
+     'name collision must leave existing metric untouched');
+   await page.getByRole('button',{name:'Remove metric review_first',exact:true}).click();
+   await page.locator('#owgMetricCompareStages').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'signed last minus first'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList').locator('button').count(),3);
+   assert.equal(await page.locator('#owgAnalysisMeasure1').inputValue(),'avg:metric:review_delta');
+   assert.match(await page.locator('#owgMetricList').textContent(),/review_delta: review_last − review_first/);
+   const [stageDeltaResponse]=await Promise.all([
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
+     page.locator('#owgAnalysisRun').click()]);
+   assert.equal(stageDeltaResponse.status(),200);
+   const deltaSpec=JSON.parse(stageDeltaResponse.request().postData());
+   assert.equal(deltaSpec.metrics.length,3);
+   assert.deepEqual(deltaSpec.metrics.slice(0,2).map(m=>[m.name,m.statistic,m.stage_occurrence,m.missing_policy,m.unit]),
+     [['review_first','average','first','available','EUR'],['review_last','average','last_completed','available','EUR']]);
+   assert.deepEqual(deltaSpec.metrics[2],{name:'review_delta',kind:'arithmetic',expression_version:'1',
+     operation:'subtract',left:{kind:'metric',name:'review_last'},right:{kind:'metric',name:'review_first'}});
+   const deltaResult=await stageDeltaResponse.json();
+   assert.deepEqual(deltaResult.rows,[[6]],'A: last mean 9 minus first mean 3; incomplete B remains unknown');
+   assert.equal(deltaResult.metrics[2].cases_with_value,1);
+   assert.equal(deltaResult.metrics[2].cases_with_missing_operand,1);
+   assert.equal(deltaResult.metrics[2].unit,'EUR');
+   await page.locator('#owgAnalysisName').fill('First to last review change');
+   await page.locator('#owgAnalysisSave').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Analysis saved.'}).waitFor();
+   const [replayedDelta]=await Promise.all([
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')),
+     page.getByRole('button',{name:'Run saved analysis First to last review change',exact:true}).click()]);
+   assert.deepEqual((await replayedDelta.json()).rows,[[6]]);
+   const [deltaCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCsv').click()]);
+   assert.match(await fs.readFile(await deltaCsv.path(),'utf8'),/avg_metric:review_delta\\r\\n6/);
    const numericAxe=await page.evaluate(()=>axe.run(document.querySelector('#owgEventLogAnalysis'),{
      runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']},resultTypes:['violations']}));
    assert.deepEqual(numericAxe.violations,[]);
