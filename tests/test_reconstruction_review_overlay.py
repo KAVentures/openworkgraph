@@ -11,7 +11,8 @@ import sys
 import pytest
 
 from server.reconstruction_review_overlay import (
-    ADJUDICATION_FORMAT, DECISION_FORMAT, adjudicate_review,
+    ADJUDICATION_FORMAT, RESOLUTION_FORMAT, DECISION_FORMAT, adjudicate_review,
+    resolve_review_disagreement,
     apply_review, prepare_review_packet, score_review,
 )
 from server.work_item_links import linked_work_items
@@ -678,6 +679,167 @@ def test_adjudicate_cli_to_apply_score_and_batch_replays_exact_reviewers(tmp_pat
     altered["consensus_confirmed_count"] = 2
     Path(manifest_sessions[1]["decisions"]).write_text(json.dumps(altered))
     refused = tmp_path / "refused-batch.json"
+    assert run("score-batch", "--manifest", str(manifest),
+               "--output", str(refused)).returncode == 2
+    assert not refused.exists()
+
+
+def test_third_reviewer_resolves_contested_case_without_changing_canonical_membership():
+    events = _events()
+    before = linked_work_items(events)
+    packet = prepare_review_packet(events)
+    first, second = [x["item_id"] for x in packet["eligible_candidates"][0]["candidate_items"]]
+    adjudication = adjudicate_review(
+        events, packet, _decision(packet, "e03", first, "confirm"),
+        _decision(packet, "e03", second, "confirm"),
+    )
+    assert adjudication["unresolved_event_ids"] == ["e03"]
+    resolved = resolve_review_disagreement(
+        events, packet, adjudication, _decision(packet, "e03", second, "confirm"),
+    )
+    assert resolved["format"] == RESOLUTION_FORMAT
+    assert resolved["third_reviewer_resolved_count"] == 1
+    assert resolved["remaining_unresolved_event_ids"] == []
+    overlay = apply_review(events, packet, resolved)
+    assert overlay["human_confirmed_count"] == 1
+    assert overlay["review_decision_provenance"] == "third_reviewer_resolution"
+    assert overlay["unresolved_reviewer_disagreement_count"] == 0
+    assert "e03" in next(x for x in overlay["items"] if x["item_id"] == second)["event_ids"]
+    assert overlay["canonical_membership_unchanged"] is True
+    assert overlay["authorizes_business_action"] is False
+    assert linked_work_items(events) == before
+    scored = score_review(events, packet, resolved, _batch_truth())
+    assert scored["human_assisted_overlay"]["workflow_assignment_f1"] == 1.0
+    assert scored["automatic_baseline"]["workflow_assignment_f1"] < 1.0
+    assert scored["automatic_model_improvement_claim"] is False
+    for forbidden in ("SECRET", "PRIVATE", "private.example", "/medical-notes"):
+        assert forbidden not in json.dumps(resolved)
+
+
+def test_third_reviewer_cannot_change_consensus_or_resolve_outside_dispute():
+    events = _events()
+    packet = prepare_review_packet(events)
+    first, second = [x["item_id"] for x in packet["eligible_candidates"][0]["candidate_items"]]
+    left = _decision(packet, "e03", first, "confirm")
+    right = _decision(packet, "e03", second, "confirm")
+    disputed = adjudicate_review(events, packet, left, right)
+    third = _decision(packet, "e03", second, "reject")
+    resolved = resolve_review_disagreement(events, packet, disputed, third)
+    assert apply_review(events, packet, resolved)["human_confirmed_count"] == 0
+    for mutation in (
+        {"third_reviewer_resolved_count": 2},
+        {"remaining_unresolved_event_ids": ["e03"]},
+        {"resolved_decisions": left},
+        {"reviewer_independence_verified": True},
+        {"extra_authorization": True},
+    ):
+        with pytest.raises(ValueError):
+            apply_review(events, packet, {**resolved, **mutation})
+    changed = copy.deepcopy(events)
+    changed[2]["metadata"]["target"]["label"] = "revoked"
+    with pytest.raises(ValueError):
+        apply_review(changed, packet, resolved)
+    for bad in (
+        {"format": DECISION_FORMAT, "evidence_sha256": packet["evidence_sha256"], "decisions": []},
+        _decision(packet, "e01", first, "confirm"),
+        {**third, "decisions": third["decisions"] * 2},
+    ):
+        with pytest.raises(ValueError):
+            resolve_review_disagreement(events, packet, disputed, bad)
+    agreed = adjudicate_review(events, packet, left, copy.deepcopy(left))
+    with pytest.raises(ValueError, match="only unresolved"):
+        resolve_review_disagreement(events, packet, agreed, third)
+    with pytest.raises(ValueError):
+        resolve_review_disagreement(events, packet, {**disputed, "unresolved_event_ids": []}, third)
+
+
+def test_third_reviewer_resolution_rejects_cross_review_two_hop_contradictions():
+    events = _fragment_events()
+    packet = prepare_review_packet(events)
+    fragment = next(row for row in packet["eligible_candidates"] if row["evidence_hops"] == 2)
+    direct = next(row for row in packet["eligible_candidates"] if row["evidence_hops"] == 1)
+    target = fragment["candidate_items"][0]["item_id"]
+    fragment_confirm = _decision(packet, fragment["event_id"], target, "confirm")
+    first = copy.deepcopy(fragment_confirm)
+    first["decisions"].append({
+        "event_id": direct["event_id"], "item_id": target, "action": "confirm",
+    })
+    # Both agree on the fragment, only the first reviews the intermediary.
+    disputed = adjudicate_review(events, packet, first, fragment_confirm)
+    assert disputed["unresolved_event_ids"] == [direct["event_id"]]
+    third_reject = _decision(packet, direct["event_id"], target, "reject")
+    with pytest.raises(ValueError, match="conflicting human decisions"):
+        resolve_review_disagreement(events, packet, disputed, third_reject)
+    third_confirm = _decision(packet, direct["event_id"], target, "confirm")
+    resolution = resolve_review_disagreement(events, packet, disputed, third_confirm)
+    overlay = apply_review(events, packet, resolution)
+    assert overlay["human_confirmed_count"] == 2
+    assert overlay["human_confirmed_two_hop_count"] == 1
+    assert overlay["human_confirmed_direct_count"] == 1
+
+
+def test_resolve_cli_apply_score_and_batch_replay_private_artifact(tmp_path: Path):
+    root = Path(__file__).resolve().parents[1]
+    def run(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, "-m", "scripts.reconstruction_review", *args],
+            cwd=root, capture_output=True, text=True, timeout=40,
+        )
+    sessions = []
+    for index in range(2):
+        events, packet, _decisions, truth = _batch_session(f"resolution-{index}")
+        target = _decisions["decisions"][0]["item_id"]
+        other = next(x["item_id"] for x in packet["eligible_candidates"][0]["candidate_items"]
+                     if x["item_id"] != target)
+        a = _decision(packet, "e03", target, "confirm")
+        b = _decision(packet, "e03", other, "confirm")
+        paths = {}
+        for name, document in (
+            ("events", events), ("packet", packet), ("a", a), ("b", b),
+            ("third", copy.deepcopy(a)), ("truth", truth),
+        ):
+            p = tmp_path / f"{index}-{name}.json"
+            p.write_text(json.dumps(document))
+            paths[name] = str(p)
+        adjudicated = tmp_path / f"{index}-adjudication.json"
+        assert run("adjudicate", "--events", paths["events"], "--packet", paths["packet"],
+                   "--reviewer-a", paths["a"], "--reviewer-b", paths["b"],
+                   "--output", str(adjudicated)).returncode == 0
+        resolved = tmp_path / f"{index}-resolution.json"
+        result = run("resolve", "--events", paths["events"], "--packet", paths["packet"],
+                     "--adjudication", str(adjudicated), "--third-reviewer", paths["third"],
+                     "--output", str(resolved))
+        assert result.returncode == 0, result.stderr
+        overlay_path = tmp_path / f"{index}-overlay.json"
+        result = run("apply", "--events", paths["events"], "--packet", paths["packet"],
+                     "--decisions", str(resolved), "--output", str(overlay_path))
+        assert result.returncode == 0, result.stderr
+        assert json.loads(overlay_path.read_text())["human_confirmed_count"] == 1
+        sessions.append({
+            "events": paths["events"], "packet": paths["packet"],
+            "decisions": str(resolved), "truth": paths["truth"],
+        })
+        if os.name != "nt":
+            assert resolved.stat().st_mode & 0o077 == 0
+        assert "PRIVATE" not in resolved.read_text()
+    manifest = tmp_path / "resolution-manifest.json"
+    manifest.write_text(json.dumps({
+        "format": "openworkgraph.reconstruction-review-manifest.v1",
+        "sessions": sessions,
+    }))
+    report = tmp_path / "resolution-batch.json"
+    result = run("score-batch", "--manifest", str(manifest), "--output", str(report))
+    assert result.returncode == 0, result.stderr
+    batch = json.loads(report.read_text())
+    assert batch["third_reviewer_resolution_session_count"] == 2
+    assert batch["unresolved_reviewer_disagreement_count"] == 0
+    assert batch["session_macro_human_assisted_overlay"]["workflow_assignment_f1"] == 1.0
+    assert "PRIVATE" not in report.read_text()
+    # Tampered resolution cannot be used as a shortcut around revalidation.
+    corrupt = json.loads(Path(sessions[1]["decisions"]).read_text())
+    corrupt["third_reviewer_resolved_count"] = 99
+    Path(sessions[1]["decisions"]).write_text(json.dumps(corrupt))
+    refused = tmp_path / "refused-resolution-batch.json"
     assert run("score-batch", "--manifest", str(manifest),
                "--output", str(refused)).returncode == 2
     assert not refused.exists()
