@@ -1511,16 +1511,37 @@ const path=require('node:path');
    assert.equal(await page.getByRole('button',{name:'Edit metric work_selected',exact:true}).count(),1);
    assert.equal(await page.locator('#owgAnalysisSave').isDisabled(),true,'loading cannot save a stale result');
    assert.equal(await page.locator('#owgAnalysisJson').isDisabled(),true,'loading clears stale exports');
+   // A rename is a graph refactor: exact arithmetic references and selected
+   // measures follow it, while the saved original remains unchanged.
+   const pureRefactor=await page.evaluate(ms=>{
+     const model=window.__owgEventLogModel;
+     const result=model.refactorMetricGraph(ms,'work_selected',{...ms[0],name:'renamed_selected'},['avg:metric:work_selected','sum:metric:work_fraction']);
+     let refused='';
+     try{model.refactorMetricGraph(ms,'work_selected',{...ms[0],name:'work_all'},['avg:metric:work_selected']);}
+     catch(error){refused=error.message;}
+     return {result,refused,original:ms};
+   },sharePure);
+   assert.equal(pureRefactor.result.metrics[2].left.name,'renamed_selected');
+   assert.deepEqual(pureRefactor.result.measures,['avg:metric:renamed_selected','sum:metric:work_fraction']);
+   assert.match(pureRefactor.refused,/already has that name/);
+   assert.deepEqual(pureRefactor.original,sharePure,'a refused or successful pure refactor never mutates its source');
    await page.getByRole('button',{name:'Edit metric work_selected',exact:true}).click();
    assert.equal(await page.locator('#owgMetricMissingPolicy').inputValue(),'available');
-   await page.locator('#owgMetricName').fill('renamed_selected');
+   await page.locator('#owgMetricName').fill('work_all');
    await page.locator('#owgMetricUpdate').click();
-   await page.locator('#owgAnalysisStatus').filter({hasText:'has dependents'}).waitFor();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'already has that name'}).waitFor();
    assert.match(await page.locator('#owgMetricList').textContent(),/work_selected/);
-   await page.locator('#owgMetricName').fill('work_selected');
+   await page.locator('#owgMetricName').fill('renamed_selected');
    await page.locator('#owgMetricMissingPolicy').selectOption('complete');
    await page.locator('#owgMetricUpdate').click();
-   await page.locator('#owgAnalysisStatus').filter({hasText:'Metric updated in this draft'}).waitFor();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'dependent arithmetic and selected measures'}).waitFor();
+   assert.equal(await page.getByRole('button',{name:'Edit metric renamed_selected',exact:true}).count(),1);
+   assert.match(await page.locator('#owgMetricList').textContent(),/renamed_selected/);
+   await page.getByRole('button',{name:'Edit metric work_fraction',exact:true}).click();
+   await page.locator('#owgMetricName').fill('renamed_fraction');
+   await page.locator('#owgMetricUpdate').click();
+   assert.equal(await page.locator('#owgAnalysisMeasure1').inputValue(),'avg:metric:renamed_fraction',
+     'the selected measure follows the renamed arithmetic result');
    assert.equal(await page.locator('#owgMetricUpdate').isDisabled(),true);
    assert.equal(await page.locator('#owgAnalysisSave').isDisabled(),true,'editing requires a fresh run before saving');
    assert.equal(await page.locator('#owgAnalysisJson').isDisabled(),true,'editing cannot export an older result');
@@ -1528,13 +1549,26 @@ const path=require('node:path');
      page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
      page.locator('#owgAnalysisRun').click()]);
    assert.equal(loadedResponse.status(),200);
-   const editedMetrics=JSON.parse(loadedResponse.request().postData()).metrics;
-   assert.deepEqual(editedMetrics,[{...sharePure[0],missing_policy:'complete'},...sharePure.slice(1)]);
+   const editedSpec=JSON.parse(loadedResponse.request().postData());
+   assert.equal(editedSpec.measures[0].of,'metric:renamed_fraction');
+   assert.deepEqual(editedSpec.metrics,[{...sharePure[0],name:'renamed_selected',missing_policy:'complete'},
+     sharePure[1],{...sharePure[2],name:'renamed_fraction',left:{kind:'metric',name:'renamed_selected'}}]);
    assert.deepEqual((await loadedResponse.json()).rows,shareResult.rows);
    await page.locator('#owgAnalysisName').fill('Revised Work contribution');
    await page.locator('#owgAnalysisSave').click();
    await page.getByRole('button',{name:'Run saved analysis Revised Work contribution',exact:true}).waitFor();
    await page.getByRole('button',{name:'Run saved analysis Observed Work contribution',exact:true}).waitFor();
+   const [replayedRevision]=await Promise.all([
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
+     page.getByRole('button',{name:'Run saved analysis Revised Work contribution',exact:true}).click()]);
+   assert.equal(replayedRevision.status(),200);
+   const replayedSpec=JSON.parse(replayedRevision.request().postData());
+   assert.deepEqual(replayedSpec.metrics,editedSpec.metrics,'saved revision keeps rewritten dependencies');
+   assert.deepEqual(replayedSpec.measures,editedSpec.measures,'saved revision keeps rewritten measure');
+   const [replayedOriginal]=await Promise.all([
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
+     page.getByRole('button',{name:'Run saved analysis Observed Work contribution',exact:true}).click()]);
+   assert.deepEqual(JSON.parse(replayedOriginal.request().postData()).metrics,sharePure,'original saved analysis is unchanged');
    const numericAxe=await page.evaluate(()=>axe.run(document.querySelector('#owgEventLogAnalysis'),{
      runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']},resultTypes:['violations']}));
    assert.deepEqual(numericAxe.violations,[]);
