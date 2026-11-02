@@ -73,8 +73,8 @@ def compose_outcome_portfolio(
     attention_count = 0
     for row, provider, human in entries:
         ref = row["work_item_ref"]
-        if (provider.get("format") != "openworkgraph.local-case-operation-evidence.v1" or
-                human.get("format") != "openworkgraph.local-case-human-outcomes.v1" or
+        if (provider.get("format") != "openworkgraph.local-case-operation-evidence-ledger.v1" or
+                human.get("format") != "openworkgraph.local-case-human-outcome-assessments.v1" or
                 provider.get("work_item_ref") != ref or human.get("work_item_ref") != ref):
             raise CaseDeclarationError("conflicting outcome portfolio history identity")
         h_status = human["latest_human_assessed_status"]
