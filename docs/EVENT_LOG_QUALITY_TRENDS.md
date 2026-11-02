@@ -266,3 +266,50 @@ reason-count validity, bounds, stale selection and the direct inspection
 control. Native exact-head CI, including real Chromium and cross-platform
 tests, is still required before merging; synthetic fixtures are not a
 real-provider or consenting-customer pilot.
+
+
+## Compare rejection categories across selected batches and export the review
+
+In **Event logs → Analyse → Data quality → Compare batches**, choose a
+**Baseline batch** and a later **Target batch** under **Compare two selected
+batches**. The **Selected rejection-category comparison** now lists the
+recorded rejection reasons at those two endpoints, even if multiple append
+batches lie between them. It displays the category, each endpoint's recorded
+count, supplied-row denominator and percentage, and the signed
+percentage-point difference. The largest absolute differences appear first
+(up to 50 rows); the panel states the full number of recorded categories and
+how many were omitted. A category missing from a **present** reason dictionary
+is zero *recorded* instances; a missing dictionary is **unknown**, not zero.
+Categories may overlap, so their counts are not additive unique rejected rows.
+
+A comparison is allowed only when both endpoints and **every intervening
+batch** have a saved, nonduplicated quality report with the same verified
+SHA-256 transform digest. The two endpoints must additionally have valid
+rejection-reason dictionaries, matching rejected-input counts and positive
+supplied-row denominators. Missing, duplicate or inconsistent reports,
+mapping changes, gaps, unknown counts, oversized category dictionaries
+(over 256 per endpoint or combined) and reversed/identical selections produce
+an explicit refusal rather than a misleading zero. The existing latest-100
+batch window applies. This compares *recorded supplied-row rates*, not the
+completeness of the upstream source or a statistically matched population.
+
+The **Download selected rejection comparison CSV** button becomes available
+only when the selected comparison is valid and contains recorded categories.
+The download includes the two batch labels, full **transform digest** (not
+a source-file hash), up to 50 displayed category labels, recorded counts,
+denominators, percentages and differences. It contains **no rejected-row
+samples, event bodies, source identities or provider credentials**. All cells
+are CSV-quoted, with spreadsheet-formula-leading characters escaped; it is
+created locally from the already-loaded, session-authenticated quality
+response. The CSV is explicitly limited to displayed categories and is **not**
+a full-history export. Changing the selected log, rerunning analysis, or
+choosing an invalid comparison clears or disables the export; stale responses
+cannot export a different log's data.
+
+This is a **read-only, descriptive audit aid**. A category-rate increase does
+not prove a source-system regression, causal relationship, complete coverage,
+worker performance or authority to quarantine, release or execute anything.
+Synthetic Node tests exercise the multi-batch comparison, invalid/missing
+evidence, bounds, CSV injection escaping, keyboard select updates, download
+and stale-log clearing. Native exact-head CI and real consenting-customer
+acceptance are still separate release gates.
