@@ -2381,6 +2381,8 @@
         if(proposed.some(m=>existing.has(m.name)))throw new Error('A comparison metric name already exists. Choose a different base name.');
         // Validate the entire batch before mutation; no half-added comparisons.
         metrics.push(...proposed);renderMetrics();
+        // Case metrics cannot be measured at the event level.
+        level.value='cases';sync();
         measure1.value='avg:metric:'+proposed[2].name;measure2.value='';
         message.textContent='Added first, last completed, and signed last minus first metrics. Run analysis; missing stages remain unknown.';
       }catch(error){message.textContent=error.message;}
