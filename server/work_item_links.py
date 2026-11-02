@@ -48,6 +48,7 @@ from .reconstruction_actor_continuity import actor_observation_index, observed_s
 from .reconstruction_case_coverage import observed_record_participant_surfaces
 from .reconstruction_app_focus import bracketed_tabless_app_focus
 from .reconstruction_candidate_review import ambiguous_assignment_review
+from .reconstruction_candidate_fragments import ambiguous_fragment_review
 from .reconstruction_assignment_proof import accepted_assignment_proofs
 
 _TRANSFER = re.compile(r"^[A-Za-z0-9:._-]{1,120}$")
@@ -791,9 +792,14 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
         linked["candidates"], item_of, singleton_ids,
         {item["item_id"] for item in items if item["resource_refs"]},
     )
+    fragment_queue = ambiguous_fragment_review(
+        linked["candidates"], rows, item_of, singleton_ids,
+        {item["item_id"] for item in items if item["resource_refs"]},
+    )
     unlinked = len(singleton_ids)
     return {
         **review_queue,
+        **fragment_queue,
         "format": "openworkgraph.linked-work-items.v1",
         "items": items,
         "total_items": len(groups),
@@ -869,6 +875,8 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             "ask_when_ambiguous": True,
             "ambiguous_assignment_review_never_merges_or_authorizes": True,
             "ambiguous_assignment_review_only_visible_source_anchored_items": True,
+            "ambiguous_fragment_review_is_two_hop_candidate_only": True,
+            "ambiguous_fragment_review_never_creates_membership": True,
         },
         "no_item_means_no_linking_evidence_not_no_work": True,
         "derived": True,
