@@ -914,6 +914,9 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    assert.equal(dependencyArtifact.coverage.stages,7);
    assert.equal(dependencyArtifact.coverage.upstream_basis_current,false);
    assert(dependencyArtifact.stages.find(s=>s.id==='project').affected_by.includes('dataset'));
+   assert(dependencyArtifact.stages.find(s=>s.id==='reports').affected_by.includes('dataset'),
+     'incomplete source coverage propagates through a recorded project to its reports');
+   assert(dependencyArtifact.stages.find(s=>s.id==='source_checks').affected_by.includes('dataset'));
    assert(!JSON.stringify(dependencyArtifact).includes('PRIVATE_RAW_CASE_VALUE'));
    assert(!JSON.stringify(dependencyArtifact).includes('owg:r:'));
    const dependencyAudit=await page.evaluate(async()=>window.axe.run(
