@@ -1508,14 +1508,26 @@ const path=require('node:path');
    await page.locator('#owgAnalysisStatus').filter({hasText:'Edit and run it, then save under a new name'}).waitFor();
    assert.equal(await page.locator('#owgAnalysisLevel').inputValue(),'cases');
    assert.equal(await page.locator('#owgAnalysisMeasure1').inputValue(),'avg:metric:work_fraction');
-   assert.equal(await page.locator('#owgMetricList button').count(),3);
+   assert.equal(await page.getByRole('button',{name:'Edit metric work_selected',exact:true}).count(),1);
    assert.equal(await page.locator('#owgAnalysisSave').isDisabled(),true,'loading cannot save a stale result');
    assert.equal(await page.locator('#owgAnalysisJson').isDisabled(),true,'loading clears stale exports');
+   await page.getByRole('button',{name:'Edit metric work_selected',exact:true}).click();
+   assert.equal(await page.locator('#owgMetricMissingPolicy').inputValue(),'available');
+   await page.locator('#owgMetricName').fill('renamed_selected');
+   await page.locator('#owgMetricUpdate').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'has dependents'}).waitFor();
+   assert.match(await page.locator('#owgMetricList').textContent(),/work_selected/);
+   await page.locator('#owgMetricName').fill('work_selected');
+   await page.locator('#owgMetricMissingPolicy').selectOption('complete');
+   await page.locator('#owgMetricUpdate').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Metric updated in this draft'}).waitFor();
+   assert.equal(await page.locator('#owgMetricUpdate').isDisabled(),true);
    const [loadedResponse]=await Promise.all([
      page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
      page.locator('#owgAnalysisRun').click()]);
    assert.equal(loadedResponse.status(),200);
-   assert.deepEqual(JSON.parse(loadedResponse.request().postData()).metrics,sharePure);
+   const editedMetrics=JSON.parse(loadedResponse.request().postData()).metrics;
+   assert.deepEqual(editedMetrics,[{...sharePure[0],missing_policy:'complete'},...sharePure.slice(1)]);
    assert.deepEqual((await loadedResponse.json()).rows,shareResult.rows);
    await page.locator('#owgAnalysisName').fill('Revised Work contribution');
    await page.locator('#owgAnalysisSave').click();
