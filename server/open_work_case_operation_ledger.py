@@ -368,8 +368,13 @@ def _operate(admitted: dict[str, Any], signature: tuple, *, scope: str,
             db.execute("ROLLBACK")
             raise
     # A revoked review/source is denied even if it changed during the write.
-    # The revocation path itself scrubs the ledger. No distributed fence claim.
-    guard()
+    # Conservatively scrub the entire local evidence store if post-commit
+    # admission fails; never leave a just-written stale case on disk.
+    try:
+        guard()
+    except Exception:
+        clear_operation_evidence()
+        raise
     return result
 
 
