@@ -295,7 +295,8 @@ def _insert(db: sqlite3.Connection, row: dict[str, Any]) -> None:
 def _operate(admitted: dict[str, Any], signature: tuple, *, scope: str,
              secret: str, guard: Callable[[], None], mode: str,
              resource_ref: str | None = None, verification: dict | None = None,
-             target_seq: int | None = None, reason: str | None = None) -> dict[str, Any]:
+             target_seq: int | None = None, reason: str | None = None,
+              expected_history: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     graph, source, key, expiry = _context(admitted, signature, scope, secret)
     ref = admitted["work_item_ref"]
     record = _record(key, resource_ref) if resource_ref is not None else None
@@ -338,6 +339,12 @@ def _operate(admitted: dict[str, Any], signature: tuple, *, scope: str,
             now = _clock(None)
             rows = _load(db, admitted, graph, source, key, expiry, now)
             if mode == "check":
+                # The caller captured this exact private history before a potentially
+                # slow source read. Compare inside the SQLite write transaction so
+                # another process cannot append/dispute between comparison and insert.
+                # Existing callers without a checkpoint remain backward-compatible.
+                if expected_history is not None and _result(ref, rows)["events"] != expected_history:
+                    raise CaseDeclarationError("operation evidence changed during source verification")
                 if not rows and db.execute("SELECT COUNT(DISTINCT work_item_ref) FROM evidence").fetchone()[0] >= _MAX_CASES:
                     raise CaseDeclarationError("operation evidence case capacity reached")
                 event = _event(
@@ -380,10 +387,11 @@ def _operate(admitted: dict[str, Any], signature: tuple, *, scope: str,
 
 def append_operation_evidence(admitted: dict[str, Any], signature: tuple, *,
                               scope: str, secret: str, resource_ref: str,
-                              verification: dict, guard: Callable[[], None]) -> dict[str, Any]:
+                              verification: dict, guard: Callable[[], None],
+                              expected_history: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     return _operate(admitted, signature, scope=scope, secret=secret,
                     guard=guard, mode="check", resource_ref=resource_ref,
-                    verification=verification)
+                    verification=verification, expected_history=expected_history)
 
 
 def read_operation_evidence(admitted: dict[str, Any], signature: tuple, *,
