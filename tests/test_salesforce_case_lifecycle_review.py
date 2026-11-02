@@ -575,7 +575,6 @@ def owg_context(tmp_path, monkeypatch):
 
 
 def _retained_log(workspace, source_review, *, wrong_namespace=False):
-    from server.salesforce_case_history_incremental import _canonical
     scope = json.loads(source_review.read_text())["scope_sha256"]
     ns = "sf_" + scope[:32]
     if wrong_namespace:
@@ -638,10 +637,10 @@ def test_real_source_review_to_authenticated_owg_retained_evidence_impact(
     assert rows[_key("sandbox", "case", CASE_A)]["owg_events"] == 1
     assert rows[_key("sandbox", "case", CASE_B)]["owg_events"] == 1
     assert rows[_key("sandbox", "case", CASE_C)]["owg_evidence"] == "not_observed"
-    assert len(seen) == 4
-    assert seen[0] == ("GET", "/v1/event-logs")
+    assert len(seen) == 5
+    assert seen[0] == seen[-1] == ("GET", "/v1/event-logs")
     assert all(method == "POST" and path.endswith("/cases/query")
-               for method, path in seen[1:])
+               for method, path in seen[1:-1])
     assert source.read_bytes()
     assert workspace.list_logs()["logs"][0]["events"] == 2
     assert os.name != "posix" or output.stat().st_mode & 0o077 == 0
@@ -661,7 +660,7 @@ def test_real_source_review_to_authenticated_owg_retained_evidence_impact(
     assert main(cli) == 2
     assert len(seen) == before
     assert main(cli + ["--consent-local-owg-read", "--consent-private-impact"]) == 0
-    assert len(seen) == before + 4
+    assert len(seen) == before + 5
     assert "impact_review_created" in capsys.readouterr().out
 
 
