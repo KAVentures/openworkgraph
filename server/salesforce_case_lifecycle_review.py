@@ -98,7 +98,7 @@ def _read(opener, origin, bearer, cases, *, max_pages=1):
         # permits a caller-supplied URL, query, fragment or encoded traversal.
         if (type(cursor) is not str
                 or re.fullmatch(
-                    r"/services/data/v60\\.0/(?:query|queryAll)/[A-Za-z0-9_-]{1,200}",
+                    r"/services/data/v60\.0/(?:query|queryAll)/[A-Za-z0-9_-]{1,200}",
                     cursor) is None
                 or not data["records"] or page == max_pages):
             raise LifecycleReviewError("Unfinished or unsafe lifecycle cursor")
