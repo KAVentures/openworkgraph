@@ -106,6 +106,52 @@ a stage; an end must occur *after* the selected start.
 }
 ```
 
+### First versus last completed stage (rework and repeated cycles)
+
+The default `"stage_occurrence": "first"` preserves existing behavior: first
+observed `from_activity` and first strictly later `to_activity`. For
+repeated review/approval or rework cycles, explicitly set
+`"stage_occurrence": "last_completed"` to select the **latest observed
+start that has a strictly later end**. OWG calculates the statistic only
+over that selected interval, not over every cycle and not over an unfinished
+final cycle. A start without a later observed end is never treated as
+complete; an earlier complete cycle can still contribute its value.
+
+For example, a case with `Start(2), Work(4), End, Start(8), Work(10),
+End, Start(100)` has a first-stage average of **3**, a last-completed
+stage average of **9**, and one trailing unfinished stage. The final
+`Start(100)` does not silently inflate the last-completed result.
+
+```json
+{
+  "level": "cases",
+  "metrics": [
+    {"name": "first_review", "kind": "event_attribute_statistic",
+     "attribute": "amount", "unit": "EUR", "statistic": "average",
+     "from_activity": "Start", "to_activity": "End", "stage_occurrence": "first"},
+    {"name": "last_review", "kind": "event_attribute_statistic",
+     "attribute": "amount", "unit": "EUR", "statistic": "average",
+     "from_activity": "Start", "to_activity": "End", "stage_occurrence": "last_completed"},
+    {"name": "observed_change", "kind": "arithmetic", "operation": "subtract",
+     "left": {"kind": "metric", "name": "last_review"},
+     "right": {"kind": "metric", "name": "first_review"}}
+  ],
+  "measures": [{"fn": "avg", "of": "metric:observed_change"}]
+}
+```
+
+This is a **per-case comparison of two observed intervals**, not a
+source-authoritative rework count, financial adjustment, causal effect or
+evidence of complete capture. If a case has no start or no completed
+start→end pair, the statistic is null. If start and end are the same
+activity, the later end occurrence can also be the start of an unfinished
+next cycle; this is disclosed rather than inferred complete. Both
+selectors use the same deterministic `(UTC timestamp, event_id)` ordering,
+including ties. `last_completed` is valid only when **both**
+`from_activity` and `to_activity` are specified. The bounded
+parameterized planner uses a window pass rather than enumerating all
+possible start/end pairs.
+
 The optional `activity` selector composes with this interval: only
 events of that exact activity *inside the interval* contribute. Both
 boundaries are exact case-sensitive strings bound as SQL parameters. Events
@@ -118,13 +164,16 @@ policy applies to the *selected stage rows*, not events outside it.
 
 Coverage includes `cases_without_stage_start`,
 `cases_without_later_stage_end`, and
-`cases_without_complete_stage`; their counts are distinct from
+`cases_without_complete_stage`; when `last_completed` is selected it also
+includes `cases_with_trailing_unfinished_stage` (including cases with a
+start but no completed stage). These counts survive the numeric-coverage
+summary and remain distinct from
 `cases_without_matching_activity` (which counts only complete stages
 with no events matching an optional activity selector).
 `flattened_case_event_rows_considered` counts only rows in complete
 observed stages. The coverage scope explicitly includes
 `stage_bounded`. Saved definitions and existing authenticated analysis
-and export contracts retain both boundaries. This does not prove that
+and export contracts retain both boundaries and the explicit stage occurrence selection. This does not prove that
 source events are complete or that the named activities correspond to
 approved business policy.
 
