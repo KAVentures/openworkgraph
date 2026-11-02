@@ -453,8 +453,53 @@
               idea_not_approved:'Human opportunity approval missing',project_uses_historical_idea_revision:'Project based on historical idea revision',
               no_imported_report:'No imported run report',reported_specification_unverified:'Reported specification unavailable or mismatched',
               execution_and_business_outcomes_unverified:'Execution, causality and business outcomes not independently verified'};
-            packet.readiness.blockers.forEach(key=>issues.appendChild(el('li',names[key]||key)));
-            review.appendChild(issues);
+            // First-view blocker triage: navigate to the existing human-review
+            // controls for this *exact* project, never clear a blocker by clicking.
+            // Source coverage and independent outcomes require manual evidence;
+            // no dashboard shortcut can attest to either.
+            const blockerStatus=el('div','Review actions only open existing controls. Checks remain outstanding.','muted');
+            blockerStatus.id='owgPipelineJourneyBlockerStatus';
+            blockerStatus.setAttribute('role','status');blockerStatus.setAttribute('aria-live','polite');
+            const blockerRoutes={
+              process_not_current:['Inspect exact saved process revision',processAction],
+              idea_not_approved:['Review opportunity assessment or decision',ideaAction],
+              project_uses_historical_idea_revision:['Review current opportunity before new handoff',ideaAction],
+              no_imported_report:['Review imported reports for this exact project',reportsAction],
+              reported_specification_unverified:['Inspect mismatched or unavailable reports',reportsAction],
+              reported_specification_list_truncated:['Inspect full imported report links',reportsAction],
+              execution_and_business_outcomes_unverified:['Prepare separately consented source-state review',sourceAction]
+            };
+            const blockerHelp={
+              no_exact_saved_process:'No pinned design is available. Return to the process catalog, explicitly review and save a revision, then create a new linked opportunity.',
+              process_not_current:'Only the pinned revision may be opened. If unavailable, return to the catalog; a newer design cannot be substituted.',
+              dataset_origin_not_linked:'Return to the originating event-log workspace, confirm opt-in and source/cohort selection, then create a newly linked design and opportunity.',
+              dataset_origin_not_current:'Recheck consent, retention, dataset availability and completeness in the originating workspace; do not assume the saved snapshot is current.',
+              dataset_origin_list_truncated:'Only 64 source/cohort checks are included. Inspect the original workspace; this summary cannot certify full coverage.',
+              reported_specification_list_truncated:'Only 64 reported specifications are summarized. Review the full report-link list before drawing conclusions.',
+              project_uses_historical_idea_revision:'This export is historical. A new reviewed idea revision requires its own explicitly requested project.',
+              execution_and_business_outcomes_unverified:'A source-state check alone cannot verify execution, causality, customer benefit or agent authorization. Independent case/outcome validation remains required.'
+            };
+            packet.readiness.blockers.forEach(key=>{
+              const item=el('li');item.appendChild(el('span',names[key]||'Unresolved review requirement'));
+              const route=blockerRoutes[key];
+              if(route){
+                const [label,target]=route,action=button(label,'secondary');
+                action.id='owgPipelineBlocker_'+key;
+                action.disabled=target.disabled;
+                action.onclick=()=>{
+                  if(generation!==detailGeneration||choice.value!==p.project_id||
+                    !artifact.contains(review)||action.disabled||target.disabled)return;
+                  target.click();
+                  blockerStatus.textContent='Opened '+label.toLowerCase()+
+                    ' for this exact selection. The blocker remains outstanding; no approval, provider read or execution occurred.';
+                };
+                item.appendChild(action);
+                if(action.disabled)item.appendChild(el('p','Unavailable for this historical or uncheckable reference; no newer artifact will be substituted.','muted'));
+              }
+              if(blockerHelp[key])item.appendChild(el('p',blockerHelp[key],'muted'));
+              issues.appendChild(item);
+            });
+            review.append(issues,blockerStatus);
             const downloadPacket=button('Download review packet for this exact project','secondary');
             downloadPacket.id='owgPipelineJourneyReviewPacket';
             downloadPacket.onclick=()=>{
