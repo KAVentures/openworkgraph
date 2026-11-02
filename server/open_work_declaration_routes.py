@@ -27,6 +27,9 @@ from .open_work_case_operation_verification import (
 from .open_work_case_dependency_operations import (
     admit_dependency_operation_links, compose_dependency_operation_result,
 )
+from .open_work_case_operation_timeline import (
+    validate_prior_operation_timeline, append_operation_timeline,
+)
 from .open_work_outcomes import source_operation_receipt
 from .open_work_case_status_checkpoint import (
     validate_prior_checkpoint, issue_status_checkpoint,
@@ -877,6 +880,74 @@ async def delete_local_case_declaration(request: Request, response: Response):
             expected_edit_token=payload["expected_edit_token"],
         )
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/v1/open-work/declarations/operation-timeline")
+async def check_local_case_operation_timeline(request: Request, response: Response):
+    """Explicitly append one independent provider check to a sealed portable history."""
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_source_verification", "record_link", "prior_timeline",
+    })
+    if payload["confirm_source_verification"] is not True:
+        raise HTTPException(403, "explicit independent provider verification required")
+    try:
+        before = await asyncio.to_thread(list_case_declarations, scope)
+        admitted, signature = admitted_case_dossier_snapshot(
+            before, work_item_ref=payload["work_item_ref"],
+            expected_revision=payload["expected_revision"],
+            expected_edit_token=payload["expected_edit_token"],
+        )
+        secret = await asyncio.to_thread(_read_or_create_secret, ".open_work_reference_key")
+        link = payload["record_link"]
+        resource_ref = validate_case_record_link(
+            link, admitted, signature, scope=scope, secret=secret,
+        )
+        prior = payload["prior_timeline"]
+        if prior is not None:
+            checks = validate_prior_operation_timeline(
+                prior, admitted, signature, resource_ref=resource_ref,
+                scope=scope, secret=secret, link_expires_at=link["expires_at"],
+            )
+            if len(checks) >= 8:
+                raise CaseDeclarationError("operation timeline full")
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    # A bad record link, full history or stale/tampered prior history must not
+    # trigger provider IO. Revalidate source and DAG after the source read.
+    await _recheck_source(scope)
+    try:
+        receipt = await asyncio.to_thread(
+            source_operation_receipt, resource_ref, "stripe_invoice_paid",
+        )
+    except (ValueError, OSError, TypeError, CaseDeclarationError, sqlite3.DatabaseError):
+        receipt = None
+    await _recheck_source(scope)
+    try:
+        after = await asyncio.to_thread(list_case_declarations, scope)
+        current, current_signature = admitted_case_dossier_snapshot(
+            after, work_item_ref=payload["work_item_ref"],
+            expected_revision=payload["expected_revision"],
+            expected_edit_token=payload["expected_edit_token"],
+        )
+        if current_signature != signature:
+            raise CaseDeclarationError("stale operation timeline dependency graph changed")
+        validate_case_record_link(
+            link, current, current_signature, scope=scope, secret=secret,
+        )
+        result = append_operation_timeline(
+            current, current_signature, resource_ref,
+            project_case_operation_verification(current, resource_ref, receipt),
+            scope=scope, secret=secret, link_expires_at=link["expires_at"],
+            prior=prior,
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
         raise _safe_error(exc) from None
     await _recheck_source(scope)
     response.headers["Cache-Control"] = "no-store"
