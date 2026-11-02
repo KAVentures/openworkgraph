@@ -467,7 +467,7 @@
                   if(generation!==detailGeneration||choice.value!==p.project_id||
                     requestSequence!==comparisonSequence||!compareResult.contains(exportInspection))return;
                   const record=handoffInspectionWorklist(saved,latest,[...inspected],new Date().toISOString());
-                  const blob=new Blob([JSON.stringify(record,null,2)+'\\n'],{type:'application/json'});
+                  const blob=new Blob([JSON.stringify(record,null,2)+'\n'],{type:'application/json'});
                   const url=URL.createObjectURL(blob),link=el('a');
                   link.href=url;link.download='owg-human-inspection-worklist.json';
                   document.body.appendChild(link);link.click();link.remove();
