@@ -15,11 +15,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 from typing import Any
 
-from server.record_case_lanes import record_case_lanes
-from server.work_item_links import link_observations
+from server.record_case_lanes import _EVENT_ID, _identity, _stamp, record_case_lanes
+from server.work_item_links import _TAB, _TRANSFER, link_observations
 
 from .fixtures import load_cases
 from .scoring import aggregate
@@ -31,25 +32,140 @@ def _ref(event: dict[str, Any]) -> str:
     return str(ref.get("resource_ref") or "").lower()
 
 
+def _visible_lane_identities(
+    presented: list[dict[str, Any]],
+) -> dict[str, tuple[tuple[str, str, str, str], str] | None]:
+    """Admit an ID only with one consistent visible identity and UTC instant.
+
+    Rich evidence deliberately omits organization identity. Compare the four
+    public resource components, not a guessed tenant or source-only row.
+    Equivalent offset representations of one instant are valid replays, but
+    different instants, malformed timestamps or conflicting identities veto
+    the event ID irreversibly. An ID cannot identify two observed events.
+    """
+    identities: dict[str, tuple[tuple[str, str, str, str], str] | None] = {}
+    for event in presented:
+        if not isinstance(event, dict):
+            continue
+        event_id = event.get("event_id")
+        if not isinstance(event_id, str) or not _EVENT_ID.fullmatch(event_id):
+            continue
+        # The shipped source engine normalizes raw identity components with
+        # str(...), but an AI-presented boolean/numeric claim is not the same
+        # literal observation as a source string. Check visible types before
+        # applying the engine's case-insensitive identity normalization.
+        metadata = event.get("metadata")
+        reference = (metadata.get("resource_reference")
+                     if isinstance(metadata, dict) else None)
+        literal_reference = isinstance(reference, dict) and all(
+            key not in reference or isinstance(reference[key], str)
+            for key in ("resource_ref", "provider", "resource_kind", "host")
+        )
+        match = _identity(event) if literal_reference else None
+        stamp = _stamp(event.get("observed_at"))
+        visible = match[:4] if match and stamp is not None else None
+        if event_id not in identities:
+            identities[event_id] = (visible, stamp) if visible is not None else None
+        elif identities[event_id] is not None:
+            prior_identity, prior_stamp = identities[event_id]
+            if visible is None or prior_identity != visible or prior_stamp != stamp:
+                identities[event_id] = None
+    return identities
+
+
+def _admitted_visible_lane_members(
+    events: list[dict[str, Any]], published: set[str],
+    visible_identities: dict[str, tuple[tuple[str, str, str, str], str] | None],
+) -> dict[str, list[str]]:
+    """Project only source rows actually admitted by the shipped lane engine.
+
+    `record_case_lanes` intentionally exposes no event IDs. Reconstruct the
+    evaluator-only ID mapping using its exact identity, UTC timestamp and
+    first-valid-(ref, event_id) admission rules, rather than matching every
+    raw row by reference. Do not attribute one reused event ID to an arbitrary
+    lane: a duplicate across distinct admitted references is unassignable.
+    Nonliteral/malformed IDs and source-only rows cannot be scored as visible
+    evidence, even if the source lane's aggregate count includes them. A visible
+    ID must also carry the same unambiguous provider/kind/host/opaque reference
+    as its admitted source row, at the admitted UTC instant; matching an ID
+    alone is not provenance.
+    """
+    admitted: set[tuple[str, str]] = set()
+    owners: dict[str, set[str]] = {}
+    rows: dict[str, list[tuple[str, str]]] = {ref: [] for ref in published}
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        match = _identity(event)
+        stamp = _stamp(event.get("observed_at"))
+        raw_id = event.get("event_id")
+        # The shipped lane engine coerces IDs *before* first-(ref, ID)
+        # duplicate admission. A nonliteral first ID (e.g. 17) must consume
+        # the same source slot as a later literal "17", even though the
+        # nonliteral row itself is never scoreable as visible evidence.
+        source_id = str(raw_id or "")
+        if match is None or stamp is None or not _EVENT_ID.fullmatch(source_id):
+            continue
+        ref = match[0]
+        key = (ref, source_id)
+        if key in admitted:
+            continue
+        admitted.add(key)
+        if not isinstance(raw_id, str) or not _EVENT_ID.fullmatch(raw_id):
+            continue
+        owners.setdefault(raw_id, set()).add(ref)
+        visible = visible_identities.get(raw_id)
+        if ref in published and visible is not None and visible[0] == match[:4] and stamp == visible[1]:
+            rows[ref].append((stamp, raw_id))
+    return {
+        ref: [event_id for _, event_id in sorted(values)
+              if len(owners[event_id]) == 1]
+        for ref, values in rows.items()
+    }
+
+
+
+def _presented_event_ids(presented: list[Any]) -> list[str]:
+    """Return unique literal observation IDs, never coerced or invented IDs.
+
+    Malformed rows are not legitimate scored evidence. A duplicate visible
+    event ID is one observation identity, not two artificial unassigned items.
+    """
+    ids: list[str] = []
+    seen: set[str] = set()
+    for event in presented:
+        if not isinstance(event, dict):
+            continue
+        event_id = event.get("event_id")
+        if (not isinstance(event_id, str) or not _EVENT_ID.fullmatch(event_id)
+                or event_id in seen):
+            continue
+        seen.add(event_id)
+        ids.append(event_id)
+    return ids
+
+
 def predict_record_lanes(case: dict[str, Any]) -> dict[str, Any]:
-    events = list(case.get("source_events") or case["presented_evidence"])
+    # An explicitly empty source is authoritative (revocation/deletion). Only an
+    # absent source key denotes a legacy presented-only evaluation case.
+    events = list((case["source_events"] if "source_events" in case
+                   else case["presented_evidence"]) or [])
     lanes = record_case_lanes(events, max_lanes=30)["lanes"]
     published = {lane["resource_ref"] for lane in lanes}
-    members: dict[str, list[str]] = {ref: [] for ref in sorted(published)}
-    seen: set[str] = set()
-    for event in sorted(events, key=lambda e: (str(e.get("observed_at")), str(e.get("event_id")))):
-        event_id, ref = str(event.get("event_id") or ""), _ref(event)
-        if ref in members and event_id and event_id not in seen:
-            members[ref].append(event_id)
-            seen.add(event_id)
+    presented = case["presented_evidence"]
+    visible_identities = _visible_lane_identities(presented)
+    members = _admitted_visible_lane_members(events, published, visible_identities)
+    seen = {event_id for ids in members.values() for event_id in ids}
     workflows = [{
         "prediction_id": f"lane_{index}",
         "event_ids": ids,
         "ordered_event_ids": ids,
         "automation_relevant_event_ids": ids,
         "ui_mechanic_event_ids": [],
-    } for index, ids in enumerate(members.values(), start=1) if ids]
-    all_ids = [str(e["event_id"]) for e in case["presented_evidence"]]
+    } for index, ids in enumerate(
+        (members[ref] for ref in sorted(published)), start=1
+    ) if ids]
+    all_ids = _presented_event_ids(presented)
     return {
         "case_id": case["case_id"],
         "workflows": workflows,
@@ -59,10 +175,221 @@ def predict_record_lanes(case: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_MAX_EVAL_JSON_NODES = 10_000
+_MAX_EVAL_JSON_CHARS = 65_536
+
+
+def _canonical_eval_json(value: Any) -> str | None:
+    """Bound duplicate claims before encoding; never coerce non-JSON keys.
+
+    A post-serialization length check alone permits unbounded temporary
+    allocations and silently converts numeric object keys to strings. Walk
+    only JSON-shaped data with a fixed node/string budget, rejecting repeated
+    container objects (including cycles), unsupported types and nonfinite
+    numbers. This is evaluator-only, conservative evidence admission.
+    """
+    pending = [value]
+    seen_containers: set[int] = set()
+    nodes = 0
+    raw_chars = 0
+    while pending:
+        node = pending.pop()
+        nodes += 1
+        if nodes > _MAX_EVAL_JSON_NODES:
+            return None
+        if type(node) is dict:
+            marker = id(node)
+            if marker in seen_containers:
+                return None
+            seen_containers.add(marker)
+            if nodes + len(pending) + 2 * len(node) > _MAX_EVAL_JSON_NODES:
+                return None
+            for key, item in node.items():
+                if type(key) is not str:
+                    return None
+                raw_chars += len(key)
+                pending.append(item)
+        elif type(node) is list:
+            marker = id(node)
+            if marker in seen_containers:
+                return None
+            seen_containers.add(marker)
+            if nodes + len(pending) + len(node) > _MAX_EVAL_JSON_NODES:
+                return None
+            pending.extend(node)
+        elif type(node) is str:
+            raw_chars += len(node)
+        elif type(node) is float:
+            if not math.isfinite(node):
+                return None
+        elif type(node) is int:
+            # A huge integer can exhaust the decimal conversion budget even
+            # when it occupies only one node.
+            if node.bit_length() > 10_000:
+                return None
+        elif type(node) not in (bool, type(None)):
+            return None
+        if raw_chars > _MAX_EVAL_JSON_CHARS:
+            return None
+    try:
+        encoded = json.dumps(value, sort_keys=True, separators=(",", ":"),
+                             ensure_ascii=True, allow_nan=False)
+    except (TypeError, ValueError, OverflowError, RecursionError):
+        return None
+    return encoded if len(encoded) <= _MAX_EVAL_JSON_CHARS else None
+
+
+def _linked_projection(event: dict[str, Any]) -> str | None:
+    """Visible, link-authorizing fields of one observation, not hidden identity.
+
+    Rich evidence omits actor/device/organization; the evaluator cannot
+    independently attest those scopes. It preserves original source rows and
+    leaves production scope enforcement to the separately reviewed linker.
+    Metadata comparisons intentionally retain literal malformed claims: an
+    unseen or changed tab/transfer/reference cannot acquire link authority.
+    """
+    stamp = _stamp(event.get("observed_at"))
+    metadata = event.get("metadata")
+    if stamp is None or not isinstance(metadata, dict):
+        return None
+    # The production linker normalizes source fields for display/grouping, but
+    # a malformed raw value must not become evaluation link authority merely
+    # because its visible copy contains the same Python value. In particular,
+    # bool providers/kinds and numeric hosts can stringify into valid labels;
+    # nonstring apps can create ambiguous surface-continuity candidates.
+    app = event.get("app")
+    if app is not None and not isinstance(app, str):
+        return None
+    if "resource_reference" in metadata:
+        reference = metadata["resource_reference"]
+        if not isinstance(reference, dict):
+            return None
+        for field in ("resource_ref", "provider", "resource_kind", "host"):
+            if field in reference and not isinstance(reference[field], str):
+                return None
+    # Compare only the identity components the shipped linker actually uses.
+    # It casefolds valid opaque refs, provider/kind and host; unrelated extra
+    # reference attributes are not link authority. Keep malformed/invalid
+    # claims raw so they cannot impersonate a normalized valid identity.
+    reference_claim = metadata.get("resource_reference")
+    if isinstance(reference_claim, dict):
+        normalized_identity = _identity(event)
+        if normalized_identity is not None:
+            reference_claim = ["normalized_record_identity", *normalized_identity[:4]]
+    # Rich evidence normally copies metadata tokens into top-level convenience
+    # fields. Other authorized callers can present an independently observed
+    # top-level-only token, which the shipped linker also recognizes. Admit
+    # either location only when its value is a literal valid token, and reject
+    # contradictory dual claims rather than selecting a preferred one.
+    tokens: dict[str, str | None] = {}
+    for field, pattern in (("tab_context_id", _TAB),
+                           ("clipboard_transfer_id", _TRANSFER)):
+        # Never grant link authority via production's string coercion of bools
+        # or numbers (including Python's True == 1 equality shortcut).
+        in_metadata, at_top = field in metadata, field in event
+        if in_metadata and (not isinstance(metadata[field], str)
+                            or not pattern.fullmatch(metadata[field])):
+            return None
+        if at_top and (not isinstance(event[field], str)
+                       or not pattern.fullmatch(event[field])):
+            return None
+        if in_metadata and at_top and metadata[field] != event[field]:
+            return None
+        tokens[field] = (metadata[field] if in_metadata else
+                         event[field] if at_top else None)
+    # The duplicate-source preflight rejects tuples by design: this internal
+    # projection must use JSON-native lists at every level, including the
+    # normalized identity above, or all legitimate links fail closed.
+    return _canonical_eval_json([
+        stamp, event.get("app"), event.get("event_type"),
+        event.get("source"), event.get("session_id"),
+        reference_claim,
+        tokens["tab_context_id"],
+        tokens["clipboard_transfer_id"],
+        metadata.get("clipboard_source_observed"),
+        metadata.get("action"), metadata.get("semantic_action"),
+    ])
+
+
+def _visible_linked_source_events(case: dict[str, Any]) -> list[dict[str, Any]]:
+    """Keep only unambiguous source observations actually presented for scoring.
+
+    Filtering happens BEFORE linking: a source-only event must neither appear
+    as a member nor bridge two otherwise separate visible components. Reused
+    IDs with conflicting source payloads or visible link evidence fail closed.
+    Identical duplicates are idempotent. This is evaluator-only; the production
+    linker continues to receive the caller's authorized source observations.
+    """
+    # A repeated visible ID is one observation identity. Keep only its first
+    # projection and an irreversible conflict state, not a list of all replays.
+    # None also represents malformed visible evidence and cannot be repaired by
+    # a later, well-formed duplicate.
+    visible: dict[str, str | None] = {}
+    for event in case["presented_evidence"]:
+        if not isinstance(event, dict):
+            continue
+        event_id = event.get("event_id")
+        if not isinstance(event_id, str) or not _EVENT_ID.fullmatch(event_id):
+            continue
+        projection = _linked_projection(event)
+        if event_id not in visible:
+            visible[event_id] = projection
+        elif visible[event_id] != projection:
+            visible[event_id] = None
+
+    # Explicit empty source is authoritative after revocation. Only a missing
+    # source key is the legacy presented-only contract. Avoid copying the full
+    # source list merely to iterate it.
+    source = (case["source_events"] if "source_events" in case
+              else case["presented_evidence"]) or []
+    # Production reserves the first normalized ID with a valid timestamp,
+    # including numeric/boolean IDs. A later literal duplicate cannot replace
+    # an earlier nonliteral admission. Invalid timestamps reserve no slot.
+    first_admitted_literal: dict[str, bool] = {}
+    first_literal_rows: dict[str, dict[str, Any]] = {}
+    first_claims: dict[str, str | None] = {}
+    conflicting_literals: set[str] = set()
+    for event in source:
+        if not isinstance(event, dict):
+            continue
+        raw_id = event.get("event_id")
+        source_id = str(raw_id or "")
+        if not _EVENT_ID.fullmatch(source_id):
+            continue
+        if _stamp(event.get("observed_at")) is None:
+            continue
+        if source_id not in first_admitted_literal:
+            first_admitted_literal[source_id] = isinstance(raw_id, str)
+        if not isinstance(raw_id, str):
+            continue
+        if raw_id not in first_literal_rows:
+            first_literal_rows[raw_id] = event
+            continue
+        # Compare complete source JSON claims only when a valid literal replay
+        # exists. Canonicalization is bounded and type-preserving; a malformed
+        # or oversized duplicate is never allowed to replace the first row.
+        if raw_id not in first_claims:
+            first_claims[raw_id] = _canonical_eval_json(first_literal_rows[raw_id])
+        claim = first_claims[raw_id]
+        if claim is None or _canonical_eval_json(event) != claim:
+            conflicting_literals.add(raw_id)
+
+    admitted: list[dict[str, Any]] = []
+    for event_id, first in first_literal_rows.items():
+        if not first_admitted_literal.get(event_id, False):
+            continue
+        if event_id in conflicting_literals:
+            continue
+        projection = _linked_projection(first)
+        if projection is not None and visible.get(event_id) == projection:
+            admitted.append(first)
+    return admitted
+
+
 def predict_linked_items(case: dict[str, Any], *, accept_candidates: bool = False) -> dict[str, Any]:
     """Merged multi-signal items. Accepting the ambiguous candidate links is a
     diagnostic upper bound only: OWG itself never merges them."""
-    events = list(case.get("source_events") or case["presented_evidence"])
+    events = _visible_linked_source_events(case)
     linked = link_observations(events)
     members = list(linked["members"].values())
     if accept_candidates:
@@ -80,7 +407,7 @@ def predict_linked_items(case: dict[str, Any], *, accept_candidates: bool = Fals
                    for group in groups]
     members = [ids for ids in members if len(ids) >= 2]
     assigned = {event_id for ids in members for event_id in ids}
-    all_ids = [str(e["event_id"]) for e in case["presented_evidence"]]
+    all_ids = _presented_event_ids(case["presented_evidence"])
     return {
         "case_id": case["case_id"],
         "workflows": [{
