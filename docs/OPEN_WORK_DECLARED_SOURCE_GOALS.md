@@ -170,3 +170,71 @@ that forces atomic batch refusal. Run the repository's full exact-head
 cross-platform, browser, collaboration, scale, accessibility, starter and
 packaging matrix before merge. Real restricted Stripe test-account and
 independent customer-outcome acceptance remain outstanding.
+
+
+## Independent selected-portfolio checks
+
+The authenticated local REST endpoint
+`POST /v1/open-work/declarations/source-goals/verify-portfolio-payments`
+checks **2–4 explicitly selected independent cases** in one operator action.
+This is not the transitive prerequisite API above, a background scan, or
+automatic verification of all 50 portfolio items. It reuses the exact
+reviewed-case and signed invoice-link controls already required by
+`/source-goals/verify-payment`.
+
+After declaring and explicitly source-linking each selected case, send exactly:
+
+```json
+{
+  "confirm_source_verification": true,
+  "selections": [
+    {
+      "work_item_ref": "owg:w:<32 lowercase hex characters>",
+      "expected_revision": 1,
+      "expected_edit_token": "<current edit token>",
+      "record_link": {"format": "openworkgraph.local-case-record-link.v1", "...": "complete sealed link"}
+    },
+    {
+      "work_item_ref": "owg:w:<different 32 lowercase hex characters>",
+      "expected_revision": 1,
+      "expected_edit_token": "<current edit token>",
+      "record_link": {"format": "openworkgraph.local-case-record-link.v1", "...": "complete distinct sealed link"}
+    }
+  ]
+}
+```
+
+Placeholders above are **not** usable tokens or valid signed links. The order
+of `selections` is the order of the returned case summaries and provider
+checks. A selected root cannot be a prerequisite of another selected root:
+use `/source-goals/verify-dependency-payments` for a reviewed dependency
+chain. Shared non-selected prerequisites are allowed but remain unverified by
+this portfolio operation. A signed source link can be used for only one
+selected case, and all cases must belong to the currently connected local
+Stripe source account.
+
+**Before the first Stripe request**, OWG checks every selected case's exact
+owner revision/incarnation, current review and full prerequisite DAG, declared
+`stripe_invoice_paid_reported` goal, HMAC-sealed invoice link, and the
+private HMAC-validated historical provider ledger bound to that same invoice.
+It refuses the entire request if any selected case fails. After each read it
+rechecks *all* selected cases and source scope; revocation or source-account
+replacement stops the remaining provider calls. Provider unavailability
+produces an explicit `unknown` check, never `unpaid`.
+
+If every read completes and all rechecks pass, the private ledger appends all
+checked states in **one SQLite transaction**, with each case's exact
+previous-history optimistic checkpoint. A concurrent dispute or a later
+database failure aborts the whole append. The bounded response includes
+per-case fresh `met` / `unknown` state, last-history transition and count,
+plus totals. The check is sequential across Stripe, **not** a provider-atomic
+snapshot; there is no claim that the cases were paid simultaneously.
+Historical records can still be read individually using
+`/source-goals/payment-history` without contacting Stripe.
+
+The endpoint does not perform any source writes, create new obligations,
+approve an agent, send data to the cloud, infer customer success, or establish
+bank settlement or commercial uplift. The cross-process owner/connector
+revocation boundary is not a distributed transaction. Production acceptance
+still requires an authorized restricted Stripe TEST account and signed-client
+tests; synthetic FastAPI/SQLite acceptance is not that evidence.
