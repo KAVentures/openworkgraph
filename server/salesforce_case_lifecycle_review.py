@@ -488,8 +488,11 @@ def main(argv=None):
         return 0
     except (LifecycleReviewError, ValueError, TypeError, OSError, OverflowError):
         print(json.dumps({
-            "format": FORMAT, "status": "refused",
-            "reason": "Check current source grant, selected scope, consents and private new output",
+            "format": IMPACT_FORMAT if args.impact_review is not None else FORMAT,
+            "status": "refused",
+            "reason": ("Check pinned source review, local OWG session/log, consents and private output"
+                       if args.impact_review is not None else
+                       "Check current source grant, selected scope, consents and private new output"),
             "checkpoint_advanced": False, "owg_deletion_performed": False,
             "source_writes_performed": False,
         }, sort_keys=True))
