@@ -42,6 +42,7 @@ from .reconstruction_surfaces import observed_surface_runs
 from .reconstruction_transfer_episodes import disjoint_directional_transfer_episodes
 from .reconstruction_link_proof import directional_transfer_witness, observed_record_link_evidence
 from .reconstruction_tab_focus import bracketed_multiplexed_tab_focus
+from .reconstruction_actor_continuity import actor_observation_index, observed_same_record_actor_changes
 
 _TRANSFER = re.compile(r"^[A-Za-z0-9:._-]{1,120}$")
 _TAB = re.compile(r"^[A-Za-z0-9:._-]{1,160}$")
@@ -635,6 +636,7 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
     items: list[dict[str, Any]] = []
     item_of: dict[str, str] = {}
     record_positions, record_scope_positions = record_path_index(linked["rows"])
+    actor_positions, actor_tenant_positions = actor_observation_index(linked["rows"])
     groups = sorted((ids for ids in linked["members"].values() if len(ids) >= 2),
                     key=lambda ids: (-len(ids), rows[ids[0]]["observed_at"], ids[0]))
     for number, ids in enumerate(groups[:max_items], start=1):
@@ -652,6 +654,10 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
         bridge_evidence = observed_record_link_evidence(
             [rows[i] for i in ids], link_edges[linked["root"](ids[0])],
         )
+        actor_participation = observed_same_record_actor_changes(
+            [rows[i] for i in ids], position_index=actor_positions,
+            tenant_positions=actor_tenant_positions,
+        )
         items.append({
             "item_id": item_id,
             "event_ids": ids[:_MAX_EVENT_IDS],
@@ -667,6 +673,7 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             **surfaces,
             **record_path,
             **bridge_evidence,
+            **actor_participation,
             "link_basis": basis,
             "cross_record_join": len(refs) > 1,
             "confidence": min(_CONFIDENCE[name] for name in basis) if basis else _CONFIDENCE["same_record"],
@@ -720,6 +727,9 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             "observed_surface_runs_are_not_task_memberships": True,
             "observed_record_paths_are_not_verified_business_transitions": True,
             "record_bridges_are_observed_link_witnesses_not_handoffs": True,
+            "same_record_actor_changes_are_observed_not_verified_handoffs": True,
+            "cross_actor_participation_requires_complete_explicit_capture_scope": True,
+            "cross_actor_participation_does_not_add_membership": True,
             "directional_bridges_require_ordered_copy_paste": True,
             "legacy_shared_token_bridges_have_no_observed_direction": True,
             "observed_record_changes_require_same_exact_capture_scope": True,
