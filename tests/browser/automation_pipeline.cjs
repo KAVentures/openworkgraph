@@ -259,17 +259,34 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    const alteredPacket=JSON.parse(JSON.stringify(handoffPacket));
    alteredPacket.process.status='changed';
    alteredPacket.project.spec_sha256='a'.repeat(64);
+   alteredPacket.source_check_exports.count+=1;
+   alteredPacket.readiness.blockers.push('idea_not_approved');
    await setPacket(alteredPacket);
    await page.locator('#owgPipelineJourneyComparePacket').click();
    await page.locator('#owgPipelineJourneyCompareResult').getByText(/Recorded fields changed since the saved packet/).waitFor();
    const comparisonText=await page.locator('#owgPipelineJourneyCompareResult').textContent();
    assert(comparisonText.includes('Saved process availability'));
    assert(comparisonText.includes('Project revision and artifact hashes'));
+   const driftActions=page.locator('#owgPipelineJourneyDriftActions');
+   assert(await driftActions.getByRole('button',{name:'Inspect exact saved process revision'}).isEnabled());
+   assert((await driftActions.textContent()).includes('Review changed areas'));
+   // Keyboard navigation is an explicit review action, not an automatic export.
+   await driftActions.getByRole('button',{name:'Inspect selected immutable project'}).focus();
+   await page.keyboard.press('Enter');
+   assert.equal(await page.evaluate(()=>document.activeElement.id),'owgPipelineJourneyProject');
+   await driftActions.getByRole('button',{name:'Prepare separate source review for this project'}).click();
+   await page.locator('#owgPipelineSourceProject').waitFor();
+   assert.equal(await page.locator('#owgPipelineSourceProject').inputValue(),manifest.project_id);
+   assert.equal(await page.locator('#owgPipelineSourceConsent').isChecked(),false);
+   await driftActions.getByRole('button',{name:'Inspect outstanding human review checks'}).click();
+   assert.equal(await page.evaluate(()=>document.activeElement.id),'owgPipelineJourneyReadiness');
+   assert.equal(guidedWrites,writesBeforePacket,'drift review navigation must not write or read source');
    const wrongPacket=JSON.parse(JSON.stringify(handoffPacket));
    wrongPacket.project.project_id='unrelated-project';
    await setPacket(wrongPacket);
    await page.locator('#owgPipelineJourneyComparePacket').click();
    await page.locator('#owgPipelineJourneyCompareResult').filter({hasText:/belongs to another idea or project/}).waitFor();
+   assert.equal(await page.locator('#owgPipelineJourneyDriftActions').count(),0,'invalid packet must clear actionable review links');
    await priorPacket.setInputFiles({name:'huge.json',mimeType:'application/json',buffer:Buffer.alloc(65537,32)});
    await page.locator('#owgPipelineJourneyComparePacket').click();
    await page.locator('#owgPipelineJourneyCompareResult').filter({hasText:/no larger than 64 KiB/}).waitFor();
@@ -436,7 +453,12 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await page.locator('#owgPipelineJourneyComparePacket').click();
    await page.locator('#owgPipelineJourneyCompareResult').getByText(/Recorded fields changed since the saved packet/).waitFor();
    assert((await page.locator('#owgPipelineJourneyCompareResult').textContent()).includes('Saved process availability'));
-
+   // Report drift leads to the selected project's existing report-review controls.
+   const changedActions=page.locator('#owgPipelineJourneyDriftActions');
+   await changedActions.getByRole('button',{name:'Review imported reports for this project'}).click();
+   await page.locator('#owgPipelineReportProject').waitFor();
+   assert.equal(await page.locator('#owgPipelineReportProject').inputValue(),manifest.project_id);
+   assert.equal(guidedWrites,writesBeforeNavigation,'drift navigation must not create report links or source reads');
 
    assert(await guide.locator('#owgPipelineJourneyOpenProcess').isEnabled());
    page.once('dialog',dialog=>dialog.accept());
@@ -470,6 +492,8 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    });
    await page.locator('#owgPipelineJourneyComparePacket').click();
    await page.locator('#owgPipelineJourneyCompareResult').getByText(/Recorded fields changed since the saved packet/).waitFor();
+   assert(await page.locator('#owgPipelineJourneyDriftActions').getByRole('button',{name:'Inspect exact saved process revision'}).isDisabled(),
+     'unavailable process cannot be silently replaced with a newer revision');
    const writesAfterDeletion=guidedWrites;
    await page.locator('#owgPipelineJourneyComparePacket').click();
    await page.locator('#owgPipelineJourneyCompareResult').getByText(/Recorded fields changed since the saved packet/).waitFor();
