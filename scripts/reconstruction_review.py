@@ -14,7 +14,7 @@ from typing import Any
 
 from server.reconstruction_review_overlay import (
     BATCH_FORMAT, MAX_BATCH_SESSIONS, aggregate_review_scores,
-    apply_review, prepare_review_packet, score_review,
+    adjudicate_review, apply_review, prepare_review_packet, score_review,
 )
 
 _MAX_JSON = 8 * 1024 * 1024
@@ -95,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Human-reviewed, evidence-bound local reconstruction overlay"
     )
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("prepare", "apply", "score", "score-batch"):
+    for name in ("prepare", "adjudicate", "apply", "score", "score-batch"):
         command = sub.add_parser(name)
         if name == "score-batch":
             command.add_argument("--manifest", required=True,
@@ -104,9 +104,14 @@ def main(argv: list[str] | None = None) -> int:
             command.add_argument("--events", required=True,
                                  help="consented local JSON event array")
         command.add_argument("--output", required=True, help="new local private JSON file")
-        if name in ("apply", "score"):
+        if name in ("adjudicate", "apply", "score"):
             command.add_argument("--packet", required=True)
-            command.add_argument("--decisions", required=True)
+        if name in ("apply", "score"):
+            command.add_argument("--decisions", required=True,
+                                 help="single review or two-reviewer adjudication artifact")
+        if name == "adjudicate":
+            command.add_argument("--reviewer-a", required=True)
+            command.add_argument("--reviewer-b", required=True)
         if name == "score":
             command.add_argument("--truth", required=True,
                                  help="independent complete local annotations")
@@ -120,12 +125,17 @@ def main(argv: list[str] | None = None) -> int:
             result = prepare_review_packet(events)
         elif args.command != "score-batch":
             packet = _read_json(args.packet, max_bytes=1024 * 1024)
-            decisions = _read_json(args.decisions, max_bytes=128 * 1024)
-            if args.command == "apply":
-                result = apply_review(events, packet, decisions)
+            if args.command == "adjudicate":
+                first = _read_json(args.reviewer_a, max_bytes=128 * 1024)
+                second = _read_json(args.reviewer_b, max_bytes=128 * 1024)
+                result = adjudicate_review(events, packet, first, second)
             else:
-                truth = _read_json(args.truth, max_bytes=1024 * 1024)
-                result = score_review(events, packet, decisions, truth)
+                decisions = _read_json(args.decisions, max_bytes=128 * 1024)
+                if args.command == "apply":
+                    result = apply_review(events, packet, decisions)
+                else:
+                    truth = _read_json(args.truth, max_bytes=1024 * 1024)
+                    result = score_review(events, packet, decisions, truth)
         _write_private(args.output, result)
     except (OSError, ValueError, TypeError, KeyError) as exc:
         print(f"Review refused: {exc}", file=sys.stderr)
