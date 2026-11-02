@@ -254,3 +254,33 @@ def test_batch_creation_refuses_incompatible_source_payment_goal(local):
             }],
         })
         assert invalid.status_code in (409, 422)
+
+
+def test_source_account_replaced_during_provider_read_never_persists(local, monkeypatch):
+    with TestClient(app) as client:
+        headers = _auth()
+        saved = _declare(client, headers).json()
+        link = _link(client, headers, saved, monkeypatch)
+        account, _ = local
+        def replace(ref, op):
+            account["id"] = "acct_REPLACED"
+            return _paid(ref, op)
+        monkeypatch.setattr(routes, "source_operation_receipt", replace)
+        assert _verify(client, headers, saved, link).status_code in (403, 409, 422)
+        assert not ledger._path().exists()
+
+
+def test_tampered_retained_evidence_fails_closed_without_provider_read(local, monkeypatch):
+    with TestClient(app) as client:
+        headers = _auth()
+        saved = _declare(client, headers).json()
+        link = _link(client, headers, saved, monkeypatch)
+        monkeypatch.setattr(routes, "source_operation_receipt", _paid)
+        assert _verify(client, headers, saved, link).status_code == 200
+        with sqlite3.connect(ledger._path()) as db:
+            db.execute("UPDATE evidence SET provider_state='unknown' WHERE seq=1")
+        monkeypatch.setattr(routes, "source_operation_receipt",
+                            lambda *_a: pytest.fail("history must not read provider"))
+        history = _history(client, headers, saved)
+        assert history.status_code in (403, 409, 422)
+        assert history.headers.get("cache-control", "no-store") == "no-store"
