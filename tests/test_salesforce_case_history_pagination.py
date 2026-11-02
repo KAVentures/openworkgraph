@@ -61,10 +61,14 @@ def source(mode="ok"):
                     cursor = "https://example.invalid/services/data/v60.0/query/01gBAD"
                 elif mode == "query_cursor":
                     cursor = CURSOR + "?q=secret"
+                elif mode == "path_traversal":
+                    cursor = "/services/data/v60.0/query/../query/01gBAD"
                 payload = {"done": False, "totalSize": 2, "records": [ROW1],
                            "nextRecordsUrl": cursor}
                 if mode == "empty_page":
                     payload["records"] = []
+                elif mode == "over_limit":
+                    payload["totalSize"] = 201
             else:
                 if mode == "unauthorized":
                     self.send_response(401)
@@ -174,7 +178,8 @@ def test_real_two_page_incremental_prepare_digest_and_no_checkpoint(private):
 
 
 @pytest.mark.parametrize("mode", [
-    "off_origin", "query_cursor", "empty_page", "unauthorized", "redirect",
+    "off_origin", "query_cursor", "path_traversal", "empty_page",
+    "over_limit", "unauthorized", "redirect",
     "foreign", "duplicate", "out_of_order", "changed_count", "truncated",
     "repeat", "done_extra_cursor", "malformed_json",
 ])
