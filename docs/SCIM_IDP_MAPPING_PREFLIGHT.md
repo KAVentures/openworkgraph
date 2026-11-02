@@ -16,32 +16,643 @@ From a source checkout, create a local JSON file containing only field names and
       "provider_policy": {"allow_unversioned_user_patch": false}
     }
 
-Run **python scripts/scim_idp_mapping_preflight.py mapping.json** or pipe strict JSON on standard input with **-**. The tool accepts at most 32 KiB and refuses unknown keys, duplicate/case-colliding JSON keys, invalid attribute lists, nonfinite JSON and unsupported mapping types. Results contain only generic attribute *positions*, diagnostic codes and counts, never input attribute values. Exit code **0** means no *known static* blocker (result requires_live_validation), **2** means a known blocker (blocked), and **1** means invalid input (invalid_input). **Exit 0 does not mean the client works.**
+Run **python scripts/scim_idp_mapping_preflight.py mapping.json** or pipe strict JSON on standard input with **-**. The tool accepts at most 32 KiB and refuses unknown keys, duplicate/case-colliding JSON keys, invalid attribute lists, nonfinite JSON and unsupported mapping types. The JSON parser also refuses nonfinite exponent overflow (for example `1e309`) and integers exceeding 128 decimal digits **before conversion**, including values in otherwise unused nested fields. Ordinary finite numeric tokens can parse but do not authorize unsupported mapping fields. The strict decoder also rejects lone UTF-16 surrogate escapes in **any JSON string or object key**, even unused nested data, and normalizes raw unencodable surrogate input from direct Python callers to a generic invalid-mapping error. Properly paired surrogate escapes (valid supplementary Unicode characters) remain accepted by the JSON decoder; this does not change which declared SCIM mapping fields are supported. Results contain only generic attribute *positions*, diagnostic codes and counts, never input attribute values. Exit code **0** means no *known static* blocker (result requires_live_validation), **2** means a known blocker (blocked), and **1** means invalid input (invalid_input). **Exit 0 does not mean the client works.**
 
 ## What is checked
 
 - User matching is limited to **userName** and **externalId**; email value selectors, name, extension and other matching selectors are **not** supported by the current baseline. Up to eight conjunction clauses exist in OWG's read-only matching API, but the tool validates field choices rather than generated filter syntax.
-- User create must include immutable stable work-email **userName**; supported descriptive create fields are displayName, externalId, active, name, six documented name children and the shipped whole-array `emails` contact metadata. User PATCH cannot rename userName. It accepts the bounded contact paths `emails`, `emails.value/type/display/primary`, `emails[type eq "literal"]`, `emails[value eq "literal"]` and a supported child after a single selector. These are **PATCH write paths**, not search filters or assertions that an address is verified. Unknown nested selectors, unsupported operators, extension/roles/password fields and create-time `emails.value` are blocked. This static tool does not validate actual array values, PATCH operation ordering, null/removal semantics or live client requests.
+- User create must include immutable stable work-email **userName**; supported descriptive create fields are displayName, externalId, active, name, six documented name children and the shipped whole-array `emails` contact metadata. User PATCH cannot rename userName. It accepts the bounded contact paths `emails`, `emails.value/type/display/primary`, `emails[type eq "literal"]`, `emails[value eq "literal"]` and a supported child after a single selector. These are **PATCH write paths**, not search filters or assertions that an address is verified. The exact core User schema prefix `urn:ietf:params:scim:schemas:core:2.0:User:` is also accepted **only** on contact PATCH paths, matching the shipped contact parser; this does not authorize schema-qualified User matching/creation, generic attribute paths, or foreign Group/extension URNs. Unknown nested selectors, unsupported operators, extension/roles/password fields and create-time `emails.value` are blocked. This static tool does not validate actual array values, PATCH operation ordering, null/removal semantics or live client requests.
 - Normal writes require exact If-Match ETags. Only standalone User PATCH may omit it **after explicit administrator approval**; the tool flags the potential overwrite race even when approved. Unversioned PUT, DELETE, Bulk and Group writes are not accepted as compatible.
 - Groups are independently enabled and have only displayName/externalId matching. **Entra Group matching by displayName is blocked by default.** Optional `provider_policy.unique_group_names: true` declares that the separate [Group naming policy](SCIM_GROUP_NAME_POLICY.md) has been enabled and verified in the actual provider. The CLI does not configure or inspect that policy; it warns that this is an unverified declaration and still requires live testing. Old mapping files without this flag retain their previous behavior. The server constraint requires uniform worker upgrades and does not change existing exact matching-filter semantics or grant OWG permissions.
 
-The contact-email array **shipped in #480** (resolving #470) and is documented in [SCIM_USER_EMAILS.md](SCIM_USER_EMAILS.md). This preflight now recognizes its bounded write-path shapes but **continues blocking all email-based matching**, including `emails[type eq "work"].value` in `users.match_attributes`. Provider contacts are unverified descriptive metadata, never roster email, SSO, actor, invitation routing, automatic employee adoption or login authority. A value-based PATCH selector receives a caution because it depends on current stored contact data. Do not put real addresses or customer information in a mapping declaration; reports intentionally omit attribute values. **Upgrade all serving workers before enabling contact mappings**; mixed-version workers and downgrade with contacts are unsupported.
+## Optional User PATCH operation shapes (offline only)
 
-Selector declarations use the shipped unqualified PATCH grammar: literal ASCII
+The optional `users.patch_operations` array describes the IdP's **declared**
+User PATCH verbs, paths and value-property presence, rather than just the
+legacy `users.patch_attributes` names. For example, a pathless Okta-style
+replace-active declaration is:
+
+```json
+{
+  "users": {
+    "patch_operations": [
+      {"op": "replace", "path": "", "value_present": true,
+       "value_attributes": ["active"]}
+    ]
+  }
+}
+```
+
+This is an **illustrative partial `users` object**, not a complete mapping
+file. The existing required `users` keys remain mandatory. The actual shipped
+User PATCH handler permits **pathless `add`/`replace` only with an
+object-valued `value`**, and refuses pathless `remove`. A declared empty
+`path` is therefore meaningful and permitted only in this optional
+operation list. `value_attributes` is an optional bounded list of *top-level
+object field names*, allowed **only for pathless operations**. It supports
+`active`, `displayName`, `externalId`, `name` and `emails` as declared
+fields. A pathless `name.givenName` is **not** a top-level object key;
+`name` must carry its own nested object. An immutable `userName` change
+is not certified by this tool. Values, addresses, subjects, employee IDs,
+tokens, raw objects and credentials are never accepted as metadata.
+
+The preflight blocks unsupported verbs, pathless removal, unsupported paths
+or pathless object fields, removal of `active` or other non-removable User
+attributes, and a declared missing `value` property on add/replace.
+A missing `value_present` flag instead produces a nonblocking
+`user_patch_value_presence_undeclared` caution; omitted pathless
+`value_attributes` produces `user_pathless_fields_undeclared`.
+An explicitly empty pathless object-field list is flagged as a possible
+no-op, not treated as evidence of offboarding. Supported `remove` paths
+include `displayName`, `externalId`, the shipped `name` paths and bounded
+contact PATCH paths. These checks do **not** inspect the actual payload
+value types, current provider policy, mutation order, ETag, tenant, revocation,
+or IdP request headers. In particular, a declared `active` field does not
+prove that a real IdP sends `false` during offboarding.
+
+The list is bounded to 32 **declared possible operations** and is independent
+of `users.patch_attributes`. An absent list is unknown; an explicitly
+empty list reports `checked.user_patch_operations: 0`, not an actual
+successful empty HTTP PATCH. The shipped endpoint requires 1–20 operations
+per request. The four legacy `checked` fields and all existing mappings
+remain compatible. Actual client behavior must be verified in an explicitly
+authorized disposable Entra/Okta tenant, including pathless deactivation,
+current/missing/stale If-Match behavior, provider isolation and device/session
+revocation. No synthetic mapping result certifies customer rollout.
+
+The contact-email array **shipped in #480** (resolving #470) and is documented in [SCIM_USER_EMAILS.md](SCIM_USER_EMAILS.md). This preflight now recognizes its bounded write-path shapes but **continues blocking all email-based matching**, including `emails[type eq "work"].value` in `users.match_attributes`. Provider contacts are unverified descriptive metadata, never roster email, SSO, actor, invitation routing, automatic employee adoption or login authority. A value-based PATCH selector receives a caution because it depends on current stored contact data. Do not put real addresses or customer information in a mapping declaration; reports intentionally omit attribute values. The same nonblocking descriptive-contact and value-selector cautions apply when contact writes are declared **only** in `users.patch_operations`, including an operation on `emails`, a qualified or unqualified contact selector, or a pathless object whose `value_attributes` includes `emails`. `users.patch_attributes` may be empty in these cases; it is not evidence that the IdP sends no contact writes. This static report neither inspects operation payloads nor infers verified contact identity, live request ordering, or actual provider behavior. **Upgrade all serving workers before enabling contact mappings**; mixed-version workers and downgrade with contacts are unsupported.
+
+Contact selector declarations use the shipped unqualified **or exact core User-qualified** PATCH grammar: literal ASCII
 spaces around `eq`, at most 64 decoded characters for a type literal and 320 for
-a value literal. Structural names are case-insensitive; quoted JSON strings are
+a value literal. The prefix is recognized case-insensitively without changing
+quoted selector bytes. Other schema prefixes, extra colons, qualified matching
+and create declarations remain unsupported. A clean static result for a
+qualified contact path is not evidence that any real IdP sends that path. Structural names are case-insensitive; quoted JSON strings are
 parsed unchanged before comparison. For example, the invalid JSON escape
 `\U0041` must not become the valid `\u0041` through case folding. A decoded NUL
 is refused, while an escaped literal backslash followed by `u0000` remains
 ordinary literal text. C1 controls and U+FFFE/U+FFFF are refused in raw paths
 and decoded literals, matching the shipped identity validation; U+FFFD remains
 ordinary literal text. Differential tests compare these cases, Unicode lengths,
-and separators with the actual shipped PATCH parser. The matching-attribute
+separators and qualified/foreign URNs with the actual shipped PATCH parser. The matching-attribute
 counts remain separate from selector match objects, including on CLI requests
 with nonempty PATCH declarations.
+
+The declared contact PATCH paths must also be **unique after interpreting the
+shipped path grammar**. An unqualified path and its exact core User-qualified
+spelling refer to the same target; so do selector strings whose JSON escapes
+decode to the same value, or whose decoded values compare equally after the
+shipped casefolded selector matching. The offline preflight refuses these
+ambiguous duplicate write declarations rather than allowing an IdP mapping to
+silently target one contact field twice. Distinct child fields, selector kinds
+and distinct selector values remain separate. This is only a mapping-level
+consistency check: it cannot predict a live client's PATCH operation ordering,
+current contact values, no-match behavior or whether a real provider sends
+such requests. Invalid mappings receive generic errors without echoing contact
+values or addresses.
+
+The preflight also emits a **non-blocking** `overlapping_contact_patch_paths`
+caution when supported declarations may write overlapping contact data: whole
+`emails` plus any nested path, a field affecting all contacts plus a selector
+for the same child (or an entire selected contact), or an entire selected
+contact plus a child path for the same decoded/casefolded selector. These are
+not necessarily duplicate targets: the shipped PATCH parser accepts each
+operation, but the result may depend on actual client operation order and
+current stored contact data. Two selectors using **different fields** (for example,
+`emails[type eq "work"]` and `emails[value eq "private@example.test"]`)
+may also resolve to the **same** stored contact, even though their selector
+literals differ. The preflight now cautions about that possibility across
+legacy, operation-level and mixed declarations. This does **not** assert that
+either selector matches a real contact or that the IdP sends both operations.
+Distinct literals of the **same** selector field remain separate unless
+another overlap rule applies; distinct child fields on one exact selector
+also remain separate. The caution does not block legitimate mappings,
+change provider permissions or grant identity authority. Verify operation ordering and no-match behavior with a
+customer-authorized IdP test before rollout; the static report never echoes
+declared selector values or email addresses.
+
+The overlap caution now considers **both** legacy `users.patch_attributes`
+and optional `users.patch_operations[].path`, even when the legacy list is
+empty. It also considers a whole-array path in one declaration and a selector
+or child path in the other. A supported pathless User add/replace operation
+declaring `value_attributes: ["emails"]` is treated as a possible whole-array
+contact write; pathless remove or an explicitly missing `value` is not.
+Only supported, parsed contact paths and valid declared pathless shapes contribute:
+an unsupported path remains a blocker, not a fabricated overlap. Equivalent
+paths repeated across the two declaration formats do not by themselves imply
+two distinct targets. The caution retains its legacy
+`users.patch_attributes` location when that list alone overlaps; otherwise
+it points to `users.patch_operations`. No literal selector values appear in
+findings, and an overlap is **not** evidence that two declared operations are
+sent in the same HTTP request, that any contact is verified, or that an IdP
+has passed a live tenant test.
+
+## Optional Group creation mapping and externalId lineage (offline only)
+
+When Groups are enabled, the mapping may now include an **optional**
+`groups.create_attributes` array, for example:
+
+```json
+{
+  "groups": {
+    "enabled": true,
+    "match_attributes": ["externalId"],
+    "create_attributes": ["displayName", "externalId", "members"]
+  }
+}
+```
+
+The array describes **declared IdP mapping outputs**, not actual emitted
+requests, authenticated identity, SCIM permissions or an enabled OWG
+connector. The shipped `gateway/scim_groups.py` Group create endpoint
+**requires `displayName`** and optionally accepts `externalId` and
+direct-User `members` metadata. Other Group creation fields, including
+roles, scopes and nested membership paths, are unsupported. A declared
+creation mapping missing `displayName` is a **blocker**
+(`missing_group_create_displayname`). If matching declares `externalId`
+but the declared creation mapping omits it, the tool emits a **nonblocking**
+`group_externalid_match_not_created` caution: the later provider-scoped
+correlation cannot be demonstrated by this declaration. The preflight does
+not infer that matching by `displayName` is safe or unique.
+
+If enabled Group creation declares `members`, the preflight adds the
+**nonblocking** `group_member_id_resolution_unverified` caution. OWG's shipped
+Group membership handler resolves each `members[].value` as the **current
+provider's OWG SCIM User resource ID** (the `id` returned by User create/read),
+not `userName`, `externalId`, an email address, a Group display name or an
+OIDC subject. An IdP may correctly retain and send those IDs, but merely
+declaring a `members` mapping does not demonstrate it. Before enabling
+membership sync, in an explicitly authorized disposable tenant: create two
+Users under provider A, read and record their returned opaque IDs, create a
+Group with those IDs, read back direct membership, then verify that a
+userName/externalId in place of an ID and a User ID belonging only to provider
+B cannot silently attach. Test offboarding, rehire, source revocation and
+stale ETags without granting OWG roles or access. Record actual client
+requests and outcomes separately from this offline declaration. Omitting
+`members` from a declared create mapping does **not** establish that later
+Group PATCH membership updates are supported or absent.
+
+For **older mapping files** with enabled Groups but no
+`groups.create_attributes` field, the tool emits a **nonblocking**
+`group_create_mapping_not_declared` caution rather than inventing a
+creation contract. Adding an empty array is **not** equivalent to omitting
+the declaration: it explicitly fails the required displayName check.
+Any Group creation declaration while `groups.enabled=false` is blocked,
+even an empty array, to avoid contradictory rollout settings. Existing
+Group name-uniqueness, ETag, disabled-by-default, provider/tenant and
+consent rules are unchanged; Group members never grant OWG access.
+
+A clean declared mapping is still not proof that Entra/Okta sends
+`externalId` consistently, uses the same provider-scoped value on later
+filtering, sends `displayName` on creation, handles duplicate names, or
+respects offboarding and ETags. With authorization and disposable IdP
+identities, verify create → read → match → PATCH/PUT with current/stale
+versions, cross-provider collisions, deleted/revoked providers, direct
+member scope and backup/restore before company rollout. The preflight
+performs **no** live provider calls, identity mutations or business writes.
 
 ## Required acceptance after a clean static result
 
 With a customer-controlled test tenant and explicit authorization, inspect actual generated SCIM requests against ServiceProviderConfig, Schemas and ResourceTypes; test matching filters, create/read/PUT/PATCH/deactivate/delete, Group identity if enabled, ETag/428/412 behavior, provider isolation, revoked-token refusal, employee offboarding/rehire, restore/downgrade and consent boundaries. Validate uniform worker versions before enabling optional mappings. Record failures and timestamps; synthetic CI or this local mapping file is **not** an Entra/Okta certificate, production pilot, customer outcome or business ROI evidence.
 
 Relevant existing contracts: [Users](SCIM_USER_PROVISIONING.md), [names](SCIM_USER_NAMES.md), [search](SCIM_SEARCH.md), [Groups](SCIM_GROUPS.md), [client policy](SCIM_CLIENT_POLICY.md). Coordination: #458, #412, #326 Section B, #264 Stage 3.
+
+
+## Declared externalId matching lineage (offline only)
+
+When `users.match_attributes` declares `externalId` but
+`users.create_attributes` omits it, the preflight emits a **nonblocking**
+`externalid_match_not_created` caution. SCIM `externalId` is a
+**client-issued identifier scoped to its provisioning domain**, not a
+verified email, SSO subject, global person ID, or invitation/adoption grant.
+A declared create operation that omits it does not demonstrate how a later
+`externalId`-based lookup will find that newly created resource.
+
+This applies both to externalId-only matching and to mappings that also
+declare `userName`: the latter may have a separate stable-userName fallback,
+but the static declaration cannot establish that the IdP actually uses it.
+Declaring `externalId` on creation removes this *particular* caution; it
+does **not** prove that an IdP sends a stable value, that it is unique within
+the current provider, that subsequent matching works, or that tenant and
+provider boundaries are enforced. The server still refuses silent roster
+adoption and userName renaming. Test create → read → match → update,
+duplicate/foreign-provider IDs, offboarding, rehire, ETag conflicts and
+revoked credentials using explicitly authorized disposable identities.
+No client requests or provisioning are performed by this preflight.
+
+## User creation activation mapping review (offline only)
+
+A declared User **create** mapping without `active` now receives the
+nonblocking `creation_active_not_declared` caution. In the shipped SCIM
+User creation implementation, an otherwise valid new User is **active by
+default**; only an actual create request carrying the literal JSON Boolean
+`"active": false` immediately offboards that newly created employee. Thus
+an IdP mapping that omits `active` cannot demonstrate that a disabled
+upstream user will be created inactive in OWG. This is distinct from the
+PATCH deactivation warning below: declaring `active` for updates does not
+ensure it is sent on creation, or vice versa.
+
+The preflight does not block otherwise valid create mappings, because
+a separately validated client lifecycle may create then deactivate, or
+may only provision active accounts. Declaring `active` removes this
+particular caution but does **not** prove a real Entra/Okta request contains
+the correct Boolean, that an inactive account cannot access OWG, or that
+revocation works. Before rollout, explicitly test a disabled upstream
+test employee's create request and OWG status, followed by deactivate,
+rehire, ETag and credential-revocation checks with authorized fake/test
+identities. No real IdP calls, identities or permissions are changed here.
+
+## Deactivation lifecycle mapping review (offline only)
+
+A declared User PATCH mapping without a supported `active` update
+produces the nonblocking `deactivation_patch_not_declared` caution. The
+preflight checks **both** the legacy `users.patch_attributes` list and
+optional `users.patch_operations`: a declared `add`/`replace` on
+`active`, or a pathless `add`/`replace` with
+`value_attributes: ["active"]`, satisfies this *declaration-only* check.
+This covers an Okta-style pathless active update without requiring a
+redundant legacy mapping. A pathless operation with undeclared object fields,
+an unsupported `remove active`, or an explicitly absent required `value`
+does **not** satisfy the check. Unknown `value_present` still triggers its
+separate caution, even when `active` is declared.
+
+This is only a missing-declaration warning for Entra, Okta and other clients;
+it does **not** establish that an IdP actually emits a supported deactivation
+request, that a separately supported PUT or other lifecycle route is absent,
+that the current service credential has the correct scope, or that OWG
+offboarding/revocation succeeds.
+
+Before any company rollout, use a disposable, customer-controlled IdP and
+employee to exercise disabled-by-default authorization, create, deactivate,
+rehire without old credentials, current/stale ETags, tenant/provider isolation,
+revocation, audit and backup/restore. Inspect actual source-scoped results;
+synthetic mapping validation is not live Entra/Okta conformance or permission
+to provision identities. No provisioning, provider requests or identity
+mutations are performed by this preflight.
+
+
+## Structural Unicode alias rejection (offline parser parity)
+
+The preflight now mirrors the shipped SCIM parser's Unicode `lower()`
+normalization for plain attribute names and the optional core User URN
+prefix. Python's broader `casefold()` can turn `uſerName` into
+`username`, or `paramſ` into `params`, even though the actual OWG
+User attribute parser and contact-prefix stripper do **not** accept those
+spellings. Such declarations now remain unsupported blockers rather than
+producing a misleading clean static result. Ordinary ASCII case variants
+and Unicode **inside quoted contact selector values** retain their existing
+behavior. Synthetic differential regressions compare these decisions with
+the shipped User key parser and contact PATCH path parser.
+
+This closes a static false-positive compatibility gap only. It does not
+validate IdP-generated payloads, enable new mappings, alter actual SCIM
+requests, or certify Entra/Okta compatibility. Strict server-side identity,
+provider, tenant, ETag and revocation rules are unchanged.
+
+
+## Group displayName collision review for Okta and other clients (offline only)
+
+When Group provisioning is declared enabled and Group matching uses
+`displayName` without a declared `provider_policy.unique_group_names: true`,
+the preflight now emits `group_displayname_collision_risk` for **Okta and
+other** clients. This is a **nonblocking caution**: Group names may collide
+within a provider, making name-based matching ambiguous. Unlike Microsoft's
+Entra requirement, uniqueness is **not a general SCIM requirement** and the
+preflight does not presume every other IdP needs a uniqueness constraint.
+Entra's existing `entra_group_name_uniqueness` blocker remains unchanged.
+
+Matching only by `externalId` does not trigger the displayName collision
+caution. Declaring the optional unique-name policy suppresses the caution but
+still emits `declared_group_name_policy` and `groups_not_certified`: this
+JSON flag neither enables nor verifies the actual default-off server policy.
+Before rollout, an authorized administrator must check the provider's current
+policy/revision, uniformly upgraded workers, existing active-name collisions,
+real IdP filter behavior and tenant/provider isolation. No Group identity,
+membership, login or permission is granted by a clean static report. These
+synthetic mapping checks do not establish live Okta/Entra interoperability.
+
+
+## ETag mapping with declared missing-If-Match allowance (offline only)
+
+A declaration can say `users.write_mode: "etag"` while also saying
+`provider_policy.allow_unversioned_user_patch: true`. These statements
+are not mutually exclusive: the client may normally send `If-Match`,
+while the **separately configured server policy** can still accept a
+standalone User PATCH with the header **absent**. The shipped policy is
+strict by default, is provider-scoped and administrator-controlled, and
+does not relax supplied stale/empty/wildcard versions, PUT, DELETE,
+Groups, Bulk or direct callers. See [SCIM_CLIENT_POLICY.md](SCIM_CLIENT_POLICY.md).
+
+The offline preflight now emits the **nonblocking** caution
+`etag_mode_with_unversioned_patch_policy` when these two declarations
+coexist. It does not assert that the actual provider policy is enabled,
+that the IdP ever omits `If-Match`, or that a particular request was
+accepted. If the declaration intends strict ETag-only behavior, set the
+declared allowance to false **and independently verify** the current
+provider's stored policy and revision through the authorized admin
+controls. A JSON declaration does not disable a previously enabled
+server policy.
+
+Before rollout, with explicit authorization and a disposable identity,
+test a supplied correct ETag, a stale ETag, an absent header, and
+disable/revoke races against the **current provider revision**. Check
+that a missing header is rejected under strict policy and accepted only
+where an administrator explicitly enabled the bounded standalone User
+PATCH exception. Inspect tenant/provider isolation, offboarding
+revocation, audit and worker-version consistency. These are required
+live gates, not performed by this static preflight or its synthetic
+regressions. No identity, credential, consent or permission changes are
+made by the warning.
+
+
+## Unicode contact PATCH structure versus shipped dispatch (offline only)
+
+The shipped User PATCH handler first routes contact paths through
+`scim_user_emails.owns()`, which recognizes the exact core User-qualified
+prefix and lowercases the remaining path. The contact path regex itself uses
+Unicode case-insensitive matching, which is broader: for example it can match
+`emailſ[type eq "work"].value` as though the long-s were ASCII `s`, even
+though the dispatcher does **not** own that path. It can also match
+`emails[type eq "work"].prımary` or `diſplay` as a child, while downstream
+canonical field validation does not recognize those spellings. The preflight
+now refuses these structural aliases rather than incorrectly reporting a
+compatible PATCH mapping. It retains ordinary ASCII case-insensitive
+`EMAILS[TYPE EQ "work"].PRIMARY` and core User-qualified contact paths,
+and never changes quoted selector literal bytes or their matching semantics.
+
+Synthetic differential checks exercise the shipped ownership predicate,
+contact path parser and canonical field set. These checks only reduce false
+static compatibility claims; they do not exercise a live IdP request,
+validate a complete PATCH transaction, grant contact identity authority,
+change provisioning permissions or establish customer rollout readiness.
+
+
+## Optional Group PATCH declaration (offline only)
+
+An enabled Group mapping can optionally declare `groups.patch_attributes`, for example
+`["displayName", "externalId", "members", "members[value eq \"opaque-user-id\"]"]`.
+This declaration is **not** an executable PATCH request and does not specify
+actual verbs, ETags, credentials or IdP behavior. Older mapping files without
+the field remain valid and receive no implied Group PATCH certification.
+An explicit Group PATCH declaration while `groups.enabled=false` is blocked,
+even if its attribute list is empty.
+
+The Group member selector expression is compiled at CLI import, not just
+when a Group mapping is assessed. The offline regression suite therefore
+executes the **actual CLI process** for supported literal/escaped selectors
+and unsupported operators/children, preventing a malformed selector pattern
+from making every preflight invocation fail before assessment. This tests
+local parser availability and declared path syntax only, not live Group PATCH
+operations or IdP conformance.
+
+The static preflight accepts only the shipped Group PATCH path subset:
+`displayName`, `externalId`, `members` and the literal
+`members[value eq "opaque-user-id"]` selector. Structural matching follows
+the shipped ASCII syntax and exact spaces, allowing ASCII case variations but
+not Unicode lookalikes, alternate selectors, nested child fields, schema URNs
+or arbitrary extensions. Selector literals must be bounded, nonempty Unicode
+scalar strings without controls. Rejected paths appear only as generic
+indexed `unsupported_attribute` findings; raw IDs or selector values never
+appear in reports. These conservative static constraints do not change or
+certify the server's runtime parser.
+
+**Crucially, the shipped Group selector path is supported only with the
+`remove` verb.** A declared selector therefore produces the nonblocking
+`group_member_selector_remove_only` caution: the preflight cannot establish
+that the IdP emits removal rather than add/replace, or that a matching member
+is still present. Any declared member PATCH target also produces
+`group_member_patch_ids_unverified`: Group members use the current
+provider's OWG SCIM User resource IDs, not emails, usernames, external IDs or
+SSO subjects. A valid path is never proof of correct identity resolution,
+tenant isolation, current provider authorization or Group membership success.
+Group membership is metadata and **does not grant OWG permissions**.
+
+If the optional Group PATCH declaration contains both the whole-array `members`
+path and at least one **supported** `members[value eq "..."]` selector, the
+preflight emits a **nonblocking** `overlapping_group_member_patch_paths`
+caution. A whole-members replace/add/remove and a selector removal can affect
+the same provider-scoped membership set; the final result may depend on the
+actual IdP's emitted PATCH verbs, operation ordering and current ETag. The
+preflight does not infer that both declarations are sent in the same request,
+that any member exists, or that the IdP uses a particular order. Whole-only,
+selector-only, distinct selectors and unsupported selectors do not trigger
+this overlap warning. Unsupported selectors retain their separate blocker;
+disabled Groups retain their existing blocker. Reports never echo selector
+IDs. This is a mapping-review warning, **not** a server behavior or privilege
+change.
+
+For actual authorized acceptance, capture disposable IdP-generated Group
+PATCH requests and check exact verbs/paths, current and stale If-Match
+responses (428/412), direct User ID resolution, provider isolation, duplicate
+and missing members, offboard/rehire, revocation, rollback/restore and mixed
+worker versions. Never infer Group PATCH support from Group create attributes.
+No live provider call, provisioning, identity mutation or business write is
+performed by this offline preflight.
+
+
+## Group PATCH selector identity and duplicate review (offline only)
+
+Group PATCH member selectors such as `members[value eq "usr_123"]` address
+an **opaque OWG SCIM User resource ID**. The shipped Group handler compares
+the decoded JSON selector value **exactly** (case-sensitive), not as a
+case-insensitive username, email, SSO subject or `externalId`. The preflight
+therefore keeps `usr_A` and `usr_a` as different *declared selector values*;
+neither is evidence that the User exists or belongs to the current provider.
+
+The static mapping now refuses duplicate **effective** Group PATCH paths.
+For example, `members[value eq "usr_123"]` and
+`MEMBERS[VALUE EQ "u\u0073r_123"]` decode to the same target even
+though their source spelling differs. Plain paths such as `members` and
+`MEMBERS` also remain duplicates. Selector structure is ASCII
+case-insensitive; the decoded opaque member value is not folded. Duplicate
+errors never echo the selector's ID or other supplied values. Unsupported
+selectors remain blockers, not a way to bypass duplicate checking.
+
+This is a declaration-level ambiguity check only. The shipped Group PATCH
+still permits **remove only** for member selectors, requires the exact
+current Group `If-Match`, resolves direct members within the current
+provisioning provider and employee generation, and does not grant OWG
+permissions. Verify emitted PATCH verbs, stale ETags, duplicate operations,
+cross-provider IDs, revocation, offboarding/rehire and backup/restore with
+authorized disposable identities before company rollout. No real IdP
+requests or provisioning are performed by the preflight.
+
+
+## Declared Group coverage counts (offline report only)
+
+The JSON report's `checked` object retains its original four counts:
+`user_matching`, `user_create`, `user_patch`, and `group_matching`.
+When optional `groups.create_attributes` or `groups.patch_attributes`
+is **present**, the report additionally includes `group_create` or
+`group_patch` with the corresponding number of declared paths. This
+distinguishes an **omitted** mapping (no key; unknown/not reviewed) from
+an **explicit empty** mapping (key present with count zero), as well as
+a populated mapping. The keys are additive; old mapping files and their
+four legacy count fields retain their existing output shape.
+
+These counts describe only the bounded **local declarations** that the
+preflight examined. They are not counts of accepted operations, validated
+attributes, executed provisioning requests, verified Group members,
+successful matching, or customer/IdP coverage. Even a nonzero count can
+include unsupported paths reported separately as blockers. A disabled
+Group with an explicitly declared empty mapping still receives its
+existing contradiction blocker. The report never echoes Group member IDs,
+contact values, provider secrets, or raw selector paths. Existing
+`status`, `scope`, finding codes, and the required live-validation
+gate remain unchanged.
+
+Synthetic acceptance covers absent/empty/populated/disabled/unsupported
+Group declarations and actual offline CLI JSON parity. It does **not**
+exercise Entra, Okta, SCIM server mutations, tenant credentials, live
+provider state, revocation or backup/restore. Those require the separately
+authorized disposable-tenant acceptance procedures above.
+
+
+## Optional Group PATCH verb declarations (offline only)
+
+The optional `groups.patch_attributes` list records paths but cannot show
+which HTTP PATCH **verbs** an IdP actually emits. To detect incompatible
+declared verb/path combinations before any live test, a mapping may
+independently include a bounded `groups.patch_operations` list:
+
+```json
+{
+  "groups": {
+    "enabled": true,
+    "match_attributes": ["externalId"],
+    "patch_operations": [
+      {"op": "replace", "path": "displayName", "value_present": true},
+      {"op": "add", "path": "members", "value_present": true},
+      {"op": "remove", "path": "members[value eq \"usr_SYNTHETIC\"]"}
+    ]
+  }
+}
+```
+
+This fragment illustrates the optional `groups` section of a full mapping;
+do not place actual provider IDs, user IDs, email addresses or tokens in the
+declaration. At most 32 operation objects are accepted, each with exactly
+`op` and `path`. Verbs are ASCII case-insensitive and limited to
+`add`, `replace`, `remove`; paths use the existing bounded Group PATCH
+grammar. An unknown verb or path is a **blocker**. The shipped Group handler
+supports `members[value eq "opaque-user-id"]` **only with `remove`**;
+declaring `add` or `replace` on that selector is a blocker. Removing
+`displayName` is also a blocker because the field is required. Whole
+`members` and `externalId` support the documented verbs, subject to
+actual payload, current state, provider isolation and exact ETag checks.
+
+For supported Group `add` and `replace` paths, the shipped Group
+PATCH handler requires a **present `value` property** in the actual
+operation object. The optional **boolean** `value_present` declaration
+records only whether the IdP is configured to send that property; it must
+never contain an actual value, email, User ID or customer payload.
+`value_present: false` on a supported add/replace path is a **blocker**
+(`group_patch_required_value_missing`), because the shipped handler rejects
+that request. If `value_present` is **omitted**, older declarations remain
+accepted but receive a **nonblocking**
+`group_patch_value_presence_undeclared` caution: absent evidence is not a
+validated payload. `value_present: true` removes that particular uncertainty,
+but **does not validate the value's type, content, Group membership authority,
+provider-scoped identity, actual IdP request, or the presence of an exact
+If-Match ETag**. Group `remove` operations do not require a value property;
+this flag has no effect on their supported verb/path checks. Nonboolean flags
+are invalid input. Reports expose only generic diagnostic locations, never
+actual values.
+
+The operation list is **optional and independent** of the legacy path-only
+`groups.patch_attributes` list. An omitted list remains *unknown*; an
+explicitly empty list produces a zero `checked.group_patch_operations`
+count. Declaring it while Groups are disabled is blocked even if empty.
+Existing four report counts and any optional `group_patch` count are
+unchanged. If member-selector and whole-member operations are both declared,
+the existing nonblocking overlap/opaque-ID cautions still apply; no User ID
+or selector literal is echoed in findings. A declaration does not validate
+the actual `value` payload, ordering, Group ETag, user ID resolution,
+permission or live IdP behavior. The Group endpoint does **not** grant OWG
+roles through membership.
+
+Before rollout, an explicitly authorized disposable Entra/Okta tenant must
+show the **actual emitted** operation verbs, paths, values, 428/412 stale
+ETag refusal, provider-scoped User IDs, revocation and offboarding behavior.
+These synthetic offline checks are not live provider/customer acceptance.
+
+
+## Group PATCH per-request operation limit (offline only)
+
+The shipped Group PATCH handler accepts **1–20 operations in one HTTP PATCH
+request**. The optional `groups.patch_operations` declaration is a list of
+*possible* client operations, not an observed HTTP request or a promise that
+all declared operations are emitted together. It remains bounded to 32
+declarations for offline review. When a mapping declares **21–32**
+operations, the preflight adds the nonblocking
+`group_patch_single_request_limit` caution: **those operations cannot all
+be sent together in one supported Group PATCH request**. They may be valid
+when distributed across separate versioned requests, but only actual
+IdP traffic can establish batching and order.
+
+This caution does not alter `status`, `checked.group_patch_operations`,
+the existing disabled-Group blockers, or Group server behavior. Zero
+declarations do not claim a valid empty PATCH request: an actual empty
+operations array is refused by the server. More than 32 declarations
+remain invalid offline input. The preflight never reads or echoes
+operation values, opaque member IDs, tenant data or credentials.
+
+Before rollout, inspect disposable, authorized IdP Group PATCH requests:
+verify each envelope has 1–20 operations, the exact current Group ETag,
+operation ordering and membership results, and 428/412 behavior for missing
+or stale versions. These synthetic mapping checks are **not** real
+Entra/Okta conformance or company rollout acceptance.
+
+
+## User PATCH per-request operation limit (offline only)
+
+The shipped User PATCH handler accepts **1–20 operations in one HTTP
+request**. The optional `users.patch_operations` declaration is a list of
+*possible* client operation shapes, not a captured request or proof that
+all declared operations are sent together. It remains bounded to 32
+declarations for offline review. When a mapping declares **21–32**
+operations, the preflight adds the nonblocking
+`user_patch_single_request_limit` caution: those operations cannot all
+be sent together in one supported User PATCH request. They might be
+valid if split across multiple independently authorized requests, but
+only real IdP traffic establishes the batching, order and ETag behavior.
+
+Zero declarations do not establish support for an empty PATCH envelope:
+the server rejects an actual request with zero operations. More than 32
+declarations remain invalid offline input. The caution preserves
+`status`, the legacy four `checked` counts, optional
+`checked.user_patch_operations`, all existing blockers and the shipped
+server behavior. No raw values, contact addresses, selector literals,
+User IDs or credentials are accepted into or echoed by reports.
+
+For a separately authorized disposable Entra/Okta acceptance run, verify
+actual request envelopes have 1–20 operations, whether each operation
+carries its required value, the correct current User If-Match (or the
+separately approved standalone unversioned-PATCH policy), stale-version
+refusal, provider isolation, offboarding/revocation and rollback/restore.
+These offline synthetic declarations are **not** live client conformance,
+real-tenant validation or company rollout acceptance.
+
+## Selector-key mutation and PATCH ordering (offline caution only)
+
+The shipped contact PATCH handler re-evaluates each selector against the **current**
+array after earlier operations. Changing `emails.type` or `emails.value` can
+therefore change which contacts a later `emails[type eq "..."]` or
+`emails[value eq "..."]` operation selects. A selector can also invalidate
+itself: `emails[type eq "work"].type` followed by
+`emails[type eq "work"].display` may fail with no target, even though the
+reverse order succeeds. Similarly, changing `work` to `home` can cause a
+later `home` selector to target the previously `work` contact.
+
+The preflight emits the existing **nonblocking**
+`overlapping_contact_patch_paths` caution for selector-key writes combined
+with other selected writes, across legacy paths and optional User PATCH
+operation declarations. It also covers global key-field writes paired with
+selectors of that key. Distinct literal selectors of one kind remain
+nonoverlapping when neither writes that selector's key; distinct non-key
+children of the same selector likewise remain separate. A declaration
+does **not** prove the IdP sends these paths together, their order, the
+values written, or the resulting server state. Cautions contain no selector
+literal, email or customer data. Validate actual emitted request sequences
+and current-state behavior only in an explicitly authorized disposable
+provider/tenant; this tool performs no provisioning or network calls.
