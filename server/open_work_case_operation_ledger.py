@@ -404,9 +404,12 @@ def clear_operation_evidence(work_item_ref: str | None = None) -> None:
     path = _path()
     if work_item_ref is None:
         for suffix in ("", "-journal", "-wal", "-shm"):
+            candidate = Path(str(path) + suffix)
             try:
-                Path(str(path) + suffix).unlink()
-            except FileNotFoundError:
+                if candidate.is_dir() and not candidate.is_symlink():
+                    continue  # Never recursively delete an unexpected directory.
+                candidate.unlink()
+            except (FileNotFoundError, IsADirectoryError):
                 pass
         return
     with _database(create=False) as db:
