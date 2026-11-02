@@ -38,6 +38,10 @@ from .open_work_case_fresh_outcome_triage import compose_fresh_outcome_triage
 from .open_work_case_outcome_portfolio import (
     portfolio_fingerprint, validate_page_token, compose_outcome_portfolio,
 )
+from .open_work_case_declared_outcome import (
+    require_declared_payment_goal, compose_fresh_declared_payment_goal,
+    compose_historical_declared_payment_goal,
+)
 from .open_work_case_review_packet import (
     issue_review_packet, validate_review_packet, compare_review_packet,
 )
@@ -1634,6 +1638,81 @@ async def read_local_outcome_portfolio_triage(request: Request, response: Respon
         result = compose_outcome_portfolio(
             entries, total=len(rows), offset=offset, fingerprint=digest,
         )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/v1/open-work/declarations/source-goals/verify-payment")
+async def verify_local_declared_stripe_payment_goal(request: Request, response: Response):
+    """Explicit fresh provider read + durable check for a narrowly declared goal.
+
+    A Stripe-reported paid invoice can satisfy only the owner-declared
+    "stripe_invoice_paid_reported" provider goal, not customer/bank success.
+    """
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_source_verification", "record_link",
+    })
+    if payload["confirm_source_verification"] is not True:
+        raise HTTPException(403, "explicit independent provider verification required")
+    try:
+        admitted, signature, secret, guard = await _operation_ledger_admission(scope, payload)
+        require_declared_payment_goal(admitted)
+        resource_ref = validate_case_record_link(
+            payload["record_link"], admitted, signature, scope=scope, secret=secret,
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    try:
+        receipt = await asyncio.to_thread(
+            source_operation_receipt, resource_ref, "stripe_invoice_paid",
+        )
+    except (ValueError, OSError, TypeError, CaseDeclarationError, sqlite3.DatabaseError):
+        receipt = None
+    await _recheck_source(scope)
+    try:
+        await asyncio.to_thread(guard)
+        validate_case_record_link(
+            payload["record_link"], admitted, signature, scope=scope, secret=secret,
+        )
+        verified = project_case_operation_verification(admitted, resource_ref, receipt)
+        history = await asyncio.to_thread(
+            append_operation_evidence, admitted, signature, scope=scope,
+            secret=secret, resource_ref=resource_ref, verification=verified, guard=guard,
+        )
+        result = compose_fresh_declared_payment_goal(admitted, verified, history)
+        await asyncio.to_thread(guard)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/v1/open-work/declarations/source-goals/payment-history")
+async def read_local_declared_stripe_payment_goal_history(request: Request, response: Response):
+    """Read private durable checks; a historical paid receipt is not current."""
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+    })
+    try:
+        admitted, signature, secret, guard = await _operation_ledger_admission(scope, payload)
+        require_declared_payment_goal(admitted)
+        await _recheck_source(scope)
+        history = await asyncio.to_thread(
+            read_operation_evidence, admitted, signature, scope=scope,
+            secret=secret, guard=guard,
+        )
+        result = compose_historical_declared_payment_goal(admitted, history)
+        await asyncio.to_thread(guard)
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
         raise _safe_error(exc) from None
     await _recheck_source(scope)
