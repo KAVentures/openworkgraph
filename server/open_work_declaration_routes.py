@@ -34,6 +34,7 @@ from .open_work_case_operation_timeline import (
 from .open_work_case_dependency_history import compose_dependency_operation_history
 from .open_work_case_human_dependency_history import compose_dependency_human_outcomes
 from .open_work_case_outcome_reconciliation import compose_outcome_evidence_triage
+from .open_work_case_fresh_outcome_triage import compose_fresh_outcome_triage
 from .open_work_case_review_packet import (
     issue_review_packet, validate_review_packet, compare_review_packet,
 )
@@ -1476,6 +1477,75 @@ async def verify_local_outcome_review_packet(request: Request, response: Respons
             scope=scope, secret=current_secret,
         )
         result = compare_review_packet(payload["packet"], triage)
+        await asyncio.to_thread(guard)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/v1/open-work/declarations/human-outcomes/fresh-evidence-triage")
+async def check_local_fresh_outcome_evidence_triage(request: Request, response: Response):
+    """One explicitly authorized fresh Stripe operation check + historical review.
+
+    The signed record link is validated before the source read. A provider
+    receipt proves only its narrowly scoped operation, not customer success.
+    """
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_historical_review", "confirm_source_verification",
+        "record_link", "max_cases",
+    })
+    if payload["confirm_historical_review"] is not True or payload["confirm_source_verification"] is not True:
+        raise HTTPException(403, "explicit history review and source verification required")
+    if type(payload["max_cases"]) is not int or not 1 <= payload["max_cases"] <= 4:
+        raise HTTPException(422, "max_cases must be between 1 and 4")
+    try:
+        admitted, signature, secret, guard = await _operation_ledger_admission(scope, payload)
+        resource_ref = validate_case_record_link(
+            payload["record_link"], admitted, signature, scope=scope, secret=secret,
+        )
+        await asyncio.to_thread(guard)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    # Independently read both HMAC-protected histories for each selected case.
+    # An invalid link or revoked declaration must not cause provider access.
+    historical_before, before_case, before_signature, _ = await _load_review_triage(scope, payload)
+    try:
+        if before_signature != signature or before_case["work_item_ref"] != admitted["work_item_ref"]:
+            raise CaseDeclarationError("reviewed outcome dependency graph changed")
+        await asyncio.to_thread(guard)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    try:
+        receipt = await asyncio.to_thread(
+            source_operation_receipt, resource_ref, "stripe_invoice_paid",
+        )
+    except (ValueError, OSError, TypeError, CaseDeclarationError, sqlite3.DatabaseError):
+        receipt = None
+    await _recheck_source(scope)
+    try:
+        await asyncio.to_thread(guard)
+        validate_case_record_link(
+            payload["record_link"], admitted, signature, scope=scope, secret=secret,
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    # Re-read the full selected history after source IO. A concurrent human
+    # correction or provider dispute invalidates this combined review.
+    historical_after, after_case, after_signature, _ = await _load_review_triage(scope, payload)
+    try:
+        if (after_signature != signature
+                or after_case["work_item_ref"] != admitted["work_item_ref"]
+                or historical_after != historical_before):
+            raise CaseDeclarationError("historical outcome review changed during source verification")
+        verified = project_case_operation_verification(admitted, resource_ref, receipt)
+        result = compose_fresh_outcome_triage(historical_after, verified)
         await asyncio.to_thread(guard)
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
         raise _safe_error(exc) from None
