@@ -72,10 +72,11 @@ subtracted from `ambiguous_single_record_tab_interleaving_abstentions`.
 Without e05, neither loose step can be attributed solely from the tab.
 A cross-app interruption never supplies a positive case link.
 
-A cross-app witness requires a literal different, known app label, a known
+A **cross-app exact-case** witness requires a literal different, known app label, a known
 capture source, a valid exact record and complete matching capture scope, a distinct *pre-tab*
 record-link component, strictly ordered observations, and a two-sided A
-bracket. Cross-app events must not claim clipboard transfer, copy/paste or
+bracket. The separate unreferenced-app interruption above has no exact B
+record and never claims one. Cross-app events must not claim clipboard transfer, copy/paste or
 malformed action; unknown surfaces, timestamp ties, intervening ambiguous
 events and changed capture scope abstain. At most eight loose steps and sixteen
 foreign observations can be crossed. The independent-record boundary index
@@ -165,7 +166,7 @@ and sixteen foreign-tab events. The pre-tab union component must not already con
 different record or have another competing tab target.
 
 The following **do not** gain membership: same-tab A → B → loose → A,
-A → loose → Terminal → A, A → loose → B on the same tab,
+A → loose → unknown/untrusted Terminal → A, A → loose → B on the same tab,
 changed app/source/tab, missing actor/device/session, timestamp ties,
 unknown or tainted foreign-tab events, long unbounded spans, competing
 clipboard-linked records or any proximity-only event. A separately
