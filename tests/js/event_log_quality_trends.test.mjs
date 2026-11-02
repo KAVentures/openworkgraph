@@ -208,7 +208,24 @@ test('on-demand local read renders counts as text and rejects stale log response
   assert.ok(pair.querySelector('#owgQualityPairTable'));
   assert.ok(output.querySelector('#owgQualityTrendsRows'));
   assert.equal(output.querySelector('#owgQualityTrendsRows').children[1].children[0].children[1].textContent,'Rejected input');
-  const reviewTable=quality.querySelector('#owgQualityReviewTable');
+  const increaseThreshold=quality.querySelector('#owgQualityIncreaseThreshold');
+  const increaseRows=quality.querySelector('#owgQualityIncreaseRows');
+  assert.ok(increaseThreshold && increaseRows);
+  assert.equal(increaseThreshold.value,'5');
+  const increaseTable=quality.querySelector('#owgQualityIncreaseTable');
+  assert.ok(increaseTable);
+  const increaseRow=increaseTable.children[1].children[0];
+  assert.equal(increaseRow.children[1].textContent,'Rejected input');
+  assert.equal(increaseRow.children[4].textContent,'+10.00 pp');
+  increaseThreshold.value='20';increaseThreshold.listeners.change();
+  assert.equal(quality.querySelector('#owgQualityIncreaseTable'),null);
+  increaseThreshold.value='5';increaseThreshold.listeners.change();
+  const increaseInspect=quality.querySelector('#owgQualityIncreaseTable')
+    .children[1].children[0].children[5].children[0];
+  increaseInspect.listeners.click();
+  assert.equal(quality.querySelector('#owgQualityBatchSelect').value,'1');
+  assert.equal(quality.querySelector('#owgQualityBatchSelect').focused,true);
+    const reviewTable=quality.querySelector('#owgQualityReviewTable');
   assert.ok(reviewTable);
   const reviewRow=reviewTable.children[1].children[0];
   assert.equal(reviewRow.children[1].textContent,'Recorded issue — inspect');
@@ -231,6 +248,7 @@ test('on-demand local read renders counts as text and rejects stale log response
   assert.equal(baseline.disabled,true);
   assert.equal(target.disabled,true);
   assert.equal(pair.children.length,0);
+  assert.equal(increaseRows.children.length,0);
   assert.equal(download.disabled,true);
   assert.equal(output.children.length,0);
 });
@@ -287,4 +305,54 @@ test('quality review queue distinguishes observed problems, unknowns and missing
   assert.equal(hostile.status,'Unknown review status');
   assert.equal(hostile.flags,'None recorded');
   assert.equal(hostile.unknown,'None');
+});
+
+test('ranked quality rate increases are comparable, bounded and sorted without source values', () => {
+  const digest='a'.repeat(64);
+  const batches=[
+    {...report(0,'first_report',2,0.2,null),transform_sha256:digest},
+    {...report(1,'same_transform',4,0.4,20),transform_sha256:digest},
+    {...report(2,'same_transform',5,0.5,10),transform_sha256:digest},
+    {...report(3,'transform_changed',8,0.8,null),transform_sha256:'b'.repeat(64)},
+    {...report(5,'missing_intermediate_report',9,0.9,null),transform_sha256:'b'.repeat(64)}
+  ];
+  const ranked=view.rankedIncreases({batches},5);
+  assert.equal(ranked.examined,5);
+  assert.equal(ranked.total,2);
+  assert.deepEqual(ranked.rows.map(r=>[r.batch,r.metric,r.increase]),[
+    ['Append 1','Rejected input','+20.00 pp'],
+    ['Append 2','Rejected input','+10.00 pp']
+  ]);
+  assert.equal(view.rankedIncreases({batches},15).total,1);
+  assert.equal(view.rankedIncreases({batches},21).total,0);
+  assert.equal(view.rankedIncreases({batches},-1).total,0);
+  assert.equal(view.rankedIncreases({batches},NaN).total,0);
+  assert.equal(view.rankedIncreases({batches:[...batches,batches[0]]},5).total,0);
+  assert.ok(ranked.rows.every(r=>!JSON.stringify(r).includes('transform_sha256')));
+});
+
+test('ranked increases suppress invalid denominators, unknown mappings and future-time comparisons', () => {
+  const digest='a'.repeat(64);
+  const a={...report(0,'first_report',2,0.2,null),transform_sha256:digest};
+  const b={...report(1,'same_transform',5,0.5,30),transform_sha256:digest};
+  b.metrics.events_without_resource.count=20; // greater than denominator
+  b.metrics.duplicates_skipped_on_append.denominator=null;
+  b.metrics.events_sharing_timestamp.count='9'; // hostile noninteger
+  b.metrics.future_dated_events.count=9; // never comparable across report times
+  const result=view.rankedIncreases({batches:[a,b]},1);
+  assert.equal(result.total,1);
+  assert.equal(result.rows[0].metric,'Rejected input');
+  assert.equal(result.rows[0].increase,'+30.00 pp');
+  assert.equal(view.rankedIncreases({batches:[a,{...b,transform_sha256:null}]},1).total,0);
+  assert.equal(view.rankedIncreases({batches:[a,{...b,transform_sha256:'b'.repeat(64)}]},1).total,0);
+  assert.equal(view.rankedIncreases({batches:[a,{...b,batch:2}]},1).total,0);
+  const many=Array.from({length:120},(_,batch)=>({
+    ...report(batch,'same_transform',batch%2?9:0,batch%2?0.9:0,0),
+    transform_sha256:digest
+  }));
+  const bounded=view.rankedIncreases({batches:many},1);
+  assert.equal(bounded.examined,100);
+  assert.ok(bounded.total>0);
+  assert.ok(bounded.rows.length<=view.MAX_INCREASE_ROWS);
+  assert.ok(bounded.rows.every(row=>row.batchId>=20));
 });
