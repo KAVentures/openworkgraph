@@ -940,7 +940,7 @@ const path=require('node:path');
    await addGates.click();
    assert.match(await page.locator('#owgCatalogDifferenceStatus').textContent(),/valid 1–64 character label/);
    await page.locator('#owgCatalogDifferenceLabel0').fill('Review missing source step');
-   await page.getByLabel('Business goal').fill('Clarify the observed process difference');
+   await page.locator('#owgCatalogEditor').getByLabel('Business goal').fill('Clarify the observed process difference');
    await addGates.click();
    assert.match(await page.locator('#owgCatalogDifferenceStatus').textContent(),/process or review changed/);
    await page.getByRole('button',{name:'Refresh graph preview',exact:true}).click();
@@ -952,7 +952,7 @@ const path=require('node:path');
    await addGates.focus();await page.keyboard.press('Enter');
    await page.locator('#owgCatalogStatus').filter({hasText:/Added 1 unverified human-only/}).waitFor();
    assert.equal(catalogWrites,0,'clarification never saves automatically');
-   assert.equal(await page.getByLabel('Condition label 1').inputValue(),'Review missing source step');
+   assert.equal(await page.locator('#owgCatalogEditor').getByLabel('Condition label 1').inputValue(),'Review missing source step');
    await page.locator('#owgCatalogDifferenceConfirm0').check();
    await page.locator('#owgCatalogDifferenceActivity0').selectOption('step_1');
    await page.locator('#owgCatalogDifferenceKind0').selectOption('decision_point');
@@ -960,7 +960,7 @@ const path=require('node:path');
    await page.locator('#owgCatalogDifferenceLabel0').fill('Review missing source step');
    await addGates.click();
    assert.match(await page.locator('#owgCatalogDifferenceStatus').textContent(),/Duplicate clarification gate/);
-   assert.equal(await page.getByLabel('Condition label 1').count(),1);
+   assert.equal(await page.locator('#owgCatalogEditor').getByLabel('Condition label 1').count(),1);
    await page.route('**/v1/process-catalog',async route=>{
      if(route.request().method()!=='POST')return route.continue();
      const body=route.request().postDataJSON();
@@ -991,8 +991,9 @@ const path=require('node:path');
      await reopened.locator('#owgProcessCatalog').waitFor();
      await reopened.evaluate(()=>window.owgProcessCatalog.openSaved({
        workflow_id:'reviewed_difference_fixture',revision:1,content_sha256:'f'.repeat(64)}));
-     assert.equal(await reopened.getByLabel('Condition label 1').inputValue(),'Review missing source step');
+     assert.equal(await reopened.locator('#owgCatalogEditor').getByLabel('Condition label 1').inputValue(),'Review missing source step');
      assert.match(await reopened.locator('#owgCatalogStatus').textContent(),/Opened immutable revision 1/);
+     await reopened.locator('[role=tab][data-tab=evidence]').click();
      await audit(reopened,'#owgCatalogDifferenceReview','Reopened human clarification');
    }finally{await reopened.close();}
    const overflow=await browser.newPage();
