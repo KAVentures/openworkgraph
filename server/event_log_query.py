@@ -406,16 +406,16 @@ def _metrics(conn, metrics: list[Any]) -> tuple[dict[str, str], list[dict[str, A
                 if metric.activity is not None:
                     source += " AND e.activity = ?"
             else:
-                source = "FROM ce WHERE case_id IN (SELECT case_id FROM qc)"
+                source = "FROM ce e WHERE e.case_id IN (SELECT case_id FROM qc)"
                 if metric.activity is not None:
-                    source += " AND activity = ?"
+                    source += " AND e.activity = ?"
             bound = [_path(metric.attribute)] + ([metric.activity] if metric.activity is not None else [])
             conn.execute(f"""CREATE OR REPLACE TEMP TABLE qstat AS
                 SELECT case_id, count(*) AS event_rows,
                     count(*) FILTER (WHERE v IS NOT NULL AND isfinite(v)) AS finite_rows,
                     count(*) FILTER (WHERE v IS NULL OR NOT isfinite(v)) AS excluded_rows,
                     {aggregate} FILTER (WHERE v IS NOT NULL AND isfinite(v)) AS metric_value
-                FROM (SELECT case_id, try_cast(json_extract_string(attributes, ?) AS DOUBLE) AS v
+                FROM (SELECT e.case_id, try_cast(json_extract_string(e.attributes, ?) AS DOUBLE) AS v
                       {source}) typed GROUP BY case_id""", bound)
             stats = conn.execute("""SELECT coalesce(sum(event_rows), 0),
                     coalesce(sum(finite_rows), 0), coalesce(sum(excluded_rows), 0),
