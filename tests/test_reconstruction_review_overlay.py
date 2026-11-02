@@ -891,6 +891,17 @@ def test_review_interleaving_context_matching_anchors_and_scope_barriers():
     assert context["status"] == "one_sided_record_anchor"
     assert context["preceding_linked_item_id"] is None
     assert context["following_linked_item_id"] is not None
+    # A different application cannot supply a preceding anchor or let a
+    # reviewer skip over the app boundary to a convenient earlier case.
+    app_switch = copy.deepcopy(_events())
+    app_switch[1]["app"] = "OtherApp"
+    app_switch[2]["event_type"] = "copy"
+    packet = prepare_review_packet(app_switch)
+    context = next(x for x in packet["eligible_candidates"] if x["event_id"] == "e03")[
+        "interleaving_context"
+    ]
+    assert context["preceding_linked_item_id"] is None
+    assert context["status"] == "one_sided_record_anchor"
     # Tied timestamps do not establish observed before/after order.
     tied = copy.deepcopy(matching)
     tied[1]["observed_at"] = tied[2]["observed_at"]
