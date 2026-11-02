@@ -101,6 +101,39 @@ const path=require('node:path');
    assert.equal(implemented.execution_authorized,false);
    assert.equal(implemented.history.filter(h=>h.state==='approved').at(-1).assessment.minutes_per_case,1);
 
+
+   // A portfolio handoff audit is an explicit bounded GET-only review.
+   // An implemented state without an export is not a verified handoff.
+   let portfolioWrites=0;
+   const observePortfolio=request=>{
+     if(request.method()!=='GET'&&/\/v1\/automation-pipeline/.test(request.url()))
+       portfolioWrites++;
+   };
+   page.on('request',observePortfolio);
+   await page.locator('#owgPipelinePortfolioAudit').focus();
+   await page.keyboard.press('Enter');
+   await page.locator('#owgPipelinePortfolioAuditStatus')
+     .filter({hasText:'1 reviewed of 1 eligible'}).waitFor();
+   assert.match(await page.locator('#owgPipelinePortfolioAuditResults tbody').textContent(),
+     /No recorded project.*Export a reviewed project first/s);
+   const [emptyPortfolioDownload]=await Promise.all([
+     page.waitForEvent('download'),
+     page.locator('#owgPipelinePortfolioAuditDownload').click()
+   ]);
+   const emptyPortfolio=JSON.parse(await fs.readFile(await emptyPortfolioDownload.path(),'utf8'));
+   assert.equal(emptyPortfolio.format,'openworkgraph.portfolio-handoff-review.v1');
+   assert.equal(emptyPortfolio.complete_coverage,false);
+   assert.equal(emptyPortfolio.items[0].status,'no_export');
+   assert.equal(emptyPortfolio.items[0].project_id,null);
+   assert.equal(emptyPortfolio.execution_authorized,false);
+   assert.equal(emptyPortfolio.source_read_authorized,false);
+   assert.equal(portfolioWrites,0);
+   await page.locator('#owgPipelinePortfolioAuditResults')
+     .getByRole('button',{name:'Open opportunity Copy approved prices into renewals'}).click();
+   await page.locator('#owgPipelineDetail h3')
+     .filter({hasText:'Copy approved prices into renewals'}).waitFor();
+   page.off('request',observePortfolio);
+
    await page.locator('#owgPipelineFilter').selectOption('rejected');
    await page.locator('#owgPipelineList').getByText('No ideas in this view.').waitFor();
    await page.locator('#owgPipelineFilter').selectOption('');
@@ -212,6 +245,68 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await page.locator('#owgPipelineProjects').getByRole('status').filter({hasText:'Project downloaded.'}).waitFor();
    const recorded=await page.evaluate(async id=>(await fetch('/v1/automation-pipeline/'+id+'/projects')).json(),linked.idea_id);
    assert.equal(recorded.projects.length,1);assert.equal(recorded.deployment_verified,false);
+
+   // Reuse actual saved-process/approved-idea/recorded-project backend data
+   // in the portfolio inbox, not synthetic fixtures or a new export.
+   let inboxWrites=0;
+   const observeInbox=request=>{
+     if(request.method()!=='GET'&&/\/v1\/automation-pipeline/.test(request.url()))
+       inboxWrites++;
+   };
+   page.on('request',observeInbox);
+   await page.locator('#owgPipelinePortfolioAudit').focus();
+   await page.keyboard.press('Enter');
+   await page.locator('#owgPipelinePortfolioAuditStatus')
+     .filter({hasText:'1 reviewed of 1 eligible'}).waitFor();
+   assert.match(await page.locator('#owgPipelinePortfolioAuditResults tbody').textContent(),
+     /Review required.*execution and business outcomes unverified/s);
+   const [inboxDownload]=await Promise.all([
+     page.waitForEvent('download'),
+     page.locator('#owgPipelinePortfolioAuditDownload').click()
+   ]);
+   const inbox=JSON.parse(await fs.readFile(await inboxDownload.path(),'utf8'));
+   assert.equal(inbox.complete_coverage,true,'all loaded journeys checked, not outcomes verified');
+   assert.equal(inbox.items[0].project_id,manifest.project_id);
+   assert.equal(inbox.items[0].spec_sha256,manifest.spec_sha256);
+   assert.equal(inbox.items[0].archive_sha256,projectResponse.headers()['x-owg-archive-sha256']);
+   assert(inbox.items[0].blockers.includes('execution_and_business_outcomes_unverified'));
+   assert.equal(inbox.verified_business_outcomes,false);
+   assert(!JSON.stringify(inbox).includes('PRIVATE_RAW_CASE_VALUE'));
+   assert(!JSON.stringify(inbox).includes('owg:r:'));
+   assert.equal(inboxWrites,0,'inbox review and download must only GET');
+
+   // A state refresh invalidates an in-flight inbox request; late responses
+   // cannot recreate old navigation controls.
+   let heldInboxRoute,releaseInbox;
+   const inboxHeld=new Promise(resolve=>{releaseInbox=resolve;});
+   await page.route('**/v1/automation-pipeline/*/journey',route=>{
+     heldInboxRoute=route;releaseInbox();
+   });
+   await page.locator('#owgPipelinePortfolioAudit').click();
+   await inboxHeld;
+   await page.locator('#owgPipelineFilter').selectOption('rejected');
+   await page.locator('#owgPipelinePortfolioAuditResults tbody tr').waitFor({state:'detached'});
+   await heldInboxRoute.continue();
+   await page.unroute('**/v1/automation-pipeline/*/journey');
+   assert.equal(await page.locator('#owgPipelinePortfolioAuditResults tbody tr').count(),0,
+     'late portfolio response must not revive invalidated evidence');
+   await page.locator('#owgPipelineFilter').selectOption('');
+   await page.locator('#owgPipelinePortfolioAudit').click();
+   await page.locator('#owgPipelinePortfolioAuditStatus')
+     .filter({hasText:'1 reviewed of 1 eligible'}).waitFor();
+   await page.locator('#owgPipelinePortfolioAuditResults')
+     .getByRole('button',{name:/Open exact project review for Project comparison review/}).click();
+   await page.locator('#owgPipelineJourneyProject').waitFor();
+   assert.equal(await page.locator('#owgPipelineJourneyProject').inputValue(),manifest.project_id);
+   assert.match(await page.locator('#owgPipelineJourneyReadiness').textContent(),/Handoff review/);
+   const inboxAudit=await page.evaluate(async()=>window.axe.run(
+     document.querySelector('#owgPipelinePortfolioAuditSection'),{
+       runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},
+       resultTypes:['violations']}));
+   assert.deepEqual(inboxAudit.violations.map(v=>v.id),[]);
+   assert.equal(inboxWrites,0,'navigation is GET-only, not approval or execution');
+   page.off('request',observeInbox);
+
    // Navigate into the exact selected project's existing read-only report and
    // source-check forms. The latter still requires fresh explicit consent.
    await page.locator('#owgPipelineJourney').click();
