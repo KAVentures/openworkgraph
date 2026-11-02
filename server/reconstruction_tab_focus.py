@@ -58,6 +58,8 @@ def _same_anchor(row: dict[str, Any], left: dict[str, Any]) -> bool:
 def bracketed_multiplexed_tab_focus(
     ordered_rows: list[dict[str, Any]],
     allowed_multiplexed_tabs: set[tuple[tuple[str, str, str, str], str]],
+    *,
+    cross_app_components: dict[str, str] | None = None,
 ) -> list[tuple[str, str, str, str]]:
     """Return (anchor ID, loose ID, exact ref, evidence basis) proposals.
 
@@ -65,6 +67,9 @@ def bracketed_multiplexed_tab_focus(
     A -> loose... -> A on a multiplexed tab is sufficient when timestamps
     are strictly ordered and all intervening observations are either safe
     loose steps on that tab or explicitly distinct same-scope browser tabs.
+    With cross_app_components, independently linked exact records in a named
+    different application are also permitted negative interruptions, including
+    tabless desktop observations. They never gain membership themselves.
     Foreign-tab observations never gain membership. Same-tab competing refs,
     tabless/unknown events, scope/app/source changes, ties, clipboard actions
     on foreign tabs and unbounded spans cause abstention. Time alone never
@@ -77,6 +82,7 @@ def bracketed_multiplexed_tab_focus(
             continue
         loose_ids: list[str] = []
         foreign_count = 0
+        cross_app_count = 0
         previous = left
         for next_index in range(index + 1, min(count, index + _MAX_SCAN_SPAN + 1)):
             row = ordered_rows[next_index]
@@ -94,13 +100,35 @@ def bracketed_multiplexed_tab_focus(
                 if foreign_count > _MAX_FOREIGN_TAB_SPAN:
                     break
                 continue
+            # Only the single-record-tab caller enables cross-app interruptions.
+            # An independently linked B in Terminal can interrupt Browser A,
+            # but cannot become positive evidence for A or join A by proximity.
+            if (cross_app_components is not None
+                    and bool(row["ref"])
+                    and row["app"] not in ("", "unknown", "other")
+                    and row["app"] != left["app"]
+                    and row["scope"] == left["scope"]
+                    and _complete_scope(row["scope"])
+                    and not row["reference_tainted"]
+                    and not row["ephemeral_claim_tainted"]
+                    and not row["action_claim_malformed"]
+                    and not row["transfer"]
+                    and row["action"] not in ("copy", "paste")
+                    and cross_app_components.get(row["event_id"])
+                    != cross_app_components.get(left["event_id"])):
+                foreign_count += 1
+                cross_app_count += 1
+                if foreign_count > _MAX_FOREIGN_TAB_SPAN:
+                    break
+                continue
             if loose_ids and _same_anchor(row, left):
                 # A concurrent-tab focus is weaker than a globally consecutive
                 # span, and an explicit transfer at either anchor makes the
                 # interleaved attribution ambiguous.
                 if foreign_count and (left["transfer"] or row["transfer"]):
                     break
-                basis = ("same_tab_interleaved_bracketed_record" if foreign_count
+                basis = ("same_tab_cross_app_interleaved_bracketed_record" if cross_app_count
+                         else "same_tab_interleaved_bracketed_record" if foreign_count
                          else "same_tab_bracketed_record")
                 proposals.extend((left["event_id"], loose_id, left["ref"], basis)
                                  for loose_id in loose_ids)
@@ -116,9 +144,10 @@ def single_record_tab_foreign_case_boundaries(
 ) -> set[str]:
     """Loose single-record-tab IDs needing independent two-sided focus evidence.
 
-    A tab's sole observed record is not sufficient when another exact record
-    from the same complete capture scope in an explicitly different tab
-    appears between the loose step and either adjacent same-tab record anchor.
+    A tab's sole observed record is not sufficient when another independent
+    exact record from the same complete capture scope appears in a different
+    explicitly named tab OR a different named application (including a tabless
+    desktop source) between the loose step and an adjacent same-tab anchor.
     Only independently linked record components count: a legitimate observed
     clipboard bridge between A and B must not become a false competing case.
     The other record is a negative boundary, never a positive link. No time
@@ -132,23 +161,53 @@ def single_record_tab_foreign_case_boundaries(
     component_positions: dict[
         tuple[tuple[str, str, str, str], str], list[int]
     ] = defaultdict(list)
-    tied_components: dict[tuple[tuple[str, str, str, str], str], set[str]] = defaultdict(set)
+    all_app_positions: dict[tuple[str, str, str, str], list[int]] = defaultdict(list)
+    same_app_positions: dict[tuple[tuple[str, str, str, str], str], list[int]] = defaultdict(list)
+    component_app_positions: dict[tuple[tuple[str, str, str, str], str], list[int]] = defaultdict(list)
+    component_same_app_positions: dict[
+        tuple[tuple[str, str, str, str], str, str], list[int]
+    ] = defaultdict(list)
+    tied_components: dict[
+        tuple[tuple[str, str, str, str], str], set[tuple[str, str, str]]
+    ] = defaultdict(set)
     for position, row in enumerate(ordered_rows):
         scope = row["scope"]
-        if (row["ref"] and row["tab"] and not row["reference_tainted"] and
-                _complete_scope(scope)):
-            component = pre_tab_root[row["event_id"]]
+        if not (row["ref"] and not row["reference_tainted"]
+                and _complete_scope(scope)):
+            continue
+        component = pre_tab_root[row["event_id"]]
+        app = row["app"]
+        if row["tab"]:
             all_record_positions[scope].append(position)
             component_positions[(scope, component)].append(position)
-            tied_components[(scope, row["observed_at"])].add(component)
+        if app not in ("", "unknown", "other"):
+            all_app_positions[scope].append(position)
+            same_app_positions[(scope, app)].append(position)
+            component_app_positions[(scope, component)].append(position)
+            component_same_app_positions[(scope, component, app)].append(position)
+        if row["tab"] or app not in ("", "unknown", "other"):
+            tied_components[(scope, row["observed_at"])].add(
+                (component, row["tab"], app)
+            )
+
+    def between(positions: list[int], left: int, right: int) -> int:
+        return bisect_left(positions, right) - bisect_right(positions, left)
 
     def has_foreign(scope: tuple[str, str, str, str], component: str,
-                    left: int, right: int) -> bool:
-        all_positions = all_record_positions[scope]
-        same_positions = component_positions[(scope, component)]
-        all_between = bisect_left(all_positions, right) - bisect_right(all_positions, left)
-        same_between = bisect_left(same_positions, right) - bisect_right(same_positions, left)
-        return all_between > same_between
+                    app: str, left: int, right: int) -> bool:
+        # Existing explicit other-tab boundary (a single-record tab cannot
+        # contain an independently named second record itself).
+        if (between(all_record_positions[scope], left, right)
+                > between(component_positions[(scope, component)], left, right)):
+            return True
+        # Cross-app exact records can be tabless. Subtract the same component
+        # before treating a different application as an independent case.
+        all_other_app = (between(all_app_positions[scope], left, right)
+                         - between(same_app_positions[(scope, app)], left, right))
+        own_other_app = (between(component_app_positions[(scope, component)], left, right)
+                         - between(component_same_app_positions[(scope, component, app)],
+                                   left, right))
+        return all_other_app > own_other_app
 
     withheld: set[str] = set()
     for (scope, _tab), tab_rows in by_tab.items():
@@ -160,6 +219,7 @@ def single_record_tab_foreign_case_boundaries(
         sole_ref = next(iter(refs))
         anchor_rows = [row for row in tab_rows if row["ref"] == sole_ref]
         anchor_component = pre_tab_root[anchor_rows[0]["event_id"]]
+        anchor_app = anchor_rows[0]["app"]
         anchors = [positions[row["event_id"]] for row in anchor_rows]
         for row in tab_rows:
             if row["ref"]:
@@ -173,15 +233,19 @@ def single_record_tab_foreign_case_boundaries(
             # Treat foreign record ties at either anchor or the loose step as
             # an unresolved interruption regardless of sort order.
             tied_foreign = any(
-                tied_components.get((scope, ordered_rows[p]["observed_at"]), set())
-                - {anchor_component}
+                component != anchor_component
+                and ((tab and tab != row["tab"])
+                     or (app not in ("", "unknown", "other") and app != anchor_app))
                 for p in (left, position, right) if p is not None
+                for component, tab, app in tied_components.get(
+                    (scope, ordered_rows[p]["observed_at"]), set()
+                )
             )
             if (tied_foreign or
                     (left is not None and
-                     has_foreign(scope, anchor_component, left, position)) or
+                     has_foreign(scope, anchor_component, anchor_app, left, position)) or
                     (right is not None and
-                     has_foreign(scope, anchor_component, position, right))):
+                     has_foreign(scope, anchor_component, anchor_app, position, right))):
                 withheld.add(row["event_id"])
     return withheld
 
