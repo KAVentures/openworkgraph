@@ -1,20 +1,46 @@
 """Independent provider operation receipts: never agent-self-reported success."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
+import httpx
 
 from server.open_work_outcomes import source_operation_receipt
+from server.record_graph import record_graph
 
 REF = "owg:r:" + "a" * 32
 WHEN = datetime(2026, 10, 19, 10, 0, tzinfo=timezone.utc)
 
+# These are the current opt-in read paths emitted by production adapters,
+# not inferred authority from source status or observed human activity.
+SOURCE_READ_METHOD = {
+    "github": "explicit_opt_in_authenticated_local_github_cli_read",
+    "jira": "explicit_opt_in_site_verified_oauth_jira_issue_status_read",
+    "stripe": "opted_in_restricted_key_stripe_account_and_record_get",
+}
+
 
 def response(provider="stripe", kind="invoice", state="paid",
              operation="stripe_invoice_paid", verified=True):
+    detail = {
+        "kind": operation, "scope": "stripe_processor_only",
+        "verified": verified,
+    }
+    if provider == "jira":
+        # Match the existing production Jira adapter's independent
+        # resolution-detail contract, not just its top-level "done" state.
+        detail.update(
+            status="resolved" if verified else "unverified",
+            source_timestamp=WHEN.isoformat() if verified else None,
+            scope="jira_issue_only_not_customer_acknowledgement_or_refund",
+        )
     return {
+        "resource_ref": REF,
+        "source_rows_scoped_to_exact_record": True,
+        "source_log_join_supported": True,
+        "source_window": {"since": None, "until": None},
         "record_observed": True,
         "record_type": {"provider": provider, "kind": kind},
         "record_identity_complete_within_retained_window": True,
@@ -23,10 +49,8 @@ def response(provider="stripe", kind="invoice", state="paid",
             "provider": provider, "availability": "source_reported",
             "source_state_reported": True, "source_state": state,
             "verified_at": WHEN.isoformat(),
-            "verified_operational_outcome": {
-                "kind": operation, "scope": "stripe_processor_only",
-                "verified": verified,
-            },
+            "verification_method": SOURCE_READ_METHOD[provider],
+            "verified_operational_outcome": detail,
             "private_customer": "VERY_PRIVATE_CUSTOMER",
         },
     }
@@ -59,6 +83,7 @@ def test_github_merge_provider_status_not_deployment_or_customer_outcome():
     result = source_operation_receipt(REF, "github_pr_merged", now=WHEN,
         record_reader=lambda *_a, **_kw: response(
             provider="github", kind="pull_request", state="merged",
+            operation="github_pr_merged",
         ))
     assert result["operation_verified"] is True
     assert result["customer_outcome_verified"] is False
@@ -67,7 +92,9 @@ def test_github_merge_provider_status_not_deployment_or_customer_outcome():
 def test_jira_requires_explicit_operational_resolution_receipt():
     data = response(provider="jira", kind="issue", state="done",
                     operation="jira_issue_resolved")
-    data["source_evidence"]["verified_operational_outcome"].pop("scope")
+    assert data["source_evidence"]["verified_operational_outcome"]["scope"] == (
+        "jira_issue_only_not_customer_acknowledgement_or_refund"
+    )
     r = source_operation_receipt(
         REF, "jira_issue_resolved",
         record_reader=lambda *_a, **_kw: data, now=WHEN,
@@ -166,3 +193,1127 @@ def test_history_guard_applies_to_receipts_too():
         "resource_ref": REF, "expected_operation": "stripe_invoice_paid",
         "since": "2026-10-19T09:00:00+00:00",
     })]
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), [
+    ("github_pr_merged", "github", "pull_request", "merged"),
+    ("stripe_invoice_paid", "stripe", "invoice", "paid"),
+    ("stripe_refund_processor_succeeded", "stripe", "refund", "succeeded"),
+    ("jira_issue_resolved", "jira", "issue", "done"),
+])
+def test_receipt_requires_independent_matching_source_provider_identity(
+    operation, provider, kind, state,
+):
+    # The observed record type alone cannot authorize a source receipt.
+    # All four provider operation families must reject a separately supplied
+    # source_evidence identity conflict, even when state/detail say verified.
+    for bad_provider in ("other_provider", None, False, {"name": provider}):
+        data = response(provider=provider, kind=kind, state=state, operation=operation)
+        data["source_evidence"]["provider"] = bad_provider
+        calls = []
+        result = source_operation_receipt(
+            REF, operation, record_reader=reader(data, calls), now=WHEN,
+        )
+        assert result["availability"] == "unknown"
+        assert result["reason"] == "provider_receipt_identity_conflict"
+        assert result["operation_verified"] is False
+        assert result["business_objective_verified"] is False
+        assert result["customer_outcome_verified"] is False
+        assert result["agent_execution_authorized"] is False
+        assert len(calls) == 1
+        assert calls[0][1]["include_source_status"] is True
+        assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state", "wrong_kind"), [
+    ("github_pr_merged", "github", "pull_request", "merged", "issue"),
+    ("stripe_invoice_paid", "stripe", "invoice", "paid", "refund"),
+    ("stripe_refund_processor_succeeded", "stripe", "refund", "succeeded", "invoice"),
+    ("jira_issue_resolved", "jira", "issue", "done", "pull_request"),
+])
+def test_receipt_rejects_conflicting_optional_source_object_kind(
+    operation, provider, kind, state, wrong_kind,
+):
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    data["source_evidence"]["object_type"] = wrong_kind
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "provider_receipt_identity_conflict"
+    assert result["operation_verified"] is False
+
+    # Source adapters differ: Stripe's older receipt has no object_type,
+    # while Jira/GitHub include it. Both valid forms remain compatible.
+    data["source_evidence"]["object_type"] = kind
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["operation_verified"] is True
+    del data["source_evidence"]["object_type"]
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["operation_verified"] is True
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), [
+    ("github_pr_merged", "github", "pull_request", "merged"),
+    ("stripe_invoice_paid", "stripe", "invoice", "paid"),
+    ("stripe_refund_processor_succeeded", "stripe", "refund", "succeeded"),
+    ("jira_issue_resolved", "jira", "issue", "done"),
+])
+@pytest.mark.parametrize("conflicting_ref", [
+    None, False, 0, 1, "", "owg:r:" + "b" * 32,
+    "PRIVATE_OTHER_RECORD", [], {},
+])
+def test_receipt_rejects_conflicting_nested_source_record_reference(
+    operation, provider, kind, state, conflicting_ref,
+):
+    # An optional adapter/cache identity must never contradict the exact
+    # canonical record, even if its provider status otherwise looks valid.
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    data["source_evidence"]["resource_ref"] = conflicting_ref
+    calls = []
+    result = source_operation_receipt(
+        REF, operation, record_reader=reader(data, calls), now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "provider_receipt_identity_conflict"
+    assert result["operation_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["business_objective_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert result["resource_ref"] == REF
+    assert "PRIVATE_OTHER_RECORD" not in str(result)
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), [
+    ("github_pr_merged", "github", "pull_request", "merged"),
+    ("stripe_invoice_paid", "stripe", "invoice", "paid"),
+    ("stripe_refund_processor_succeeded", "stripe", "refund", "succeeded"),
+    ("jira_issue_resolved", "jira", "issue", "done"),
+])
+@pytest.mark.parametrize("nested_ref_present", [False, True])
+def test_matching_or_absent_nested_source_record_reference_remains_valid(
+    operation, provider, kind, state, nested_ref_present,
+):
+    # Production adapters omit this field; integrations may explicitly bind
+    # it to the exact requested opaque reference. Neither grants new rights.
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    if nested_ref_present:
+        data["source_evidence"]["resource_ref"] = REF
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["operation_verified"] is True
+    assert result["customer_outcome_verified"] is False
+    assert result["business_objective_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), [
+    ("github_pr_merged", "github", "pull_request", "merged"),
+    ("stripe_invoice_paid", "stripe", "invoice", "paid"),
+    ("stripe_refund_processor_succeeded", "stripe", "refund", "succeeded"),
+    ("jira_issue_resolved", "jira", "issue", "done"),
+])
+@pytest.mark.parametrize("field,reason", [
+    ("record_observed", "record_not_observed_in_permitted_window"),
+    ("record_identity_complete_within_retained_window",
+     "incomplete_or_conflicting_record_identity"),
+])
+@pytest.mark.parametrize("malformed", [None, False, 0, 1, "true", "false", [], {}])
+def test_receipt_requires_literal_positive_record_evidence_flags(
+    operation, provider, kind, state, field, reason, malformed,
+):
+    # A malformed upstream graph must not attest a source operation.
+    # In particular 1 and "true" are truthy but are not verified booleans.
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    data[field] = malformed
+    calls = []
+    result = source_operation_receipt(
+        REF, operation, record_reader=reader(data, calls), now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == reason
+    assert result["operation_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["business_objective_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert len(calls) == 1
+    assert calls[0][1]["include_source_status"] is True
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), [
+    ("github_pr_merged", "github", "pull_request", "merged"),
+    ("stripe_invoice_paid", "stripe", "invoice", "paid"),
+    ("stripe_refund_processor_succeeded", "stripe", "refund", "succeeded"),
+    ("jira_issue_resolved", "jira", "issue", "done"),
+])
+def test_literal_true_record_evidence_preserves_valid_provider_receipts(
+    operation, provider, kind, state,
+):
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    assert data["record_observed"] is True
+    assert data["record_identity_complete_within_retained_window"] is True
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["availability"] == "source_reported"
+    assert result["operation_verified"] is True
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_execution_authorized"] is False
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), [
+    ("github_pr_merged", "github", "pull_request", "merged"),
+    ("stripe_invoice_paid", "stripe", "invoice", "paid"),
+    ("stripe_refund_processor_succeeded", "stripe", "refund", "succeeded"),
+    ("jira_issue_resolved", "jira", "issue", "done"),
+])
+@pytest.mark.parametrize("malformed", [
+    None, 0, 1, "false", "true", "", "0", -1, [], {}, True,
+])
+def test_receipt_requires_literal_false_history_truncation_flag(
+    operation, provider, kind, state, malformed,
+):
+    # Even falsey 0, empty text, and null are not affirmative proof that
+    # the exact record history was fully retained and checked for conflicts.
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    data["source_event_limit_reached"] = malformed
+    calls = []
+    result = source_operation_receipt(
+        REF, operation, record_reader=reader(data, calls), now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "incomplete_or_conflicting_record_identity"
+    assert result["operation_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["business_objective_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert len(calls) == 1
+    assert calls[0][1]["include_source_status"] is True
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), [
+    ("github_pr_merged", "github", "pull_request", "merged"),
+    ("stripe_invoice_paid", "stripe", "invoice", "paid"),
+    ("stripe_refund_processor_succeeded", "stripe", "refund", "succeeded"),
+    ("jira_issue_resolved", "jira", "issue", "done"),
+])
+def test_receipt_missing_history_truncation_flag_is_unknown(
+    operation, provider, kind, state,
+):
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    del data["source_event_limit_reached"]
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "incomplete_or_conflicting_record_identity"
+    assert result["operation_verified"] is False
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), [
+    ("github_pr_merged", "github", "pull_request", "merged"),
+    ("stripe_invoice_paid", "stripe", "invoice", "paid"),
+    ("stripe_refund_processor_succeeded", "stripe", "refund", "succeeded"),
+    ("jira_issue_resolved", "jira", "issue", "done"),
+])
+def test_literal_false_history_truncation_flag_preserves_valid_receipt(
+    operation, provider, kind, state,
+):
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    assert data["source_event_limit_reached"] is False
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["availability"] == "source_reported"
+    assert result["operation_verified"] is True
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_execution_authorized"] is False
+
+
+_OPERATION_FAMILIES = [
+    ("github_pr_merged", "github", "pull_request", "merged"),
+    ("stripe_invoice_paid", "stripe", "invoice", "paid"),
+    ("stripe_refund_processor_succeeded", "stripe", "refund", "succeeded"),
+    ("jira_issue_resolved", "jira", "issue", "done"),
+]
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+@pytest.mark.parametrize("wrong_ref", [
+    "owg:r:" + "b" * 32, None, 7, {}, REF.upper(),
+])
+def test_receipt_rejects_wrong_record_reference_even_with_valid_provider_state(
+    operation, provider, kind, state, wrong_ref,
+):
+    # Cached or injected evidence for a different exact record is never
+    # proof of the requested record, even with matching provider/state.
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    data["resource_ref"] = wrong_ref
+    calls = []
+    result = source_operation_receipt(
+        REF, operation, record_reader=reader(data, calls), now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "record_reference_scope_conflict"
+    assert result["operation_verified"] is False
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert result["resource_ref"] == REF
+    assert len(calls) == 1
+    assert calls[0][1]["include_source_status"] is True
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+    if isinstance(wrong_ref, str):
+        assert wrong_ref not in str(result)
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+@pytest.mark.parametrize("malformed", [None, False, 0, 1, "true", [], {}])
+def test_receipt_requires_literal_true_exact_record_query_scope(
+    operation, provider, kind, state, malformed,
+):
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    data["source_rows_scoped_to_exact_record"] = malformed
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "record_reference_scope_conflict"
+    assert result["operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+@pytest.mark.parametrize("missing", ["resource_ref", "source_rows_scoped_to_exact_record"])
+def test_receipt_missing_exact_record_provenance_is_unknown(
+    operation, provider, kind, state, missing,
+):
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    del data[missing]
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "record_reference_scope_conflict"
+    assert result["operation_verified"] is False
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+def test_exact_record_provenance_preserves_valid_source_receipt(
+    operation, provider, kind, state,
+):
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    assert data["resource_ref"] == REF
+    assert data["source_rows_scoped_to_exact_record"] is True
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["availability"] == "source_reported"
+    assert result["operation_verified"] is True
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+@pytest.mark.parametrize("wrong_window", [
+    None, {}, [], "VERY_PRIVATE_CUSTOMER",
+    {"since": "2026-01-01T00:00:00Z", "until": None},
+    {"since": None, "until": "2026-10-19T10:00:00Z"},
+    {"since": None, "until": None, "extra": "VERY_PRIVATE_CUSTOMER"},
+])
+def test_receipt_rejects_missing_or_different_returned_history_window(
+    operation, provider, kind, state, wrong_window,
+):
+    # Cached wider/different history is not evidence for this selection.
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    data["source_window"] = wrong_window
+    calls = []
+    result = source_operation_receipt(
+        REF, operation, record_reader=reader(data, calls), now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "source_window_scope_conflict"
+    assert result["operation_verified"] is False
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert result["resource_ref"] == REF
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+    assert calls == [(REF, {
+        "since": None, "until": None, "include_source_status": True,
+        "required_source_provider_kind": (provider, kind),
+    })]
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+def test_receipt_missing_history_window_is_unknown(
+    operation, provider, kind, state,
+):
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    del data["source_window"]
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "source_window_scope_conflict"
+    assert result["operation_verified"] is False
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+@pytest.mark.parametrize("requested,returned", [
+    (
+        {"since": "2026-10-18T00:00:00Z", "until": None},
+        {"since": None, "until": None},
+    ),
+    (
+        {"since": None, "until": "2026-10-20T00:00:00Z"},
+        {"since": None, "until": None},
+    ),
+    (
+        {"since": "2026-10-18T00:00:00Z", "until": "2026-10-20T00:00:00Z"},
+        {"since": "2026-10-18T00:00:00Z", "until": None},
+    ),
+    (
+        {"since": "2026-10-18T00:00:00Z", "until": "2026-10-20T00:00:00Z"},
+        {"since": "2026-10-20T00:00:00Z", "until": "2026-10-18T00:00:00Z"},
+    ),
+])
+def test_receipt_rejects_cached_window_when_caller_requests_bounded_history(
+    operation, provider, kind, state, requested, returned,
+):
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    data["source_window"] = returned
+    calls = []
+    result = source_operation_receipt(
+        REF, operation, record_reader=reader(data, calls), now=WHEN, **requested,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "source_window_scope_conflict"
+    assert result["operation_verified"] is False
+    assert calls == [(REF, {**requested, "include_source_status": True,
+                            "required_source_provider_kind": (provider, kind)})]
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+@pytest.mark.parametrize("window", [
+    {"since": None, "until": None},
+    {"since": "2026-10-18T00:00:00Z", "until": None},
+    {"since": None, "until": "2026-10-20T00:00:00Z"},
+    {"since": "2026-10-18T00:00:00Z", "until": "2026-10-20T00:00:00Z"},
+])
+def test_receipt_accepts_exact_history_window_without_new_authority(
+    operation, provider, kind, state, window,
+):
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    data["source_window"] = window
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN, **window,
+    )
+    assert result["availability"] == "source_reported"
+    assert result["operation_verified"] is True
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+@pytest.mark.parametrize("untrusted_method", [
+    None, False, 0, 1, "", [], {},
+    "untrusted_cached_export",
+    SOURCE_READ_METHOD["github"],
+    SOURCE_READ_METHOD["jira"],
+    SOURCE_READ_METHOD["stripe"],
+])
+def test_receipt_requires_exact_authenticated_source_read_method(
+    operation, provider, kind, state, untrusted_method,
+):
+    # A valid state, timestamp and provider label are insufficient without
+    # provenance from the matching existing authenticated opt-in source path.
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    data["source_evidence"]["verification_method"] = untrusted_method
+    calls = []
+    result = source_operation_receipt(
+        REF, operation, record_reader=reader(data, calls), now=WHEN,
+    )
+    if untrusted_method == SOURCE_READ_METHOD[provider]:
+        assert result["availability"] == "source_reported"
+        assert result["operation_verified"] is True
+    else:
+        assert result["availability"] == "unknown"
+        assert result["reason"] == "source_verification_provenance_conflict"
+        assert result["operation_verified"] is False
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert result["read_only"] is True
+    assert calls == [(REF, {
+        "since": None, "until": None, "include_source_status": True,
+        "required_source_provider_kind": (provider, kind),
+    })]
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+    assert "untrusted_cached_export" not in str(result)
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+def test_receipt_missing_source_read_method_is_unknown(
+    operation, provider, kind, state,
+):
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    del data["source_evidence"]["verification_method"]
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "source_verification_provenance_conflict"
+    assert result["operation_verified"] is False
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+def test_matching_authenticated_source_read_method_keeps_provider_only_scope(
+    operation, provider, kind, state,
+):
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    assert data["source_evidence"]["verification_method"] == SOURCE_READ_METHOD[provider]
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["availability"] == "source_reported"
+    assert result["operation_verified"] is True
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+@pytest.mark.parametrize("untrusted_join", [None, False, 0, 1, "true", [], {}])
+def test_receipt_rejects_unsupported_or_malformed_source_log_join(
+    operation, provider, kind, state, untrusted_join,
+):
+    # A provider state cannot attest an operation for an unallowlisted
+    # observed provider/kind/host, even when the other receipt fields match.
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    data["source_log_join_supported"] = untrusted_join
+    calls = []
+    result = source_operation_receipt(
+        REF, operation, record_reader=reader(data, calls), now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "source_join_not_supported"
+    assert result["operation_verified"] is False
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert result["read_only"] is True
+    assert calls == [(REF, {
+        "since": None, "until": None, "include_source_status": True,
+        "required_source_provider_kind": (provider, kind),
+    })]
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+def test_receipt_missing_source_log_join_is_unknown(
+    operation, provider, kind, state,
+):
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    del data["source_log_join_supported"]
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "source_join_not_supported"
+    assert result["operation_verified"] is False
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+def test_allowlisted_source_log_join_preserves_provider_only_receipt(
+    operation, provider, kind, state,
+):
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    assert data["source_log_join_supported"] is True
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["availability"] == "source_reported"
+    assert result["operation_verified"] is True
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+@pytest.mark.parametrize("failure", [
+    OSError, TimeoutError, ConnectionError, httpx.ConnectError, httpx.ReadTimeout,
+])
+def test_source_reader_transport_outage_is_privacy_safe_unknown(
+    operation, provider, kind, state, failure,
+):
+    # Provider failures can surface from the trusted graph reader itself,
+    # not just from its existing adapters. Never turn a transport exception
+    # into an operation success or leak the exception's native record details.
+    calls = []
+    def failing_reader(ref, **kwargs):
+        calls.append((ref, kwargs))
+        raise failure("PRIVATE_NATIVE_RECORD_AND_CUSTOMER")
+    result = source_operation_receipt(
+        REF, operation, record_reader=failing_reader, now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "source_read_unavailable"
+    assert result["operation_verified"] is False
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert result["read_only"] is True
+    assert calls == [(REF, {
+        "since": None, "until": None, "include_source_status": True,
+        "required_source_provider_kind": (provider, kind),
+    })]
+    assert "PRIVATE_NATIVE_RECORD_AND_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize("failure", [ValueError, RuntimeError])
+def test_source_reader_programming_and_request_errors_are_not_masked(failure):
+    # Invalid history windows and programming bugs are not provider outages.
+    # Preserve their normal error handling instead of claiming an outage.
+    calls = []
+    def failing_reader(ref, **kwargs):
+        calls.append((ref, kwargs))
+        raise failure("invalid_request_or_programming_error")
+    with pytest.raises(failure, match="invalid_request_or_programming_error"):
+        source_operation_receipt(
+            REF, "stripe_invoice_paid", record_reader=failing_reader, now=WHEN,
+        )
+    assert calls == [(REF, {
+        "since": None, "until": None, "include_source_status": True,
+        "required_source_provider_kind": ("stripe", "invoice"),
+    })]
+
+
+@pytest.mark.parametrize("bad_status", [
+    None, False, 0, "unverified", "RESOLVED", "done", {}, [],
+])
+def test_jira_verified_flag_cannot_override_contradictory_resolution_status(bad_status):
+    data = response(provider="jira", kind="issue", state="done",
+                    operation="jira_issue_resolved")
+    data["source_evidence"]["verified_operational_outcome"]["status"] = bad_status
+    result = source_operation_receipt(
+        REF, "jira_issue_resolved", record_reader=lambda *_a, **_kw: data,
+        now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "provider_resolution_detail_conflict"
+    assert result["operation_verified"] is False
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize("bad_timestamp", [
+    None, False, 0, [], {},
+    "", "not-a-timestamp", "2026-10-19T10:00:00",
+    "2026-10-19T10:05:01+00:00",
+    "2026-10-19T12:05:01+02:00",
+    "x" * 100,
+])
+def test_jira_resolution_timestamp_must_be_aware_bounded_and_consistent(bad_timestamp):
+    data = response(provider="jira", kind="issue", state="done",
+                    operation="jira_issue_resolved")
+    data["source_evidence"]["verified_operational_outcome"]["source_timestamp"] = bad_timestamp
+    calls = []
+    result = source_operation_receipt(
+        REF, "jira_issue_resolved", record_reader=reader(data, calls), now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "provider_resolution_detail_conflict"
+    assert result["operation_verified"] is False
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert calls == [(REF, {
+        "since": None, "until": None, "include_source_status": True,
+        "required_source_provider_kind": ("jira", "issue"),
+    })]
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+def test_jira_missing_resolution_detail_fields_are_unknown():
+    for missing in ("status", "source_timestamp"):
+        data = response(provider="jira", kind="issue", state="done",
+                        operation="jira_issue_resolved")
+        del data["source_evidence"]["verified_operational_outcome"][missing]
+        result = source_operation_receipt(
+            REF, "jira_issue_resolved", record_reader=lambda *_a, **_kw: data,
+            now=WHEN,
+        )
+        assert result["availability"] == "unknown"
+        assert result["reason"] == "provider_resolution_detail_conflict"
+        assert result["operation_verified"] is False
+
+
+@pytest.mark.parametrize("resolution_stamp", [
+    "2026-10-19T10:00:00+00:00",
+    "2026-10-19T10:05:00+00:00",
+    "2026-10-19T12:00:00+02:00",
+    "2026-10-19T10:00:00Z",
+    "2026-10-18T09:00:00+00:00",
+])
+def test_jira_consistent_resolution_detail_keeps_provider_only_success(resolution_stamp):
+    data = response(provider="jira", kind="issue", state="done",
+                    operation="jira_issue_resolved")
+    data["source_evidence"]["verified_operational_outcome"]["source_timestamp"] = resolution_stamp
+    result = source_operation_receipt(
+        REF, "jira_issue_resolved", record_reader=lambda *_a, **_kw: data,
+        now=WHEN,
+    )
+    assert result["availability"] == "source_reported"
+    assert result["operation_verified"] is True
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize("bad_scope", [
+    None, False, 0, 1, "true", "", [], {},
+    "stripe_processor_only",
+    "jira_issue_only",
+    "jira_issue_only_not_customer_acknowledgement_or_refund ",
+    "jira_issue_only_not_customer_acknowledgement_or_refund\\nPRIVATE_NATIVE_ID",
+])
+def test_jira_verified_resolution_requires_exact_provider_defined_scope(bad_scope):
+    data = response(provider="jira", kind="issue", state="done",
+                    operation="jira_issue_resolved")
+    data["source_evidence"]["verified_operational_outcome"]["scope"] = bad_scope
+    calls = []
+    result = source_operation_receipt(
+        REF, "jira_issue_resolved", record_reader=reader(data, calls), now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "provider_receipt_scope_conflict"
+    assert result["operation_verified"] is False
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert calls == [(REF, {
+        "since": None, "until": None, "include_source_status": True,
+        "required_source_provider_kind": ("jira", "issue"),
+    })]
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+    assert "PRIVATE_NATIVE_ID" not in str(result)
+
+
+def test_jira_missing_provider_defined_resolution_scope_is_unknown():
+    data = response(provider="jira", kind="issue", state="done",
+                    operation="jira_issue_resolved")
+    del data["source_evidence"]["verified_operational_outcome"]["scope"]
+    result = source_operation_receipt(
+        REF, "jira_issue_resolved", record_reader=lambda *_a, **_kw: data,
+        now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "provider_receipt_scope_conflict"
+    assert result["operation_verified"] is False
+    assert result["customer_outcome_verified"] is False
+
+
+def test_jira_exact_issue_only_scope_preserves_resolution_not_customer_success():
+    data = response(provider="jira", kind="issue", state="done",
+                    operation="jira_issue_resolved")
+    assert data["source_evidence"]["verified_operational_outcome"]["scope"] == (
+        "jira_issue_only_not_customer_acknowledgement_or_refund"
+    )
+    result = source_operation_receipt(
+        REF, "jira_issue_resolved", record_reader=lambda *_a, **_kw: data,
+        now=WHEN,
+    )
+    assert result["availability"] == "source_reported"
+    assert result["operation_verified"] is True
+    assert result["verification_scope"] == "authenticated_source_provider_operational_state"
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+@pytest.mark.parametrize("bad_stamp", [
+    None, False, 0, 1, [], {}, WHEN,
+    "2026-W43-1T10:00:00+00:00",  # permissive Python week date
+    "20261019T100000+00:00",     # basic date/time
+    "2026-10-19 10:00:00+00:00", # ambiguous separator
+    "2026-10-19T10:00+00:00",    # missing seconds
+    "2026-10-19T10:00:00+0000",  # missing offset colon
+    "2026-10-19T10:00:00",       # naive timestamp
+    "2026-10-19T10:00:00.1234567890Z",  # excessive precision
+    pytest.param("x" * 100_000, id="oversized-untrusted-timestamp"),
+])
+def test_receipt_requires_bounded_explicit_source_read_timestamp(
+    operation, provider, kind, state, bad_stamp,
+):
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    data["source_evidence"]["verified_at"] = bad_stamp
+    calls = []
+    result = source_operation_receipt(
+        REF, operation, record_reader=reader(data, calls), now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "invalid_provider_receipt_timestamp"
+    assert result["operation_verified"] is False
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert result["read_only"] is True
+    assert calls == [(REF, {
+        "since": None, "until": None, "include_source_status": True,
+        "required_source_provider_kind": (provider, kind),
+    })]
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+    assert "x" * 100 not in str(result)
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+@pytest.mark.parametrize("good_stamp", [
+    "2026-10-19T10:00:00Z",
+    "2026-10-19T10:00:00+00:00",
+    "2026-10-19T12:00:00+02:00",
+    "2026-10-19T10:00:00.123456+00:00",
+    "2026-10-19T10:00:00.123456789Z",
+])
+def test_receipt_accepts_explicit_source_time_without_business_authority(
+    operation, provider, kind, state, good_stamp,
+):
+    data = response(provider=provider, kind=kind, state=state, operation=operation)
+    data["source_evidence"]["verified_at"] = good_stamp
+    result = source_operation_receipt(
+        REF, operation, record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["availability"] == "source_reported"
+    assert result["operation_verified"] is True
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize("bad_resolution_stamp", [
+    WHEN, "2026-W43-1T10:00:00+00:00", "20261019T100000+00:00",
+    "2026-10-19 10:00:00+00:00", "2026-10-19T10:00+00:00",
+    "2026-10-19T10:00:00+0000", "2026-10-19T10:00:00.1234567890Z",
+    pytest.param("x" * 100_000, id="oversized-untrusted-resolution"),
+])
+def test_jira_resolution_rejects_noncanonical_source_time(bad_resolution_stamp):
+    data = response(provider="jira", kind="issue", state="done",
+                    operation="jira_issue_resolved")
+    data["source_evidence"]["verified_operational_outcome"]["source_timestamp"] = (
+        bad_resolution_stamp
+    )
+    result = source_operation_receipt(
+        REF, "jira_issue_resolved",
+        record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "provider_resolution_detail_conflict"
+    assert result["operation_verified"] is False
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize("resolution_stamp", [
+    "2026-10-19T10:00:00Z",
+    "2026-10-19T12:00:00+02:00",
+    "2026-10-19T10:00:00.123456+00:00",
+    "2026-10-19T10:00:00.123456789Z",
+])
+def test_jira_resolution_accepts_explicit_source_time_without_customer_claim(
+    resolution_stamp,
+):
+    data = response(provider="jira", kind="issue", state="done",
+                    operation="jira_issue_resolved")
+    data["source_evidence"]["verified_operational_outcome"]["source_timestamp"] = (
+        resolution_stamp
+    )
+    result = source_operation_receipt(
+        REF, "jira_issue_resolved",
+        record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["availability"] == "source_reported"
+    assert result["operation_verified"] is True
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+
+
+@pytest.mark.parametrize(("read_ahead_seconds", "resolution_ahead_seconds", "valid"), [
+    (299, 598, False),  # each source-relative skew passes; local event is +598s
+    (300, 600, False),  # previously two +300s allowances compounded
+    (299, 301, False),  # just beyond the local clock's +300s allowance
+    (0, 301, False),    # existing source-relative bound must still hold
+    (-100, 201, False), # local skew passes but source-relative +301s fails
+    (299, 300, True),   # exact local boundary, +1s after the source read
+    (0, 300, True),     # exact +300s source and local boundaries
+    (-100, 200, True),  # exact +300s source-relative boundary
+    (300, 299, True),   # source clock ahead, resolution before source read
+])
+@pytest.mark.parametrize("zone", [
+    pytest.param(timezone.utc, id="utc"),
+    pytest.param(timezone(timedelta(hours=2)), id="offset-plus-2"),
+])
+def test_jira_resolution_clock_skew_cannot_compound(
+    read_ahead_seconds, resolution_ahead_seconds, valid, zone,
+):
+    # A source read up to +300s ahead of the local clock must not grant an
+    # *additional* +300s for an alleged future Jira resolution event.
+    data = response(provider="jira", kind="issue", state="done",
+                    operation="jira_issue_resolved")
+    data["source_evidence"]["verified_at"] = (
+        WHEN + timedelta(seconds=read_ahead_seconds)
+    ).astimezone(zone).isoformat()
+    data["source_evidence"]["verified_operational_outcome"]["source_timestamp"] = (
+        WHEN + timedelta(seconds=resolution_ahead_seconds)
+    ).astimezone(zone).isoformat()
+    calls = []
+    result = source_operation_receipt(
+        REF, "jira_issue_resolved", record_reader=reader(data, calls), now=WHEN,
+    )
+    assert result["availability"] == ("source_reported" if valid else "unknown")
+    assert result["operation_verified"] is valid
+    if not valid:
+        assert result["reason"] == "provider_resolution_detail_conflict"
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert result["read_only"] is True
+    assert calls == [(REF, {
+        "since": None, "until": None, "include_source_status": True,
+        "required_source_provider_kind": ("jira", "issue"),
+    })]
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+# This exercises the real record_graph pre-adapter guard, not only a fake
+# post-read operation receipt. A requested Stripe operation must never cause
+# an unrelated Jira/GitHub adapter read, or vice versa.
+_SOURCE_FAMILIES_WITH_HOST = [
+    ("github", "pull_request", "github.com"),
+    ("jira", "issue", "example.atlassian.net"),
+    ("stripe", "invoice", "dashboard.stripe.com"),
+    ("stripe", "refund", "dashboard.stripe.com"),
+]
+
+
+@pytest.mark.parametrize(("observed_provider", "observed_kind", "observed_host"),
+                         _SOURCE_FAMILIES_WITH_HOST)
+@pytest.mark.parametrize(("operation", "expected_provider", "expected_kind", "_state"),
+                         _OPERATION_FAMILIES)
+def test_record_graph_fences_wrong_operation_family_before_source_adapter(
+    observed_provider, observed_kind, observed_host,
+    operation, expected_provider, expected_kind, _state,
+):
+    event = {
+        "event_id": "synthetic-e1",
+        "observed_at": WHEN.isoformat(),
+        "event_type": "browser_navigation",
+        "source": "browser",
+        "metadata": {"resource_reference": {
+            "resource_ref": REF, "provider": observed_provider,
+            "resource_kind": observed_kind, "host": observed_host,
+        }},
+    }
+    calls = []
+    def source_reader(ref, **kwargs):
+        calls.append((ref, kwargs))
+        return {"availability": "source_reported", "provider": observed_provider}
+
+    graph = record_graph(
+        REF, _raw_events=[event], include_source_status=True,
+        required_source_provider_kind=(expected_provider, expected_kind),
+        source_reader=source_reader,
+    )
+    assert graph["record_type"] == {
+        "provider": observed_provider, "kind": observed_kind,
+    }
+    if (observed_provider, observed_kind) != (expected_provider, expected_kind):
+        assert calls == []
+        assert graph["source_evidence"]["availability"] == "unknown"
+        assert graph["source_evidence"]["reason"] == "selected_source_type_not_observed"
+    else:
+        assert calls == [(REF, {})]
+        assert graph["source_evidence"]["availability"] == "source_reported"
+    assert graph["source_log_join_supported"] is True
+    assert graph["read_only"] is True
+
+
+@pytest.mark.parametrize(("operation", "provider", "kind", "state"), _OPERATION_FAMILIES)
+def test_operation_receipt_passes_provider_family_fence_to_reader(
+    operation, provider, kind, state,
+):
+    calls = []
+    result = source_operation_receipt(
+        REF, operation,
+        record_reader=reader(response(provider, kind, state, operation), calls),
+        now=WHEN,
+    )
+    assert calls == [(REF, {
+        "since": None, "until": None, "include_source_status": True,
+        "required_source_provider_kind": (provider, kind),
+    })]
+    assert result["operation_verified"] is True
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_execution_authorized"] is False
+
+
+@pytest.mark.parametrize(("provider", "kind", "host"), [
+    ("github", "pull_request", "github.com"),
+    ("jira", "issue", "team.atlassian.net"),
+    ("stripe", "invoice", "dashboard.stripe.com"),
+    ("stripe", "refund", "dashboard.stripe.com"),
+])
+def test_canonical_exact_record_read_still_allows_explicit_source_refresh(
+    monkeypatch, provider, kind, host,
+):
+    import importlib
+
+    module = importlib.import_module("server.record_graph")
+    row = {
+        "event_id": "retained-1",
+        "observed_at": WHEN.isoformat(),
+        "event_type": "click",
+        "source": "browser",
+        "metadata": {"resource_reference": {
+            "resource_ref": REF, "provider": provider,
+            "resource_kind": kind, "host": host,
+        }},
+    }
+    monkeypatch.setattr(module, "_record_rows", lambda *_args, **_kwargs: [row])
+    calls = []
+
+    def fake_source_reader(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"availability": "source_reported", "source_state_reported": True}
+
+    graph = record_graph(
+        REF, include_source_status=True,
+        required_source_provider_kind=(provider, kind),
+        source_reader=fake_source_reader,
+    )
+    assert graph["record_observed"] is True
+    assert graph["source_rows_scoped_to_exact_record"] is True
+    assert graph["source_log_join_supported"] is True
+    assert graph["source_evidence"]["availability"] == "source_reported"
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("conflicting_detail", [
+    None,
+    False,
+    0,
+    "",
+    [],
+    {"verified": False, "kind": "github_pr_merged"},
+    {"verified": 1, "kind": "github_pr_merged"},
+    {"verified": True, "kind": "jira_issue_resolved"},
+    {"verified": True},
+    {"kind": "github_pr_merged"},
+])
+def test_github_explicit_contradictory_operation_detail_is_unknown(
+    conflicting_detail,
+):
+    # GitHub's production adapter does not need a nested operation detail.
+    # But a cache/reader that *does* supply one cannot simultaneously
+    # assert a contradictory result and have it silently ignored.
+    data = response(
+        provider="github", kind="pull_request", state="merged",
+        operation="github_pr_merged",
+    )
+    data["source_evidence"]["verified_operational_outcome"] = conflicting_detail
+    calls = []
+    result = source_operation_receipt(
+        REF, "github_pr_merged", record_reader=reader(data, calls), now=WHEN,
+    )
+    assert result["availability"] == "unknown"
+    assert result["reason"] == "provider_operation_not_independently_verified"
+    assert result["operation_verified"] is False
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert result["read_only"] is True
+    assert len(calls) == 1
+    assert calls[0][1]["required_source_provider_kind"] == ("github", "pull_request")
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)
+
+
+@pytest.mark.parametrize("detail_present", [False, True])
+def test_github_optional_matching_operation_detail_preserves_provider_only_scope(
+    detail_present,
+):
+    data = response(
+        provider="github", kind="pull_request", state="merged",
+        operation="github_pr_merged",
+    )
+    if not detail_present:
+        # Exact current production adapter shape: source state only.
+        del data["source_evidence"]["verified_operational_outcome"]
+    else:
+        data["source_evidence"]["verified_operational_outcome"] = {
+            "kind": "github_pr_merged", "verified": True,
+        }
+    result = source_operation_receipt(
+        REF, "github_pr_merged", record_reader=lambda *_a, **_kw: data, now=WHEN,
+    )
+    assert result["operation_verified"] is True
+    assert result["verification_scope"] == "authenticated_source_provider_operational_state"
+    assert result["business_objective_verified"] is False
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_operation_verified"] is False
+    assert result["agent_execution_authorized"] is False
+    assert result["read_only"] is True
+    assert "VERY_PRIVATE_CUSTOMER" not in str(result)

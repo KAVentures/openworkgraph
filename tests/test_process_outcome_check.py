@@ -22,10 +22,13 @@ model={'goal':'Resolve selected case','baseline_path':['Open','Close'],'baseline
 calls=[]
 def receipt(resource,operation):
  calls.append((resource,operation))
- graph={'record_observed':True,'source_event_limit_reached':False,
+ # The fields production record_graph emits for an exact, scoped GitHub record.
+ graph={'resource_ref':resource,'source_rows_scoped_to_exact_record':True,'source_log_join_supported':True,
+   'source_window':{'since':None,'until':None},'record_observed':True,'source_event_limit_reached':False,
    'record_identity_complete_within_retained_window':True,'record_type':{'provider':'github','kind':'pull_request'},
    'source_evidence':{'availability':'source_reported','source_state_reported':True,
-   'verified_at':datetime.now(timezone.utc).isoformat(),'source_state':'merged'}}
+   'verified_at':datetime.now(timezone.utc).isoformat(),'source_state':'merged',
+   'provider':'github','verification_method':'explicit_opt_in_authenticated_local_github_cli_read'}}
  return source_operation_receipt(resource,operation,record_reader=lambda *a,**k:graph)
 routes.source_operation_receipt=receipt
 with TestClient(app) as client:
