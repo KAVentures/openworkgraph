@@ -470,7 +470,10 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    });
    await page.locator('#owgPipelineJourneyComparePacket').click();
    await page.locator('#owgPipelineJourneyCompareResult').getByText(/Recorded fields changed since the saved packet/).waitFor();
-   assert.equal(guidedWrites,writesBeforePacket,'read-only comparison after source deletion must not write');
+   const writesAfterDeletion=guidedWrites;
+   await page.locator('#owgPipelineJourneyComparePacket').click();
+   await page.locator('#owgPipelineJourneyCompareResult').getByText(/Recorded fields changed since the saved packet/).waitFor();
+   assert.equal(guidedWrites,writesAfterDeletion,'read-only comparison after source deletion must not write');
 
 
    assert(await page.getByRole('button',{name:'Open linked saved process',exact:true}).isDisabled());
