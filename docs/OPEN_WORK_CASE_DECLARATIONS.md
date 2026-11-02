@@ -1374,3 +1374,50 @@ source disconnect, retention and privacy with synthetic local cases.
 Native CI, signed-client acceptance, independent customer outcome
 adjudication, real-provider testing and held-out A/B/C commercial trials
 are **not established** by those synthetic tests.
+
+
+## Reviewed dependency-wide HUMAN outcome history (experimental)
+
+The local dashboard operator may explicitly inspect the latest retained **human
+assessments**, including non-destructive corrections, for a reviewed case and
+up to three prerequisites in one response. This is separate from the
+provider-operation evidence ledger and never implies verified payment,
+customer success, agent causality, or a verified business obligation.
+
+`POST /v1/open-work/declarations/human-outcomes/dependency-history` requires
+an authenticated `OWG-Session`, the current root `work_item_ref`,
+`expected_revision` and `expected_edit_token`, plus
+`"confirm_historical_review": true` and `"max_cases": 1..4`. Example:
+
+```json
+{
+  "work_item_ref": "owg:w:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "expected_revision": 1,
+  "expected_edit_token": "<current owner review token>",
+  "confirm_historical_review": true,
+  "max_cases": 4
+}
+```
+
+The response includes typed owner-declared dependency edges, each selected
+case's goal/outcome codes and revision, chronological human assessment and
+correction events, and the latest **human-assessed** `met`/`not_met`/`unknown`
+status. It reports missing feedback, omitted prerequisites and
+`human_feedback_coverage_complete` separately. A complete set of human
+assessments is **not** independently verified completion. A smaller
+`max_cases` truncates the prerequisite selection explicitly rather than
+silently treating omitted cases as successful.
+
+Each selected case must independently pass current source scope, review,
+retention and exact dependency-version checks. The root graph is re-admitted
+before and after every private SQLite read. Any revoked, changed or
+integrity-invalid selected history fails closed; no partial trusted response
+is returned. Reads are bounded and provider-free, but the separate SQLite
+reads are **not an atomic cross-process snapshot**. The API does not perform
+source checks, writes, polling, network sync or agent execution. It preserves
+the original local workflow mapping and dashboard experiences.
+
+Synthetic FastAPI/private-SQLite coverage checks full/partial chains,
+corrections, missing feedback, local-session authorization, malformed limits,
+tampering and review revocation. Native cross-platform CI and real customer
+adjudication are separate release gates.
