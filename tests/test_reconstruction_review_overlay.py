@@ -352,3 +352,28 @@ def test_two_hop_cli_prepare_apply_and_score_with_actual_linker(tmp_path: Path):
     assert json.loads(score_path.read_text())["human_confirmed_two_hop_count"] == 1
     assert "PRIVATE" not in overlay_path.read_text()
     assert "PRIVATE" not in score_path.read_text()
+
+
+def test_mixed_direct_and_fragment_decisions_preserve_rejections_and_origin_counts():
+    events = _fragment_events()
+    packet = prepare_review_packet(events)
+    candidates = {row["event_id"]: row for row in packet["eligible_candidates"]}
+    direct_item = candidates["e03"]["candidate_items"][0]["item_id"]
+    fragment_item = candidates["e04"]["candidate_items"][0]["item_id"]
+    decisions = {
+        "format": DECISION_FORMAT,
+        "evidence_sha256": packet["evidence_sha256"],
+        "decisions": [
+            {"event_id": "e03", "item_id": direct_item, "action": "reject"},
+            {"event_id": "e04", "item_id": fragment_item, "action": "confirm"},
+        ],
+    }
+    overlay = apply_review(events, packet, decisions)
+    assert overlay["human_confirmed_count"] == 1
+    assert overlay["human_confirmed_direct_count"] == 0
+    assert overlay["human_confirmed_two_hop_count"] == 1
+    assert overlay["human_rejected_count"] == 1
+    assert overlay["human_rejections"] == [{"event_id": "e03", "item_id": direct_item}]
+    assert "e03" in overlay["unassigned_event_ids"]
+    assert "e04" not in overlay["unassigned_event_ids"]
+    assert overlay["human_decisions_are_not_source_evidence"] is True
