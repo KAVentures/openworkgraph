@@ -118,8 +118,7 @@ def test_conflicting_stored_object_definitions_refuse_resolution():
 def test_other_logs_cannot_supply_joined_objects():
     log = _import()
     second = _doc()
-    second["objects"] = [x for x in second["objects"] if x["id"] == "i1"]
-    second["events"] = []
+    next(obj for obj in second["objects"] if obj["id"] == "i1")["attributes"][0]["value"] = "OTHER"
     _import(second)
     result = joined.analyze(log, _spec())
     assert result["status_counts"]["resolved"] == 3
