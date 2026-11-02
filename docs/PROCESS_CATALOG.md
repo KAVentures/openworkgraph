@@ -76,6 +76,27 @@ stale asynchronous responses cannot repopulate a changed editor. Unsaved edits
 are never included in the comparison and cannot be treated as a reviewed
 revision. Deleted, mismatched or unavailable revision responses are refused.
 
+### Restore a historical design as a new reviewed revision
+
+When comparing an older rN against the **currently opened latest** rM, choose
+**Prepare historical rN as unsaved restoration draft**. OWG re-reads both saved
+revisions and their SHA-256 references, and refuses if the latest process has
+advanced, the old revision disappeared, or the comparison became stale.
+Confirm discarding local unsaved edits. The old process model becomes an
+**unsaved** editor draft based on the latest revision for optimistic concurrency;
+rN and rM are not overwritten. The current process title is retained.
+
+Restoration removes inherited evidence references and resets prior human
+confirmations, execution-related flags, and decision-table approvals. The
+historical baseline and rules remain **unverified declarations**, not proof that
+old observations are still available or current. Inspect the complete model,
+reconcile source evidence and conditions, explicitly tick the reviewed checkbox,
+then **Save new revision** to create rM+1. Concurrent changes fail the normal
+expected-revision check; a cancelled restore or failed read performs no write.
+There is no automatic policy approval, provider call, agent invocation or
+business action. This is deliberately distinct from silently rolling back
+history or reviving revoked evidence.
+
 This is a structural review aid for handoff decisions, not an automatic
 approval, source-revalidation, policy attestation, agent authorization or
 verified business outcome. No provider, model or agent is contacted, and no
