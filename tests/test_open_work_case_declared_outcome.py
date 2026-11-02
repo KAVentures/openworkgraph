@@ -245,7 +245,7 @@ def test_batch_creation_refuses_incompatible_source_payment_goal(local):
     with TestClient(app) as client:
         headers = _auth()
         invalid = client.post(BASE + "/batch", headers=headers, json={
-            "confirm_owner_declaration_batch": True,
+            "confirm_batch_create": True,
             "items": [{
                 "work_item_ref": A, "goal_code": "review_source_state",
                 "expected_outcome_code": "stripe_invoice_paid_reported",
