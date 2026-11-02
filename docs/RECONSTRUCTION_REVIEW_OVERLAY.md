@@ -50,6 +50,11 @@ candidate item ID from the generated packet):
 Use "reject" to reject that suggested item without assigning the event.
 An empty decisions array is allowed. One decision per event, maximum 24.
 A review of one candidate is not a claim that other candidates are false.
+For a two-hop confirmation, a simultaneous human rejection of the
+intermediary-to-same-item candidate, or confirmation of the intermediary for a
+different item, is contradictory and the entire apply is refused regardless
+of decision order. Reviewing the intermediary for the same item is an
+independent human confirmation, not an automatic transitive assignment.
 Do not treat evidence support counts as probabilities. Reviewer confirmation
 is a **new human annotation**, not source-verified business identity.
 
