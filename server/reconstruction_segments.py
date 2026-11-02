@@ -1,8 +1,9 @@
 """Observed activity episodes inside an already evidence-linked work item.
 
-Episodes are presentation-only: independent foreign-record activity, a
-strictly witnessed different-app observation without a record, or a
-capture-scope change can bound a displayed sequence. Episodes neither create
+Episodes are presentation-only: independent foreign-record activity,
+strictly witnessed different-app/tab observations without a record, a direct
+within-item exact-record context change, or a capture-scope change can bound
+a displayed sequence. Episodes neither create
 nor remove membership edges. A clock gap alone never supplies an edge or an
 interruption claim. No raw scope values or foreign record IDs are returned.
 """
