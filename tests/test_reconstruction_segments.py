@@ -319,3 +319,79 @@ def test_other_tab_interruptions_keep_exact_count_when_projection_is_bounded():
     assert len(a["activity_segments"]) == 16
     assert all(s["boundary_before"] == ["observed_other_tab_without_record"]
                for s in a["activity_segments"][1:])
+
+
+def _cross_record_member_sequence():
+    """A witnessed clipboard bridge creates ONE item with two exact records."""
+    first, second, resumed = event(1, A), event(2, B), event(3, A)
+    first["event_type"] = "copy"
+    second["event_type"] = "paste"
+    first["metadata"]["clipboard_transfer_id"] = "private-transfer-1"
+    second["metadata"]["clipboard_transfer_id"] = "private-transfer-1"
+    return first, second, resumed
+
+
+def test_cross_record_linked_item_has_distinct_observed_record_episodes():
+    first, second, resumed = _cross_record_member_sequence()
+    result = linked_work_items([first, second, resumed])
+    joined = item(result, A)
+    assert joined["resource_refs"] == [A, B]
+    assert joined["cross_record_join"] is True
+    assert joined["event_ids"] == ["e0001", "e0002", "e0003"]
+    assert joined["link_basis"] == {"clipboard_transfer": 1, "same_record": 1}
+    assert joined["activity_segment_count"] == 3
+    assert [s["event_ids"] for s in joined["activity_segments"]] == [
+        ["e0001"], ["e0002"], ["e0003"]]
+    assert [s["boundary_before"] for s in joined["activity_segments"]] == [
+        [], ["observed_member_record_change"], ["observed_member_record_change"]]
+    assert "private-transfer-1" not in json.dumps(result)
+    assert "actor-a" not in json.dumps(result)
+    assert result["link_contract"]["activity_segments_are_observed_episodes_not_tasks"]
+
+
+def test_cross_record_episodes_survive_workflow_api_and_recompute_on_removal():
+    first, second, resumed = _cross_record_member_sequence()
+    response = workflow_evidence.list_workflow_evidence_candidates(
+        _raw_events=[first, second, resumed])
+    linked = response["linked_work_items"]
+    assert item(linked, A)["activity_segment_count"] == 3
+    assert response["record_case_lanes"]["format"] == "openworkgraph.record-case-lanes.v1"
+    # Removing a source observation must never leave a stale record boundary.
+    retained = item(linked_work_items([first, resumed]), A)
+    assert retained["event_ids"] == ["e0001", "e0003"]
+    assert retained["activity_segment_count"] == 1
+    assert retained["cross_record_join"] is False
+
+
+def test_record_context_boundary_abstains_on_ties_and_incomplete_scope():
+    from server.reconstruction_segments import observed_activity_segments
+    from server.work_item_links import link_observations
+
+    def projected(first, second):
+        rows = link_observations([first, second])["rows"]
+        return observed_activity_segments(rows, ["e0001", "e0002"])
+
+    first, second = event(1, A), event(2, B)
+    assert [s["boundary_before"] for s in projected(first, second)["activity_segments"]] == [
+        [], ["observed_member_record_change"]]
+    second["observed_at"] = first["observed_at"]
+    assert projected(first, second)["activity_segment_count"] == 1
+    second["observed_at"] = event(2, B)["observed_at"]
+    first.pop("device_id")
+    second.pop("device_id")
+    assert projected(first, second)["activity_segment_count"] == 1
+    first, second = event(1, A), event(2, B, actor="actor-b")
+    assert [s["boundary_before"] for s in projected(first, second)["activity_segments"]] == [
+        [], ["capture_scope_change"]]
+
+
+def test_unreferenced_member_does_not_invent_direct_record_change():
+    from server.reconstruction_segments import observed_activity_segments
+    from server.work_item_links import link_observations
+
+    first, loose, second = event(1, A), event(2), event(3, B)
+    rows = link_observations([first, loose, second])["rows"]
+    projected = observed_activity_segments(rows, ["e0001", "e0002", "e0003"])
+    assert projected["activity_segment_count"] == 1
+    assert projected["activity_segments"][0]["event_ids"] == [
+        "e0001", "e0002", "e0003"]
