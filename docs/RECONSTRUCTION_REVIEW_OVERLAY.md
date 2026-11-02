@@ -445,3 +445,44 @@ real-linker and CLI regression cases exercise positive two-hop propagation,
 conflicting record, foreign scope, changed app/source, tied timestamp,
 missing second anchor, packet forgery and private create-only outputs;
 native exact-head CI remains required.
+
+
+## Interruption-aware provisional episode partition (episodes)
+
+The local \`episodes\` command turns the existing production-linked membership
+and conservative experimental direct/two-hop proposals into a **complete,
+chronologically ordered, noncanonical episode partition** of the admitted
+observations. This is a usable view of *when* a case-like work item appeared
+in the observed sequence, not proof that the inferred work is one task.
+
+    python -m scripts.reconstruction_review episodes \
+      --events /private/observations.json \
+      --packet /private/review-packet.json \
+      --output /private/provisional-episodes.json
+
+Every admitted event appears exactly once in one episode. Each episode
+separates \`production_linked_event_ids\`, \`experimental_proposed_event_ids\`
+and \`unassigned_event_ids\`. Unknown events remain unknown; a source-record
+singleton is not silently attached to a different record. A change of linked
+item, unknown gap, complete capture scope, app/source, tied timestamp or
+different observed literal record anchor starts a new episode. In particular,
+A → unknown → B → unknown → A yields **two distinct A episodes**, never
+one flattened timeline. A bounded A → copy X/Y/Z → A span can appear as
+one **provisional** A episode with X/Y/Z explicitly marked experimental,
+provided the proposal engine independently supports them.
+
+The report includes counts of admitted versus unadmitted input rows, direct
+versus two-hop proposals, unknown observations, boundary reasons and
+\`eligible_review_truncated\`. An incomplete/truncated review queue is never
+presented as complete experimental coverage. No record references, work text,
+source URLs, credentials or tenant identities are exported; only opaque
+event/item IDs are included. The packet and source are rederived on every
+invocation; stale/revoked or forged evidence refuses without a partial file.
+Output is local, private and create-only.
+
+This is **not** a production linker change, a human confirmation, a verified
+business-case identity, an accuracy claim, a consent extension or an
+authorization for any agent action. The episode partition is an experimental
+review aid. Real consenting-user validation, family-holdout assignment F1
+and contamination gates, interruption regression and native exact-head CI
+remain outstanding before any automatic promotion.

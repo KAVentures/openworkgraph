@@ -16,6 +16,7 @@ from server.reconstruction_review_overlay import (
     BATCH_FORMAT, MAX_BATCH_SESSIONS, aggregate_review_scores,
     adjudicate_review, apply_review, prepare_review_packet, score_review,
     resolve_review_disagreement, propose_automatic_review, score_automatic_proposals,
+    provisional_activity_episodes,
 )
 
 _MAX_JSON = 8 * 1024 * 1024
@@ -96,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Human-reviewed, evidence-bound local reconstruction overlay"
     )
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("prepare", "propose", "score-proposals", "adjudicate", "resolve", "apply", "score", "score-batch"):
+    for name in ("prepare", "propose", "episodes", "score-proposals", "adjudicate", "resolve", "apply", "score", "score-batch"):
         command = sub.add_parser(
             name, help=("prepare weak candidates with bounded interleaving record context"
                         if name == "prepare" else None),
@@ -108,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
             command.add_argument("--events", required=True,
                                  help="consented local JSON event array")
         command.add_argument("--output", required=True, help="new local private JSON file")
-        if name in ("propose", "score-proposals", "adjudicate", "resolve", "apply", "score"):
+        if name in ("propose", "episodes", "score-proposals", "adjudicate", "resolve", "apply", "score"):
             command.add_argument("--packet", required=True)
         if name in ("apply", "score"):
             command.add_argument("--decisions", required=True,
@@ -136,6 +137,8 @@ def main(argv: list[str] | None = None) -> int:
             packet = _read_json(args.packet, max_bytes=1024 * 1024)
             if args.command == "propose":
                 result = propose_automatic_review(events, packet)
+            elif args.command == "episodes":
+                result = provisional_activity_episodes(events, packet)
             elif args.command == "score-proposals":
                 truth = _read_json(args.truth, max_bytes=1024 * 1024)
                 result = score_automatic_proposals(events, packet, truth)

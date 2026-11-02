@@ -15,6 +15,7 @@ from server.reconstruction_review_overlay import (
     resolve_review_disagreement,
     apply_review, prepare_review_packet, score_review,
     propose_automatic_review, score_automatic_proposals,
+    provisional_activity_episodes,
 )
 from server.work_item_links import linked_work_items
 
@@ -1226,3 +1227,105 @@ def test_seeded_two_hop_cli_propose_and_score_private_outputs(tmp_path: Path):
             assert private not in output.read_text()
         if os.name != "nt":
             assert output.stat().st_mode & 0o077 == 0
+
+
+
+def test_provisional_episodes_preserve_interleaved_case_switches_and_unknowns():
+    # The same A record resumes after B; this is two separate observed
+    # episodes, never a single flattened A episode.
+    events = [
+        _event(1, A), _event(2, A), _event(3),
+        _event(4, B), _event(5, B), _event(6),
+        _event(7, A), _event(8, A),
+    ]
+    before = linked_work_items(events)
+    packet = prepare_review_packet(events)
+    result = provisional_activity_episodes(events, packet)
+    episodes = result["episodes"]
+    assert [row["event_ids"] for row in episodes] == [
+        ["e01", "e02"], ["e03"], ["e04", "e05"], ["e06"], ["e07", "e08"],
+    ]
+    assert episodes[0]["item_id"] == episodes[4]["item_id"]
+    assert episodes[0]["item_id"] != episodes[2]["item_id"]
+    assert episodes[1]["item_id"] is None
+    assert episodes[3]["item_id"] is None
+    assert result["production_linked_event_count"] == 6
+    assert result["experimental_proposed_event_count"] == 0
+    assert result["unassigned_event_count"] == 2
+    assert result["boundary_counts"]["item_switch_or_unknown_gap"] == 4
+    assert result["admitted_observation_count"] == 8
+    assert result["canonical_membership_unchanged"] is True
+    assert linked_work_items(events) == before
+    for secret in (A, B, "SECRET", "PRIVATE", "private.example"):
+        assert secret not in json.dumps(result)
+
+
+def test_provisional_episodes_group_bounded_two_hop_proposals_without_canonical_merge():
+    events = _seeded_two_hop_proposal_events()
+    packet = prepare_review_packet(events)
+    before = linked_work_items(events)
+    result = provisional_activity_episodes(events, packet)
+    assert result["episode_count"] == 1
+    [episode] = result["episodes"]
+    assert episode["event_ids"] == [f"e{n:02d}" for n in range(1, 8)]
+    assert episode["experimental_proposed_event_ids"] == ["e03", "e04", "e05"]
+    assert episode["production_linked_event_ids"] == ["e01", "e02", "e06", "e07"]
+    assert result["direct_proposal_count"] == 2
+    assert result["two_hop_proposal_count"] == 1
+    assert result["experimental_proposed_event_count"] == 3
+    assert result["production_linker_changed"] is False
+    assert result["authorizes_business_action"] is False
+    assert linked_work_items(events) == before
+
+
+def test_provisional_episodes_split_scope_app_and_tied_timestamp_without_inference():
+    events = [_event(1, A), _event(2, A), _event(3), _event(4, A)]
+    events[2]["organization_id"] = "another-tenant"
+    packet = prepare_review_packet(events)
+    result = provisional_activity_episodes(events, packet)
+    assert result["episode_count"] >= 3
+    assert result["boundary_counts"]["capture_scope_change"] >= 2
+    changed = copy.deepcopy(events)
+    changed[2]["organization_id"] = "revoked-tenant"
+    with pytest.raises(ValueError, match="stale|altered"):
+        provisional_activity_episodes(changed, packet)
+    forged = copy.deepcopy(packet)
+    forged["eligible_review_total"] += 1
+    with pytest.raises(ValueError, match="stale|altered"):
+        provisional_activity_episodes(events, forged)
+    tied = [_event(1, A), _event(2, A)]
+    tied[1]["observed_at"] = tied[0]["observed_at"]
+    result = provisional_activity_episodes(tied, prepare_review_packet(tied))
+    assert result["boundary_counts"]["timestamp_tie"] == 1
+
+
+def test_provisional_episodes_cli_private_create_only_and_stale_refusal(tmp_path: Path):
+    root = Path(__file__).resolve().parents[1]
+    events = _seeded_two_hop_proposal_events()
+    source = tmp_path / "events.json"
+    packet_path = tmp_path / "packet.json"
+    output = tmp_path / "episodes.json"
+    source.write_text(json.dumps(events))
+    def run(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, "-m", "scripts.reconstruction_review", *args],
+            cwd=root, capture_output=True, text=True, timeout=40,
+        )
+    prepared = run("prepare", "--events", str(source), "--output", str(packet_path))
+    assert prepared.returncode == 0, prepared.stderr
+    result = run("episodes", "--events", str(source), "--packet", str(packet_path),
+                 "--output", str(output))
+    assert result.returncode == 0, result.stderr
+    data = json.loads(output.read_text())
+    assert data["experimental_proposed_event_count"] == 3
+    for private in ("SECRET", "PRIVATE", "private.example", A):
+        assert private not in output.read_text()
+    if os.name != "nt":
+        assert output.stat().st_mode & 0o077 == 0
+    assert run("episodes", "--events", str(source), "--packet", str(packet_path),
+               "--output", str(output)).returncode == 2
+    source.write_text(json.dumps(events[:-1]))
+    refused = tmp_path / "refused.json"
+    assert run("episodes", "--events", str(source), "--packet", str(packet_path),
+               "--output", str(refused)).returncode == 2
+    assert not refused.exists()

@@ -330,6 +330,123 @@ def propose_automatic_review(
     }
 
 
+
+EPISODE_FORMAT = "openworkgraph.reconstruction-provisional-episodes.v1"
+
+
+def provisional_activity_episodes(
+    events: list[dict[str, Any]], packet: dict[str, Any],
+) -> dict[str, Any]:
+    """Partition observed time into interruption-aware, noncanonical episodes.
+
+    Production membership and experimental proposals remain separate evidence
+    classes. A later return to the same linked item starts a new episode after
+    another item, an unknown span, a capture boundary or a different record.
+    Never merge episodes by elapsed time or infer a business-case identity.
+    """
+    expected, linked, groups = _snapshot(events)
+    if type(packet) is not dict or packet != expected:
+        raise ValueError("review packet is stale or altered; prepare again")
+    proposal = propose_automatic_review(events, packet)
+    production = {
+        event_id: f"linked_item_{index:02d}"
+        for index, members in enumerate(groups, start=1)
+        for event_id in members
+    }
+    suggested = {
+        entry["event_id"]: entry["item_id"]
+        for entry in proposal["proposed_assignments"]
+    }
+    rows = linked["rows"]
+    episodes: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    previous: dict[str, Any] | None = None
+    current_record: str | None = None
+    linked_count = proposed_count = unassigned_count = 0
+    boundary_counts: dict[str, int] = {}
+
+    for row in rows:
+        event_id = row["event_id"]
+        item_id = production.get(event_id) or suggested.get(event_id)
+        basis = (
+            "production_linked" if event_id in production
+            else "experimental_proposal" if event_id in suggested
+            else "unassigned"
+        )
+        if basis == "production_linked":
+            linked_count += 1
+        elif basis == "experimental_proposal":
+            proposed_count += 1
+        else:
+            unassigned_count += 1
+
+        boundary = None
+        if previous is None:
+            boundary = "window_start"
+        elif row["observed_at"] <= previous["observed_at"]:
+            boundary = "timestamp_tie"
+        elif row.get("scope") != previous.get("scope"):
+            boundary = "capture_scope_change"
+        elif (row.get("app"), row.get("source")) != (
+            previous.get("app"), previous.get("source")
+        ):
+            boundary = "surface_change"
+        elif item_id != current["item_id"]:
+            boundary = "item_switch_or_unknown_gap"
+        elif row.get("ref") and current_record and row["ref"] != current_record:
+            boundary = "different_record_anchor"
+
+        if boundary is not None:
+            current = {
+                "episode_id": f"episode_{len(episodes) + 1:05d}",
+                "item_id": item_id,
+                "event_ids": [],
+                "production_linked_event_ids": [],
+                "experimental_proposed_event_ids": [],
+                "unassigned_event_ids": [],
+                "start_boundary": boundary,
+                "source_record_identity_verified": False,
+                "business_case_identity_verified": False,
+            }
+            episodes.append(current)
+            boundary_counts[boundary] = boundary_counts.get(boundary, 0) + 1
+            current_record = None
+
+        current["event_ids"].append(event_id)
+        current[{
+            "production_linked": "production_linked_event_ids",
+            "experimental_proposal": "experimental_proposed_event_ids",
+            "unassigned": "unassigned_event_ids",
+        }[basis]].append(event_id)
+        if row.get("ref"):
+            current_record = row["ref"]
+        previous = row
+
+    return {
+        "format": EPISODE_FORMAT,
+        "evidence_sha256": expected["evidence_sha256"],
+        "input_observation_count": len(events),
+        "admitted_observation_count": len(rows),
+        "unadmitted_input_row_count": len(events) - len(rows),
+        "episode_count": len(episodes),
+        "production_linked_event_count": linked_count,
+        "experimental_proposed_event_count": proposed_count,
+        "unassigned_event_count": unassigned_count,
+        "direct_proposal_count": proposal["direct_proposal_count"],
+        "two_hop_proposal_count": proposal["two_hop_proposal_count"],
+        "eligible_review_total": expected["eligible_review_total"],
+        "eligible_review_truncated": expected["eligible_review_truncated"],
+        "boundary_counts": dict(sorted(boundary_counts.items())),
+        "episodes": episodes,
+        "source_content_included": False,
+        "case_identity_verified": False,
+        "production_linker_changed": False,
+        "canonical_membership_unchanged": True,
+        "authorizes_business_action": False,
+    }
+
+
+
 def score_automatic_proposals(
     events: list[dict[str, Any]], packet: dict[str, Any], truth: dict[str, Any],
 ) -> dict[str, Any]:
