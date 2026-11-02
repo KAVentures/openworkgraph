@@ -142,7 +142,8 @@ def _local_server(*, bad_path=None, bad_value=None, redirect=False):
                 self.send_header("Location", "http://example.test/steal")
                 self.end_headers()
                 return
-            value = bad_value if self.path == bad_path else fixtures.get(self.path)
+            suffix = self.path.removeprefix("/scim/v2/owned")
+            value = bad_value if suffix == bad_path else fixtures.get(suffix)
             if value is None:
                 self.send_response(404)
                 self.end_headers()
