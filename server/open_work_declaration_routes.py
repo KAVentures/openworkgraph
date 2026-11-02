@@ -31,6 +31,7 @@ from .open_work_case_dependency_operations import (
 from .open_work_case_operation_timeline import (
     validate_prior_operation_timeline, append_operation_timeline,
 )
+from .open_work_case_dependency_history import compose_dependency_operation_history
 from .open_work_case_operation_ledger import (
     append_operation_evidence, read_operation_evidence, dispute_operation_evidence,
     clear_operation_evidence,
@@ -1074,6 +1075,87 @@ async def dispute_local_operation_evidence_ledger(request: Request, response: Re
             dispute_operation_evidence, admitted, signature, scope=scope,
             secret=secret, guard=guard, target_seq=payload["target_sequence"],
             reason=payload["reason_code"],
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/v1/open-work/declarations/operation-ledger/dependency-history")
+async def read_local_dependency_operation_history(request: Request, response: Response):
+    """Inspect a reviewed prerequisite chain's retained provider checks only.
+
+    No provider read or fresh completion claim. Every selected case is admitted
+    against its own complete owner-reviewed DAG, with the root DAG pinned across
+    each separate private-ledger read.
+    """
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_historical_review", "max_cases",
+    })
+    if payload["confirm_historical_review"] is not True:
+        raise HTTPException(403, "explicit historical evidence review required")
+    count = payload["max_cases"]
+    if type(count) is not int or not 1 <= count <= 4:
+        raise HTTPException(422, "max_cases must be between 1 and 4")
+    try:
+        before = await asyncio.to_thread(list_case_declarations, scope)
+        admitted, signature = admitted_case_dossier_snapshot(
+            before, work_item_ref=payload["work_item_ref"],
+            expected_revision=payload["expected_revision"],
+            expected_edit_token=payload["expected_edit_token"],
+        )
+        selected, omitted = select_dependency_status_targets(admitted, max_cases=count)
+        rows = {row["work_item_ref"]: row for row in before["items"]}
+        # The current root signature includes every prerequisite, including
+        # those not selected for this bounded history response.
+        from functools import partial
+        root_guard = partial(
+            _operation_ledger_guard, scope, payload["work_item_ref"],
+            payload["expected_revision"], payload["expected_edit_token"], signature,
+        )
+        secret = await asyncio.to_thread(
+            _read_or_create_secret, ".open_work_reference_key",
+        )
+        targets = []
+        for item in selected:
+            ref = item["work_item_ref"]
+            row = rows[ref]
+            child, child_signature = admitted_case_dossier_snapshot(
+                before, work_item_ref=ref,
+                expected_revision=row["revision"],
+                expected_edit_token=row["edit_token"],
+            )
+            child_guard = partial(
+                _operation_ledger_guard, scope, ref, row["revision"],
+                row["edit_token"], child_signature,
+            )
+            targets.append((child, child_signature, child_guard))
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    histories = []
+    for child, child_signature, child_guard in targets:
+        try:
+            await asyncio.to_thread(root_guard)
+            history = await asyncio.to_thread(
+                read_operation_evidence, child, child_signature,
+                scope=scope, secret=secret, guard=child_guard,
+            )
+            await asyncio.to_thread(root_guard)
+        except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+            raise _safe_error(exc) from None
+        histories.append(history)
+        await _recheck_source(scope)
+    try:
+        await asyncio.to_thread(root_guard)
+        result = compose_dependency_operation_history(
+            admitted, signature, selected, histories,
+            unscanned_prerequisites=omitted,
         )
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
         raise _safe_error(exc) from None
