@@ -839,7 +839,7 @@ with zipfile.ZipFile(sys.argv[1]) as z:
        headers:{'Content-Type':'application/json'},
        body:JSON.stringify({workflow_id:'project_comparison_review',title:'Project comparison review',
          process_model,user_confirmed:true,expected_revision:0})});
-     assert(response.ok);
+     if(!response.ok)throw new Error('Could not create saved comparison process: '+response.status);
    });
    await page.getByRole('button',{name:'Load saved designs',exact:true}).click();
    await page.locator('#owgCatalogList').getByRole('button',{name:'Project comparison review · r1',exact:true}).click();
