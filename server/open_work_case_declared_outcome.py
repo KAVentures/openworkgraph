@@ -58,6 +58,7 @@ def _ledger(admitted: dict[str, Any], history: dict[str, Any]) -> tuple[int, int
 def compose_fresh_declared_payment_goal(
     admitted: dict[str, Any], verification: dict[str, Any],
     history: dict[str, Any],
+    *, prior_history: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Fresh checked status and durable evidence are distinct typed facts."""
     ref = require_declared_payment_goal(admitted)
@@ -84,9 +85,48 @@ def compose_fresh_declared_payment_goal(
     # a prior disputed paid receipt followed by a fresh unknown.
     if historical != ("paid" if paid else "unknown"):
         raise CaseDeclarationError("source check and retained history conflict")
+    transition: dict[str, Any] = {}
+    if prior_history is not None:
+        previous_count, _previous_disputes, previous_state = _ledger(admitted, prior_history)
+        before_events = prior_history.get("events")
+        after_events = history.get("events")
+        if (not isinstance(before_events, list) or not isinstance(after_events, list)
+                or len(after_events) != len(before_events) + 1
+                or after_events[:-1] != before_events
+                or count != previous_count + 1
+                or len(after_events) > 32
+                or not isinstance(after_events[-1], dict)
+                or after_events[-1].get("kind") != "check"
+                or after_events[-1].get("sequence") != len(after_events)
+                or after_events[-1].get("provider_state") != ("paid" if paid else "unknown")
+                or after_events[-1].get("disputed") is not False):
+            raise CaseDeclarationError("conflicting source goal evidence transition")
+        prior_checks = [event for event in before_events
+                        if isinstance(event, dict) and event.get("kind") == "check"]
+        if len(prior_checks) != previous_count:
+            raise CaseDeclarationError("invalid prior source goal evidence")
+        if previous_count == 0:
+            change = "first_check"
+        elif previous_state == "unknown" and paid:
+            change = "unknown_to_paid"
+        elif previous_state == "paid" and not paid:
+            change = "paid_to_unknown"
+        else:
+            change = "unchanged_paid" if paid else "unchanged_unknown"
+        transition = {
+            "prior_historical_provider_state": previous_state,
+            "prior_provider_check_count": previous_count,
+            "prior_last_check_disputed": bool(prior_checks and prior_checks[-1].get("disputed") is True),
+            "provider_state_transition": change,
+            "observed_provider_state_changed": change in ("unknown_to_paid", "paid_to_unknown"),
+            "prior_unknown_does_not_mean_unpaid": True,
+            "paid_to_unknown_does_not_prove_payment_reversal": True,
+            "transition_based_on_atomically_fenced_local_ledger": True,
+        }
     return {
         "format": _FORMAT,
         "work_item_ref": ref,
+        **transition,
         "owner_declared_expected_outcome_code": EXPECTED,
         "provider_declared_goal_state_at_check": "met" if paid else "unknown",
         "provider_declared_goal_met_at_check": paid,
