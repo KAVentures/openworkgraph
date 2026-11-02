@@ -75,8 +75,11 @@ def _align(trace: list[str], path: list[str]) -> tuple[int, list[tuple[str, str]
 def conformance(log_id: str, model: Any, case_type: str | None = None,
                 max_variants: int = 500) -> dict[str, Any]:
     paths = parse_reference_model(model)
-    max_variants = max(1, min(int(max_variants), MAX_ALIGNED_VARIANTS))
-    shortest = min(len(p) for p in paths)
+    # Direct integrations must not silently truncate or coerce malformed caps.
+    # The REST route already declares a bounded integer query parameter.
+    if not isinstance(max_variants, int) or isinstance(max_variants, bool):
+        raise EventLogWorkspaceError("max_variants must be an integer")
+    max_variants = max(1, min(max_variants, MAX_ALIGNED_VARIANTS))
 
     def run(conn):
         total_cases = conn.execute("SELECT count(DISTINCT case_id) FROM ce").fetchone()[0]
@@ -103,11 +106,16 @@ def conformance(log_id: str, model: Any, case_type: str | None = None,
                 cost, moves = _align(trace, path)
                 if best_cost is None or cost < best_cost:
                     best_cost, best_moves, best_path = cost, moves, index
-            fitness = 1 - best_cost / (len(trace) + shortest)
+            # Normalize against the path actually selected by minimum edit cost.
+            # The shortest *other* reference path must not depress this score.
+            fitness = 1 - best_cost / (len(trace) + len(paths[best_path]))
             aligned_cases += cases
             fitness_sum += fitness * cases
             fitting_cases += cases if best_cost == 0 else 0
-            for kind, activity in best_moves:
+            # These diagnostics report *cases*, not alignment-move counts.
+            # Repeated identical missing/extra activities in one trace must
+            # contribute this variant's cases only once per activity and kind.
+            for kind, activity in set(best_moves):
                 bucket = skipped if kind == "model" else inserted if kind == "log" else None
                 if bucket is not None:
                     bucket[activity] = bucket.get(activity, 0) + cases
@@ -155,11 +163,25 @@ def kpis(log_id: str, case_type: str | None = None, sla_seconds: int | None = No
          automation_resources: list[str] | None = None, cohort: dict[str, Any] | None = None) -> dict[str, Any]:
     from .event_log_cohorts import describe, parse_cohort, restrict
     chosen = parse_cohort(cohort)
+    # The HTTP route passes a list of literal resource names. Direct Python
+    # callers must not interpret a string as a list of characters, silently
+    # coerce non-string names, or leak TypeError for unhashable entries.
+    if automation_resources is not None and (
+        not isinstance(automation_resources, list)
+        or any(not isinstance(r, str) for r in automation_resources)
+    ):
+        raise EventLogWorkspaceError("automation_resources must be a list of strings")
     automation = list(dict.fromkeys(r for r in (automation_resources or []) if r))
     if len(automation) > MAX_AUTOMATION_RESOURCES or any(len(r) > 200 for r in automation):
         raise EventLogWorkspaceError("too many or too long automation resource names")
-    if sla_seconds is not None and not 0 < int(sla_seconds) <= 10 ** 9:
-        raise EventLogWorkspaceError("sla_seconds must be a positive number of seconds")
+    # The REST route enforces an integer SLA, but direct integrations must not
+    # silently truncate fractional seconds, coerce strings/bools, or leak raw
+    # Python conversion errors before the saved-log query.
+    if sla_seconds is not None and (
+        not isinstance(sla_seconds, int) or isinstance(sla_seconds, bool)
+        or not 1 <= sla_seconds <= 10 ** 9
+    ):
+        raise EventLogWorkspaceError("sla_seconds must be an integer between 1 and 1000000000")
 
     def run(conn):
         restrict(conn, chosen, log_id)
@@ -218,21 +240,42 @@ def risk_difference(y1: int, n1: int, y0: int, n0: int, z: float = 1.959964) -> 
 
 def root_cause(log_id: str, outcome: str, case_type: str | None = None, *, threshold_seconds: int | None = None,
                activity: str | None = None, limit: int = 30) -> dict[str, Any]:
-    if outcome not in _OUTCOMES:
+    # A malformed direct-call outcome may be an unhashable list/dict; reject
+    # it with the public domain error instead of leaking Python TypeError.
+    if not isinstance(outcome, str) or outcome not in _OUTCOMES:
         raise EventLogWorkspaceError("outcome must be one of " + ", ".join(sorted(_OUTCOMES)))
-    if outcome in {"duration_over"} and not (threshold_seconds and 0 < int(threshold_seconds) <= 10 ** 9):
+    # Direct integrations must follow the typed REST contract without
+    # truncating fractional thresholds or leaking raw int() conversion errors.
+    # Validate supplied thresholds even for non-duration outcomes: an unused
+    # malformed argument must not be silently accepted.
+    if threshold_seconds is not None and (
+        not isinstance(threshold_seconds, int) or isinstance(threshold_seconds, bool)
+        or not 1 <= threshold_seconds <= 10 ** 9
+    ):
+        raise EventLogWorkspaceError("threshold_seconds must be an integer between 1 and 1000000000")
+    # Even when the selected outcome does not use activity as a predicate,
+    # the optional value is reflected in outcome metadata. Do not echo an
+    # arbitrary container or an overlong value from a direct Python caller.
+    if activity is not None and (not isinstance(activity, str) or len(activity) > 200):
+        raise EventLogWorkspaceError("activity must be a string of at most 200 characters")
+    if outcome == "duration_over" and threshold_seconds is None:
         raise EventLogWorkspaceError("threshold_seconds is required for a duration outcome")
-    if outcome in {"contains_activity", "ends_with"} and not (isinstance(activity, str) and 0 < len(activity) <= 200):
+    if outcome in {"contains_activity", "ends_with"} and not activity:
         raise EventLogWorkspaceError("activity is required for this outcome")
-    limit = max(1, min(int(limit), 100))
+    if not isinstance(limit, int) or isinstance(limit, bool):
+        raise EventLogWorkspaceError("limit must be an integer")
+    # Preserve historical direct-call integer clamping; REST remains 1..100.
+    limit = max(1, min(limit, 100))
     outcome_sql = {
         "duration_over": "epoch(max(ts) - min(ts)) > $threshold",
         "contains_activity": "bool_or(activity = $activity)",
         "ends_with": "arg_max(activity, (ts, event_id)) = $activity",
         "rework": "count(*) > count(DISTINCT activity)",
     }[outcome]
-    params = {key: value for key, value in (("threshold", int(threshold_seconds or 0)), ("activity", activity or ""))
-              if "$" + key in outcome_sql}
+    params = {key: value for key, value in (
+        ("threshold", threshold_seconds if threshold_seconds is not None else 0),
+        ("activity", activity or ""),
+    ) if "$" + key in outcome_sql}
 
     def run(conn):
         conn.execute(f"""CREATE OR REPLACE TEMP TABLE co AS
@@ -242,7 +285,9 @@ def root_cause(log_id: str, outcome: str, case_type: str | None = None, *, thres
                 "outcome": {"kind": outcome, "threshold_seconds": threshold_seconds, "activity": activity}}
         if not n or y in (0, n):
             return {**base, "features_tested": 0, "associations": [],
-                    "note": "the outcome does not vary across cases, so nothing can be associated with it"}
+                    "note": "the outcome does not vary across cases, so nothing can be associated with it",
+                    "associations_are_not_causes": True,
+                    "temporal_order_not_checked": True}
         excluded = activity if outcome in {"contains_activity", "ends_with"} else None
         rows = conn.execute("""WITH f AS (
               SELECT DISTINCT case_id, 'activity' AS kind, activity AS value FROM ce WHERE activity IS DISTINCT FROM $excluded

@@ -1,4 +1,4 @@
-"""Versioned domain packs for saved event logs: order to cash first (#370 R23).
+"""Versioned domain packs for saved event logs: order to cash and procure to pay (#370 R23).
 
 A domain pack bundles definitions a process team would otherwise rebuild for every log of a well-known process:
 
@@ -14,9 +14,9 @@ Installing a newer version upgrades it and records the previous one; a downgrade
 resolved definition against the log in one call. Definitions that use an optional role left unmapped are listed
 as not applicable rather than silently dropped.
 
-The pack states assumptions about a typical order-to-cash process; it is not validated against any particular
-ERP. A mapping is the user's assertion that a log's names mean the pack's roles. Results describe the log, not
-verified business outcomes, policy compliance or the source system's completeness.
+Each pack states assumptions about a typical process; it is not validated against any particular ERP. A mapping
+is the user's assertion that a log's names mean the pack's roles. Results describe the log, not verified business
+outcomes, policy compliance or the source system's completeness.
 """
 from __future__ import annotations
 
@@ -59,6 +59,7 @@ _O2C_ROLES_ACTIVITIES = [
 
 ORDER_TO_CASH_1_0_0: dict[str, Any] = {
     "format": FORMAT, "pack_id": "order_to_cash", "version": "1.0.0", "title": "Order to cash",
+    "reference_goal": "Order-to-cash reference lifecycle",
     "description": ("Sales orders with items, deliveries, invoices and payments: the time from order to invoice "
                     "and from invoice to payment, rework through order changes, credit approval by someone other "
                     "than the order's creator, picking before shipping and the object relations around shipping "
@@ -132,7 +133,170 @@ ORDER_TO_CASH_1_0_0: dict[str, Any] = {
     ],
 }
 
-PACKS: dict[str, dict[str, dict[str, Any]]] = {"order_to_cash": {"1.0.0": ORDER_TO_CASH_1_0_0}}
+PROCURE_TO_PAY_1_0_0: dict[str, Any] = {
+    "format": FORMAT, "pack_id": "procure_to_pay", "version": "1.0.0", "title": "Procure to pay",
+    "description": ("Purchase requisitions, purchase orders, goods receipts, invoices and payments: three-way match "
+                    "(no invoice before the goods are received), no invoice without a purchase order, approval of "
+                    "orders by someone other than their buyer, goods received only for approved orders, delivery "
+                    "and payment times, and invoices paid exactly once."),
+    "object_types": [
+        {"role": "requisition", "label": "Purchase requisition", "required": False},
+        {"role": "purchase_order", "label": "Purchase order", "required": True},
+        {"role": "goods_receipt", "label": "Goods receipt", "required": False},
+        {"role": "invoice", "label": "Vendor invoice", "required": True},
+        {"role": "payment", "label": "Payment", "required": False},
+    ],
+    "activities": [
+        {"role": "create_requisition", "label": "Create requisition", "required": False},
+        {"role": "approve_requisition", "label": "Approve requisition", "required": False},
+        {"role": "create_po", "label": "Create purchase order", "required": True},
+        {"role": "approve_po", "label": "Approve purchase order", "required": False},
+        {"role": "change_po", "label": "Change purchase order", "required": False},
+        {"role": "receive_goods", "label": "Receive goods", "required": True},
+        {"role": "post_invoice", "label": "Post invoice", "required": True},
+        {"role": "pay_invoice", "label": "Pay invoice", "required": True},
+    ],
+    "parameters": [
+        {"name": "delivery_within_days", "label": "Delivery within (days of order)", "default": 14, "min": 1, "max": 365},
+        {"name": "payment_terms_days", "label": "Payment terms (days of invoice)", "default": 30, "min": 1, "max": 365},
+    ],
+    "metrics": [
+        {"case_type": "@requisition", "metric": {"name": "p2p_requisition_to_order", "kind": "time_between",
+                                                 "from_activity": "@create_requisition", "to_activity": "@create_po"}},
+        {"case_type": "@purchase_order", "metric": {"name": "p2p_order_to_receipt", "kind": "time_between",
+                                                    "from_activity": "@create_po", "to_activity": "@receive_goods"}},
+        {"case_type": "@purchase_order", "metric": {"name": "p2p_order_changes", "kind": "activity_count",
+                                                    "activity": "@change_po"}},
+        {"case_type": "@invoice", "metric": {"name": "p2p_invoice_to_payment", "kind": "time_between",
+                                             "from_activity": "@post_invoice", "to_activity": "@pay_invoice"}},
+    ],
+    "compliance": [
+        {"case_type": "@purchase_order", "rule": {"template": "precedence", "a": "@receive_goods", "b": "@post_invoice"}},
+        {"case_type": "@purchase_order", "rule": {"template": "response_within", "a": "@create_po", "b": "@receive_goods",
+                                                  "seconds": "$delivery_within_days"}},
+        {"case_type": "@purchase_order", "rule": {"template": "segregation_of_duties", "a": "@create_po",
+                                                  "b": "@approve_po"}},
+        {"case_type": "@purchase_order", "rule": {"template": "precedence", "a": "@approve_po", "b": "@receive_goods"}},
+        {"case_type": "@requisition", "rule": {"template": "precedence", "a": "@approve_requisition", "b": "@create_po"}},
+        {"case_type": "@invoice", "rule": {"template": "response_within", "a": "@post_invoice", "b": "@pay_invoice",
+                                           "seconds": "$payment_terms_days"}},
+        {"case_type": "@invoice", "rule": {"template": "existence", "a": "@pay_invoice", "min": 1, "max": 1}},
+    ],
+    "object_rules": [
+        {"template": "event_cardinality", "activity": "@post_invoice", "object_type": "@purchase_order", "min": 1},
+        {"template": "event_cardinality", "activity": "@receive_goods", "object_type": "@purchase_order", "min": 1, "max": 1},
+        {"template": "synchronization", "activity": "@post_invoice", "object_type": "@invoice",
+         "related_type": "@purchase_order", "required_activity": "@receive_goods"},
+    ],
+    "reference_model": {
+        "types": [
+            {"object_type": "@requisition", "steps": ["@create_requisition", {"optional": "@approve_requisition"},
+                                                      "@create_po"]},
+            {"object_type": "@purchase_order", "steps": ["@create_po", {"optional": "@approve_po"},
+                                                         {"optional": "@change_po"}, "@receive_goods", "@post_invoice"]},
+            {"object_type": "@goods_receipt", "steps": ["@receive_goods"]},
+            {"object_type": "@invoice", "steps": ["@post_invoice", "@pay_invoice"]},
+            {"object_type": "@payment", "steps": ["@pay_invoice"]},
+        ],
+        "arcs": [
+            {"activity": "@create_requisition", "object_type": "@requisition", "variable": False},
+            {"activity": "@approve_requisition", "object_type": "@requisition", "variable": False},
+            {"activity": "@create_po", "object_type": "@requisition", "variable": True},
+            {"activity": "@create_po", "object_type": "@purchase_order", "variable": False},
+            {"activity": "@approve_po", "object_type": "@purchase_order", "variable": False},
+            {"activity": "@change_po", "object_type": "@purchase_order", "variable": False},
+            {"activity": "@receive_goods", "object_type": "@purchase_order", "variable": False},
+            {"activity": "@receive_goods", "object_type": "@goods_receipt", "variable": False},
+            {"activity": "@post_invoice", "object_type": "@invoice", "variable": False},
+            {"activity": "@post_invoice", "object_type": "@purchase_order", "variable": True},
+            {"activity": "@pay_invoice", "object_type": "@invoice", "variable": True},
+            {"activity": "@pay_invoice", "object_type": "@payment", "variable": False},
+        ],
+    },
+    "assumptions": [
+        "Each purchase order is received once and invoiced once; partial deliveries or invoices show as deviations.",
+        "An invoice may cover several purchase orders, and a payment may settle several invoices.",
+        "Three-way match is checked as order of events only: amounts and quantities are not compared.",
+        "Segregation of duties compares the recorded resources of creating and approving the order; cases "
+        "without a recorded resource, which includes every OCEL import, are reported as unknown, never satisfied.",
+        "Delivery and payment terms are parameters with stated defaults, not your policy until set.",
+    ],
+}
+
+SERVICE_MANAGEMENT_1_0_0: dict[str, Any] = {
+    "format": FORMAT, "pack_id": "service_management", "version": "1.0.0", "title": "IT service management",
+    "description": ("Incidents from logging to resolution: time to assign and to resolve against response and "
+                    "resolution targets, reassignments between groups, reopened incidents, and resolution before "
+                    "closure. Works on a single-case CSV export as well as on an object-centric log."),
+    "object_types": [
+        {"role": "incident", "label": "Incident", "required": True},
+        {"role": "problem", "label": "Problem", "required": False},
+    ],
+    "activities": [
+        {"role": "log_incident", "label": "Log incident", "required": True},
+        {"role": "assign", "label": "Assign", "required": True},
+        {"role": "start_work", "label": "Start work", "required": False},
+        {"role": "reassign", "label": "Reassign", "required": False},
+        {"role": "resolve", "label": "Resolve", "required": True},
+        {"role": "reopen", "label": "Reopen", "required": False},
+        {"role": "close", "label": "Close", "required": False},
+    ],
+    "parameters": [
+        {"name": "response_hours", "label": "Assign within (hours of logging)", "unit": "hours",
+         "default": 4, "min": 0.25, "max": 720},
+        {"name": "resolution_hours", "label": "Resolve within (hours of logging)", "unit": "hours",
+         "default": 72, "min": 1, "max": 8760},
+    ],
+    "metrics": [
+        {"case_type": "@incident", "metric": {"name": "itsm_time_to_assign", "kind": "time_between",
+                                              "from_activity": "@log_incident", "to_activity": "@assign"}},
+        {"case_type": "@incident", "metric": {"name": "itsm_time_to_resolve", "kind": "time_between",
+                                              "from_activity": "@log_incident", "to_activity": "@resolve",
+                                              "to_occurrence": "last"}},
+        {"case_type": "@incident", "metric": {"name": "itsm_reassignments", "kind": "activity_count",
+                                              "activity": "@reassign"}},
+        {"case_type": "@incident", "metric": {"name": "itsm_reopens", "kind": "activity_count", "activity": "@reopen"}},
+    ],
+    "compliance": [
+        {"case_type": "@incident", "rule": {"template": "response_within", "a": "@log_incident", "b": "@assign",
+                                            "seconds": "$response_hours"}},
+        {"case_type": "@incident", "rule": {"template": "response_within", "a": "@log_incident", "b": "@resolve",
+                                            "seconds": "$resolution_hours"}},
+        {"case_type": "@incident", "rule": {"template": "precedence", "a": "@assign", "b": "@resolve"}},
+        {"case_type": "@incident", "rule": {"template": "existence", "a": "@reassign", "max": 2}},
+        {"case_type": "@incident", "rule": {"template": "existence", "a": "@reopen", "max": 0}},
+        {"case_type": "@incident", "rule": {"template": "precedence", "a": "@resolve", "b": "@close"}},
+    ],
+    "object_rules": [
+        {"template": "event_cardinality", "activity": "@resolve", "object_type": "@incident", "min": 1, "max": 1},
+        {"template": "object_cardinality", "object_type": "@problem", "related_type": "@incident", "min": 1},
+    ],
+    "reference_model": {
+        "types": [
+            {"object_type": "@incident", "steps": ["@log_incident", "@assign", {"optional": "@start_work"},
+                                                   "@resolve", {"optional": "@close"}]},
+        ],
+        "arcs": [
+            {"activity": "@log_incident", "object_type": "@incident", "variable": False},
+            {"activity": "@assign", "object_type": "@incident", "variable": False},
+            {"activity": "@start_work", "object_type": "@incident", "variable": False},
+            {"activity": "@resolve", "object_type": "@incident", "variable": False},
+            {"activity": "@close", "object_type": "@incident", "variable": False},
+        ],
+    },
+    "assumptions": [
+        "The reference lifecycle is the happy path: reassignments and reopenings show as deviations from it, by "
+        "design, and are also counted by their own rules.",
+        "More than two reassignments of one incident counts as ping-pong between groups.",
+        "Response and resolution are measured from the first logging to the first assignment and to each "
+        "resolution; time with the requester, on hold or outside support hours is not excluded.",
+        "Response and resolution targets are parameters with stated defaults, not your service levels until set.",
+    ],
+}
+
+PACKS: dict[str, dict[str, dict[str, Any]]] = {"order_to_cash": {"1.0.0": ORDER_TO_CASH_1_0_0},
+                                              "procure_to_pay": {"1.0.0": PROCURE_TO_PAY_1_0_0},
+                                              "service_management": {"1.0.0": SERVICE_MANAGEMENT_1_0_0}}
 
 
 class _Strict(BaseModel):
@@ -185,8 +349,13 @@ class _Unmapped(Exception):
         self.role = role
 
 
+UNIT_SECONDS = {"days": 86400, "hours": 3600}
+
+
 def _resolve(value: Any, names: dict[str, str], params: dict[str, float], key: str | None = None) -> Any:
-    """Replace ``@role`` with the mapped name and ``$parameter`` (days) with seconds; unmapped roles raise."""
+    """Replace ``@role`` with the mapped name and ``$parameter`` with seconds; unmapped roles raise.
+
+    ``params`` holds (value, seconds per unit) pairs; a parameter's unit is days unless the pack says hours."""
     if isinstance(value, dict):
         return {k: _resolve(v, names, params, k) for k, v in value.items()}
     if isinstance(value, list):
@@ -196,11 +365,12 @@ def _resolve(value: Any, names: dict[str, str], params: dict[str, float], key: s
             raise _Unmapped(value[1:])
         return names[value[1:]]
     if isinstance(value, str) and value.startswith("$") and key == "seconds":
-        return int(round(params[value[1:]] * 86400))
+        amount, unit = params[value[1:]]
+        return int(round(amount * unit))
     return value
 
 
-def _sequence_model(labels: list[tuple[str, bool]]) -> dict[str, Any]:
+def _sequence_model(labels: list[tuple[str, bool]], goal: str) -> dict[str, Any]:
     """A catalog process model for a sequence in which (label, optional) steps may be skipped."""
     nodes = [{"id": "start_1", "label": "Start", "kind": "start", "implementation": "unmapped"}]
     edges, rules, tails = [], [], [("start_1", None)]
@@ -226,7 +396,7 @@ def _sequence_model(labels: list[tuple[str, bool]]) -> dict[str, Any]:
             tails = [(act, None)]
     nodes.append({"id": "end_1", "label": "End", "kind": "end", "implementation": "unmapped"})
     edges += [{"source": s, "target": "end_1", "rule_id": r} for s, r in tails]
-    return {"format": "openworkgraph.process-model.v1", "goal": "Order-to-cash reference lifecycle", "owner_label": "",
+    return {"format": "openworkgraph.process-model.v1", "goal": goal, "owner_label": "",
             "baseline_path": [label for label, _ in labels][:40], "baseline_source": "selected_csv_variant",
             "baseline_coverage": "complete_supplied_path", "baseline_support_unit": "declared_cases",
             "supporting_case_count": 0, "activities": nodes, "transitions": edges, "business_rules": rules,
@@ -239,6 +409,8 @@ def resolve(pack: dict[str, Any], mapping: dict[str, dict[str, str]], params: di
     """Every definition of the pack with the log's names, and the ones an unmapped optional role leaves out."""
     names = {**mapping["object_types"], **mapping["activities"]}
     labels = {a["role"]: a["label"] for a in pack["activities"]}
+    units = {p["name"]: UNIT_SECONDS[p.get("unit", "days")] for p in pack["parameters"]}
+    params = {name: (value, units[name]) for name, value in params.items()}
     out: dict[str, Any] = {"metrics": [], "compliance": [], "object_rules": [], "not_applicable": []}
     for section in ("metrics", "compliance", "object_rules"):
         for n, item in enumerate(pack[section]):
@@ -258,7 +430,7 @@ def resolve(pack: dict[str, Any], mapping: dict[str, dict[str, str]], params: di
             out["not_applicable"].append({"section": "reference_model", "index": n, "unmapped_role": missing[0]})
             continue
         kept = [(labels[s[1:]], optional) for s, optional in steps if s[1:] in names]
-        types.append({"object_type": names[role], "process_model": _sequence_model(kept),
+        types.append({"object_type": names[role], "process_model": _sequence_model(kept, pack.get("reference_goal", pack["title"] + " reference lifecycle")),
                       "activities": {labels[s[1:]]: names[s[1:]] for s, _ in steps
                                      if s[1:] in names and labels[s[1:]] != names[s[1:]]}})
     modelled = {t["object_type"] for t in types}
@@ -458,7 +630,7 @@ def report(log_id: str, pack_id: str) -> dict[str, Any]:
         "mapping": record["mapping"], "parameters": record["parameters"], **sections,
         "not_applicable": definitions["not_applicable"], "assumptions": pack["assumptions"],
         "interpretation": ("Pack definitions applied to this log through your mapping. They state assumptions about a "
-                           "typical order-to-cash process, not your policy until you set the parameters, and are not "
+                           f"typical {pack['title'].lower()} process, not your policy until you set the parameters, and are not "
                            "validated against any particular source system. Results describe the log, not verified "
                            "business outcomes or compliance."),
         "source_system_validated": False, "policy_compliance_verified": False,

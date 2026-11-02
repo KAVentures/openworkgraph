@@ -6,7 +6,7 @@ No scheduling, external recipients, source writes or AI-visible permissions.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import hashlib
 import json
 import re
@@ -15,6 +15,10 @@ from . import event_log_workspace as workspace
 
 _RULE_ID = re.compile(r"sig_[0-9a-f]{16}\Z")
 _FINGERPRINT = re.compile(r"[0-9a-f]{64}\Z")
+
+
+def _now():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def log_basis(conn, log_id: str) -> list[int]:
@@ -91,12 +95,22 @@ def list_inbox(log_id: str) -> dict:
                 ON s.log_id=r.log_id AND s.rule_id=r.rule_id
                 WHERE s.log_id=? ORDER BY s.created_at,s.rule_id""", [log_id]).fetchall()
             basis = log_basis(conn, log_id)
+            snoozes = {rid: (fp, until) for rid, fp, until in conn.execute(
+                "SELECT rule_id,state_fingerprint,until_at FROM signal_snoozes WHERE log_id=?", [log_id]).fetchall()}
+            now = _now()
             items = []
             for rule_id, definition, when, state, fingerprint, acknowledged_at in records:
                 raw = json.loads(definition)
                 items.append(_state(log_id, rule_id, raw["name"], when, state,
                                     (fingerprint, acknowledged_at) if fingerprint else None,
                                     basis=basis))
+                item = items[-1]
+                snoozed = snoozes.get(rule_id)
+                item["snoozed_until"] = None
+                if (item["requires_review"] and snoozed and snoozed[0] == item["state_fingerprint"]
+                        and snoozed[1] > now):
+                    item.update(status="snoozed", requires_review=False,
+                                snoozed_until=snoozed[1].isoformat() + "Z")
         finally:
             conn.close()
     return {
@@ -132,6 +146,7 @@ def review(log_id: str, rule_id: str, body: dict, *, acknowledge: bool) -> dict:
                 existing = conn.execute(
                     "SELECT state_fingerprint,acknowledged_at FROM signal_reviews WHERE log_id=? AND rule_id=?",
                     [log_id, rule_id]).fetchone()
+                conn.execute("DELETE FROM signal_snoozes WHERE log_id=? AND rule_id=?", [log_id, rule_id])
                 if acknowledge and existing and existing[0] == current["state_fingerprint"]:
                     # Retrying an acknowledgement must not forge a new review
                     # time, or silently change the human's original decision.
@@ -157,4 +172,41 @@ def review(log_id: str, rule_id: str, body: dict, *, acknowledge: bool) -> dict:
             conn.close()
 
 
-__all__ = ["list_inbox", "review"]
+__all__ = ["list_inbox", "review", "snooze"]
+
+
+def snooze(log_id: str, rule_id: str, body: dict) -> dict:
+    """Defer only the exact triggered state; zero minutes resumes it."""
+    if (not isinstance(body, dict) or set(body) != {"state_fingerprint", "minutes"}
+            or not isinstance(body.get("state_fingerprint"), str)
+            or not _FINGERPRINT.fullmatch(body["state_fingerprint"])
+            or type(body.get("minutes")) is not int or not 0 <= body["minutes"] <= 43200):
+        raise workspace.EventLogWorkspaceError("current state_fingerprint and integer minutes (0–43200) required")
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            workspace._check_log(conn, log_id)
+            conn.execute("BEGIN TRANSACTION")
+            try:
+                definition, when, state = _row(conn, log_id, rule_id)
+                current = _state(log_id, rule_id, json.loads(definition)["name"], when, state,
+                                 basis=log_basis(conn, log_id))
+                if current["state_fingerprint"] != body["state_fingerprint"] or not current["triggered"]:
+                    raise workspace.EventLogWorkspaceError("signal is stale or not triggered; evaluate again")
+                reviewed = conn.execute("SELECT state_fingerprint FROM signal_reviews WHERE log_id=? AND rule_id=?", [log_id, rule_id]).fetchone()
+                if body["minutes"] and reviewed and reviewed[0] == current["state_fingerprint"]:
+                    raise workspace.EventLogWorkspaceError("reopen the acknowledged signal before snoozing")
+                now = _now()
+                existing = conn.execute("SELECT state_fingerprint,until_at FROM signal_snoozes WHERE log_id=? AND rule_id=?", [log_id, rule_id]).fetchone()
+                if body["minutes"] == 0:
+                    conn.execute("DELETE FROM signal_snoozes WHERE log_id=? AND rule_id=?", [log_id, rule_id])
+                elif not (existing and existing[0] == current["state_fingerprint"] and existing[1] > now):
+                    conn.execute("DELETE FROM signal_snoozes WHERE log_id=? AND rule_id=?", [log_id, rule_id])
+                    conn.execute("INSERT INTO signal_snoozes VALUES (?,?,?,?)", [log_id, rule_id, current["state_fingerprint"], now + timedelta(minutes=body["minutes"])])
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+        finally:
+            conn.close()
+    return list_inbox(log_id)
