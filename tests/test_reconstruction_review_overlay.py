@@ -870,6 +870,9 @@ def test_review_interleaving_context_competing_anchors_are_not_assignments():
 
 def test_review_interleaving_context_matching_anchors_and_scope_barriers():
     matching = [_event(1, A), _event(2, A), _event(3), _event(4, A), _event(5, A)]
+    # An unpaired copy action is deliberately not auto-joined by tabless
+    # two-sided focus recovery, but remains eligible for weak surface review.
+    matching[2]["event_type"] = "copy"
     packet = prepare_review_packet(matching)
     context = next(x for x in packet["eligible_candidates"] if x["event_id"] == "e03")[
         "interleaving_context"
