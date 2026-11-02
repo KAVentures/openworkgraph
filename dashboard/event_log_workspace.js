@@ -2236,6 +2236,24 @@
       operation:'subtract',left:{kind:'metric',name:second.name},right:{kind:'metric',name:first.name}};
     return [first,second,delta];
   }
+  // A selected activity's recorded contribution to the whole-case numeric total.
+  // A fraction is not necessarily bounded by 0..1 when recorded values have signs.
+  function activityShareMetrics(baseMetric){
+    if(baseMetric.kind!=='event_attribute_statistic'||baseMetric.statistic!=='total')
+      throw new Error('Choose Total as the within-case numeric statistic for an activity fraction.');
+    if(!baseMetric.activity)
+      throw new Error('Choose Only this activity to calculate its fraction of the whole case.');
+    if(baseMetric.from_activity||baseMetric.to_activity)
+      throw new Error('Clear stage start and end for a whole-case activity fraction.');
+    if(baseMetric.name.length>31)
+      throw new Error('Use a base metric name of at most 31 characters for an activity fraction.');
+    const selected={...baseMetric,name:baseMetric.name+'_selected'};
+    const whole={...baseMetric,name:baseMetric.name+'_all'};
+    delete whole.activity;
+    const fraction={name:baseMetric.name+'_fraction',kind:'arithmetic',expression_version:'1',
+      operation:'divide',left:{kind:'metric',name:selected.name},right:{kind:'metric',name:whole.name}};
+    return [selected,whole,fraction];
+  }
   const METRIC_KINDS=[['time_between','Time from one activity to another'],['activity_count','How often an activity occurs'],['event_attribute_statistic','Numeric event values within each case or stage'],['event_attribute_sum','Sum of a numeric event attribute'],['case_attribute_number','A numeric case attribute'],['arithmetic','Arithmetic on earlier metrics']];
   function metricText(m){
     if(m.kind==='time_between')return m.name+': time from the '+m.from_occurrence+' '+m.from_activity+' to the '+m.to_occurrence+' '+m.to_activity;
@@ -2311,6 +2329,7 @@
     const mCompare=button('Compare first and last completed stages (3 metrics)','secondary');mCompare.id='owgMetricCompareStages';
     const mCompareRelative=button('Compare fractional first-to-last change (4 metrics)','secondary');mCompareRelative.id='owgMetricCompareRelative';
     const mCompareActivities=button('Compare two activities (3 metrics)','secondary');mCompareActivities.id='owgMetricCompareActivities';
+    const mCompareShare=button('Compare selected activity with whole-case total (3 metrics)','secondary');mCompareShare.id='owgMetricCompareActivityShare';
     const mf={from:field('From activity',mFrom),fromOcc:field('Occurrence of the from activity',mFromOcc),to:field('To activity',mTo),toOcc:field('Occurrence of the to activity',mToOcc),
       activity:field('Activity to count',mActivity),attribute:field('Attribute',mAttribute),unit:field('Unit of the values',mUnit),
       statistic:field('Statistic within each case',mStatistic),missing:field('Missing numeric values',mMissing),
@@ -2322,7 +2341,7 @@
     const mSync=()=>{const k=mKind.value;show(mf.from,k==='time_between');show(mf.fromOcc,k==='time_between');show(mf.to,k==='time_between');show(mf.toOcc,k==='time_between');
       const numeric=k==='event_attribute_statistic';
       show(mf.activity,k==='activity_count');show(mf.attribute,numeric||k.endsWith('_number')||k.endsWith('_sum'));show(mf.unit,numeric||k.endsWith('_number')||k.endsWith('_sum'));
-      show(mf.statistic,numeric);show(mf.missing,numeric);show(mf.statActivity,numeric);show(mCompare,numeric);show(mCompareRelative,numeric);show(mCompareActivities,numeric);
+      show(mf.statistic,numeric);show(mf.missing,numeric);show(mf.statActivity,numeric);show(mCompare,numeric);show(mCompareRelative,numeric);show(mCompareActivities,numeric);show(mCompareShare,numeric);
       show(mf.compareActivityA,numeric);show(mf.compareActivityB,numeric);
       show(mf.stageFrom,numeric);show(mf.stageTo,numeric);show(mf.stageOccurrence,numeric&&(!!mStageFrom.value||!!mStageTo.value));
       show(mf.operation,k==='arithmetic');
@@ -2331,11 +2350,11 @@
     operands.left.kind.onchange=operands.right.kind.onchange=mSync;
     mKind.onchange=mStageFrom.onchange=mStageTo.onchange=mSync;mSync();
     const metricRow=el('div',null,'row');metricRow.style.alignItems='end';
-    metricRow.append(field('Case metric',mKind),field('Metric name',mName),...Object.values(mf),mAdd,mCompare,mCompareRelative,mCompareActivities,mSave);
+    metricRow.append(field('Case metric',mKind),field('Metric name',mName),...Object.values(mf),mAdd,mCompare,mCompareRelative,mCompareActivities,mCompareShare,mSave);
     const metricList=el('div');metricList.id='owgMetricList';
     const library=el('div');library.id='owgMetricLibrary';
     const metricBox=document.createElement('fieldset');metricBox.style.cssText='border:1px solid var(--line,#ccc);border-radius:6px;padding:8px;margin-top:8px';
-    const legend=el('legend','Case metrics (optional)');metricBox.append(legend,el('div','Define up to four values per case, then choose a measure. Numeric event statistics use only observed finite values; choose available or require all matching rows, optionally one activity and a first or last completed stage. Compare first and last completed stages adds three metrics atomically; fractional first-to-last change adds four, including (last minus first) divided by first, and selects a dimensionless ratio (2 means +200%, not 2%). A zero first-stage value leaves relative change unknown. Compare two distinct activities adds A, B, and signed B minus A as three ordinary metrics; absent or invalid matching values remain unknown. Clear stage boundaries and the single-activity filter before comparing. Unfinished stages are not completed. Times are in seconds; declared units are never converted. Arithmetic uses earlier metrics or typed constants; ratio means dimensionless. Add/subtract need identical units; division by zero is missing. Saved arithmetic templates refer to names: add their dependencies first. Save an analysis to retain all definitions together.','muted'),metricRow,metricList,library);
+    const legend=el('legend','Case metrics (optional)');metricBox.append(legend,el('div','Define up to four values per case, then choose a measure. Numeric event statistics use only observed finite values; choose available or require all matching rows, optionally one activity and a first or last completed stage. Compare first and last completed stages adds three metrics atomically; fractional first-to-last change adds four, including (last minus first) divided by first, and selects a dimensionless ratio (2 means +200%, not 2%). A zero first-stage value leaves relative change unknown. Compare two distinct activities adds A, B, and signed B minus A as three ordinary metrics; absent or invalid matching values remain unknown. Compare a selected activity with the whole case using Total and Only this activity: the selected total divided by all recorded totals is a ratio, not a guaranteed 0–100% share. Missing selected values or zero whole-case totals remain unknown. Clear stage boundaries and the single-activity filter before comparing. Unfinished stages are not completed. Times are in seconds; declared units are never converted. Arithmetic uses earlier metrics or typed constants; ratio means dimensionless. Add/subtract need identical units; division by zero is missing. Saved arithmetic templates refer to names: add their dependencies first. Save an analysis to retain all definitions together.','muted'),metricRow,metricList,library);
     const readMetric=()=>caseMetric({kind:mKind.value,name:mName.value,from:mFrom.value,to:mTo.value,fromOccurrence:mFromOcc.value,toOccurrence:mToOcc.value,activity:mActivity.value,attribute:mAttribute.value,unit:mUnit.value,statistic:mStatistic.value,missingPolicy:mMissing.value,statActivity:mStatActivity.value,stageFrom:mStageFrom.value,stageTo:mStageTo.value,stageOccurrence:mStageOccurrence.value,operation:mOperation.value,
       ...Object.fromEntries(Object.entries(operands).flatMap(([side,controls])=>Object.entries(controls).map(([key,node])=>[side+key[0].toUpperCase()+key.slice(1),node.value])))});
     function useMetric(metric){
@@ -2434,6 +2453,21 @@
         level.value='cases';sync();
         measure1.value='avg:metric:'+proposed[2].name;measure2.value='';
         message.textContent='Added activity A, activity B, and signed B minus A metrics. Missing activity values remain unknown, never zero.';
+      }catch(error){message.textContent=error.message;}
+    };
+    mCompareShare.onclick=()=>{
+      try{
+        const proposed=activityShareMetrics(readMetric());
+        if(metrics.length+proposed.length>4)
+          throw new Error('An activity fraction needs three free metric slots (four maximum). Remove other metrics first.');
+        const existing=new Set(metrics.map(m=>m.name));
+        if(proposed.some(m=>existing.has(m.name)))
+          throw new Error('An activity fraction metric name already exists. Choose a different base name.');
+        // The numerator, denominator and typed division are one atomic addition.
+        metrics.push(...proposed);renderMetrics();
+        level.value='cases';sync();
+        measure1.value='avg:metric:'+proposed[2].name;measure2.value='';
+        message.textContent='Added selected activity total, whole-case total and their fraction. Missing values and zero denominators remain unknown; signed totals may produce ratios outside 0–1.';
       }catch(error){message.textContent=error.message;}
     };
     mSave.onclick=async()=>{try{await api(base()+'/metrics',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({metric:readMetric()})});message.textContent='Metric saved for reuse.';await refreshLibrary();}catch(error){message.textContent=error.message;}};
@@ -2956,6 +2990,6 @@
         (p.previous_window_coverage_after===null?'.':' and '+pct(p.previous_window_coverage_after)+' of the window before.'):null};
   }
 
-  window.__owgEventLogModel={simBatch,simPriorities,objectModelArcs,objectModelText,visitRows,simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,stageComparisonMetrics,activityComparisonMetrics,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths,packMapping,packGuess,packReportRows,monitoringRows,impactSpec,impactRows};
+  window.__owgEventLogModel={simBatch,simPriorities,objectModelArcs,objectModelText,visitRows,simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,stageComparisonMetrics,activityComparisonMetrics,activityShareMetrics,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths,packMapping,packGuess,packReportRows,monitoringRows,impactSpec,impactRows};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
