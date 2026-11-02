@@ -2538,6 +2538,9 @@
           if(operand.kind==='metric'&&!metrics.slice(0,index).some(m=>m.name===operand.name))
             throw new Error('Arithmetic operands must reference an earlier metric.');
         metrics[index]=next;editingMetric=null;mUpdate.disabled=true;renderMetrics();
+        // A previous result and its export/share grants belong to the old definition.
+        resetSharing();last=null;lastSpec=null;out.replaceChildren();exports.enable(false);
+        save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;
         message.textContent='Metric updated in this draft. Run analysis to recalculate before saving or exporting.';
       }catch(error){message.textContent=error.message;}
     };
