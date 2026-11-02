@@ -185,6 +185,146 @@ def _snapshot(events: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, A
     return packet, linked, groups
 
 
+
+AUTO_PROPOSAL_FORMAT = "openworkgraph.reconstruction-auto-proposals.v1"
+
+
+def propose_automatic_review(
+    events: list[dict[str, Any]], packet: dict[str, Any],
+) -> dict[str, Any]:
+    """Conservative *experimental* deterministic membership proposals.
+
+    The production linker supplies the eligible direct weak candidates.
+    Matching literal source-record anchors on both sides of one singleton
+    suggest, but do not prove, its membership. No canonical join occurs.
+    This deliberately abstains on two-hop paths and competing candidates.
+    """
+    expected, linked, groups = _snapshot(events)
+    if type(packet) is not dict or packet != expected:
+        raise ValueError("review packet is stale or altered; prepare again")
+    rows = linked["rows"]
+    positions = {row["event_id"]: index for index, row in enumerate(rows)}
+    item_of = {
+        event_id: f"linked_item_{index:02d}"
+        for index, members in enumerate(groups, start=1)
+        for event_id in members
+    }
+    proposals: list[dict[str, str]] = []
+    abstentions: dict[str, int] = {}
+
+    def abstain(reason: str) -> None:
+        abstentions[reason] = abstentions.get(reason, 0) + 1
+
+    for candidate in expected["eligible_candidates"]:
+        if candidate["evidence_hops"] != 1:
+            abstain("two_hop_requires_human_review")
+            continue
+        targets = candidate["candidate_items"]
+        if candidate["candidate_items_truncated"] or len(targets) != 1:
+            abstain("competing_or_incomplete_candidates")
+            continue
+        pivot = rows[positions[candidate["event_id"]]]
+        scope = pivot.get("scope")
+        if (
+            not isinstance(scope, tuple) or len(scope) != 4
+            or not all(isinstance(part, str) and part for part in scope)
+            or not pivot.get("app") or pivot.get("source") in ("", "unknown")
+            or pivot.get("reference_tainted") or pivot.get("ephemeral_claim_tainted")
+            or pivot.get("action_claim_malformed") or pivot.get("ref")
+        ):
+            abstain("invalid_or_incomplete_capture")
+            continue
+
+        def anchor(direction: int) -> tuple[str | None, Any] | None:
+            previous_time = pivot["observed_at"]
+            for distance in range(1, _MAX_CONTEXT_INTERVENING + 2):
+                index = positions[pivot["event_id"]] + direction * distance
+                if not 0 <= index < len(rows):
+                    return None
+                row = rows[index]
+                timestamp = row["observed_at"]
+                if (
+                    row.get("scope") != scope or row.get("app") != pivot["app"]
+                    or row.get("source") != pivot["source"]
+                    or row.get("reference_tainted")
+                    or row.get("ephemeral_claim_tainted")
+                    or row.get("action_claim_malformed")
+                    or (direction < 0 and timestamp >= previous_time)
+                    or (direction > 0 and timestamp <= previous_time)
+                ):
+                    return None
+                previous_time = timestamp
+                if row.get("ref"):
+                    return item_of.get(row["event_id"]), row["ref"]
+            return None
+
+        before, after = anchor(-1), anchor(1)
+        target = targets[0]["item_id"]
+        if (
+            before is None or after is None
+            or before[0] != target or after[0] != target
+            or before[1] != after[1]
+        ):
+            abstain("missing_or_conflicting_exact_record_brackets")
+            continue
+        proposals.append({
+            "event_id": candidate["event_id"],
+            "item_id": target,
+            "basis": "same_literal_record_brackets_and_unique_weak_candidate",
+        })
+    return {
+        "format": AUTO_PROPOSAL_FORMAT,
+        "evidence_sha256": expected["evidence_sha256"],
+        "proposed_assignments": proposals,
+        "proposal_count": len(proposals),
+        "abstention_counts": dict(sorted(abstentions.items())),
+        "visible_candidate_count": len(expected["eligible_candidates"]),
+        "eligible_review_total": expected["eligible_review_total"],
+        "eligible_review_truncated": expected["eligible_review_truncated"],
+        "case_identity_verified": False,
+        "automatic_proposals_not_canonical_membership": True,
+        "canonical_membership_unchanged": True,
+        "authorizes_business_action": False,
+    }
+
+
+def score_automatic_proposals(
+    events: list[dict[str, Any]], packet: dict[str, Any], truth: dict[str, Any],
+) -> dict[str, Any]:
+    """Compare deterministic proposals with production baseline on independent labels.
+
+    Reuse the existing complete-annotation scorer, not human decisions or a
+    different metric definition. These results are a local *experimental*
+    automatic overlay, not the shipped linker's F1 or frozen holdout.
+    """
+    proposed = propose_automatic_review(events, packet)
+    decisions = {
+        "format": DECISION_FORMAT,
+        "evidence_sha256": proposed["evidence_sha256"],
+        "decisions": [
+            {"event_id": entry["event_id"], "item_id": entry["item_id"],
+             "action": "confirm"}
+            for entry in proposed["proposed_assignments"]
+        ],
+    }
+    measured = score_review(events, packet, decisions, truth)
+    return {
+        "format": "openworkgraph.reconstruction-auto-proposal-score.v1",
+        "annotated_event_count": measured["annotated_event_count"],
+        "visible_candidate_count": proposed["visible_candidate_count"],
+        "proposal_count": proposed["proposal_count"],
+        "abstention_counts": proposed["abstention_counts"],
+        "eligible_review_truncated": proposed["eligible_review_truncated"],
+        "automatic_baseline": measured["automatic_baseline"],
+        "experimental_automatic_proposal_overlay": measured["human_assisted_overlay"],
+        "canonical_membership_unchanged": True,
+        "preregistered_family_holdout": False,
+        "production_linker_changed": False,
+        "real_pilot_validated": False,
+        "authorizes_business_action": False,
+    }
+
+
 def prepare_review_packet(events: list[dict[str, Any]]) -> dict[str, Any]:
     """Produce only opaque IDs and typed candidate bases; never raw work text."""
     return _snapshot(events)[0]
