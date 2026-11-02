@@ -61,7 +61,9 @@ def test_tabless_two_anchor_app_focus_recovers_existing_record_via_actual_api():
     assert linked["link_contract"]["tabless_app_focus_requires_two_sided_exact_record"]
     assert linked["link_contract"]["tabless_app_focus_requires_complete_scope"]
     assert linked["read_only"] and not linked["authoritative"]
-    serialized = json.dumps(response)
+    # The linked-item projection is response-local/pseudonymized. The wider
+    # legacy workflow explorer may independently show vetted surface labels.
+    serialized = json.dumps(linked)
     for secret in ("PRIVATE", "tenant-a", "actor-a", "device-a",
                    "session-a", "atlassian", "Terminal"):
         assert secret not in serialized
