@@ -11,6 +11,18 @@ This is an additive, local-dashboard **guided navigation** feature for [#370 R5/
 5. After an explicitly requested export, select the exact recorded project in the journey. **Review reports for this exact project** opens the existing imported-report link review with that project selected. **Prepare source check for this exact project** opens the existing source-check form with that project selected, but **does not** supply a record reference, check its consent box, contact a provider, download a receipt or execute a business action. Source-check reads require the existing separate explicit confirmation and source permissions.
 6. After closing/restarting the dashboard, reopen the idea and click **View evidence journey** again. The stages are reconstructed from stored server-side references, not browser session state. Changed or deleted source data, changed process revisions, historical idea/project revisions and missing reported specifications remain visible. The UI does not substitute a newer process or project.
 
+## Triage outstanding handoff blockers on the first journey view
+
+Once an exact exported project is selected, **Handoff review** lists each currently outstanding requirement with a safe, context-specific next step. No prior review packet or import is required. Use Tab to select an available action and Enter/Space to open the existing control for **that exact project**:
+
+- A changed but still available saved design opens only its pinned revision. An unavailable or missing revision disables that action rather than substituting a newer process.
+- Missing human approval or a historical idea revision focuses the existing opportunity assessment/decision. A historical export remains historical; navigation cannot make it current.
+- Missing, mismatched, or truncated imported reports open the report-link review with the exact selected project preselected. A truncated summary remains incomplete.
+- The independently unverified execution/outcome blocker can open the existing separately consent-gated source-state check, with the project preselected and source consent **unchecked**. A source-state receipt is not independent proof of execution, causality, value, or agent permission.
+- Missing, changed or truncated dataset/cohort origins provide explicit instructions to return to the originating workspace, recheck consent, retention and completeness, and create a new linked reviewed basis when necessary. The pipeline cannot repair or certify source completeness.
+
+Clicking any action **never removes a blocker** or changes approval state. These are navigation controls, not remediation, evidence verification, provider reads, project exports, or execution. Source-check submission retains its own record-reference and explicit-consent requirements. Changing idea/project invalidates old controls; after reviewing, refresh the authenticated journey to see the current saved state.
+
 ## Explicit handoff review packet
 
 After opening **View evidence journey** and choosing a recorded project, use **Download review packet for this exact project**. This is a local, user-initiated JSON download with format `openworkgraph.evidence-handoff-review.v1`. It binds the chosen project ID, specification/archive hashes, saved process revision/digest and current source-status check, idea revision/state, source snapshot checks, linked reported-specification statuses, and recorded source-check document hashes. Switching the selected project rebuilds the packet for that project. Reopening after restart fetches the stored references again; refreshing the journey discards the prior UI selection and packet controls.
