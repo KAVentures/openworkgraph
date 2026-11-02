@@ -1138,7 +1138,7 @@ const path=require('node:path');
        await page.locator('#owgMetricSave').click();
        await page.getByRole('button',{name:'Add saved metric '+metricName,exact:true}).waitFor();
        const [pairCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCsv').click()]);
-       assert.match(await fs.readFile(await pairCsv.path(),'utf8'),/avg_metric:pair_absolute_difference\\r\\n3/);
+       assert.match(await fs.readFile(await pairCsv.path(),'utf8'),/avg_metric:pair_absolute_difference\r\n3/);
        await page.locator('#owgAnalysisName').fill('Pairwise recorded EUR difference');
        await page.locator('#owgAnalysisSave').click();
        await page.locator('#owgAnalysisStatus').filter({hasText:'Analysis saved.'}).waitFor();
