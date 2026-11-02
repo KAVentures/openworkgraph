@@ -325,9 +325,13 @@ def _operate(admitted: dict[str, Any], signature: tuple, *, scope: str,
             raise CaseDeclarationError("invalid explicit operation dispute")
     elif mode != "history":
         raise CaseDeclarationError("unsupported operation evidence action")
+    # Review deletion holds the review lock while purging this SQLite file.
+    # Never acquire that review lock while holding our SQLite write lock:
+    # the reverse order would deadlock with explicit revocation. Admission
+    # before and after the transaction is best-effort local fencing only.
+    guard()
     with _database(create=mode == "check") as db:
         if db is None:
-            guard()
             return _result(ref, [])
         db.execute("BEGIN IMMEDIATE")
         try:
@@ -358,13 +362,15 @@ def _operate(admitted: dict[str, Any], signature: tuple, *, scope: str,
                 )
                 _insert(db, event)
                 rows.append(event)
-            guard()  # re-admit owner graph, source and consent while write lock held
             result = _result(ref, rows)
             db.execute("COMMIT")
-            return result
         except Exception:
             db.execute("ROLLBACK")
             raise
+    # A revoked review/source is denied even if it changed during the write.
+    # The revocation path itself scrubs the ledger. No distributed fence claim.
+    guard()
+    return result
 
 
 def append_operation_evidence(admitted: dict[str, Any], signature: tuple, *,
