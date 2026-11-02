@@ -148,7 +148,7 @@ def _previous(path, expected_sha256, scope, namespace, cases):
     try:
         stamp = prior["checked_at_utc"]
         if (type(stamp) is not str
-                or re.fullmatch(r"\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z", stamp) is None):
+                or re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", stamp) is None):
             raise ValueError("invalid timestamp")
         datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ")
         rows = prior["case_states"]
