@@ -2350,7 +2350,7 @@
   }
 
   function analysisSection(activityNames){
-    const metrics=[];
+    const metrics=[];let editingMetric=null;
     const box=section('Build an analysis');box.id='owgEventLogAnalysis';
     box.appendChild(el('div','Group cases or events by up to two dimensions and choose what to measure. The choices are fixed, so no query text is ever run directly.','muted'));
     const level=select('owgAnalysisLevel',[['cases','Cases'],['events','Events']]);
@@ -2401,6 +2401,7 @@
       operands[side].value.step='any';operands[side].unit.maxLength=20;
     }
     const mAdd=button('Add metric to this analysis','secondary');mAdd.id='owgMetricAdd';
+    const mUpdate=button('Update selected metric','secondary');mUpdate.id='owgMetricUpdate';mUpdate.disabled=true;
     const mSave=button('Save metric for reuse','secondary');mSave.id='owgMetricSave';
     const mCompare=button('Compare first and last completed stages (3 metrics)','secondary');mCompare.id='owgMetricCompareStages';
     const mCompareRelative=button('Compare fractional first-to-last change (4 metrics)','secondary');mCompareRelative.id='owgMetricCompareRelative';
@@ -2426,7 +2427,7 @@
     operands.left.kind.onchange=operands.right.kind.onchange=mSync;
     mKind.onchange=mStageFrom.onchange=mStageTo.onchange=mSync;mSync();
     const metricRow=el('div',null,'row');metricRow.style.alignItems='end';
-    metricRow.append(field('Case metric',mKind),field('Metric name',mName),...Object.values(mf),mAdd,mCompare,mCompareRelative,mCompareActivities,mCompareShare,mSave);
+    metricRow.append(field('Case metric',mKind),field('Metric name',mName),...Object.values(mf),mAdd,mUpdate,mCompare,mCompareRelative,mCompareActivities,mCompareShare,mSave);
     const metricList=el('div');metricList.id='owgMetricList';
     const library=el('div');library.id='owgMetricLibrary';
     const metricBox=document.createElement('fieldset');metricBox.style.cssText='border:1px solid var(--line,#ccc);border-radius:6px;padding:8px;margin-top:8px';
@@ -2440,15 +2441,42 @@
       metrics.push(metric);renderMetrics();
     }
     function renderMetrics(){
-      metricList.replaceChildren(...metrics.map((m,i)=>{const item=el('div',metricText(m)+' ');const rm=button('Remove','secondary');rm.setAttribute('aria-label','Remove metric '+m.name);rm.onclick=()=>{
+      metricList.replaceChildren(...metrics.map((m,i)=>{const item=el('div',metricText(m)+' ');
+        const edit=button('Edit','secondary');edit.setAttribute('aria-label','Edit metric '+m.name);
+        edit.onclick=()=>{try{populateMetric(m);editingMetric=m.name;mUpdate.disabled=false;message.textContent='Editing '+m.name+'. Update the selected metric to apply changes; the saved analysis remains unchanged.';}catch(error){message.textContent=error.message;}};
+        const rm=button('Remove','secondary');rm.setAttribute('aria-label','Remove metric '+m.name);rm.onclick=()=>{
         const dependent=metrics.find(x=>x.kind==='arithmetic'&&[x.left,x.right].some(o=>o.kind==='metric'&&o.name===m.name));
         if(dependent){message.textContent='Remove dependent metric '+dependent.name+' first.';return;}
-        metrics.splice(i,1);renderMetrics();};item.appendChild(rm);return item;}));
+        metrics.splice(i,1);if(editingMetric===m.name){editingMetric=null;mUpdate.disabled=true;}renderMetrics();};item.append(edit,rm);return item;}));
       for(const controls of Object.values(operands)){
         const keep=controls.metric.value;setOptions(controls.metric,metrics.length?metrics.map(m=>[m.name,m.name]):[['','(add an earlier metric)']]);
         if(metrics.some(m=>m.name===keep))controls.metric.value=keep;
       }
       sync();
+    }
+    function populateMetric(m){
+      const choose=(control,value)=>{const v=String(value||'');if(v&&![...control.options].some(o=>o.value===v))throw new Error('This metric references an activity no longer listed in the log; it can still be run.');control.value=v;};
+      mKind.value=m.kind;mName.value=m.name;
+      if(m.kind==='time_between'){
+        choose(mFrom,m.from_activity);choose(mTo,m.to_activity);
+        mFromOcc.value=m.from_occurrence||'first';mToOcc.value=m.to_occurrence||'first';
+      }else if(m.kind==='activity_count')choose(mActivity,m.activity);
+      else if(m.kind==='event_attribute_statistic'||m.kind==='event_attribute_sum'||m.kind==='case_attribute_number'){
+        mAttribute.value=m.attribute||'';mUnit.value=m.unit||'';
+        if(m.kind==='event_attribute_statistic'){
+          mStatistic.value=m.statistic;mMissing.value=m.missing_policy||'available';
+          choose(mStatActivity,m.activity);choose(mStageFrom,m.from_activity);choose(mStageTo,m.to_activity);
+          mStageOccurrence.value=m.stage_occurrence||'first';
+        }
+      }else if(m.kind==='arithmetic'){
+        mOperation.value=m.operation;
+        for(const side of ['left','right']){
+          const operand=m[side],controls=operands[side];controls.kind.value=operand.kind;
+          if(operand.kind==='metric')controls.metric.value=operand.name;
+          else{controls.value.value=String(operand.value);controls.unit.value=operand.unit;}
+        }
+      }
+      mSync();
     }
     const saveRow=el('div',null,'row');saveRow.style.alignItems='end';saveRow.append(field('Name',name),save);
     const message=el('div',null,'muted');message.id='owgAnalysisStatus';message.setAttribute('role','status');
@@ -2498,6 +2526,21 @@
       el('p','Local jobs have a two-minute deadline including queue time. They use the log when execution starts; results are static. Results expire after ten minutes or restart. Leaving this view stops polling; work may continue until its deadline. Nothing is uploaded.','muted'),
       row,metricBox,message,out,exports.node,prepareShare,prepareCases,sharing,saveRow,savedList);
     mAdd.onclick=()=>{try{useMetric(readMetric());message.textContent='Metric added; choose it under Measure.';}catch(error){message.textContent=error.message;}};
+    mUpdate.onclick=()=>{
+      try{
+        const index=metrics.findIndex(m=>m.name===editingMetric);
+        if(index<0)throw new Error('Select a metric to edit first.');
+        const next=readMetric(),old=editingMetric;
+        if(next.name!==old&&metrics.some(m=>m.name===next.name))throw new Error('Another metric already has that name.');
+        if(next.name!==old&&metrics.some(m=>m.kind==='arithmetic'&&[m.left,m.right].some(o=>o.kind==='metric'&&o.name===old)))
+          throw new Error('This metric has dependents. Keep its name or update dependents first.');
+        if(next.kind==='arithmetic')for(const operand of [next.left,next.right])
+          if(operand.kind==='metric'&&!metrics.slice(0,index).some(m=>m.name===operand.name))
+            throw new Error('Arithmetic operands must reference an earlier metric.');
+        metrics[index]=next;editingMetric=null;mUpdate.disabled=true;renderMetrics();
+        message.textContent='Metric updated in this draft. Run analysis to recalculate before saving or exporting.';
+      }catch(error){message.textContent=error.message;}
+    };
     function addStageComparison(relative){
       try{
         const proposed=stageComparisonMetrics(readMetric(),relative);
@@ -2628,7 +2671,7 @@
             // All checks have passed; replace the draft in one synchronous operation.
             level.value=draft.level;
             metrics.splice(0,metrics.length,...draft.metrics);
-            renderMetrics();
+            editingMetric=null;mUpdate.disabled=true;renderMetrics();
             dim1.value=draft.dim1;dim2.value=draft.dim2;
             attr1.value=draft.attr1;attr2.value=draft.attr2;
             hours.value=draft.hours;endsWith.value=draft.endsWith;
