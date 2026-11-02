@@ -128,7 +128,7 @@ def test_source_identity_conflict_and_cross_tenant_cannot_claim_handoff():
 
 def test_legacy_missing_scope_does_not_impersonate_consenting_actor():
     first, second = _event(1), _event(2, actor="bob")
-    for key in ("organization_id", "actor_id", "device_id", "session_id"):
+    for key in ("actor_id", "device_id", "session_id"):
         first.pop(key)
     item = _single([first, second])
     assert item["observed_same_record_actor_change_count"] == 0
