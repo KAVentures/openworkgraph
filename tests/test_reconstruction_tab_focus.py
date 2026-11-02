@@ -46,7 +46,8 @@ def test_two_sided_focus_attaches_only_loose_observation_to_existing_record():
     assert item["confidence"] == 0.72
     assert item["cross_record_join"] is False
     assert result["observed_bracketed_tab_focus_links"] == 1
-    assert result["link_contract"]["multiplexed_tab_focus_requires_global_two_sided_same_record_evidence"]
+    assert not result["link_contract"]["multiplexed_tab_focus_requires_global_two_sided_same_record_evidence"]
+    assert result["link_contract"]["multiplexed_tab_focus_requires_two_sided_same_tab_record_evidence"]
     assert result["unlinked_observation_count"] == 1
     assert "PRIVATE" not in json.dumps(result)
     assert "atlassian" not in json.dumps(result)
@@ -132,3 +133,101 @@ def test_conflicting_tab_claim_vetoes_focus_without_erasing_same_record():
     assert result["observed_bracketed_tab_focus_links"] == 0
     assert ("e01", "e03") in groups(result)
     assert result["unlinked_observation_count"] == 2
+
+
+def test_interleaved_other_tab_recovers_same_record_without_merging_foreign_case():
+    trace = [
+        event(1, A), event(2), event(3, C, tab="other"),
+        event(4, C, tab="other"), event(5, A), event(6, B),
+    ]
+    # The real workflow-evidence API is the public integration surface.
+    response = workflow_evidence.list_workflow_evidence_candidates(_raw_events=trace)
+    result = response["linked_work_items"]
+    items = groups(result)
+    assert set(items) == {("e01", "e02", "e05"), ("e03", "e04")}
+    assert items[("e01", "e02", "e05")]["link_basis"] == {
+        "same_record": 1, "same_tab_interleaved_bracketed_record": 1,
+    }
+    assert items[("e01", "e02", "e05")]["confidence"] == 0.68
+    assert items[("e01", "e02", "e05")]["activity_segment_count"] == 2
+    assert result["observed_bracketed_tab_focus_links"] == 1
+    assert result["observed_interleaved_tab_focus_links"] == 1
+    assert result["unlinked_observation_count"] == 1
+    assert result["link_contract"]["interleaved_tab_focus_requires_explicit_distinct_tab"]
+    assert result["link_contract"]["interleaved_tab_focus_has_bounded_foreign_and_loose_events"]
+    assert result["read_only"] and not result["authoritative"]
+    serialized = json.dumps(response)
+    for secret in ("PRIVATE", "tenant-a", "actor-a", "device-a", "session-a", "atlassian"):
+        assert secret not in serialized
+
+
+def test_interleaved_tab_recovers_multiple_loose_steps_but_no_foreign_membership():
+    result = linked_work_items([
+        event(1, A), event(2), event(3, C, tab="other"),
+        event(4), event(5, A), event(6, B),
+    ])
+    item = groups(result)[("e01", "e02", "e04", "e05")]
+    assert item["link_basis"]["same_tab_interleaved_bracketed_record"] == 2
+    assert result["observed_interleaved_tab_focus_links"] == 2
+    assert result["unlinked_observation_count"] == 2
+    assert not item["cross_record_join"]
+
+
+def test_interleaved_tab_abstains_on_unknown_competing_or_untrusted_foreign_rows():
+    foreign_rows = [
+        event(3, C, tab=None),
+        event(3, C, tab="shared"),
+        event(3, C, tab="other", app="Different Browser"),
+        event(3, C, tab="other", source="desktop_sensor"),
+        event(3, C, tab="other", transfer="ambiguous"),
+    ]
+    wrong_tenant = event(3, C, tab="other")
+    wrong_tenant["organization_id"] = "tenant-b"
+    foreign_rows.append(wrong_tenant)
+    conflicting_tab = event(3, C, tab="other")
+    conflicting_tab["tab_context_id"] = "contradictory-tab"
+    foreign_rows.append(conflicting_tab)
+    malformed_action = event(3, C, tab="other")
+    malformed_action["event_type"] = None
+    foreign_rows.append(malformed_action)
+    for foreign in foreign_rows:
+        result = linked_work_items([event(1, A), event(2), foreign, event(4, A), event(5, B)])
+        assert result["observed_interleaved_tab_focus_links"] == 0
+        assert result["observed_bracketed_tab_focus_links"] == 0
+        assert ("e01", "e02", "e04") not in groups(result)
+
+
+def test_interleaved_tab_timestamp_ties_and_clipboard_anchors_abstain():
+    for tie_to in (2, 4):
+        trace = [event(1, A), event(2), event(3, C, tab="other"),
+                 event(4, A), event(5, B)]
+        trace[2]["observed_at"] = trace[tie_to - 1]["observed_at"]
+        result = linked_work_items(trace)
+        assert result["observed_interleaved_tab_focus_links"] == 0
+    for transfer_at in (0, 3):
+        trace = [event(1, A), event(2), event(3, C, tab="other"),
+                 event(4, A), event(5, B)]
+        trace[transfer_at]["metadata"]["clipboard_transfer_id"] = "x"
+        result = linked_work_items(trace)
+        assert result["observed_interleaved_tab_focus_links"] == 0
+
+
+def test_interleaved_tab_refuses_unbounded_foreign_or_loose_span():
+    too_many_foreign = ([event(1, A), event(2)]
+                        + [event(i, C, tab="other") for i in range(3, 20)]
+                        + [event(20, A), event(21, B)])
+    assert linked_work_items(too_many_foreign)["observed_interleaved_tab_focus_links"] == 0
+    too_many_loose = ([event(1, A)] + [event(i) for i in range(2, 11)]
+                      + [event(11, C, tab="other"), event(12, A), event(13, B)])
+    assert linked_work_items(too_many_loose)["observed_interleaved_tab_focus_links"] == 0
+
+
+def test_interleaved_tab_recomputes_from_retained_events_not_stale_membership():
+    trace = [event(1, A), event(2), event(3, C, tab="other"),
+             event(4, A), event(5, B)]
+    assert linked_work_items(trace)["observed_interleaved_tab_focus_links"] == 1
+    retained = [row for row in trace if row["event_id"] != "e04"]
+    result = linked_work_items(retained)
+    assert result["observed_interleaved_tab_focus_links"] == 0
+    assert ("e01", "e02") not in groups(result)
+    assert result["unlinked_observation_count"] >= 2
