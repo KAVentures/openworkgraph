@@ -718,12 +718,75 @@ const path=require('node:path');
    await audit(page,'#owgWorkflowExplorer','Explicit source-backed design review');
    await page.locator('#owgExplorerDesignConfirmed').check();
    assert.equal(await continueDesign.isDisabled(),false);
+   // Portable, fingerprint-only design review: reopening never restores consent,
+   // source inspection, or human approval, even when the same revision matches.
+   const checkpointDownload=page.getByRole('button',{name:'Download reviewed design checkpoint',exact:true});
+   assert.equal(await checkpointDownload.isDisabled(),false);
+   const checkpointPending=page.waitForEvent('download');
+   await checkpointDownload.focus();await page.keyboard.press('Enter');
+   const checkpointArtifact=await checkpointPending;
+   const checkpointBytes=await fs.readFile(await checkpointArtifact.path());
+   const checkpoint=JSON.parse(checkpointBytes.toString('utf8'));
+   assert.equal(checkpoint.schema,'openworkgraph.observed_design_checkpoint.v1');
+   assert.equal(checkpoint.execution_permitted,false);
+   assert.equal(checkpoint.source_identity_verified,false);
+   assert.equal(checkpoint.process_saved,false);
+   assert.equal(checkpoint.approval_restored_on_import,false);
+   assert.equal(checkpoint.reviewed_group.revision,3);
+   assert.match(checkpoint.selected_evidence.fingerprint_sha256,/^[0-9a-f]{64}$/);
+   assert.equal(checkpointBytes.includes(Buffer.from('execution:design_ref')),false);
+   assert.equal(checkpointBytes.includes(Buffer.from('Read case')),false);
+   await page.evaluate(()=>{
+     window.owgWorkflowExplorer.showReviewedGroup({
+       label:'Design review fixture',workflow_id:'design_fixture',revision:3,
+       bundle:{selector:{execution_ids:['execution:design_ref'],selected_execution_count:1},
+         structural_alignment:{structural_sequence_variants:[{exact_variants:[{
+           readable_steps:['Read case','Check exception'],
+           structural_steps:['action:read','action:check'],
+           execution_count:4,execution_ids:['execution:design_ref']
+         }]}]}}
+     });
+   });
+   await page.locator('#owgExplorerDetail svg g[role=button]').first().click();
+   await openDesign.click();
+   assert.equal(await continueDesign.isDisabled(),true);
+   assert.equal(await page.locator('#owgExplorerDesignConfirmed').isDisabled(),true);
+   const checkpointInput=page.locator('#owgExplorerDesignCheckpointImport');
+   const uploadCheckpoint=value=>checkpointInput.setInputFiles({
+     name:'observed-design-checkpoint.json',mimeType:'application/json',
+     buffer:Buffer.from(JSON.stringify(value))
+   });
+   const readsBeforeCheckpointImport=evidenceReads;
+   await uploadCheckpoint({...checkpoint,execution_permitted:true});
+   assert.match(await page.locator('#owgExplorerDesignCheckpointStatus').textContent(),/Checkpoint refused/);
+   await uploadCheckpoint({...checkpoint,reviewed_group:{...checkpoint.reviewed_group,revision:99}});
+   assert.match(await page.locator('#owgExplorerDesignCheckpointStatus').textContent(),/revision, variant or evidence scope differs/);
+   await uploadCheckpoint({...checkpoint,selected_evidence:{
+     ...checkpoint.selected_evidence,fingerprint_sha256:'0'.repeat(64)}});
+   assert.match(await page.locator('#owgExplorerDesignCheckpointStatus').textContent(),/fingerprint differs/);
+   await checkpointInput.setInputFiles({
+     name:'oversized-checkpoint.json',mimeType:'application/json',buffer:Buffer.alloc(16385,65)
+   });
+   assert.match(await page.locator('#owgExplorerDesignCheckpointStatus').textContent(),/16 KiB limit/);
+   await checkpointInput.setInputFiles({
+     name:'observed-design-checkpoint.json',mimeType:'application/json',buffer:checkpointBytes
+   });
+   assert.match(await page.locator('#owgExplorerDesignCheckpointStatus').textContent(),/Checkpoint matches/);
+   assert.equal(evidenceReads,readsBeforeCheckpointImport,'import makes no background evidence read');
+   assert.equal(await continueDesign.isDisabled(),true,'matching checkpoint never restores approval');
+   await audit(page,'#owgWorkflowExplorer','Reopened unapproved design checkpoint');
+   await page.getByRole('button',{name:'Review selected examples',exact:true}).click();
+   await page.locator('#owgExplorerEvidence h4').waitFor();
+   await openDesign.click();
+   assert.equal(await continueDesign.isDisabled(),true,'fresh inspection still needs new review');
+   await page.locator('#owgExplorerDesignConfirmed').check();
+   assert.equal(await continueDesign.isDisabled(),false);
    const writesBeforeDesign=writes;
    await continueDesign.focus();await page.keyboard.press('Enter');
    assert.equal(writes,writesBeforeDesign,'catalog draft navigation is not a process save or business write');
    assert.match(await page.locator('#owgCatalogEditor').textContent(),/Review process · unsaved observed proposal/);
    assert.match(await page.locator('#owgCatalogStatus').textContent(),/Unsaved proposal from a bounded observation/);
-   assert.equal(evidenceReads,readsBeforeDesign+3,'only three explicit bounded evidence inspections read sources');
+   assert.equal(evidenceReads,readsBeforeDesign+4,'four explicit evidence reads; checkpoint import makes none');
    await page.locator('[role=tab][data-tab=overview]').click();
    await page.locator('#owgExplorerDetail svg g[role=button]').last().click();
    assert.equal(await page.locator('#owgExplorerDesignPanel').count(),0,'switching steps invalidates design approval');
