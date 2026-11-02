@@ -109,3 +109,70 @@ Full exact-head native cross-platform, browser, collaboration, accessibility,
 scale, starter and packaging/release acceptance and independent consenting-user
 validation are still required. This feature improves **reviewability of
 unassigned work**, not measured F1 or contamination by itself.
+
+
+## Review two-hop unassigned work fragments (additive API feature)
+
+The existing read-only workflow-evidence response also exposes
+`linked_work_items.ambiguous_fragment_review_queue` for a narrower case
+that the direct review queue cannot show: an unassigned observation may be
+connected to a **visible, independently source-anchored item** through
+exactly **one other still-unassigned singleton observation** using two
+already-emitted weak candidate edges. For example:
+
+```
+A (exact record) --surface_continuity--> loose X
+loose X --surface_continuity--> loose Y
+```
+
+Y has no direct visible source-anchored candidate. It can now be presented for
+human review with a literal `witness_event_path` of `[Y, X, A]` and two
+`weak_relation_path` bases. A competing B route appears as another option,
+not as an automatic selection. X remains unassigned too. The system does
+**not** merge X/Y with A, infer task identity, or promote candidate edges to
+verified evidence.
+
+This projection requires the same **complete** organization, actor, device
+and session identity on every hop, plus the same known application and capture
+source. It rejects malformed/tainted claims, hidden linked targets, unknown
+app/source, cross-tenant or cross-session hops, and linked or non-singleton
+intermediaries. Only visible, source-anchored items are eligible. An
+observation already having a direct candidate stays in the one-hop queue;
+two-hop paths never recursively grow to three or more edges.
+
+Each row has `event_id`, `candidate_item_count`, bounded
+`candidate_items`, `candidate_items_truncated`, `evidence_hops: 2`,
+`review_priority`, `auto_assigned: false` and
+`requires_human_review: true`. Each option includes the existing
+`item_id`, `distinct_intermediary_count`,
+`distinct_two_hop_path_count`, a literal three-event witness path and two
+weak relation bases. The two-hop path is an **explanation of an ambiguous
+suggestion**, not an accepted assignment or a calibrated probability.
+
+At most 24 rows and four options per row are displayed, with exact eligible
+and competing totals **only when** `ambiguous_fragment_review_scan_complete`
+is true. If input exceeds 10,000 candidate edges/singletons or the two-hop
+fanout exceeds 20,000 potential paths, the helper fails closed: no
+suggestions, `scan_complete: false`, and null totals rather than misleading
+zeros. `ambiguous_fragment_review_truncated` is true for a bounded display
+or incomplete scan. These are analysis/display budgets, not claims about
+source coverage. Removal or revocation of observed anchors recomputes
+suggestions from current evidence; no review decision is persisted.
+
+The additive response reuses existing authenticated REST/MCP projections,
+with no new permissions, raw text, source host, tab/clipboard token, provider
+call, saved decision, agent authorization or business write. Existing
+`linked_work_items.items`, direct candidate review, event membership,
+capture and dashboard remain unchanged.
+
+Focused regression command:
+
+```bash
+python -m pytest -q tests/test_reconstruction_assignment_proof.py tests/test_work_item_links.py
+```
+
+The complete exact-head Ubuntu/macOS/Windows pytest, browser,
+process-collaboration, scale, accessibility, starter, installation and
+packaging/release workflows must pass before merge. No F1/contamination
+improvement or real consenting-user validation is claimed from this review
+feature.
