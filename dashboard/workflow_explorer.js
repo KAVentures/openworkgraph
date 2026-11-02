@@ -64,6 +64,7 @@
         count: count(variant.execution_count),
         ids,
         exact: variants.length > 0,
+        structural: safeArray(variant.structural_steps).slice(0, MAX_STEPS).map(step => String(step)),
         inferred: true
       };
     }).filter(row => row.steps.length);
@@ -331,6 +332,42 @@
       'Each lane is a distinct observed sequence. Identical steps in different lanes are not assumed to be the same decision or case.' +
       (limited > 0 ? ' ' + limited + ' additional variants are not drawn.' : '') +
       ' The map shows no unobserved actions, values, or inferred authorization.', 'muted'));
+    if (lanes.length > 1) {
+      const compare = element('section', null, 'owg-explorer-variant-compare');
+      compare.id = 'owgExplorerVariantComparison';
+      compare.appendChild(element('h4', 'Compare exact observed variants'));
+      compare.appendChild(element('p',
+        'Compare two displayed lanes by identical structural step tokens. Shared tokens do not prove the same business case, intent, policy or decision. No evidence is read until you explicitly inspect a lane.', 'muted'));
+      const controls = element('div', null, 'owg-explorer-actions');
+      const labelA = element('label', 'Variant A ');
+      const labelB = element('label', 'Variant B ');
+      const choiceA = element('select');
+      const choiceB = element('select');
+      choiceA.id = 'owgExplorerCompareA';
+      choiceB.id = 'owgExplorerCompareB';
+      for (const lane of lanes) {
+        for (const select of [choiceA, choiceB]) {
+          const option = element('option', 'Variant ' + (lane.index + 1) + ' · ' + lane.count + ' runs');
+          option.value = String(lane.index);
+          select.appendChild(option);
+        }
+      }
+      choiceA.value = String(lanes[0].index);
+      choiceB.value = String(lanes[1].index);
+      append(labelA, choiceA);
+      append(labelB, choiceB);
+      const result = element('div');
+      result.id = 'owgExplorerCompareResult';
+      result.setAttribute('role', 'status');
+      const compareButton = button('Compare observed variants', () => {
+        const first = lanes.find(lane => String(lane.index) === choiceA.value);
+        const second = lanes.find(lane => String(lane.index) === choiceB.value);
+        renderVariantComparison(candidate, first, second, result);
+      }, true);
+      append(controls, labelA, labelB, compareButton);
+      append(compare, controls, result);
+      host.appendChild(compare);
+    }
     if(candidate.observed_transition_map){
       const combined=element('div');combined.id='owgExplorerCombinedMap';
       host.appendChild(button('Explore combined candidate transitions',()=>renderCombinedMap(candidate,lanes,combined),true));
@@ -366,6 +403,86 @@
     examples.id = 'owgExplorerEvidence';
     host.appendChild(examples);
   }
+  function alignObservedVariants(left, right) {
+    // At most 24 structural tokens per lane; stable LCS keeps repeated steps
+    // ordered rather than treating a set of activities as an observed route.
+    const a = left.structural, b = right.structural;
+    const dp = Array.from({length: a.length + 1}, () => Array(b.length + 1).fill(0));
+    for (let i = a.length - 1; i >= 0; i--) {
+      for (let j = b.length - 1; j >= 0; j--) {
+        dp[i][j] = a[i] === b[j] ? 1 + dp[i + 1][j + 1] :
+          Math.max(dp[i + 1][j], dp[i][j + 1]);
+      }
+    }
+    const rows = [];
+    let i = 0, j = 0;
+    while (i < a.length || j < b.length) {
+      if (i < a.length && j < b.length && a[i] === b[j]) {
+        rows.push({kind: 'shared', left: left.steps[i++], right: right.steps[j++]});
+      } else if (i < a.length && (j === b.length || dp[i + 1][j] >= dp[i][j + 1])) {
+        rows.push({kind: 'only A', left: left.steps[i++], right: ''});
+      } else {
+        rows.push({kind: 'only B', left: '', right: right.steps[j++]});
+      }
+    }
+    return rows;
+  }
+
+  function renderVariantComparison(candidate, left, right, host) {
+    host.replaceChildren();
+    if (!left || !right || left.index === right.index) {
+      host.appendChild(element('p', 'Choose two different displayed variants to compare.', 'muted'));
+      return;
+    }
+    const comparable = lane => lane.exact && !lane.omittedSteps && lane.structural.length === lane.steps.length &&
+      lane.structural.length > 0 && lane.structural.every(step => step.trim().length > 0);
+    if (!comparable(left) || !comparable(right)) {
+      host.appendChild(element('p',
+        'Exact structural comparison unavailable: one lane is clipped, lacks complete structural tokens or is only a candidate summary. No partial path is presented as an exact variant. Narrow the period or inspect its source evidence.', 'muted'));
+      return;
+    }
+    const rows = alignObservedVariants(left, right);
+    const shared = rows.filter(row => row.kind === 'shared').length;
+    host.appendChild(element('p',
+      'Variant A (V' + (left.index + 1) + '): ' + left.count + ' observed candidate runs; Variant B (V' +
+      (right.index + 1) + '): ' + right.count + ' observed candidate runs. ' + shared +
+      ' shared structural steps in order; ' + (left.steps.length - shared) + ' only in A and ' +
+      (right.steps.length - shared) + ' only in B. Counts may reflect bounded evidence, not distinct verified cases.', 'muted'));
+    const actions = element('div', null, 'owg-explorer-actions');
+    for (const [label, lane] of [['A', left], ['B', right]]) {
+      actions.appendChild(button('Inspect variant ' + label + ' evidence', () => {
+        invalidateEvidence();
+        selectedExample = lane;
+        const info = document.getElementById('owgExplorerStepInfo');
+        if (info) info.textContent = 'Variant ' + (lane.index + 1) +
+          ' selected from comparison. Inspecting only its bounded supporting references; this is not an approval.';
+        inspect(candidate, lane);
+      }, true));
+    }
+    host.appendChild(actions);
+    const scroll = element('div', null, 'owg-map-scroll');
+    const table = element('table');
+    table.setAttribute('aria-label', 'Aligned exact structural variant comparison');
+    const head = element('thead'), header = element('tr');
+    for (const label of ['Alignment', 'Variant A (V' + (left.index + 1) + ')', 'Variant B (V' + (right.index + 1) + ')']) {
+      const th = element('th', label);
+      th.setAttribute('scope', 'col');
+      header.appendChild(th);
+    }
+    head.appendChild(header);
+    const body = element('tbody');
+    for (const row of rows) {
+      const tr = element('tr');
+      append(tr, element('td', row.kind), element('td', row.left || '—'), element('td', row.right || '—'));
+      body.appendChild(tr);
+    }
+    append(table, head, body);
+    scroll.appendChild(table);
+    host.appendChild(scroll);
+    host.appendChild(element('p',
+      'Alignment is a deterministic display comparison of normalized structural tokens, not an edit script, causal explanation or verified source trace. Repeated steps can admit multiple alignments. Select and inspect each variant separately before any review or handoff.', 'muted'));
+  }
+
   function renderCombinedMap(candidate,lanes,host){
     host.replaceChildren();
     const map=candidate.observed_transition_map;
