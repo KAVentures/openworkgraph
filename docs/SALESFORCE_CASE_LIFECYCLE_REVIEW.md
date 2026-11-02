@@ -33,6 +33,30 @@ python -m server.salesforce_case_lifecycle_review \
 
 Review the resulting file locally before deciding what, if anything, to do about source lifecycle changes. **There is deliberately no automatic OWG event deletion, retention change, checkpoint advancement, employee identity mutation, Salesforce write or agent handoff.** Follow OWG's separately authorized deletion/retention procedure where applicable. This command does not grant deletion approval.
 
+## Compare two reviewed source snapshots (optional)
+
+The read-only command can now compare **a previously saved review** with a fresh bounded Salesforce read for the **same confirmed instance, namespace and exact selected Cases**. This is a useful operator-facing change review: it distinguishes a Case newly observed as soft-deleted, a Case no longer visible, a Case becoming visible again and a soft-deleted Case appearing active. A change is an observation between two reads, **not** proof of when it occurred, a complete Salesforce audit trail, a hard-deletion finding or authorization to delete OWG evidence.
+
+Keep the first private JSON review and copy its printed `review_sha256` receipt into the next invocation. Use the same source scope and add the separate explicit comparison consent:
+
+```sh
+python -m server.salesforce_case_lifecycle_review \
+  --instance https://acme.my.salesforce.com \
+  --confirm-host acme.my.salesforce.com \
+  --namespace acme-sandbox \
+  --case 500000000000001 \
+  --case 500000000000002 \
+  --previous-review /private/owg-salesforce-lifecycle/review-001.json \
+  --previous-sha256 '<exact-review_sha256-from-first-receipt>' \
+  --output /private/owg-salesforce-lifecycle/review-002.json \
+  --consent-source-lifecycle-read --consent-private-review \
+  --consent-compare-previous-review
+```
+
+The previous review must be a canonical owner-private regular file (not a symlink) with a matching SHA-256, complete version-1 schema, same scope hash and exact namespace-hashed Case set, internally consistent states/counts, valid timestamp and non-write flags. Validation happens **before any Salesforce GET**. A previous comparison review can itself be used for the next comparison with its newly printed digest. Existing single-snapshot invocation remains unchanged.
+
+The new private review contains `comparison.previous_review_sha256`, the prior UTC observation timestamp and one pseudonymous per-Case `previous_state` → `current_state` transition (including unchanged states). The CLI prints only changed/unchanged totals and the pinned previous digest. The current review retains the current `case_states` and three state counts. No raw source IDs, host, token or namespace are included. A SHA-256 pin detects unexpected edits **relative to the operator's trusted receipt**; it is not an authenticated signature, a proof of provider authenticity or a substitute for protecting the receipt and local files. Do not use these artifacts to automatically alter retention, revoke accounts, delete evidence or advance an import checkpoint.
+
 ## Safety and completeness
 
 The tool validates exact Salesforce HTTPS host and namespace/case scope before the request; it does not use system proxies or follow redirects. It defaults to one page; operators must explicitly set `--max-pages 2` through `--max-pages 8` when Salesforce may paginate. Each page is limited to 64 KiB; the entire selection is limited to 8 distinct Cases and 8 requests. A continuation must be a strict relative `/services/data/v60.0/query/<opaque-locator>` or `/services/data/v60.0/queryAll/<opaque-locator>` path on the **same confirmed origin**, with no query, fragment, redirect or path traversal. It requires stable `totalSize`, strictly ordered distinct selected IDs, exact boolean deletion states, nonempty intermediate pages and a final `done=true` page with no cursor and exact cumulative count. It refuses malformed/duplicate JSON keys, foreign rows, changed counts, truncated/over-budget/repeated/unsafe cursors, HTTP errors, revoked credentials, unsafe/private path failures and output overwrite. If a provider returns more pages than the operator approved, the run fails **without creating a review**. The private artifact and counts-only receipt record `pages_fetched` for auditing. No automatic retry. A query returning zero rows is an **all-unresolved review**, not a deletion certificate.
