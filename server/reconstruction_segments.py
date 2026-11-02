@@ -114,6 +114,13 @@ def observed_activity_segments(
     boundary: list[str] = []
     previous_position: int | None = None
     previous_row: dict[str, Any] | None = None
+    # Exact-record anchors may be separated by clean, already-linked but
+    # unreferenced member actions. Do not attribute those actions to either
+    # record; only split at the next independently observed different record.
+    last_record_anchor: dict[str, Any] | None = None
+    unreferenced_since_anchor = 0
+    unreferenced_bridge_clean = True
+    max_unreferenced_record_bridge = 8
 
     def emit() -> None:
         if not current:
@@ -149,6 +156,20 @@ def observed_activity_segments(
                     # source records. Keep the membership, but distinguish
                     # independently observed record-context episodes. Neither
                     # this boundary nor the transfer proves a task handoff.
+                    reasons.append("observed_member_record_change")
+                elif (all(row["scope"]) and row["ref"] and not previous_row["ref"]
+                      and last_record_anchor is not None
+                      and 0 < unreferenced_since_anchor <= max_unreferenced_record_bridge
+                      and unreferenced_bridge_clean
+                      and last_record_anchor["scope"] == row["scope"]
+                      and last_record_anchor["ref"] != row["ref"]
+                      and not row["reference_tainted"]
+                      and last_record_anchor["observed_at"] < row["observed_at"]
+                      and previous_row["observed_at"] < row["observed_at"]):
+                    # A -> unreferenced member(s) -> B: the exact B observation
+                    # begins a new record-context episode. The intervening
+                    # members retain their original membership and unknown
+                    # record identity. No time-only join or handoff is inferred.
                     reasons.append("observed_member_record_change")
                 # A known different app strictly between two same-app anchors
                 # bounds an uncertain episode, NOT a verified case switch.
@@ -212,6 +233,35 @@ def observed_activity_segments(
             boundary = reasons
             total_segments += 1
         current.append(row)
+        # Never carry a record-context witness across a separately observed
+        # interruption, scope change or ambiguous/tainted intermediate member.
+        if reasons:
+            last_record_anchor = None
+            unreferenced_since_anchor = 0
+            unreferenced_bridge_clean = True
+        if row["ref"]:
+            last_record_anchor = (
+                row if row["scope"] is not None and all(row["scope"])
+                and not row["reference_tainted"]
+                and not row.get("ephemeral_claim_tainted", False)
+                else None
+            )
+            unreferenced_since_anchor = 0
+            unreferenced_bridge_clean = True
+        elif last_record_anchor is not None:
+            unreferenced_since_anchor += 1
+            unreferenced_bridge_clean = (
+                unreferenced_bridge_clean
+                and row["scope"] == last_record_anchor["scope"]
+                and not row["reference_tainted"]
+                and not row.get("ephemeral_claim_tainted", False)
+                and not row.get("action_claim_malformed", False)
+                and not row["transfer"]
+                and not _clipboard_action(row["action"])
+                and last_record_anchor["observed_at"] < row["observed_at"]
+                and (previous_row is None
+                     or previous_row["observed_at"] < row["observed_at"])
+            )
         previous_position, previous_row = position, row
     emit()
     return {
