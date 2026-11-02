@@ -269,10 +269,10 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    wrongPacket.project.project_id='unrelated-project';
    await setPacket(wrongPacket);
    await page.locator('#owgPipelineJourneyComparePacket').click();
-   await page.locator('#owgPipelineJourneyCompareResult').getByText(/belongs to another idea or project/).waitFor();
+   await page.locator('#owgPipelineJourneyCompareResult').filter({hasText:/belongs to another idea or project/}).waitFor();
    await priorPacket.setInputFiles({name:'huge.json',mimeType:'application/json',buffer:Buffer.alloc(65537,32)});
    await page.locator('#owgPipelineJourneyComparePacket').click();
-   await page.locator('#owgPipelineJourneyCompareResult').getByText(/no larger than 64 KiB/).waitFor();
+   await page.locator('#owgPipelineJourneyCompareResult').filter({hasText:/no larger than 64 KiB/}).waitFor();
    await setPacket(handoffPacket);
    assert.equal(guidedWrites,writesBeforePacket,'invalid packets must not write or upload');
    // A different selected project must not inherit the first project's hashes.
