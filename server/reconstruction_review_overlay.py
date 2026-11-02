@@ -48,24 +48,54 @@ def _snapshot(events: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, A
     )
     if len(groups) != len(projected["items"]):
         raise ValueError("inconsistent linker projection")
+    # Both queues come from the production linker, not from caller-provided
+    # candidate IDs. Two-hop paths are review hints, never automatic edges.
+    if not projected["ambiguous_fragment_review_scan_complete"]:
+        raise ValueError("two-hop evidence scan incomplete; select a smaller window")
     eligible = []
     for entry in projected["ambiguous_assignment_review_queue"]:
         eligible.append({
             "event_id": entry["event_id"],
+            "evidence_hops": 1,
             "candidate_items": [
                 {"item_id": target["item_id"], "weak_relations": target["weak_relations"]}
                 for target in entry["candidate_items"]
             ],
             "candidate_items_truncated": entry["candidate_items_truncated"],
         })
+    for entry in projected["ambiguous_fragment_review_queue"]:
+        eligible.append({
+            "event_id": entry["event_id"],
+            "evidence_hops": 2,
+            "candidate_items": [
+                {
+                    "item_id": target["item_id"],
+                    "witness_event_path": target["witness_event_path"],
+                    "weak_relation_path": target["weak_relation_path"],
+                    "distinct_intermediary_count": target["distinct_intermediary_count"],
+                }
+                for target in entry["candidate_items"]
+            ],
+            "candidate_items_truncated": entry["candidate_items_truncated"],
+        })
+    if len({entry["event_id"] for entry in eligible}) != len(eligible):
+        raise ValueError("overlapping direct and fragment review candidates")
+    direct_total = projected["ambiguous_assignment_review_total"]
+    fragment_total = projected["ambiguous_fragment_review_total"]
     packet = {
         "format": PACKET_FORMAT,
         "evidence_sha256": digest,
         "admitted_observation_count": len(linked["rows"]),
         "linked_item_count": len(groups),
-        "eligible_review_total": projected["ambiguous_assignment_review_total"],
-        "eligible_review_truncated": projected["ambiguous_assignment_review_truncated"],
-        "eligible_candidates": eligible,
+        "eligible_review_total": direct_total + fragment_total,
+        "eligible_direct_review_total": direct_total,
+        "eligible_fragment_review_total": fragment_total,
+        "eligible_review_truncated": (
+            projected["ambiguous_assignment_review_truncated"]
+            or projected["ambiguous_fragment_review_truncated"]
+            or len(eligible) > MAX_DECISIONS
+        ),
+        "eligible_candidates": eligible[:MAX_DECISIONS],
         "source_content_included": False,
         "canonical_membership_unchanged": True,
     }
@@ -101,7 +131,10 @@ def apply_review(
     if type(rows) is not list or len(rows) > MAX_DECISIONS:
         raise ValueError("too many or malformed review decisions")
     eligible = {
-        entry["event_id"]: {target["item_id"] for target in entry["candidate_items"]}
+        entry["event_id"]: {
+            target["item_id"]: entry["evidence_hops"]
+            for target in entry["candidate_items"]
+        }
         for entry in expected["eligible_candidates"]
     }
     singleton_ids = {
@@ -112,6 +145,7 @@ def apply_review(
         for index, ids in enumerate(groups, start=1)
     }
     confirmations: dict[str, str] = {}
+    confirmation_hops: dict[str, int] = {}
     rejected: list[dict[str, str]] = []
     seen: set[str] = set()
     for decision in rows:
@@ -130,6 +164,9 @@ def apply_review(
         seen.add(event_id)
         if action == "confirm":
             confirmations[event_id] = item_id
+            confirmation_hops[event_id] = eligible[event_id][item_id]
+            # A two-hop confirmation attaches only the reviewed loose event.
+            # Its unassigned intermediary is never transitively promoted.
             reviewed[item_id].append(event_id)
         else:
             rejected.append({"event_id": event_id, "item_id": item_id})
@@ -145,6 +182,12 @@ def apply_review(
             "item_id": item_id,
             "event_ids": members,
             "human_confirmed_event_ids": confirmed,
+            "human_confirmed_direct_event_ids": [
+                event_id for event_id in confirmed if confirmation_hops[event_id] == 1
+            ],
+            "human_confirmed_two_hop_event_ids": [
+                event_id for event_id in confirmed if confirmation_hops[event_id] == 2
+            ],
             "automatic_member_count": len(members) - len(confirmed),
             "membership_status": "human_reviewed_overlay" if confirmed else "automatic_evidence",
         })
@@ -153,6 +196,8 @@ def apply_review(
         "evidence_sha256": expected["evidence_sha256"],
         "items": items,
         "human_confirmed_count": len(confirmations),
+        "human_confirmed_direct_count": sum(hops == 1 for hops in confirmation_hops.values()),
+        "human_confirmed_two_hop_count": sum(hops == 2 for hops in confirmation_hops.values()),
         "human_rejected_count": len(rejected),
         "human_rejections": rejected,
         "eligible_unreviewed_count": expected["eligible_review_total"] - len(seen),
@@ -225,6 +270,8 @@ def score_review(
         "evidence_sha256": packet["evidence_sha256"],
         "annotated_event_count": len(admitted),
         "human_confirmed_count": overlay["human_confirmed_count"],
+        "human_confirmed_direct_count": overlay["human_confirmed_direct_count"],
+        "human_confirmed_two_hop_count": overlay["human_confirmed_two_hop_count"],
         "automatic_baseline": scored(groups),
         "human_assisted_overlay": scored([item["event_ids"] for item in overlay["items"]]),
         "complete_local_annotations_required": True,
