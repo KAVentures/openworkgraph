@@ -427,9 +427,10 @@ unresolved-prerequisite flags, historical evidence state, and ordered
 - `fresh_declared_payment_check`: even an undisputed historical `paid`
   check is not a current provider result; the existing explicit verify API
   must re-admit owner/source/review and use a valid signed link.
-- `review_historical_provider_evidence`: a **non-payment** declared goal
-  lacks usable operation evidence. This action never routes non-payment goals
-  to the Stripe payment-verification API.
+- `review_historical_provider_evidence`: an explicit **operation receipt**
+  review goal lacks usable operation evidence. Human-review-only goals do not
+  require unrelated provider checks; neither goal is routed to the Stripe
+  payment-verification API.
 - `expand_dependency_review`: the requested `max_cases` omitted one or
   more reviewed prerequisites, so the root cannot be treated as fully covered.
 
