@@ -21,7 +21,9 @@ from urllib import error, parse, request
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .servicenow_incident_journal import JournalError, _private_directory, _scope_digest
-from .servicenow_incident_staging import SelectedIncidents, StagingError, _validate_updated
+from .servicenow_incident_staging import (
+    SelectedIncidents, StagingError, _require_selected_scope, _validate_updated,
+)
 from .servicenow_incident_sync import (
     SyncError, _bearer, _check_grant, _http_opener, _publish_new,
     _source_local_to_utc, _unique_pairs,
@@ -74,6 +76,9 @@ def _check_audit_grant(path: Path, scope: SelectedIncidents, *,
                        fields: tuple[str, ...], since: str, until: str,
                        zone_name: str) -> None:
     """Independent owner-only grant for sys_audit, not inherited incident access."""
+    _private_directory(path.parent)
+    if path.is_symlink():
+        raise AuditError("Audit grant symlink refused")
     try:
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         with os.fdopen(fd, "rb") as stream:
@@ -166,6 +171,7 @@ def _read_audit(scope: SelectedIncidents, *, grant_file: Path,
                 audit_grant_file: Path, fields: tuple[str, ...],
                 since: str, until: str, zone_name: str,
                 token: str, opener=None) -> list[tuple[str, str, str, str]]:
+    _require_selected_scope(scope)
     bearer = _bearer(token)
     transport = _http_opener() if opener is None else opener
     events = {}
