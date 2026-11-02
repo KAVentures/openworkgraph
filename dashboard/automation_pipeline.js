@@ -185,10 +185,9 @@
               if(!window.owgProcessCatalog?.openSaved)throw new Error('Process catalog unavailable.');
               const opened=await window.owgProcessCatalog.openSaved(ref);
               if(generation!==detailGeneration)return;
-              if(opened===false){guideStatus.textContent='Existing unsaved catalog edits were kept. No revision was opened.';return;}
               document.getElementById('owgCatalogEditor')?.scrollIntoView?.({block:'start'});
-              guideStatus.textContent='Opened the exact linked revision '+ref.revision+'. '+(process.status==='changed'?
-                'A newer process exists; this historical revision is not current.':'Review is still required for any further decision.');
+              guideStatus.textContent='Requested exact linked revision '+ref.revision+'. Verify the catalog status; declining its unsaved-edit prompt keeps the previous draft. '+(process.status==='changed'?
+                'A newer process exists; the linked revision is historical.':'Fresh review is still required for any further decision.');
             }catch(e){if(generation===detailGeneration)guideStatus.textContent='Could not reopen pinned revision: '+e.message;}
             finally{if(generation===detailGeneration)processAction.disabled=false;}
           };
@@ -230,7 +229,6 @@
             const actions=el('div',null,'row');
             const reportsAction=button('Review reports for this exact project','secondary');
             reportsAction.id='owgPipelineJourneyReports';
-            reportsAction.disabled=!p.idea_revision_is_current;
             reportsAction.onclick=()=>{
               if(generation!==detailGeneration)return;
               preferredReportProjectId=p.project_id;
