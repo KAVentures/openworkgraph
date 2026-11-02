@@ -302,7 +302,110 @@ def score_review(
     }
 
 
+# Multi-session audits are descriptive local measurements, not preregistered
+# family-holdout certification. Sessions are the statistical unit.
+BATCH_FORMAT = "openworkgraph.reconstruction-review-batch.v1"
+MAX_BATCH_SESSIONS = 24
+_AUDIT_METRICS = (
+    "workflow_assignment_precision", "workflow_assignment_recall",
+    "workflow_assignment_f1", "cross_workflow_contamination",
+    "interruption_rejection",
+)
+
+
+def aggregate_review_scores(scores: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate independent local score_review outputs without exposing IDs.
+
+    Each complete session receives equal weight; no per-event or source fields
+    are returned. A duplicated source snapshot is refused rather than counted
+    twice. The numeric threshold check is *local only*, never a holdout claim.
+    """
+    import math
+
+    if type(scores) is not list or not 2 <= len(scores) <= MAX_BATCH_SESSIONS:
+        raise ValueError("batch audit requires 2 to 24 independently annotated sessions")
+    seen_digests: set[str] = set()
+    sessions = []
+    for index, report in enumerate(scores, start=1):
+        if type(report) is not dict or report.get("format") != (
+            "openworkgraph.reconstruction-review-score.v1"
+        ):
+            raise ValueError("batch requires complete local reconstruction score reports")
+        digest = report.get("evidence_sha256")
+        if (type(digest) is not str or len(digest) != 64
+                or any(char not in "0123456789abcdef" for char in digest)
+                or digest in seen_digests):
+            raise ValueError("invalid or duplicate evidence snapshot in batch")
+        seen_digests.add(digest)
+        count = report.get("annotated_event_count")
+        if type(count) is not int or not 1 <= count <= 500:
+            raise ValueError("invalid annotated observation count")
+        metrics: dict[str, dict[str, float]] = {}
+        for key in ("automatic_baseline", "human_assisted_overlay"):
+            raw = report.get(key)
+            if type(raw) is not dict:
+                raise ValueError("missing reconstruction score metrics")
+            metrics[key] = {}
+            for name in _AUDIT_METRICS:
+                value = raw.get(name)
+                if (type(value) not in (int, float) or not math.isfinite(value)
+                        or not 0 <= value <= 1):
+                    raise ValueError("nonfinite or out-of-range reconstruction metric")
+                metrics[key][name] = float(value)
+        confirmed = report.get("human_confirmed_count")
+        if type(confirmed) is not int or not 0 <= confirmed <= count:
+            raise ValueError("invalid human confirmation count")
+        sessions.append({
+            "session_index": index,
+            "annotated_observation_count": count,
+            "human_confirmed_count": confirmed,
+            **metrics,
+        })
+    def macro(key: str) -> dict[str, float]:
+        return {
+            name: round(sum(session[key][name] for session in sessions) / len(sessions), 6)
+            for name in _AUDIT_METRICS
+        }
+    automatic = macro("automatic_baseline")
+    assisted = macro("human_assisted_overlay")
+    return {
+        "format": BATCH_FORMAT,
+        "session_count": len(sessions),
+        "annotated_observation_count": sum(
+            session["annotated_observation_count"] for session in sessions
+        ),
+        "human_confirmed_count": sum(
+            session["human_confirmed_count"] for session in sessions
+        ),
+        "session_macro_automatic_baseline": automatic,
+        "session_macro_human_assisted_overlay": assisted,
+        "session_macro_assisted_minus_automatic": {
+            name: round(assisted[name] - automatic[name], 6)
+            for name in _AUDIT_METRICS
+        },
+        "minimum_automatic_interruption_rejection": min(
+            session["automatic_baseline"]["interruption_rejection"]
+            for session in sessions
+        ),
+        "local_numeric_thresholds": {
+            "minimum_automatic_f1": 0.90,
+            "maximum_automatic_contamination": 0.05,
+            "observed_local_automatic_meets_both": (
+                automatic["workflow_assignment_f1"] >= 0.90
+                and automatic["cross_workflow_contamination"] <= 0.05
+            ),
+        },
+        "sessions": sessions,
+        "aggregation_unit": "independently_annotated_local_session",
+        "preregistered_family_holdout_verified": False,
+        "real_consenting_user_pilot_verified": False,
+        "automatic_improvement_claim": False,
+        "source_content_included": False,
+    }
+
+
 __all__ = [
     "prepare_review_packet", "apply_review", "score_review",
-    "PACKET_FORMAT", "DECISION_FORMAT",
+    "PACKET_FORMAT", "DECISION_FORMAT", "BATCH_FORMAT",
+    "aggregate_review_scores",
 ]
