@@ -68,7 +68,8 @@ def read_imported_run(*, deployment_id: str, run_id: str, scope: str, secret: st
     status, started, finished, reported, runtime = row
     if (finished is not None and (not isinstance(finished, datetime) or finished < started)
             or status == "running" and finished is not None
-            or reported is not None and type(reported) is not bool):
+            or reported is not None and type(reported) is not bool
+            or runtime not in monitoring.RUNTIMES):
         raise CaseDeclarationError("invalid retained automation run")
     started_at = started.replace(tzinfo=timezone.utc).isoformat()
     finished_at = finished.replace(tzinfo=timezone.utc).isoformat() if finished else None
