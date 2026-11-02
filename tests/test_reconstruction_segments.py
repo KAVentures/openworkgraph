@@ -218,3 +218,101 @@ def test_existing_workflow_evidence_api_exposes_uncertain_other_app_episode():
     assert item(linked, A)["activity_segments"][1]["boundary_before"] == [
         "observed_other_app_without_record"]
     assert response["record_case_lanes"]["format"] == "openworkgraph.record-case-lanes.v1"
+
+
+def test_other_tab_observation_splits_same_tab_episode_without_assigning_it():
+    before, other_tab, after = event(1, A), event(2), event(3, A)
+    before["tab_context_id"] = after["tab_context_id"] = "tab-a"
+    other_tab["tab_context_id"] = "tab-b"
+    result = linked_work_items([before, other_tab, after])
+    a = item(result, A)
+    assert a["event_ids"] == ["e0001", "e0003"]
+    assert a["activity_segment_count"] == 2
+    assert [s["boundary_before"] for s in a["activity_segments"]] == [
+        [], ["observed_other_tab_without_record"]]
+    assert result["unlinked_observation_count"] == 1
+    assert "tab-a" not in json.dumps(result)
+    assert "tab-b" not in json.dumps(result)
+    assert "SECRET" not in json.dumps(result)
+    # Retention/removal recomputes the episode boundary from surviving evidence.
+    assert item(linked_work_items([before, after]), A)["activity_segment_count"] == 1
+
+
+def test_other_tab_episode_requires_exact_complete_capture_scope():
+    def count(change):
+        before, middle, after = event(1, A), event(2), event(3, A)
+        before["tab_context_id"] = after["tab_context_id"] = "tab-a"
+        middle["tab_context_id"] = "tab-b"
+        change(before, middle, after)
+        return item(linked_work_items([before, middle, after]), A)[
+            "activity_segment_count"]
+
+    assert count(lambda _a, _b, _c: None) == 2
+    assert count(lambda _a, b, _c: b.update(organization_id="tenant-b")) == 1
+    assert count(lambda _a, b, _c: b.update(actor_id="actor-b")) == 1
+    assert count(lambda _a, b, _c: b.update(device_id="device-b")) == 1
+    assert count(lambda _a, b, _c: b.update(session_id="session-b")) == 1
+    assert count(lambda _a, b, _c: b.pop("device_id")) == 1
+    assert count(lambda _a, b, _c: b.update(tab_context_id="tab-a")) == 1
+    assert count(lambda _a, b, _c: b.pop("tab_context_id")) == 1
+    assert count(lambda _a, b, _c: b.update(app="Unknown")) == 1
+    assert count(lambda _a, b, _c: b.update(source="unknown")) == 1
+    assert count(lambda _a, b, _c: b.update(app="Terminal")) == 2
+    assert count(lambda _a, b, _c: b.update(
+        tab_context_id="tab-b", metadata={"tab_context_id": "tab-c"})) == 1
+    assert count(lambda _a, b, _c: b.update(
+        metadata={"resource_reference": {"resource_ref": True}})) == 1
+
+
+def test_other_tab_episode_rejects_ties_clipboard_and_mismatched_anchors():
+    def boundary(change):
+        before, middle, after = event(1, A), event(2), event(3, A)
+        before["tab_context_id"] = after["tab_context_id"] = "tab-a"
+        middle["tab_context_id"] = "tab-b"
+        change(before, middle, after)
+        return item(linked_work_items([before, middle, after]), A)[
+            "activity_segments"]
+
+    assert len(boundary(lambda _a, _b, _c: None)) == 2
+    assert len(boundary(lambda _a, b, c: b.update(
+        observed_at=c["observed_at"]))) == 1
+    assert len(boundary(lambda a, b, _c: b.update(
+        observed_at=a["observed_at"]))) == 1
+    assert len(boundary(lambda _a, _b, c: c.update(tab_context_id="tab-c"))) == 1
+    assert len(boundary(lambda _a, _b, c: c.update(app="Excel"))) == 1
+    assert len(boundary(lambda _a, _b, c: c.update(source="desktop_capture"))) == 1
+    assert len(boundary(lambda _a, b, _c: b.update(
+        event_type="clipboard_copy", metadata={"clipboard_transfer_id": "transfer-x"}))) == 1
+
+
+def test_other_tab_interruption_preserves_foreign_record_precedence_and_api():
+    before, middle, after = event(1, A), event(2, B), event(3, A)
+    before["tab_context_id"] = after["tab_context_id"] = "tab-a"
+    middle["tab_context_id"] = "tab-b"
+    a = item(linked_work_items([before, middle, after]), A)
+    assert a["activity_segments"][1]["boundary_before"] == [
+        "interleaved_other_record"]
+    middle = event(2)
+    middle["tab_context_id"] = "tab-b"
+    response = workflow_evidence.list_workflow_evidence_candidates(
+        _raw_events=[before, middle, after])
+    linked = response["linked_work_items"]
+    assert item(linked, A)["activity_segments"][1]["boundary_before"] == [
+        "observed_other_tab_without_record"]
+    assert linked["read_only"] is True
+    assert linked["authoritative"] is False
+
+
+def test_other_tab_interruptions_keep_exact_count_when_projection_is_bounded():
+    observations = []
+    for n in range(1, 82):
+        row = event(n, A if n % 2 else None)
+        row["tab_context_id"] = "tab-a" if n % 2 else "tab-b"
+        observations.append(row)
+    a = item(linked_work_items(observations), A)
+    assert a["observed_event_count"] == 41
+    assert a["activity_segment_count"] == 41
+    assert a["activity_segments_truncated"] is True
+    assert len(a["activity_segments"]) == 16
+    assert all(s["boundary_before"] == ["observed_other_tab_without_record"]
+               for s in a["activity_segments"][1:])
