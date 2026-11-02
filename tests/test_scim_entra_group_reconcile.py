@@ -68,9 +68,9 @@ def _graph_server(states, memberships, *, failure=None, mutate_after=None):
             direct = rest.endswith("/memberOf/microsoft.graph.group")
             eid = rest.removesuffix("/memberOf/microsoft.graph.group") if direct else rest
             query = parse.parse_qs(parsed.query)
-            expected = ({"$select": ["id"], "$top": ["100"]} if direct
+            expected = ({"$select": ["id"], "$top": ["100"], "$count": ["true"]} if direct
                         else {"$select": ["id,accountEnabled"]})
-            if eid not in states or query != expected:
+            if eid not in states or query != expected or (direct and self.headers.get("ConsistencyLevel") != "eventual"):
                 self.send_response(404)
                 self.end_headers()
                 return
