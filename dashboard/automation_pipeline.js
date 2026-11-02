@@ -794,7 +794,7 @@
       const r=await (await api('/v1/automation-pipeline'+q)).json();
       if(generation!==refreshGeneration)return;
       counts.textContent=Object.entries(r.counts).filter(([,n])=>n).map(([s,n])=>STATE_LABELS[s]+': '+n).join(' · ')||'No ideas yet.';
-      latestIdeas=r.ideas;syncAuditPages();render();
+      latestIdeas=r.ideas;syncAuditPages();updateCumulative();render();
     }
 
     let detailGeneration=0;
