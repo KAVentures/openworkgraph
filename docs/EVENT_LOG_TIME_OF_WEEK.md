@@ -189,3 +189,79 @@ Synthetic tests cover activity × bucket counts, distinct cases and shares,
 DST fold/gap, case start/completion × first/last activity, save/reload,
 wrong-level dimensions and missing/irrelevant zone refusal. Native CI and
 consenting real-source acceptance remain separate requirements.
+
+
+## Filter an analysis to selected observed weekday/hour windows
+
+The existing typed, session-authenticated analysis endpoint also accepts a
+`time_of_week` filter. This selects **actual observed events**, or **whole
+cases by their first or last observed event**. It is useful for comparing
+weekend, overnight or other explicitly chosen clock windows, rather than
+only grouping every observed event in a heatmap.
+
+For example, count distinct cases and event activity on local Sundays
+between 02:00 and 02:59 in Stockholm:
+
+```json
+{
+  "level": "events",
+  "dimensions": ["activity"],
+  "time_zone": "Europe/Stockholm",
+  "time_of_week": {
+    "anchor": "event",
+    "clock": "local",
+    "weekdays": [7],
+    "hours": [2]
+  },
+  "measures": [{"fn": "count"}, {"fn": "cases"}, {"fn": "share"}],
+  "order": "dimensions"
+}
+```
+
+`anchor` is mandatory: use `event` at event level, or `case_start` /
+`case_end` at case level. It never selects cases merely because some
+intermediate event falls in the window. `clock` defaults to `utc`; for
+`local`, specify a validated IANA `time_zone` on the enclosing analysis
+spec. The same zone also applies to any local grouping dimensions. A
+local-only filter may be combined with UTC grouping dimensions without
+changing their meaning. Supplying a zone to an otherwise UTC-only
+analysis is refused.
+
+`weekdays` is a nonempty, duplicate-free list of ISO weekdays 1 (Monday)
+through 7 (Sunday); `hours` is a nonempty, duplicate-free list of 24-hour
+clock bins 0–23. Omitted lists select all seven days or all 24 hours,
+respectively. An hour selects the full local hour, not an interval with
+custom minute precision. On spring DST transitions a local hour may not
+exist; on autumn transitions both occurrences of a repeated wall hour
+are selected. Stored UTC instants remain unchanged.
+
+For cases, an explicit weekend intake window looks like:
+
+```json
+{
+  "level": "cases",
+  "dimensions": ["duration_band"],
+  "time_of_week": {
+    "anchor": "case_start",
+    "weekdays": [6, 7]
+  },
+  "measures": [{"fn": "count"}, {"fn": "median", "of": "duration_seconds"}],
+  "order": "dimensions"
+}
+```
+
+The filter composes with existing cohort, activity and case filters,
+attribute dimensions, aggregate measures and saved analyses. `matching`
+counts describe only selected observed data. This is **not** an employee
+shift, staffing requirement, business-hours SLA, provider completeness
+claim or proof of source-authoritative case start/completion. No new
+data collection, business writes, raw SQL, permissions or network
+requests are introduced. The query uses fixed SQL expressions and bound
+list/time-zone parameters; input lengths and values are validated before
+querying.
+
+Synthetic regressions cover case start versus completion, observed
+event selection, local DST gap/fold, activity and case filters, mixed
+UTC grouping with local selection, saved definitions and malformed
+windows. Native CI and consenting real-source acceptance remain
+separate release gates.
