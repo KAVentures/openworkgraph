@@ -301,7 +301,7 @@
             downloadPacket.onclick=()=>{
               if(generation!==detailGeneration||choice.value!==p.project_id||!journeyHost.contains(downloadPacket))return;
               const current=handoffReviewPacket(data,p.project_id,idea.idea_id,new Date().toISOString());
-              const blob=new Blob([JSON.stringify(current,null,2)+'\\n'],{type:'application/json'});
+              const blob=new Blob([JSON.stringify(current,null,2)+'\n'],{type:'application/json'});
               const url=URL.createObjectURL(blob),link=el('a');
               link.href=url;link.download='owg-evidence-handoff-review.json';
               document.body.appendChild(link);link.click();link.remove();
