@@ -246,3 +246,49 @@ source-verified business truth. It does not change the production linker,
 canonical membership, tenant/consent boundaries, REST/MCP/dashboard, or
 authorize any agent or business action. Exact-head native CI, frozen family
 holdout and real consenting-user acceptance remain outstanding.
+
+## Resolve a contested assignment with an explicit third review (resolve)
+
+Two-reviewer consensus intentionally leaves competing or one-sided decisions
+unassigned. For an authorized human arbiter to resolve **only those disputed
+observations**, retain the exact original adjudication artifact and create a
+third, independently authored local decision document in the same
+`openworkgraph.reconstruction-review-decisions.v1` format. Its `decisions`
+array must be nonempty and may contain **only event IDs from
+`unresolved_event_ids`** in the original adjudication. A third reviewer may
+confirm or reject an existing, actually eligible item; they cannot revise
+agreed decisions, add candidates or silently assign an intermediary.
+
+    python -m scripts.reconstruction_review resolve \
+      --events /private/observations.json \
+      --packet /private/review-packet.json \
+      --adjudication /private/adjudication.json \
+      --third-reviewer /private/third-review.json \
+      --output /private/resolution.json
+
+The command reruns the current production linker, validates both original
+reviews, their exact consensus and the third review, then validates the
+**combined** decisions. If a third reviewer rejects an intermediary that an
+already agreed two-hop confirmation depends upon, the entire resolution fails.
+Partially resolved disagreements remain explicitly unresolved; there is no
+automatic majority vote. Original reviews and disagreements are preserved in
+the new private, create-only resolution artifact. Its format is
+`openworkgraph.reconstruction-review-resolution.v1`, and it includes
+`third_reviewer_resolved_count`, `remaining_unresolved_event_ids` and
+`reviewer_independence_verified: false`.
+
+Use `--decisions /private/resolution.json` with `apply` or `score`, or
+in a `score-batch` manifest. Every consumer replays and checks all three
+human inputs and the combined result against the exact current evidence.
+The overlay marks `review_decision_provenance: third_reviewer_resolution`,
+and batch reports `third_reviewer_resolution_session_count`. Scoring still
+reports the unchanged automatic baseline separately from human-assisted
+assignments. No authenticated third-reviewer identity or independent review
+is established by file inputs, and neither resolution nor review permits a
+provider write, a canonical event change or an agent action.
+
+Acceptance is a real local operator journey: produce contested A/B case
+assignments, explicitly adjudicate, resolve a disputed event, apply and score
+against independently annotated truth, then revoke or alter source evidence
+and verify the exact prior artifact is refused. Native exact-head cross-platform
+CI and real consenting-user acceptance remain mandatory before release.
