@@ -258,6 +258,11 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    assert.equal(comparisonResponse.status(),200);
    await page.locator('#owgPipelineJourneyCompareResult').getByText(/Recorded fields match the current local references/).waitFor();
    assert.equal(guidedWrites,writesBeforePacket,'local packet comparison must not write');
+   const matchingInspection=page.locator('#owgPipelineJourneyInspectionWorklist');
+   assert(await matchingInspection.locator('input[type=checkbox]').count()>0,
+     'even a matching snapshot still has outstanding human checks');
+   assert((await matchingInspection.textContent()).includes('All approval and verification gates remain open.'));
+
    const alteredPacket=JSON.parse(JSON.stringify(handoffPacket));
    alteredPacket.process.status='changed';
    alteredPacket.project.spec_sha256='a'.repeat(64);
@@ -269,6 +274,47 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    const comparisonText=await page.locator('#owgPipelineJourneyCompareResult').textContent();
    assert(comparisonText.includes('Saved process availability'));
    assert(comparisonText.includes('Project revision and artifact hashes'));
+   // Human-inspection checklist is local and never approves any of the
+   // underlying decision/source/execution gates. Export is pinned to both
+   // snapshots and contains no raw case, receipt or free-form user text.
+   const inspectionWorklist=page.locator('#owgPipelineJourneyInspectionWorklist');
+   const inspectionChecks=inspectionWorklist.locator('input[type=checkbox]');
+   assert(await inspectionChecks.count()>=5);
+   await inspectionChecks.first().focus();
+   await page.keyboard.press('Space');
+   assert(await inspectionChecks.first().isChecked(),'keyboard can mark inspected locally');
+   const [inspectionDownload]=await Promise.all([
+     page.waitForEvent('download'),
+     inspectionWorklist.locator('#owgPipelineJourneyInspectionDownload').click()
+   ]);
+   assert.equal(inspectionDownload.suggestedFilename(),'owg-human-inspection-worklist.json');
+   const inspectionRecord=JSON.parse(await fs.readFile(await inspectionDownload.path(),'utf8'));
+   assert.equal(inspectionRecord.format,'openworkgraph.handoff-human-inspection.v1');
+   assert.equal(inspectionRecord.scope,'local_human_inspection_only');
+   assert.equal(inspectionRecord.idea_id,linked.idea_id);
+   assert.equal(inspectionRecord.project_id,manifest.project_id);
+   assert.equal(inspectionRecord.saved_basis.project_spec_sha256,'a'.repeat(64));
+   assert.equal(inspectionRecord.current_basis.project_spec_sha256,manifest.spec_sha256);
+   assert.equal(inspectionRecord.current_basis.process_sha256,saved.content_sha256);
+   assert.equal(inspectionRecord.inspected_count,1);
+   assert(inspectionRecord.pending_inspection_count>0);
+   assert(inspectionRecord.items.some(item=>item.kind==='changed_area'&&item.inspected_locally));
+   assert(inspectionRecord.items.some(item=>item.kind==='outstanding_blocker'&&!item.inspected_locally));
+   for(const flag of ['execution_authorized','source_read_authorized','human_approval_granted',
+     'verified_execution','verified_business_outcomes'])assert.equal(inspectionRecord[flag],false);
+   assert.equal(inspectionRecord.source_and_outcome_verification,'not_established');
+   assert(!JSON.stringify(inspectionRecord).includes('PRIVATE_RAW_CASE_VALUE'));
+   assert(!JSON.stringify(inspectionRecord).includes('owg:r:'));
+   assert(!JSON.stringify(inspectionRecord).includes('raw_receipt'));
+   const invalidInspection=await page.evaluate(([oldPacket,newPacket])=>{
+     try{
+       window.__owgPipelineModel.handoffInspectionWorklist(oldPacket,newPacket,
+         ['change:invented-unreviewed-category'],'2026-11-02T00:00:00Z');
+       return false;
+     }catch{return true;}
+   },[alteredPacket,handoffPacket]);
+   assert.equal(invalidInspection,true,'cannot import arbitrary inspection or approval claims');
+   assert.equal(guidedWrites,writesBeforePacket,'inspection and export must not write or read source');
    const driftActions=page.locator('#owgPipelineJourneyDriftActions');
    assert(await driftActions.getByRole('button',{name:'Inspect exact saved process revision'}).isEnabled());
    assert((await driftActions.textContent()).includes('Review changed areas'));
@@ -286,6 +332,8 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    const wrongPacket=JSON.parse(JSON.stringify(handoffPacket));
    wrongPacket.project.project_id='unrelated-project';
    await setPacket(wrongPacket);
+   assert.equal(await page.locator('#owgPipelineJourneyInspectionWorklist').count(),0,
+     'new packet selection must invalidate old local inspection marks and download');
    await page.locator('#owgPipelineJourneyComparePacket').click();
    await page.locator('#owgPipelineJourneyCompareResult').filter({hasText:/belongs to another idea or project/}).waitFor();
    assert.equal(await page.locator('#owgPipelineJourneyDriftActions').count(),0,'invalid packet must clear actionable review links');
