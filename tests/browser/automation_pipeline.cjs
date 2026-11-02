@@ -401,6 +401,28 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await directResume.locator('#owgPipelineResumeStatus')
      .filter({hasText:/no larger than 64 KiB/}).waitFor();
    assert.equal(directResumeWrites,0,'invalid, oversized and missing-project resumes never write');
+   // Changing the selected file while the authenticated journey is in flight
+   // must invalidate that response rather than restoring old marks.
+   let releaseDirectJourney,journeyWasHeld;
+   const directJourneyHeld=new Promise(resolve=>{releaseDirectJourney=resolve;});
+   const directJourneyReached=new Promise(resolve=>{journeyWasHeld=resolve;});
+   await directResume.route('**/v1/automation-pipeline/'+linked.idea_id+'/journey',async route=>{
+     journeyWasHeld();await directJourneyHeld;await route.continue();
+   });
+   await directResume.locator('#owgPipelineResumeBundleFile').setInputFiles({
+     name:'race-original.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(reviewBundle))
+   });
+   await directResume.locator('#owgPipelineResumeBundle').click();
+   await directJourneyReached;
+   await directResume.locator('#owgPipelineResumeBundleFile').setInputFiles({
+     name:'race-changed.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(reviewBundle))
+   });
+   releaseDirectJourney();
+   await directResume.locator('#owgPipelineResumeStatus')
+     .filter({hasText:/File selected. Resume explicitly/}).waitFor();
+   assert.equal(await directResume.locator('#owgPipelineJourneyProject').count(),0,
+     'stale journey response cannot select a project after the file changes');
+   assert.equal(directResumeWrites,0,'stale resume never writes');
    await directResume.close();
    // A local file can resume only the same explicit human inspection after
    // reopening the dashboard. This never changes server-side approval state.
