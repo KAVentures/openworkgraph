@@ -164,6 +164,18 @@ const path=require('node:path');
    await page.locator('#owgPipelineStatus').filter({hasText:'Assessment saved.'}).waitFor();
    await page.getByRole('button',{name:'Move to Approved',exact:true}).click();
    await page.locator('#owgPipelineStatus').filter({hasText:'Moved to Approved.'}).waitFor();
+   // A delayed journey from an earlier idea view must not populate a newly
+   // opened detail view or re-enable its stale navigation controls.
+   let heldJourneyRoute,releaseJourney;
+   const journeyHeld=new Promise(resolve=>{releaseJourney=resolve;});
+   await page.route('**/v1/automation-pipeline/*/journey',route=>{heldJourneyRoute=route;releaseJourney();});
+   await page.evaluate(()=>{document.getElementById('owgPipelineJourney').dataset.oldView='yes';});
+   await page.locator('#owgPipelineJourney').click();await journeyHeld;
+   await page.evaluate(id=>window.dispatchEvent(new CustomEvent('owg-pipeline-open',{detail:{idea_id:id}})),linked.idea_id);
+   await page.waitForFunction(()=>document.getElementById('owgPipelineJourney')?.dataset.oldView!=='yes');
+   const staleResponse=page.waitForResponse(r=>r.url().endsWith('/'+linked.idea_id+'/journey'));
+   await heldJourneyRoute.continue();await staleResponse;await page.unroute('**/v1/automation-pipeline/*/journey');
+   assert.equal(await page.locator('#owgPipelineJourneyGuide').count(),0,'superseded journey cannot restore controls');
    const linkedBeforeExport=await page.evaluate(async id=>(await fetch('/v1/automation-pipeline/'+id)).json(),linked.idea_id);
    await page.locator('#owgPipelineJourney').click();
    await guide.locator('#owgPipelineJourneyExport').waitFor();
