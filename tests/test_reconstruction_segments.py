@@ -127,3 +127,94 @@ def test_existing_workflow_evidence_api_carries_additive_segments():
     linked = result["linked_work_items"]
     assert item(linked, A)["activity_segment_count"] == 2
     assert "record_case_lanes" in result
+
+
+def test_unreferenced_other_app_splits_observed_episode_not_case_membership():
+    browser_before, terminal, browser_after = event(1, A), event(2), event(3, A)
+    terminal.update(app="Terminal", source="desktop_capture")
+    result = linked_work_items([browser_before, terminal, browser_after])
+    a = item(result, A)
+    assert a["event_ids"] == ["e0001", "e0003"]
+    assert a["activity_segment_count"] == 2
+    assert [segment["boundary_before"] for segment in a["activity_segments"]] == [
+        [], ["observed_other_app_without_record"]]
+    assert a["link_basis"] == {"same_record": 1}
+    assert result["unlinked_observation_count"] == 1
+    assert "Terminal" not in json.dumps(result)
+    assert "SECRET" not in json.dumps(result)
+    # Removing a retained observation recomputes boundaries, not memberships.
+    without_terminal = item(linked_work_items([browser_before, browser_after]), A)
+    assert without_terminal["activity_segment_count"] == 1
+
+
+def test_other_app_boundary_requires_same_complete_scope_and_trusted_capture():
+    def segments(change):
+        first, middle, last = event(1, A), event(2), event(3, A)
+        middle.update(app="Terminal", source="desktop_capture")
+        change(first, middle, last)
+        return item(linked_work_items([first, middle, last]), A)["activity_segment_count"]
+
+    assert segments(lambda _a, b, _c: b.update(organization_id="tenant-b")) == 1
+    assert segments(lambda _a, b, _c: b.update(actor_id="actor-b")) == 1
+    assert segments(lambda _a, b, _c: b.update(device_id="device-b")) == 1
+    assert segments(lambda _a, b, _c: b.update(session_id="session-b")) == 1
+    assert segments(lambda _a, b, _c: b.pop("device_id")) == 1
+    assert segments(lambda _a, b, _c: b.update(app="Other")) == 1
+    assert segments(lambda _a, b, _c: b.update(app="Unknown")) == 1
+    assert segments(lambda _a, b, _c: b.update(app="Browser")) == 1
+    assert segments(lambda _a, b, _c: b.update(source="unknown")) == 1
+    assert segments(lambda _a, b, _c: b.update(app="Terminal\nInjected")) == 1
+    assert segments(lambda _a, b, _c: b.update(
+        metadata={"resource_reference": {"resource_ref": True}})) == 1
+    assert segments(lambda _a, b, _c: b.update(
+        tab_context_id="tab-a", metadata={"tab_context_id": "tab-b"})) == 1
+
+
+def test_other_app_boundary_requires_strict_time_and_same_member_app():
+    def segments(change):
+        first, middle, last = event(1, A), event(2), event(3, A)
+        middle.update(app="Terminal", source="desktop_capture")
+        change(first, middle, last)
+        return item(linked_work_items([first, middle, last]), A)["activity_segments"]
+
+    assert len(segments(lambda _a, b, c: b.update(observed_at=c["observed_at"]))) == 1
+    assert len(segments(lambda a, b, _c: b.update(observed_at=a["observed_at"]))) == 1
+    assert len(segments(lambda _a, _b, c: c.update(app="Excel"))) == 1
+    assert len(segments(lambda _a, _b, _c: None)) == 2
+
+
+def test_literal_foreign_record_retains_existing_interleaving_boundary():
+    first, middle, last = event(1, A), event(2, B), event(3, A)
+    middle.update(app="Terminal", source="desktop_capture")
+    a = item(linked_work_items([first, middle, last]), A)
+    assert a["activity_segment_count"] == 2
+    assert a["activity_segments"][1]["boundary_before"] == [
+        "interleaved_other_record"]
+
+
+def test_other_app_episode_counts_remain_exact_when_timeline_truncated():
+    observations = []
+    for n in range(1, 82):
+        row = event(n, A if n % 2 else None)
+        if n % 2 == 0:
+            row.update(app="Terminal", source="desktop_capture")
+        observations.append(row)
+    a = item(linked_work_items(observations), A)
+    assert a["observed_event_count"] == 41
+    assert a["activity_segment_count"] == 41
+    assert a["activity_segments_truncated"] is True
+    assert len(a["activity_segments"]) == 16
+    assert all(segment["boundary_before"] == ["observed_other_app_without_record"]
+               for segment in a["activity_segments"][1:])
+
+
+def test_existing_workflow_evidence_api_exposes_uncertain_other_app_episode():
+    first, middle, last = event(1, A), event(2), event(3, A)
+    middle.update(app="Terminal", source="desktop_capture")
+    response = workflow_evidence.list_workflow_evidence_candidates(
+        _raw_events=[first, middle, last]
+    )
+    linked = response["linked_work_items"]
+    assert item(linked, A)["activity_segments"][1]["boundary_before"] == [
+        "observed_other_app_without_record"]
+    assert response["record_case_lanes"]["format"] == "openworkgraph.record-case-lanes.v1"
