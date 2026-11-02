@@ -355,6 +355,8 @@ def score_automatic_proposals(
         "annotated_event_count": measured["annotated_event_count"],
         "visible_candidate_count": proposed["visible_candidate_count"],
         "proposal_count": proposed["proposal_count"],
+        "direct_proposal_count": proposed["direct_proposal_count"],
+        "two_hop_proposal_count": proposed["two_hop_proposal_count"],
         "abstention_counts": proposed["abstention_counts"],
         "eligible_review_truncated": proposed["eligible_review_truncated"],
         "automatic_baseline": measured["automatic_baseline"],
