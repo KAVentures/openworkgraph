@@ -423,9 +423,12 @@
                     followups.appendChild(control);
                     if(disabled&&explanation)followups.appendChild(el('p',explanation,'muted'));
                   };
+                  const freshExactProcess=!!ref&&['current','changed'].includes(latest.process.status)&&
+                    latest.process.workflow_id===ref.workflow_id&&latest.process.revision===ref.revision&&
+                    latest.process.content_sha256===ref.content_sha256;
                   if(changed.has('Saved process revision and digest')||changed.has('Saved process availability'))
                     offer('Inspect exact saved process revision',()=>processAction.click(),
-                      processAction.disabled,'The linked saved revision is unavailable or uncheckable. No newer revision will be substituted.');
+                      processAction.disabled||!freshExactProcess,'The linked saved revision is unavailable or uncheckable on the fresh read. No newer revision will be substituted.');
                   if(changed.has('Opportunity revision and state'))
                     offer('Review opportunity assessment and decision',()=>ideaAction.click());
                   if(changed.has('Project revision and artifact hashes'))
@@ -436,7 +439,8 @@
                     offer('Review imported reports for this project',()=>reportsAction.click());
                   if(changed.has('Recorded source-check exports'))
                     offer('Prepare separate source review for this project',()=>sourceAction.click(),
-                      sourceAction.disabled,'Historical projects cannot prepare a source read. Review the current idea and project first.');
+                      sourceAction.disabled||!latest.project.idea_revision_is_current,
+                      'Historical projects cannot prepare a source read. Review the current idea and project first.');
                   if(changed.has('Dataset and cohort source checks'))
                     followups.appendChild(el('p','Dataset or cohort evidence changed. Review the source origin and consent in its original workspace; this journey cannot repair or independently verify it.','muted'));
                   if(changed.has('Human review blockers'))
