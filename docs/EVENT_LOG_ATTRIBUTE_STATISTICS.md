@@ -559,7 +559,12 @@ the latter and independent consenting-user acceptance remain release gates.
 ## Reopen and revise a saved analysis in the dashboard
 
 **Build an analysis → Saved analysis → Load into builder** now reconstructs an
-existing saved analysis as an **editable local draft**. This restores its
+existing saved analysis as an **editable local draft**. Each metric has an
+**Edit** control that populates the original typed form, followed by **Update
+selected metric**. Renaming a metric that other metrics depend on, creating
+duplicate names or introducing a reference to a later metric is refused
+without changing the draft. An update changes only the in-memory draft; rerun
+before exporting or saving the new version. This restores its
 case/event level, both grouping dimensions (including named attributes), case
 duration/end-activity filters, ordered typed case metrics and metric
 dependencies, and the selected measures. You can then change the draft, run it
