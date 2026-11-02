@@ -52,29 +52,51 @@ def read_imported_run(*, deployment_id: str, run_id: str, scope: str, secret: st
         try:
             conn = duckdb.connect(str(path), read_only=True)
             try:
+                conn.execute("BEGIN TRANSACTION")
                 row = conn.execute(
                     """SELECT r.status, r.started_at, r.finished_at,
-                              r.outcome_reported_verified, d.runtime
+                              r.outcome_reported_verified, d.runtime, r.outcome_source
                        FROM runs r JOIN deployments d ON d.deployment_id = r.deployment_id
                        WHERE r.deployment_id = ? AND r.run_id = ? LIMIT 1""",
                     [deployment_id, run_id],
                 ).fetchone()
+                steps = conn.execute(
+                    """SELECT seq, step_id, activity, status, observed_at
+                       FROM steps WHERE deployment_id = ? AND run_id = ?
+                       ORDER BY seq LIMIT 101""", [deployment_id, run_id],
+                ).fetchall()
+                conn.execute("COMMIT")
             finally:
                 conn.close()
         except duckdb.Error:
             raise CaseDeclarationError("imported automation run store unavailable") from None
     if row is None or row[0] not in _STATES or not isinstance(row[1], datetime):
         raise CaseDeclarationError("no imported automation run available")
-    status, started, finished, reported, runtime = row
+    status, started, finished, reported, runtime, reported_source = row
     if (finished is not None and (not isinstance(finished, datetime) or finished < started)
             or status == "running" and finished is not None
             or reported is not None and type(reported) is not bool
-            or runtime not in monitoring.RUNTIMES):
+            or runtime not in monitoring.RUNTIMES
+            or not isinstance(reported_source, str) or len(reported_source) > 80
+            or len(steps) > 100):
         raise CaseDeclarationError("invalid retained automation run")
+    minimized_steps = []
+    for index, step_id, activity, step_status, observed_at in steps:
+        if (type(index) is not int or index != len(minimized_steps)
+                or not isinstance(step_id, str) or len(step_id) > 128
+                or not isinstance(activity, str) or len(activity) > 200
+                or step_status not in monitoring.STEP_STATUSES
+                or not isinstance(observed_at, datetime)):
+            raise CaseDeclarationError("invalid retained automation run steps")
+        minimized_steps.append([index, step_id, activity, step_status, observed_at.isoformat()])
     started_at = started.replace(tzinfo=timezone.utc).isoformat()
     finished_at = finished.replace(tzinfo=timezone.utc).isoformat() if finished else None
     identity = [deployment_id, run_id]
-    snapshot = [deployment_id, run_id, status, started_at, finished_at, reported, runtime]
+    # Sensitive report labels/steps are used only inside the keyed digest,
+    # never included in the response. Replacing a run's steps or outcome-source
+    # label must invalidate the double-read consistency check too.
+    snapshot = [deployment_id, run_id, status, started_at, finished_at,
+                reported, runtime, reported_source, minimized_steps]
     return {
         "run_ref": "owg:run:" + _opaque(secret, scope, "selected-imported-run", identity)[:32],
         "run_snapshot_fingerprint": _opaque(secret, scope, "imported-run-snapshot", snapshot),
