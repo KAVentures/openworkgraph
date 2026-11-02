@@ -276,7 +276,7 @@
   // Combines only pages that a human explicitly requested and that were read
   // through the authenticated local journey API. It is not a source attestation.
   function combinedPortfolioHandoffReview(eligible,pages,createdAt){
-    if(!Array.isArray(eligible)||eligible.length>2048||!(pages instanceof Map)||
+    if(!Array.isArray(eligible)||!(pages instanceof Map)||
       typeof createdAt!=='string')throw new Error('Invalid portfolio review basis.');
     const ids=eligible.map(item=>item.idea_id);
     if(ids.some(id=>typeof id!=='string'||!id||id.length>128)||
@@ -303,7 +303,7 @@
       reviewed_page_numbers:reviewedNumbers,unreviewed_page_numbers:unreviewedNumbers,
       reviewed_count:items.length,unreviewed_count:ids.length-items.length,
       incomplete_evidence_count:items.filter(item=>item.status!=='human_review_required').length,
-      complete_coverage:unreviewedNumbers.length===0&&
+      complete_coverage:ids.length>0&&unreviewedNumbers.length===0&&
         items.every(item=>item.status==='human_review_required'),
       execution_authorized:false,source_read_authorized:false,
       verified_execution:false,verified_business_outcomes:false,
