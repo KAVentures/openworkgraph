@@ -107,6 +107,8 @@ def test_refuse_unreviewed_tampered_or_revoked_without_post(
             data["enabled"] = False
             grant.write_text(json.dumps(data))
         elif failure == "symlink-csv":
+            if os.name == "nt":
+                pytest.skip("Windows symlink creation requires elevated privileges")
             csv = environment[0] / "review.csv"
             data = environment[0] / "other.csv"
             csv.rename(data)
