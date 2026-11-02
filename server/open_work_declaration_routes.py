@@ -34,6 +34,7 @@ from .open_work_case_operation_timeline import (
 from .open_work_case_dependency_history import compose_dependency_operation_history
 from .open_work_case_human_dependency_history import compose_dependency_human_outcomes
 from .open_work_case_outcome_reconciliation import compose_outcome_evidence_triage
+from .open_work_case_review_actions import compose_outcome_review_action_plan
 from .open_work_case_fresh_outcome_triage import compose_fresh_outcome_triage
 from .open_work_case_outcome_portfolio import (
     portfolio_fingerprint, validate_page_token, compose_outcome_portfolio,
@@ -1448,8 +1449,13 @@ async def read_local_outcome_evidence_triage(request: Request, response: Respons
     if type(count) is not int or not 1 <= count <= 4:
         raise HTTPException(422, "max_cases must be between 1 and 4")
     result, _admitted, _signature, _secret = await _load_review_triage(scope, payload)
+    try:
+        action_plan = compose_outcome_review_action_plan(result)
+    except (CaseDeclarationError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
     response.headers["Cache-Control"] = "no-store"
-    return result
+    return {**result, "review_action_plan": action_plan}
 
 
 @router.post("/v1/open-work/declarations/human-outcomes/review-packet")
