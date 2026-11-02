@@ -1233,7 +1233,8 @@ background polling, new provider privileges, or external writes.
 Each request requires the existing local dashboard session and independently
 authorized Stripe connection. A current exact reviewed case and its entire
 prerequisite graph are admitted before any provider read, rechecked after it,
-and checked again under the evidence transaction before commit. This narrows
+and checked again before and after the evidence transaction. Lock ordering
+prevents a review-revocation deadlock; this narrows
 local revocation races but **does not establish an atomic cross-process
 provider-grant fence, production organization/actor RBAC, or a distributed
 tenant-scoped outcome ledger**. A copied response is historical evidence only
