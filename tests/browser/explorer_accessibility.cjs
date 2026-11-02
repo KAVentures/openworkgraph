@@ -912,6 +912,85 @@ const path=require('node:path');
    assert.match(editor,/Read A record/,'editable proposed activities come from other lane');
    assert.match(await page.locator('#owgCatalogStatus').textContent(),/TO-BE activities.*not verified policy/i);
    assert.equal(await alternativeDraft.isDisabled(),true,'alternative acknowledgement is consumed');
+
+   // Functional human clarification: actual process-model edit, reviewed save,
+   // then reopen the same revision in a fresh browser session.
+   const differencePanel=page.locator('#owgCatalogDifferenceReview');
+   await differencePanel.waitFor();
+   assert.match(await differencePanel.textContent(),/6 unmatched ordered steps/);
+   assert.equal(await differencePanel.locator('fieldset').count(),6);
+   await audit(page,'#owgCatalogDifferenceReview','Human AS-IS to TO-BE clarification');
+   let catalogWrites=0,savedCatalog;
+   page.on('request',r=>{if(r.method()==='POST'&&new URL(r.url()).pathname==='/v1/process-catalog')catalogWrites++;});
+   const addGates=page.getByRole('button',{name:'Add selected human review gates',exact:true});
+   await addGates.click();
+   assert.match(await page.locator('#owgCatalogDifferenceStatus').textContent(),/Choose at least one/);
+   await page.locator('#owgCatalogDifferenceConfirm0').check();
+   await addGates.click();
+   assert.match(await page.locator('#owgCatalogDifferenceStatus').textContent(),/Every selected gate needs/);
+   await page.locator('#owgCatalogDifferenceActivity0').selectOption('step_1');
+   await page.locator('#owgCatalogDifferenceKind0').selectOption('decision_point');
+   await page.locator('#owgCatalogDifferenceResponse0').selectOption('pause_for_review');
+   await page.locator('#owgCatalogDifferenceLabel0').fill('Invalid:label');
+   await addGates.click();
+   assert.match(await page.locator('#owgCatalogDifferenceStatus').textContent(),/valid 1–64 character label/);
+   await page.locator('#owgCatalogDifferenceLabel0').fill('Review missing source step');
+   await page.getByLabel('Business goal').fill('Clarify the observed process difference');
+   await addGates.click();
+   assert.match(await page.locator('#owgCatalogDifferenceStatus').textContent(),/process or review changed/);
+   await page.getByRole('button',{name:'Refresh graph preview',exact:true}).click();
+   await page.locator('#owgCatalogDifferenceConfirm0').check();
+   await page.locator('#owgCatalogDifferenceActivity0').selectOption('step_1');
+   await page.locator('#owgCatalogDifferenceKind0').selectOption('decision_point');
+   await page.locator('#owgCatalogDifferenceResponse0').selectOption('pause_for_review');
+   await page.locator('#owgCatalogDifferenceLabel0').fill('Review missing source step');
+   await addGates.focus();await page.keyboard.press('Enter');
+   await page.locator('#owgCatalogStatus').filter({hasText:/Added 1 unverified human-only/}).waitFor();
+   assert.equal(catalogWrites,0,'clarification never saves automatically');
+   assert.equal(await page.getByLabel('Condition label 1').inputValue(),'Review missing source step');
+   await page.locator('#owgCatalogDifferenceConfirm0').check();
+   await page.locator('#owgCatalogDifferenceActivity0').selectOption('step_1');
+   await page.locator('#owgCatalogDifferenceKind0').selectOption('decision_point');
+   await page.locator('#owgCatalogDifferenceResponse0').selectOption('pause_for_review');
+   await page.locator('#owgCatalogDifferenceLabel0').fill('Review missing source step');
+   await addGates.click();
+   assert.match(await page.locator('#owgCatalogDifferenceStatus').textContent(),/Duplicate clarification gate/);
+   assert.equal(await page.getByLabel('Condition label 1').count(),1);
+   await page.route('**/v1/process-catalog',async route=>{
+     if(route.request().method()!=='POST')return route.continue();
+     const body=route.request().postDataJSON();
+     savedCatalog={...body,workflow_id:'reviewed_difference_fixture',revision:1,content_sha256:'f'.repeat(64)};
+     await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(savedCatalog)});
+   });
+   await page.locator('#owgCatalogReviewed').check();
+   await page.getByRole('button',{name:'Save new revision',exact:true}).click();
+   await page.locator('#owgCatalogStatus').filter({hasText:'Saved revision 1'}).waitFor();
+   assert.equal(catalogWrites,1,'one separately reviewed save request');
+   assert.deepEqual(savedCatalog.process_model.manual_review_conditions,[{
+     activity_id:'step_1',kind:'decision_point',condition_label:'Review missing source step',
+     response:'pause_for_review',source:'user_declared_unverified',evaluated_by_owg:false,
+     automatic_branch_authorized:false,executable:false}]);
+   assert.deepEqual(savedCatalog.evidence_refs,['execution:design_B'],
+     'alternative lane evidence is never borrowed');
+   assert.equal(savedCatalog.process_model.execution_authorized,false);
+   const reopened=await browser.newPage();
+   reopened.on('pageerror',error=>errors.push(error.message));
+   await reopened.route('**/v1/process-catalog/revision?*',route=>{
+     const q=new URL(route.request().url()).searchParams;
+     assert.equal(q.get('workflow_id'),'reviewed_difference_fixture');
+     assert.equal(q.get('revision'),'1');
+     return route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(savedCatalog)});
+   });
+   try{
+     await reopened.goto(base+'/#session='+session);
+     await reopened.locator('#owgProcessCatalog').waitFor();
+     await reopened.evaluate(()=>window.owgProcessCatalog.openSaved({
+       workflow_id:'reviewed_difference_fixture',revision:1,content_sha256:'f'.repeat(64)}));
+     assert.equal(await reopened.getByLabel('Condition label 1').inputValue(),'Review missing source step');
+     assert.match(await reopened.locator('#owgCatalogStatus').textContent(),/Opened immutable revision 1/);
+     await audit(reopened,'#owgCatalogDifferenceReview','Reopened human clarification');
+   }finally{await reopened.close();}
+
    await page.locator('[role=tab][data-tab=overview]').click();
    await audit(page,'#owgWorkflowExplorer','Two-sided AS-IS and proposed TO-BE catalog handoff');
    await page.unroute('**/v1/workflow-evidence?*');
