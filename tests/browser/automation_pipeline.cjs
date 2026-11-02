@@ -977,13 +977,49 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await page.keyboard.press('Enter');
    await comparePanel.locator('#owgPipelineProjectComparisonResult')
      .filter({hasText:/recorded artifact\/metadata differences/}).waitFor();
-   const comparisonRows=comparePanel.locator('tbody tr');
+   const comparisonRows=comparePanel.locator('#owgPipelineProjectComparisonResult > .table-wrap tbody tr');
    assert.equal(await comparisonRows.count(),7);
    assert.match(await comparisonRows.filter({hasText:'Idea revision'}).first().textContent(),/Changed/);
    assert.match(await comparisonRows.filter({hasText:'Specification SHA-256'}).textContent(),/Changed/);
    assert.match(await comparisonRows.filter({hasText:'ZIP SHA-256'}).textContent(),/Changed/);
    assert.match(await comparisonRows.filter({hasText:'Reported specification status counts'}).textContent(),/None recorded/);
    assert.match(await comparePanel.textContent(),/Execution and business outcomes remain unverified/);
+   // Functional comparison of actual exported projects' outstanding review
+   // requirements; no approval or execution is inferred from a disappearing check.
+   const readinessPanel=comparePanel.locator('#owgPipelineProjectReadinessDelta');
+   await readinessPanel.getByText('Human handoff review changes').waitFor();
+   assert.equal(await readinessPanel.locator('tbody tr').count(),7);
+   assert.match(await readinessPanel.textContent(),/No longer reported \(not independently resolved\)/);
+   assert.match(await readinessPanel.locator('tbody tr')
+     .filter({hasText:'Immutable agent project export'}).textContent(),/historical.*artifact recorded.*Changed/s);
+   const [readinessDownload]=await Promise.all([
+     page.waitForEvent('download'),
+     (async()=>{
+       await readinessPanel.locator('#owgPipelineProjectReadinessDownload').focus();
+       await page.keyboard.press('Enter');
+     })()
+   ]);
+   const readinessJson=await fs.readFile(await readinessDownload.path(),'utf8');
+   assert(Buffer.byteLength(readinessJson)<=65536);
+   const readinessRecord=JSON.parse(readinessJson);
+   assert.equal(readinessRecord.format,'openworkgraph.project-handoff-readiness-comparison.v1');
+   assert.equal(readinessRecord.baseline.project_id,baselineId);
+   assert.equal(readinessRecord.candidate.project_id,candidateId);
+   assert.equal(readinessRecord.execution_authorized,false);
+   assert.equal(readinessRecord.source_read_authorized,false);
+   assert.equal(readinessRecord.verified_execution,false);
+   assert.equal(readinessRecord.verified_business_outcomes,false);
+   assert.equal(readinessRecord.handoff_review_complete,false);
+   assert.equal(readinessRecord.stages.length,7);
+   assert(readinessRecord.stages.some(stage=>stage.id==='project'&&stage.changed));
+   assert(readinessRecord.blockers.no_longer_reported.includes('project_uses_historical_idea_revision'));
+   assert(!readinessJson.includes('PRIVATE_RAW_CASE_VALUE'));
+   assert(!readinessJson.includes('owg:r:'));
+   const readinessAudit=await page.evaluate(async()=>window.axe.run(
+     document.querySelector('#owgPipelineProjectReadinessDelta'),
+     {runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},
+       resultTypes:['violations']}));
+   assert.deepEqual(readinessAudit.violations.map(v=>v.id),[]);
    await comparePanel.getByRole('button',{name:'Inspect baseline exact project'}).focus();
    await page.keyboard.press('Enter');
    assert.equal(await page.locator('#owgPipelineJourneyProject').inputValue(),baselineId);
@@ -1009,6 +1045,35 @@ with zipfile.ZipFile(sys.argv[1]) as z:
      try{model.compareRecordedProjects(data,'a','b');return false;}catch{return true;}
    });
    assert(refusal,'truncated project list refuses apparently complete comparison');
+   const readinessRefusals=await page.evaluate(()=>{
+     const model=window.__owgPipelineModel,sha=c=>c.repeat(64);
+     const p={project_id:'a',idea_revision:1,idea_revision_is_current:false,
+       spec_sha256:sha('a'),archive_sha256:sha('b'),reported_specifications:[],
+       source_check_exports:{count:0,last_document_sha256:null}};
+     const data={idea:{idea_id:'i',revision:2,state:'approved'},
+       process_status:{status:'current',process_reference:{
+         workflow_id:'w',revision:1,content_sha256:sha('c')}},
+       dataset_origins:[{status:'current',source_content_sha256:sha('d'),
+         selection_sha256:sha('e')}],
+       projects:[p,{...p,project_id:'b',idea_revision:2,idea_revision_is_current:true}]};
+     const run=d=>model.compareProjectHandoffReadiness(d,'a','b','i','2026-11-02T00:00:00Z');
+     const normal=run(data);
+     let truncatedOrigin=false,truncatedReport=false,wrongProject=false;
+     try{run({...data,dataset_origins:Array.from({length:65},()=>data.dataset_origins[0])});}
+     catch{truncatedOrigin=true;}
+     try{run({...data,projects:[{...p,reported_specifications:Array.from({length:65},()=>({
+       status:'matching_reported_specification',reported_run_count:1}))},data.projects[1]]});}
+     catch{truncatedReport=true;}
+     try{model.compareProjectHandoffReadiness(data,'a','missing','i','2026-11-02T00:00:00Z');}
+     catch{wrongProject=true;}
+     return {normal,truncatedOrigin,truncatedReport,wrongProject};
+   });
+   assert(readinessRefusals.truncatedOrigin&&readinessRefusals.truncatedReport&&
+     readinessRefusals.wrongProject,'incomplete or wrong-project review comparisons refuse');
+   assert(readinessRefusals.normal.blockers.no_longer_reported.includes('project_uses_historical_idea_revision'));
+   assert.equal(readinessRefusals.normal.coverage.baseline.stages,7);
+   assert.equal(readinessRefusals.normal.coverage.candidate.stages,7);
+
    const compareAudit=await page.evaluate(async()=>window.axe.run(
      document.querySelector('#owgPipelineProjectComparison'),
      {runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},
