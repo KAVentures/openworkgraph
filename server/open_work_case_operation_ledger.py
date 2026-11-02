@@ -77,6 +77,7 @@ def _database(*, create: bool) -> Iterator[sqlite3.Connection | None]:
     try:
         db.execute("PRAGMA busy_timeout=5000")
         db.execute("PRAGMA synchronous=FULL")
+        db.execute("PRAGMA secure_delete=ON")
         if db.execute("PRAGMA journal_mode").fetchone() != ("delete",):
             raise CaseDeclarationError("unsupported operation ledger journal mode")
         version = db.execute("PRAGMA user_version").fetchone()[0]
