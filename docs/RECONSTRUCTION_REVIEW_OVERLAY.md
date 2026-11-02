@@ -343,7 +343,7 @@ CI and real consenting-user acceptance remain mandatory before release.
 
 ## Experimental conservative automatic proposals and independent scoring
 
-The local \`propose\` command tests a **deterministic, noncanonical** reconstruction
+The local `propose` command tests a **deterministic, noncanonical** reconstruction
 rule against the existing production linker's real weak-candidate queue. It
 proposes an unassigned observation for an existing item **only** when all of
 the following hold: (1) the production linker exposes exactly one complete
@@ -383,8 +383,8 @@ existing production assignment with the proposed grouping:
       --truth /private/independent-truth.json \
       --output /private/proposal-score.json
 
-The report separates \`automatic_baseline\` from
-\`experimental_automatic_proposal_overlay\` and uses the existing production
+The report separates `automatic_baseline` from
+`experimental_automatic_proposal_overlay` and uses the existing production
 scoring definition for F1, precision, recall, contamination and interruption
 rejection. No reviewer decisions are read, and the proposals are derived
 afresh; changing/revoking source evidence or altering the packet refuses the
