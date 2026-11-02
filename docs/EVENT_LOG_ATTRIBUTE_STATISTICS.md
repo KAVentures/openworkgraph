@@ -555,3 +555,32 @@ keyboard activation, authenticated analysis, ratio and missing-case coverage,
 atomic refusals, saved replay, CSV export and the existing WCAG audit.
 Source-level JavaScript checks are distinct from native Chromium and pytest;
 the latter and independent consenting-user acceptance remain release gates.
+
+## Reopen and revise a saved analysis in the dashboard
+
+**Build an analysis → Saved analysis → Load into builder** now reconstructs an
+existing saved analysis as an **editable local draft**. This restores its
+case/event level, both grouping dimensions (including named attributes), case
+duration/end-activity filters, ordered typed case metrics and metric
+dependencies, and the selected measures. You can then change the draft, run it
+through the existing authenticated analysis endpoint and **save it under a new
+name**. Loading does not modify or delete the original saved definition, does
+not contact an external provider and never authorizes a business action.
+
+Loading deliberately clears the previous result, exports and sharing preview:
+those belonged to the *previous* query, not the newly loaded draft. Run the
+loaded draft to obtain fresh results and enable saving/exporting again.
+Existing **Run** and **Delete** buttons retain their original behavior.
+Keyboard users can focus **Load into builder** and press Enter.
+
+The builder refuses a saved definition **without changing the current draft**
+if it cannot represent all of its settings: unsupported dimensions, filters or
+measure functions; a different OCEL case notion; more than four metrics;
+invalid/duplicate metric names; an arithmetic dependency on a missing or later
+metric; or an unsupported typed arithmetic expression. Such definitions can
+still be run with the existing **Run** action; they are not silently reduced
+to an incomplete edit form. This edit operation does not pin the log's source
+contents: imported logs can change between the original save and the rerun,
+so the new result must be interpreted as a new observation, not a historical
+snapshot or a source-verified business outcome.
+
