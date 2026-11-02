@@ -306,6 +306,86 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    assert(!JSON.stringify(inspectionRecord).includes('PRIVATE_RAW_CASE_VALUE'));
    assert(!JSON.stringify(inspectionRecord).includes('owg:r:'));
    assert(!JSON.stringify(inspectionRecord).includes('raw_receipt'));
+   assert.match(inspectionRecord.comparison_sha256,/^[a-f0-9]{64}$/);
+   // A local file can resume only the same explicit human inspection after
+   // reopening the dashboard. This never changes server-side approval state.
+   await inspectionChecks.first().uncheck();
+   const inspectionFilePayload={
+     name:'previous-inspection.json',mimeType:'application/json',
+     buffer:Buffer.from(JSON.stringify(inspectionRecord))
+   };
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionImportFile').setInputFiles(inspectionFilePayload);
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionRestore').click();
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionRestoreStatus')
+     .getByText(/Restored 1 local inspection marks/).waitFor();
+   assert(await inspectionChecks.first().isChecked(),'same-comparison import restores a local mark');
+   await inspectionChecks.first().uncheck();
+   const wrongInspection={...inspectionRecord,project_id:'unrelated-project'};
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionImportFile').setInputFiles({
+     name:'wrong-inspection.json',mimeType:'application/json',
+     buffer:Buffer.from(JSON.stringify(wrongInspection))
+   });
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionRestore').click();
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionRestoreStatus')
+     .getByText(/does not match this exact fresh comparison/).waitFor();
+   assert(!await inspectionChecks.first().isChecked(),'wrong-project worklist must not restore marks');
+   const forgedInspection={...inspectionRecord,execution_authorized:true};
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionImportFile').setInputFiles({
+     name:'forged-inspection.json',mimeType:'application/json',
+     buffer:Buffer.from(JSON.stringify(forgedInspection))
+   });
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionRestore').click();
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionRestoreStatus')
+     .getByText(/does not match this exact fresh comparison/).waitFor();
+   assert(!await inspectionChecks.first().isChecked(),'imported execution claims are rejected');
+   const staleInspection={...inspectionRecord,comparison_sha256:'f'.repeat(64)};
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionImportFile').setInputFiles({
+     name:'stale-inspection.json',mimeType:'application/json',
+     buffer:Buffer.from(JSON.stringify(staleInspection))
+   });
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionRestore').click();
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionRestoreStatus')
+     .getByText(/does not match this exact fresh comparison/).waitFor();
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionImportFile').setInputFiles({
+     name:'oversized-inspection.json',mimeType:'application/json',
+     buffer:Buffer.alloc(65537,0x20)
+   });
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionRestore').click();
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionRestoreStatus')
+     .getByText(/no larger than 64 KiB/).waitFor();
+   assert.equal(guidedWrites,writesBeforePacket,'worklist reimport must remain read-only');
+
+   const inspectionRestart=await context.newPage();
+   let inspectionRestartWrites=0;
+   inspectionRestart.on('request',r=>{
+     if(r.url().startsWith(base+'/v1/')&&!['GET','HEAD','OPTIONS'].includes(r.method()))
+       inspectionRestartWrites++;
+   });
+   await inspectionRestart.goto(base+'/#session='+session);
+   await inspectionRestart.locator('[role=tab][data-tab=evidence]').click();
+   await inspectionRestart.locator('#owgPipelineCard').waitFor();
+   await inspectionRestart.evaluate(id=>window.dispatchEvent(new CustomEvent(
+     'owg-pipeline-open',{detail:{idea_id:id}})),linked.idea_id);
+   await inspectionRestart.locator('#owgPipelineProcessStatus').filter({hasText:'Current saved revision'}).waitFor();
+   await inspectionRestart.locator('#owgPipelineJourney').click();
+   await inspectionRestart.locator('#owgPipelineJourneyGuide').waitFor();
+   await inspectionRestart.locator('#owgPipelineJourneyProject').selectOption(manifest.project_id);
+   await inspectionRestart.locator('#owgPipelineJourneyPriorPacket').setInputFiles({
+     name:'original-review.json',mimeType:'application/json',
+     buffer:Buffer.from(JSON.stringify(alteredPacket))
+   });
+   await inspectionRestart.locator('#owgPipelineJourneyComparePacket').click();
+   await inspectionRestart.locator('#owgPipelineJourneyInspectionWorklist').waitFor();
+   const restartedChecks=inspectionRestart.locator('#owgPipelineJourneyInspectionWorklist input[type=checkbox]');
+   assert(!await restartedChecks.first().isChecked(),'restart never silently restores inspection marks');
+   await inspectionRestart.locator('#owgPipelineJourneyInspectionImportFile').setInputFiles(inspectionFilePayload);
+   await inspectionRestart.locator('#owgPipelineJourneyInspectionRestore').focus();
+   await inspectionRestart.keyboard.press('Enter');
+   await inspectionRestart.locator('#owgPipelineJourneyInspectionRestoreStatus')
+     .getByText(/Restored 1 local inspection marks/).waitFor();
+   assert(await restartedChecks.first().isChecked(),'explicit keyboard import resumes the exact inspection after restart');
+   assert.equal(inspectionRestartWrites,0,'review restoration never writes server state');
+   await inspectionRestart.close();
    const invalidInspection=await page.evaluate(([oldPacket,newPacket])=>{
      try{
        window.__owgPipelineModel.handoffInspectionWorklist(oldPacket,newPacket,
