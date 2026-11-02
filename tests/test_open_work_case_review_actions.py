@@ -196,7 +196,7 @@ def test_action_plan_requires_session_and_current_source(local):
         headers = _auth()
         saved = _setup(client, headers)
         payload = {**_cas(saved), "confirm_historical_review": True, "max_cases": 2}
-        assert client.post(BASE + "/human-outcomes/evidence-triage", json=payload).status_code == 403
+        assert client.post(BASE + "/human-outcomes/evidence-triage", json=payload).status_code == 401  # no credentials
         local["id"] = None
         assert client.post(BASE + "/human-outcomes/evidence-triage",
                            headers=headers, json=payload).status_code == 403

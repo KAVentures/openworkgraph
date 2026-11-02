@@ -285,7 +285,8 @@ def test_invalid_links_and_missing_confirmation_refuse_preflight_without_provide
         assert client.post(PREVIEW, headers=headers, json={
             **_cas(a), "confirm_historical_review": False, "record_links": links,
         }).status_code == 403
+        # No credentials: the global auth middleware refuses before the route.
         assert client.post(PREVIEW, json={
             **_cas(a), "confirm_historical_review": True, "record_links": links,
-        }).status_code == 403
+        }).status_code == 401
         assert not ledger._path().exists()

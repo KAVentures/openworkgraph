@@ -274,7 +274,7 @@ def test_partial_dependency_and_authentication(local):
         headers = _auth()
         saved = _setup(client, headers)
         payload = {**_cas(saved), "confirm_historical_review": True, "max_cases": 1}
-        assert client.post(ISSUE, json=payload).status_code == 403
+        assert client.post(ISSUE, json=payload).status_code == 401  # no credentials
         baseline = _issue(client, headers, saved, max_cases=1)
         assert baseline.status_code == 200, baseline.text
         assert len(baseline.json()["checkpoint"]["case_states"]) == 1
@@ -284,4 +284,4 @@ def test_partial_dependency_and_authentication(local):
         assert compared.json()["review_action_plan"]["cases"][0]["prerequisite_review_pending"] is True
         assert client.post(COMPARE, json={
             **_cas(saved), "checkpoint": baseline.json()["checkpoint"],
-        }).status_code == 403
+        }).status_code == 401  # no credentials

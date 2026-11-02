@@ -206,11 +206,13 @@ def test_portfolio_invalid_selection_refused_before_any_source_io(local, monkeyp
         ]
         for candidate in invalid:
             response = _verify(client, headers, candidate)
-            assert response.status_code in (403, 409, 422), response.text
+            # Too many selections can exceed the body limit (413) before validation.
+            assert response.status_code in (403, 409, 413, 422), response.text
         assert _verify(client, headers, selections, confirm=False).status_code == 403
+        # No credentials: the global auth middleware refuses before the route.
         assert client.post(PORTFOLIO, json={
             "confirm_source_verification": True, "selections": selections,
-        }).status_code == 403
+        }).status_code == 401
         assert not ledger._path().exists()
 
 

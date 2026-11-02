@@ -284,7 +284,8 @@ def test_invalid_selection_confirmation_and_auth_refuse_portfolio_preview(local,
         assert _preview(client, headers, selections, confirm=False).status_code == 403
         assert _preview(client, headers, selections[:1]).status_code in (403, 409, 422)
         assert _preview(client, headers, [selections[0], selections[0]]).status_code in (403, 409, 422)
+        # No credentials: the global auth middleware refuses before the route.
         assert client.post(PREVIEW, json={
             "confirm_historical_review": True, "selections": selections,
-        }).status_code == 403
+        }).status_code == 401
         assert not ledger._path().exists()
