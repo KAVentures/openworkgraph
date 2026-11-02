@@ -1,10 +1,10 @@
 # First ServiceNow selected-incident journal → OWG event log
 
-Worker E / [#326](https://github.com/KAVentures/openworkgraph/issues/326) Section B / #264 Stage 3 / #370 R3. This is an **operator-invoked, opt-in first-import workflow** using the production local OWG REST API. It closes the manual first CSV-import prerequisite of `SERVICENOW_OWG_APPEND.md`. It does not itself poll ServiceNow, request a credential, infer a complete change history, schedule sync, or perform a provider write.
+Worker E / [#326](https://github.com/KAVentures/openworkgraph/issues/326) Section B / #264 Stage 3 / #370 R3. This is an **operator-invoked, opt-in first-import workflow** using the production local OWG REST API. It closes the manual first CSV-import prerequisite of `SERVICENOW_OWG_APPEND.md`. The default mode does not contact ServiceNow; an optional separately consented mode performs one bounded selected HTTPS read before the first import. Neither mode schedules sync, obtains credentials, infers complete history or writes to the provider.
 
 ## Preconditions
 
-1. Run the existing [selected ServiceNow poll/journal](SERVICENOW_INCIDENT_JOURNAL.md) with an authorized **read-only**, current grant for one exact instance, tenant, 1–8 selected sys_ids and declared timezone. Keep the journal and grant in an owner-only directory; the SQLite journal must contain at least one valid event. The grant must remain enabled for the entire import.
+1. For the default offline mode, first populate the private journal with the existing [selected ServiceNow poll/journal](SERVICENOW_INCIDENT_JOURNAL.md). For the new one-command mode below, a journal is not required in advance. Both modes require an authorized, current grant for one exact instance, tenant, 1–8 selected sys_ids and declared timezone. Keep the journal and grant in an owner-only directory. The grant must remain enabled throughout the operation.
 2. Start the local OWG dashboard and obtain a current local dashboard session. Supply it through `OWG_DASHBOARD_SESSION` **only**; never paste it into the CLI, logs, repository or provider export.
 3. Select a new local event-log name and repeat it exactly. Two separate explicit flags authorize reading the private journal and storing the selected events locally. The command will not silently choose a target, upload externally, or contact ServiceNow.
 
