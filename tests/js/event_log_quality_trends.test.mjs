@@ -187,7 +187,11 @@ test('on-demand local read renders counts as text and rejects stale log response
     reports:[{batch:0,created_at:'2026-11-01T18:00:00Z',
       transform:{transform_sha256:'b'.repeat(64)},
       rows:{accepted:8,rejected:2,rejected_by_reason:{'=unsafe':2},
-        reason_counts_can_overlap:false}}]
+        reason_counts_can_overlap:false}},
+      {batch:1,created_at:'2026-11-02T18:00:00Z',
+        transform:{transform_sha256:'b'.repeat(64)},
+        rows:{accepted:7,rejected:3,rejected_by_reason:{'=unsafe':3},
+          reason_counts_can_overlap:false}}]
   })});
   await second;
   assert.equal(download.disabled,false);
@@ -223,6 +227,20 @@ test('on-demand local read renders counts as text and rejects stale log response
   const increaseInspect=quality.querySelector('#owgQualityIncreaseTable')
     .children[1].children[0].children[5].children[0];
   increaseInspect.listeners.click();
+  const reasonThreshold=quality.querySelector('#owgQualityReasonThreshold');
+  const reasonRows=quality.querySelector('#owgQualityReasonRows');
+  assert.equal(reasonThreshold.value,'1');
+  const reasonTable=quality.querySelector('#owgQualityReasonTable');
+  assert.ok(reasonTable);
+  const reasonRow=reasonTable.children[1].children[0];
+  assert.equal(reasonRow.children[1].textContent,'=unsafe'); // text, never HTML
+  assert.equal(reasonRow.children[4].textContent,'+10.00 pp');
+  const reasonInspect=reasonRow.children[5].children[0];
+  reasonInspect.listeners.click();
+  assert.equal(quality.querySelector('#owgQualityBatchSelect').value,'1');
+  reasonThreshold.value='20';reasonThreshold.listeners.change();
+  assert.equal(quality.querySelector('#owgQualityReasonTable'),null);
+  reasonThreshold.value='1';reasonThreshold.listeners.change();
   assert.equal(quality.querySelector('#owgQualityBatchSelect').value,'1');
   assert.equal(quality.querySelector('#owgQualityBatchSelect').focused,true);
     const reviewTable=quality.querySelector('#owgQualityReviewTable');
@@ -249,6 +267,7 @@ test('on-demand local read renders counts as text and rejects stale log response
   assert.equal(target.disabled,true);
   assert.equal(pair.children.length,0);
   assert.equal(increaseRows.children.length,0);
+  assert.equal(reasonRows.children.length,0);
   assert.equal(download.disabled,true);
   assert.equal(output.children.length,0);
 });
@@ -355,4 +374,82 @@ test('ranked increases suppress invalid denominators, unknown mappings and futur
   assert.ok(bounded.total>0);
   assert.ok(bounded.rows.length<=view.MAX_INCREASE_ROWS);
   assert.ok(bounded.rows.every(row=>row.batchId>=20));
+});
+
+test('recorded rejection-category increases compare adjacent verified batches and show reason counts', () => {
+  const digest='a'.repeat(64);
+  const batch=(id,rejected,denominator=10)=>({
+    batch:id,transform_sha256:digest,
+    metrics:{rejected_input_rows:{count:rejected,denominator}}
+  });
+  const record=(id,rejected,reasons,sha=digest)=>({
+    batch:id,transform:{transform_sha256:sha},
+    rows:{rejected,rejected_by_reason:reasons,reason_counts_can_overlap:true}
+  });
+  const trends={batches:[batch(0,2),batch(1,4),batch(2,5)]};
+  const reports=[record(0,2,{invalid_date:2}),record(1,4,{invalid_date:3,missing_case:1}),
+    record(2,5,{invalid_date:1,missing_case:4})];
+  const result=view.rejectionReasonIncreases(trends,reports,1);
+  assert.equal(result.examined,3);
+  assert.equal(result.comparablePairs,2);
+  assert.equal(result.skippedPairs,0);
+  assert.equal(result.total,3);
+  assert.deepEqual(result.rows.map(r=>[r.batch,r.category,r.increase]),[
+    ['Append 2','missing_case','+30.00 pp'],
+    ['Append 1','missing_case','+10.00 pp'],
+    ['Append 1','invalid_date','+10.00 pp']
+  ]);
+  assert.equal(result.rows[0].before,'1 / 10 (10.00%)');
+  assert.equal(result.rows[0].after,'4 / 10 (40.00%)');
+  assert.equal(view.rejectionReasonIncreases(trends,reports,15).total,1);
+  assert.equal(view.rejectionReasonIncreases(trends,reports,31).total,0);
+  assert.ok(result.rows.every(r=>!JSON.stringify(r).includes('transform_sha256')));
+});
+
+test('rejection-category comparisons refuse missing reports, mapping drift and invalid denominators', () => {
+  const digest='a'.repeat(64),other='b'.repeat(64);
+  const batch=(id,rejected=3,denominator=10,sha=digest)=>({
+    batch:id,transform_sha256:sha,metrics:{rejected_input_rows:{count:rejected,denominator}}
+  });
+  const record=(id,rejected=3,reasons={bad:3},sha=digest)=>({
+    batch:id,transform:{transform_sha256:sha},rows:{rejected,rejected_by_reason:reasons}
+  });
+  const good=[batch(0),batch(1)],reports=[record(0),record(1)];
+  const check=(batches,rs)=>view.rejectionReasonIncreases({batches},rs,0.1);
+  assert.equal(check(good,reports).comparablePairs,1);
+  assert.equal(check(good,[reports[0]]).comparablePairs,0);
+  assert.equal(check(good,[...reports,reports[1]]).comparablePairs,0);
+  assert.equal(check([good[0],batch(1,3,10,other)],reports).comparablePairs,0);
+  assert.equal(check(good,[reports[0],record(1,3,{bad:3},other)]).comparablePairs,0);
+  assert.equal(check([good[0],batch(1,3,null)],reports).comparablePairs,0);
+  assert.equal(check([good[0],batch(1,3,0)],reports).comparablePairs,0);
+  assert.equal(check(good,[reports[0],record(1,3,null)]).comparablePairs,0);
+  assert.equal(check(good,[reports[0],record(1,3,{bad:Infinity})]).comparablePairs,0);
+  assert.equal(check(good,[reports[0],record(1,3,{bad:4})]).comparablePairs,0);
+  assert.equal(check(good,[reports[0],record(1,2,{bad:2})]).comparablePairs,0);
+  assert.equal(check([batch(0),batch(2)],reports).comparablePairs,0);
+  assert.equal(check([...good,good[0]],reports).comparablePairs,0);
+  assert.equal(check(good,[reports[0],record(1,3,Object.fromEntries(
+    Array.from({length:257},(_,i)=>['reason_'+i,0)))]).comparablePairs,0);
+  assert.equal(view.rejectionReasonIncreases({batches:good},reports,-1).total,0);
+  assert.equal(view.rejectionReasonIncreases({batches:good},reports,NaN).total,0);
+  assert.equal(view.rejectionReasonIncreases({batches:good},null,1).total,0);
+});
+
+test('rejection-category increase rows remain bounded to the latest 100 reports', () => {
+  const digest='a'.repeat(64);
+  const batches=Array.from({length:120},(_,batch)=>({
+    batch,transform_sha256:digest,
+    metrics:{rejected_input_rows:{count:batch%2?4:1,denominator:10}}
+  }));
+  const reports=batches.map(({batch})=>({
+    batch,transform:{transform_sha256:digest},
+    rows:{rejected:batch%2?4:1,rejected_by_reason:{bad:batch%2?4:1}}
+  }));
+  const result=view.rejectionReasonIncreases({batches},reports,1);
+  assert.equal(result.examined,100);
+  assert.equal(result.comparablePairs,99);
+  assert.ok(result.total>0);
+  assert.ok(result.rows.length<=view.MAX_REASON_INCREASE_ROWS);
+  assert.ok(result.rows.every(r=>r.batchId>=20));
 });
