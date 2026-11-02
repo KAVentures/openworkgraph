@@ -130,7 +130,17 @@ class EventAttributeSum(_Strict):
     unit: Unit
 
 
-Metric = Annotated[TimeBetween | ActivityCount | CaseAttributeNumber | EventAttributeSum | expressions.Arithmetic, Field(discriminator="kind")]
+class EventAttributeStatistic(_Strict):
+    """Finite numeric event-attribute statistic per selected full case."""
+    name: MetricName
+    kind: Literal["event_attribute_statistic"]
+    attribute: AttributeName
+    unit: Unit
+    statistic: Literal["average", "minimum", "maximum"]
+    missing_policy: Literal["available", "complete"] = "available"
+
+
+Metric = Annotated[TimeBetween | ActivityCount | CaseAttributeNumber | EventAttributeSum | EventAttributeStatistic | expressions.Arithmetic, Field(discriminator="kind")]
 METRIC_FORMAT = "openworkgraph.event-log-case-metric.v1"
 
 
@@ -348,6 +358,38 @@ def _metrics(conn, metrics: list[Any]) -> tuple[dict[str, str], list[dict[str, A
         elif metric.kind == "case_attribute_number":
             conn.execute(f"UPDATE qc SET {column} = try_cast(json_extract_string(case_attributes, ?) AS DOUBLE)",
                          [_path(metric.attribute)])
+            unit = metric.unit
+        elif metric.kind == "event_attribute_statistic":
+            # The input is flattened onto the selected case notion. An OCEL
+            # event linked to two objects is counted once in *each* case, not
+            # twice in one case. Restrict to selected cases before aggregating.
+            aggregate = {"average": "avg", "minimum": "min", "maximum": "max"}[metric.statistic]
+            conn.execute(f"""CREATE OR REPLACE TEMP TABLE qstat AS
+                SELECT case_id, count(*) AS event_rows,
+                    count(*) FILTER (WHERE v IS NOT NULL AND isfinite(v)) AS finite_rows,
+                    count(*) FILTER (WHERE v IS NULL OR NOT isfinite(v)) AS excluded_rows,
+                    {aggregate}(v) FILTER (WHERE v IS NOT NULL AND isfinite(v)) AS metric_value
+                FROM (SELECT case_id, try_cast(json_extract_string(attributes, ?) AS DOUBLE) AS v
+                      FROM ce WHERE case_id IN (SELECT case_id FROM qc)) typed
+                GROUP BY case_id""", [_path(metric.attribute)])
+            stats = conn.execute("""SELECT coalesce(sum(event_rows), 0),
+                    coalesce(sum(finite_rows), 0), coalesce(sum(excluded_rows), 0),
+                    count(*) FILTER (WHERE finite_rows > 0 AND excluded_rows > 0),
+                    count(*) FILTER (WHERE finite_rows = 0)
+                FROM qstat""").fetchone()
+            extra = dict(zip(("flattened_case_event_rows_considered",
+                              "event_rows_with_finite_attribute",
+                              "event_rows_with_missing_invalid_or_nonfinite_attribute",
+                              "cases_with_partial_attribute_coverage",
+                              "cases_with_no_finite_attribute"), (int(v or 0) for v in stats)))
+            extra["cases_excluded_by_complete_policy"] = (
+                extra["cases_with_partial_attribute_coverage"] if metric.missing_policy == "complete" else 0)
+            extra["coverage_scope"] = "selected_full_cases_flattened_case_event_rows"
+            conn.execute(f"""UPDATE qc SET {column} =
+                CASE WHEN qstat.finite_rows = 0 THEN NULL
+                     WHEN ? = 'complete' AND qstat.excluded_rows > 0 THEN NULL
+                     ELSE qstat.metric_value END
+                FROM qstat WHERE qc.case_id = qstat.case_id""", [metric.missing_policy])
             unit = metric.unit
         else:
             # A non-finite event value makes the case's sum non-finite, so it is withheld below, not silently skipped.
