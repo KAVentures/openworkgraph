@@ -46,6 +46,7 @@ from .reconstruction_tab_focus import (
 )
 from .reconstruction_actor_continuity import actor_observation_index, observed_same_record_actor_changes
 from .reconstruction_case_coverage import observed_record_participant_surfaces
+from .reconstruction_app_focus import bracketed_tabless_app_focus
 
 _TRANSFER = re.compile(r"^[A-Za-z0-9:._-]{1,120}$")
 _TAB = re.compile(r"^[A-Za-z0-9:._-]{1,160}$")
@@ -53,7 +54,7 @@ _MAX_ITEMS = 50
 _MAX_EVENT_IDS = 50
 _MAX_CANDIDATES = 50
 _MAX_DUPLICATE_PAYLOAD_NODES = 10_000
-_CONFIDENCE = {"same_record": 0.95, "clipboard_transfer": 0.85, "same_tab_single_record": 0.7, "same_tab_bracketed_record": 0.72, "same_tab_interleaved_bracketed_record": 0.68, "same_tab_single_record_interleaved_bracketed": 0.66, "same_tab_single_record_cross_app_bracketed": 0.62}
+_CONFIDENCE = {"same_record": 0.95, "clipboard_transfer": 0.85, "same_tab_single_record": 0.7, "same_tab_bracketed_record": 0.72, "same_tab_interleaved_bracketed_record": 0.68, "same_tab_single_record_interleaved_bracketed": 0.66, "same_tab_single_record_cross_app_bracketed": 0.62, "same_app_bracketed_record": 0.64, "same_app_cross_app_bracketed_record": 0.58}
 _CANDIDATE_CONFIDENCE = {"same_tab_multiplexed": 0.4, "same_tab_unreferenced": 0.35, "surface_continuity": 0.3}
 
 
@@ -565,6 +566,10 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
         and loose in single_record_boundaries
     ]
     focus_proposals.extend(single_focus_proposals)
+    # Tabless desktop activity has no browser-tab authority. Only a strict
+    # A -> loose -> A app/source bracket can recover it; independently linked
+    # cross-app B observations are negative boundaries, never membership.
+    focus_proposals.extend(bracketed_tabless_app_focus(rows, pre_tab_root))
     for _anchor, loose_id, focus_ref, _basis in focus_proposals:
         targets = tab_targets[pre_tab_root[loose_id]]
         if len(targets) < 2:
@@ -620,6 +625,9 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
     interleaved_tab_focus_links = 0
     single_record_interleaved_focus_links = 0
     single_record_cross_app_focus_links = 0
+    bracketed_app_focus_links = 0
+    cross_app_bracketed_app_focus_links = 0
+    bracketed_app_focus_conflicts = 0
     bracketed_tab_focus_conflicts = 0
     for anchor_id, loose_id, focus_ref, focus_basis in focus_proposals:
         loose_root = pre_tab_root[loose_id]
@@ -627,11 +635,19 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
         if (component_refs.get(loose_root, set()) - {focus_ref}
                 or component_refs.get(anchor_root, set()) - {focus_ref}
                 or len(tab_targets.get(loose_root, set())) > 1):
-            bracketed_tab_focus_conflicts += 1
+            if focus_basis in ("same_app_bracketed_record", "same_app_cross_app_bracketed_record"):
+                bracketed_app_focus_conflicts += 1
+            else:
+                bracketed_tab_focus_conflicts += 1
             continue
         if union.find(anchor_id) != union.find(loose_id):
             join([anchor_id, loose_id], focus_basis)
-            if focus_basis == "same_tab_single_record_cross_app_bracketed":
+            if focus_basis == "same_app_bracketed_record":
+                bracketed_app_focus_links += 1
+            elif focus_basis == "same_app_cross_app_bracketed_record":
+                bracketed_app_focus_links += 1
+                cross_app_bracketed_app_focus_links += 1
+            elif focus_basis == "same_tab_single_record_cross_app_bracketed":
                 single_record_cross_app_focus_links += 1
             elif focus_basis == "same_tab_single_record_interleaved_bracketed":
                 single_record_interleaved_focus_links += 1
@@ -669,7 +685,10 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
                 len(single_record_boundaries) - single_record_interleaved_focus_links
                 - single_record_cross_app_focus_links
             ),
-            "bracketed_tab_focus_conflicts": bracketed_tab_focus_conflicts}
+            "bracketed_tab_focus_conflicts": bracketed_tab_focus_conflicts,
+            "bracketed_app_focus_links": bracketed_app_focus_links,
+            "cross_app_bracketed_app_focus_links": cross_app_bracketed_app_focus_links,
+            "bracketed_app_focus_conflicts": bracketed_app_focus_conflicts}
 
 
 def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> dict[str, Any]:
@@ -768,6 +787,9 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
         "inconsistent_clipboard_transfer_direction_groups": linked["inconsistent_transfer_direction_groups"],
         "ambiguous_tab_component_attachments_suppressed": linked["tab_component_conflicts"],
         "observed_bracketed_tab_focus_links": linked["bracketed_tab_focus_links"],
+        "observed_bracketed_app_focus_links": linked["bracketed_app_focus_links"],
+        "observed_cross_app_bracketed_app_focus_links": linked["cross_app_bracketed_app_focus_links"],
+        "ambiguous_bracketed_app_focus_attachments_suppressed": linked["bracketed_app_focus_conflicts"],
         "observed_interleaved_tab_focus_links": linked["interleaved_tab_focus_links"],
         "observed_single_record_interleaved_focus_links": linked["single_record_interleaved_focus_links"],
         "observed_single_record_cross_app_focus_links": linked["single_record_cross_app_focus_links"],
@@ -811,6 +833,9 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             "interleaved_tab_focus_has_bounded_foreign_and_loose_events": True,
             "single_record_tab_foreign_case_requires_two_sided_focus": True,
             "single_record_tab_cross_app_case_requires_two_sided_focus": True,
+            "tabless_app_focus_requires_two_sided_exact_record": True,
+            "tabless_app_focus_requires_complete_scope": True,
+            "tabless_app_focus_cross_app_rows_are_negative_only": True,
             "cross_app_interruptions_do_not_create_record_membership": True,
             "multiplexed_tab_focus_requires_complete_capture_scope": True,
             "multiplexed_tab_focus_never_uses_elapsed_time_as_link_evidence": True,
