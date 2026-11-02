@@ -196,3 +196,21 @@ def test_real_tcp_redirect_does_not_forward_bearer():
         with pytest.raises(ProbeError):
             probe(base, "127.0.0.1", TOKEN, allow_loopback_http=True)
     assert len(calls) == 1
+
+def test_cli_success_against_actual_owg_scim_routes(http, monkeypatch, capsys):
+    client, db, owner, headers, base, pid = http
+    opener = _ActualASGIRoutes(client)
+    token = headers["Authorization"][7:]
+    monkeypatch.setenv("OWG_SCIM_PROBE_TOKEN", token)
+    code = main(["--base-url", "https://owg.example.test" + base,
+                 "--confirm-host", "owg.example.test",
+                 "--consent-readonly-probe"], opener=opener)
+    assert code == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["status"] == "read_only_checks_passed"
+    assert receipt["identity_resources_requested"] == 0
+    assert receipt["provider_writes_performed"] is False
+    assert len(opener.requests) == 5
+    assert token not in json.dumps(receipt)
+    assert pid not in json.dumps(receipt)
+
