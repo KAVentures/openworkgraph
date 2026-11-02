@@ -15,7 +15,7 @@ from typing import Any
 from server.reconstruction_review_overlay import (
     BATCH_FORMAT, MAX_BATCH_SESSIONS, aggregate_review_scores,
     adjudicate_review, apply_review, prepare_review_packet, score_review,
-    resolve_review_disagreement,
+    resolve_review_disagreement, propose_automatic_review, score_automatic_proposals,
 )
 
 _MAX_JSON = 8 * 1024 * 1024
@@ -96,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Human-reviewed, evidence-bound local reconstruction overlay"
     )
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("prepare", "adjudicate", "resolve", "apply", "score", "score-batch"):
+    for name in ("prepare", "propose", "score-proposals", "adjudicate", "resolve", "apply", "score", "score-batch"):
         command = sub.add_parser(
             name, help=("prepare weak candidates with bounded interleaving record context"
                         if name == "prepare" else None),
@@ -108,7 +108,7 @@ def main(argv: list[str] | None = None) -> int:
             command.add_argument("--events", required=True,
                                  help="consented local JSON event array")
         command.add_argument("--output", required=True, help="new local private JSON file")
-        if name in ("adjudicate", "resolve", "apply", "score"):
+        if name in ("propose", "score-proposals", "adjudicate", "resolve", "apply", "score"):
             command.add_argument("--packet", required=True)
         if name in ("apply", "score"):
             command.add_argument("--decisions", required=True,
@@ -121,7 +121,7 @@ def main(argv: list[str] | None = None) -> int:
                                  help="original exact-evidence two-reviewer artifact")
             command.add_argument("--third-reviewer", required=True,
                                  help="explicit decisions for disputed events only")
-        if name == "score":
+        if name in ("score", "score-proposals"):
             command.add_argument("--truth", required=True,
                                  help="independent complete local annotations")
     args = parser.parse_args(argv)
@@ -134,7 +134,12 @@ def main(argv: list[str] | None = None) -> int:
             result = prepare_review_packet(events)
         elif args.command != "score-batch":
             packet = _read_json(args.packet, max_bytes=1024 * 1024)
-            if args.command == "adjudicate":
+            if args.command == "propose":
+                result = propose_automatic_review(events, packet)
+            elif args.command == "score-proposals":
+                truth = _read_json(args.truth, max_bytes=1024 * 1024)
+                result = score_automatic_proposals(events, packet, truth)
+            elif args.command == "adjudicate":
                 first = _read_json(args.reviewer_a, max_bytes=128 * 1024)
                 second = _read_json(args.reviewer_b, max_bytes=128 * 1024)
                 result = adjudicate_review(events, packet, first, second)
