@@ -942,6 +942,10 @@ def delete_case_declaration(
         except Exception:
             db.execute("ROLLBACK")
             raise
+    # Deleting one owner declaration invalidates all dependent approvals.
+    # Their human outcome assessments must not survive as orphaned feedback.
+    from .open_work_case_outcome_reviews import clear_human_outcome_reviews
+    clear_human_outcome_reviews()
     return {
         "deleted": True,
         "invalidated_declaration_count": len(affected),
