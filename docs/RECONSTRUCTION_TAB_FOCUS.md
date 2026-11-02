@@ -42,6 +42,48 @@ At most eight loose T events and sixteen distinct-tab observations may
 intervene; ties, unknown/tabless events, changed capture scope, changed
 app/source, tainted identity and clipboard actions cause abstention.
 
+### Cross-application case interruptions (single-record browser tabs)
+
+An exact record in a **different named application**, including a tabless
+desktop observation, is now an independent negative case boundary when its
+organization, actor, device and capture session all match the browser tab.
+Previously, a browser tab containing only A could attach a later unreferenced
+click to A even after the same actor had explicitly worked on B in Terminal.
+The engine now refuses that one-sided attribution unless it sees a strict
+same-tab return to A. Different-tenant or unknown-app observations cannot
+invent a competing case. A source-confirmed clipboard link already joining
+A and B is not a competing case.
+
+Example with the same complete capture scope:
+
+```text
+e01  Browser tab T  exact record A
+e02  Browser tab T  no record reference
+e03  Terminal       exact record B (no browser tab)
+e04  Browser tab T  no record reference
+e05  Browser tab T  exact record A
+```
+
+Only e02 and e04 gain membership in the **existing A item**, with evidence
+basis `same_tab_single_record_cross_app_bracketed` and conservative confidence
+0.62. B remains separate. The existing read-only workflow-evidence response
+exposes `observed_single_record_cross_app_focus_links`; these recoveries are
+subtracted from `ambiguous_single_record_tab_interleaving_abstentions`.
+Without e05, neither loose step can be attributed solely from the tab.
+A cross-app interruption never supplies a positive case link.
+
+A cross-app witness requires a literal different, known app label, a valid
+exact record and complete matching capture scope, a distinct *pre-tab*
+record-link component, strictly ordered observations, and a two-sided A
+bracket. Cross-app events must not claim clipboard transfer, copy/paste or
+malformed action; unknown surfaces, timestamp ties, intervening ambiguous
+events and changed capture scope abstain. At most eight loose steps and sixteen
+foreign observations can be crossed. The independent-record boundary index
+uses per-scope/per-app/per-component sorted positions and bounded bisects;
+it does not scan the entire trace for every loose event. No elapsed-time
+threshold, URL, window title, clipboard contents, inferred handoff or
+permission change is involved.
+
 ### Interruption-aware nominally single-record tabs
 
 A tab showing only exact record A is not proof that all later unreferenced
@@ -110,7 +152,10 @@ Run `pytest -q tests/test_reconstruction_tab_focus.py
 tests/test_work_item_links.py` on native CI and the complete required
 Ubuntu/macOS/Windows, browser, process collaboration, scale, accessibility,
 starter and packaging/release matrix. The new tests cover a working
-workflow-evidence response, multi-step recovery, cross-record/interleaved
+workflow-evidence response, cross-app Terminal/browser case interruption
+and strictly bracketed recovery, no-return abstention, same-component
+clipboard exceptions, tenant isolation, ties, malformed actions, retained
+observation removal and bounded foreign spans, multi-step recovery, cross-record/interleaved
 rejection, incomplete scope, source/app/tab changes, timestamp ties,
 clipboard ambiguity, interruption-aware one-sided abstention, bounded
 two-sided return across distinct tabs, cross-tenant exclusion, and no
