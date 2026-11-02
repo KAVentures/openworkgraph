@@ -1233,6 +1233,60 @@ const path=require('node:path');
    assert.deepEqual((await replayedDelta.json()).rows,[[6]]);
    const [deltaCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCsv').click()]);
    assert.match(await fs.readFile(await deltaCsv.path(),'utf8'),/avg_metric:review_delta\r\n6/);
+   // R9: one action also produces a dimensionless fractional change:
+   // (last completed stage - first stage) / first stage. 2 means +200%, not 2%.
+   await page.locator('#owgMetricCompareRelative').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'four free metric slots'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList').locator('button').count(),3,
+     'relative comparison capacity refusal must leave existing metrics unchanged');
+   for(const n of ['review_delta','review_last','review_first'])
+     await page.getByRole('button',{name:'Remove metric '+n,exact:true}).click();
+   await page.locator('#owgMetricName').fill('a'.repeat(32));
+   await page.locator('#owgMetricCompareRelative').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'at most 31 characters'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList').locator('button').count(),0);
+   await page.locator('#owgMetricName').fill('review_relative');
+   await page.locator('#owgMetricAdd').click();
+   await page.locator('#owgMetricName').fill('review');
+   await page.locator('#owgMetricCompareRelative').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'comparison metric name already exists'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList').locator('button').count(),1);
+   await page.getByRole('button',{name:'Remove metric review_relative',exact:true}).click();
+   await page.locator('#owgMetricStageTo').selectOption('');
+   await page.locator('#owgMetricCompareRelative').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Choose both stage start and end'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList').locator('button').count(),0);
+   await page.locator('#owgMetricStageTo').selectOption('End');
+   await page.locator('#owgAnalysisLevel').selectOption('events');
+   await page.locator('#owgMetricCompareRelative').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'fractional change metrics'}).waitFor();
+   assert.equal(await page.locator('#owgAnalysisLevel').inputValue(),'cases');
+   assert.equal(await page.locator('#owgMetricList').locator('button').count(),4);
+   assert.equal(await page.locator('#owgAnalysisMeasure1').inputValue(),'avg:metric:review_relative');
+   assert.match(await page.locator('#owgMetricList').textContent(),/review_relative: review_delta ÷ review_first/);
+   const [relativeResponse]=await Promise.all([
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
+     page.locator('#owgAnalysisRun').click()]);
+   assert.equal(relativeResponse.status(),200);
+   const relativeSpec=JSON.parse(relativeResponse.request().postData());
+   assert.deepEqual(relativeSpec.metrics.map(m=>m.name),
+     ['review_first','review_last','review_delta','review_relative']);
+   assert.deepEqual(relativeSpec.metrics[3],{name:'review_relative',kind:'arithmetic',expression_version:'1',
+     operation:'divide',left:{kind:'metric',name:'review_delta'},right:{kind:'metric',name:'review_first'}});
+   const relativeResult=await relativeResponse.json();
+   assert.deepEqual(relativeResult.rows,[[2]],'A: (9-3)/3 = 2, while B has no valid last-stage value');
+   assert.equal(relativeResult.metrics[3].cases_with_value,1);
+   assert.equal(relativeResult.metrics[3].cases_with_missing_operand,1);
+   assert.equal(relativeResult.metrics[3].unit,'ratio');
+   await page.locator('#owgAnalysisName').fill('First to last review fractional change');
+   await page.locator('#owgAnalysisSave').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Analysis saved.'}).waitFor();
+   const [replayedRelative]=await Promise.all([
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')),
+     page.getByRole('button',{name:'Run saved analysis First to last review fractional change',exact:true}).click()]);
+   assert.deepEqual((await replayedRelative.json()).rows,[[2]]);
+   const [relativeCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCsv').click()]);
+   assert.match(await fs.readFile(await relativeCsv.path(),'utf8'),/avg_metric:review_relative\r\n2/);
    const numericAxe=await page.evaluate(()=>axe.run(document.querySelector('#owgEventLogAnalysis'),{
      runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']},resultTypes:['violations']}));
    assert.deepEqual(numericAxe.violations,[]);
