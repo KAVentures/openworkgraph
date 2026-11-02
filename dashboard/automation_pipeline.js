@@ -273,6 +273,43 @@
       archive_sha256:review.basis.project_archive_sha256};
   }
 
+  // Combines only pages that a human explicitly requested and that were read
+  // through the authenticated local journey API. It is not a source attestation.
+  function combinedPortfolioHandoffReview(eligible,pages,createdAt){
+    if(!Array.isArray(eligible)||eligible.length>2048||!(pages instanceof Map)||
+      typeof createdAt!=='string')throw new Error('Invalid portfolio review basis.');
+    const ids=eligible.map(item=>item.idea_id);
+    if(ids.some(id=>typeof id!=='string'||!id||id.length>128)||
+      new Set(ids).size!==ids.length)throw new Error('Portfolio identities are incomplete.');
+    const pageCount=Math.ceil(ids.length/12),reviewed=[],items=[];
+    for(const [pageNumber,page] of [...pages].sort(([a],[b])=>a-b)){
+      const start=(pageNumber-1)*12,expected=ids.slice(start,start+12);
+      if(!Number.isSafeInteger(pageNumber)||pageNumber<1||pageNumber>pageCount||
+        !page||!Array.isArray(page.items)||page.items.length!==expected.length||
+        typeof page.reviewed_at!=='string'||page.reviewed_at.length>64||
+        page.items.some((item,i)=>item?.idea_id!==expected[i]||
+          !['no_export','unavailable','human_review_required'].includes(item.status)))
+        throw new Error('A reviewed page no longer matches the loaded opportunities.');
+      reviewed.push({page_number:pageNumber,reviewed_at:page.reviewed_at,
+        start_index:start+1,end_index:start+expected.length,items:page.items.map(item=>({...item}))});
+      items.push(...page.items);
+    }
+    const reviewedNumbers=reviewed.map(page=>page.page_number);
+    const unreviewedNumbers=Array.from({length:pageCount},(_,i)=>i+1)
+      .filter(n=>!pages.has(n));
+    return {format:'openworkgraph.portfolio-handoff-multipage-review.v1',
+      generated_at:createdAt,scope:'read_only_human_review',
+      eligible_count:ids.length,page_count:pageCount,
+      reviewed_page_numbers:reviewedNumbers,unreviewed_page_numbers:unreviewedNumbers,
+      reviewed_count:items.length,unreviewed_count:ids.length-items.length,
+      incomplete_evidence_count:items.filter(item=>item.status!=='human_review_required').length,
+      complete_coverage:unreviewedNumbers.length===0&&
+        items.every(item=>item.status==='human_review_required'),
+      execution_authorized:false,source_read_authorized:false,
+      verified_execution:false,verified_business_outcomes:false,
+      pages:reviewed};
+  }
+
   // Compare an imported point-in-time review packet against a freshly fetched local journey.
   // Never restore approval or trust imported fields as execution/verification evidence.
   function compareHandoffReviewPackets(saved,current){
@@ -519,14 +556,60 @@
     auditPage.setAttribute('role','status');auditPage.setAttribute('aria-live','polite');
     const auditNavigation=el('div',null,'row');
     auditNavigation.append(auditPrevious,auditPage,auditNext);
+    const auditCumulative=el('div','No pages explicitly reviewed yet.','muted');
+    auditCumulative.id='owgPipelinePortfolioCumulativeStatus';
+    auditCumulative.setAttribute('role','status');auditCumulative.setAttribute('aria-live','polite');
+    const auditCombinedDownload=button('Download reviewed pages together','secondary');
+    auditCombinedDownload.id='owgPipelinePortfolioCombinedDownload';
+    auditCombinedDownload.disabled=true;
     const auditSection=el('section');auditSection.id='owgPipelinePortfolioAuditSection';
     auditSection.append(el('h3','Human handoff review inbox'),
       el('p','Review approved or implemented opportunities in explicit pages of up to 12. Each page is a fresh, point-in-time local read; other pages are not certified, approved or executed.','muted'),
-      auditNavigation,auditButton,auditStatus,auditHost);
+      auditNavigation,auditButton,auditStatus,auditHost,auditCumulative,auditCombinedDownload);
     card.append(row,resumeSection,auditSection,tools,status,counts,viewCount,list,detail);
     panel.appendChild(card);
 
     let latestIdeas=[],refreshGeneration=0,resumeGeneration=0,auditGeneration=0,auditPageIndex=0,auditAbort=null;
+    const auditPages=new Map();let auditBasis=null;
+    const auditSnapshot=()=>JSON.stringify(auditEligible().map(i=>
+      [i.idea_id,i.revision,i.state,i.updated_at||'']));
+    function updateCumulative(){
+      const combined=combinedPortfolioHandoffReview(auditEligible(),auditPages,new Date().toISOString());
+      auditCombinedDownload.disabled=!auditPages.size;
+      auditCumulative.textContent=combined.reviewed_page_numbers.length+' of '+combined.page_count+
+        ' pages explicitly reviewed · '+combined.reviewed_count+' of '+combined.eligible_count+
+        ' loaded eligible opportunities. '+(combined.unreviewed_page_numbers.length?
+          'Unreviewed pages: '+combined.unreviewed_page_numbers.join(', ')+'. ':
+          'Every loaded page was checked. ')+
+        (combined.incomplete_evidence_count?
+          combined.incomplete_evidence_count+' rows have missing/incomplete evidence. ':'')+
+        'This does not verify outcomes or authorize handoff.';
+    }
+    function clearCumulative(reason){
+      ++auditGeneration;
+      if(auditAbort)auditAbort.abort();
+      auditAbort=null;auditPages.clear();auditBasis=null;auditPageIndex=0;
+      auditHost.replaceChildren();auditButton.disabled=false;
+      auditStatus.textContent=reason||'Review cleared. Explicitly check pages again.';
+      syncAuditPages();updateCumulative();
+    }
+    auditCombinedDownload.onclick=()=>{
+      if(!auditPages.size)return;
+      if(auditBasis!==auditSnapshot()){
+        clearCumulative('Loaded opportunities changed; the prior multi-page review was invalidated.');
+        return;
+      }
+      try{
+        const record=combinedPortfolioHandoffReview(auditEligible(),auditPages,new Date().toISOString());
+        const body=JSON.stringify(record);
+        if(body.length>65536)throw new Error('Combined review exceeds 64 KiB. Download individual pages instead.');
+        const url=URL.createObjectURL(new Blob([body],{type:'application/json'}));
+        const link=el('a');link.href=url;link.download='owg-portfolio-reviewed-pages.json';
+        document.body.appendChild(link);link.click();link.remove();
+        setTimeout(()=>URL.revokeObjectURL(url),1000);
+        auditStatus.textContent='Downloaded only explicitly reviewed pages. No source read, approval or agent action occurred.';
+      }catch(e){auditStatus.textContent=e.message;}
+    };
     function auditEligible(){
       return latestIdeas.filter(idea=>['approved','implemented'].includes(idea.state))
         .sort((a,b)=>String(b.updated_at||'').localeCompare(String(a.updated_at||''))||
@@ -592,11 +675,14 @@
       const request=++auditGeneration;
       auditButton.disabled=true;
       auditHost.replaceChildren();
+      const snapshot=auditSnapshot();
+      if(auditBasis!==null&&auditBasis!==snapshot){auditPages.clear();auditBasis=null;}
       const eligible=auditEligible(),start=auditPageIndex*12;
       const selected=eligible.slice(start,start+12);
       const unreviewedBefore=start,unreviewedAfter=eligible.length-start-selected.length;
       const omitted=unreviewedBefore+unreviewedAfter;
       const pageNumber=auditPageIndex+1,pageCount=Math.ceil(eligible.length/12);
+      auditPages.delete(pageNumber);updateCumulative();
       syncAuditPages();
       if(!selected.length){
         auditStatus.textContent='No approved or implemented opportunities in the currently loaded state.';
@@ -619,6 +705,10 @@
           if(request!==auditGeneration)return;
           rows.push(...batch);
         }
+        if(request!==auditGeneration||snapshot!==auditSnapshot())return;
+        if(auditBasis===null)auditBasis=snapshot;
+        auditPages.set(pageNumber,{reviewed_at:new Date().toISOString(),items:rows});
+        updateCumulative();
         const incomplete=omitted>0||rows.some(r=>r.status!=='human_review_required');
         const table=el('table'),thead=el('thead'),head=el('tr'),tbody=el('tbody');
         ['Opportunity','Coverage','Human review checks','Dependency stages needing review',''].forEach(label=>head.appendChild(el('th',label)));
@@ -698,9 +788,7 @@
     }
 
     async function refresh(){
-      ++auditGeneration;if(auditAbort)auditAbort.abort();auditAbort=null;
-      auditPageIndex=0;auditHost.replaceChildren();auditButton.disabled=false;
-      auditStatus.textContent='Portfolio review cleared; explicitly check again after the list refresh.';
+      clearCumulative('Portfolio review cleared; explicitly check again after the list refresh.');
       const generation=++refreshGeneration;
       const q=filter.value?'?state='+encodeURIComponent(filter.value):'';
       const r=await (await api('/v1/automation-pipeline'+q)).json();
@@ -1537,7 +1625,9 @@
       const idea=await post('/v1/automation-pipeline',{title:title.value.trim(),description:description.value.trim(),source:{kind:source.value,reference:reference.value.trim()}});
       title.value='';description.value='';reference.value='';await refresh();await show(idea.idea_id);status.textContent='Idea added.';
     }catch(e){status.textContent=e.message;}};
-    search.oninput=render;quadrant.onchange=render;sort.onchange=render;
+    search.oninput=()=>{clearCumulative('Search changed; review pages again.');render();};
+    quadrant.onchange=()=>{clearCumulative('Priority filter changed; review pages again.');render();};
+    sort.onchange=()=>{clearCumulative('Sort changed; review pages again.');render();};
     reset.onclick=()=>{search.value='';quadrant.value='';sort.value='priority';filter.value='';refresh().catch(e=>{status.textContent=e.message;});};
     filter.onchange=()=>refresh().catch(e=>{status.textContent=e.message;});
     exportLink.onclick=async()=>{try{
@@ -1547,6 +1637,6 @@
     refresh().catch(e=>{status.textContent=e.message;});
   }
 
-  window.__owgPipelineModel={assessmentBody,portfolioView,handoffReviewPacket,handoffDependencyReview,compareHandoffReviewPackets,compareRecordedProjects,compareProjectHandoffReadiness,portfolioHandoffRow,handoffInspectionWorklist,handoffInspectionSnapshotDigest,restoreHandoffInspectionKeys};
+  window.__owgPipelineModel={assessmentBody,portfolioView,handoffReviewPacket,handoffDependencyReview,compareHandoffReviewPackets,compareRecordedProjects,compareProjectHandoffReadiness,portfolioHandoffRow,combinedPortfolioHandoffReview,handoffInspectionWorklist,handoffInspectionSnapshotDigest,restoreHandoffInspectionKeys};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
