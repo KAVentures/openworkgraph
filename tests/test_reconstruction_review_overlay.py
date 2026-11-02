@@ -1136,6 +1136,24 @@ def test_two_hop_auto_proposals_abstain_on_interruption_and_capture_barriers(alt
     assert result["canonical_membership_unchanged"] is True
 
 
+
+def test_seeded_two_hop_proposal_abstains_on_competing_visible_record_items():
+    events = _seeded_two_hop_proposal_events()
+    # Both A and B are real, visible, distinct linked items. The middle
+    # action has weak two-hop paths to each and cannot be ranked into A.
+    events[5]["metadata"]["resource_reference"]["resource_ref"] = B
+    events[6]["metadata"]["resource_reference"]["resource_ref"] = B
+    packet = prepare_review_packet(events)
+    fragment = next(row for row in packet["eligible_candidates"]
+                    if row["event_id"] == "e04")
+    assert fragment["evidence_hops"] == 2
+    assert len(fragment["candidate_items"]) == 2
+    proposed = propose_automatic_review(events, packet)
+    assert proposed["two_hop_proposal_count"] == 0
+    assert proposed["abstention_counts"]["competing_or_incomplete_two_hop_candidates"] >= 1
+    assert proposed["canonical_membership_unchanged"] is True
+
+
 def test_two_hop_proposal_independent_accuracy_and_stale_evidence_refusal():
     events = _seeded_two_hop_proposal_events()
     packet = prepare_review_packet(events)
