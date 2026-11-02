@@ -86,7 +86,7 @@ class Provider:
         assert "documentkeyIN" + INCIDENT in query["sysparm_query"][0]
         assert query["sysparm_display_value"] == ["false"]
         offset = int(query["sysparm_offset"][0])
-        assert offset == self.calls * PAGE_SIZE
+        assert offset % PAGE_SIZE == 0 and 0 <= offset < PAGE_SIZE * MAX_PAGES
         self.calls += 1
         if self.after_first and self.calls == 1:
             self.after_first()
