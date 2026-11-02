@@ -942,10 +942,14 @@ def delete_case_declaration(
         except Exception:
             db.execute("ROLLBACK")
             raise
-    # Deleting one owner declaration invalidates all dependent approvals.
-    # Their human outcome assessments must not survive as orphaned feedback.
+    # Delete feedback for the invalidated closure, preserving independent cases.
     from .open_work_case_outcome_reviews import clear_human_outcome_reviews
-    clear_human_outcome_reviews()
+    try:
+        for ref in affected:
+            clear_human_outcome_reviews(ref)
+    except (OSError, ValueError, sqlite3.DatabaseError):
+        clear_human_outcome_reviews()  # fail closed if targeted purge is damaged
+        raise
     return {
         "deleted": True,
         "invalidated_declaration_count": len(affected),
@@ -954,12 +958,12 @@ def delete_case_declaration(
     }
 
 
-def purge_case_declaration(work_item_ref: str) -> None:
+def purge_case_declaration(work_item_ref: str) -> set[str]:
     """Called by explicit local review deletion; prune dangling dependency edges."""
     _check_ref(work_item_ref, _REF, "work item reference")
     with _database(create=False) as db:
         if db is None:
-            return
+            return {work_item_ref}
         db.execute("BEGIN IMMEDIATE")
         try:
             # A dependency was explicitly owner-declared, not inferred.
@@ -972,12 +976,14 @@ def purge_case_declaration(work_item_ref: str) -> None:
             # fail on sorted(str, bytes), which would force the review
             # subsystem to scrub otherwise independent declarations.
             # Dependency closure is a set; deletion order is irrelevant.
-            for ref in _dependent_closure(db, work_item_ref):
+            affected = _dependent_closure(db, work_item_ref)
+            for ref in affected:
                 db.execute("DELETE FROM declarations WHERE work_item_ref=?", (ref,))
             db.execute("COMMIT")
         except Exception:
             db.execute("ROLLBACK")
             raise
+    return affected
 
 
 def clear_case_declarations() -> None:
