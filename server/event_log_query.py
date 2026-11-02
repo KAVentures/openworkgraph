@@ -432,12 +432,15 @@ def _metrics(conn, metrics: list[Any]) -> tuple[dict[str, str], list[dict[str, A
                 if metric.stage_occurrence == "last_completed":
                     # A subsequent unmatched start is not a failed or complete
                     # stage. Disclose it separately from the selected value.
+                    # When start and end are the same activity, the end
+                    # occurrence is also the start of a possible next cycle.
+                    boundary = ">=" if metric.from_activity == metric.to_activity else ">"
                     extra["cases_with_trailing_unfinished_stage"] = int(conn.execute(
-                        """SELECT count(*) FROM qc q WHERE EXISTS (
+                        f"""SELECT count(*) FROM qc q WHERE EXISTS (
                             SELECT 1 FROM qordered e LEFT JOIN qstage s
                               ON e.case_id = s.case_id
                             WHERE e.case_id = q.case_id AND e.activity = ?
-                              AND e.ordinal > coalesce(s.end_pos, 0))""",
+                              AND e.ordinal {boundary} coalesce(s.end_pos, 0))""",
                         [metric.from_activity]).fetchone()[0])
                 source = """FROM qordered e JOIN qstage s ON e.case_id = s.case_id
                     WHERE s.end_pos IS NOT NULL AND e.ordinal >= s.start_pos
