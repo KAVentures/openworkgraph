@@ -293,7 +293,7 @@ def run(log_id: str, spec: Any, *, control=None) -> dict[str, Any]:
             notion = workspace._case_type(conn, log_id, parsed.case_type)
             conn.execute("""CREATE OR REPLACE TEMP TABLE qc AS SELECT c.*, o.attributes AS case_attributes FROM (
                   SELECT case_id, min(ts) AS started, max(ts) AS ended,
-                    date_diff('second', min(ts), max(ts)) AS duration, count(*) AS events,
+                    epoch(max(ts) - min(ts)) AS duration, count(*) AS events,
                     count(DISTINCT activity) AS distinct_activities, count(*) > count(DISTINCT activity) AS rework,
                     arg_min(activity, struct_pack(at := ts, event_order := event_id)) AS first_activity,
                     arg_max(activity, struct_pack(at := ts, event_order := event_id)) AS last_activity,

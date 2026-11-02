@@ -75,6 +75,49 @@ def test_csv_import_rejects_naive_times_and_mines_variants():
     assert activities["Receive"]["cases"] == 2
 
 
+
+def test_summary_variants_and_directly_follows_preserve_fractional_elapsed_seconds():
+    """Synthetic UTC/offset CSV: observed durations and edge gaps retain microseconds.
+
+    This is a local import regression, not source-verified process timing.
+    """
+    rows = [
+        "case,activity,time,who",
+        "c1,A,2024-01-01T00:00:00Z,team",
+        "c1,B,2024-01-01T01:00:00.500000+01:00,team",
+        "c1,C,2024-01-01T00:00:01.500000Z,team",
+        "c2,A,2024-01-01T00:01:00Z,team",
+        "c2,B,2024-01-01T00:01:01.250000Z,team",
+        "c2,C,2024-01-01T00:01:02.750000Z,team",
+        "c3,A,2024-01-01T00:02:00Z,team",
+        "c3,B,2024-01-01T00:02:00.250000Z,team",
+        "c3,C,2024-01-01T00:02:01Z,team",
+        "c4,D,2024-01-01T00:03:00Z,team",
+        "c4,E,2024-01-01T00:03:00.125000Z,team",
+    ]
+    log_id = _import("\n".join(rows) + "\n", "csv", mapping=MAPPING)["log_id"]
+    summary = workspace.summary(log_id)
+    assert summary["cases"] == 4 and summary["events"] == 11
+    assert summary["case_duration_seconds"] == {
+        "median": pytest.approx(1.25),
+        "p90": pytest.approx(2.375),
+        "mean": pytest.approx(1.34375),
+    }
+    variants = workspace.variants(log_id)
+    assert variants["cases"] == 4 and variants["distinct_variants"] == 2
+    by_path = {tuple(v["path"]): v for v in variants["variants"]}
+    assert by_path[("A", "B", "C")]["cases"] == 3
+    assert by_path[("A", "B", "C")]["median_duration_seconds"] == pytest.approx(1.5)
+    assert by_path[("D", "E")]["median_duration_seconds"] == pytest.approx(0.125)
+    edges = {(e["from"], e["to"]): e for e in workspace.directly_follows(log_id)["edges"]}
+    assert edges[("A", "B")]["median_gap_seconds"] == pytest.approx(0.5)
+    assert edges[("B", "C")]["median_gap_seconds"] == pytest.approx(1.0)
+    assert edges[("D", "E")]["median_gap_seconds"] == pytest.approx(0.125)
+    assert edges[("A", "B")]["transitions"] == 3
+    assert workspace.directly_follows(log_id)["gaps_are_observed_not_verified_waiting"] is True
+
+
+
 def test_bulk_csv_blank_resources_match_streaming_reader_and_quality_counts():
     """Whitespace-only resources are missing; padded nonblank IDs stay literal."""
     text = (
