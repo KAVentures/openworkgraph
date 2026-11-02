@@ -5,7 +5,7 @@
   let shadowGeneration=0;
   let importGeneration=0,importDraft=null;
   let ruleCheckGeneration=0,sourceRuleGeneration=0;
-  let originGeneration=0,editGeneration=0;
+  let originGeneration=0,editGeneration=0,revisionCompareGeneration=0;
   const el=(tag,text)=>{const n=document.createElement(tag);if(text!=null)n.textContent=String(text);return n;};
   const button=(text,fn)=>{const n=el('button',text);n.type='button';n.className='secondary';n.addEventListener('click',()=>Promise.resolve().then(fn).catch(error=>status(error.message)));return n;};
   const status=text=>{const n=document.getElementById('owgCatalogStatus');if(n)n.textContent=String(text);};
@@ -14,7 +14,8 @@
   function clearRuleChecks(){ruleCheckGeneration++;document.getElementById('owgCatalogRuleCheckResult')?.replaceChildren();}
   function clearSourceRuleChecks(){sourceRuleGeneration++;document.getElementById('owgCatalogSourceRuleResult')?.replaceChildren();}
   function clearOrigins(){originGeneration++;document.getElementById('owgCatalogOriginResult')?.replaceChildren();}
-  function changed(invalidateTables=true){editGeneration++;if(invalidateTables&&model?.decision_tables?.length){for(const t of model.decision_tables)t.user_confirmed=false;document.querySelectorAll("input[data-table-confirmation]").forEach(n=>{n.checked=false;});}clearOrigins();clearSourceRuleChecks();reviewed=false;const check=document.getElementById('owgCatalogReviewed');if(check)check.checked=false;clearShadowReview();clearRuleChecks();}
+  function clearRevisionComparison(){revisionCompareGeneration++;document.getElementById('owgCatalogRevisionCompare')?.replaceChildren();}
+  function changed(invalidateTables=true){editGeneration++;if(invalidateTables&&model?.decision_tables?.length){for(const t of model.decision_tables)t.user_confirmed=false;document.querySelectorAll("input[data-table-confirmation]").forEach(n=>{n.checked=false;});}clearOrigins();clearRevisionComparison();clearSourceRuleChecks();reviewed=false;const check=document.getElementById('owgCatalogReviewed');if(check)check.checked=false;clearShadowReview();clearRuleChecks();}
   function field(parent,title,value,apply,options){
     const label=el('label',title+' '),input=el(options?'select':'input');
     if(options)options.forEach(value=>{const option=el('option',value);option.value=value;input.appendChild(option);});
@@ -129,6 +130,101 @@
       status('Saved revision '+record.revision+'. Earlier revisions remain available.');
     });
   }
+
+  // Compare two exact saved snapshots. Never derive approval from structural equality.
+  // Keys are stable model identities, not display labels; changed labels remain visible.
+  function revisionDifferences(older,newer){
+    const stable=value=>JSON.stringify(value,(_key,v)=>
+      v&&typeof v==='object'&&!Array.isArray(v)?
+        Object.fromEntries(Object.keys(v).sort().map(key=>[key,v[key]])):v);
+    const format=value=>{
+      const raw=typeof value==='string'?value:stable(value);
+      return raw===undefined?'—':raw.length>180?raw.slice(0,180)+'… [truncated]':raw;
+    };
+    const rows=[];
+    const add=(area,key,kind,before,after)=>rows.push({area,key,kind,before:format(before),after:format(after)});
+    const old=older.process_model,now=newer.process_model;
+    for(const key of ['title']){
+      if(stable(older[key])!==stable(newer[key]))add('Process',key,'changed',older[key],newer[key]);
+    }
+    for(const key of ['goal','owner_label','baseline_path','baseline_source','baseline_coverage',
+      'baseline_support_unit','supporting_case_count','entry_activity_id','terminal_activity_ids',
+      'opportunity_scenario']){
+      if(stable(old[key])!==stable(now[key]))add('Model',key,'changed',old[key],now[key]);
+    }
+    const collections=[
+      ['Activities','activities',item=>item.id],
+      ['Transitions','transitions',item=>item.source+' → '+item.target],
+      ['Business rules','business_rules',item=>item.id],
+      ['Manual review gates','manual_review_conditions',item=>item.activity_id+' · '+item.kind+' · '+item.condition_label],
+      ['Outcome expectations','outcome_expectations',item=>item.terminal_activity_id+' · '+item.operation],
+      ['Decision tables','decision_tables',(item,index)=>item.id||'table '+(index+1)]
+    ];
+    for(const [area,key,identify] of collections){
+      const before=new Map((old[key]||[]).map((item,index)=>[identify(item,index),item]));
+      const after=new Map((now[key]||[]).map((item,index)=>[identify(item,index),item]));
+      for(const id of [...new Set([...before.keys(),...after.keys()])].sort()){
+        if(!before.has(id))add(area,id,'added',undefined,after.get(id));
+        else if(!after.has(id))add(area,id,'removed',before.get(id),undefined);
+        else if(stable(before.get(id))!==stable(after.get(id)))add(area,id,'changed',before.get(id),after.get(id));
+      }
+    }
+    return rows;
+  }
+  async function compareSavedRevision(revision){
+    return locked(async()=>{
+      const selected=record,host=document.getElementById('owgCatalogRevisionCompare');
+      if(!selected?.workflow_id||!Number.isInteger(selected.revision)||selected.revision<1||
+         !Number.isInteger(revision)||revision<1||revision===selected.revision||!host)
+        throw new Error('Open a saved revision and choose a different historical revision.');
+      const generation=++revisionCompareGeneration;
+      host.replaceChildren(el('p','Reading the selected immutable revision for comparison…'));
+      try{
+        const previous=await request('/v1/process-catalog/revision?'+new URLSearchParams({
+          workflow_id:selected.workflow_id,revision:String(revision)}));
+        if(generation!==revisionCompareGeneration||record!==selected||!host.isConnected)return;
+        if(previous.workflow_id!==selected.workflow_id||previous.revision!==revision||
+           !/^[0-9a-f]{64}$/.test(previous.content_sha256||'')||
+           !/^[0-9a-f]{64}$/.test(selected.content_sha256||'')||
+           previous.process_model?.format!=='openworkgraph.process-model.v1'||
+           selected.process_model?.format!=='openworkgraph.process-model.v1')
+          throw new Error('The compared revision or its immutable reference does not match.');
+        const changes=revisionDifferences(previous,selected);
+        const section=el('section');section.id='owgCatalogRevisionComparison';
+        section.setAttribute('aria-label','Saved process revision differences');
+        section.append(el('h4','Saved revision comparison · r'+revision+' → r'+selected.revision),
+          el('p','Compared r'+revision+' SHA-256 '+previous.content_sha256),
+          el('p','Opened saved r'+selected.revision+' SHA-256 '+selected.content_sha256),
+          el('p','Only stored snapshots are compared. Unsaved edits, current source state and business outcomes are NOT evaluated. Equal structure is not policy approval, evidence validity or permission to run an agent.'));
+        const summary=el('p',changes.length+' changed model entries. '+
+          (changes.length>120?'Only the first 120 are displayed; comparison is incomplete.':
+            'All detected stored-model differences are displayed.'));
+        summary.setAttribute('role','status');section.appendChild(summary);
+        if(changes.length){
+          const wrap=el('div');wrap.className='table-wrap';
+          const table=el('table'),thead=el('thead'),heading=el('tr');
+          for(const title of ['Area','Identity','Change','Compared r'+revision,'Opened r'+selected.revision])
+            heading.appendChild(el('th',title));
+          thead.appendChild(heading);table.appendChild(thead);
+          const body=el('tbody');
+          for(const change of changes.slice(0,120)){
+            const tr=el('tr');
+            for(const value of [change.area,change.key,change.kind,change.before,change.after])
+              tr.appendChild(el('td',value));
+            body.appendChild(tr);
+          }
+          table.appendChild(body);wrap.appendChild(table);section.appendChild(wrap);
+        }else section.appendChild(el('p','No stored-model difference detected. Source evidence and outcomes remain unverified.'));
+        section.appendChild(button('Open compared revision r'+revision,
+          ()=>load(selected.workflow_id,revision,previous.content_sha256)));
+        host.replaceChildren(section);
+      }catch(error){
+        if(generation===revisionCompareGeneration&&record===selected)
+          host.replaceChildren(el('p','Comparison unavailable: '+error.message));
+        throw error;
+      }
+    });
+  }
   async function history(before){
     if(!record)return;
     return locked(async()=>{
@@ -136,7 +232,12 @@
       const params=new URLSearchParams({workflow_id:workflowId,limit:'10'});if(before)params.set('before_revision',String(before));
       const result=await request('/v1/process-catalog/history?'+params),host=document.getElementById('owgCatalogHistory');
       host.replaceChildren(el('h4','Revision history'));
-      result.workflows.forEach(item=>host.appendChild(button('Open revision '+item.revision+' · '+item.saved_at,()=>load(workflowId,item.revision))));
+      result.workflows.forEach(item=>{
+        const row=el('p');row.appendChild(button('Open revision '+item.revision+' · '+item.saved_at,()=>load(workflowId,item.revision)));
+        if(item.revision!==record.revision)row.appendChild(button('Compare r'+item.revision+' with opened r'+record.revision,()=>compareSavedRevision(item.revision)));
+        host.appendChild(row);
+      });
+      const compare=el('div');compare.id='owgCatalogRevisionCompare';compare.setAttribute('aria-live','polite');host.appendChild(compare);
       if(result.has_more)host.appendChild(button('Older revisions',()=>history(result.next_before_revision)));
     });
   }
@@ -292,6 +393,7 @@
     host.appendChild(section);
   }
   function renderEditor(){
+    clearRevisionComparison();
     clearOrigins();
     clearSourceRuleChecks();
     clearRuleChecks();
@@ -730,6 +832,6 @@
     panel.appendChild(host);
   }
   window.owgProcessCatalog={saveDesigner,draftObserved,draftDiscovered,openSaved:ref=>load(ref.workflow_id,ref.revision,ref.content_sha256)};
-  window.__owgProcessCatalogModel={linearModel,designPathDifferences};
+  window.__owgProcessCatalogModel={linearModel,designPathDifferences,revisionDifferences};
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install);else install();
 })();
