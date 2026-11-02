@@ -47,6 +47,17 @@ const path=require('node:path');
    assert.match(await page.locator('#owgPipelineDetail').textContent(),/Ease 75\/100 · 25 modeled hours per month · Quick win/);
    assert.match(await page.locator('#owgPipelineList').textContent(),/Quick win/);
 
+   await page.locator('#owgPipelineSearch').fill('RENEWALS r3');
+   await page.locator('#owgPipelineViewCount').filter({hasText:'1 shown of 1'}).waitFor();
+   await page.locator('#owgPipelineQuadrant').selectOption('unassessed');
+   await page.getByText('No ideas in this view.',{exact:true}).waitFor();
+   await page.locator('#owgPipelineViewCount').filter({hasText:'0 shown of 1'}).waitFor();
+   await page.locator('#owgPipelineReset').click();
+   await page.locator('#owgPipelineViewCount').filter({hasText:'1 shown of 1'}).waitFor();
+   assert.equal(await page.locator('#owgPipelineSearch').inputValue(),'');
+   await page.locator('#owgPipelineSort').selectOption('impact');
+   assert.equal(await page.getByRole('button',{name:'Open idea Copy approved prices into renewals'}).count(),1);
+
    // A second tab edits the same idea; the stale page must be refused, not overwrite it.
    const ideaId=(await (await page.evaluate(async()=>{const r=await fetch('/v1/automation-pipeline');return r.json();})).ideas[0]).idea_id;
    await page.evaluate(async id=>{const r=await fetch('/v1/automation-pipeline/'+id);const idea=await r.json();
