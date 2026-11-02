@@ -384,3 +384,134 @@ def test_mixed_direct_and_fragment_decisions_reject_contradictory_intermediary()
     for rows in (contradictory["decisions"], list(reversed(contradictory["decisions"]))):
         with pytest.raises(ValueError, match="conflicting human decisions"):
             apply_review(events, packet, {**contradictory, "decisions": rows})
+
+
+
+def _batch_truth() -> dict:
+    return {
+        "workflows": [
+            {"event_ids": ["e01", "e04"]},
+            {"event_ids": ["e02", "e03", "e05"]},
+        ],
+        "noise_event_ids": [],
+    }
+
+
+def _batch_session(suffix: str) -> tuple[list[dict], dict, dict, dict]:
+    events = copy.deepcopy(_events())
+    for event in events:
+        event["session_id"] = f"session-{suffix}"
+    packet = prepare_review_packet(events)
+    target = next(
+        item["item_id"] for item in linked_work_items(events)["items"]
+        if "e02" in item["event_ids"]
+    )
+    decisions = _decision(packet, "e03", target, "confirm")
+    return events, packet, decisions, _batch_truth()
+
+
+def test_batch_aggregates_actual_linker_scores_without_leaking_source_ids():
+    from server.reconstruction_review_overlay import aggregate_review_scores, BATCH_FORMAT
+
+    first = _batch_session("one")
+    second = _batch_session("two")
+    scores = [score_review(*session) for session in (first, second)]
+    result = aggregate_review_scores(scores)
+    assert result["format"] == BATCH_FORMAT
+    assert result["session_count"] == 2
+    assert result["annotated_observation_count"] == 10
+    assert result["human_confirmed_count"] == 2
+    assert result["session_macro_automatic_baseline"]["workflow_assignment_f1"] == (
+        scores[0]["automatic_baseline"]["workflow_assignment_f1"]
+    )
+    assert result["session_macro_human_assisted_overlay"]["workflow_assignment_f1"] == 1.0
+    assert result["session_macro_assisted_minus_automatic"]["workflow_assignment_f1"] > 0
+    assert result["local_numeric_thresholds"]["observed_local_automatic_meets_both"] is False
+    assert result["preregistered_family_holdout_verified"] is False
+    assert result["automatic_improvement_claim"] is False
+    output = json.dumps(result)
+    for forbidden in ("SECRET", "PRIVATE", "private.example", "/medical-notes",
+                      first[1]["evidence_sha256"], "e03", "session-one"):
+        assert forbidden not in output
+    assert [row["session_index"] for row in result["sessions"]] == [1, 2]
+    with pytest.raises(ValueError, match="duplicate"):
+        aggregate_review_scores([scores[0], scores[0]])
+    for corrupted in (
+        {**scores[1], "automatic_baseline": {
+            **scores[1]["automatic_baseline"], "workflow_assignment_f1": float("nan"),
+        }},
+        {**scores[1], "human_assisted_overlay": {
+            **scores[1]["human_assisted_overlay"], "cross_workflow_contamination": 2,
+        }},
+        {**scores[1], "annotated_event_count": True},
+    ):
+        with pytest.raises(ValueError):
+            aggregate_review_scores([scores[0], corrupted])
+
+
+def test_batch_cli_replays_complete_private_sessions_and_refuses_stale_manifest(tmp_path: Path):
+    root = Path(__file__).resolve().parents[1]
+    def run(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, "-m", "scripts.reconstruction_review", *args],
+            cwd=root, capture_output=True, text=True, timeout=40,
+        )
+    sessions = []
+    for index in range(2):
+        events, packet, decisions, truth = _batch_session(str(index))
+        paths = {}
+        for key, document in (
+            ("events", events), ("packet", packet),
+            ("decisions", decisions), ("truth", truth),
+        ):
+            path = tmp_path / f"{index}-{key}.json"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            paths[key] = str(path)
+        sessions.append(paths)
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({
+        "format": "openworkgraph.reconstruction-review-manifest.v1",
+        "sessions": sessions,
+    }))
+    output = tmp_path / "batch-score.json"
+    completed = run("score-batch", "--manifest", str(manifest), "--output", str(output))
+    assert completed.returncode == 0, completed.stderr
+    report = json.loads(output.read_text())
+    assert report["session_count"] == 2
+    assert report["human_confirmed_count"] == 2
+    assert "PRIVATE" not in output.read_text()
+    assert str(tmp_path) not in output.read_text()
+    if os.name != "nt":
+        assert output.stat().st_mode & 0o077 == 0
+    # A changed or revoked source invalidates its packet and the entire
+    # batch refuses before creating a partial output.
+    original = json.loads(Path(sessions[1]["events"]).read_text())
+    Path(sessions[1]["events"]).write_text(json.dumps(original[:-1]))
+    refused_output = tmp_path / "refused.json"
+    refused = run("score-batch", "--manifest", str(manifest),
+                  "--output", str(refused_output))
+    assert refused.returncode == 2
+    assert not refused_output.exists()
+    Path(sessions[1]["events"]).write_text(json.dumps(original))
+    # Duplicate evidence is not two independent sessions.
+    duplicate = copy.deepcopy(sessions)
+    duplicate[1] = copy.deepcopy(duplicate[0])
+    manifest.write_text(json.dumps({
+        "format": "openworkgraph.reconstruction-review-manifest.v1",
+        "sessions": duplicate,
+    }))
+    assert run("score-batch", "--manifest", str(manifest),
+               "--output", str(refused_output)).returncode == 2
+    assert not refused_output.exists()
+    # Unknown keys, unsupported formats and over-budget input fail closed.
+    for invalid in (
+        {"format": "unknown", "sessions": sessions},
+        {"format": "openworkgraph.reconstruction-review-manifest.v1",
+         "sessions": [sessions[0]]},
+        {"format": "openworkgraph.reconstruction-review-manifest.v1",
+         "sessions": sessions, "upload": True},
+    ):
+        manifest.write_text(json.dumps(invalid))
+        assert run("score-batch", "--manifest", str(manifest),
+                   "--output", str(refused_output)).returncode == 2
+        assert not refused_output.exists()
