@@ -843,3 +843,99 @@ def test_resolve_cli_apply_score_and_batch_replay_private_artifact(tmp_path: Pat
     assert run("score-batch", "--manifest", str(manifest),
                "--output", str(refused)).returncode == 2
     assert not refused.exists()
+
+
+def test_review_interleaving_context_competing_anchors_are_not_assignments():
+    events = _events()
+    before = linked_work_items(events)
+    packet = prepare_review_packet(events)
+    candidate = next(x for x in packet["eligible_candidates"] if x["event_id"] == "e03")
+    context = candidate["interleaving_context"]
+    assert context["status"] == "competing_record_anchors"
+    assert context["preceding_linked_item_id"] != context["following_linked_item_id"]
+    assert set((context["preceding_linked_item_id"], context["following_linked_item_id"])) == {
+        item["item_id"] for item in before["items"]
+    }
+    assert context["case_identity_verified"] is False
+    assert context["auto_assigned"] is False
+    assert packet["observed_interleaving_context_counts"]["competing_record_anchors"] == 1
+    # Context changes neither canonical membership nor the human approval gate.
+    empty = {"format": DECISION_FORMAT, "evidence_sha256": packet["evidence_sha256"],
+             "decisions": []}
+    assert apply_review(events, packet, empty)["human_confirmed_count"] == 0
+    assert linked_work_items(events) == before
+    assert "SECRET" not in json.dumps(packet)
+    assert "private.example" not in json.dumps(packet)
+
+
+def test_review_interleaving_context_matching_anchors_and_scope_barriers():
+    matching = [_event(1, A), _event(2, A), _event(3), _event(4, A), _event(5, A)]
+    packet = prepare_review_packet(matching)
+    context = next(x for x in packet["eligible_candidates"] if x["event_id"] == "e03")[
+        "interleaving_context"
+    ]
+    assert context["status"] == "matching_linked_item_anchors"
+    assert context["preceding_linked_item_id"] == context["following_linked_item_id"]
+    # A foreign-tenant observation cannot be used as a before-anchor or
+    # crossed to reach an older matching record in the same tenant.
+    scoped = [_event(1, A), _event(2, B, tenant="tenant-b"), _event(3),
+              _event(4, A), _event(5, A)]
+    packet = prepare_review_packet(scoped)
+    context = next(x for x in packet["eligible_candidates"] if x["event_id"] == "e03")[
+        "interleaving_context"
+    ]
+    assert context["status"] == "one_sided_record_anchor"
+    assert context["preceding_linked_item_id"] is None
+    assert context["following_linked_item_id"] is not None
+    # Tied timestamps do not establish observed before/after order.
+    tied = copy.deepcopy(matching)
+    tied[1]["observed_at"] = tied[2]["observed_at"]
+    packet = prepare_review_packet(tied)
+    context = next(x for x in packet["eligible_candidates"] if x["event_id"] == "e03")[
+        "interleaving_context"
+    ]
+    assert context["preceding_linked_item_id"] is None
+    assert context["status"] == "one_sided_record_anchor"
+
+
+def test_review_interleaving_context_has_bounded_observation_distance():
+    # e02 (B) is ten observations before e12; a nearby A anchor after
+    # e12 must not turn a distant B observation into local negative evidence.
+    events = [_event(1, A), _event(2, B)]
+    events.extend(_event(number) for number in range(3, 13))
+    events.extend([_event(13, A), _event(14, B)])
+    packet = prepare_review_packet(events)
+    candidate = next(x for x in packet["eligible_candidates"] if x["event_id"] == "e12")
+    context = candidate["interleaving_context"]
+    assert context["status"] == "one_sided_record_anchor"
+    assert context["preceding_linked_item_id"] is None
+    assert context["following_linked_item_id"] is not None
+    assert context["maximum_intervening_observations_per_side"] == 8
+    # Changing the exact evidence requires a fresh packet, including context.
+    altered = copy.deepcopy(events)
+    altered[3]["metadata"]["target"]["label"] = "CHANGED PRIVATE"
+    with pytest.raises(ValueError, match="stale|altered"):
+        apply_review(altered, packet, {"format": DECISION_FORMAT,
+                     "evidence_sha256": packet["evidence_sha256"], "decisions": []})
+
+
+def test_prepare_cli_exposes_interleaving_context_without_private_work_text(tmp_path: Path):
+    root = Path(__file__).resolve().parents[1]
+    source = tmp_path / "events.json"
+    output = tmp_path / "context-packet.json"
+    source.write_text(json.dumps(_events()))
+    result = subprocess.run(
+        [sys.executable, "-m", "scripts.reconstruction_review", "prepare",
+         "--events", str(source), "--output", str(output)],
+        cwd=root, capture_output=True, text=True, timeout=40,
+    )
+    assert result.returncode == 0, result.stderr
+    packet = json.loads(output.read_text())
+    assert packet["eligible_candidates"][0]["interleaving_context"]["status"] == (
+        "competing_record_anchors"
+    )
+    assert packet["observed_interleaving_context_counts"]["competing_record_anchors"] == 1
+    for forbidden in ("SECRET", "PRIVATE", "private.example", "/medical-notes"):
+        assert forbidden not in output.read_text()
+    if os.name != "nt":
+        assert output.stat().st_mode & 0o077 == 0
