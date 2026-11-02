@@ -21,12 +21,16 @@
       status:item.status||'unknown',source_content_sha256:item.source_content_sha256||null,
       selection_sha256:item.selection_sha256||null
     }));
+    const originsTruncated=(journey.dataset_origins||[]).length>64;
+    const reportsTruncated=(project.reported_specifications||[]).length>64;
     const reported=(project.reported_specifications||[]).slice(0,64).map(item=>({
       status:item.status||'unknown',reported_run_count:Number.isSafeInteger(item.reported_run_count)&&item.reported_run_count>=0?item.reported_run_count:null
     }));
     const blockers=[];
     if(!ref)blockers.push('no_exact_saved_process');
     if(process.status!=='current')blockers.push('process_not_current');
+    if(originsTruncated)blockers.push('dataset_origin_list_truncated');
+    if(reportsTruncated)blockers.push('reported_specification_list_truncated');
     if(!origins.length)blockers.push('dataset_origin_not_linked');
     else if(origins.some(item=>item.status!=='current'))blockers.push('dataset_origin_not_current');
     if(!['approved','implemented'].includes(journey.idea?.state))blockers.push('idea_not_approved');
@@ -41,11 +45,11 @@
       idea:{idea_id:ideaId,revision:journey.idea?.revision??null,state:journey.idea?.state||'unknown'},
       process:{workflow_id:ref?.workflow_id||null,revision:ref?.revision??null,
         content_sha256:ref?.content_sha256||null,status:process.status||'unknown'},
-      dataset_origins:origins,
+      dataset_origins:origins,dataset_origins_truncated:originsTruncated,
       project:{project_id:project.project_id,idea_revision:project.idea_revision,
         idea_revision_is_current:!!project.idea_revision_is_current,
         spec_sha256:project.spec_sha256,archive_sha256:project.archive_sha256},
-      reported_specifications:reported,
+      reported_specifications:reported,reported_specifications_truncated:reportsTruncated,
       source_check_exports:{count:project.source_check_exports?.count||0,
         last_document_sha256:project.source_check_exports?.last_document_sha256||null},
       readiness:{human_review_required:true,blockers,verified_execution:false,verified_business_outcomes:false}
@@ -291,6 +295,7 @@
             const issues=el('ul');
             const names={no_exact_saved_process:'Exact saved process missing',process_not_current:'Process revision changed or unavailable',
               dataset_origin_not_linked:'Source dataset/cohort not linked',dataset_origin_not_current:'Source dataset/cohort changed or unavailable',
+              dataset_origin_list_truncated:'Source dataset/cohort checks truncated to 64',reported_specification_list_truncated:'Reported specification checks truncated to 64',
               idea_not_approved:'Human opportunity approval missing',project_uses_historical_idea_revision:'Project based on historical idea revision',
               no_imported_report:'No imported run report',reported_specification_unverified:'Reported specification unavailable or mismatched',
               execution_and_business_outcomes_unverified:'Execution, causality and business outcomes not independently verified'};
