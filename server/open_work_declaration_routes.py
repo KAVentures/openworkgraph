@@ -35,6 +35,9 @@ from .open_work_case_dependency_history import compose_dependency_operation_hist
 from .open_work_case_human_dependency_history import compose_dependency_human_outcomes
 from .open_work_case_outcome_reconciliation import compose_outcome_evidence_triage
 from .open_work_case_review_actions import compose_outcome_review_action_plan
+from .open_work_case_review_progress import (
+    issue_review_progress, validate_review_progress, compare_review_progress,
+)
 from .open_work_case_fresh_outcome_triage import compose_fresh_outcome_triage
 from .open_work_case_outcome_portfolio import (
     portfolio_fingerprint, validate_page_token, compose_outcome_portfolio,
@@ -1456,6 +1459,75 @@ async def read_local_outcome_evidence_triage(request: Request, response: Respons
     await _recheck_source(scope)
     response.headers["Cache-Control"] = "no-store"
     return {**result, "review_action_plan": action_plan}
+
+
+@router.post("/v1/open-work/declarations/human-outcomes/progress-checkpoint")
+async def issue_local_outcome_review_progress(request: Request, response: Response):
+    """Seal historical human/provider review and unresolved action baseline."""
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_historical_review", "max_cases",
+    })
+    if payload["confirm_historical_review"] is not True:
+        raise HTTPException(403, "explicit historical outcome review required")
+    triage, admitted, signature, secret = await _load_review_triage(scope, payload)
+    try:
+        result = issue_review_progress(
+            triage, admitted, signature, scope=scope, secret=secret,
+            max_cases=payload["max_cases"],
+        )
+        await asyncio.to_thread(
+            _operation_ledger_guard, scope, payload["work_item_ref"],
+            payload["expected_revision"], payload["expected_edit_token"], signature,
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/v1/open-work/declarations/human-outcomes/progress-compare")
+async def compare_local_outcome_review_progress(request: Request, response: Response):
+    """Compare two historical reviews; no provider read or outcome certification."""
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token", "checkpoint",
+    })
+    try:
+        admitted, signature, secret, guard = await _operation_ledger_admission(scope, payload)
+        validated = validate_review_progress(
+            payload["checkpoint"], admitted, signature, scope=scope, secret=secret,
+        )
+        await asyncio.to_thread(guard)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    request_payload = {**payload, "max_cases": validated["max_cases"]}
+    triage, refreshed, current_signature, current_secret = await _load_review_triage(
+        scope, request_payload,
+    )
+    try:
+        result = compare_review_progress(
+            payload["checkpoint"], triage, refreshed, current_signature,
+            scope=scope, secret=current_secret,
+        )
+        await asyncio.to_thread(guard)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    # A second independent HMAC-ledger read detects intervening edits during
+    # the first comparison. This is not an atomic cross-store snapshot.
+    repeated, _a, _s, _secret = await _load_review_triage(scope, request_payload)
+    if repeated != triage:
+        raise HTTPException(409, "historical review changed during comparison")
+    await asyncio.to_thread(guard)
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
 
 
 @router.post("/v1/open-work/declarations/human-outcomes/review-packet")
