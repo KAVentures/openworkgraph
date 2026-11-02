@@ -51,7 +51,7 @@ _MAX_ITEMS = 50
 _MAX_EVENT_IDS = 50
 _MAX_CANDIDATES = 50
 _MAX_DUPLICATE_PAYLOAD_NODES = 10_000
-_CONFIDENCE = {"same_record": 0.95, "clipboard_transfer": 0.85, "same_tab_single_record": 0.7, "same_tab_bracketed_record": 0.72}
+_CONFIDENCE = {"same_record": 0.95, "clipboard_transfer": 0.85, "same_tab_single_record": 0.7, "same_tab_bracketed_record": 0.72, "same_tab_interleaved_bracketed_record": 0.68}
 _CANDIDATE_CONFIDENCE = {"same_tab_multiplexed": 0.4, "same_tab_unreferenced": 0.35, "surface_continuity": 0.3}
 
 
@@ -536,7 +536,7 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
         if key not in tainted_tabs and len({r["ref"] for r in tab_rows if r["ref"]}) > 1
     }
     focus_proposals = bracketed_multiplexed_tab_focus(rows, multiplexed_tabs)
-    for _anchor, loose_id, focus_ref in focus_proposals:
+    for _anchor, loose_id, focus_ref, _basis in focus_proposals:
         targets = tab_targets[pre_tab_root[loose_id]]
         if len(targets) < 2:
             targets.add(focus_ref)
@@ -585,8 +585,9 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
                 candidates.append({"event_id": row["event_id"], "toward_event_id": previous["event_id"],
                                    "relation": "same_tab_unreferenced"})
     bracketed_tab_focus_links = 0
+    interleaved_tab_focus_links = 0
     bracketed_tab_focus_conflicts = 0
-    for anchor_id, loose_id, focus_ref in focus_proposals:
+    for anchor_id, loose_id, focus_ref, focus_basis in focus_proposals:
         loose_root = pre_tab_root[loose_id]
         anchor_root = pre_tab_root[anchor_id]
         if (component_refs.get(loose_root, set()) - {focus_ref}
@@ -595,8 +596,10 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
             bracketed_tab_focus_conflicts += 1
             continue
         if union.find(anchor_id) != union.find(loose_id):
-            join([anchor_id, loose_id], "same_tab_bracketed_record")
+            join([anchor_id, loose_id], focus_basis)
             bracketed_tab_focus_links += 1
+            if focus_basis == "same_tab_interleaved_bracketed_record":
+                interleaved_tab_focus_links += 1
 
     for index, row in enumerate(rows):
         if (row["reference_tainted"] or row["ephemeral_claim_tainted"] or
@@ -620,6 +623,7 @@ def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
             "inconsistent_transfer_direction_groups": inconsistent_transfer_direction_groups,
             "tab_component_conflicts": tab_component_conflicts,
             "bracketed_tab_focus_links": bracketed_tab_focus_links,
+            "interleaved_tab_focus_links": interleaved_tab_focus_links,
             "bracketed_tab_focus_conflicts": bracketed_tab_focus_conflicts}
 
 
@@ -719,6 +723,7 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
         "inconsistent_clipboard_transfer_direction_groups": linked["inconsistent_transfer_direction_groups"],
         "ambiguous_tab_component_attachments_suppressed": linked["tab_component_conflicts"],
         "observed_bracketed_tab_focus_links": linked["bracketed_tab_focus_links"],
+        "observed_interleaved_tab_focus_links": linked["interleaved_tab_focus_links"],
         "ambiguous_bracketed_tab_focus_attachments_suppressed": linked["bracketed_tab_focus_conflicts"],
         "link_contract": {
             "merged_bases": sorted(_CONFIDENCE),
@@ -752,7 +757,10 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             "reused_clipboard_token_only_links_disjoint_explicit_episodes": True,
             "explicit_clipboard_direction_conflicts_are_unmerged": True,
             "competing_tab_component_records_are_unmerged": True,
-            "multiplexed_tab_focus_requires_global_two_sided_same_record_evidence": True,
+            "multiplexed_tab_focus_requires_global_two_sided_same_record_evidence": False,
+            "multiplexed_tab_focus_requires_two_sided_same_tab_record_evidence": True,
+            "interleaved_tab_focus_requires_explicit_distinct_tab": True,
+            "interleaved_tab_focus_has_bounded_foreign_and_loose_events": True,
             "multiplexed_tab_focus_requires_complete_capture_scope": True,
             "multiplexed_tab_focus_never_uses_elapsed_time_as_link_evidence": True,
             "labels_titles_urls_and_clipboard_contents_read": False,
