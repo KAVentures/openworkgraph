@@ -2176,6 +2176,21 @@
       if(!['add','subtract','multiply','divide'].includes(values.operation))throw new Error('Choose the arithmetic operation.');
       return {name,kind:'arithmetic',expression_version:'1',operation:values.operation,left:operand('left'),right:operand('right')};
     }
+    if(values.kind==='event_attribute_statistic'){
+      const attribute=String(values.attribute||'').trim(),unit=String(values.unit||'').trim();
+      const statistic=String(values.statistic||''),missingPolicy=String(values.missingPolicy||'');
+      const stageFrom=String(values.stageFrom||''),stageTo=String(values.stageTo||'');
+      if(!attribute)throw new Error('Enter the numeric event attribute name.');
+      if(!/^[A-Za-z%$€£¥/._ -]{1,20}$/.test(unit))throw new Error('Enter the unit of the values, for example EUR or kg.');
+      if(!['average','minimum','maximum','median','p90','total','population_stddev'].includes(statistic))throw new Error('Choose a supported within-case statistic.');
+      if(!['available','complete'].includes(missingPolicy))throw new Error('Choose how to handle missing numeric values.');
+      if(!!stageFrom!==!!stageTo)throw new Error('Choose both stage start and end, or leave both empty.');
+      if(!['first','last_completed'].includes(values.stageOccurrence||'first'))throw new Error('Choose the first or last completed stage.');
+      const metric={name,kind:'event_attribute_statistic',attribute,unit,statistic,missing_policy:missingPolicy};
+      if(values.statActivity)metric.activity=String(values.statActivity);
+      if(stageFrom){metric.from_activity=stageFrom;metric.to_activity=stageTo;metric.stage_occurrence=values.stageOccurrence||'first';}
+      return metric;
+    }
     if(values.kind==='event_attribute_sum'||values.kind==='case_attribute_number'){
       const attribute=String(values.attribute||'').trim(),unit=String(values.unit||'').trim();
       if(!attribute)throw new Error('Enter the attribute name.');
@@ -2184,10 +2199,16 @@
     }
     throw new Error('Choose what the metric measures.');
   }
-  const METRIC_KINDS=[['time_between','Time from one activity to another'],['activity_count','How often an activity occurs'],['event_attribute_sum','Sum of a numeric event attribute'],['case_attribute_number','A numeric case attribute'],['arithmetic','Arithmetic on earlier metrics']];
+  const METRIC_KINDS=[['time_between','Time from one activity to another'],['activity_count','How often an activity occurs'],['event_attribute_statistic','Numeric event values within each case or stage'],['event_attribute_sum','Sum of a numeric event attribute'],['case_attribute_number','A numeric case attribute'],['arithmetic','Arithmetic on earlier metrics']];
   function metricText(m){
     if(m.kind==='time_between')return m.name+': time from the '+m.from_occurrence+' '+m.from_activity+' to the '+m.to_occurrence+' '+m.to_activity;
     if(m.kind==='activity_count')return m.name+': number of '+m.activity+' events';
+    if(m.kind==='event_attribute_statistic'){
+      const label={average:'average',minimum:'minimum',maximum:'maximum',median:'median',p90:'90th percentile',total:'total',population_stddev:'population standard deviation'}[m.statistic]||m.statistic;
+      return m.name+': '+label+' of event attribute '+m.attribute+(m.activity?' at '+m.activity:'')+
+        (m.from_activity?' from '+m.from_activity+' to '+m.to_activity+' ('+(m.stage_occurrence||'first')+' completed stage)':'')+
+        ' ('+m.unit+', '+m.missing_policy+' numeric values)';
+    }
     if(m.kind==='arithmetic'){
       const text=o=>o.kind==='metric'?o.name:String(o.value)+' '+o.unit;
       return m.name+': '+text(m.left)+' '+({add:'+',subtract:'−',multiply:'×',divide:'÷'}[m.operation])+' '+text(m.right);
@@ -2230,6 +2251,12 @@
     const occurrences=[['first','first'],['last','last']];
     const mFromOcc=select('owgMetricFromOccurrence',occurrences),mToOcc=select('owgMetricToOccurrence',occurrences);
     const mAttribute=input('owgMetricAttribute','text','amount'),mUnit=input('owgMetricUnit','text','EUR');mUnit.maxLength=20;
+    const mStatistic=select('owgMetricStatistic',[['average','Average'],['minimum','Minimum'],['maximum','Maximum'],['median','Median'],['p90','90th percentile'],['total','Total'],['population_stddev','Population standard deviation']]);
+    const mMissing=select('owgMetricMissingPolicy',[['available','Use available finite values'],['complete','Require every matching event to have a finite value']]);
+    const mStatActivity=select('owgMetricStatActivity',[['','(all activities)'],...names]);
+    const mStageFrom=select('owgMetricStageFrom',[['','(whole case)'],...names]);
+    const mStageTo=select('owgMetricStageTo',[['','(whole case)'],...names]);
+    const mStageOccurrence=select('owgMetricStageOccurrence',[['first','First observed completed stage'],['last_completed','Last completed stage (ignore unfinished trailing stage)']]);
     const mOperation=select('owgMetricOperation',[['add','Add'],['subtract','Subtract'],['multiply','Multiply'],['divide','Divide']]);
     const operands={};
     for(const side of ['left','right']){
@@ -2241,22 +2268,29 @@
     const mAdd=button('Add metric to this analysis','secondary');mAdd.id='owgMetricAdd';
     const mSave=button('Save metric for reuse','secondary');mSave.id='owgMetricSave';
     const mf={from:field('From activity',mFrom),fromOcc:field('Occurrence of the from activity',mFromOcc),to:field('To activity',mTo),toOcc:field('Occurrence of the to activity',mToOcc),
-      activity:field('Activity to count',mActivity),attribute:field('Attribute',mAttribute),unit:field('Unit of the values',mUnit),operation:field('Operation',mOperation)};
+      activity:field('Activity to count',mActivity),attribute:field('Attribute',mAttribute),unit:field('Unit of the values',mUnit),
+      statistic:field('Statistic within each case',mStatistic),missing:field('Missing numeric values',mMissing),
+      statActivity:field('Only this activity (optional)',mStatActivity),stageFrom:field('Stage start (optional)',mStageFrom),
+      stageTo:field('Stage end (optional)',mStageTo),stageOccurrence:field('Which completed stage',mStageOccurrence),
+      operation:field('Operation',mOperation)};
     for(const side of ['left','right'])for(const key of ['kind','metric','value','unit'])mf[side+key]=field((side==='left'?'Left':'Right')+' '+({kind:'operand',metric:'metric',value:'constant',unit:'constant unit'}[key]),operands[side][key]);
     const mSync=()=>{const k=mKind.value;show(mf.from,k==='time_between');show(mf.fromOcc,k==='time_between');show(mf.to,k==='time_between');show(mf.toOcc,k==='time_between');
-      show(mf.activity,k==='activity_count');show(mf.attribute,k.endsWith('_number')||k.endsWith('_sum'));show(mf.unit,k.endsWith('_number')||k.endsWith('_sum'));
+      const numeric=k==='event_attribute_statistic';
+      show(mf.activity,k==='activity_count');show(mf.attribute,numeric||k.endsWith('_number')||k.endsWith('_sum'));show(mf.unit,numeric||k.endsWith('_number')||k.endsWith('_sum'));
+      show(mf.statistic,numeric);show(mf.missing,numeric);show(mf.statActivity,numeric);
+      show(mf.stageFrom,numeric);show(mf.stageTo,numeric);show(mf.stageOccurrence,numeric&&(!!mStageFrom.value||!!mStageTo.value));
       show(mf.operation,k==='arithmetic');
       for(const side of ['left','right'])for(const key of ['kind','metric','value','unit'])show(mf[side+key],k==='arithmetic'&&(key==='kind'||(key==='metric'?operands[side].kind.value==='metric':operands[side].kind.value==='constant')));
     };
     operands.left.kind.onchange=operands.right.kind.onchange=mSync;
-    mKind.onchange=mSync;mSync();
+    mKind.onchange=mStageFrom.onchange=mStageTo.onchange=mSync;mSync();
     const metricRow=el('div',null,'row');metricRow.style.alignItems='end';
     metricRow.append(field('Case metric',mKind),field('Metric name',mName),...Object.values(mf),mAdd,mSave);
     const metricList=el('div');metricList.id='owgMetricList';
     const library=el('div');library.id='owgMetricLibrary';
     const metricBox=document.createElement('fieldset');metricBox.style.cssText='border:1px solid var(--line,#ccc);border-radius:6px;padding:8px;margin-top:8px';
-    const legend=el('legend','Case metrics (optional)');metricBox.append(legend,el('div','Define up to four values per case, then choose a measure. Times are in seconds; declared units are never converted. Arithmetic uses earlier metrics or typed constants; ratio means dimensionless. Add/subtract need identical units; division by zero is missing. Saved arithmetic templates refer to names: add their dependencies first. Save an analysis to retain all definitions together.','muted'),metricRow,metricList,library);
-    const readMetric=()=>caseMetric({kind:mKind.value,name:mName.value,from:mFrom.value,to:mTo.value,fromOccurrence:mFromOcc.value,toOccurrence:mToOcc.value,activity:mActivity.value,attribute:mAttribute.value,unit:mUnit.value,operation:mOperation.value,
+    const legend=el('legend','Case metrics (optional)');metricBox.append(legend,el('div','Define up to four values per case, then choose a measure. Numeric event statistics use only observed finite values; choose available or require all matching rows, optionally one activity and a first or last completed stage. Unfinished stages are not completed. Times are in seconds; declared units are never converted. Arithmetic uses earlier metrics or typed constants; ratio means dimensionless. Add/subtract need identical units; division by zero is missing. Saved arithmetic templates refer to names: add their dependencies first. Save an analysis to retain all definitions together.','muted'),metricRow,metricList,library);
+    const readMetric=()=>caseMetric({kind:mKind.value,name:mName.value,from:mFrom.value,to:mTo.value,fromOccurrence:mFromOcc.value,toOccurrence:mToOcc.value,activity:mActivity.value,attribute:mAttribute.value,unit:mUnit.value,statistic:mStatistic.value,missingPolicy:mMissing.value,statActivity:mStatActivity.value,stageFrom:mStageFrom.value,stageTo:mStageTo.value,stageOccurrence:mStageOccurrence.value,operation:mOperation.value,
       ...Object.fromEntries(Object.entries(operands).flatMap(([side,controls])=>Object.entries(controls).map(([key,node])=>[side+key[0].toUpperCase()+key.slice(1),node.value])))});
     function useMetric(metric){
       if(metrics.some(m=>m.name===metric.name))throw new Error('This analysis already has a metric named '+metric.name+'.');
