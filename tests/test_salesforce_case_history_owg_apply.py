@@ -64,8 +64,8 @@ def provider():
 
 @pytest.fixture
 def context(tmp_path, monkeypatch):
-    pytest.importorskip("duckdb")
-    uvicorn = pytest.importorskip("uvicorn")
+    import duckdb  # Required native integration dependency: never silently skip.
+    import uvicorn
     from fastapi import FastAPI
     from server import event_log_routes as routes
     from server import event_log_workspace as workspace
