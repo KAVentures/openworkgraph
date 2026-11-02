@@ -171,6 +171,77 @@ def test_event_level_metric_refused_before_dataset_access(monkeypatch):
         query.run("unused", {"level": "events", "metrics": [metric()], "measures": [{"fn": "count"}]})
 
 
+def test_activity_scoped_statistics_distinguish_no_activity_from_invalid_values(log):
+    doc = (
+        "case,activity,time,amount\n"
+        "x,Receive,2024-02-01T00:00:00Z,2\n"
+        "x,Pay,2024-02-01T01:00:00Z,6\n"
+        "y,Receive,2024-02-02T00:00:00Z,3\n"
+        "z,Pay,2024-02-03T00:00:00Z,invalid\n"
+        "w,Pay,2024-02-04T00:00:00Z,9\n"
+        "w,Pay,2024-02-04T01:00:00Z,NaN\n"
+        "r,Refund,2024-02-05T00:00:00Z,11\n"
+    ).encode()
+    selected = workspace.import_log(BytesIO(doc), name="activity-scope", source_format="csv", mapping={
+        "case_column": "case", "activity_column": "activity", "timestamp_column": "time",
+        "attribute_columns": ["amount"]})["log_id"]
+
+    def scoped(activity, policy="available", statistic="average", **kw):
+        return query.run(selected, {"level": "cases", "metrics": [{
+            **metric(statistic, policy), "activity": activity}],
+            "measures": [{"fn": "sum", "of": "metric:price"}], **kw})
+
+    pay = scoped("Pay")
+    assert pay["rows"] == [[15.0]]
+    assert pay["matching"]["cases"] == 5
+    coverage = pay["metrics"][0]
+    assert coverage["flattened_case_event_rows_considered"] == 4
+    assert coverage["event_rows_with_finite_attribute"] == 2
+    assert coverage["event_rows_with_missing_invalid_or_nonfinite_attribute"] == 2
+    assert coverage["cases_with_partial_attribute_coverage"] == 1
+    assert coverage["cases_without_matching_activity"] == 2
+    assert coverage["cases_with_no_finite_attribute"] == 3
+    assert coverage["cases_with_value"] == 2
+    assert coverage["cases_without_value"] == 3
+    assert coverage["coverage_scope"] == "selected_full_cases_matching_activity_flattened_case_event_rows"
+    assert pay["units"] == {"sum_metric:price": "EUR"}
+    assert scoped("Pay", "complete")["rows"] == [[6.0]]
+    assert scoped("Pay", statistic="median")["rows"] == [[15.0]]
+    assert scoped("Refund")["rows"] == [[11.0]]
+    assert scoped("NotObserved")["rows"] == [[None]]
+    assert scoped("NotObserved")["metrics"][0]["cases_without_matching_activity"] == 5
+    assert scoped("Pay' OR 1=1 --")["rows"] == [[None]]  # literal, bound; never SQL
+    filtered = scoped("Pay", where={"ends_with": "Pay"})
+    assert filtered["matching"]["cases"] == 3
+    assert filtered["metrics"][0]["cases_without_matching_activity"] == 0
+    assert filtered["metrics"][0]["cases_with_no_finite_attribute"] == 1
+    json.dumps(pay, allow_nan=False)
+
+    pay_metric = {**metric(), "name": "paid", "activity": "Pay"}
+    received_metric = {**metric(), "name": "received", "activity": "Receive"}
+    difference = {"name": "net", "kind": "arithmetic", "operation": "subtract",
+                  "left": {"kind": "metric", "name": "paid"},
+                  "right": {"kind": "metric", "name": "received"}}
+    spec = {"level": "cases", "metrics": [pay_metric, received_metric, difference],
+            "measures": [{"fn": "sum", "of": "metric:net"}]}
+    assert query.run(selected, spec)["rows"] == [[4.0]]
+    template = query.save_metric(selected, {"metric": pay_metric})
+    assert query.list_metrics(selected)["metrics"][0]["metric"]["activity"] == "Pay"
+    saved = query.save(selected, {"name": "Pay less Receive", "spec": spec})
+    assert query.run(selected, query.list_saved(selected)["analyses"][0]["spec"])["rows"] == [[4.0]]
+    assert saved["spec"]["metrics"][0]["activity"] == "Pay"
+    query.delete_metric(selected, template["metric_id"])
+
+
+@pytest.mark.parametrize("activity", ["", "a" * 201, 123, False])
+def test_invalid_activity_selector_refused_before_dataset_access(monkeypatch, activity):
+    monkeypatch.setattr(workspace, "_query", lambda *a, **kw: pytest.fail("dataset accessed"))
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        query.run("unused", {"level": "cases",
+            "metrics": [{**metric(), "activity": activity}],
+            "measures": [{"fn": "sum", "of": "metric:price"}]})
+
+
 def test_authenticated_http_analysis_save_and_denial(tmp_path):
     code = r'''
 from fastapi.testclient import TestClient
@@ -197,6 +268,14 @@ with TestClient(app) as client:
         assert other.status_code == 200, other.text
         assert other.json()["rows"] == [[expected]]
         assert other.json()["metrics"][0]["definition"]["statistic"] == statistic
+    for activity, expected in (("A", 15.0), ("B", 20.0), ("Unseen", None)):
+        scoped = client.post(base + "/analysis", json={**spec, "metrics": [{**m, "activity": activity}]},
+                             headers=headers)
+        assert scoped.status_code == 200, scoped.text
+        assert scoped.json()["rows"] == [[expected]]
+        assert scoped.json()["metrics"][0]["definition"]["activity"] == activity
+        if activity == "Unseen":
+            assert scoped.json()["metrics"][0]["cases_without_matching_activity"] == 2
     assert client.post(base + "/metrics", json={"metric": m}, headers=headers).status_code == 200
     saved = client.post(base + "/analyses", json={"name": "Verified contract", "spec": spec}, headers=headers)
     assert saved.status_code == 200, saved.text
