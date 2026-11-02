@@ -215,7 +215,7 @@ def test_progress_reports_dispute_and_never_promotes_paid_to_customer_success(lo
         target = history.json()["events"][-1]["sequence"]
         dispute = client.post(BASE + "/operation-ledger/dispute", headers=headers, json={
             **_cas(saved, A), "confirm_dispute": True,
-            "target_sequence": target, "reason_code": "incorrect_source_record",
+            "target_sequence": target, "reason_code": "operator_dispute",
         })
         assert dispute.status_code == 200, dispute.text
         result = _compare(client, headers, saved, checkpoint)
@@ -256,9 +256,6 @@ def test_expired_and_source_revoked_checkpoint_refused(local, monkeypatch):
         )
         expired = _compare(client, headers, saved, checkpoint)
         assert expired.status_code in (409, 422), expired.text
-        monkeypatch.undo()
-        # The original local fixture is no longer patched after undo.
-        # Source disconnect is separately tested below.
 
 
 def test_account_switch_revokes_checkpoint(local):
