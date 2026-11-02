@@ -340,6 +340,68 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    assert.equal(reviewBundle.inspection_worklist.comparison_sha256,inspectionRecord.comparison_sha256);
    assert(!JSON.stringify(reviewBundle).includes('PRIVATE_RAW_CASE_VALUE'));
    assert(!JSON.stringify(reviewBundle).includes('raw_receipt'));
+   // The first-class entry point must resume without manually locating the
+   // idea, choosing a project or opening the previous review panel.
+   const directResume=await context.newPage();
+   let directResumeWrites=0;
+   directResume.on('request',request=>{
+     if(request.url().startsWith(base+'/v1/')&&!['GET','HEAD','OPTIONS'].includes(request.method()))
+       directResumeWrites++;
+   });
+   await directResume.goto(base+'/#session='+session);
+   await directResume.locator('[role=tab][data-tab=evidence]').click();
+   await directResume.locator('#owgPipelineResumeBundleFile').setInputFiles({
+     name:'resume-from-home.json',mimeType:'application/json',
+     buffer:Buffer.from(JSON.stringify(reviewBundle))
+   });
+   assert.equal(await directResume.locator('#owgPipelineJourneyProject').count(),0,
+     'no idea or project was manually opened');
+   await directResume.locator('#owgPipelineResumeBundle').focus();
+   await directResume.keyboard.press('Enter');
+   await directResume.locator('#owgPipelineResumeStatus')
+     .filter({hasText:/Fresh comparison completed/}).waitFor();
+   assert.equal(await directResume.locator('#owgPipelineJourneyProject').inputValue(),manifest.project_id);
+   await directResume.locator('#owgPipelineJourneyInspectionRestoreStatus')
+     .filter({hasText:/Resumed 1 local inspection marks from one review bundle/}).waitFor();
+   assert(await directResume.locator('#owgPipelineJourneyInspectionWorklist input[type=checkbox]').first().isChecked());
+   assert.equal(await directResume.locator('#owgPipelineSourceConsent').count(),0,
+     'resume does not even open the consent-gated source-check form');
+   assert.equal(directResumeWrites,0,'direct resume uses only authenticated local GETs');
+   // A valid-looking but unavailable project must never silently switch to
+   // another project or replay inspection marks.
+   const missingProjectBundle=JSON.parse(JSON.stringify(reviewBundle));
+   missingProjectBundle.saved_packet.project.project_id='deleted-project-id';
+   missingProjectBundle.inspection_worklist.project_id='deleted-project-id';
+   await directResume.locator('#owgPipelineResumeBundleFile').setInputFiles({
+     name:'deleted-project.json',mimeType:'application/json',
+     buffer:Buffer.from(JSON.stringify(missingProjectBundle))
+   });
+   await directResume.locator('#owgPipelineResumeBundle').click();
+   await directResume.locator('#owgPipelineResumeStatus')
+     .filter({hasText:/Exact saved project is unavailable or deleted/}).waitFor();
+   assert.equal(await directResume.locator('#owgPipelineJourneyProject').count(),0,
+     'unavailable project refuses fallback selection');
+   for(const bad of [
+     {...reviewBundle,execution_authorized:true},
+     {...reviewBundle,extra_approval:true},
+     {...reviewBundle,inspection_worklist:{...reviewBundle.inspection_worklist,human_approval_granted:true}}
+   ]){
+     await directResume.locator('#owgPipelineResumeBundleFile').setInputFiles({
+       name:'forged-review.json',mimeType:'application/json',
+       buffer:Buffer.from(JSON.stringify(bad))
+     });
+     await directResume.locator('#owgPipelineResumeBundle').click();
+     await directResume.locator('#owgPipelineResumeStatus')
+       .filter({hasText:/Could not resume review/}).waitFor();
+   }
+   await directResume.locator('#owgPipelineResumeBundleFile').setInputFiles({
+     name:'oversized-review.json',mimeType:'application/json',buffer:Buffer.alloc(65537,65)
+   });
+   await directResume.locator('#owgPipelineResumeBundle').click();
+   await directResume.locator('#owgPipelineResumeStatus')
+     .filter({hasText:/no larger than 64 KiB/}).waitFor();
+   assert.equal(directResumeWrites,0,'invalid, oversized and missing-project resumes never write');
+   await directResume.close();
    // A local file can resume only the same explicit human inspection after
    // reopening the dashboard. This never changes server-side approval state.
    await inspectionChecks.first().uncheck();
