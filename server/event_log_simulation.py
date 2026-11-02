@@ -30,6 +30,7 @@ MAX_PATHS = 20
 MAX_PATH_LENGTH = 100
 MAX_RESOURCES = 1000
 MAX_POOLS = 20
+MAX_BATCH_SIZE = 1000
 WARM_UP_SHARE = 0.1
 ASSUMPTIONS = [
     "Cases arrive as a Poisson process at the stated rate.",
@@ -501,8 +502,8 @@ def parse_scenario(spec: Any, base: dict[str, Any]) -> dict[str, Any]:
     for name in names:
         known = base["activities"].get(name, {})
         given = overrides.get(name, {})
-        if not isinstance(given, dict) or set(given) - {"minutes", "resources"}:
-            raise EventLogWorkspaceError("each activity takes minutes and resources")
+        if not isinstance(given, dict) or set(given) - {"minutes", "resources", "batch"}:
+            raise EventLogWorkspaceError("each activity takes minutes, resources and optionally a batch")
         minutes = given.get("minutes", known.get(measured_key, known.get("minutes")))
         if minutes is None:
             raise EventLogWorkspaceError("enter minutes for activities not seen in the log")
@@ -510,7 +511,8 @@ def parse_scenario(spec: Any, base: dict[str, Any]) -> dict[str, Any]:
         resources = _number(resources, 1, MAX_RESOURCES, "resources")
         if resources != int(resources):
             raise EventLogWorkspaceError("resources must be a whole number")
-        params[name] = {"minutes": _number(minutes, 0, 525600, "minutes"), "resources": int(resources)}
+        params[name] = {"minutes": _number(minutes, 0, 525600, "minutes"), "resources": int(resources),
+                        **({"batch": _batch(given["batch"], name)} if "batch" in given else {})}
     if len(params) > MAX_ACTIVITIES:
         raise EventLogWorkspaceError(f"at most {MAX_ACTIVITIES} distinct activities")
     distribution = spec.get("distribution", base.get("distribution", "exponential"))
@@ -531,6 +533,19 @@ def parse_scenario(spec: Any, base: dict[str, Any]) -> dict[str, Any]:
             "activities": params, "distribution": distribution, "cases": cases, "seed": seed, "calendar": calendar,
             "activity_time_basis": basis, "routing": route_kind, "transitions": steps_model,
             "pools": _pools(spec.get("pools"), params), "priorities": priority_classes.parse(spec.get("priorities"))}
+
+
+def _batch(spec: Any, activity: str) -> dict[str, Any]:
+    """Batch processing: up to ``size`` waiting cases are served together in one activity time."""
+    if not isinstance(spec, dict) or not {"size"} <= set(spec) <= {"size", "max_wait_minutes"}:
+        raise EventLogWorkspaceError(f"the batch of {activity!r} takes a size and optionally max_wait_minutes")
+    size = _number(spec["size"], 2, MAX_BATCH_SIZE, "batch size")
+    if size != int(size):
+        raise EventLogWorkspaceError("batch size must be a whole number")
+    batch = {"size": int(size)}
+    if "max_wait_minutes" in spec:
+        batch["max_wait_minutes"] = _number(spec["max_wait_minutes"], 1, 525600, "max_wait_minutes")
+    return batch
 
 
 def _pools(spec: Any, params: dict[str, dict[str, float]]) -> dict[str, dict[str, Any]]:
@@ -557,6 +572,8 @@ def _pools(spec: Any, params: dict[str, dict[str, float]]) -> dict[str, dict[str
                 raise EventLogWorkspaceError(f"pool {name!r} names an activity the scenario's paths do not use")
             if activity in owner:
                 raise EventLogWorkspaceError(f"activity {activity!r} is in more than one pool")
+            if "batch" in params[activity]:
+                raise EventLogWorkspaceError(f"batched activity {activity!r} cannot also be in a pool")
             owner[activity] = name
         pools[name] = {"resources": int(resources), "activities": list(members)}
     return pools
@@ -642,9 +659,51 @@ def simulate(model: dict[str, Any], samples: list[float] | None = None) -> dict[
         waits[activity].append(started - step_arrival[(case, step)])
         heapq.heappush(completions, (calendar.finish(started, duration), seq, case, step, activity)); seq += 1
 
-    while events or completions:
+    batched = {a: p["batch"] for a, p in params.items() if "batch" in p}
+    timers: list[tuple[float, int, str]] = []          # (time, order, batched activity): a case's maximum wait
+    members: dict[int, list[tuple[int, int]]] = {}     # running batch -> its (case, step)s
+
+    def due(now: float, activity: str) -> bool:
+        limit = batched[activity].get("max_wait_minutes")
+        return limit is not None and min(e[1] for e in queues[team[activity]]) + limit * 60 <= now
+
+    def start_batches(now: float, activity: str) -> None:
+        """Start batches while a resource is free and a batch is full or its oldest case has waited long enough."""
+        nonlocal seq
+        t, size = team[activity], batched[activity]["size"]
+        while free[t] and queues[t] and (len(queues[t]) >= size or due(now, activity)):
+            free[t] -= 1
+            group = [heapq.heappop(queues[t])[3] for _ in range(min(size, len(queues[t])))]
+            duration = service(activity)
+            busy[activity] += duration
+            opened = now if calendar is None else calendar.open_at(now)
+            for case, step in group:
+                waits[activity].append(opened - step_arrival[(case, step)])
+                if classes:
+                    class_waits.setdefault(klass[case], []).append(opened - step_arrival[(case, step)])
+            batch_sizes[activity].append(len(group))
+            members[seq] = group
+            end = opened + duration if calendar is None else calendar.finish(opened, duration)
+            heapq.heappush(completions, (end, seq, -1, seq, activity)); seq += 1
+
+    batch_sizes = {a: [] for a in batched}
+    while events or completions or timers:
+        if timers and (not completions or timers[0][0] < completions[0][0]) and (not events or timers[0][0] <= events[0][0]):
+            now, _, activity = heapq.heappop(timers)
+            start_batches(now, activity)
+            continue
         if completions and (not events or completions[0][0] <= events[0][0]):
             now, _, case, step, activity = heapq.heappop(completions)
+            if case == -1:
+                # A batch finished: its resource is free and every member moves on together.
+                free[team[activity]] += 1
+                for member, member_step in members.pop(step):
+                    if member_step + 1 < len(route[member]):
+                        heapq.heappush(events, (now, seq, member, member_step + 1)); seq += 1
+                    else:
+                        finish[member] = now
+                start_batches(now, activity)
+                continue
             if queues[team[activity]]:
                 _, _, _, (waiting_case, waiting_step) = heapq.heappop(queues[team[activity]])
                 begin(now, waiting_case, waiting_step, route[waiting_case][waiting_step])
@@ -658,6 +717,13 @@ def simulate(model: dict[str, Any], samples: list[float] | None = None) -> dict[
         now, order, case, step = heapq.heappop(events)
         activity = route[case][step]
         step_arrival[(case, step)] = now
+        if activity in batched:
+            rank = classes[klass[case]]["rank"] if classes else 0
+            heapq.heappush(queues[team[activity]], (rank, now, order, (case, step)))
+            if "max_wait_minutes" in batched[activity]:
+                heapq.heappush(timers, (now + batched[activity]["max_wait_minutes"] * 60, seq, activity)); seq += 1
+            start_batches(now, activity)
+            continue
         if free[team[activity]]:
             free[team[activity]] -= 1
             begin(now, case, step, activity)
@@ -665,7 +731,9 @@ def simulate(model: dict[str, Any], samples: list[float] | None = None) -> dict[
             rank = classes[klass[case]]["rank"] if classes else 0
             heapq.heappush(queues[team[activity]], (rank, now, order, (case, step)))
     warm = int(model["cases"] * WARM_UP_SHARE)
-    measured = [c for c in range(warm, model["cases"])]
+    # A batch that never fills (no maximum wait) holds its cases; they are counted, never measured as finished.
+    stuck = sum(1 for c in range(model["cases"]) if c not in finish)
+    measured = [c for c in range(warm, model["cases"]) if c in finish]
     cycle = sorted(finish[c] - start[c] for c in measured)
     if samples is not None:
         samples.extend(cycle)
@@ -685,7 +753,8 @@ def simulate(model: dict[str, Any], samples: list[float] | None = None) -> dict[
         visits = {a: sum(w * steps.count(a) for steps, w in model["paths"]) for a in params}
 
     def work_per_second(activity: str) -> float:
-        return model["arrivals_per_hour"] / 3600 * params[activity]["minutes"] * 60 * visits[activity]
+        per_case = params[activity]["minutes"] * 60 / (batched[activity]["size"] if activity in batched else 1)
+        return model["arrivals_per_hour"] / 3600 * per_case * visits[activity]
     team_busy, team_work = {t: 0.0 for t in size}, {t: 0.0 for t in size}
     for activity in params:
         team_busy[team[activity]] += busy[activity]
@@ -702,6 +771,11 @@ def simulate(model: dict[str, Any], samples: list[float] | None = None) -> dict[
                "overloaded": offered_of[t] >= 1}
         if t[0] == "pool":
             row["pool"] = t[1]
+        if activity in batched:
+            sizes = batch_sizes[activity]
+            row["batch"] = {**batched[activity], "batches": len(sizes),
+                            "mean_batch_size": round(sum(sizes) / len(sizes), 3) if sizes else None,
+                            "waiting_in_unfilled_batch": len(queues[t])}
         activity_rows.append(row)
     pool_rows = []
     for name, pool in sorted(pools.items()):
@@ -720,6 +794,7 @@ def simulate(model: dict[str, Any], samples: list[float] | None = None) -> dict[
         "activities": activity_rows,
         **({"pools": pool_rows} if pools else {}),
         "unstable": any(r["overloaded"] for r in activity_rows),
+        **({"cases_waiting_in_unfilled_batches": stuck} if batched else {}),
         **({"priority_classes": priority_classes.summary(
             classes, {i: [finish[c] - start[c] for c in measured if klass[c] == i] for i in range(len(classes))},
             class_waits, _percentile)} if classes else {}),
@@ -786,12 +861,24 @@ def _time_basis(lines: list[str], model: dict[str, Any]) -> list[str]:
     return [MEAN_BASIS_ASSUMPTION if a.startswith("Calibrated activity times are the median") else a for a in lines]
 
 
+BATCH_ASSUMPTIONS = [
+    "In the scenario, a batched activity's cases wait until the batch is full, or until its oldest case has waited "
+    "the maximum wait, and one resource then serves the whole batch in one activity time; all members move on "
+    "together. Offered load counts the work of full batches. A batch with no maximum wait can hold cases forever; "
+    "they are counted and not measured.",
+]
+
+
 def _with_priorities(scenario: dict[str, Any], lines: list[str]) -> list[str]:
-    """With priority classes the scenario does model priorities; say so instead of the general disclaimer."""
-    if not scenario.get("priorities"):
+    """Priority classes and batches the scenario models replace the general "not modeled" wording."""
+    batching = any("batch" in p for p in scenario["activities"].values())
+    if not scenario.get("priorities") and not batching:
         return lines
-    return [line.replace("batching, priorities or abandonment", "batching or abandonment") for line in lines] + \
-        priority_classes.ASSUMPTIONS
+    missing = [x for x, used in (("batching", batching), ("priorities", bool(scenario.get("priorities")))) if not used]
+    text = ", " + ", ".join(missing) + " or abandonment" if missing else " or abandonment"
+    lines = [line.replace(", batching, priorities or abandonment", text) for line in lines]
+    return lines + (priority_classes.ASSUMPTIONS if scenario.get("priorities") else []) + \
+        (BATCH_ASSUMPTIONS if batching else [])
 
 
 def _assumptions(baseline: dict[str, Any], scenario: dict[str, Any]) -> list[str]:
