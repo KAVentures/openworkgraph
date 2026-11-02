@@ -706,3 +706,194 @@ def test_impact_refuses_tamper_consent_scope_and_revoked_local_session(
         impact(**{**args, "previous_review": altered})
     assert seen == []
     assert not args["output"].exists()
+
+
+def test_repeat_impact_compares_real_source_and_owg_changes_over_tcp(
+        private_dir, owg_context, monkeypatch, capsys):
+    """Actual source HTTP + FastAPI/DuckDB; no mocked local evidence transport."""
+    port, workspace, _, seen = owg_context
+    rows = [{"Id": CASE_A, "IsDeleted": True},
+            {"Id": CASE_B, "IsDeleted": False}]
+    with provider(rows) as (origin, source_calls):
+        source1 = private_dir / "source-first.json"
+        source_receipt1 = run(origin, source1)
+        log_id = _retained_log(workspace, source1)
+        first = private_dir / "impact-first.json"
+        impact1 = impact(**_impact_args(
+            origin, source1, source_receipt1["review_sha256"],
+            first, log_id, port))
+        assert len(source_calls) == 1
+        assert len(seen) == 5
+        assert impact1["counts"]["owg_cases_observed"] == 2
+
+        # The production append path, not an in-memory stand-in, adds history
+        # for one already-observed case and one previously unobserved case.
+        scope = json.loads(source1.read_text())["scope_sha256"]
+        namespace = "sf_" + scope[:32]
+        csv = ("case_id,activity,timestamp,source_event_id\n"
+               + _key("sandbox", "case", CASE_A)
+               + ",Status: Closed,2026-10-03T01:00:00+00:00,"
+               + _key("sandbox", "history", "017000000000003") + "\n"
+               + _key("sandbox", "case", CASE_C)
+               + ",Case created,2026-10-04T01:00:00+00:00,"
+               + _key("sandbox", "history", "017000000000004") + "\n").encode()
+        workspace.append_log(
+            log_id, BytesIO(csv), source_format="csv", mapping={
+                "case_column": "case_id", "activity_column": "activity",
+                "timestamp_column": "timestamp",
+                "event_id_column": "source_event_id",
+                "source_namespace": namespace, "case_namespace": namespace,
+            })
+        rows[:] = [{"Id": CASE_A, "IsDeleted": False},
+                   {"Id": CASE_B, "IsDeleted": False}]
+        source2 = private_dir / "source-second.json"
+        source_receipt2 = run(origin, source2)
+        second = private_dir / "impact-second.json"
+        args = _impact_args(
+            origin, source2, source_receipt2["review_sha256"],
+            second, log_id, port)
+        args.update(previous_impact=first,
+                    previous_impact_sha256=impact1["impact_sha256"],
+                    consent_compare_impact=True)
+        impact2 = impact(**args)
+        assert len(source_calls) == 2
+        assert len(seen) == 10
+        assert workspace.list_logs()["logs"][0]["events"] == 4
+        assert impact2["comparison"] == {
+            "changed": 2, "unchanged": 1, "source_state_changed": 1,
+            "owg_presence_changed": 1, "owg_event_count_changed": 2,
+            "previous_impact_sha256": impact1["impact_sha256"],
+        }
+        actual = json.loads(second.read_text())
+        assert actual["comparison"]["previous_source_review_sha256"] == (
+            source_receipt1["review_sha256"])
+        transitions = {row["case_id"]: row
+                       for row in actual["comparison"]["transitions"]}
+        a = transitions[_key("sandbox", "case", CASE_A)]
+        assert a["previous_source_state"] == "soft_deleted"
+        assert a["current_source_state"] == "active"
+        assert (a["previous_owg_events"], a["current_owg_events"]) == (1, 2)
+        c = transitions[_key("sandbox", "case", CASE_C)]
+        assert (c["previous_owg_evidence"], c["current_owg_evidence"]) == (
+            "not_observed", "observed")
+        assert (c["previous_owg_events"], c["current_owg_events"]) == (None, 1)
+        assert actual["deletion_or_retention_authorized"] is False
+        assert actual["owg_deletion_performed"] is False
+        assert actual["checkpoint_advanced"] is False
+
+        # A comparison artifact can itself be the prior observation.
+        third = private_dir / "impact-third.json"
+        impact3 = impact(**{
+            **args, "output": third, "previous_impact": second,
+            "previous_impact_sha256": impact2["impact_sha256"]})
+        assert impact3["comparison"]["changed"] == 0
+        assert impact3["comparison"]["unchanged"] == 3
+
+        monkeypatch.setenv("OWG_DASHBOARD_SESSION", SESSION)
+        cli = [
+            "--instance", origin, "--confirm-host", "127.0.0.1",
+            "--namespace", "sandbox", "--case", CASE_A, "--case", CASE_B,
+            "--case", CASE_C, "--impact-review", str(source2),
+            "--impact-sha256", source_receipt2["review_sha256"],
+            "--previous-impact", str(second),
+            "--previous-impact-sha256", impact2["impact_sha256"],
+            "--owg-log-id", log_id, "--confirm-owg-log-id", log_id,
+            "--owg-port", str(port), "--output", str(private_dir / "cli-compare.json"),
+            "--allow-loopback-http", "--consent-local-owg-read",
+            "--consent-private-impact",
+        ]
+        before = len(seen)
+        assert main(cli) == 2  # Comparison consent is independent.
+        assert len(seen) == before
+        assert main(cli + ["--consent-compare-impact"]) == 0
+        assert len(seen) == before + 5
+        assert "impact_review_created" in capsys.readouterr().out
+
+    combined = (first.read_text() + second.read_text() + third.read_text()
+                + json.dumps(impact2) + json.dumps(impact3))
+    for secret in (CASE_A, CASE_B, CASE_C, TOKEN, SESSION, "sandbox", origin):
+        assert secret not in combined
+    if os.name == "posix":
+        assert second.stat().st_mode & 0o077 == 0
+        assert third.stat().st_mode & 0o077 == 0
+
+
+@pytest.mark.parametrize("kind", [
+    "no_consent", "missing_digest", "wrong_digest", "changed_log",
+    "changed_scope", "symlink", "changed_count", "changed_events",
+    "altered_flags", "noncanonical", "unknown_key", "missing_file",
+])
+def test_repeat_impact_refuses_invalid_prior_before_any_owg_http(
+        private_dir, owg_context, kind):
+    port, workspace, _, seen = owg_context
+    with provider() as (origin, _):
+        source = private_dir / "source.json"
+        source_receipt = run(origin, source)
+        log_id = _retained_log(workspace, source)
+        first = private_dir / "impact-first.json"
+        first_receipt = impact(**_impact_args(
+            origin, source, source_receipt["review_sha256"],
+            first, log_id, port))
+        seen.clear()
+        args = _impact_args(
+            origin, source, source_receipt["review_sha256"],
+            private_dir / "refused.json", log_id, port)
+        args.update(previous_impact=first,
+                    previous_impact_sha256=first_receipt["impact_sha256"],
+                    consent_compare_impact=True)
+        if kind == "no_consent":
+            args["consent_compare_impact"] = False
+        elif kind == "missing_digest":
+            args["previous_impact_sha256"] = None
+        elif kind == "wrong_digest":
+            args["previous_impact_sha256"] = "0" * 64
+        elif kind == "changed_log":
+            args["log_id"] = "log_" + "0" * 16
+            args["confirm_log_id"] = args["log_id"]
+        elif kind == "changed_scope":
+            args["namespace"] = "another"
+        elif kind == "symlink":
+            linked = private_dir / "symlink.json"
+            linked.symlink_to(first)
+            args["previous_impact"] = linked
+        elif kind == "missing_file":
+            args["previous_impact"] = private_dir / "absent.json"
+        else:
+            modified = json.loads(first.read_text())
+            if kind == "changed_count":
+                modified["counts"]["owg_cases_observed"] = 99
+            elif kind == "changed_events":
+                modified["case_impacts"][0]["owg_events"] = 0
+            elif kind == "altered_flags":
+                modified["deletion_or_retention_authorized"] = True
+            elif kind == "unknown_key":
+                modified["provider_bearer"] = "must-never-appear"
+            bad = private_dir / "modified.json"
+            if kind == "noncanonical":
+                bad.write_text(json.dumps(modified, indent=2))
+            else:
+                bad.write_text(json.dumps(modified, sort_keys=True,
+                                          separators=(",", ":")) + "\n")
+            if os.name == "posix":
+                bad.chmod(0o600)
+            args["previous_impact"] = bad
+            args["previous_impact_sha256"] = hashlib.sha256(
+                bad.read_bytes()).hexdigest()
+        with pytest.raises(LifecycleReviewError):
+            impact(**args)
+        assert seen == []
+        assert not args["output"].exists()
+
+
+def test_impact_comparison_flags_refused_outside_impact_mode(
+        private_dir, monkeypatch):
+    monkeypatch.setenv("OWG_SALESFORCE_READ_TOKEN", TOKEN)
+    with provider() as (origin, calls):
+        base = ["--instance", origin, "--confirm-host", "127.0.0.1",
+                "--namespace", "sandbox", "--case", CASE_A, "--case", CASE_B,
+                "--case", CASE_C, "--output", str(private_dir / "no.json"),
+                "--allow-loopback-http", "--consent-source-lifecycle-read",
+                "--consent-private-review"]
+        assert main(base + ["--previous-impact", str(private_dir / "old.json")]) == 2
+        assert main(base + ["--consent-compare-impact"]) == 2
+        assert calls == []
