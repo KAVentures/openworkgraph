@@ -454,3 +454,51 @@ missing-case coverage, capacity/name/stage refusal, saved replay, CSV,
 zero-denominator withholding through the same authenticated divide operator,
 and accessibility. Native exact-head CI and consenting-user pilot acceptance
 remain separate release requirements.
+
+
+## One-action comparison of two recorded activities (dashboard)
+
+In **Build an analysis → Case metrics**, choose **Numeric event values within
+each case or stage**, enter an exact retained numeric event attribute, its
+declared unit, a within-case statistic and the missing-value policy. Clear
+**Only this activity** and both stage boundaries, then choose two distinct
+activities under **Comparison activity A** and **Comparison activity B**.
+Activate **Compare two activities (3 metrics)** with a mouse or keyboard.
+
+OWG atomically constructs three ordinary version-1 case metrics:
+`<base>_a` evaluates the chosen statistic on activity A events within each
+case, `<base>_b` evaluates it on activity B, and `<base>_delta` computes
+**B minus A**, retaining the same declared unit. It selects **Cases** and
+**Average <base>_delta** automatically. Analysts may then select another
+existing outer aggregation, inspect the three metric definitions, save the
+analysis, replay it or export JSON/CSV through the existing session-authenticated
+API. No new API, grant, SQL expression, provider read or business action is
+introduced.
+
+For example, one observed case has `Start` amounts 2, 8 and 100 EUR and
+`Work` amounts 4 and 10 EUR. Choosing within-case **Total** gives
+A = 110 EUR, B = 14 EUR and **B − A = −96 EUR**. Another case with a
+finite `Start` value but only an invalid `Work` amount has an **unknown**
+delta, not a fabricated zero or negative Start total. The final average
+includes only cases with finite values on both sides; metric coverage
+discloses missing/invalid values and missing operands. Activity strings
+are exact, case-sensitive selectors, not substring matches.
+
+This is descriptive arithmetic on *observed* event values, not net revenue,
+reconciled accounting, a causal comparison or proof that either activity
+was completely captured. The two sides share the selected statistic,
+declared unit and missing-value policy; no currency conversion is performed.
+An observed zero is a valid value; an absent activity or one with no
+finite values remains unknown. A complete-value policy means every *matching
+observed event* must have a finite numeric value, not that the source export
+is complete. The four-metric limit remains in force.
+
+The action refuses same/missing activity choices, active stage boundaries,
+an active single-activity filter, duplicate derived names, a base name over
+34 characters and insufficient free metric slots **before adding any metrics**.
+The three generated metrics are individually removable in dependency order:
+delta, B, A. The committed real Chromium acceptance imports an actual numeric
+CSV, exercises keyboard activation and the authenticated API, checks signed
+output, unknown-case coverage, atomic refusals, saved replay, CSV and WCAG.
+Native exact-head CI and independent consenting-user acceptance are still
+separate release gates.
