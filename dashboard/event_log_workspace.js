@@ -2330,6 +2330,42 @@
       operation:'divide',left:{kind:'metric',name:selected.name},right:{kind:'metric',name:whole.name}};
     return [selected,whole,fraction];
   }
+  // Refactor a typed metric graph as one draft operation. References are exact
+  // metric identifiers, not text substitutions, so constants and source
+  // attribute names cannot be rewritten accidentally.
+  function refactorMetricGraph(definitions,oldName,replacement,selectedMeasures){
+    const index=definitions.findIndex(m=>m.name===oldName);
+    if(index<0)throw new Error('Select a metric to edit first.');
+    if(definitions.some((m,i)=>i!==index&&m.name===replacement.name))
+      throw new Error('Another metric already has that name.');
+    const rewritten=definitions.map((m,i)=>{
+      const copy=JSON.parse(JSON.stringify(i===index?replacement:m));
+      if(i>index&&copy.kind==='arithmetic'){
+        for(const side of ['left','right']){
+          if(copy[side].kind==='metric'&&copy[side].name===oldName)
+            copy[side].name=replacement.name;
+        }
+      }
+      return copy;
+    });
+    const earlier=new Set();
+    for(const metric of rewritten){
+      if(earlier.has(metric.name))throw new Error('Metric names must be unique.');
+      if(metric.kind==='arithmetic')for(const operand of [metric.left,metric.right]){
+        if(operand.kind==='metric'&&!earlier.has(operand.name))
+          throw new Error('Arithmetic operands must reference an earlier metric.');
+      }
+      earlier.add(metric.name);
+    }
+    const measures=selectedMeasures.map(value=>{
+      if(typeof value!=='string')return value;
+      for(const fn of ['median','avg','sum','max']){
+        if(value===fn+':metric:'+oldName)return fn+':metric:'+replacement.name;
+      }
+      return value;
+    });
+    return {metrics:rewritten,measures};
+  }
   const METRIC_KINDS=[['time_between','Time from one activity to another'],['activity_count','How often an activity occurs'],['event_attribute_statistic','Numeric event values within each case or stage'],['event_attribute_sum','Sum of a numeric event attribute'],['case_attribute_number','A numeric case attribute'],['arithmetic','Arithmetic on earlier metrics']];
   function metricText(m){
     if(m.kind==='time_between')return m.name+': time from the '+m.from_occurrence+' '+m.from_activity+' to the '+m.to_occurrence+' '+m.to_activity;
@@ -2431,7 +2467,7 @@
     const metricList=el('div');metricList.id='owgMetricList';
     const library=el('div');library.id='owgMetricLibrary';
     const metricBox=document.createElement('fieldset');metricBox.style.cssText='border:1px solid var(--line,#ccc);border-radius:6px;padding:8px;margin-top:8px';
-    const legend=el('legend','Case metrics (optional)');metricBox.append(legend,el('div','Define up to four values per case, then choose a measure. Numeric event statistics use only observed finite values; choose available or require all matching rows, optionally one activity and a first or last completed stage. Compare first and last completed stages adds three metrics atomically; fractional first-to-last change adds four, including (last minus first) divided by first, and selects a dimensionless ratio (2 means +200%, not 2%). A zero first-stage value leaves relative change unknown. Compare two distinct activities adds A, B, and signed B minus A as three ordinary metrics; absent or invalid matching values remain unknown. Compare a selected activity with the whole case using Total and Only this activity: the selected total divided by all recorded totals is a ratio, not a guaranteed 0–100% share. Missing selected values or zero whole-case totals remain unknown. Clear stage boundaries and the single-activity filter before comparing. Unfinished stages are not completed. Times are in seconds; declared units are never converted. Arithmetic uses earlier metrics or typed constants; ratio means dimensionless. Add/subtract need identical units; division by zero is missing. Saved arithmetic templates refer to names: add their dependencies first. Save an analysis to retain all definitions together.','muted'),metricRow,metricList,library);
+    const legend=el('legend','Case metrics (optional)');metricBox.append(legend,el('div','Define up to four values per case, then choose a measure. Numeric event statistics use only observed finite values; choose available or require all matching rows, optionally one activity and a first or last completed stage. Compare first and last completed stages adds three metrics atomically; fractional first-to-last change adds four, including (last minus first) divided by first, and selects a dimensionless ratio (2 means +200%, not 2%). A zero first-stage value leaves relative change unknown. Compare two distinct activities adds A, B, and signed B minus A as three ordinary metrics; absent or invalid matching values remain unknown. Compare a selected activity with the whole case using Total and Only this activity: the selected total divided by all recorded totals is a ratio, not a guaranteed 0–100% share. Missing selected values or zero whole-case totals remain unknown. Clear stage boundaries and the single-activity filter before comparing. Unfinished stages are not completed. Times are in seconds; declared units are never converted. Arithmetic uses earlier metrics or typed constants; ratio means dimensionless. Add/subtract need identical units; division by zero is missing. Saved arithmetic templates refer to names: add their dependencies first. Editing a metric name updates its dependent arithmetic and selected measures in the draft; rerun before saving or exporting. Save an analysis to retain all definitions together.','muted'),metricRow,metricList,library);
     const readMetric=()=>caseMetric({kind:mKind.value,name:mName.value,from:mFrom.value,to:mTo.value,fromOccurrence:mFromOcc.value,toOccurrence:mToOcc.value,activity:mActivity.value,attribute:mAttribute.value,unit:mUnit.value,statistic:mStatistic.value,missingPolicy:mMissing.value,statActivity:mStatActivity.value,stageFrom:mStageFrom.value,stageTo:mStageTo.value,stageOccurrence:mStageOccurrence.value,operation:mOperation.value,
       ...Object.fromEntries(Object.entries(operands).flatMap(([side,controls])=>Object.entries(controls).map(([key,node])=>[side+key[0].toUpperCase()+key.slice(1),node.value])))});
     function useMetric(metric){
@@ -2531,17 +2567,16 @@
         const index=metrics.findIndex(m=>m.name===editingMetric);
         if(index<0)throw new Error('Select a metric to edit first.');
         const next=readMetric(),old=editingMetric;
-        if(next.name!==old&&metrics.some(m=>m.name===next.name))throw new Error('Another metric already has that name.');
-        if(next.name!==old&&metrics.some(m=>m.kind==='arithmetic'&&[m.left,m.right].some(o=>o.kind==='metric'&&o.name===old)))
-          throw new Error('This metric has dependents. Keep its name or update dependents first.');
-        if(next.kind==='arithmetic')for(const operand of [next.left,next.right])
-          if(operand.kind==='metric'&&!metrics.slice(0,index).some(m=>m.name===operand.name))
-            throw new Error('Arithmetic operands must reference an earlier metric.');
-        metrics[index]=next;editingMetric=null;mUpdate.disabled=true;renderMetrics();
+        // Resolve every dependent and selected measure before mutating the UI.
+        // A refused refactor leaves the complete draft and its exports intact.
+        const draft=refactorMetricGraph(metrics,old,next,[measure1.value,measure2.value]);
+        metrics.splice(0,metrics.length,...draft.metrics);
+        editingMetric=null;mUpdate.disabled=true;renderMetrics();
+        measure1.value=draft.measures[0];measure2.value=draft.measures[1];
         // A previous result and its export/share grants belong to the old definition.
         resetSharing();last=null;lastSpec=null;out.replaceChildren();exports.enable(false);
         save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;
-        message.textContent='Metric updated in this draft. Run analysis to recalculate before saving or exporting.';
+        message.textContent='Metric updated in this draft; dependent arithmetic and selected measures follow any rename. Run analysis to recalculate before saving or exporting.';
       }catch(error){message.textContent=error.message;}
     };
     function addStageComparison(relative){
@@ -3130,6 +3165,6 @@
         (p.previous_window_coverage_after===null?'.':' and '+pct(p.previous_window_coverage_after)+' of the window before.'):null};
   }
 
-  window.__owgEventLogModel={simBatch,simPriorities,objectModelArcs,objectModelText,visitRows,simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,stageComparisonMetrics,activityComparisonMetrics,activityShareMetrics,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,analysisDraft,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths,packMapping,packGuess,packReportRows,monitoringRows,impactSpec,impactRows};
+  window.__owgEventLogModel={simBatch,simPriorities,objectModelArcs,objectModelText,visitRows,simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,refactorMetricGraph,stageComparisonMetrics,activityComparisonMetrics,activityShareMetrics,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,analysisDraft,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths,packMapping,packGuess,packReportRows,monitoringRows,impactSpec,impactRows};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
