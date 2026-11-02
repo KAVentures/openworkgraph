@@ -98,7 +98,8 @@ def _safe_error(exc: Exception) -> HTTPException:
         if "stale" in message or "scope" in message or "changed" in message:
             return HTTPException(409, "declaration version, scope or review changed")
         # Whole words: "reviewed" in a validation message is not a missing review.
-        if re.search(r"\b(review|retention)\b", message):
+        # "review packet" names the sealed packet object, not a missing review.
+        if re.search(r"\b(review|retention)\b", message.replace("review packet", "packet")):
             return HTTPException(403, "explicit current review and retained history required")
         return HTTPException(422, "invalid or unavailable owner declaration")
     return HTTPException(409, "local declaration store unavailable")
