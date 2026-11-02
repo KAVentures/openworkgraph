@@ -231,3 +231,86 @@ def test_interleaved_tab_recomputes_from_retained_events_not_stale_membership():
     assert result["observed_interleaved_tab_focus_links"] == 0
     assert ("e01", "e02") not in groups(result)
     assert result["unlinked_observation_count"] >= 2
+
+
+def test_single_record_tab_foreign_case_without_return_abstains_instead_of_absorbing():
+    # A's tab is nominally single-record, but a different scoped case B was
+    # explicitly observed between A and the otherwise loose tab event.
+    trace = [event(1, A), event(2, B, tab="other"), event(3)]
+    result = linked_work_items(trace)
+    assert result["total_items"] == 0
+    assert result["unlinked_observation_count"] == 3
+    assert result["ambiguous_single_record_tab_interleaving_abstentions"] == 1
+    assert result["observed_single_record_interleaved_focus_links"] == 0
+    assert result["link_contract"]["single_record_tab_foreign_case_requires_two_sided_focus"]
+
+
+def test_single_record_tab_interleaved_return_recovers_only_witnessed_loose_step():
+    trace = [event(1, A), event(2), event(3, B, tab="other"), event(4, A)]
+    response = workflow_evidence.list_workflow_evidence_candidates(_raw_events=trace)
+    result = response["linked_work_items"]
+    item = groups(result)[("e01", "e02", "e04")]
+    assert item["link_basis"] == {
+        "same_record": 1, "same_tab_single_record_interleaved_bracketed": 1,
+    }
+    assert item["confidence"] == 0.66
+    assert item["cross_record_join"] is False
+    assert result["observed_single_record_interleaved_focus_links"] == 1
+    assert result["ambiguous_single_record_tab_interleaving_abstentions"] == 0
+    assert result["unlinked_observation_count"] == 1
+    assert result["read_only"] and not result["authoritative"]
+    serialized = json.dumps(response)
+    for secret in ("PRIVATE", "tenant-a", "actor-a", "device-a", "session-a", "atlassian"):
+        assert secret not in serialized
+
+
+def test_single_record_tab_return_after_other_case_is_also_recoverable():
+    result = linked_work_items([
+        event(1, A), event(2, B, tab="other"), event(3), event(4, A),
+    ])
+    assert ("e01", "e03", "e04") in groups(result)
+    assert result["observed_single_record_interleaved_focus_links"] == 1
+    assert result["unlinked_observation_count"] == 1
+
+
+def test_single_record_tab_foreign_case_from_other_tenant_is_not_a_veto():
+    foreign = event(2, B, tab="other")
+    foreign["organization_id"] = "tenant-b"
+    result = linked_work_items([event(1, A), foreign, event(3)])
+    assert ("e01", "e03") in groups(result)
+    assert result["observed_single_record_interleaved_focus_links"] == 0
+    assert result["ambiguous_single_record_tab_interleaving_abstentions"] == 0
+
+
+def test_single_record_tab_refuses_unproven_or_ambiguous_return():
+    cases = []
+    missing_return = [event(1, A), event(2, B, tab="other"), event(3)]
+    cases.append(missing_return)
+    wrong_app = [event(1, A), event(2, B, tab="other"),
+                 event(3, app="Terminal"), event(4, A)]
+    cases.append(wrong_app)
+    transfer = [event(1, A), event(2), event(3, B, tab="other"),
+                event(4, A, transfer="transfer-1")]
+    cases.append(transfer)
+    tied = [event(1, A), event(2), event(3, B, tab="other"), event(4, A)]
+    tied[3]["observed_at"] = tied[2]["observed_at"]
+    cases.append(tied)
+    too_long = ([event(1, A), event(2)]
+                + [event(i, B, tab="other") for i in range(3, 20)]
+                + [event(20, A)])
+    cases.append(too_long)
+    for trace in cases:
+        result = linked_work_items(trace)
+        assert result["observed_single_record_interleaved_focus_links"] == 0
+        assert result["ambiguous_single_record_tab_interleaving_abstentions"] >= 1
+
+
+def test_single_record_tab_two_independent_interleaved_returns_remain_separate():
+    result = linked_work_items([
+        event(1, A), event(2), event(3, B, tab="other"), event(4, A),
+        event(5, B, tab="other"), event(6), event(7, A),
+    ])
+    item = groups(result)[("e01", "e02", "e04", "e06", "e07")]
+    assert item["link_basis"]["same_tab_single_record_interleaved_bracketed"] == 2
+    assert result["observed_single_record_interleaved_focus_links"] == 2
+    assert ("e03", "e05") not in groups(result)
