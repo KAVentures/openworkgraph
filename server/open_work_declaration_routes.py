@@ -19,6 +19,7 @@ from .open_work_case_graph import project_declared_case_graph, project_declared_
 from .open_work_case_dossier import admitted_case_dossier_snapshot, compose_reviewed_case_dossier
 from .open_work_case_context import stripe_open_work_case_context
 from .open_work_case_portfolio import admit_portfolio, compose_portfolio_status
+from .open_work_case_evidence_graph import compose_case_evidence_graph
 from .open_work_case_status_checkpoint import (
     validate_prior_checkpoint, issue_status_checkpoint,
 )
@@ -256,27 +257,12 @@ async def get_local_reviewed_case_dossier(request: Request, response: Response):
 
 
 
-@router.post("/v1/open-work/declarations/dependency-status")
-async def get_local_reviewed_dependency_status(request: Request, response: Response):
-    """Explicit bounded source recheck of reviewed prerequisites and target.
+async def _read_reviewed_dependency_evidence(scope: str, payload: dict[str, Any]):
+    """Single consent-pinned source-read path shared by status and evidence graph.
 
-    Sequential source checks are NOT an atomic provider snapshot; never treat
-    an absent open invoice as payment, completion or an obligation.
+    The caller must already have authenticated the local dashboard session,
+    validated exact request fields, and obtained the current source scope.
     """
-    _dashboard_only(request)
-    scope = await _require_scope()
-    payload = await _body(request, {
-        "work_item_ref", "expected_revision", "expected_edit_token",
-        "confirm_source_scan", "max_pages", "max_cases",
-    })
-    if payload["confirm_source_scan"] is not True:
-        raise HTTPException(403, "explicit dependency source scan confirmation required")
-    pages = payload["max_pages"]
-    count = payload["max_cases"]
-    if type(pages) is not int or not 1 <= pages <= 3:
-        raise HTTPException(422, "max_pages must be between 1 and 3")
-    if type(count) is not int or not 1 <= count <= 4:
-        raise HTTPException(422, "max_cases must be between 1 and 4")
     try:
         before = await asyncio.to_thread(list_case_declarations, scope)
         admitted, signature = admitted_case_dossier_snapshot(
@@ -328,6 +314,33 @@ async def get_local_reviewed_dependency_status(request: Request, response: Respo
                 raise CaseDeclarationError("stale dependency review changed")
         except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError) as exc:
             raise _safe_error(exc) from None
+    return admitted, signature, selected, contexts, unscanned
+
+
+@router.post("/v1/open-work/declarations/dependency-status")
+async def get_local_reviewed_dependency_status(request: Request, response: Response):
+    """Explicit bounded source recheck of reviewed prerequisites and target.
+
+    Sequential source checks are NOT an atomic provider snapshot; never treat
+    an absent open invoice as payment, completion or an obligation.
+    """
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_source_scan", "max_pages", "max_cases",
+    })
+    if payload["confirm_source_scan"] is not True:
+        raise HTTPException(403, "explicit dependency source scan confirmation required")
+    pages = payload["max_pages"]
+    count = payload["max_cases"]
+    if type(pages) is not int or not 1 <= pages <= 3:
+        raise HTTPException(422, "max_pages must be between 1 and 3")
+    if type(count) is not int or not 1 <= count <= 4:
+        raise HTTPException(422, "max_cases must be between 1 and 4")
+    admitted, _signature, selected, contexts, unscanned = (
+        await _read_reviewed_dependency_evidence(scope, payload)
+    )
     try:
         result = compose_dependency_status_snapshot(
             admitted, selected, contexts, unscanned_prerequisites=unscanned)
@@ -338,6 +351,38 @@ async def get_local_reviewed_dependency_status(request: Request, response: Respo
     return result
 
 
+
+
+@router.post("/v1/open-work/declarations/evidence-graph")
+async def get_local_reviewed_case_evidence_graph(request: Request, response: Response):
+    """Explicit bounded typed DAG + provider-state evidence, never outcome proof."""
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_source_scan", "max_pages", "max_cases",
+    })
+    if payload["confirm_source_scan"] is not True:
+        raise HTTPException(403, "explicit case evidence source scan required")
+    if type(payload["max_pages"]) is not int or not 1 <= payload["max_pages"] <= 3:
+        raise HTTPException(422, "max_pages must be between 1 and 3")
+    if type(payload["max_cases"]) is not int or not 1 <= payload["max_cases"] <= 4:
+        raise HTTPException(422, "max_cases must be between 1 and 4")
+    admitted, signature, selected, contexts, unscanned = (
+        await _read_reviewed_dependency_evidence(scope, payload)
+    )
+    try:
+        result = compose_case_evidence_graph(
+            admitted, signature, selected, contexts,
+            unscanned_prerequisites=unscanned,
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    # The source may change after its last read; never turn this projection
+    # into a grant or durable assertion of customer/business completion.
+    response.headers["Cache-Control"] = "no-store"
+    return result
 
 
 @router.post("/v1/open-work/declarations/portfolio-status")
