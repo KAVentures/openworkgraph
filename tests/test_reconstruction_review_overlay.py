@@ -354,26 +354,33 @@ def test_two_hop_cli_prepare_apply_and_score_with_actual_linker(tmp_path: Path):
     assert "PRIVATE" not in score_path.read_text()
 
 
-def test_mixed_direct_and_fragment_decisions_preserve_rejections_and_origin_counts():
+def test_mixed_direct_and_fragment_decisions_reject_contradictory_intermediary():
     events = _fragment_events()
     packet = prepare_review_packet(events)
     candidates = {row["event_id"]: row for row in packet["eligible_candidates"]}
     direct_item = candidates["e03"]["candidate_items"][0]["item_id"]
     fragment_item = candidates["e04"]["candidate_items"][0]["item_id"]
+    assert direct_item == fragment_item
     decisions = {
         "format": DECISION_FORMAT,
         "evidence_sha256": packet["evidence_sha256"],
         "decisions": [
-            {"event_id": "e03", "item_id": direct_item, "action": "reject"},
+            {"event_id": "e03", "item_id": direct_item, "action": "confirm"},
             {"event_id": "e04", "item_id": fragment_item, "action": "confirm"},
         ],
     }
     overlay = apply_review(events, packet, decisions)
-    assert overlay["human_confirmed_count"] == 1
-    assert overlay["human_confirmed_direct_count"] == 0
+    assert overlay["human_confirmed_count"] == 2
+    assert overlay["human_confirmed_direct_count"] == 1
     assert overlay["human_confirmed_two_hop_count"] == 1
-    assert overlay["human_rejected_count"] == 1
-    assert overlay["human_rejections"] == [{"event_id": "e03", "item_id": direct_item}]
-    assert "e03" in overlay["unassigned_event_ids"]
+    assert overlay["human_rejected_count"] == 0
+    assert "e03" not in overlay["unassigned_event_ids"]
     assert "e04" not in overlay["unassigned_event_ids"]
     assert overlay["human_decisions_are_not_source_evidence"] is True
+    # A reviewer cannot reject the very intermediary-to-item link that the
+    # confirmed two-hop loose event depends on, in either decision order.
+    contradictory = copy.deepcopy(decisions)
+    contradictory["decisions"][0]["action"] = "reject"
+    for rows in (contradictory["decisions"], list(reversed(contradictory["decisions"]))):
+        with pytest.raises(ValueError, match="conflicting human decisions"):
+            apply_review(events, packet, {**contradictory, "decisions": rows})
