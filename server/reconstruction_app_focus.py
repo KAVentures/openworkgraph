@@ -12,7 +12,7 @@ from typing import Any
 _MAX_LOOSE_SPAN = 8
 _MAX_FOREIGN_APP_SPAN = 16
 _MAX_SCAN_SPAN = _MAX_LOOSE_SPAN + _MAX_FOREIGN_APP_SPAN + 1
-_UNKNOWN = ("", "unknown", "other")
+_UNKNOWN = ("", "unknown", "other", "other app", "unknown app")
 
 
 def _complete_scope(scope: Any) -> bool:
@@ -74,6 +74,11 @@ def bracketed_tabless_app_focus(
         previous = left
         for next_index in range(index + 1, min(count, index + _MAX_SCAN_SPAN + 1)):
             row = ordered_rows[next_index]
+            # Unrelated fully identified capture scopes must neither supply
+            # positive evidence nor veto a valid same-scope bracket.
+            if (_complete_scope(row["scope"]) and
+                    row["scope"] != left["scope"]):
+                continue
             # The event-ID tie breaker is not an observed order.
             if previous["observed_at"] >= row["observed_at"]:
                 break
