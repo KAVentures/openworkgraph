@@ -1312,6 +1312,94 @@ const path=require('node:path');
    assert.equal(zeroResult.metrics[0].cases_with_zero_divisor,2);
    assert.ok(!JSON.stringify(zeroResult.rows).includes('Infinity'));
    assert.ok(!JSON.stringify(zeroResult.rows).includes('NaN'));
+   // R9: a keyboard-operable single action compares exact activity-specific
+   // recorded totals, using the same authenticated typed case-analysis API.
+   // A: Start 2+8+100=110, Work 4+10=14, signed B minus A = -96 EUR.
+   // B: Start 5, Work invalid => unknown, not a false zero or -5 EUR.
+   await page.getByRole('button',{name:'Remove metric zero_denominator',exact:true}).click();
+   await page.locator('#owgMetricKind').selectOption('event_attribute_statistic');
+   await page.locator('#owgMetricName').fill('step');
+   await page.locator('#owgMetricStatistic').selectOption('total');
+   await page.locator('#owgMetricMissingPolicy').selectOption('available');
+   await page.locator('#owgMetricStageFrom').selectOption('');
+   await page.locator('#owgMetricStageTo').selectOption('');
+   await page.locator('#owgMetricStatActivity').selectOption('');
+   assert.equal(await page.locator('#owgMetricCompareActivities').isVisible(),true);
+   await page.locator('#owgMetricCompareActivityA').selectOption('Start');
+   await page.locator('#owgMetricCompareActivityB').selectOption('Start');
+   await page.locator('#owgMetricCompareActivities').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Choose two different activities'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList button').count(),0);
+   await page.locator('#owgMetricCompareActivityB').selectOption('');
+   await page.locator('#owgMetricCompareActivities').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Choose two different activities'}).waitFor();
+   await page.locator('#owgMetricCompareActivityB').selectOption('Work');
+   await page.locator('#owgMetricStageFrom').selectOption('Start');
+   await page.locator('#owgMetricStageTo').selectOption('End');
+   await page.locator('#owgMetricCompareActivities').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Clear stage start and end'}).waitFor();
+   await page.locator('#owgMetricStageFrom').selectOption('');
+   await page.locator('#owgMetricStageTo').selectOption('');
+   await page.locator('#owgMetricStatActivity').selectOption('End');
+   await page.locator('#owgMetricCompareActivities').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Clear Only this activity'}).waitFor();
+   await page.locator('#owgMetricStatActivity').selectOption('');
+   await page.locator('#owgMetricName').fill('a'.repeat(35));
+   await page.locator('#owgMetricCompareActivities').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'at most 34 characters'}).waitFor();
+   await page.locator('#owgMetricName').fill('step_a');
+   await page.locator('#owgMetricAdd').click();
+   await page.locator('#owgMetricName').fill('step');
+   await page.locator('#owgMetricCompareActivities').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'activity comparison metric name already exists'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList button').count(),1,'collision is atomic');
+   await page.getByRole('button',{name:'Remove metric step_a',exact:true}).click();
+   for(const name of ['capacity_one','capacity_two']){
+     await page.locator('#owgMetricName').fill(name);
+     await page.locator('#owgMetricAdd').click();
+   }
+   await page.locator('#owgMetricName').fill('step');
+   await page.locator('#owgMetricCompareActivities').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'three free metric slots'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList button').count(),2,'capacity refusal is atomic');
+   for(const name of ['capacity_one','capacity_two'])
+     await page.getByRole('button',{name:'Remove metric '+name,exact:true}).click();
+   const activityPure=await page.evaluate(()=>window.__owgEventLogModel.activityComparisonMetrics(
+     window.__owgEventLogModel.caseMetric({kind:'event_attribute_statistic',name:'step',attribute:'amount',
+       unit:'EUR',statistic:'total',missingPolicy:'available'}),'Start','Work'));
+   assert.deepEqual(activityPure.map(m=>m.name),['step_a','step_b','step_delta']);
+   assert.equal(activityPure[0].activity,'Start');
+   assert.equal(activityPure[1].activity,'Work');
+   assert.deepEqual(activityPure[2],{name:'step_delta',kind:'arithmetic',expression_version:'1',
+     operation:'subtract',left:{kind:'metric',name:'step_b'},right:{kind:'metric',name:'step_a'}});
+   await page.locator('#owgAnalysisLevel').selectOption('events');
+   await page.locator('#owgMetricCompareActivities').focus();
+   await page.keyboard.press('Enter');
+   await page.locator('#owgAnalysisStatus').filter({hasText:'signed B minus A metrics'}).waitFor();
+   assert.equal(await page.locator('#owgAnalysisLevel').inputValue(),'cases');
+   assert.equal(await page.locator('#owgMetricList button').count(),3);
+   assert.equal(await page.locator('#owgAnalysisMeasure1').inputValue(),'avg:metric:step_delta');
+   const [activityComparisonResponse]=await Promise.all([
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
+     page.locator('#owgAnalysisRun').click()]);
+   assert.equal(activityComparisonResponse.status(),200);
+   const activitySpec=JSON.parse(activityComparisonResponse.request().postData());
+   assert.deepEqual(activitySpec.metrics,activityPure);
+   const activityResult=await activityComparisonResponse.json();
+   assert.deepEqual(activityResult.rows,[[-96]],'only A has both finite activity totals');
+   assert.equal(activityResult.metrics[2].cases_with_value,1);
+   assert.equal(activityResult.metrics[2].cases_with_missing_operand,1);
+   assert.equal(activityResult.metrics[2].unit,'EUR');
+   assert.equal(activityResult.metrics[1].cases_with_no_finite_attribute,1);
+   await page.locator('#owgAnalysisName').fill('Recorded Start versus Work totals');
+   await page.locator('#owgAnalysisSave').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Analysis saved.'}).waitFor();
+   const [activitySaved]=await Promise.all([
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')),
+     page.getByRole('button',{name:'Run saved analysis Recorded Start versus Work totals',exact:true}).click()]);
+   assert.deepEqual((await activitySaved.json()).rows,[[-96]]);
+   const [activityCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCsv').click()]);
+   assert.match(await fs.readFile(await activityCsv.path(),'utf8'),/avg_metric:step_delta\r\n-96/);
    const numericAxe=await page.evaluate(()=>axe.run(document.querySelector('#owgEventLogAnalysis'),{
      runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']},resultTypes:['violations']}));
    assert.deepEqual(numericAxe.violations,[]);
