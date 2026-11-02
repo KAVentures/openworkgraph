@@ -140,6 +140,10 @@ class EventAttributeStatistic(_Strict):
     # Optional exact activity selector. Only matching event rows contribute;
     # unmatched cases remain unknown rather than becoming zero.
     activity: Name | None = None
+    # First from-activity (inclusive) to first strictly later to-activity
+    # (exclusive), with deterministic (timestamp, event ID) ordering.
+    from_activity: Name | None = None
+    to_activity: Name | None = None
     missing_policy: Literal["available", "complete"] = "available"
 
 
@@ -262,6 +266,10 @@ def parse(spec: Any) -> AnalysisSpec:
         raise workspace.EventLogWorkspaceError("case metric names must be different")
     if parsed.metrics and parsed.level != "cases":
         raise workspace.EventLogWorkspaceError("case metrics apply to case-level analyses")
+    for metric in parsed.metrics:
+        if metric.kind == "event_attribute_statistic" and ((metric.from_activity is None) != (metric.to_activity is None)):
+            raise workspace.EventLogWorkspaceError(
+                "stage-bounded event attribute statistics require both from_activity and to_activity")
     try:
         expressions.units(parsed.metrics)
     except ValueError as exc:
@@ -368,7 +376,39 @@ def _metrics(conn, metrics: list[Any]) -> tuple[dict[str, str], list[dict[str, A
             # twice in one case. Restrict to selected cases before aggregating.
             aggregate = {"average": "avg(v)", "minimum": "min(v)", "maximum": "max(v)",
                          "median": "quantile_cont(v, 0.5)", "p90": "quantile_cont(v, 0.9)"}[metric.statistic]
-            activity_clause = " AND activity = ?" if metric.activity is not None else ""
+            stage_selected = metric.from_activity is not None
+            if stage_selected:
+                # Use the same stable event order as the case trace. A prior
+                # end does not terminate the stage; only a later end does.
+                conn.execute("""CREATE OR REPLACE TEMP TABLE qordered AS
+                    SELECT case_id, activity, attributes,
+                        row_number() OVER (PARTITION BY case_id ORDER BY ts, event_id) AS ordinal
+                    FROM ce WHERE case_id IN (SELECT case_id FROM qc)""")
+                conn.execute("""CREATE OR REPLACE TEMP TABLE qstage AS
+                    WITH starts AS (
+                        SELECT case_id, min(ordinal) AS start_pos FROM qordered
+                        WHERE activity = ? GROUP BY case_id)
+                    SELECT s.case_id, s.start_pos, min(e.ordinal) AS end_pos
+                    FROM starts s LEFT JOIN qordered e
+                      ON e.case_id = s.case_id AND e.ordinal > s.start_pos AND e.activity = ?
+                    GROUP BY s.case_id, s.start_pos""",
+                    [metric.from_activity, metric.to_activity])
+                missing_start = int(conn.execute("""SELECT count(*) FROM qc q WHERE NOT EXISTS
+                    (SELECT 1 FROM qstage s WHERE s.case_id = q.case_id)""").fetchone()[0])
+                missing_end = int(conn.execute(
+                    "SELECT count(*) FROM qstage WHERE end_pos IS NULL").fetchone()[0])
+                extra["cases_without_stage_start"] = missing_start
+                extra["cases_without_later_stage_end"] = missing_end
+                extra["cases_without_complete_stage"] = missing_start + missing_end
+                source = """FROM qordered e JOIN qstage s ON e.case_id = s.case_id
+                    WHERE s.end_pos IS NOT NULL AND e.ordinal >= s.start_pos
+                      AND e.ordinal < s.end_pos"""
+                if metric.activity is not None:
+                    source += " AND e.activity = ?"
+            else:
+                source = "FROM ce WHERE case_id IN (SELECT case_id FROM qc)"
+                if metric.activity is not None:
+                    source += " AND activity = ?"
             bound = [_path(metric.attribute)] + ([metric.activity] if metric.activity is not None else [])
             conn.execute(f"""CREATE OR REPLACE TEMP TABLE qstat AS
                 SELECT case_id, count(*) AS event_rows,
@@ -376,8 +416,7 @@ def _metrics(conn, metrics: list[Any]) -> tuple[dict[str, str], list[dict[str, A
                     count(*) FILTER (WHERE v IS NULL OR NOT isfinite(v)) AS excluded_rows,
                     {aggregate} FILTER (WHERE v IS NOT NULL AND isfinite(v)) AS metric_value
                 FROM (SELECT case_id, try_cast(json_extract_string(attributes, ?) AS DOUBLE) AS v
-                      FROM ce WHERE case_id IN (SELECT case_id FROM qc){activity_clause}) typed
-                GROUP BY case_id""", bound)
+                      {source}) typed GROUP BY case_id""", bound)
             stats = conn.execute("""SELECT coalesce(sum(event_rows), 0),
                     coalesce(sum(finite_rows), 0), coalesce(sum(excluded_rows), 0),
                     count(*) FILTER (WHERE finite_rows > 0 AND excluded_rows > 0),
@@ -392,13 +431,19 @@ def _metrics(conn, metrics: list[Any]) -> tuple[dict[str, str], list[dict[str, A
             # observation; it is a missing case, even with complete policy.
             absent = int(conn.execute("""SELECT count(*) FROM qc q
                 WHERE NOT EXISTS (SELECT 1 FROM qstat s WHERE s.case_id = q.case_id)""").fetchone()[0])
-            extra["cases_without_matching_activity"] = absent if metric.activity is not None else 0
+            if metric.activity is not None and stage_selected:
+                no_activity = int(conn.execute("""SELECT count(*) FROM qstage s
+                    WHERE s.end_pos IS NOT NULL AND NOT EXISTS
+                    (SELECT 1 FROM qstat q WHERE q.case_id = s.case_id)""").fetchone()[0])
+            else:
+                no_activity = absent if metric.activity is not None else 0
+            extra["cases_without_matching_activity"] = no_activity
             extra["cases_with_no_finite_attribute"] += absent
             extra["cases_excluded_by_complete_policy"] = (
                 extra["cases_with_partial_attribute_coverage"] if metric.missing_policy == "complete" else 0)
-            extra["coverage_scope"] = ("selected_full_cases_matching_activity_flattened_case_event_rows"
-                                       if metric.activity is not None else
-                                       "selected_full_cases_flattened_case_event_rows")
+            extra["coverage_scope"] = ("selected_full_cases_stage_bounded_" if stage_selected else
+                                       "selected_full_cases_") + ("matching_activity_" if metric.activity is not None else
+                                       "") + "flattened_case_event_rows"
             conn.execute(f"""UPDATE qc SET {column} =
                 CASE WHEN qstat.finite_rows = 0 THEN NULL
                      WHEN ? = 'complete' AND qstat.excluded_rows > 0 THEN NULL
