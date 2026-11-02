@@ -793,6 +793,93 @@ const path=require('node:path');
    await openDesign.click();
    assert.equal(await continueDesign.isDisabled(),true,'another selection needs another inspection');
    await audit(page,'#owgWorkflowExplorer','Design review after selection change');
+   // Two-sided comparison → separate exact source reads → explicit target → unsaved catalog.
+   await page.evaluate(()=>{
+     window.owgWorkflowExplorer.showReviewedGroup({
+       label:'Two-sided design fixture',workflow_id:'compared_design',revision:6,
+       bundle:{selector:{execution_ids:['execution:design_A','execution:design_B'],selected_execution_count:2},
+         structural_alignment:{structural_sequence_variants:[{exact_variants:[
+           {readable_steps:['Read A record','Check A exception','Close A'],
+            structural_steps:['action:read','action:check','action:close'],
+            execution_count:7,execution_ids:['execution:design_A']},
+           {readable_steps:['Read B record','Escalate B','Close B'],
+            structural_steps:['action:read','action:escalate','action:close'],
+            execution_count:5,execution_ids:['execution:design_B']}
+         ]}]}}
+     });
+     window.__owgComparedDrafts=[];
+     const original=window.owgProcessCatalog.draftObserved;
+     window.owgProcessCatalog.draftObserved=value=>{
+       window.__owgComparedDrafts.push(value);return original(value);
+     };
+   });
+   await compare.click();
+   const target=page.locator('#owgExplorerCompareTarget');
+   const twoSidedCheck=page.locator('#owgExplorerCompareConfirmed');
+   const twoSidedDraft=page.getByRole('button',{name:'Open chosen variant as unsaved catalog draft',exact:true});
+   const inspectA=page.getByRole('button',{name:'Inspect variant A evidence',exact:true});
+   const inspectB2=page.getByRole('button',{name:'Inspect variant B evidence',exact:true});
+   assert.equal(await target.isDisabled(),true,'comparison alone cannot choose a design');
+   assert.equal(await twoSidedDraft.isDisabled(),true);
+   const readsBeforeTwoSided=evidenceReads;
+   await page.route('**/v1/workflow-evidence?*',route=>route.fulfill({
+     status:200,contentType:'application/json',
+     body:JSON.stringify({selector:{execution_ids:['execution:wrong'],selected_execution_count:1},
+       provenance:{source_limit_reached:false},structural_alignment:{high_support_steps:[]}})
+   }));
+   await inspectA.focus();await page.keyboard.press('Enter');
+   await page.locator('#owgExplorerCompareEvidenceA').filter({hasText:/Evidence incomplete/}).waitFor();
+   assert.equal(await target.isDisabled(),true,'unrelated source refs cannot unlock draft');
+   await page.unroute('**/v1/workflow-evidence?*');
+   const seenComparedIds=[];
+   await page.route('**/v1/workflow-evidence?*',route=>{
+     const ids=new URL(route.request().url()).searchParams.get('execution_ids');
+     seenComparedIds.push(ids);
+     return route.fulfill({status:200,contentType:'application/json',
+       body:JSON.stringify({selector:{execution_ids:[ids],selected_execution_count:1},
+         provenance:{source_limit_reached:false,truncated:false},
+         structural_alignment:{high_support_steps:[]}})});
+   });
+   await compare.click();
+   await inspectA.click();
+   await page.locator('#owgExplorerCompareEvidenceA').filter({hasText:/Inspected 1 exact/}).waitFor();
+   assert.equal(await target.isDisabled(),true,'one-sided inspection is insufficient');
+   await inspectB2.click();
+   await page.locator('#owgExplorerCompareEvidenceB').filter({hasText:/Inspected 1 exact/}).waitFor();
+   assert.deepEqual(seenComparedIds,['execution:design_A','execution:design_B']);
+   await audit(page,'#owgWorkflowExplorer','Two independently inspected compared variants');
+   await target.selectOption('B');
+   assert.equal(await twoSidedDraft.isDisabled(),true,'target choice is not approval');
+   await twoSidedCheck.check();
+   assert.equal(await twoSidedDraft.isDisabled(),false);
+   await inspectA.click();
+   await page.locator('#owgExplorerCompareEvidenceA').filter({hasText:/Inspected 1 exact/}).waitFor();
+   assert.equal(await target.isDisabled(),true,'a third inspection restarts the two-sided review');
+   await inspectB2.click();
+   await page.locator('#owgExplorerCompareEvidenceB').filter({hasText:/Inspected 1 exact/}).waitFor();
+   await target.selectOption('A');await twoSidedCheck.check();
+   await compareB.selectOption('0');
+   assert.equal(await twoSidedDraft.isDisabled(),true,'reconfiguring lanes revokes review');
+   await compareB.selectOption('1');await compare.click();
+   await inspectA.click();
+   await page.locator('#owgExplorerCompareEvidenceA').filter({hasText:/Inspected 1 exact/}).waitFor();
+   await inspectB2.click();
+   await page.locator('#owgExplorerCompareEvidenceB').filter({hasText:/Inspected 1 exact/}).waitFor();
+   await target.selectOption('A');await twoSidedCheck.check();
+   const writesBeforeDraft=writes;
+   page.once('dialog',dialog=>dialog.accept());
+   await twoSidedDraft.focus();await page.keyboard.press('Enter');
+   assert.equal(writes,writesBeforeDraft,'catalog draft navigation must not POST or execute');
+   const drafts=await page.evaluate(()=>window.__owgComparedDrafts);
+   assert.equal(drafts.length,1);
+   assert.deepEqual(drafts[0].evidenceRefs,['execution:design_A'],'B refs must not leak into A draft');
+   assert.deepEqual(drafts[0].path,['Read A record','Check A exception','Close A']);
+   assert.equal(drafts[0].count,7);
+   assert.match(await page.locator('#owgCatalogEditor').textContent(),/Read A record → Check A exception → Close A/);
+   assert.equal(await twoSidedDraft.isDisabled(),true,'confirmation is consumed');
+   assert.equal(evidenceReads,readsBeforeTwoSided+7,'no implicit reads in comparison or draft');
+   await page.locator('[role=tab][data-tab=overview]').click();
+   await audit(page,'#owgWorkflowExplorer','Two-sided reviewed catalog handoff');
    await page.unroute('**/v1/workflow-evidence?*');
    await period.selectOption('7');
    assert.equal(await page.locator('#owgExplorerHandoffPanel').count(),0,'period change invalidates reviewed copy and JSON download');
