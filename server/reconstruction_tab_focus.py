@@ -68,11 +68,11 @@ def bracketed_multiplexed_tab_focus(
     are strictly ordered and all intervening observations are either safe
     loose steps on that tab or explicitly distinct same-scope browser tabs.
     With cross_app_components, independently linked exact records in a named
-    different application are also permitted negative interruptions, including
-    tabless desktop observations. They never gain membership themselves.
-    Foreign-tab observations never gain membership. Same-tab competing refs,
-    tabless/unknown events, scope/app/source changes, ties, clipboard actions
-    on foreign tabs and unbounded spans cause abstention. Time alone never
+    different application and *known named unreferenced* tabless app switches
+    are permitted negative interruptions. Neither gains membership itself.
+    Unknown/untrusted tabless events, same-tab competing refs, scope changes,
+    ties, clipboard actions on foreign tabs and unbounded spans abstain.
+    Time alone never
     provides a link. Complexity is O(n * bounded_scan_span).
     """
     proposals: list[tuple[str, str, str, str]] = []
@@ -174,9 +174,11 @@ def single_record_tab_foreign_case_boundaries(
     exact record from the same complete capture scope appears in a different
     explicitly named tab OR a different named application (including a tabless
     desktop source) between the loose step and an adjacent same-tab anchor.
-    Only independently linked record components count: a legitimate observed
+    An unreferenced known named other-app observation is also a negative
+    *focus* boundary, without claiming a different business case. For exact
+    records only independently linked components count: a legitimate observed
     clipboard bridge between A and B must not become a false competing case.
-    The other record is a negative boundary, never a positive link. No time
+    No time
     threshold or source text is used. Indexed complexity is O(n log n).
     """
     from bisect import bisect_left, bisect_right
