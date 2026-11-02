@@ -1,0 +1,26 @@
+# Resume the evidence-to-implementation journey
+
+This is an additive, local-dashboard **guided navigation** feature for [#370 R5/M0](https://github.com/KAVentures/openworkgraph/issues/370), [#326](https://github.com/KAVentures/openworkgraph/issues/326) and [#264 Stages 5–7](https://github.com/KAVentures/openworkgraph/issues/264). It connects existing reviewed-process, opportunity, project-export and imported-report screens; it does not introduce a second workflow store, a new approval, or any execution capability.
+
+## Analyst journey
+
+1. Explicitly inspect an observed workflow or a selected retained log and save a process **after separate human review** in the existing process catalog. The observed path alone is not verified policy. Create an opportunity from the **saved immutable revision**, not unsaved editor changes.
+2. In **Automation pipeline**, open the linked idea and choose **View evidence journey**. This makes one session-authenticated, read-only request to the existing `/v1/automation-pipeline/{idea_id}/journey` endpoint. Dataset/cohort origin checks, exact process revision and digest, idea state, exported project specification and archive digests, reported specifications and source-check export hashes are shown with explicit unknown/stale/unavailable labels.
+3. Use **Resume this evidence-to-implementation journey** to request the **exact linked saved process revision**, not the latest process. If a newer revision exists, the historical basis remains marked changed; if the saved reference is unavailable or mismatched, the reopen action is disabled. Existing unsaved catalog edits still trigger their ordinary discard confirmation, which can be declined. Reopening does not restore approval.
+4. **Continue at idea assessment or decision** scrolls to and focuses the existing assessment/decision control. An idea needs its existing human review and approval before the existing agent-project export can be used. For an approved idea without a project, **Continue at agent project export** focuses the existing export control; it never clicks it or creates a project.
+5. After an explicitly requested export, select the exact recorded project in the journey. **Review reports for this exact project** opens the existing imported-report link review with that project selected. **Prepare source check for this exact project** opens the existing source-check form with that project selected, but **does not** supply a record reference, check its consent box, contact a provider, download a receipt or execute a business action. Source-check reads require the existing separate explicit confirmation and source permissions.
+6. After closing/restarting the dashboard, reopen the idea and click **View evidence journey** again. The stages are reconstructed from stored server-side references, not browser session state. Changed or deleted source data, changed process revisions, historical idea/project revisions and missing reported specifications remain visible. The UI does not substitute a newer process or project.
+
+## Safety and limitations
+
+- The guide adds **navigation only**. It never automatically saves a process, approves an opportunity, exports a project, links a report, reads a provider, grants tool permissions or executes an agent. Existing REST/MCP and dashboard controls retain their behavior.
+- A process digest binds a **saved design revision**, not the truth of its underlying events or company rules. A project specification/archive hash is a recorded artifact identity, **not** evidence that it ran. Imported monitoring reports are customer-reported and may be missing, unbound, changed or unverifiable; source-check exports retain hashes, not their receipt bodies or independently verified outcomes.
+- Dataset/cohort origins may be absent or no longer accessible. A missing origin must not be called current, complete or source-verified. No automatic approval is inherited from any upstream stage.
+- Actions are scoped to the currently opened idea; a superseding idea selection invalidates pending journey responses and old navigation controls. Project-specific controls use the exact project ID selected in the journey, not an unrelated default.
+- Source deletion, revocation and retention can make an old reference unavailable. A downloaded project or receipt is an independent copy and is not retroactively recalled by the dashboard.
+
+## Acceptance and test boundaries
+
+`tests/browser/automation_pipeline.cjs` covers the real browser path: saved design → linked idea → guided process reopen and assessment focus → explicit project export → exact project-specific report/source navigation → imported report → reopen after a second browser session → changed/deleted process refusal. It asserts stage navigation does not perform project/source/report writes, preserves the source-read consent gate, and runs the existing axe/WCAG and narrow-screen checks.
+
+Native Ubuntu/macOS/Windows pytest, Chromium, collaboration, accessibility, scale, starter and packaging/release checks are **required before merge**. Synthetic and browser fixtures are not a consenting multi-team pilot, real source-backed validation or verified business outcomes. Those remain the separate #370 R25 acceptance gates.
