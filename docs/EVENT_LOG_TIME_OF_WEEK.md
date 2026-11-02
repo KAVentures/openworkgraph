@@ -265,3 +265,64 @@ event selection, local DST gap/fold, activity and case filters, mixed
 UTC grouping with local selection, saved definitions and malformed
 windows. Native CI and consenting real-source acceptance remain
 separate release gates.
+
+## Exact weekday-hour cells for overnight operational windows
+
+The original `time_of_week.weekdays` and `hours` selectors form a
+**Cartesian product**. For example, `weekdays: [7, 1]` with
+`hours: [22, 23, 0, 1, 2, 3, 4, 5]` selects **both** Sunday morning
+and Monday late evening, not just a Sunday-to-Monday overnight window.
+
+To select only the intended clock cells, supply a nonempty `slots` array
+of explicit `{weekday, hour}` objects. Each pair means the complete
+clock hour on that ISO weekday (Monday 1 through Sunday 7, hours 0–23).
+For a Sunday 22:00–Monday 02:00 UTC observation window:
+
+```json
+{
+  "level": "events",
+  "dimensions": ["activity"],
+  "time_of_week": {
+    "anchor": "event",
+    "slots": [
+      {"weekday": 7, "hour": 22},
+      {"weekday": 7, "hour": 23},
+      {"weekday": 1, "hour": 0},
+      {"weekday": 1, "hour": 1}
+    ]
+  },
+  "measures": [{"fn": "count"}, {"fn": "cases"}],
+  "order": "dimensions"
+}
+```
+
+This counts **only the four selected cells**, not the other Sunday or
+Monday hours. It is a clock-window analysis of observed records, not proof
+of a scheduled shift, on-call assignment, work effort or complete upstream
+coverage. Use `anchor: "case_start"` or `"case_end"` at `level: "cases"`
+to select entire cases by their first or last *observed* event instead
+of counting individual events.
+
+For an IANA-local clock window, add `"clock": "local"` to
+`time_of_week` and `"time_zone": "Europe/Stockholm"` to the enclosing
+analysis. UTC source instants are not rewritten. An absent spring-forward
+hour matches no event; both instances of a repeated autumn hour match
+the same selected cell. The window uses the chosen zone's historical
+rules for every source instant, not the analyst computer's current offset.
+
+**Validation and compatibility:** `slots` is mutually exclusive with
+explicit `weekdays` or `hours` (even if those lists contain defaults).
+There must be 1–168 unique pairs; duplicate pairs, non-integer values,
+out-of-range hours/days, unknown fields and malformed zones are rejected
+before querying. Existing cross-product selectors remain unchanged.
+Cells are compiled from fixed SQL with a bound list of ISO weekday/hour
+keys and a bound zone, never user SQL. Existing authenticated analysis
+and saved-analysis endpoints accept the additive field; the response
+returns the normalized `slots` in its `spec` for reproducibility.
+The existing row, measure, permission, tenant, deletion and retention
+limits remain in force.
+
+Synthetic tests exercise cross-product differences, event and case
+anchors, saved-definition round trips, the Stockholm DST gap and fold,
+parameter binding and invalid inputs. Native multi-platform CI and
+real consenting-source validation are separate acceptance gates.
