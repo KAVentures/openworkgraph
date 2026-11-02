@@ -47,6 +47,7 @@ from .reconstruction_tab_focus import (
 from .reconstruction_actor_continuity import actor_observation_index, observed_same_record_actor_changes
 from .reconstruction_case_coverage import observed_record_participant_surfaces
 from .reconstruction_app_focus import bracketed_tabless_app_focus
+from .reconstruction_assignment_proof import accepted_assignment_proofs
 
 _TRANSFER = re.compile(r"^[A-Za-z0-9:._-]{1,120}$")
 _TAB = re.compile(r"^[A-Za-z0-9:._-]{1,160}$")
@@ -736,6 +737,10 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             tenant_positions=actor_tenant_positions,
         )
         coverage = observed_record_participant_surfaces([rows[i] for i in ids])
+        assignment_proofs = accepted_assignment_proofs(
+            [rows[i] for i in ids], link_edges[linked["root"](ids[0])],
+            visible_event_ids=ids[:_MAX_EVENT_IDS],
+        )
         items.append({
             "item_id": item_id,
             "event_ids": ids[:_MAX_EVENT_IDS],
@@ -753,6 +758,7 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             **bridge_evidence,
             **actor_participation,
             **coverage,
+            **assignment_proofs,
             "link_basis": basis,
             "cross_record_join": len(refs) > 1,
             "confidence": min(_CONFIDENCE[name] for name in basis) if basis else _CONFIDENCE["same_record"],
@@ -814,6 +820,7 @@ def linked_work_items(events: list[dict[str, Any]], *, max_items: int = 20) -> d
             "observed_surface_runs_are_not_task_memberships": True,
             "observed_record_paths_are_not_verified_business_transitions": True,
             "record_bridges_are_observed_link_witnesses_not_handoffs": True,
+            "assignment_proofs_do_not_add_membership_or_verify_case_identity": True,
             "same_record_actor_changes_are_observed_not_verified_handoffs": True,
             "record_participant_surface_coverage_is_presence_not_productivity": True,
             "record_participant_surface_coverage_requires_complete_scope": True,
