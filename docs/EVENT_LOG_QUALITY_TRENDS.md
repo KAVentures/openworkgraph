@@ -191,3 +191,36 @@ denominators, malicious identifiers, bounded display, fake-DOM keyboard
 selection and stale-log clearing. These synthetic tests and the dashboard
 implementation still require native CI and real consenting-customer validation
 before a release claim.
+
+## Review the largest recorded rate increases
+
+After clicking **Compare batches**, use **Largest adjacent-batch rate increases**
+to review the biggest recorded percentage-point increases across the latest 100
+displayed stored reports. Choose a minimum increase of **1, 5, 10 or 20
+percentage points**. The ranked table shows the batch, metric, preceding rate,
+current rate and increase. At most 50 ranked rows are displayed, with the
+total matching count and examined report count disclosed. **Inspect batch**
+moves focus to the existing stored rejection-diagnostics selector; it does
+not load provider data, quarantine a batch or save an approval.
+
+This is intentionally narrower than the arbitrary two-batch comparison:
+only **consecutive** reports with identical, verified SHA-256 transform
+digests qualify. Both numerator and denominator must be nonnegative
+safe integers, the denominator positive and the numerator no greater than
+the denominator. Rates are recomputed from recorded counts. Missing batches,
+changed/unknown transforms, invalid or missing denominators and future-dated
+metrics (different report reference times) never create ranked deltas. A
+positive increase is a **descriptive review candidate**, not proof that
+upstream data quality deteriorated: source populations, sampling and event
+coverage may differ. No employee ranking, statistical significance,
+automated alert, provider sync or business action is inferred.
+
+The table is calculated locally from the existing session-authenticated
+counts-only `batch_trends.batches` response; no REST/MCP contract change,
+additional event scan or persistence is introduced. Switching logs or
+re-running the analysis clears the ranking and disables stale drilldown.
+Synthetic Node tests cover rank ordering, thresholds, transform and
+denominator refusals, missing batches, 100-report/50-row bounds and actual
+fake-DOM threshold and inspect interactions. Native exact-head CI, including
+cross-platform and browser jobs, and independent consenting-customer
+acceptance are still required before a shipped-feature claim.
