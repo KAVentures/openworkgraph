@@ -80,10 +80,8 @@ def test_nonexcluded_browser_event_is_sanitized_without_losing_semantics():
     assert "0123456789abcdef0123456789abcdef" not in serialized
 
 
-def test_api_rejects_rebinding_hosts_and_history_reads_from_extensions():
-    from server import main
-
-    client = TestClient(main.app)
+def test_api_rejects_rebinding_hosts_and_history_reads_from_extensions(raw_main_app):
+    client = TestClient(raw_main_app)
     assert client.get("/health", headers={"host": "attacker.example"}).status_code == 400
     assert client.get("/health", headers={"origin": "https://attacker.example"}).status_code == 403
 

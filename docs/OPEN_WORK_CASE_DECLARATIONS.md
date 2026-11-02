@@ -1,0 +1,1299 @@
+# Local Open Work case declarations (bounded foundation)
+
+`server/open_work_case_declarations.py` adds a **disabled-by-default, internal-only** durable owner-declaration ledger for issue #247 Milestone 3. It complements the existing `open_work_reviews` human-reviewed queue, `open_work_model.compose_case_graph` source/observation projection, `record_graph` and `open_work_outcomes.source_operation_receipt`. It does **not** replace them or register a new REST/MCP tool, browser surface, background scan, scheduler or agent runtime.
+
+## Stored facts and provenance
+
+A trusted local caller can explicitly `save_case_declaration` only for an opaque `owg:w:` item already in the local reviewed queue. The caller must supply an **account-bound opaque `owg:scope:` identifier** from its own verified authorization context; this module cannot authenticate a provider or derive the binding itself. It accepts a fixed, non-textual owner-declared `goal_code` (`review_source_state`, `assess_declared_policy`, `verify_operation`), an `expected_outcome_code` (`human_review_recorded`, `source_state_rechecked`, `operation_receipt_reviewed`), and at most eight explicitly declared dependency references to other reviewed cases in the **same scope**. Self-edges, duplicate edges and cycles are rejected. It does not infer obligations or dependencies from clicks, temporal proximity, agent telemetry or a source status.
+
+The stored row includes a per-incarnation monotonic `revision`, a random opaque 128-bit `edit_token`, creation/update/expiry timestamps, opaque refs and codes only. **At save time, expiry is capped by the admitting human review's own expiry and every declared prerequisite's current expiry.** A declaration created later than its review cannot survive the review's original deadline; a dependent declaration cannot outlive an earlier-expiring prerequisite and reappear if that prerequisite is reviewed again. CAS updates may shorten an expiry when a new prerequisite is declared or retention is reduced, but never renew it—even if the dependency is later removed. A lapsed review requires a fresh explicit declaration, not just a renewed review. **Replacing a human review before its expiry also invalidates the prior owner's declaration**: reads require the declaration's original creation to be at least as recent as the admitting review's `created_at`. That invalidation closes transitively over declared dependencies, and the next write prunes those stale approvals before allowing a fresh declaration. Review creation/expiry windows are rechecked under the declaration write transaction; a changed review window between admission snapshots refuses the save. Review timestamps are not cryptographic generation identifiers: a replacement recorded at the exact same timestamp cannot be distinguished in this v1 schema. The trusted local caller must not expose this as a multi-process tenant authorization guarantee. Write-time expiry/retention pruning also **transitively erases** declarations that depend on an expired or unreviewed prerequisite. It additionally erases dependent chains when a prerequisite row is **missing from the auxiliary ledger or belongs to a different opaque scope**: merely hiding an orphan on reads is insufficient, because re-declaring the missing prerequisite could otherwise resurrect old dependent approvals. This scope-aware closure is checked before inserting any newly declared case, and does not reinterpret a deleted edge as an independent owner-approved obligation. This prevents a later re-declaration of that prerequisite from reviving a dependent whose prior expiry was longer (for example, after a prerequisite's CAS edit shortened its lifetime). Future-dated approvals withheld after a local clock rollback are also preserved **only as an intact same-scope dependency closure**: each future dependent needs a retained prerequisite (either eligible at the earlier instant or itself a valid preserved future approval) whose last owner revision is no later than the dependent's and whose expiry covers it. If an interrupted cleanup deleted a prerequisite or its scope changed, the future dependent chain is erased on the next write even when its approval time is still ahead of the rolled-back clock. This prevents a later prerequisite re-declaration or scope repair from resurrecting old dependent approval, while preserving valid future-dated chains without granting them premature read authority. The read-time fixed-point filter still suppresses all such dependents before cleanup occurs. It never contains customer text, titles, native provider identifiers, credentials, amounts, source status, provider receipts, workflow observations or free-text instructions. A new declaration requires `expected_revision=0` and no token; every update requires **both** the current exact `revision` and the `expected_edit_token` returned with that same incarnation. Concurrent writers are serialized by SQLite `BEGIN IMMEDIATE`; stale edits are rejected, not silently merged. A successful save returns the exact row read **inside its write transaction**, before `COMMIT` releases the lock. If another local writer deletes or revises that row immediately after the commit, the first caller receives its own committed revision and incarnation token, not the competing writer's data or a post-commit missing-row assertion. This is a point-in-time save receipt, **not** a guarantee that the row is still current when the caller receives it; callers must re-read for current authority. **Any successful CAS revision of a prerequisite transactionally erases its transitive dependent declarations**, even if the prerequisite's codes are unchanged: v1 dependencies refer to an opaque case, not a pinned prerequisite revision, so carrying a dependent owner's earlier approval to a different revision would be unsafe. Failed CAS/cycle checks roll back without erasing dependents; unrelated cases remain. Affected owners must explicitly declare fresh dependencies (revision 0), while their independent review requests remain. This is conservative invalidation, not inferred approval, provider verification or a new permission. Deleting a reviewed case deletes its declaration **and all transitively dependent declarations**, rather than silently stripping owner-declared prerequisite edges and presenting previously blocked work as independent. Unrelated declarations remain intact. Owners must explicitly re-declare any replacement graph; a stale revision cannot resurrect a deleted dependent declaration. If the auxiliary ledger is corrupt or unreadable, review deletion instead erases the entire auxiliary ledger rather than leaving a revoked case behind. A missing review suppresses the declaration from reads even if an interrupted cleanup left a row. A dependency is presented only if its own declaration is current and reviewed, **and all of its transitive prerequisites are also current and reviewed**; if A expires while B depends on A and C depends on B, neither B nor C is returned. Unrelated current declarations remain visible. This is a read-time safety filter, not an inferred business-status change or automatic source recheck.
+
+Every read says `source_state=unknown_until_explicit_recheck` and `source_read_performed=false`. Owner-declared expected outcomes are **not** verified outcomes; business obligation, customer outcome and agent execution authorization remain false. An independent fresh provider receipt from `open_work_outcomes` must still be obtained through the existing authorized reader; the ledger neither stores nor grants that authority. No source status or agent execution is cached as truth.
+
+## Lifecycle and security
+
+The local SQLite file lives in the existing private `auth_dir` with mode `0600` on POSIX. It is created **only** by an explicit save of an already reviewed item. Symlinks, non-regular files, unsafe permissions and unsupported schema versions fail closed. Storage is bounded to 50 declarations and a maximum seven-day TTL, further restricted by the user's human-history retention setting; `ephemeral` retention forbids saves and erases the file on read. Existing review removal erases the corresponding declaration and its transitive dependent declarations, and source replacement/disconnect and session-only history-policy cleanup erase the ledger through the existing `clear_review_intentions` lifecycle. Reads never perform provider/network calls or create a database.
+
+This is a **single-installation local foundation**, not a production org/actor-scoped durable graph or a tenant-wide access-control service. The opaque scope must be supplied by an independently trusted account-bound caller; there is intentionally no untrusted API entry point yet. A declaration save checks current review admission and history retention both before opening storage and again inside its SQLite write transaction. If a source disconnect, review deletion or session-only retention switch occurred between those checks, the save fails closed; deterministic tests exercise all three cases. This narrows a stale-snapshot admission race, but does not establish a cross-process atomic fence. Cross-process source-revocation racing a concurrent save is not a distributed transaction: every read still requires a current reviewed item, but full provider-grant epoch fencing and atomic multi-store erasure remain necessary before exposing writes in a company deployment. Source outage, stale/partial/conflicted receipts and customer outcomes stay unknown. Real-provider acceptance, independent business outcome verification, agent uplift and customer pilots remain open.
+
+## Acceptance
+
+`tests/test_open_work_case_declarations.py` covers default-OFF behavior, prior review admission, scope separation, exact-version CAS including concurrent writers, dependency cycles and same-scope checks, multi-hop review removal without silent dependency laundering, disconnect erasure, retention reduction and session-only scrubbing, review-expiry/re-review resurrection prevention, transitive prerequisite expiry, write-time cascade pruning after a shortened expiry and non-renewing CAS edits, storage symlink/permissions, rollback and absence of native/customer content. Synthetic early re-review regressions cover an A←B←C approval chain, preservation of an unrelated D, stale CAS rejection after re-review, explicit fresh re-declaration, and a review replacement between two save admission snapshots. Existing expiry regressions now use a stable original review window rather than silently treating an early re-review as continuing approval. Two additional synthetic CAS regressions verify A←B←C transitive invalidation on an exact prerequisite revision, unrelated-case survival, stale dependent CAS rejection, failed cyclic-update rollback and same-value revision invalidation. Two synthetic interrupted-ledger/scope-mismatch regressions remove a prerequisite row or alter its stored scope, verify multi-hop dependents remain hidden, then trigger write-time pruning and verify the old dependent revisions cannot reappear. This guards a local auxiliary-store integrity failure, not cryptographic tamper resistance or atomic cross-process source-grant fencing. Existing workflow mapping, Activity, Discovery Mode, REST/MCP, export and provider readers are untouched. These are synthetic/local tests, **not** real-tenant or customer-outcome validation.
+
+
+## Temporal provenance and as-of reads
+
+A declaration is an owner approval recorded at its exact `created_at` and `updated_at`, **not** a historical source fact. When a trusted caller supplies an as-of time, the bounded list omits any declaration created or revised after that instant, even if its human review was already active. It also closes dependency availability transitively, so a dependent cannot point to a hidden future-approved prerequisite. Because the ledger retains only the current revision, an earlier as-of read **does not reconstruct a previous version**: it conservatively omits the later-revised case rather than falsely presenting future approval as historical evidence.
+
+A successful exact-CAS edit cannot move `updated_at` earlier than the existing creation or last revision, and a dependent cannot be approved at a time before its prerequisite's creation or latest owner-declared revision. These checks use the existing explicit timestamps and SQLite transaction; they do not infer a business obligation, grant provider access, or supply a cryptographic clock. Caller-supplied timestamps still require a trusted clock and cannot substitute for an atomic cross-process revocation fence. Synthetic regressions cover future-created approvals, future revisions, rejected backdated edits and prerequisites, and unaffected independent cases.
+
+## Incarnation-bound optimistic concurrency (ABA protection)
+
+A revision number can reset to 1 when a reviewed case is explicitly deleted, expires, is pruned as a dependent, or is re-declared. **Revision-only edits are therefore refused**, even when the number matches. Each fresh declaration gets an independent cryptographically random 128-bit `edit_token`; a successful CAS update preserves that token while incrementing the revision. A newly declared incarnation gets a new token. The trusted caller must supply `expected_revision` **and** `expected_edit_token` from the same previously returned declaration. Both are compared under the SQLite write transaction; a stale caller cannot overwrite a newly declared B rev1 using an earlier B rev1 token. The token is a concurrency guard, **not** a login credential, provider grant, approval, or authority to execute. Missing, malformed or mismatched tokens fail closed. No erased declaration content, tombstones, customer fields or native IDs are retained to prevent ABA.
+
+This draft-only internal ledger upgrades a legacy v1 SQLite file transactionally to schema version 2, assigning new random edit tokens to surviving rows. Existing callers holding only a v1 integer revision must re-read the declaration before editing; they cannot bypass the new guard. This migration neither changes a review, extends expiry nor creates an obligation. A read of an existing legacy database can perform this local schema upgrade; a read with no database still creates nothing. No REST/MCP/dashboard contract currently exposes this draft-only writer. Deterministic synthetic regressions cover prerequisite-edit → dependent-purge → re-declare → stale old-CAS, explicit review-delete/re-declare, missing-token refusal, and v1 migration. This does not solve cross-process source-revocation fencing or equal-timestamp human review generation.
+
+
+## Corrupt auxiliary dependency graphs (synthetic fail-closed behavior)
+
+Persisted dependency edges must decode to a JSON **array** of at most eight unique opaque `owg:w:` refs, with no self-edge. A JSON object, scalar, malformed JSON, duplicate, or invalid reference is **not** an empty dependency list. Read projections withhold malformed declarations and all their dependent cases rather than silently converting a formerly dependent approval into an independent one. The bounded read and write-time availability closures grow only from eligible dependency-free roots, so a damaged persisted A↔B cycle cannot be presented as an approved dependency graph. A subsequent explicit declaration save transactionally prunes invalid/cyclic rows and their dependents while retaining unrelated current reviewed declarations. Explicit review deletion remains possible even if the auxiliary graph is damaged: its existing fallback erases the entire declaration ledger if safe targeted purge fails.
+
+The normal trusted writer already rejects invalid dependency shapes and cycles. These tests simulate damaged **local auxiliary SQLite state**; they are not evidence of cryptographic database tamper resistance, multi-process source-grant fencing, live provider validation, or independently verified business outcomes. No provider calls, agent permissions, background execution, REST/MCP routes, or additional stored customer data are introduced.
+
+## Damaged auxiliary approval clocks (synthetic fail-closed behavior)
+
+Only canonical timezone-aware UTC ISO-8601 timestamps emitted by the trusted writer are valid stored approval clocks. Read-time visibility and transactional write-time pruning independently validate the stored creation, latest revision and expiry timestamps against the current as-of time, admitting human review, and retained-history TTL. A malformed/noncanonical clock, an approval revision before creation or after the as-of time, or a deadline extending beyond the review or retention window cannot become an owner-approved declaration. Its explicitly dependent closure is withheld from reads and erased on the next authorized declaration write; unrelated reviewed cases remain. This prevents a damaged auxiliary row from crashing normal list/prune operations or laundering future/over-retained approval into current authority. It is conservative: malformed rows are not repaired or treated as independent obligations.
+
+Eleven parameterized synthetic corruption regressions cover invalid, future, stale, noncanonical-offset and contradictory timestamps, multi-hop dependency suppression, non-mutating reads and subsequent transactional cleanup. This does **not** establish protection against arbitrary SQLite tampering, trustworthy host clocks, atomic cross-process grant revocation, real provider acceptance or verified customer outcomes. No source reads, routes, new privileges or autonomous actions are added.
+
+
+## Damaged owner-declaration metadata (synthetic fail-closed behavior)
+
+The v2 auxiliary SQLite ledger also validates **stored** opaque work/scope refs,
+fixed owner-declared goal and expected-outcome codes, positive bounded integer
+revisions, and lowercase 128-bit incarnation edit tokens. SQLite's dynamic
+column typing and damaged local rows must not make unsupported codes or
+unusable versions appear to be approved owner declarations. Read-time
+availability withholds invalid rows and their entire dependent closure;
+the next explicitly authorized save transactionally prunes that closure while
+preserving unrelated valid approvals. This does not infer obligations or
+source/customer outcomes, grant authority, or add a new API.
+
+Ten parameterized synthetic corrupt-row regressions cover both codes, invalid
+integer/text revisions, tokens and opaque identities, with A <- B <- C
+transitive suppression, unrelated D survival, and post-prune stale CAS
+refusal. They do not prove resistance to malicious database tampering,
+cross-process source revocation, real provider acceptance, or verified
+business outcomes.
+
+## Read-time consent and retention revalidation (bounded race narrowing)
+
+A declaration list now rechecks local human-review admission windows and history
+retention **after** fetching its bounded SQLite rows and closing the connection.
+A removed review or a replacement review with a different creation/expiry
+window suppresses that declaration and every transitively dependent approval;
+an unchanged independent declaration remains available. If retention shortens,
+the stricter of the two snapshots governs the response, including refusing
+previously saved deadlines that exceed the new retention window rather than
+silently extending or reapproving them. If durable retention is
+disabled during the read, no owner facts are returned and the local auxiliary
+ledger is erased. This does not grant new source reads or authorize actions.
+
+These are deterministic synthetic interleavings, **not** proof of atomic
+cross-process revocation: a grant may change again after the final check, and
+the review store and declaration store do not share a transaction. An equal-
+timestamp review replacement still cannot be distinguished by the current
+review-window representation. Trusted callers must not treat a prior list
+response as a durable provider grant, business obligation, or verified outcome.
+
+
+## Explicit dependency-edge approval windows
+
+The local ledger now requires **each already declared dependency edge** to be
+temporally consistent in addition to validating each row independently. A
+dependent's latest owner approval must not predate its prerequisite's latest
+owner approval, and the dependent's deadline must not extend past the
+prerequisite's deadline. Both conditions compare parsed canonical UTC instants,
+not lexical timestamp strings. This is **not** a time-only join or inferred
+business obligation: only existing exact, same-scope owner-declared references
+are evaluated. An invalid prerequisite edge withholds its dependent and the
+entire transitive dependent closure in non-mutating reads. The next authorized
+write prunes that closure transactionally, without deleting unrelated reviewed
+cases or extending approvals.
+
+Two synthetic SQLite corruption regressions start with A <- B <- C and an
+independent D, then make either A's latest approval newer than B's approval
+or B's deadline later than A's. Every individual row still passes its own
+temporal and human-review window checks. The list must expose only A and D;
+a subsequent explicit edit of D prunes B and C, and stale B CAS cannot revive
+them. These tests do not prove arbitrary database-tamper resistance, atomic
+source-grant revocation, real provider/customer outcome verification, or
+business uplift. The ledger remains internal-only, local, opt-in, and
+non-executing.
+
+
+## Final pre-commit review and retention check (bounded revocation window)
+
+A declaration save now takes a **third** local human-review and retained-history
+policy snapshot after its SQLite row insert/update and before COMMIT. If the
+admitting review or any newly declared prerequisite review was removed or
+replaced, or if the retained-history duration changed (including session-only
+revocation), the entire transaction rolls back. The saved row, its revision,
+and any transitive dependent-pruning side effects are not committed. This
+protects against a revocation observed after the earlier BEGIN IMMEDIATE
+admission check; it does not extend an approval or grant provider access.
+
+Seven parameterized synthetic regressions cover create/update/dependency
+review revocation and create/update retention reduction or disabling at that
+exact boundary. They check the underlying SQLite rows after rollback, not
+only a read-time suppression filter. This is **not** atomic cross-process
+source-grant fencing: a review or grant may change immediately after the final
+check, and the review/policy stores do not share this SQLite transaction.
+Equal-timestamp replacement review generations remain indistinguishable.
+Do not expose the internal ledger as an independent provider permission,
+business obligation, verified outcome or agent execution authorization.
+
+
+### Persisted row-count integrity
+
+The local auxiliary ledger is capped at **50 total declarations across all source scopes**. If damaged/legacy SQLite content exceeds this bound, scoped reads withhold the entire owner-approval projection instead of presenting a seemingly complete truncated subset. Transactional pruning and dependent-deletion traversal fetch at most 51 rows and refuse an over-capacity graph. A failed save rolls back; explicit review deletion can scrub the corrupt auxiliary ledger through the existing fail-closed cleanup path. Exactly 50 rows remain supported, with unreviewed entries removed by the next authorized save. This is a local resource/availability bound, not tamper-proof storage, tenant authorization or independently verified outcomes.
+
+
+### Bounded legacy schema-v1 migration
+
+An existing local schema-v1 declaration store is upgraded on first access to
+schema v2 with per-incarnation edit tokens. Migration now reads at most **51
+legacy references**, and refuses an over-capacity (>50) store **before**
+altering its table or generating any tokens. The SQLite migration transaction
+rolls back and leaves the v1 version, columns and rows unchanged on overflow;
+it never silently treats a partial migration as approved owner declarations.
+Exactly 50 legacy rows can migrate with distinct opaque edit tokens. These
+are synthetic boundary tests, not evidence of live source authority, a
+customer-verified outcome, or cross-process grant fencing.
+
+### Persisted dependency JSON parsing bound
+
+The trusted owner-declaration writer emits a JSON array of at most eight
+opaque case references (at most 336 characters with its current serializer).
+The auxiliary SQLite reader now refuses a stored `dependencies_json` value
+longer than **1,024 characters before calling the JSON decoder**. This
+conservatively permits modest legacy whitespace/serialization differences
+without allowing an oversized or deeply nested damaged payload to consume
+unbounded JSON parsing work. Non-text, malformed and oversized values are
+invalid dependency graphs, **not** empty dependency lists. Affected cases and
+all their declared dependent cases are withheld on non-mutating reads and
+pruned by the next authorized save. Explicit review deletion retains the
+existing whole-ledger scrub fallback if targeted deletion cannot safely
+interpret the damaged auxiliary graph.
+
+Three synthetic regressions cover valid eight-edge writer output and the
+1,024/1,025-character boundary with a decoder tripwire; transitive withholding
+and authorized transactional pruning; and explicit review deletion with an
+oversized malformed payload. This caps **JSON decoding work**; the separate 2 MiB main-file admission
+limit rejects larger SQLite ledgers before opening them, but does not bound
+all SQLite allocations or arbitrary local database tampering. No provider authorization, business status, customer
+outcome, source receipt or agent execution permission is inferred.
+
+
+## Main SQLite ledger size admission (2 MiB)
+
+The internal-only declaration ledger admits a maximum **2 MiB main SQLite
+file** before calling `sqlite3.connect`, for both existing v1 migration
+candidates and v2 read/CAS operations. The trusted writer stores at most 50
+small fixed-code rows; a corrupted auxiliary database with a multi-megabyte
+TEXT/BLOB cell can otherwise force SQLite to allocate and materialize that
+cell before the Python row-count, timestamp and JSON guards run. Oversized
+files fail closed with `CaseDeclarationError`, without truncating, migrating,
+reading, or writing them. The existing explicit human-review deletion path
+still catches the error and erases the entire auxiliary ledger rather than
+leaving an undeleted owner approval. Fresh authorized declarations can then
+be created normally after a new human review.
+
+Two synthetic real-SQLite regressions exercise oversized v1 and v2 stores,
+tripwire that no SQLite connection is opened on read/CAS, verify original
+bytes and v1 schema version remain unchanged, and verify explicit review
+deletion followed by a fresh authorized declaration. This is an **admission
+bound**, not a global memory quota, a guarantee about unknown sidecar files,
+or an atomic defense against another process replacing the file after
+`lstat`. The existing single-link, private-permission, DELETE-journal and
+schema checks still apply. No provider source status, verified customer
+outcome or agent authority follows from a successfully opened ledger.
+
+## Bounded legacy-v1 migration identifiers
+
+The original v1 ledger is an ordinary SQLite rowid table with a `TEXT PRIMARY KEY` opaque work-item reference. Its v2 incarnation-token upgrade first fetches at most 51 **integer rowids** (50 allowed plus an overflow sentinel) and updates tokens by `rowid`. It does not materialize or rebind arbitrarily large native `work_item_ref` TEXT values from a damaged legacy database merely to perform migration. More than 50 legacy rows still fail closed before any schema alteration or token generation; an exactly 50-row valid ledger remains supported. A synthetic malformed 256-KiB reference regression inspects the migration SQL and verifies both surviving rows receive distinct tokens without changing their original references.
+
+This bounds migration *identifier enumeration*. The separate 2 MiB main-file admission cap bounds the size of a ledger opened by SQLite, not all SQLite page-cache allocations, concurrent filesystem replacement or malicious local tampering. The normal reader still validates opaque reference syntax and excludes malformed rows; it does not turn a malformed ref into a verified business fact. No new source authority, tenant-wide revocation guarantee or independently verified outcome follows from this change.
+
+
+## Persisted approval timestamp parser bound
+
+The internal writer emits canonical UTC ISO-8601 owner-approval timestamps of
+at most 32 characters. A damaged auxiliary SQLite row with a non-text or
+more-than-40-character `created_at`, `updated_at` or `expires_at` is now
+rejected **before calling Python's ISO timestamp parser**. Existing canonical
+UTC, review-window, retention, and dependency-approval checks remain
+mandatory. A rejected prerequisite withholds its entire explicitly declared
+dependent chain; a subsequent authorized owner save prunes that chain while
+preserving unrelated reviewed declarations. It never converts a malformed
+clock into a new approval or source-confirmed outcome.
+
+Synthetic regressions verify a parser tripwire on oversized/non-text values,
+plus 256-KiB corruption of each of the three timestamp columns, read-time
+withholding, and transactional pruning. This bounds **Python timestamp parsing**; the separate 2 MiB main-file
+admission cap rejects larger SQLite ledgers before opening them, but still
+permits SQLite to materialize cells inside that limit. Neither guard proves
+atomic cross-process source revocation or real provider/customer outcomes. No routes, agent permissions or source reads
+are added.
+
+
+### Damaged SQLite reference storage classes
+
+SQLite's `TEXT` affinity does not prevent a damaged auxiliary row from holding a `BLOB` work-item key; numeric values may also be stored as invalid text. These keys are never valid `owg:w:` identities and cannot become owner-approved declarations. Transactional pruning deletes ineligible rows without sorting mixed Python `str`/`bytes` keys, so one corrupt BLOB cannot abort a separate authorized save. Explicit dependent declarations referencing a missing or corrupted prerequisite are pruned transitively, not silently reclassified as independent obligations. Synthetic regression tests exercise both BLOB and numeric-derived invalid keys, dependent withholding and unaffected declarations. This does **not** make the SQLite database tamper-resistant, prevent prior cell materialization, or provide cross-process source-revocation fencing; no provider/customer outcomes are verified.
+
+
+### Explicit review deletion with mixed SQLite key classes
+
+The same malformed BLOB/TEXT key hazard also affected the explicit
+`purge_case_declaration` path. A corrupt BLOB row whose declared dependencies
+include a revoked reviewed case could enter the deletion closure alongside
+valid string references. Sorting those mixed Python keys raised `TypeError`,
+causing the existing review-deletion fallback to scrub the **entire**
+auxiliary ledger, including unrelated, still-reviewed owner declarations.
+The bounded closure is now deleted without sorting. The synthetic SQLite
+regression exercises the real `remove_review_intention` lifecycle: revoked
+root, valid dependent, and corrupt BLOB dependent are removed while an
+independent approved declaration remains. The primary review deletion still
+succeeds. Invalid rows are never treated as approved owner facts.
+
+This is a narrow preservation and minimization guarantee for an auxiliary
+local ledger, not a repair of arbitrary SQLite corruption or a change to the
+existing fail-closed full scrub when a dependency graph cannot be decoded.
+It does not add source authority, cross-process revocation fencing, provider
+or customer outcome verification, or any agent execution permission.
+
+
+## Unversioned auxiliary-store admission
+
+A newly created or existing **empty** SQLite file at schema version zero may be initialized to the supported v2 declaration table by an explicit, reviewed save. A version-zero file that already contains any user-defined table, view, index or trigger is **not** adopted: the save fails closed and rolls back without stamping `user_version=2` or modifying the existing schema. This prevents `CREATE TABLE IF NOT EXISTS` from silently treating an incompatible or unrelated pre-existing `declarations` table as a valid durable approval ledger. A read of an unsupported version also fails closed rather than interpreting its contents as approved facts.
+
+The explicit bounded v1-to-v2 migration remains separate and unchanged. This guard does not authenticate the local filesystem, repair corrupt databases, prove cross-process grant revocation, or verify provider/customer outcomes. Synthetic SQLite tests cover incompatible declaration tables, unrelated tables/views, unchanged version/data on rejection, and initialization of a clean version-zero file.
+
+
+## Version-two schema identity admission
+
+An auxiliary SQLite file stamped `PRAGMA user_version=2` is **not** automatically
+a valid declaration ledger. Before reading or writing owner-approved facts,
+the internal store checks the fixed ten-column v2 table contract: exact
+column names/order, declared SQLite types, required NOT NULL fields, and
+`work_item_ref TEXT PRIMARY KEY`. A missing primary key could otherwise
+allow two rows with the same opaque case identity, making exact optimistic
+CAS and deletion ambiguous. Missing/extra columns, a wrong revision type,
+or a nullable required scope also fail closed without attempting to repair,
+delete or adopt that incompatible table.
+
+Both freshly initialized v2 stores and the supported bounded v1-to-v2
+migration retain their existing behavior; v1's default on the newly added
+`edit_token` column is permitted because it does not change identity or
+CAS requirements. Five synthetic SQLite regressions exercise malformed
+v2 schemas, including two duplicate case rows in the no-PK variant, and
+verify that reads/saves refuse them while preserving the stored schema,
+rows and version. Existing clean initialization and v1 migration tests
+cover compatibility.
+
+This is a narrow structural admission check, **not** filesystem tamper
+resistance, SQLite integrity verification, a cross-process source-revocation
+fence, or proof of provider/customer outcomes. It grants no source reads,
+new business obligations, agent rights or execution.
+
+
+## Legacy v1 schema admission before migration
+
+A local auxiliary file claiming `PRAGMA user_version=1` is not automatically a
+valid legacy declaration ledger. Before enumerating rows, generating incarnation
+tokens, or running `ALTER TABLE`, the migration now checks that
+`declarations` is a table with the exact nine original v1 columns, their
+declared SQLite types, required NOT NULL fields, and the opaque
+`work_item_ref TEXT PRIMARY KEY`. A marker on a view, a table without that
+primary key, or a table with missing/extra/wrongly typed or nullable fields
+fails closed. Rejection rolls back without stamping v2, modifying existing
+rows, or generating tokens. The normal bounded 50-row v1 migration remains
+supported, and the existing v2 shape preflight still runs after migration.
+
+Six synthetic SQLite regressions exercise malformed legacy schemas, including
+duplicate opaque identities without a primary key, and verify that both reads
+and writes refuse the ledger while preserving its version, schema, and rows.
+This guards schema identity only; it does not authenticate the filesystem,
+repair arbitrary SQLite corruption, establish cross-process revocation
+atomicity, verify source/customer outcomes, or grant agent execution.
+
+
+## Versioned schema-object admission (v1 migration and v2 reads/writes)
+
+Exact column and primary-key checks do **not** detect additional SQLite
+triggers. A pre-existing `AFTER UPDATE` trigger can erase or rewrite rows
+when v1 migration assigns incarnation tokens; an `AFTER INSERT` or
+`AFTER UPDATE` trigger can mutate owner facts during an otherwise reviewed
+v2 save. Neither effect is an independently approved declaration.
+
+Before migrating a v1 ledger or exposing/editing a v2 ledger, the local store
+now refuses **any user-defined schema object beyond the one
+`declarations` table**. This includes foreign tables, views, explicit indexes
+and executable triggers. SQLite's implicit `sqlite_autoindex_*` for the
+`work_item_ref TEXT PRIMARY KEY` is permitted. Rejected stores retain their
+schema, rows and `user_version`; there is no automatic repair or migration
+of unrecognized objects. Ten parameterized synthetic SQLite regressions
+exercise both versions and five extra-object forms, including INSERT/UPDATE
+triggers, while existing clean v1/v2 compatibility tests remain applicable.
+
+This is a narrow fail-closed schema admission guard, not cryptographic
+tamper resistance, `PRAGMA integrity_check`, protection from a concurrently
+malicious local process, or atomic source-grant revocation. The ledger remains
+internal-only and disabled by default; no provider reads, obligations, agent
+permissions, execution or verified customer outcomes are introduced.
+
+
+## Generated-column schema admission
+
+SQLite's `PRAGMA table_info` excludes generated/hidden columns. An otherwise
+exact nine-column v1 or ten-column v2 `declarations` table can therefore carry
+an additional `GENERATED ALWAYS AS ... VIRTUAL` or `STORED` column without
+appearing different to `table_info`, and without creating an extra user-defined
+`sqlite_master` object. A version marker and visible-column match do not
+establish the private ledger's exact identity.
+
+Both v1 migration preflight and v2 read/write admission now use
+`PRAGMA table_xinfo` and require **exactly** the trusted columns with
+`hidden=0` for every field. Extra generated/hidden fields fail closed before
+migration or owner fact exposure, even if the visible fields, primary key and
+schema-object list otherwise match. Four synthetic real-SQLite regressions
+cover v1/v2 × VIRTUAL/STORED, checking rejection before token generation,
+version changes or row mutation. Existing clean v1 migration and v2 operation
+tests remain the compatibility baseline.
+
+This is **schema-shape** validation, not a full SQL-DDL equivalence proof:
+additional CHECK/collation guards are described below; malicious concurrent
+filesystem writes and cross-process source-grant revocation remain outside
+this guard. No new
+provider reads, agent rights, background execution, or business outcome
+verification are implied.
+
+
+## Hidden UNIQUE and foreign-key schema constraints
+
+A versioned SQLite table can have exactly the expected columns, types and
+primary key while still changing owner-declaration behavior. A table-level
+`UNIQUE(scope_ref)` creates an extra **implicit** `sqlite_autoindex_*` that
+was previously excluded from the user-defined schema-object check. A foreign
+key, including `ON DELETE CASCADE`, creates no additional schema object at
+all. Either can reject otherwise valid owner saves or change deletion semantics
+without a reviewed dependency change.
+
+Both v1 migration and v2 read/write admission now require the exact one
+implicit `work_item_ref` primary-key index reported by
+`PRAGMA index_list(declarations)`, with no additional UNIQUE indexes, and
+an empty `PRAGMA foreign_key_list(declarations)`. Four parameterized
+synthetic SQLite regressions cover v1/v2 × extra UNIQUE/foreign-key schema,
+verifying rejection before migration or mutation and preservation of rows,
+schema and version. Existing clean v1 migration and fresh-v2 tests remain
+required for compatibility.
+
+This is bounded structural admission, **not** a complete SQL DDL equivalence
+proof. CHECK/collation/PK-order guards are described below; database tamper
+resistance, atomic source-grant revocation, provider/customer outcome
+verification and execution authority remain unproven. The store remains
+internal-only, local, and disabled by default.
+
+## CHECK, collation and primary-key order admission
+
+SQLite can accept a versioned declaration table with exactly the expected
+columns, one implicit PK index, no foreign keys and no extra schema objects,
+yet still change the meaning of owner approvals. An added table-level
+`CHECK(goal_code = 'review_source_state')` can veto other legitimate declared
+goals; `scope_ref TEXT COLLATE NOCASE` changes opaque scope comparisons without
+changing `PRAGMA index_list`; `work_item_ref TEXT PRIMARY KEY COLLATE NOCASE`
+or `PRIMARY KEY DESC` changes exact key identity/order while keeping the same
+index-list entry.
+
+Both v1 pre-migration and v2 read/write admission now reject `CHECK` or
+`COLLATE` keywords in the declaration table DDL (conservatively, including
+ambiguous SQL text) and require the single implicit PK's `PRAGMA index_xinfo`
+to match the writer's **ascending BINARY** `work_item_ref` plus rowid suffix.
+Eight synthetic SQLite rejection cases cover v1/v2 × CHECK, non-key collation,
+PK collation and descending PK; two clean v1/v2 compatibility cases still
+admit valid schemas. Rejection preserves existing schema, rows and version
+without token generation, migration or partial CAS.
+
+These are narrow guards for the private writer's known schema, not a general
+SQL parser or a cryptographic database integrity proof. Other foreign DDL
+semantics, concurrent filesystem mutation and cross-process source-grant
+revocation remain separate risks. The ledger still does not verify provider
+status, customer outcomes or agent authorization.
+
+
+## Column defaults and explicit conflict policies
+
+SQLite's exact `PRAGMA table_xinfo` column names/types and
+`PRAGMA index_xinfo` primary-key shape do not expose every write semantic.
+For example, `scope_ref TEXT NOT NULL DEFAULT '...'` adds a foreign fallback
+without changing the reported column identity, while `work_item_ref TEXT
+PRIMARY KEY ON CONFLICT REPLACE` (or `IGNORE`) changes duplicate-key
+behavior without changing the implicit PK index. A version marker alone must
+not promote either into a trusted owner-approval ledger.
+
+The v1 pre-migration check now requires **no column defaults**. The v2
+admission check requires no defaults on its first nine columns and permits
+only the known `edit_token` default `''` from the supported v1→v2
+`ALTER TABLE` migration, or no default from a fresh v2 writer. Both
+versions also conservatively reject the `CONFLICT` keyword in the table
+DDL (alongside the existing `CHECK`/`COLLATE` veto). This is deliberately
+strict for this internal-only, fixed-writer schema, not a general SQLite DDL
+parser.
+
+Nine synthetic SQLite regression scenarios cover v1/v2 canonical schemas,
+foreign scope defaults, `ON CONFLICT REPLACE`/`IGNORE`, and the supported
+migrated-v2 token default. Rejected stores retain their schema, version and
+rows, without generating edit tokens or granting source/agent authority.
+Real tenant/source revocation fencing, filesystem tamper resistance,
+independent business outcomes and native cross-platform CI are separate
+acceptance gates.
+
+
+## SQLite journal-mode admission and explicit erasure
+
+The internal declaration writer uses SQLite's `DELETE` journal mode. A local
+auxiliary database may nevertheless have been changed by another process to
+persistent `WAL` mode. Merely validating the table schema does not establish
+that owner-declared facts are contained in the main SQLite file: WAL pages can
+retain older or newer facts in a `-wal` sidecar. Ledger admission therefore
+checks the current SQLite journal mode **before schema migration, read or
+write** and refuses any mode other than `DELETE`. It does not silently
+convert a foreign WAL-mode store or reinterpret its rows as approved facts.
+
+Explicit review/source/retention clear now unlinks the main auxiliary file
+and the known `-journal`, `-wal` and `-shm` sidecar paths, without following
+symlinks. Synthetic SQLite regressions cover a persisted WAL-mode ledger
+refusing reads and CAS saves without mutating its version/rows, stale sidecar
+erasure, symlink-target preservation on POSIX, and ordinary DELETE-mode
+compatibility. The checks **do not** establish secure disk overwrite, erase
+backups, or atomically revoke another process's open SQLite handles; a
+concurrent writer could race the clear. A company deployment still requires
+coordinated cross-process source-grant and storage lifecycle fencing. No new
+provider access, network reads, execution or verified business outcomes follow.
+
+
+### Hard-link admission guard for the private SQLite ledger
+
+An existing declaration database must be a regular, non-symlink file with
+**exactly one filesystem hard link** before SQLite opens it. Mode `0600` and
+symlink checks alone cannot prevent a second pathname from referring to the
+same inode: an otherwise valid declaration save could mutate that other
+file's contents. Reads and CAS saves now reject multi-linked ledgers before
+SQLite access; they neither migrate nor repair them. A POSIX synthetic
+regression links an already valid ledger to a separate pathname, verifies
+both operations refuse it without changing bytes, then removes the extra
+link and verifies unchanged owner facts and normal exact-token CAS.
+
+This is a local admission check, **not** an atomic cross-process pathname
+fence: a process with sufficient local filesystem rights could replace or
+relink paths between `lstat` and SQLite open. Explicit clear unlinks the
+known ledger pathname and SQLite sidecars, not arbitrary unknown hard-link
+aliases elsewhere. Private-directory permissions and trusted local callers
+remain necessary; this is not malicious-host protection, a source grant,
+independent outcome verification or a customer acceptance result.
+
+
+## Pre-connect SQLite sidecar admission (synthetic)
+
+SQLite can inspect a rollback journal or WAL/SHM sidecar while opening the
+private declaration database, **before** the subsequent journal-mode and
+schema checks run. Checking only the main `.sqlite3` path therefore does not
+establish safe local storage admission. The internal ledger now refuses
+preexisting `-wal` and `-shm` sidecars before `sqlite3.connect`, since this
+ledger supports **DELETE** journal mode only. An existing `-journal` rollback
+file may be needed for ordinary in-progress DELETE-mode writes or recovery;
+it is admitted only if it is a regular, non-symlink, single-hard-link file,
+private on POSIX, and at most **4 MiB** (twice the 2 MiB main-file bound to
+allow rollback page overhead). The ledger neither repairs nor silently
+converts rejected sidecars. Explicit review/source/retention clear continues
+to unlink the main database and known regular or symlink sidecar paths
+without following symlinks. An unexpected sidecar **directory**, including a
+non-empty one, is not traversed or deleted, but cannot prevent deletion of
+the human review or removal of the main ledger; future admission remains
+blocked until the foreign directory is removed.
+
+Seven synthetic rejection variants cover journal symlinks, hard links,
+directories, broad POSIX permissions, oversized rollback journals, and
+WAL/SHM sidecars; the regression uses an SQLite-open tripwire to require
+rejection **before** any SQLite access. An additional actual-SQLite
+compatibility test holds a normal DELETE-mode write transaction with its
+private rollback journal present while a second reader retrieves the last
+committed declaration. These are filesystem/SQLite contract tests, **not**
+proof against a malicious local process racing path checks, tampering with
+a valid-looking journal, or retaining open handles after revocation.
+The file checks are not an atomic cross-process fence; real provider,
+tenant and customer-outcome validation remain outstanding.
+
+## Local clock rollback and as-of writes (synthetic)
+
+A declaration or CAS revision written at a later UTC instant is **not**
+approved evidence for an earlier as-of read. That read still withholds the
+future-created or future-revised row, and dependent edges cannot use it as
+an already-approved prerequisite. However, an unrelated explicit save made
+after the system clock moves backward must not irreversibly delete a valid
+future-dated owner approval during transactional cleanup.
+
+The bounded 50-row prune now distinguishes structurally valid, canonical UTC
+future approvals from malformed/stale rows. Future approvals are **retained
+but withheld**; malformed rows, expired or revoked approvals, and invalid
+dependency closures remain subject to conservative pruning. A backdated CAS
+against the retained future revision is rejected, rather than resetting its
+revision/edit token. Explicit review deletion still erases the root and its
+declared dependent closure. Three real-SQLite synthetic regressions cover an
+unrelated backdated save, a future dependent chain, a future CAS revision,
+as-of withholding, explicit deletion, and shortened-retention pruning. The existing concurrent-CAS test
+now reads at the actual write instant and also asserts that the earlier
+as-of read remains empty; it does not relax either concurrent revision check.
+
+This is **local ledger integrity only**, not historical revision replay,
+a trusted wall-clock service, cross-process source-grant fencing, real
+provider verification, or evidence of business/customer completion. A
+foreign process modifying the review queue or filesystem concurrently
+remains outside this non-atomic admission guard. Native repository CI,
+cross-platform packaging and live tenant acceptance must be checked
+separately.
+
+
+## Working local owner-declaration REST lifecycle (experimental; dashboard only)
+
+The existing private SQLite ledger is now available to a **live, explicitly
+authenticated local dashboard session**, without changing the default
+dashboard UI, MCP tool catalog, capture, Discovery Mode or workflow mapping.
+These are local human declaration operations, **not** provider reads or agent
+execution. No source scan, network request, customer content, native record ID,
+invoice value or external business write is performed by these endpoints.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/v1/open-work/declarations` | List at most 50 current reviewed declarations for the configured Stripe account, with unknown source state |
+| POST | `/v1/open-work/declarations` | Explicitly create/revise a fixed-code goal and expected outcome plus up to eight owner-declared dependencies |
+| DELETE | `/v1/open-work/declarations` | Explicit exact-version deletion of a declaration and its dependent approval chain, without deleting the underlying review |
+
+Every operation requires the current process's `Authorization: OWG-Session
+<session>` capability. An installation API bearer, MCP bearer, browser
+extension, foreign Origin, unauthenticated caller or stale dashboard session
+does **not** grant access. Responses use `Cache-Control: no-store`.
+POST requires a JSON object with **exactly** these fields:
+`confirm_owner_declaration: true`, `work_item_ref`,
+`goal_code`, `expected_outcome_code`,
+`depends_on_work_item_refs`, `expected_revision`,
+`expected_edit_token`. Create uses revision 0 and null token; edit uses
+the returned exact revision and opaque incarnation token. DELETE requires
+`confirm_delete: true`, `work_item_ref`, `expected_revision`,
+`expected_edit_token`. Both write operations reject duplicate JSON keys,
+unknown fields, oversized bodies, nonstandard JSON numbers and unconfirmed
+actions. Stale versions fail closed without silently approving new work.
+
+**Source-account scoping is server-derived, never caller-provided.** The
+adapter reads the existing locally configured and previously verified Stripe
+account metadata, then derives an opaque `owg:scope:` identifier using the
+existing installation reference secret with a distinct HMAC domain. No
+credential or provider native account identifier is returned. Without an
+explicit configured local source the list is unavailable/empty and writes
+are denied. A source replacement/disconnect uses the existing review-clear
+lifecycle to erase the declarations; review deletion erases the affected
+dependency closure; ephemeral history forbids persistence. A source change
+detected during a request fails closed and scrubs the local auxiliary ledger.
+The scope is **local single-owner account scope**, not a hosted
+organization/actor RBAC or atomic cross-process source-grant proof.
+
+The response distinguishes `provenance:
+explicit_owner_declaration_not_source_verified` from any source-confirmed
+status. `expected_outcome_verified`,
+`customer_outcome_verified`, `business_obligation_verified` and
+`agent_execution_authorized` remain false. Nothing is scheduled or
+automatically dispatched. This REST milestone enables a real local
+owner-declaration workflow for already reviewed cases; **it does not establish
+a real customer outcome, a contractual obligation or commercial uplift**.
+
+The exact-head CI for the earlier internal-only draft revealed actual Linux,
+macOS and Windows failures. This continuation also tightens first-revision
+timestamp integrity (creation and first update must coincide), closes raw
+SQLite test connections before Windows scrub assertions, and accepts both
+pre-open WAL sidecar refusal and journal-mode refusal as valid fail-closed
+outcomes. The committed REST and regression tests still require native
+cross-platform CI and real consenting installation/provider acceptance.
+
+
+## Dashboard-only dependency graph API (issue #247 M3)
+
+The experimental local API now exposes `GET /v1/open-work/declarations/graph` alongside the owner-confirmed declaration CRUD endpoints. It is **not** a second graph store: the handler first calls the existing `list_case_declarations` with the source-account scope derived by the server from the currently configured, verified local Stripe connection. It projects only the existing reviewed, retention-valid declarations; it does not discover or refresh provider records. The same local `OWG-Session` authentication, host/origin protections, no-store cache policy and post-read source-connection recheck apply. Installation bearer credentials, extension contexts and MCP cannot read it. With no current configured source, the response is `available: false` and an empty graph; no database is created by reading.
+
+The response format is `openworkgraph.local-case-dependency-graph.v1`. `nodes` include opaque work-item references, fixed owner-declared goal/outcome codes, revision, update/expiry clocks, deterministic `dependency_depth` and declared prerequisite count. `edges` have `prerequisite_ref`, `dependent_ref`, `edge_type: owner_declared_dependency` and explicit owner-declared provenance. A topological order places prerequisites before dependents, with stable reference sorting within a depth. Neither editing tokens nor source-account scope identifiers are included in graph nodes. The output contains no native provider IDs, customer text, credentials or amounts.
+
+**Interpretation is deliberately narrow:** a graph edge is an explicit *owner declaration*, not a source-grounded fact, inferred duty, actual workflow, business outcome or execution permission. `source_inventory_complete: false`, `source_read_performed: false`, `source_state: unknown_until_explicit_recheck`, and false customer-outcome/business-obligation/agent-authority flags are mandatory. `eligible_declaration_graph_complete: true` means only that this bounded projection contains all currently admitted reviewed declarations in its source-scoped snapshot; it is **not** evidence that all business cases have been discovered or completed.
+
+The projection refuses duplicate identities, dangling dependencies, cycles, malformed references or contradictory verification flags instead of silently presenting a dependent as a newly approved independent root. The existing SQLite ledger already withholds expired/revoked dependencies transitively; changing or deleting a prerequisite invalidates dependent declarations, and the graph reflects that on the next authenticated read. This remains a single-installation local prototype without an atomic cross-process source-grant epoch fence or production organization-wide RBAC.
+
+`tests/test_open_work_case_graph.py` covers actual FastAPI + SQLite three-level dependency creation, deterministic nodes/edges, prerequisite CAS invalidation, source-account switch, explicit review revocation, disconnect, default-OFF read, forbidden bearer/Origin and corrupt-snapshot refusal. These are synthetic local acceptance checks, not live-provider acceptance or independently verified customer outcomes. All required native cross-platform, browser, accessibility, scale and packaging checks must pass on the exact PR head before merge.
+
+
+## Preview a declaration revision or deletion before invalidating dependents
+
+A local, explicitly authenticated dashboard session can now call
+`POST /v1/open-work/declarations/impact` to preview the **current reviewed
+declaration approvals** that a later revision or deletion would invalidate.
+The request is an exact JSON object with `work_item_ref`,
+`expected_revision`, `expected_edit_token`, and `operation` (`revise` or
+`delete`). The revision and incarnation token must match the current
+reviewed declaration; a stale, removed or foreign-source declaration is
+refused rather than silently projected as independent work.
+
+The read-only response includes the target, a deterministic prerequisite-first
+list of **transitively invalidated dependent opaque references**, affected and
+unaffected counts, and the explicit owner-declaration provenance. For example,
+with owner-reviewed A → B → C and unrelated D, a preview of revising or
+deleting A reports A/B/C as affected, B/C as dependent approvals requiring
+fresh human review, and D as unaffected. It does not mutate any declaration,
+remove any review, fetch a source record, or verify an outcome. It returns no
+native provider identifiers, customer text, amounts, source credentials or
+edit tokens. Source state remains unknown and business/customer/agent
+authority flags remain false.
+
+This is **advisory point-in-time impact**, not a lock, confirmation or
+authorization. The actual existing POST or DELETE requires its own explicit
+confirmation and exact revision+incarnation CAS; concurrent changes after a
+preview make a stale write fail. The preview uses the existing bounded
+`list_case_declarations` plus `project_declared_case_graph`, so it shares
+the same review, retention, dependency, source-account and origin/session
+protections. It refuses malformed/cyclic/dangling/overclaimed graphs, requires
+the current locally configured source, rechecks source scope after projection,
+uses `Cache-Control: no-store`, and is never exposed to MCP/bearer/extension
+callers. This does not establish atomic multi-process grant revocation or
+company-wide tenant RBAC.
+
+`tests/test_open_work_case_graph.py` exercises actual FastAPI+SQLite
+A→B→C/D impact previews, non-mutation, subsequent confirmed revision,
+stale incarnation, review revocation, source switch, default OFF, foreign
+Origin/bearer denial and malformed graph refusal. Synthetic local tests do
+not establish real-provider/customer acceptance. All native exact-head CI,
+accessibility, scale, packaging and review gates still apply before merge.
+
+
+## Explicit source-scanned reviewed case dossier (local REST, experimental)
+
+An authenticated local dashboard session can explicitly request
+`POST /v1/open-work/declarations/dossier` **after** a case has a current
+human review and a durable owner declaration. The endpoint joins the existing
+reviewed SQLite dependency DAG to the **existing** read-only
+`stripe_open_work_case_context` source inventory/history reader; it does not
+introduce a new provider adapter, grant, background scanner, store or engine.
+
+Example request body (the revision/token must come from a fresh authorized
+`GET /v1/open-work/declarations`, not from this documentation):
+
+```json
+{
+  "work_item_ref": "owg:w:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "expected_revision": 1,
+  "expected_edit_token": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "confirm_source_scan": true,
+  "max_pages": 2
+}
+```
+
+The dashboard session, current source-account-derived scope, current reviewed
+case and all transitive owner-declared prerequisites, and exact revision plus
+incarnation token are checked **before** any source read. The caller must
+affirmatively request a bounded 1–3-page source scan for **each** call; existing
+restricted Stripe read opt-in and provider/account checks still apply.
+`confirm_source_scan:false`, a stale CAS, removed review, missing source,
+foreign Origin or an API bearer cannot trigger this scan. The endpoint
+rechecks the source scope and exact target/prerequisite revisions, tokens,
+reviews and expiry after the scan; changes fail with a privacy-safe 409 rather
+than returning an apparently current approval. These checks narrow races,
+but are **not** atomic cross-process provider grant fencing.
+
+The `openworkgraph.local-reviewed-case-dossier.v1` response contains only
+the selected owner-declared goal/expected-outcome code and version, ordered
+transitive declared prerequisite refs and versions, source-reported
+`open`/explicit `unknown` state with verified-at/coverage when available,
+and at most eight opaque retained OWG record refs with counts and truncation.
+It does **not** echo native Stripe invoice IDs, customer identities, amounts,
+source payloads, raw timeline content, private scope or edit tokens.
+`Cache-Control: no-store` applies to successful responses. The existing
+Stripe case-context reader may read provider inventory and retained local
+history only under the explicit user request; it never writes to Stripe.
+
+**Unknown is not paid or completed.** A source outage, partial inventory
+without the selected case, or absence from a complete open-invoice list
+returns unknown; it does not establish settlement, a satisfied customer,
+a follow-up obligation or an agent-caused result. Declared prerequisites are
+**owner statements**, not source-verified dependencies. All business
+obligation, expected-outcome completion, customer outcome and agent
+execution authority flags remain false. There is no auto-execution or new
+MCP inventory permission. The current prototype is local single-account,
+not production organization-wide RBAC.
+
+The FastAPI/SQLite synthetic acceptance in
+`tests/test_open_work_case_dossier.py` covers an A→B→C owner-declared
+chain, explicit fresh scan, count-only observation minimization, stale
+revision and missing-consent no-read, source outages/partial inventory,
+source switch, prerequisite revision and human-review revocation during
+scan, bearer/Origin refusal and contradictory source status. These fake
+source tests are **not** live restricted-Stripe account acceptance, real
+tenant revocation guarantees, customer-outcome adjudication or held-out
+A/B/C commercial-benefit evidence. All exact-head native CI gates must pass
+before this draft can merge.
+
+
+## Explicit dependency-chain source status (bounded local REST)
+
+A dashboard-session holder can now request
+`POST /v1/open-work/declarations/dependency-status` for a currently reviewed,
+source-account-scoped owner declaration. This is a **functional source recheck**
+of the selected case and a bounded prefix of its transitive, owner-declared
+prerequisites. It reuses the existing private SQLite declaration ledger, DAG
+projection, and explicitly opted-in `stripe_open_work_case_context` reader.
+It does not introduce a source connector, additional Stripe permission, a
+background poll, an AI grant, or a business write.
+
+The exact JSON body contains `work_item_ref`, `expected_revision`,
+`expected_edit_token`, `confirm_source_scan: true`, `max_pages` (literal
+integer 1–3), and `max_cases` (literal integer 1–4). The current revision
+and incarnation token come from the authenticated declaration list. Example:
+
+```json
+{
+  "work_item_ref": "owg:w:dddddddddddddddddddddddddddddddd",
+  "expected_revision": 1,
+  "expected_edit_token": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "confirm_source_scan": true,
+  "max_pages": 2,
+  "max_cases": 4
+}
+```
+
+Before any provider call, the server requires the existing local dashboard
+session, current local Stripe source scope, current owner review and exact
+declaration revision/incarnation; it also validates the complete bounded
+dependency DAG. It checks scope and exact target/prerequisite versions and
+reviews **after each individual source read** and again before responding.
+Revocation, account replacement or changed prerequisite approval returns a
+privacy-safe conflict and stops further reads. These rechecks are not an
+atomic cross-process source-grant lease; a provider read already in flight
+cannot be rolled back.
+
+The response `openworkgraph.local-reviewed-dependency-status.v1` contains
+prerequisite-first `case_statuses`, with the requested target **always
+included**, owner-declared goal/outcome codes and revisions, separately
+source-reported `open` or `unknown` status, source verification timestamp,
+bounded inventory coverage, and at most eight retained OWG reference/count
+summaries per scanned case. For a four-case A → B → C → D chain,
+`max_cases: 2` scans A and D, explicitly reports two **unscanned**
+prerequisites, and does not pretend B or C is verified. A complete scanned
+prefix is **not** a complete source inventory.
+
+Each case uses a separate, sequential 1–3-page source scan (at most four
+scans per explicit request), not a transactionally consistent provider
+snapshot. Different cases may have different `verified_at` values. Source
+outages, partial inventory, missing open invoices and absent retained
+observations are `unknown`, never evidence of payment, successful customer
+outcome, or a business obligation. Owner-declared dependencies are not
+source-confirmed relationships. The endpoint does not include native Stripe
+IDs, customer text, invoice amounts, raw event timelines, source account,
+credentials, or edit tokens. No-store caching applies to success.
+
+`tests/test_open_work_dependency_dossier.py` exercises real local
+FastAPI/SQLite review/declaration creation and bounded source-check routes
+with a **fake** existing Stripe reader: A → B → C → D, explicit scan counts,
+unknown source states, missing consent/stale CAS/auth denial with zero reads,
+source replacement, review revocation, prerequisite mutation during scanning,
+and source-data minimization. This is not real Stripe/tenant acceptance,
+customer-outcome adjudication or a held-out A/B/C commercial benefit trial.
+Exact-head cross-platform CI and real consenting account acceptance remain
+required before production claims or merging the draft.
+
+
+## Explicit multi-case reviewed portfolio status (local REST, experimental)
+
+The dashboard-only `POST /v1/open-work/declarations/portfolio-status`
+lets an operator check **1–4 independently selected, currently reviewed
+cases** in one bounded request. Unlike `dependency-status`, selected cases
+need not share a prerequisite chain. Each selected case must carry its exact
+current revision and incarnation token from the authenticated declaration
+list; an invalid selection rejects the **whole** request before any source
+read. All transitive prerequisite approvals are pinned and revalidated,
+but are **not** automatically scanned or source-verified.
+
+Example body (replace refs and tokens with the current local list values):
+
+```json
+{
+  "confirm_source_scan": true,
+  "max_pages": 2,
+  "cases": [
+    {"work_item_ref": "owg:w:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+     "expected_revision": 1,
+     "expected_edit_token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"work_item_ref": "owg:w:cccccccccccccccccccccccccccccccc",
+     "expected_revision": 1,
+     "expected_edit_token": "dddddddddddddddddddddddddddddddd"}
+  ]
+}
+```
+
+The server requires a real local dashboard session, current account-scoped
+source and owner reviews, explicit source-scan confirmation and the existing
+separately authorized restricted Stripe reader. The `max_pages` bound is
+1–3 **per selected case**, at most four sequential source reads. After
+**every** read it rechecks source scope, all selected revisions/incarnations
+and their transitive prerequisite review/version signatures; revocation or
+a stale declaration stops remaining reads. This is not an atomic provider
+snapshot or an atomic cross-process revocation fence.
+
+`openworkgraph.local-reviewed-case-portfolio.v1` returns selected opaque
+case refs, owner-declared goal/expected-outcome codes, prerequisite counts,
+separate source-reported `open` or `unknown` states and timestamps, and
+bounded retained OWG reference/count summaries. Each case explicitly reports
+`unscanned_prerequisite_count` and `all_declared_prerequisites_selected`;
+prerequisites not selected remain unscanned, and even selected ones are
+**not implicitly source-verified as business dependencies**. No native IDs, customer data, amounts, raw timeline, account
+scope or edit tokens are returned. No result is persisted, automatically
+refreshed or exposed to an agent. Provider `open` does not prove a
+business obligation; `unknown` does not mean paid or completed. Expected
+outcome, customer completion, business obligation and execution authority
+remain false.
+
+`tests/test_open_work_case_portfolio.py` uses real local FastAPI/SQLite
+review and declaration storage with a fake source reader to cover independent
+cases, exact-CAS preflight before provider IO, source isolation, authorization,
+mid-read review/prerequisite/source revocation, outages, contradictory source
+evidence and private-field minimization. Synthetic acceptance is not live
+Stripe/tenant validation, verified customer outcome or held-out agent uplift.
+The draft remains unmerged pending all exact-head native CI and review gates.
+
+
+## Atomic creation of a reviewed case dependency graph (local REST)
+
+An authenticated **local dashboard session** can create **one to four new**
+owner-declared cases in a single SQLite transaction. This avoids leaving a
+half-created dependency chain when a later declaration fails. All cases must
+already have current local human reviews, retained human history must be
+enabled, and a verified Stripe source account must still be configured.
+This is **not** a source inventory, provider operation, obligation inference,
+business completion, or agent execution permission.
+
+```http
+POST /v1/open-work/declarations/batch
+Authorization: OWG-Session <current-local-dashboard-session>
+Content-Type: application/json
+
+{
+  "confirm_batch_create": true,
+  "items": [
+    {
+      "work_item_ref": "owg:w:cccccccccccccccccccccccccccccccc",
+      "goal_code": "review_source_state",
+      "expected_outcome_code": "source_state_rechecked",
+      "depends_on_work_item_refs": ["owg:w:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
+      "expected_revision": 0,
+      "expected_edit_token": null
+    },
+    {
+      "work_item_ref": "owg:w:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "goal_code": "review_source_state",
+      "expected_outcome_code": "source_state_rechecked",
+      "depends_on_work_item_refs": ["owg:w:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+      "expected_revision": 0,
+      "expected_edit_token": null
+    },
+    {
+      "work_item_ref": "owg:w:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "goal_code": "review_source_state",
+      "expected_outcome_code": "source_state_rechecked",
+      "depends_on_work_item_refs": [],
+      "expected_revision": 0,
+      "expected_edit_token": null
+    }
+  ]
+}
+```
+
+Input order does not matter: the server validates the explicit DAG and
+creates prerequisites first. A new declaration may also reference a currently
+approved existing case in the **same source account**. The request never
+updates an existing case: each item must carry create-only CAS
+`expected_revision: 0` and `expected_edit_token: null`. Duplicate
+refs, missing/revoked reviews, stale existing rows, invalid/foreign
+prerequisites, cycles, source revocation and exceeding the 50-row ledger
+limit fail the whole batch; no partial owner graph is committed.
+
+A successful response contains `format: openworkgraph.local-case-declaration-batch.v1`,
+`created_count`, and `items` in deterministic prerequisite-first order. Each item has
+a new random incarnation token and revision 1 for subsequent exact-CAS edits.
+It explicitly marks source reads/writes, customer-outcome verification,
+business obligation and agent execution as false. Responses are `no-store`.
+Use the existing `GET /v1/open-work/declarations/graph` to inspect the
+result, and the existing impact preview before any later explicit edit/delete.
+
+The transaction rechecks local review windows and history retention immediately
+before commit, but **does not provide atomic cross-process fencing** against
+an independently revoked source grant after commit. The route checks the
+source-account scope both before and after the transaction and scrubs on
+detected source change. The source account is derived server-side, never from
+the JSON request. This is a single-installation, synthetic-tested foundation,
+not production multi-tenant RBAC or independently verified business outcomes.
+
+
+## Atomic reapproval of an existing reviewed dependency graph
+
+\`POST /v1/open-work/declarations/batch-revision\` is a **local dashboard-session-only**, explicitly confirmed mutation of **1–4 existing** reviewed owner declarations. It does not create cases, read a provider, grant execution authority, or assert a business outcome. Send exactly \`confirm_batch_revision:true\`, \`confirm_cascade_invalidation:true\`, \`expected_invalidated_work_item_refs:[...]\` and \`items:[...]\`. Each item has the same six fields as the creation batch, but **must** carry the current positive \`expected_revision\` and exact incarnation \`expected_edit_token\` obtained from a fresh GET. Every item must have a current review and same-source scope. The server topologically reapproves selected dependencies regardless of input order, increments each selected revision exactly once and retains its incarnation token and original creation/expiry ceilings.
+
+**Cascade is never implicit:** any prior dependent of a changed case that is not included in the same reapproval must be named exactly in \`expected_invalidated_work_item_refs\` (opaque refs only). To obtain that list, inspect the current \`GET /v1/open-work/declarations/graph\` and take the union of transitive dependents of all selected cases, excluding selected cases. The server recomputes the closure **under the SQLite write lock**; if a dependent appeared, disappeared, changed scope or is unexpectedly included, the whole write fails rather than silently deleting an unacknowledged approval. A selected dependent is explicitly reapproved in the same transaction and survives; an omitted acknowledged dependent is deleted, not silently made independent. An unrelated case remains. If the revised full graph contains a cycle, stale CAS, missing or foreign prerequisite, expired approval, changed review/retention or unacknowledged dependent, **no revised/deleted rows commit**. Existing single-case edits retain their conservative cascading behavior.
+
+Example: A ← B ← C and independent D; reapprove A and B with C omitted, and acknowledge \`expected_invalidated_work_item_refs:[C]\`. A and B advance their revisions together, C's old declaration disappears, and D remains untouched. Reapproving A/B/C together with an empty invalidation list preserves all three only after each owner's explicit exact-version reapproval. This is a local point-in-time commit, not an atomic cross-process provider-grant/revocation fence. Re-read before relying on current authority. The response exposes only opaque refs, fixed owner codes, exact revisions, and unverified source/customer/agent outcome flags. The feature is synthetic/local until native CI and real authorized pilot acceptance.
+
+
+### Preview the exact cascade before confirmation
+
+Call \`POST /v1/open-work/declarations/batch-revision-impact\` with \`{"cases":[{"work_item_ref":"owg:w:…","expected_revision":1,"expected_edit_token":"…"}]}\` for 1–4 current reviewed cases. The authenticated local endpoint reuses the existing graph/change-impact projection to return the **union** of omitted transitive dependent refs as \`expected_invalidated_work_item_refs\`, plus the selected reapproval refs. No provider call or mutation occurs. Pass that list unchanged into the separately confirmed \`batch-revision\` write with full proposed owner codes/dependencies. Preview is advisory: it does not validate proposed new edges, lock the graph, or authorize a write. The write repeats all review, CAS, dependency, cycle and cascade checks under SQLite lock; a stale preview fails rather than deleting an unexpected case. Native CI and real-account acceptance remain pending.
+
+
+## Portable, source-scoped case status checkpoint and conservative comparison
+
+Issue #247 M3/M4 and #264 Stage 7: an authenticated **local dashboard
+session** can request a **new, explicit, read-only** source check for an
+already owner-reviewed Stripe case and later compare the provider-open/unknown
+state with a previous *server-sealed* checkpoint. The feature is OFF until the
+operator has separately connected and authorized the existing restricted
+Stripe source and saved a current reviewed declaration. It does not poll,
+persist provider status on the server, contact customers or execute agents.
+
+**Endpoint:** `POST /v1/open-work/declarations/status-checkpoint`
+
+JSON body (all six keys required):
+
+`{"work_item_ref":"owg:w:<32 lowercase hex>","expected_revision":1,"expected_edit_token":"<32 lowercase hex>","confirm_source_scan":true,"max_pages":2,"previous_checkpoint":null}`
+
+The first call returns `openworkgraph.local-case-status-comparison.v1` with
+a `checkpoint` object and `comparison.available=false`. Keep that object
+locally if you wish to compare later. A later call repeats the exact
+current declaration revision/incarnation, sets `previous_checkpoint` to the
+previous response's **checkpoint object**, and independently confirms a new
+bounded source scan. The comparison is one of `open_to_open`,
+`open_to_unknown`, `unknown_to_open`, or `unknown_to_unknown`. These are
+*provider inventory observation transitions*, **not** proven invoice
+payment, completed obligations, agent causality or customer success.
+A missing invoice in an open-invoice inventory always becomes `unknown`,
+even when the source inventory reports complete coverage.
+
+The portable checkpoint contains only opaque case ref, revision, HMAC
+bindings to the full transitive owner-declared prerequisite signature and
+configured local source account, issue/expiry clocks, provider `open` or
+`unknown`, source freshness/coverage, a fixed-vocabulary unknown reason
+and an HMAC seal. It contains **no** native invoice IDs, customer details,
+amounts, source account, edit token, raw event data or agent authority.
+The HMAC uses a domain-separated purpose with the existing local
+installation secret; it is **not** a bearer permission. A prior checkpoint
+expires after **at most 24 hours** and no later than the reviewed
+declaration's own expiry. An authenticated reader must still possess the
+current dashboard session, current review, retention, exact revision/token,
+source grant and unchanged prerequisite versions. A tampered, wrong-source,
+expired, revoked or stale checkpoint is refused **before provider IO**.
+Review/source/graph versions are rechecked after every scan. There is no
+cross-process atomic revocation fence across Stripe, review JSON and SQLite;
+a receipt previously exported by a person cannot be remotely erased, but
+never grants subsequent source access or owner-declaration authority.
+
+A fresh source-reported `open` status is sealed only when its timestamp is
+timezone-aware and at most 15 minutes old (allowing up to five minutes of
+clock skew). Stale source clocks become an explicit `unknown` checkpoint;
+contradictory source identity/state fails closed. Source outage and partial
+coverage remain unknown, never paid or resolved. Every response uses
+`Cache-Control: no-store`. Existing Activity, workflow mapping, Discovery
+Mode, export, MCP and provider permissions are unchanged.
+
+**Synthetic acceptance:** `tests/test_open_work_case_status_checkpoint.py`
+uses the actual local FastAPI app, authenticated session, review queue and
+SQLite declaration DAG, with the Stripe reader replaced at the existing
+source boundary. It covers open-to-unknown and other transitions, exact
+prerequisite CAS, source switch, review/retention revocation, mid-scan
+changes, forged seals, wrong scope, expiry, stale source clocks, contradictory
+provider status, denial before source IO and privacy minimization. Passing
+these tests is **not** real Stripe/customer validation or evidence of
+business-completion uplift; native cross-platform CI and a separately
+authorized real-provider pilot are still required.
+
+
+## Explicit case outcome-evidence graph (M3/M4, experimental)
+
+The authenticated **local dashboard session** can explicitly request
+`POST /v1/open-work/declarations/evidence-graph` with exactly these JSON
+fields:
+
+```json
+{
+  "work_item_ref": "owg:w:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "expected_revision": 1,
+  "expected_edit_token": "<current private incarnation token>",
+  "confirm_source_scan": true,
+  "max_cases": 4,
+  "max_pages": 2
+}
+```
+
+The case must already have a current human review and source-account-scoped
+owner declaration. The operator obtains the revision and private edit token
+from the authenticated declarations API; neither is echoed by this evidence
+graph. The endpoint reuses the **same** durable declaration ledger, existing
+prerequisite-first graph, existing Stripe case-context reader and privacy-
+minimized source dossier as `/dependency-status`. It reads at most four cases
+(target plus a bounded prefix of reviewed prerequisites) and three pages per
+case, **only after explicit confirmation**. Before any provider read, it
+validates exact target incarnation/revision and the entire transitive
+prerequisite signature. After **each** source read, it rechecks source account,
+human review, retention and every dependency revision; a change refuses the
+response and stops further scans. This is not a cross-process atomic grant
+fence or an atomic provider snapshot.
+
+The result is a deterministic, bounded **typed evidence graph**. Reviewed
+case nodes and `declared_prerequisite` / `declared_expected_outcome` edges
+have `explicit_owner_declaration` provenance only. Fresh source-reported
+Stripe-open observations get separate `provider_status_evidence` nodes and
+`source_reported_open` edges, never a declaration or completion edge.
+Missing, partial, unavailable, stale (>15 minutes) or conflicting-clock
+source observations become **unknown** evidence nodes/gaps; unscanned
+prerequisites remain explicitly `not_scanned`. A provider timestamp more
+than five minutes in the future is a clock conflict, not fresh evidence.
+The graph never invents inferred edges, policy obligations, payment,
+customer satisfaction, independently verified expected outcomes, or agent
+causality. A source-open invoice is not proof of a required follow-up; an
+invoice missing from the bounded open inventory is **not** proof of payment.
+`source_checks_sequential_not_atomic` and
+`source_inventory_globally_complete:false` are always explicit.
+
+The response contains only opaque case refs, owner-declared fixed codes and
+revisions, typed edges, bounded source-state evidence, timestamps and
+explicit gaps. It excludes native provider IDs, customer data, amounts,
+raw observed timelines, account scope and incarnation tokens. It is
+`Cache-Control: no-store`, never stored or synced by OWG, and cannot grant
+MCP/agent execution, source permissions or business writes. The feature is
+additive: the existing `/dependency-status` response remains unchanged
+and uses the same consent-pinned scan helper. Synthetic FastAPI/SQLite tests
+cover A→B→C→D, selected/unscanned prerequisites, fresh/unknown/stale/
+clock-conflicted observations, source outage, malformed provider evidence,
+stale CAS, unauthorized requests and mid-scan source/review/prerequisite
+revocation. **These are not real-provider acceptance or proof of commercial
+benefit.** Independent provider operation receipts, actual customer outcomes,
+production org/actor authorization and held-out matched agent trials remain
+outstanding.
+
+
+## Independently verified Stripe provider operation from a prior exact case join (experimental)
+
+This two-step **dashboard-session-only** workflow addresses a limitation of the
+open-invoice inventory: an invoice disappearing from that inventory is **not**
+evidence that it was paid. First, while the reviewed invoice is still reported
+open, the operator explicitly calls `POST /v1/open-work/declarations/operation-link`
+with exactly `work_item_ref`, `expected_revision`, `expected_edit_token`,
+`confirm_source_scan: true`, `max_pages: 1..3`, and one `resource_ref`
+(`owg:r:` opaque ID) previously obtained from that exact case's retained
+observation summary. The source scan must positively join that observed record
+to the native Stripe invoice ID, with complete retained record identity and
+fresh source evidence. Cases without an exact retained record cannot use this
+workflow; no join is invented. The server returns an operator-carried HMAC-
+sealed `record_link` valid for at most 24 hours and never beyond the case's
+review/retention expiry. It binds the exact source account and the **entire**
+reviewed prerequisite DAG, including incarnation tokens. No native IDs,
+customer details, amounts, raw events, or source-account IDs are exported.
+
+Later, even if the invoice is no longer present in the open inventory, the
+operator explicitly calls `POST /v1/open-work/declarations/verify-operation`
+with exactly the same three case CAS fields, `confirm_source_verification:
+true`, and the prior `record_link`. Invalid, expired, altered, wrong-account
+or stale-DAG links are rejected **before** independent provider IO. The
+backend calls the **existing** authorized
+`source_operation_receipt(resource_ref, "stripe_invoice_paid")` reader,
+then rechecks source scope, current human review, retention, full DAG and link.
+Only a fresh, independently source-reported Stripe invoice `paid` receipt
+with a complete exact retained record identity is returned as
+`provider_operation_verified: true`. Missing/partial/outage/conflicting
+receipts return `unknown`, never paid. Neither step persists source status,
+creates a connector/grant, polls automatically, authorizes agent execution,
+performs a business write, or verifies a customer outcome, contractual
+obligation, expected business goal, or that an agent caused payment.
+
+This is a local single-installation, manually carried link. It cannot verify
+never-observed invoices, does not support multi-tenant organization RBAC or
+atomic cross-process source-grant fencing, and is not a durable independent
+customer-outcome ledger. Synthetic FastAPI/SQLite + fake-provider acceptance
+covers source join, later paid receipt, forged links, stale prerequisite
+approval, outage, revocation during read, consent and privacy; native CI and
+an authorized real Stripe test-account pilot remain mandatory.
+
+
+## Dependency-wide independent provider-operation checks
+
+The optional local-dashboard-only `POST /v1/open-work/declarations/dependency-operations` route lets an operator review **independent provider payment evidence across a declared prerequisite chain**, rather than verifying one case at a time. It composes the existing owner-reviewed SQLite declaration DAG, the existing `/operation-link` source-joined record-link issuer, and the existing independently authorized Stripe `source_operation_receipt(resource_ref, "stripe_invoice_paid")` reader. No new provider scopes, source inventory scan, background polling, business writes, or agent tools are introduced.
+
+The request is JSON with exactly `work_item_ref` (root), `expected_revision`, `expected_edit_token`, `confirm_source_verification: true`, and `record_links` (zero to four previously issued sealed link objects). The caller must hold a valid `OWG-Session` dashboard session and an existing local Stripe connection. First issue each record link separately while the invoice is source-joined to positively observed, complete retained OWG evidence using `POST /operation-link`. The dependency operation check **does not rescan the open-invoice inventory**: it verifies each linked invoice directly through the independent provider-operation reader, even when that invoice has disappeared from the open inventory.
+
+The root and **all transitive prerequisites** must be a current, acyclic, owner-reviewed graph of at most four cases. Every case must have the explicitly declared `verify_operation` goal and `operation_receipt_reviewed` expected outcome; this endpoint does not reinterpret other human goals as invoice payments. The exact root revision/incarnation and each link's own sealed revision, transitive prerequisite signature, source-account scope, and expiry are checked before the first provider request. Duplicate, extra, foreign, tampered or stale links refuse the entire request before any provider read. Missing links are permitted, but reported as `not_checked`, never as paid. Links can be supplied in any order; results always follow prerequisite-first order.
+
+After **each** independent source read, the route rechecks the current source account, review, retention, exact root graph and every submitted link **before** reading the next source record. A mid-read revocation, revision or account change refuses the response and stops subsequent reads. A provider outage, stale timestamp or contradictory receipt is `unknown`; it does not become a negative payment finding. The response returns only opaque `owg:w:` references, per-case `paid`/`unknown`/`not_checked`, fresh verified-at times when present, counts, and `all_declared_case_provider_operations_verified`. This aggregate is true **only if every declared case has a valid source-joined link and every independent provider receipt freshly confirms paid**. It is **not** proof of contractual duty, customer satisfaction, achievement of the declared expected outcome, or agent causality; all business/customer/agent authorization flags remain false. No native invoice IDs, source account, record refs, customer names, invoice amounts, raw receipts or edit tokens appear in the response; `Cache-Control: no-store` applies.
+
+For example, with reviewed A → B → C and previously issued A/B/C links, a confirmed call returning fresh provider-paid receipts for A and C but an outage for B reports `paid, unknown, paid` and `all_declared_case_provider_operations_verified: false`. Supplying only A and C links reports B as `not_checked`. Revoking A's review during the first source read aborts the request without checking B or C. The endpoint does not persist payment status, perform any source write, or give an agent permission to execute.
+
+**Synthetic end-to-end acceptance:** `tests/test_open_work_case_dependency_operations.py` uses actual local FastAPI session authorization, the private SQLite declaration ledger and synthetic Stripe case/receipt adapters. It covers prerequisite order, complete/partial/empty link coverage, outage and conflicting receipts, forged/extra/duplicate links, review revocation, source-account replacement, stale DAG, four-case limit, wrong declared goal, consent and privacy minimization. These committed tests are **not** evidence of live Stripe acceptance or real customer/business outcomes. Exact-head native Ubuntu/macOS/Windows pytest, browser, collaboration, scale, accessibility, starter and packaging/release gates remain mandatory before merging.
+
+
+## Portable operation verification timeline (explicit local REST, M4 milestone)
+
+`POST /v1/open-work/declarations/operation-timeline` lets a currently
+authenticated local dashboard operator explicitly check a previously
+source-joined Stripe invoice record, then carry forward a short signed
+history of independent provider checks. It is **not** a durable server-side
+outcome ledger, a customer-completion certificate, or an agent grant.
+
+Request JSON has **exactly** `work_item_ref`, `expected_revision`,
+`expected_edit_token`, `confirm_source_verification: true`,
+`record_link` (previously issued by `/operation-link`) and
+`prior_timeline` (null on first check; the last response's `timeline`
+on a later check). Each invocation explicitly calls the existing separately
+authorized read-only `source_operation_receipt(resource_ref,
+"stripe_invoice_paid")`; it does **not** rescan the open-invoice inventory.
+The response includes `latest_provider_state` (paid or unknown), a
+privacy-minimized HMAC-sealed `timeline` with up to eight timestamped checks,
+and separate historical paid/unknown observation counts.
+
+An independently reported paid invoice is **provider operational evidence
+only**. If a later read is unavailable, stale or contradictory, the newest
+entry is unknown; a prior paid observation remains in the history but is not
+recast as a fresh paid status, a refund, unpaid status, customer satisfaction,
+contractual obligation, expected business-goal achievement or agent causality.
+A source outage never turns an unknown into paid. All customer/business-outcome
+and agent-authority flags remain false.
+
+The server verifies the record-link seal and any prior timeline **before**
+provider IO, including the current exact declaration revision/incarnation,
+the full reviewed prerequisite DAG, source account binding, record binding,
+monotonic UTC timestamps, HMAC and 24-hour maximum expiry. An expired,
+tampered, foreign, changed-graph, replayed full (8-entry) or otherwise invalid
+history is refused before the read. After the provider call it rechecks source
+scope, current human review/retention and the exact dependency signature
+before appending. The response uses `Cache-Control: no-store` and carries no
+native Stripe ID, invoice amount, customer text, source account, edit token,
+raw OWG event or provider credential.
+
+The timeline is **operator-carried**: OWG does not save it, poll for changes,
+send it to agents or synchronize it. A copied signed timeline cannot be
+remotely erased, but it expires in at most 24 hours and cannot be used for
+new reads after revocation or changed graph. A production durable history
+with correction lifecycle, atomic cross-process grant fencing, independently
+verified customer outcomes and real Stripe acceptance remains **OPEN**.
+`tests/test_open_work_case_operation_timeline.py` exercises actual
+FastAPI/SQLite paths with a fake source for paid→unknown, integrity and
+capacity refusal, source switching, prerequisite review revocation during
+and before reads, authentication and privacy. These synthetic tests do not
+establish real provider/customer acceptance; required native CI must pass
+before merge.
+
+
+## Durable local provider-operation evidence ledger (explicit REST, M4 milestone)
+
+The optional local-only ledger in `server/open_work_case_operation_ledger.py`
+is a **server-persisted** history of independent Stripe operation checks for a
+currently human-reviewed case. It complements, rather than replaces, the
+operator-carried `/operation-timeline` token. It is **not** a source status
+cache, verified customer outcome, billing ledger, inferred obligation, or
+permission for an agent to execute.
+
+Three authenticated dashboard-session-only POST operations are available:
+
+- `/v1/open-work/declarations/operation-ledger/check` requires the exact
+  `work_item_ref`, `expected_revision`, `expected_edit_token`,
+  `confirm_source_verification: true`, and an HMAC-sealed `record_link`
+  previously obtained from the explicit `/operation-link` source-joined
+  invoice scan. It independently calls the existing authorized
+  `source_operation_receipt` reader, then commits one paid/unknown observation
+  in a private SQLite transaction. An outage is **unknown**, not unpaid.
+- `/v1/open-work/declarations/operation-ledger/history` requires only the
+  exact current declaration reference, revision and incarnation token. It
+  reads retained history **without calling Stripe**, even if the invoice
+  disappeared from the open-invoice inventory or the original record link
+  expired. Every historical result explicitly reports
+  `current_provider_operation_verified: false`; fresh source verification
+  requires a separate explicit check.
+- `/v1/open-work/declarations/operation-ledger/dispute` requires the same
+  exact owner version, `confirm_dispute: true`, a prior check's
+  `target_sequence`, and one of `source_conflict`, `record_mismatch` or
+  `operator_dispute`. It **appends** an owner dispute without overwriting or
+  erasing the earlier independent provider observation. A disputed latest
+  check projects as unknown, never as fresh paid proof. A second dispute of
+  the same check is refused. This is a human annotation, not a provider-issued
+  refund/correction or verified customer outcome.
+
+The private SQLite file contains only opaque `owg:w:` refs, HMAC-bound
+reviewed dependency graph, source and exact record fingerprints, fixed
+paid/unknown codes, UTC timestamps and HMAC-chained events. No native invoice
+IDs, provider account IDs, customer names, amounts, credentials, raw event
+text, or raw receipts are persisted. A case can have up to 32 append-only
+events, with at most 50 cases; the local database has a 2 MiB admission cap.
+Expiry is bounded by the original owner declaration and the currently
+configured human-history retention (at most seven days). A changed review
+incarnation, dependency, account or retention makes old evidence unavailable;
+a stale graph is never silently rebound to new approval. Explicit review
+removal purges its case evidence; source disconnect/replacement or review
+clear removes the complete local evidence file. Invalid integrity chains
+fail closed rather than silently rewriting evidence. Local storage is
+private (0600 on POSIX), uses SQLite's DELETE journal and has no cloud sync,
+background polling, new provider privileges, or external writes.
+
+Each request requires the existing local dashboard session and independently
+authorized Stripe connection. A current exact reviewed case and its entire
+prerequisite graph are admitted before any provider read, rechecked after it,
+and checked again before and after the evidence transaction. Lock ordering
+prevents a review-revocation deadlock; this narrows
+local revocation races but **does not establish an atomic cross-process
+provider-grant fence, production organization/actor RBAC, or a distributed
+tenant-scoped outcome ledger**. A copied response is historical evidence only
+and cannot grant future reads or business actions. Provider-reported payment
+is not contractual performance, customer satisfaction, achievement of the
+owner's declared expected outcome, or agent causality.
+
+`tests/test_open_work_case_operation_ledger.py` covers the real FastAPI
+session/SQLite path with synthetic Stripe source/receipt adapters: explicit
+paid then unknown persisted checks, independent history retrieval, non-
+destructive disputes, duplicate/invalid disputes, tampering, stale or forged
+links, revocation during a provider call, source-account changes, review
+deletion, consent/retention refusal, and privacy minimization. Native CI,
+signed-client tests, real restricted Stripe TEST account acceptance,
+independent customer-outcome adjudication and held-out A/B/C commercial
+trials remain **unverified** and are mandatory before claiming production
+readiness or commercial benefit.
+
+
+## Retained dependency-operation history (local dashboard, explicit review)
+
+An authenticated dashboard operator can inspect the **historical provider checks** of a
+reviewed case and up to three declared prerequisites without calling Stripe:
+
+`POST /v1/open-work/declarations/operation-ledger/dependency-history`
+
+```json
+{
+  "work_item_ref": "owg:w:<32-lowercase-hex>",
+  "expected_revision": 1,
+  "expected_edit_token": "<current-32-hex-incarnation>",
+  "confirm_historical_review": true,
+  "max_cases": 4
+}
+```
+
+The response returns prerequisite-first `case_histories` with the owner's goal,
+expected-outcome code, exact review revision, historical `paid`/`unknown`
+checks and subsequent explicit disputes. `selected_dependency_edges` are
+**owner-declared**, never source-proven. `unscanned_prerequisite_count` identifies
+cases outside the four-case bound; cases without checks have empty histories.
+`historical_provider_evidence_coverage_complete` means **only** that every
+selected case has at least one retained provider check and no prerequisite was
+omitted; it does not establish payment now or business-goal completion. A
+disputed latest paid check projects as `unknown`.
+
+The endpoint validates the root's entire current dependency graph and
+incarnation, then admits each selected case against its own reviewed DAG.
+The existing private SQLite ledger validates HMAC integrity, retention, account
+scope and revocation on each read; the root DAG/source are rechecked after
+each read. Historical reads are separate, not an atomic source snapshot, and
+cross-process revocation is not an atomic distributed grant fence. It does not
+refresh Stripe, disclose native invoice IDs/customer details, grant an agent
+access, modify source systems, or claim independent customer outcomes.
+Fresh provider verification still requires a separate explicitly authorized
+`/operation-ledger/check` request. No cloud sync or background polling is added.
+
+FastAPI/private-SQLite integration coverage is in
+`tests/test_open_work_case_dependency_history.py` with synthetic provider
+fixtures, including no-source reads, partial histories, disputes, privacy,
+revocation during traversal, tampering, and exact-CAS/authorization refusal.
+Native CI and real-provider/customer acceptance remain separate gates.

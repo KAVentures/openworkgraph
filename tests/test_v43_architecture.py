@@ -122,7 +122,7 @@ def test_derived_single_os_first_name_is_not_global_owner(monkeypatch, tmp_path)
     assert "koyar" not in aliases
 
 
-def test_http_get_summary_is_read_only_after_startup(monkeypatch, tmp_path):
+def test_http_get_summary_is_read_only_after_startup(monkeypatch, tmp_path, raw_main_app):
     from server import db, main, presentation
 
     monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(tmp_path))
@@ -169,7 +169,7 @@ def test_http_get_summary_is_read_only_after_startup(monkeypatch, tmp_path):
         assert registry_path.stat().st_mtime_ns == registry_mtime
 
 
-def test_http_browser_ingest_strips_url_secrets_before_db(monkeypatch, tmp_path):
+def test_http_browser_ingest_strips_url_secrets_before_db(monkeypatch, tmp_path, raw_main_app):
     from server import db, main, presentation
 
     monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(tmp_path))
