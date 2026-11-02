@@ -21,7 +21,7 @@ _FORMAT = "openworkgraph.local-reviewed-run-outcome-comparison.v1"
 _TRIAGE = "openworkgraph.local-reviewed-outcome-evidence-triage.v1"
 _PLAN = "openworkgraph.local-reviewed-outcome-action-plan.v1"
 _DEPLOYMENT = re.compile(r"^dep_[0-9a-f]{16}$")
-_RUN_ID = re.compile(r"^[\\x20-\\x7e]{1,128}$")
+_RUN_ID = re.compile(r"^[\x20-\x7e]{1,128}$")
 _STATES = frozenset({"succeeded", "failed", "handed_to_human", "cancelled", "running"})
 
 
