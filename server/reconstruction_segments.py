@@ -67,6 +67,10 @@ def observed_activity_segments(
                 and not any(ord(char) < 32 or ord(char) == 127 for char in app)
                 and row["source"] not in ("", "unknown", "other")):
             loose_app_positions[scope].append((position, app, row["observed_at"]))
+    loose_app_indices = {
+        scope: [position for position, _, _ in observations]
+        for scope, observations in loose_app_positions.items()
+    }
 
     segments: list[dict[str, Any]] = []
     current: list[dict[str, Any]] = []
@@ -107,11 +111,14 @@ def observed_activity_segments(
                         and anchor_app == previous_row["app"]
                         and anchor_app not in ("", "unknown", "other")
                         and not any(ord(char) < 32 or ord(char) == 127 for char in anchor_app)):
-                    for loose_position, loose_app, loose_at in loose_app_positions.get(row["scope"], []):
+                    scope = row["scope"]
+                    loose_events = loose_app_positions.get(scope, [])
+                    start = bisect_right(loose_app_indices.get(scope, []), previous_position)
+                    for index in range(start, len(loose_events)):
+                        loose_position, loose_app, loose_at = loose_events[index]
                         if loose_position >= position:
                             break
-                        if (previous_position < loose_position
-                                and loose_app != anchor_app
+                        if (loose_app != anchor_app
                                 and previous_row["observed_at"] < loose_at < row["observed_at"]):
                             reasons.append("observed_other_app_without_record")
                             break
