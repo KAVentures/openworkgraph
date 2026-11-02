@@ -143,6 +143,8 @@ test('on-demand local read renders counts as text and rejects stale log response
     replaceChildren(...items){this.children=[...items];}
     addEventListener(type,callback){this.listeners[type]=callback;}
     focus(){this.focused=true;}
+    click(){this.clicked=true;}
+    remove(){this.removed=true;}
     setAttribute(key,value){this[key]=value;}
     querySelector(selector){
       const id=selector.startsWith('#')?selector.slice(1):selector;
@@ -158,9 +160,11 @@ test('on-demand local read renders counts as text and rejects stale log response
     createElement:tag=>new FakeElement(tag),
     getElementById:id=>id==='owgQuality'?quality:id==='owgEventLogPick'?picker:null
   };
-  let resolveFetch,requested='';
+  let resolveFetch,requested='',exportedCsv='';
   const source=readFileSync(new URL('../../dashboard/event_log_quality_trends.js',import.meta.url),'utf8');
   runInNewContext(source,{document,MutationObserver:class {observe(){}},
+    Blob:class {constructor(parts){exportedCsv=parts.join('');}},
+    URL:{createObjectURL:()=> 'blob:local',revokeObjectURL:()=>{}},setTimeout:()=>{},
     fetch:path=>{requested=path;return new Promise(resolve=>{resolveFetch=resolve;});}});
   const run=quality.querySelector('#owgQualityTrendsRun');
   const download=quality.querySelector('#owgQualityTrendsCsv');
@@ -205,11 +209,26 @@ test('on-demand local read renders counts as text and rejects stale log response
   assert.equal(target.value,'1');
   assert.match(pair.children[0].textContent,/Same verified transform/);
   assert.equal(pair.querySelector('#owgQualityPairTable').children[1].children[0].children[7].textContent,'+10.00 pp');
+  const reasonPairTable=quality.querySelector('#owgQualityPairReasonTable');
+  const reasonPairCsv=quality.querySelector('#owgQualityPairReasonCsv');
+  const reasonPairRows=quality.querySelector('#owgQualityPairReasonRows');
+  assert.ok(reasonPairTable && reasonPairCsv && reasonPairRows);
+  assert.equal(reasonPairCsv.disabled,false);
+  assert.equal(reasonPairTable.children[1].children[0].children[0].textContent,'=unsafe');
+  assert.equal(reasonPairTable.children[1].children[0].children[7].textContent,'+10.00 pp');
+  reasonPairCsv.listeners.click();
+  assert.match(exportedCsv,/"'=unsafe"/);
+  assert.match(exportedCsv,/baseline_supplied_rows/);
+  assert.ok(!exportedCsv.includes('alice'));
+
   target.value='0';target.listeners.change();
   assert.match(pair.children[0].textContent,/different batches/);
   assert.equal(pair.querySelector('#owgQualityPairTable'),null);
+  assert.equal(reasonPairCsv.disabled,true);
+  assert.equal(reasonPairRows.querySelector('#owgQualityPairReasonTable'),null);
   target.value='1';target.listeners.change();
   assert.ok(pair.querySelector('#owgQualityPairTable'));
+  assert.equal(reasonPairCsv.disabled,false);
   assert.ok(output.querySelector('#owgQualityTrendsRows'));
   assert.equal(output.querySelector('#owgQualityTrendsRows').children[1].children[0].children[1].textContent,'Rejected input');
   const increaseThreshold=quality.querySelector('#owgQualityIncreaseThreshold');
@@ -266,6 +285,8 @@ test('on-demand local read renders counts as text and rejects stale log response
   assert.equal(baseline.disabled,true);
   assert.equal(target.disabled,true);
   assert.equal(pair.children.length,0);
+  assert.equal(reasonPairCsv.disabled,true);
+  assert.equal(reasonPairRows.children.length,0);
   assert.equal(increaseRows.children.length,0);
   assert.equal(reasonRows.children.length,0);
   assert.equal(download.disabled,true);
@@ -452,4 +473,83 @@ test('rejection-category increase rows remain bounded to the latest 100 reports'
   assert.ok(result.total>0);
   assert.ok(result.rows.length<=view.MAX_REASON_INCREASE_ROWS);
   assert.ok(result.rows.every(r=>r.batchId>=20));
+});
+
+test('selected baseline/target compares recorded rejection categories across intervening batches', () => {
+  const sha='a'.repeat(64);
+  const batches=[0,1,2].map((i)=>({
+    ...report(i,i===0?'first_report':'same_transform',i+2,(i+2)/10,null),
+    transform_sha256:sha
+  }));
+  const reports=[0,1,2].map((i)=>({
+    batch:i,transform:{transform_sha256:sha},
+    rows:{rejected:i+2,rejected_by_reason:i===0?{'=FORMULA()':2}:
+      i===1?{'=FORMULA()':2}:{'=FORMULA()':1,'New reason':2}}
+  }));
+  const result=view.compareReasonsPair({batches},reports,0,2);
+  assert.equal(result.comparable,true);
+  assert.equal(result.baseline,'Import');
+  assert.equal(result.target,'Append 2');
+  assert.equal(result.total,2);
+  assert.equal(result.omitted,0);
+  assert.deepEqual(result.rows.map(r=>[r.category,r.change]),[
+    ['New reason','+20.00 pp'],['=FORMULA()','-10.00 pp']
+  ]);
+  assert.equal(result.rows[0].baseline_count,'0');
+  assert.equal(result.rows[0].target_denominator,'10');
+  const csv=view.csvPairReasons(result);
+  assert.match(csv,/baseline_batch,target_batch|baseline_batch/);
+  assert.match(csv,/"'=FORMULA\(\)"/);
+  assert.match(csv,/"New reason"/);
+  assert.match(csv,/"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"/);
+  assert.ok(csv.endsWith('\r\n'));
+  assert.equal(csv.split('\r\n').length,4);
+  assert.ok(!csv.includes('source_row'));
+});
+
+test('selected category comparison refuses missing or inconsistent evidence rather than treating it as zero', () => {
+  const sha='b'.repeat(64),other='c'.repeat(64);
+  const batches=[0,1,2].map(i=>({...report(i,'same_transform',2,0.2,null),transform_sha256:sha}));
+  const reports=[0,1,2].map(i=>({batch:i,transform:{transform_sha256:sha},
+    rows:{rejected:2,rejected_by_reason:{reason:1}}}));
+  const compare=(b=batches,r=reports)=>view.compareReasonsPair({batches:b},r,0,2);
+  assert.equal(compare().comparable,true);
+  assert.match(compare(batches,reports.filter(r=>r.batch!==1)).status,/intermediate saved report/);
+  assert.match(compare(batches,[...reports,reports[1]]).status,/Duplicate saved/);
+  assert.match(compare(batches,reports.map(r=>r.batch===1?
+    {...r,transform:{transform_sha256:other}}:r)).status,/inconsistent intermediate/);
+  assert.match(compare(batches.map(b=>b.batch===1?
+    {...b,transform_sha256:other}:b)).status,/Mapping changed/);
+  assert.match(compare(batches.filter(b=>b.batch!==1)).status,/Missing intermediate/);
+  assert.match(compare(batches,reports.map(r=>r.batch===2?
+    {...r,rows:{rejected:2}}:r)).status,/endpoint rejection-category breakdown/);
+  assert.match(compare(batches,reports.map(r=>r.batch===2?
+    {...r,rows:{rejected:2,rejected_by_reason:{reason:3}}}:r)).status,/inconsistent endpoint/);
+  assert.match(compare(batches.map(b=>b.batch===2?
+    {...b,metrics:{...b.metrics,rejected_input_rows:{count:2,denominator:0}}}:b)).status,
+    /inconsistent endpoint/);
+  assert.match(compare(batches,reports.map(r=>r.batch===2?
+    {...r,rows:{rejected:2,rejected_by_reason:{reason:-1}}}:r)).status,/inconsistent endpoint/);
+  assert.equal(view.compareReasonsPair({batches},reports,2,0).comparable,false);
+  assert.equal(view.compareReasonsPair({batches},reports,0,0).comparable,false);
+});
+
+test('selected category comparison is bounded and CSV always formula-safe', () => {
+  const sha='d'.repeat(64);
+  const batches=[0,1].map(i=>({...report(i,'same_transform',10,1,null),transform_sha256:sha}));
+  const reasonMap=Object.fromEntries(Array.from({length:60},(_,i)=>[
+    i===0?' =DANGEROUS()':'reason_'+i,1
+  ]));
+  const reports=[0,1].map(i=>({batch:i,transform:{transform_sha256:sha},
+    rows:{rejected:10,rejected_by_reason:i===0?{}:reasonMap}}));
+  const result=view.compareReasonsPair({batches},reports,0,1);
+  assert.equal(result.comparable,true);
+  assert.equal(result.total,60);
+  assert.equal(result.rows.length,view.MAX_PAIR_REASON_ROWS);
+  assert.equal(result.omitted,10);
+  assert.match(view.csvPairReasons(result),/"' =DANGEROUS\(\)"/);
+  assert.equal(view.compareReasonsPair({batches},reports.map(r=>r.batch===1?
+    {...r,rows:{rejected:10,rejected_by_reason:Object.fromEntries(
+      Array.from({length:257},(_,i)=>['reason_'+i,1]))}}:r),0,1).comparable,false);
+  assert.equal(view.csvPairReasons(null).split('\r\n').length,2);
 });
