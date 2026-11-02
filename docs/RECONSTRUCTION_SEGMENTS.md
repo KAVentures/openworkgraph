@@ -14,7 +14,12 @@ episodes**, not asserted tasks or completed cases. An episode ends only when:
 1. A **different literal source record** is observed between consecutive
    member events in the **same exact organization, actor, device and capture
    session**. This yields `interleaved_other_record`.
-2. The two member observations have **different exact capture scopes**.
+2. A **known different application** is independently observed without a source
+   record, strictly between two member observations in the **same known app**,
+   with a known capture source and the same **complete** organization, actor,
+   device and session. This yields `observed_other_app_without_record` — an
+   **uncertain observed interruption**, not proof of another business case.
+3. The two member observations have **different exact capture scopes**.
    This yields `capture_scope_change` (not proof that a person stopped work).
 
 Both reasons may be represented by a list of reason codes; the first episode
@@ -24,8 +29,17 @@ details are **never added** to the episode projection. Only already-present
 member event IDs, UTC observation times, counts and reason codes are returned.
 
 A long clock gap by itself does **not** establish an interruption, just as it
-does not establish a join. Missing observations, unknown/unreferenced surfaces
-and a foreign tenant/actor/device/session are not evidence of an interruption.
+does not establish a join. A known app change without a record can now bound an
+observed episode **only** when a trusted, source-observed, unreferenced app event
+lies strictly between same-app member anchors. The app event remains unlinked;
+no source record, task, verified handoff or business outcome is inferred.
+Timestamp ties, missing/incomplete capture scope, other tenants/actors/devices/
+sessions, unknown/placeholder or control-bearing app names, missing/unknown
+source, contradictory tab/transfer claims, tainted record identities, same-app
+loose actions and already-member app activity do not establish this boundary.
+The `interleaved_other_record` boundary retains precedence when a distinct
+literal source record is actually observed. Unknown observation coverage is
+never silently promoted to an uninterrupted business task.
 The original source-grounded membership, same-record/clipboard/tab link bases,
 uncertainty, ambiguous candidates and item confidence remain unchanged.
 
@@ -74,14 +88,18 @@ Run from repository root:
 python -m pytest -q tests/test_reconstruction_segments.py tests/test_work_item_links.py
 ```
 
-Synthetic tests exercise two interleaved cases, unknown observations, different
-tenants/actors/devices, cross-session same-record resumption, clock-only gaps,
-exact counts/truncation, privacy and existing workflow-evidence integration.
+Synthetic tests exercise two interleaved cases, unreferenced known-app switches,
+strict timestamp ties, same-app anchors, unknown/tainted capture, different
+tenants/actors/devices/sessions, cross-session same-record resumption, clock-only
+gaps, exact counts/truncation, retention recomputation, privacy and existing
+workflow-evidence integration.
 Cross-platform native pytest, browser/accessibility, scale, packaging and
 release checks must pass on the exact PR head before merge. These synthetic
 checks do not constitute real consenting-user validation.
 
 This improves reviewable **segmentation of observed evidence**, not assignment
-F1 by itself. The preregistered held-out F1 >= 0.90 and contamination <= 0.05
+F1 by itself. The uncertain other-app boundary must not be treated as a
+confirmed task switch, handoff, user productivity measure or agent authorization.
+No new case memberships or automatic actions are created. The preregistered held-out F1 >= 0.90 and contamination <= 0.05
 targets are **not established** by this change. No private evaluation truth,
 model/API spend, source-provider calls or business writes are introduced.
