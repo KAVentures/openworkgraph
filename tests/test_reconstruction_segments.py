@@ -392,11 +392,12 @@ def test_exact_record_change_after_clean_unreferenced_member_splits_at_new_ancho
     first, loose, second = event(1, A), event(2), event(3, B)
     rows = link_observations([first, loose, second])["rows"]
     projected = observed_activity_segments(rows, ["e0001", "e0002", "e0003"])
-    assert projected["activity_segment_count"] == 2
+    assert projected["activity_segment_count"] == 3
     assert [s["event_ids"] for s in projected["activity_segments"]] == [
-        ["e0001", "e0002"], ["e0003"]]
+        ["e0001"], ["e0002"], ["e0003"]]
     assert [s["boundary_before"] for s in projected["activity_segments"]] == [
-        [], ["observed_member_record_change"]]
+        [], ["observed_unreferenced_record_bridge"],
+        ["observed_member_record_change"]]
     # The unreferenced member has no newly invented source-record identity
     # (the linker uses "" for "no reference").
     assert rows[1]["ref"] == ""
@@ -434,17 +435,18 @@ def test_cross_record_linker_and_workflow_api_split_after_unreferenced_member():
     joined = item(result, A)
     assert joined["resource_refs"] == [A, B]
     assert joined["event_ids"] == ["e0001", "e0002", "e0003"]
-    assert joined["activity_segment_count"] == 2
+    assert joined["activity_segment_count"] == 3
     assert [s["event_ids"] for s in joined["activity_segments"]] == [
-        ["e0001", "e0002"], ["e0003"]]
-    assert joined["activity_segments"][1]["boundary_before"] == [
-        "observed_member_record_change"]
+        ["e0001"], ["e0002"], ["e0003"]]
+    assert [s["boundary_before"] for s in joined["activity_segments"]] == [
+        [], ["observed_unreferenced_record_bridge"],
+        ["observed_member_record_change"]]
     assert "private-bridge" not in json.dumps(result)
     assert "tab-a" not in json.dumps(result)
     assert "SECRET" not in json.dumps(result)
     api = workflow_evidence.list_workflow_evidence_candidates(
         _raw_events=[first, loose, second])
-    assert item(api["linked_work_items"], A)["activity_segment_count"] == 2
+    assert item(api["linked_work_items"], A)["activity_segment_count"] == 3
     # Removing B removes the record-change boundary, without stale state.
     retained = item(linked_work_items([first, loose]), A)
     assert retained["activity_segment_count"] == 1
@@ -462,7 +464,7 @@ def test_unreferenced_record_bridge_rejects_ties_taint_and_transfer_claims():
         return observed_activity_segments(
             rows, ["e0001", "e0002", "e0003"])["activity_segments"]
 
-    assert len(segments(lambda _rows: None)) == 2
+    assert len(segments(lambda _rows: None)) == 3
     assert len(segments(lambda rows: rows[1].update(
         observed_at=rows[2]["observed_at"]))) == 1
     assert len(segments(lambda rows: rows[1].update(
@@ -496,7 +498,7 @@ def test_unreferenced_record_bridge_is_bounded_and_scope_safe():
         return observed_activity_segments(
             rows, [row["event_id"] for row in rows])
 
-    assert project(8)["activity_segment_count"] == 2
+    assert project(8)["activity_segment_count"] == 3
     assert project(9)["activity_segment_count"] == 1
     first, loose, second = event(1, A), event(2), event(3, B)
     rows = link_observations([first, loose, second])["rows"]
@@ -507,3 +509,47 @@ def test_unreferenced_record_bridge_is_bounded_and_scope_safe():
         for s in result["activity_segments"])
     assert result["activity_segments"][1]["boundary_before"] == [
         "capture_scope_change"]
+
+
+def test_record_unknown_bridge_requires_contiguous_clean_member_span():
+    from server.reconstruction_segments import observed_activity_segments
+    from server.work_item_links import link_observations
+
+    first, loose, last = event(1, A), event(2), event(4, B)
+    foreign = event(3, "provider:case:foreign")
+    rows = link_observations([first, loose, foreign, last])["rows"]
+    result = observed_activity_segments(rows, ["e0001", "e0002", "e0004"])
+    assert not any("observed_unreferenced_record_bridge" in segment["boundary_before"]
+                   for segment in result["activity_segments"])
+    # A gap in the observed sequence, even without an independently named
+    # foreign case, cannot establish a complete record-unknown bridge.
+    foreign["resource_reference"] = None
+    rows = link_observations([first, loose, foreign, last])["rows"]
+    result = observed_activity_segments(rows, ["e0001", "e0002", "e0004"])
+    assert not any("observed_unreferenced_record_bridge" in segment["boundary_before"]
+                   for segment in result["activity_segments"])
+
+
+def test_record_unknown_bridge_is_reviewable_but_never_a_new_case_assignment():
+    first, loose, second = event(1, A), event(2), event(3, B)
+    first.update(event_type="copy")
+    second.update(event_type="paste")
+    first["metadata"]["clipboard_transfer_id"] = "private-bridge-2"
+    second["metadata"]["clipboard_transfer_id"] = "private-bridge-2"
+    first["tab_context_id"] = loose["tab_context_id"] = "tab-a"
+    response = workflow_evidence.list_workflow_evidence_candidates(
+        _raw_events=[first, loose, second])
+    linked = response["linked_work_items"]
+    joined = item(linked, A)
+    assert joined["event_ids"] == ["e0001", "e0002", "e0003"]
+    assert joined["cross_record_join"] is True
+    assert joined["activity_segment_count"] == 3
+    assert joined["activity_segments"][1]["event_ids"] == ["e0002"]
+    assert joined["activity_segments"][1]["boundary_before"] == [
+        "observed_unreferenced_record_bridge"]
+    assert "private-bridge-2" not in json.dumps(response)
+    assert "tab-a" not in json.dumps(response)
+    assert "SECRET" not in json.dumps(response)
+    # No independently witnessed B anchor means no retroactive bridge.
+    without_b = item(linked_work_items([first, loose]), A)
+    assert without_b["activity_segment_count"] == 1
