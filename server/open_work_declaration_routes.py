@@ -19,6 +19,9 @@ from .open_work_case_graph import project_declared_case_graph, project_declared_
 from .open_work_case_dossier import admitted_case_dossier_snapshot, compose_reviewed_case_dossier
 from .open_work_case_context import stripe_open_work_case_context
 from .open_work_case_portfolio import admit_portfolio, compose_portfolio_status
+from .open_work_case_status_checkpoint import (
+    validate_prior_checkpoint, issue_status_checkpoint,
+)
 from .open_work_dependency_dossier import (
     select_dependency_status_targets, compose_dependency_status_snapshot,
 )
@@ -401,6 +404,86 @@ async def get_local_reviewed_case_portfolio_status(request: Request, response: R
     return result
 
 
+
+
+@router.post("/v1/open-work/declarations/status-checkpoint")
+async def get_local_reviewed_case_status_checkpoint(request: Request, response: Response):
+    """Explicit portable source-state checkpoint and conservative later comparison.
+
+    The checkpoint is sealed to the local source scope and entire currently
+    reviewed DAG. It is NOT an execution credential, a verified operation or
+    evidence that an invoice was paid after leaving the open inventory.
+    """
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_source_scan", "max_pages", "previous_checkpoint",
+    })
+    if payload["confirm_source_scan"] is not True:
+        raise HTTPException(403, "explicit source checkpoint scan required")
+    pages = payload["max_pages"]
+    if type(pages) is not int or not 1 <= pages <= 3:
+        raise HTTPException(422, "max_pages must be between 1 and 3")
+    try:
+        before = await asyncio.to_thread(list_case_declarations, scope)
+        admitted, signature = admitted_case_dossier_snapshot(
+            before,
+            work_item_ref=payload["work_item_ref"],
+            expected_revision=payload["expected_revision"],
+            expected_edit_token=payload["expected_edit_token"],
+        )
+        # Use the existing installation secret, with separate HMAC domains.
+        # This is a local-only bearer-session route, never an MCP permission.
+        secret = await asyncio.to_thread(
+            _read_or_create_secret, ".open_work_reference_key")
+        prior = payload["previous_checkpoint"]
+        prior_state = None
+        if prior is not None:
+            prior_state = validate_prior_checkpoint(
+                prior, admitted, signature, scope=scope, secret=secret)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    # Reject a stale/forged receipt before any provider IO.
+    await _recheck_source(scope)
+    try:
+        scanned = await asyncio.to_thread(
+            stripe_open_work_case_context, payload["work_item_ref"],
+            explicit_scan_authorized=True, max_pages=pages,
+        )
+    except (ValueError, OSError, TypeError, CaseDeclarationError, sqlite3.DatabaseError):
+        scanned = {
+            "format": "openworkgraph.open-work-case-context.v1",
+            "work_item_ref": payload["work_item_ref"],
+            "availability": "unknown",
+            "reason": "source_unavailable",
+            "source_evidence": {"source_state": "unknown"},
+        }
+    await _recheck_source(scope)
+    try:
+        after = await asyncio.to_thread(list_case_declarations, scope)
+        _current, current_signature = admitted_case_dossier_snapshot(
+            after,
+            work_item_ref=payload["work_item_ref"],
+            expected_revision=payload["expected_revision"],
+            expected_edit_token=payload["expected_edit_token"],
+        )
+        if current_signature != signature:
+            raise CaseDeclarationError("stale checkpoint dependency review changed")
+        minimized = compose_reviewed_case_dossier(admitted, scanned)
+        if prior is not None:
+            # Receipt may have expired while the separately authorized source
+            # scan was in flight. Re-admit immediately before comparison.
+            prior_state = validate_prior_checkpoint(
+                prior, admitted, signature, scope=scope, secret=secret)
+        result = issue_status_checkpoint(
+            admitted, signature, minimized, scope=scope,
+            secret=secret, prior_state=prior_state)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
 
 
 @router.post("/v1/open-work/declarations/batch-revision-impact")
