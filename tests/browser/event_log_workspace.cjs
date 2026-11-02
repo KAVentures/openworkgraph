@@ -1018,6 +1018,100 @@ const path=require('node:path');
    assert.match(await fs.readFile(literalExportPath,'utf8'),/""A > B""/);
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
+   // R9 dashboard authoring: an actual numeric CSV, not a mocked API or hand-written spec.
+   const statValidation=await page.evaluate(()=>{
+     const build=window.__owgEventLogModel.caseMetric;
+     const base={kind:'event_attribute_statistic',name:'amounts',attribute:'amount',unit:'EUR',
+       statistic:'population_stddev',missingPolicy:'available',stageFrom:'Start',stageTo:'End',stageOccurrence:'last_completed'};
+     const good=build(base);
+     const invalid=values=>{try{build({...base,...values});return 'accepted';}catch(e){return e.message;}};
+     return {good,missingEnd:invalid({stageTo:''}),unknownStat:invalid({statistic:'arbitrary'}),
+       invalidPolicy:invalid({missingPolicy:'ignore'}),invalidUnit:invalid({unit:''})};
+   });
+   assert.deepEqual(statValidation.good,{name:'amounts',kind:'event_attribute_statistic',attribute:'amount',unit:'EUR',
+     statistic:'population_stddev',missing_policy:'available',from_activity:'Start',to_activity:'End',stage_occurrence:'last_completed'});
+   assert.match(statValidation.missingEnd,/both stage start and end/);
+   assert.match(statValidation.unknownStat,/supported within-case statistic/);
+   assert.match(statValidation.invalidPolicy,/missing numeric values/);
+   assert.match(statValidation.invalidUnit,/unit/);
+
+   const amountRows=['case_id,step,time,amount',
+     'A,Start,2024-01-01T00:00:00Z,2','A,Work,2024-01-01T00:01:00Z,4','A,End,2024-01-01T00:02:00Z,',
+     'A,Start,2024-01-01T00:03:00Z,8','A,Work,2024-01-01T00:04:00Z,10','A,End,2024-01-01T00:05:00Z,',
+     'A,Start,2024-01-01T00:06:00Z,100',
+     'B,Start,2024-01-02T00:00:00Z,5','B,Work,2024-01-02T00:01:00Z,invalid','B,End,2024-01-02T00:02:00Z,'];
+   await page.locator('#owgEventLogFile').setInputFiles({name:'numeric-stage.csv',mimeType:'text/csv',buffer:Buffer.from(amountRows.join('\\n'))});
+   await page.locator('#owgEventLogDelimiter').selectOption(',');
+   await page.waitForFunction(()=>document.querySelector('#owgEventLogAttributes')?.options.length===4);
+   await page.locator('#owgEventLogName').fill('Observed numeric stages');
+   await page.locator('#owgEventLogCase').selectOption('case_id');
+   await page.locator('#owgEventLogActivity').selectOption('step');
+   await page.locator('#owgEventLogTime').selectOption('time');
+   await page.locator('#owgEventLogAttributes').selectOption(['amount']);
+   await page.locator('#owgEventLogConsent').check();
+   await page.locator('#owgEventLogImport').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Imported 10 events'}).waitFor();
+   await page.locator('#owgEventLogAnalyze').click();
+   await page.locator('#owgMetricKind').selectOption('event_attribute_statistic');
+   assert.equal(await page.locator('#owgMetricStatistic').isVisible(),true);
+   assert.equal(await page.locator('#owgMetricStageFrom').isVisible(),true);
+   await page.locator('#owgMetricName').fill('last_review_avg');
+   await page.locator('#owgMetricAttribute').fill('amount');await page.locator('#owgMetricUnit').fill('EUR');
+   await page.locator('#owgMetricStatistic').selectOption('average');
+   await page.locator('#owgMetricMissingPolicy').selectOption('complete');
+   await page.locator('#owgMetricStageFrom').selectOption('Start');
+   await page.locator('#owgMetricAdd').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Choose both stage start and end'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList').textContent(),'');
+   await page.locator('#owgMetricStageTo').selectOption('End');
+   await page.locator('#owgMetricStageOccurrence').selectOption('last_completed');
+   await page.locator('#owgMetricAdd').click();
+   await page.locator('#owgMetricList').filter({hasText:'last_review_avg: average of event attribute amount from Start to End (last_completed completed stage)'}).waitFor();
+   await page.locator('#owgAnalysisMeasure1').selectOption('avg:metric:last_review_avg');
+   await page.locator('#owgAnalysisMeasure2').selectOption('');
+   await page.locator('#owgAnalysisBackground').uncheck();
+   const [lastStageResponse]=await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),page.locator('#owgAnalysisRun').click()]);
+   assert.equal(lastStageResponse.status(),200,await lastStageResponse.text());
+   const lastSpec=JSON.parse(lastStageResponse.request().postData());
+   assert.deepEqual(lastSpec.metrics[0],{name:'last_review_avg',kind:'event_attribute_statistic',
+     attribute:'amount',unit:'EUR',statistic:'average',missing_policy:'complete',
+     from_activity:'Start',to_activity:'End',stage_occurrence:'last_completed'});
+   const lastStage=await lastStageResponse.json();
+   assert.deepEqual(lastStage.rows,[[9]],'only the last completed A stage is valid; unfinished A and invalid B do not contribute');
+   assert.equal(lastStage.metrics[0].cases_with_value,1);
+   assert.equal(lastStage.metrics[0].cases_without_value,1);
+   await page.locator('#owgMetricSave').click();
+   await page.getByRole('button',{name:'Add saved metric last_review_avg',exact:true}).waitFor();
+   await page.locator('#owgAnalysisName').fill('Last completed review amounts');
+   await page.locator('#owgAnalysisSave').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Analysis saved.'}).waitFor();
+   const [savedStatResponse]=await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')),
+     page.getByRole('button',{name:'Run saved analysis Last completed review amounts',exact:true}).click()]);
+   assert.deepEqual((await savedStatResponse.json()).rows,[[9]]);
+   const [numericCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCsv').click()]);
+   assert.match(await fs.readFile(await numericCsv.path(),'utf8'),/avg_metric:last_review_avg\\r\\n9/);
+
+   // Available policy keeps observed values but discloses invalid ones; totals are not inferred completeness.
+   await page.locator('#owgMetricName').fill('first_review_total');
+   await page.locator('#owgMetricStatistic').selectOption('total');
+   await page.locator('#owgMetricMissingPolicy').selectOption('available');
+   await page.locator('#owgMetricStageOccurrence').selectOption('first');
+   await page.locator('#owgMetricAdd').click();
+   await page.locator('#owgAnalysisMeasure1').selectOption('sum:metric:first_review_total');
+   const [firstStageResponse]=await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')),page.locator('#owgAnalysisRun').click()]);
+   assert.equal(firstStageResponse.status(),200,await firstStageResponse.text());
+   const firstStage=await firstStageResponse.json();
+   assert.deepEqual(firstStage.rows,[[11]],'A first-stage 2+4 and B observed 5; invalid B Work omitted');
+   assert.equal(firstStage.metrics[1].cases_with_value,2);
+   assert.ok(firstStage.metrics[1].event_rows_with_missing_invalid_or_nonfinite_attribute>=1);
+   await page.locator('#owgMetricKind').selectOption('arithmetic');
+   assert.equal(await page.locator('#owgMetricStatistic').isVisible(),false);
+   await page.locator('#owgMetricKind').selectOption('event_attribute_statistic');
+   const numericAxe=await page.evaluate(()=>axe.run(document.querySelector('#owgEventLogAnalysis'),{
+     runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']},resultTypes:['violations']}));
+   assert.deepEqual(numericAxe.violations,[]);
+   page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    assert.deepEqual(errors,[]);
    console.log('Event-log workspace acceptance passed: consented CSV import with rejected naive time, a counts-only quality report and the rejected row kept, then released under an explicit offset decision, variants, Disco-style map sliders, case playback along the map, direct and eventual follower case filters saved and re-applied with a filtered case drill-down, filtered KPIs with CSV export, cohort benchmark with side-by-side map comparison, what-if simulation with an added activity, routing, arrival and activity-time uncertainty, step-by-step routing, and a held-out validation, working calendars, a shared resource pool and seasonal arrivals entered and measured from the log, conformance, discovered model drafts with BPMN export, processing vs waiting time from lifecycle columns, a dotted chart with hover, drift detection, root-cause associations, pseudonymous handovers, saved signals, saved ad-hoc analyses with a typed, saved case metric, compliance rules saved as signals, backtested predictions with a censoring-aware as-of replay, appending a newer export, WCAG audit, mobile width, OCEL export, verified deletion, OCEL import with per-object-type maps and what flattening onto each type leaves out or copies, which object attributes change over time, and object rules across types, and an object process model checked with an edited arc.');
  }finally{
