@@ -687,7 +687,6 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    assert(changedPacket.readiness.blockers.includes('process_not_current'));
    assert(await page.locator('#owgPipelineBlocker_process_not_current').isEnabled(),
      'changed but retained exact revision can be reviewed');
-   page.once('dialog',dialog=>dialog.accept());
    await page.locator('#owgPipelineBlocker_process_not_current').focus();
    await page.keyboard.press('Enter');
    await page.locator('#owgCatalogStatus').filter({hasText:'Opened immutable revision 1.'}).waitFor();
