@@ -252,3 +252,40 @@ def test_retention_switch_and_no_source_or_customer_write(local, monkeypatch):
     assert _check(client, headers, saved, link).status_code in (403, 409, 422)
     reviews.clear_review_intentions()
     assert not ledger._path().exists()
+
+
+def test_disputing_latest_paid_check_makes_effective_history_unknown(local, monkeypatch):
+    client, headers = TestClient(app), _auth()
+    saved = _cases(client, headers)
+    link = _link(client, headers, saved, monkeypatch)
+    monkeypatch.setattr(routes, "source_operation_receipt", _paid)
+    assert _check(client, headers, saved, link).status_code == 200
+    monkeypatch.setattr(routes, "source_operation_receipt",
+                        lambda *_a: pytest.fail("dispute must not call provider"))
+    disputed = _dispute(client, headers, saved, seq=1, reason="record_mismatch")
+    assert disputed.status_code == 200, disputed.text
+    assert disputed.json()["last_observed_provider_state"] == "unknown"
+    assert disputed.json()["events"][0]["provider_state"] == "paid"
+    assert disputed.json()["events"][0]["disputed"] is True
+    assert _history(client, headers, saved).json()["last_observed_provider_state"] == "unknown"
+
+
+def test_prerequisite_revision_invalidates_persisted_history(local, monkeypatch):
+    client, headers = TestClient(app), _auth()
+    saved = _cases(client, headers)
+    link = _link(client, headers, saved, monkeypatch)
+    monkeypatch.setattr(routes, "source_operation_receipt", _paid)
+    assert _check(client, headers, saved, link).status_code == 200
+    updated = client.post(BASE, headers=headers, json={
+        "confirm_owner_declaration": True, "work_item_ref": A,
+        "goal_code": "review_source_state",
+        "expected_outcome_code": "source_state_rechecked",
+        "depends_on_work_item_refs": [],
+        "expected_revision": saved[A]["revision"],
+        "expected_edit_token": saved[A]["edit_token"],
+    })
+    assert updated.status_code == 200, updated.text
+    monkeypatch.setattr(routes, "source_operation_receipt",
+                        lambda *_a: pytest.fail("stale dependency must not read provider"))
+    assert _history(client, headers, saved).status_code in (403, 409, 422)
+    assert _check(client, headers, saved, link).status_code in (403, 409, 422)
