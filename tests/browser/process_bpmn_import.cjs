@@ -117,9 +117,23 @@ const path=require('node:path');
   const facts={cases:[{case_id:'case_1',facts:{approval:{status:'approved'},unused:'PRIVATE_RAW_CASE_VALUE'},activity_ids:route},
     {case_id:'case_2',facts:{approval:{status:'rejected'}},activity_ids:route},{case_id:'case_3',facts:{},activity_ids:route}]};
   let factRequests=0;page.on('request',request=>{if(new URL(request.url()).pathname==='/v1/process-catalog/check-rules')factRequests++;});
-  await page.getByLabel('Choose authorized case-facts JSON',{exact:true}).setInputFiles({name:'owned-facts.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(facts))});
+  const caseFactsFile={name:'owned-facts.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(facts))};
+  await page.getByLabel('Choose authorized case-facts JSON',{exact:true}).setInputFiles(caseFactsFile);
   assert.equal(factRequests,0);assert(await page.getByRole('button',{name:'Check facts against saved rules',exact:true}).isDisabled());
-  await page.getByLabel('I authorize local analysis of the case facts in this selected file.',{exact:true}).check();assert.equal(factRequests,0);
+  const caseFactsConsent=page.getByLabel('I authorize local analysis of the case facts in this selected file.',{exact:true});
+  const caseFactsInput=page.getByLabel('Choose authorized case-facts JSON',{exact:true});
+  await caseFactsConsent.check();assert.equal(factRequests,0);
+  // Loading saved revisions can rebuild the editor. If the browser replaced the file
+  // control between the upload and confirmation, explicitly reselect and re-consent.
+  if((await caseFactsInput.evaluate(input=>input.files?.length||0))===0){
+    await caseFactsInput.setInputFiles(caseFactsFile);
+    await caseFactsConsent.check();
+  }
+  await page.waitForFunction(()=>{
+    const input=document.querySelector('input[aria-label="Choose authorized case-facts JSON"]');
+    const button=[...document.querySelectorAll('button')].find(item=>item.textContent==='Check facts against saved rules');
+    return input?.files?.length===1&&button&&!button.disabled;
+  });
   const [checked]=await Promise.all([
     page.waitForResponse(response=>new URL(response.url()).pathname==='/v1/process-catalog/check-rules'),
     page.getByRole('button',{name:'Check facts against saved rules',exact:true}).click(),
