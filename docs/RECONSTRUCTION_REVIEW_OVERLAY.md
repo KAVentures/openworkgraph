@@ -339,3 +339,63 @@ assignments, explicitly adjudicate, resolve a disputed event, apply and score
 against independently annotated truth, then revoke or alter source evidence
 and verify the exact prior artifact is refused. Native exact-head cross-platform
 CI and real consenting-user acceptance remain mandatory before release.
+
+
+## Experimental conservative automatic proposals and independent scoring
+
+The local \`propose\` command tests a **deterministic, noncanonical** reconstruction
+rule against the existing production linker's real weak-candidate queue. It
+proposes an unassigned observation for an existing item **only** when all of
+the following hold: (1) the production linker exposes exactly one complete
+**direct** candidate item; (2) a literal source-record reference is observed
+both before and after the observation and both anchors belong to that exact
+item; (3) the two opaque source-record references are identical, not merely
+two records in the same linked item; (4) all intervening observations stay
+within the exact complete tenant/actor/device/session scope, application and
+source with strictly monotonic timestamps, no taint or conflicting record;
+and (5) each anchor is within eight intervening observations. The first
+different record or any scope, source, app, timestamp or taint barrier stops
+the scan. Competing or truncated candidates, two-hop fragments, one-sided
+anchors and unknown capture context **abstain**.
+
+    python -m scripts.reconstruction_review prepare \
+      --events /private/observations.json \
+      --output /private/review-packet.json
+
+    python -m scripts.reconstruction_review propose \
+      --events /private/observations.json \
+      --packet /private/review-packet.json \
+      --output /private/auto-proposals.json
+
+The proposal file contains only opaque event/item IDs, reason categories and
+bounded counts. It is SHA-256-bound to the complete source snapshot and the
+exact rederived packet. It is not a human approval, a verified business case,
+a canonical link, or permission to execute any business action. The command
+does not write to a provider or alter the production linker, API, MCP,
+dashboard, consent or retention. Files are private and create-only.
+
+For a **separately and completely annotated** local session, compare the
+existing production assignment with the proposed grouping:
+
+    python -m scripts.reconstruction_review score-proposals \
+      --events /private/observations.json \
+      --packet /private/review-packet.json \
+      --truth /private/independent-truth.json \
+      --output /private/proposal-score.json
+
+The report separates \`automatic_baseline\` from
+\`experimental_automatic_proposal_overlay\` and uses the existing production
+scoring definition for F1, precision, recall, contamination and interruption
+rejection. No reviewer decisions are read, and the proposals are derived
+afresh; changing/revoking source evidence or altering the packet refuses the
+operation. This is an **experimental algorithmic comparison**, not a
+production F1 gain, calibrated confidence, frozen family-holdout result or
+real consenting-user acceptance. Matching record brackets can still enclose
+an unrelated task. Promote no automatic rule into the canonical linker until
+held-out accuracy and contamination gates are independently met.
+
+Functional acceptance tests exercise actual-linker matching record anchors,
+competing A/B records, scope and app barriers, tied timestamps, record
+mismatches, complete independent labels, revocation, private CLI output and
+nonreplacement. Exact-head Ubuntu/macOS/Windows and all other required native
+CI jobs remain the release gate.
