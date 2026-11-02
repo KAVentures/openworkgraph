@@ -601,3 +601,33 @@ contents: imported logs can change between the original save and the rerun,
 so the new result must be interpreted as a new observation, not a historical
 snapshot or a source-verified business outcome.
 
+
+
+## Reuse a saved arithmetic metric with its dependencies
+
+In **Build an analysis → Saved metrics**, select **Add** beside a saved
+arithmetic metric. The builder reads the existing authenticated metric library
+for **this event log** and adds the selected metric **and any earlier saved
+metric dependencies** in dependency order, in one action. For example, a saved
+`half_wait = to_approval / 2` automatically restores the saved
+`to_approval` metric before `half_wait`. Choose **Median half_wait** under
+Measure, **Run analysis**, then optionally save the resulting full analysis
+under a new name. The original templates and saved analyses are not modified.
+
+An already-present dependency is reused only if its entire typed definition
+matches the saved definition (field order does not matter). The builder refuses
+a missing saved dependency, ambiguous same-name templates with different
+contents, a cycle, unsupported typed arithmetic or an import that would exceed
+four metrics. These checks happen **before changing any metric**. Remove the
+conflicting metric, save the missing dependency or remove enough existing
+metrics, then retry. The UI does not silently replace conflicting definitions
+or fill unknown operands with zero. Templates are log-scoped and no arbitrary
+expression, SQL, provider read or new permission is introduced.
+
+A successful import clears previous analysis results, CSV/JSON exports,
+prepared sharing previews and the ability to save a stale analysis. A fresh
+authenticated analysis run is required before exporting or saving the changed
+draft. Imports are refused while an analysis is running. The new Chromium
+acceptance exercises the saved-library click, authenticated run, CSV export,
+saved analysis replay and the refusal cases. Native CI and real consenting-user
+acceptance are separate gates; no production release is implied by the fixture.
