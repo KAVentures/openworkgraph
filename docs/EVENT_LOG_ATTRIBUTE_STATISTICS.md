@@ -30,6 +30,54 @@ event-log routes; `Authorization: OWG-Session <local-session>`):
 }
 ```
 
+## Activity-specific metrics (same case, different event types)
+
+An optional exact \`activity\` field limits a statistic to events with that
+activity *within each already-selected full case*. This is useful for asking
+how much was recorded at \`Pay\` versus \`Refund\` without blending amounts
+from unrelated events in the same case. For example, two typed metrics can be
+subtracted with the existing \`arithmetic\` operation (only when declared units
+match):
+
+\`\`\`json
+{
+  "level": "cases",
+  "metrics": [
+    {"name": "paid", "kind": "event_attribute_statistic", "attribute": "amount",
+     "unit": "EUR", "statistic": "average", "activity": "Pay",
+     "missing_policy": "complete"},
+    {"name": "refunded", "kind": "event_attribute_statistic", "attribute": "amount",
+     "unit": "EUR", "statistic": "average", "activity": "Refund",
+     "missing_policy": "complete"},
+    {"name": "difference", "kind": "arithmetic", "operation": "subtract",
+     "left": {"kind": "metric", "name": "paid"},
+     "right": {"kind": "metric", "name": "refunded"}}
+  ],
+  "measures": [{"fn": "sum", "of": "metric:difference"}]
+}
+\`\`\`
+
+This example sums **differences of per-case average values** only for cases
+with usable Pay *and* Refund values. It is not a financial ledger total,
+net revenue, currency conversion or evidence of complete payment capture.
+For a case with no matching activity, the statistic is **null**, never zero,
+even under \`missing_policy=complete\`. For \`complete\`, every event row
+*matching that activity* must have a finite numeric value; unrelated case
+events are not required to carry that attribute. Missing/invalid/nonfinite
+matching values remain disclosed. The activity string is an exact,
+case-sensitive bound parameter (not an SQL expression or substring).
+
+The existing counts-only \`cases_without_matching_activity\` field identifies
+selected cases with no matching activity (zero for unfiltered metrics).
+\`cases_with_no_finite_attribute\` includes both cases with only invalid
+matching rows and cases with no matching activity.
+\`flattened_case_event_rows_considered\` and the finite/omitted row counts
+refer **only to matching activity rows** when \`activity\` is specified.
+\`coverage_scope\` changes to
+\`selected_full_cases_matching_activity_flattened_case_event_rows\` in this
+mode. Omit \`activity\` for the unchanged all-activity behavior.
+Saved analyses and reusable metric templates retain the exact selector.
+
 `statistic` must be `average`, `minimum`, `maximum`, `median`, or `p90`.
 `missing_policy` is `available` (default) or `complete`:
 
@@ -63,7 +111,8 @@ Each metric response includes the existing `cases_with_value`,
 | `event_rows_with_finite_attribute` | Rows with a parseable finite numeric value. |
 | `event_rows_with_missing_invalid_or_nonfinite_attribute` | Rows omitted for missing, invalid or nonfinite value. |
 | `cases_with_partial_attribute_coverage` | Cases with both finite and omitted rows. |
-| `cases_with_no_finite_attribute` | Cases with no usable numeric value. |
+| `cases_with_no_finite_attribute` | Cases with no usable numeric value, including those without the selected activity. |
+| `cases_without_matching_activity` | Selected cases with no matching activity; zero when no activity filter is set. |
 | `cases_excluded_by_complete_policy` | Partial cases additionally withheld when `missing_policy=complete`. |
 | `coverage_scope` | Fixed descriptor: selected full cases, flattened case-event rows. |
 
@@ -79,7 +128,7 @@ autonomous action or new permission is introduced.
 
 `pytest -q tests/test_event_log_attribute_statistics.py` checks real stored
 CSV imports, finite/missing/invalid values, both missingness policies, all
-five statistics, odd/even sample interpolation and invalid/nonfinite values, unit propagation through arithmetic, saved templates and
+five statistics, activity-specific filtering and absence versus invalid-value coverage, odd/even sample interpolation and invalid/nonfinite values, unit propagation through arithmetic, saved templates and
 analysis replay, invalid/injection specs rejected before dataset access,
 empty selection, and actual FastAPI session/bearer authorization.
 
