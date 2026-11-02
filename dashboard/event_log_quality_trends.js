@@ -331,14 +331,14 @@
       'baseline_recorded_count','baseline_supplied_rows','baseline_rate',
       'target_recorded_count','target_supplied_rows','target_rate','delta_pp'];
     const out=[keys.map(csvCell).join(',')];
-    if (!result || !result.comparable || !Array.isArray(result.rows)) return out.join('\\r\\n')+'\\r\\n';
+    if (!result || !result.comparable || !Array.isArray(result.rows)) return out.join('\r\n')+'\r\n';
     for (const r of result.rows) {
       const values=[result.baseline,result.target,result.transform_sha256,r.category,
         r.baseline_count,r.baseline_denominator,r.baseline_rate,r.target_count,
         r.target_denominator,r.target_rate,r.change];
       out.push(values.map(csvCell).join(','));
     }
-    return out.join('\\r\\n')+'\\r\\n';
+    return out.join('\r\n')+'\r\n';
   }
 
   if (typeof module !== 'undefined' && module.exports)
