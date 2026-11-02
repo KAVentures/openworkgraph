@@ -73,3 +73,23 @@ def _isolate_agent_ingestion_database(request):
     finally:
         analytics.clear_summary_cache()
         server_db.DB_PATH = original
+
+
+@pytest.fixture
+def raw_main_app(monkeypatch):
+    """server.main.app without the middleware that importing server.secure_app adds.
+
+    secure_app installs its authentication middleware on the shared main.app object.
+    Tests that check main's own origin and host guards would otherwise depend on
+    whether an earlier in-process test imported secure_app.
+    """
+    from server import main
+
+    def foreign(middleware):
+        dispatch = getattr(middleware, "kwargs", {}).get("dispatch")
+        return dispatch is not None and dispatch.__module__ != "server.main"
+
+    monkeypatch.setattr(main.app, "user_middleware",
+                        [m for m in main.app.user_middleware if not foreign(m)])
+    monkeypatch.setattr(main.app, "middleware_stack", None)
+    return main.app
