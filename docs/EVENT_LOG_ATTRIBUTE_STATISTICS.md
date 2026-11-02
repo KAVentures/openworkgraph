@@ -1,8 +1,8 @@
 # Case-level numeric event-attribute statistics (R9)
 
 The existing **local dashboard-session-only** event-log analysis API now accepts a typed
-`event_attribute_statistic` case metric. It calculates the average, minimum or
-maximum of a selected **finite numeric event attribute within each selected full
+`event_attribute_statistic` case metric. It calculates the average, minimum,
+maximum, median or 90th percentile (p90) of a selected **finite numeric event attribute within each selected full
 case**, then lets an analyst aggregate those case values (for example, the
 average of per-case average amounts, or the maximum case peak). This is useful
 when an imported CSV/XES/OCEL log carries an explicitly mapped numeric value,
@@ -30,7 +30,7 @@ event-log routes; `Authorization: OWG-Session <local-session>`):
 }
 ```
 
-`statistic` must be `average`, `minimum`, or `maximum`.
+`statistic` must be `average`, `minimum`, `maximum`, `median`, or `p90`.
 `missing_policy` is `available` (default) or `complete`:
 
 - **available:** use finite numeric values actually present in each case;
@@ -38,6 +38,15 @@ event-log routes; `Authorization: OWG-Session <local-session>`):
 - **complete:** withhold a case's statistic unless *every flattened event row*
   in that case has a finite numeric value for the chosen attribute. It does
   not assert that the original source system exported all its events.
+
+For `median` and `p90`, DuckDB computes the **continuous interpolated quantile**
+within each case's observed finite numeric values: the sorted values at
+zero-based position `(n - 1) × 0.5` or `(n - 1) × 0.9`, linearly interpolating
+between adjacent positions. For example, [2, 4, 8, 10] has median 6 and
+p90 9.4. These are *within-case* distribution summaries, not percentiles
+across cases; to compute a percentile of case values, select the corresponding
+outer analysis measure separately. A case with one finite value has that
+value as both quantiles.
 
 Missing, nonnumeric, NaN and infinite values are excluded, **never replaced
 with zero**. Case values that overflow or are nonfinite are withheld. Averages
@@ -70,7 +79,7 @@ autonomous action or new permission is introduced.
 
 `pytest -q tests/test_event_log_attribute_statistics.py` checks real stored
 CSV imports, finite/missing/invalid values, both missingness policies, all
-three statistics, unit propagation through arithmetic, saved templates and
+five statistics, odd/even sample interpolation and invalid/nonfinite values, unit propagation through arithmetic, saved templates and
 analysis replay, invalid/injection specs rejected before dataset access,
 empty selection, and actual FastAPI session/bearer authorization.
 
