@@ -1229,7 +1229,7 @@ const path=require('node:path');
      page.getByRole('button',{name:'Run saved analysis First to last review change',exact:true}).click()]);
    assert.deepEqual((await replayedDelta.json()).rows,[[6]]);
    const [deltaCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCsv').click()]);
-   assert.match(await fs.readFile(await deltaCsv.path(),'utf8'),/avg_metric:review_delta\\r\\n6/);
+   assert.match(await fs.readFile(await deltaCsv.path(),'utf8'),/avg_metric:review_delta\r\n6/);
    const numericAxe=await page.evaluate(()=>axe.run(document.querySelector('#owgEventLogAnalysis'),{
      runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']},resultTypes:['violations']}));
    assert.deepEqual(numericAxe.violations,[]);
