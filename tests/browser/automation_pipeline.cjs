@@ -1301,6 +1301,70 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    assert.deepEqual(invalidCombined,[true,true],
      'duplicate identities and mismatched page records must refuse combination');
 
+
+   // Triage only the authenticated local pages explicitly reviewed above.
+   const triageModel=await page.evaluate(record=>{
+     const triage=window.__owgPipelineModel.portfolioReviewTriage;
+     const eligible=record.pages.flatMap(p=>p.items.map(item=>({idea_id:item.idea_id})));
+     const pages=new Map(record.pages.map(p=>[p.page_number,{
+       reviewed_at:p.reviewed_at,items:p.items}]));
+     const all=triage(eligible,pages);
+     const missing=triage(eligible,pages,'no_recorded_project');
+     const partial=triage(eligible,new Map([[1,pages.get(1)]]));
+     const rejects=(key,limit,p=pages)=>{
+       try{triage(eligible,p,key,limit);return false;}catch{return true;}
+     };
+     const forged=new Map([[1,{reviewed_at:pages.get(1).reviewed_at,
+       items:pages.get(1).items.map((item,i)=>i===0?{
+         ...item,blockers:['unrecognized_authorization_grant']}:item)}],
+       [2,pages.get(2)]]);
+     const twentyFive=Array.from({length:25},(_,i)=>({idea_id:'synthetic-'+i}));
+     const syntheticPages=new Map([1,2,3].map((n,i)=>[n,{
+       reviewed_at:'2026-11-03T00:00:00Z',
+       items:twentyFive.slice(i*12,i*12+12).map(x=>({
+         ...x,status:'no_export',project_id:null,blockers:['no_recorded_project']}))}]));
+     const capped=triage(twentyFive,syntheticPages,'no_recorded_project');
+     return {all,missing,partial,capped,
+       invalidFilter:rejects('not_a_real_blocker',24),
+       invalidLimit:rejects('all',25),
+       forgedRefused:rejects('all',24,forged)};
+   },combined);
+   assert.equal(triageModel.all.matching_count,combined.reviewed_count);
+   assert.equal(triageModel.all.unreviewed_count,0);
+   assert.equal(triageModel.partial.reviewed_count,12);
+   assert.equal(triageModel.partial.unreviewed_count,combined.reviewed_count-12);
+   assert.equal(triageModel.missing.matching_count,
+     combined.pages.flatMap(p=>p.items).filter(item=>item.status==='no_export').length);
+   assert.equal(triageModel.capped.matching_count,25);
+   assert.equal(triageModel.capped.items.length,24);
+   assert.equal(triageModel.capped.omitted_count,1);
+   assert.equal(triageModel.all.execution_authorized,false);
+   assert.equal(triageModel.all.source_read_authorized,false);
+   assert.equal(triageModel.all.verified_business_outcomes,false);
+   assert(triageModel.invalidFilter&&triageModel.invalidLimit&&triageModel.forgedRefused);
+   assert(await page.locator('#owgPipelinePortfolioTriageFilter').isEnabled());
+   await page.locator('#owgPipelinePortfolioTriageFilter').selectOption('no_recorded_project');
+   assert.match(await page.locator('#owgPipelinePortfolioTriageSummary').textContent(),
+     new RegExp(triageModel.missing.matching_count+' matching opportunities'));
+   assert.equal(await page.locator('#owgPipelinePortfolioTriageRows tbody tr').count(),
+     triageModel.missing.items.length);
+   await page.locator('#owgPipelinePortfolioTriageRows tbody button').first().focus();
+   await page.keyboard.press('Enter');
+   await page.locator('#owgPipelineDetail h3').waitFor();
+   assert.match(await page.locator('#owgPipelineDetail h3').textContent(),
+     /Paged handoff candidate/);
+   assert.equal(pagedReviewWrites,0,'triage navigation and filtering must not write');
+   if(combined.pages.some(p=>p.items.some(item=>item.status==='human_review_required'))){
+     await page.locator('#owgPipelinePortfolioTriageFilter')
+       .selectOption('execution_and_business_outcomes_unverified');
+     await page.locator('#owgPipelinePortfolioTriageRows tbody button').first().click();
+     await page.locator('#owgPipelineJourneyProject').waitFor();
+     await page.locator('#owgPipelineBlockerItem_execution_and_business_outcomes_unverified').waitFor();
+     assert.equal(await page.evaluate(()=>document.activeElement?.id),
+       'owgPipelineBlockerItem_execution_and_business_outcomes_unverified');
+     assert.equal(pagedReviewWrites,0);
+   }
+
    // Switching pages immediately revokes the prior page's export and row actions.
    // A held response from the previous page cannot repopulate the new page.
    let heldPageRoute,notifyHeld;
@@ -1330,6 +1394,8 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    page.off('request',observePagedReview);
    assert.equal(pagedReviewWrites,0);
    await page.locator('#owgPipelineSearch').fill('changed filter invalidates review');
+   assert(await page.locator('#owgPipelinePortfolioTriageFilter').isDisabled());
+   assert.equal(await page.locator('#owgPipelinePortfolioTriageRows tbody tr').count(),0);
    assert(await page.locator('#owgPipelinePortfolioCombinedDownload').isDisabled());
    assert.match(await page.locator('#owgPipelinePortfolioCumulativeStatus').textContent(),
      /0 of 2 pages explicitly reviewed/);
