@@ -1522,6 +1522,8 @@ const path=require('node:path');
    await page.locator('#owgMetricUpdate').click();
    await page.locator('#owgAnalysisStatus').filter({hasText:'Metric updated in this draft'}).waitFor();
    assert.equal(await page.locator('#owgMetricUpdate').isDisabled(),true);
+   assert.equal(await page.locator('#owgAnalysisSave').isDisabled(),true,'editing requires a fresh run before saving');
+   assert.equal(await page.locator('#owgAnalysisJson').isDisabled(),true,'editing cannot export an older result');
    const [loadedResponse]=await Promise.all([
      page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
      page.locator('#owgAnalysisRun').click()]);
