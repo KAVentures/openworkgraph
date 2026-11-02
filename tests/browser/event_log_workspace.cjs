@@ -1180,25 +1180,25 @@ const path=require('node:path');
    assert.equal(await page.locator('#owgMetricCompareStages').isVisible(),true);
    await page.locator('#owgMetricCompareStages').click();
    await page.locator('#owgAnalysisStatus').filter({hasText:'three free metric slots'}).waitFor();
-   assert.equal(await page.locator('#owgMetricList').locator('button').count(),2,
+   assert.equal(await page.locator('#owgMetricList').locator('button[aria-label^="Remove metric "]').count(),2,
      'capacity refusal must not insert any comparison metrics');
    await page.getByRole('button',{name:'Remove metric first_review_total',exact:true}).click();
    await page.getByRole('button',{name:'Remove metric last_review_avg',exact:true}).click();
    await page.locator('#owgMetricStageTo').selectOption('');
    await page.locator('#owgMetricCompareStages').click();
    await page.locator('#owgAnalysisStatus').filter({hasText:'Choose both stage start and end'}).waitFor();
-   assert.equal(await page.locator('#owgMetricList').locator('button').count(),0);
+   assert.equal(await page.locator('#owgMetricList').locator('button[aria-label^="Remove metric "]').count(),0);
    await page.locator('#owgMetricStageTo').selectOption('End');
    await page.locator('#owgMetricName').fill('a'.repeat(35));
    await page.locator('#owgMetricCompareStages').click();
    await page.locator('#owgAnalysisStatus').filter({hasText:'at most 34 characters'}).waitFor();
-   assert.equal(await page.locator('#owgMetricList').locator('button').count(),0);
+   assert.equal(await page.locator('#owgMetricList').locator('button[aria-label^="Remove metric "]').count(),0);
    await page.locator('#owgMetricName').fill('review_first');
    await page.locator('#owgMetricAdd').click();
    await page.locator('#owgMetricName').fill('review');
    await page.locator('#owgMetricCompareStages').click();
    await page.locator('#owgAnalysisStatus').filter({hasText:'comparison metric name already exists'}).waitFor();
-   assert.equal(await page.locator('#owgMetricList').locator('button').count(),1,
+   assert.equal(await page.locator('#owgMetricList').locator('button[aria-label^="Remove metric "]').count(),1,
      'name collision must leave existing metric untouched');
    await page.getByRole('button',{name:'Remove metric review_first',exact:true}).click();
    await page.locator('#owgAnalysisLevel').selectOption('events');
@@ -1206,7 +1206,7 @@ const path=require('node:path');
    assert.equal(await page.locator('#owgAnalysisLevel').inputValue(),'cases',
      'the comparison must return to case-level analysis even if the user selected Events');
    await page.locator('#owgAnalysisStatus').filter({hasText:'signed last minus first'}).waitFor();
-   assert.equal(await page.locator('#owgMetricList').locator('button').count(),3);
+   assert.equal(await page.locator('#owgMetricList').locator('button[aria-label^="Remove metric "]').count(),3);
    assert.equal(await page.locator('#owgAnalysisMeasure1').inputValue(),'avg:metric:review_delta');
    assert.match(await page.locator('#owgMetricList').textContent(),/review_delta: review_last − review_first/);
    const [stageDeltaResponse]=await Promise.all([
@@ -1237,31 +1237,31 @@ const path=require('node:path');
    // (last completed stage - first stage) / first stage. 2 means +200%, not 2%.
    await page.locator('#owgMetricCompareRelative').click();
    await page.locator('#owgAnalysisStatus').filter({hasText:'four free metric slots'}).waitFor();
-   assert.equal(await page.locator('#owgMetricList').locator('button').count(),3,
+   assert.equal(await page.locator('#owgMetricList').locator('button[aria-label^="Remove metric "]').count(),3,
      'relative comparison capacity refusal must leave existing metrics unchanged');
    for(const n of ['review_delta','review_last','review_first'])
      await page.getByRole('button',{name:'Remove metric '+n,exact:true}).click();
    await page.locator('#owgMetricName').fill('a'.repeat(32));
    await page.locator('#owgMetricCompareRelative').click();
    await page.locator('#owgAnalysisStatus').filter({hasText:'at most 31 characters'}).waitFor();
-   assert.equal(await page.locator('#owgMetricList').locator('button').count(),0);
+   assert.equal(await page.locator('#owgMetricList').locator('button[aria-label^="Remove metric "]').count(),0);
    await page.locator('#owgMetricName').fill('review_relative');
    await page.locator('#owgMetricAdd').click();
    await page.locator('#owgMetricName').fill('review');
    await page.locator('#owgMetricCompareRelative').click();
    await page.locator('#owgAnalysisStatus').filter({hasText:'comparison metric name already exists'}).waitFor();
-   assert.equal(await page.locator('#owgMetricList').locator('button').count(),1);
+   assert.equal(await page.locator('#owgMetricList').locator('button[aria-label^="Remove metric "]').count(),1);
    await page.getByRole('button',{name:'Remove metric review_relative',exact:true}).click();
    await page.locator('#owgMetricStageTo').selectOption('');
    await page.locator('#owgMetricCompareRelative').click();
    await page.locator('#owgAnalysisStatus').filter({hasText:'Choose both stage start and end'}).waitFor();
-   assert.equal(await page.locator('#owgMetricList').locator('button').count(),0);
+   assert.equal(await page.locator('#owgMetricList').locator('button[aria-label^="Remove metric "]').count(),0);
    await page.locator('#owgMetricStageTo').selectOption('End');
    await page.locator('#owgAnalysisLevel').selectOption('events');
    await page.locator('#owgMetricCompareRelative').click();
    await page.locator('#owgAnalysisStatus').filter({hasText:'fractional change metrics'}).waitFor();
    assert.equal(await page.locator('#owgAnalysisLevel').inputValue(),'cases');
-   assert.equal(await page.locator('#owgMetricList').locator('button').count(),4);
+   assert.equal(await page.locator('#owgMetricList').locator('button[aria-label^="Remove metric "]').count(),4);
    assert.equal(await page.locator('#owgAnalysisMeasure1').inputValue(),'avg:metric:review_relative');
    assert.match(await page.locator('#owgMetricList').textContent(),/review_relative: review_delta ÷ review_first/);
    const [relativeResponse]=await Promise.all([
@@ -1329,7 +1329,7 @@ const path=require('node:path');
    await page.locator('#owgMetricCompareActivityB').selectOption('Start');
    await page.locator('#owgMetricCompareActivities').click();
    await page.locator('#owgAnalysisStatus').filter({hasText:'Choose two different activities'}).waitFor();
-   assert.equal(await page.locator('#owgMetricList button').count(),0);
+   assert.equal(await page.locator('#owgMetricList button[aria-label^="Remove metric "]').count(),0);
    await page.locator('#owgMetricCompareActivityB').selectOption('');
    await page.locator('#owgMetricCompareActivities').click();
    await page.locator('#owgAnalysisStatus').filter({hasText:'Choose two different activities'}).waitFor();
@@ -1352,7 +1352,7 @@ const path=require('node:path');
    await page.locator('#owgMetricName').fill('step');
    await page.locator('#owgMetricCompareActivities').click();
    await page.locator('#owgAnalysisStatus').filter({hasText:'activity comparison metric name already exists'}).waitFor();
-   assert.equal(await page.locator('#owgMetricList button').count(),1,'collision is atomic');
+   assert.equal(await page.locator('#owgMetricList button[aria-label^="Remove metric "]').count(),1,'collision is atomic');
    await page.getByRole('button',{name:'Remove metric step_a',exact:true}).click();
    for(const name of ['capacity_one','capacity_two']){
      await page.locator('#owgMetricName').fill(name);
@@ -1361,7 +1361,7 @@ const path=require('node:path');
    await page.locator('#owgMetricName').fill('step');
    await page.locator('#owgMetricCompareActivities').click();
    await page.locator('#owgAnalysisStatus').filter({hasText:'three free metric slots'}).waitFor();
-   assert.equal(await page.locator('#owgMetricList button').count(),2,'capacity refusal is atomic');
+   assert.equal(await page.locator('#owgMetricList button[aria-label^="Remove metric "]').count(),2,'capacity refusal is atomic');
    for(const name of ['capacity_one','capacity_two'])
      await page.getByRole('button',{name:'Remove metric '+name,exact:true}).click();
    const activityPure=await page.evaluate(()=>window.__owgEventLogModel.activityComparisonMetrics(
@@ -1377,7 +1377,7 @@ const path=require('node:path');
    await page.keyboard.press('Enter');
    await page.locator('#owgAnalysisStatus').filter({hasText:'signed B minus A metrics'}).waitFor();
    assert.equal(await page.locator('#owgAnalysisLevel').inputValue(),'cases');
-   assert.equal(await page.locator('#owgMetricList button').count(),3);
+   assert.equal(await page.locator('#owgMetricList button[aria-label^="Remove metric "]').count(),3);
    assert.equal(await page.locator('#owgAnalysisMeasure1').inputValue(),'avg:metric:step_delta');
    const [activityComparisonResponse]=await Promise.all([
      page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
@@ -1412,7 +1412,7 @@ const path=require('node:path');
    assert.equal(await page.locator('#owgMetricCompareActivityShare').isVisible(),true);
    await page.locator('#owgMetricCompareActivityShare').click();
    await page.locator('#owgAnalysisStatus').filter({hasText:'Choose Total'}).waitFor();
-   assert.equal(await page.locator('#owgMetricList button').count(),0);
+   assert.equal(await page.locator('#owgMetricList button[aria-label^="Remove metric "]').count(),0);
    await page.locator('#owgMetricStatistic').selectOption('total');
    await page.locator('#owgMetricStatActivity').selectOption('');
    await page.locator('#owgMetricCompareActivityShare').click();
@@ -1427,13 +1427,13 @@ const path=require('node:path');
    await page.locator('#owgMetricName').fill('x'.repeat(32));
    await page.locator('#owgMetricCompareActivityShare').click();
    await page.locator('#owgAnalysisStatus').filter({hasText:'at most 31 characters'}).waitFor();
-   assert.equal(await page.locator('#owgMetricList button').count(),0);
+   assert.equal(await page.locator('#owgMetricList button[aria-label^="Remove metric "]').count(),0);
    await page.locator('#owgMetricName').fill('work_selected');
    await page.locator('#owgMetricAdd').click();
    await page.locator('#owgMetricName').fill('work');
    await page.locator('#owgMetricCompareActivityShare').click();
    await page.locator('#owgAnalysisStatus').filter({hasText:'activity fraction metric name already exists'}).waitFor();
-   assert.equal(await page.locator('#owgMetricList button').count(),1,'collision cannot partially add a fraction');
+   assert.equal(await page.locator('#owgMetricList button[aria-label^="Remove metric "]').count(),1,'collision cannot partially add a fraction');
    await page.getByRole('button',{name:'Remove metric work_selected',exact:true}).click();
    for(const n of ['fraction_cap_one','fraction_cap_two']){
      await page.locator('#owgMetricName').fill(n);
@@ -1442,7 +1442,7 @@ const path=require('node:path');
    await page.locator('#owgMetricName').fill('work');
    await page.locator('#owgMetricCompareActivityShare').click();
    await page.locator('#owgAnalysisStatus').filter({hasText:'three free metric slots'}).waitFor();
-   assert.equal(await page.locator('#owgMetricList button').count(),2,'capacity refusal cannot partially add');
+   assert.equal(await page.locator('#owgMetricList button[aria-label^="Remove metric "]').count(),2,'capacity refusal cannot partially add');
    for(const n of ['fraction_cap_one','fraction_cap_two'])
      await page.getByRole('button',{name:'Remove metric '+n,exact:true}).click();
    const sharePure=await page.evaluate(()=>window.__owgEventLogModel.activityShareMetrics(
@@ -1458,7 +1458,7 @@ const path=require('node:path');
    await page.keyboard.press('Enter');
    await page.locator('#owgAnalysisStatus').filter({hasText:'whole-case total and their fraction'}).waitFor();
    assert.equal(await page.locator('#owgAnalysisLevel').inputValue(),'cases');
-   assert.equal(await page.locator('#owgMetricList button').count(),3);
+   assert.equal(await page.locator('#owgMetricList button[aria-label^="Remove metric "]').count(),3);
    assert.equal(await page.locator('#owgAnalysisMeasure1').inputValue(),'avg:metric:work_fraction');
    const [shareResponse]=await Promise.all([
      page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
