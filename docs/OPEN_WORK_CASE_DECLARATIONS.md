@@ -938,3 +938,69 @@ Example: A ← B ← C and independent D; reapprove A and B with C omitted, and 
 ### Preview the exact cascade before confirmation
 
 Call \`POST /v1/open-work/declarations/batch-revision-impact\` with \`{"cases":[{"work_item_ref":"owg:w:…","expected_revision":1,"expected_edit_token":"…"}]}\` for 1–4 current reviewed cases. The authenticated local endpoint reuses the existing graph/change-impact projection to return the **union** of omitted transitive dependent refs as \`expected_invalidated_work_item_refs\`, plus the selected reapproval refs. No provider call or mutation occurs. Pass that list unchanged into the separately confirmed \`batch-revision\` write with full proposed owner codes/dependencies. Preview is advisory: it does not validate proposed new edges, lock the graph, or authorize a write. The write repeats all review, CAS, dependency, cycle and cascade checks under SQLite lock; a stale preview fails rather than deleting an unexpected case. Native CI and real-account acceptance remain pending.
+
+
+## Portable, source-scoped case status checkpoint and conservative comparison
+
+Issue #247 M3/M4 and #264 Stage 7: an authenticated **local dashboard
+session** can request a **new, explicit, read-only** source check for an
+already owner-reviewed Stripe case and later compare the provider-open/unknown
+state with a previous *server-sealed* checkpoint. The feature is OFF until the
+operator has separately connected and authorized the existing restricted
+Stripe source and saved a current reviewed declaration. It does not poll,
+persist provider status on the server, contact customers or execute agents.
+
+**Endpoint:** `POST /v1/open-work/declarations/status-checkpoint`
+
+JSON body (all six keys required):
+
+`{"work_item_ref":"owg:w:<32 lowercase hex>","expected_revision":1,"expected_edit_token":"<32 lowercase hex>","confirm_source_scan":true,"max_pages":2,"previous_checkpoint":null}`
+
+The first call returns `openworkgraph.local-case-status-comparison.v1` with
+a `checkpoint` object and `comparison.available=false`. Keep that object
+locally if you wish to compare later. A later call repeats the exact
+current declaration revision/incarnation, sets `previous_checkpoint` to the
+previous response's **checkpoint object**, and independently confirms a new
+bounded source scan. The comparison is one of `open_to_open`,
+`open_to_unknown`, `unknown_to_open`, or `unknown_to_unknown`. These are
+*provider inventory observation transitions*, **not** proven invoice
+payment, completed obligations, agent causality or customer success.
+A missing invoice in an open-invoice inventory always becomes `unknown`,
+even when the source inventory reports complete coverage.
+
+The portable checkpoint contains only opaque case ref, revision, HMAC
+bindings to the full transitive owner-declared prerequisite signature and
+configured local source account, issue/expiry clocks, provider `open` or
+`unknown`, source freshness/coverage, a fixed-vocabulary unknown reason
+and an HMAC seal. It contains **no** native invoice IDs, customer details,
+amounts, source account, edit token, raw event data or agent authority.
+The HMAC uses a domain-separated purpose with the existing local
+installation secret; it is **not** a bearer permission. A prior checkpoint
+expires after **at most 24 hours** and no later than the reviewed
+declaration's own expiry. An authenticated reader must still possess the
+current dashboard session, current review, retention, exact revision/token,
+source grant and unchanged prerequisite versions. A tampered, wrong-source,
+expired, revoked or stale checkpoint is refused **before provider IO**.
+Review/source/graph versions are rechecked after every scan. There is no
+cross-process atomic revocation fence across Stripe, review JSON and SQLite;
+a receipt previously exported by a person cannot be remotely erased, but
+never grants subsequent source access or owner-declaration authority.
+
+A fresh source-reported `open` status is sealed only when its timestamp is
+timezone-aware and at most 15 minutes old (allowing up to five minutes of
+clock skew). Stale source clocks become an explicit `unknown` checkpoint;
+contradictory source identity/state fails closed. Source outage and partial
+coverage remain unknown, never paid or resolved. Every response uses
+`Cache-Control: no-store`. Existing Activity, workflow mapping, Discovery
+Mode, export, MCP and provider permissions are unchanged.
+
+**Synthetic acceptance:** `tests/test_open_work_case_status_checkpoint.py`
+uses the actual local FastAPI app, authenticated session, review queue and
+SQLite declaration DAG, with the Stripe reader replaced at the existing
+source boundary. It covers open-to-unknown and other transitions, exact
+prerequisite CAS, source switch, review/retention revocation, mid-scan
+changes, forged seals, wrong scope, expiry, stale source clocks, contradictory
+provider status, denial before source IO and privacy minimization. Passing
+these tests is **not** real Stripe/customer validation or evidence of
+business-completion uplift; native cross-platform CI and a separately
+authorized real-provider pilot are still required.
