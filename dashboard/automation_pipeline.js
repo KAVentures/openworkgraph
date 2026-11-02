@@ -237,6 +237,42 @@
     };
   }
 
+
+  // A bounded, read-only portfolio review row. Never treat reported runs,
+  // source-check export hashes or an approval as a verified outcome.
+  function portfolioHandoffRow(idea,journey){
+    if(!idea||typeof idea.idea_id!=='string'||!idea.idea_id||
+      !['approved','implemented'].includes(idea.state)||
+      !journey||journey.idea?.idea_id!==idea.idea_id||
+      journey.idea?.revision!==idea.revision||
+      !Array.isArray(journey.projects)||journey.projects_truncated||
+      journey.projects.length>64||!Array.isArray(journey.dataset_origins)||
+      journey.dataset_origins.length>64)
+      throw new Error('Incomplete or stale opportunity journey.');
+    if(!journey.projects.length)
+      return {idea_id:idea.idea_id,project_id:null,status:'no_export',
+        blockers:['no_recorded_project'],stage_review_count:null,
+        spec_sha256:null,archive_sha256:null};
+    const projects=[...journey.projects];
+    if(projects.some(p=>typeof p.project_id!=='string'||!p.project_id||
+      typeof p.created_at!=='string'||!Number.isSafeInteger(p.idea_revision)||
+      typeof p.idea_revision_is_current!=='boolean')||
+      new Set(projects.map(p=>p.project_id)).size!==projects.length)
+      throw new Error('Project history is incomplete or invalid.');
+    projects.sort((a,b)=>b.created_at.localeCompare(a.created_at)||
+      a.project_id.localeCompare(b.project_id));
+    const project=projects.find(p=>p.idea_revision_is_current) || projects[0];
+    const review=handoffDependencyReview(journey,project.project_id,idea.idea_id,new Date().toISOString());
+    if(review.basis.dataset_origins_truncated||review.basis.reports_truncated||
+      review.review_blockers.length>32)
+      throw new Error('Project review coverage is truncated.');
+    return {idea_id:idea.idea_id,project_id:project.project_id,
+      status:'human_review_required',blockers:[...review.review_blockers],
+      stage_review_count:review.coverage.needs_human_review,
+      spec_sha256:review.basis.project_spec_sha256,
+      archive_sha256:review.basis.project_archive_sha256};
+  }
+
   // Compare an imported point-in-time review packet against a freshly fetched local journey.
   // Never restore approval or trust imported fields as execution/verification evidence.
   function compareHandoffReviewPackets(saved,current){
@@ -465,10 +501,23 @@
     const resumeSection=el('section');resumeSection.id='owgPipelineResumeSection';
     resumeSection.append(el('h3','Resume a previous human review'),
       field('Local review bundle (JSON, up to 64 KiB)',resumeFile),resumeButton,resumeStatus);
-    card.append(row,resumeSection,tools,status,counts,viewCount,list,detail);
+
+    // Explicitly requested, bounded review across currently loaded approved ideas.
+    // No background polling, provider calls, project generation or decisions.
+    const auditButton=button('Review handoff gaps across opportunities','secondary');
+    auditButton.id='owgPipelinePortfolioAudit';
+    const auditStatus=el('div','No portfolio review has been requested.','muted');
+    auditStatus.id='owgPipelinePortfolioAuditStatus';
+    auditStatus.setAttribute('role','status');auditStatus.setAttribute('aria-live','polite');
+    const auditHost=el('div');auditHost.id='owgPipelinePortfolioAuditResults';
+    const auditSection=el('section');auditSection.id='owgPipelinePortfolioAuditSection';
+    auditSection.append(el('h3','Human handoff review inbox'),
+      el('p','Explicitly check up to 12 approved or implemented opportunities in the currently loaded state. This is a point-in-time local review, never a portfolio-wide certification, approval or execution grant.','muted'),
+      auditButton,auditStatus,auditHost);
+    card.append(row,resumeSection,auditSection,tools,status,counts,viewCount,list,detail);
     panel.appendChild(card);
 
-    let latestIdeas=[],refreshGeneration=0,resumeGeneration=0;
+    let latestIdeas=[],refreshGeneration=0,resumeGeneration=0,auditGeneration=0;
     resumeFile.onchange=()=>{
       resumeGeneration++;
       // Cancel a pending resume if the operator changes its file. Existing
@@ -509,6 +558,87 @@
           resumeStatus.textContent='Could not resume review: '+(e instanceof SyntaxError?'Invalid JSON.':e.message);
       }finally{resumeButton.disabled=false;}
     };
+
+    auditButton.onclick=async()=>{
+      const request=++auditGeneration;
+      auditButton.disabled=true;
+      auditHost.replaceChildren();
+      const eligible=latestIdeas.filter(idea=>['approved','implemented'].includes(idea.state))
+        .sort((a,b)=>String(b.updated_at||'').localeCompare(String(a.updated_at||''))||
+          String(a.idea_id).localeCompare(String(b.idea_id)));
+      const selected=eligible.slice(0,12),omitted=eligible.length-selected.length;
+      if(!selected.length){
+        auditStatus.textContent='No approved or implemented opportunities in the currently loaded state.';
+        auditButton.disabled=false;return;
+      }
+      auditStatus.textContent='Reading '+selected.length+' authenticated local evidence journeys (maximum three at once)…';
+      const rows=[];
+      try{
+        for(let offset=0;offset<selected.length;offset+=3){
+          const batch=await Promise.all(selected.slice(offset,offset+3).map(async idea=>{
+            try{
+              const journey=await (await api('/v1/automation-pipeline/'+
+                encodeURIComponent(idea.idea_id)+'/journey')).json();
+              return portfolioHandoffRow(idea,journey);
+            }catch(_){
+              return {idea_id:idea.idea_id,project_id:null,status:'unavailable',
+                blockers:[],stage_review_count:null,spec_sha256:null,archive_sha256:null};
+            }
+          }));
+          if(request!==auditGeneration)return;
+          rows.push(...batch);
+        }
+        const incomplete=omitted>0||rows.some(r=>r.status!=='human_review_required');
+        const table=el('table'),thead=el('thead'),head=el('tr'),tbody=el('tbody');
+        ['Opportunity','Coverage','Human review checks','Dependency stages needing review',''].forEach(label=>head.appendChild(el('th',label)));
+        thead.appendChild(head);
+        for(const row of rows){
+          const idea=selected.find(i=>i.idea_id===row.idea_id),tr=el('tr');
+          const label=row.status==='human_review_required'?'Review required':
+            row.status==='no_export'?'No recorded project':'Evidence unavailable / incomplete';
+          const cells=[idea.title,label,
+            row.status==='human_review_required'?row.blockers.length+' · '+row.blockers.join(', ').replaceAll('_',' '):
+              row.status==='no_export'?'Export a reviewed project first':'Cannot assess',
+            row.stage_review_count===null?'Unknown':String(row.stage_review_count)+' of 7'];
+          cells.forEach(value=>tr.appendChild(el('td',value)));
+          const actionCell=el('td');
+          const open=button(row.project_id?'Open exact project review':'Open opportunity','secondary');
+          open.setAttribute('aria-label',(row.project_id?'Open exact project review for ':'Open opportunity ')+idea.title);
+          open.onclick=()=>{
+            if(request!==auditGeneration)return;
+            const resume=row.project_id?{projectId:row.project_id,valid:()=>request===auditGeneration}:null;
+            show(row.idea_id,resume).catch(e=>{if(request===auditGeneration)auditStatus.textContent=e.message;});
+          };
+          actionCell.appendChild(open);tr.appendChild(actionCell);tbody.appendChild(tr);
+        }
+        table.append(thead,tbody);
+        const wrap=el('div',null,'table-wrap');wrap.appendChild(table);
+        const exportButton=button('Download minimized portfolio handoff review JSON','secondary');
+        exportButton.id='owgPipelinePortfolioAuditDownload';
+        const record={format:'openworkgraph.portfolio-handoff-review.v1',
+          generated_at:new Date().toISOString(),scope:'read_only_human_review',
+          reviewed_count:rows.length,eligible_count:eligible.length,omitted_count:omitted,
+          complete_coverage:!incomplete,execution_authorized:false,
+          source_read_authorized:false,verified_execution:false,
+          verified_business_outcomes:false,
+          items:rows.map(r=>({...r}))};
+        exportButton.onclick=()=>{
+          if(request!==auditGeneration)return;
+          const body=JSON.stringify(record);
+          if(body.length>65536){auditStatus.textContent='Review exceeds the 64 KiB export limit.';return;}
+          const url=URL.createObjectURL(new Blob([body],{type:'application/json'}));
+          const link=el('a');link.href=url;link.download='owg-portfolio-handoff-review.json';
+          document.body.appendChild(link);link.click();link.remove();
+          setTimeout(()=>URL.revokeObjectURL(url),1000);
+          auditStatus.textContent='Downloaded a point-in-time review; no approval or source read was granted.';
+        };
+        auditHost.replaceChildren(wrap,exportButton);
+        auditStatus.textContent=rows.length+' reviewed of '+eligible.length+' eligible in the currently loaded state. '+
+          (incomplete?'Partial coverage: '+omitted+' omitted by the 12-item budget; unavailable or missing project evidence is not verified.':
+            'All loaded eligible journeys checked; execution and business outcomes remain unverified.')+
+          ' Refresh after changes; nothing was executed.';
+      }finally{if(request===auditGeneration)auditButton.disabled=false;}
+    };
     function render(){
       const ideas=portfolioView(latestIdeas,{query:search.value,quadrant:quadrant.value,sort:sort.value});
       viewCount.textContent=ideas.length+' shown of '+latestIdeas.length+' in selected state. CSV includes the entire selected state.';
@@ -524,6 +654,8 @@
     }
 
     async function refresh(){
+      ++auditGeneration;auditHost.replaceChildren();auditButton.disabled=false;
+      auditStatus.textContent='Portfolio review cleared; explicitly check again after the list refresh.';
       const generation=++refreshGeneration;
       const q=filter.value?'?state='+encodeURIComponent(filter.value):'';
       const r=await (await api('/v1/automation-pipeline'+q)).json();
@@ -1370,6 +1502,6 @@
     refresh().catch(e=>{status.textContent=e.message;});
   }
 
-  window.__owgPipelineModel={assessmentBody,portfolioView,handoffReviewPacket,handoffDependencyReview,compareHandoffReviewPackets,compareRecordedProjects,compareProjectHandoffReadiness,handoffInspectionWorklist,handoffInspectionSnapshotDigest,restoreHandoffInspectionKeys};
+  window.__owgPipelineModel={assessmentBody,portfolioView,handoffReviewPacket,handoffDependencyReview,compareHandoffReviewPackets,compareRecordedProjects,compareProjectHandoffReadiness,portfolioHandoffRow,handoffInspectionWorklist,handoffInspectionSnapshotDigest,restoreHandoffInspectionKeys};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
