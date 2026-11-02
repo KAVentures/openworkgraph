@@ -57,6 +57,35 @@ The previous review must be a canonical owner-private regular file (not a symlin
 
 The new private review contains `comparison.previous_review_sha256`, the prior UTC observation timestamp and one pseudonymous per-Case `previous_state` → `current_state` transition (including unchanged states). The CLI prints only changed/unchanged totals and the pinned previous digest. The current review retains the current `case_states` and three state counts. No raw source IDs, host, token or namespace are included. A SHA-256 pin detects unexpected edits **relative to the operator's trusted receipt**; it is not an authenticated signature, a proof of provider authenticity or a substitute for protecting the receipt and local files. Do not use these artifacts to automatically alter retention, revoke accounts, delete evidence or advance an import checkpoint.
 
+
+## Review retained OWG evidence for the selected source lifecycle (optional)
+
+After creating a source lifecycle review, an authorized local OWG operator can **independently read the actual local event-log workspace** and identify which selected Salesforce Cases still have retained historical events. This is a second, separately consented, **read-only** step: it does **not** contact Salesforce again, import events, alter a checkpoint, delete a log or authorize retention changes. It is useful when a source Case is observed soft-deleted or no longer visible but the local OWG history still contains records. A missing OWG case is **not** proof that all evidence has been deleted.
+
+Use a current local OWG dashboard session, the **exact** existing log ID and the same confirmed Salesforce host, namespace and selected Cases used for the pinned source review. Set the OWG session in the process environment, never in the command line:
+
+```sh
+export OWG_DASHBOARD_SESSION='<current-local-dashboard-session>'
+python -m server.salesforce_case_lifecycle_review \
+  --instance https://acme.my.salesforce.com \
+  --confirm-host acme.my.salesforce.com \
+  --namespace acme-sandbox \
+  --case 500000000000001 --case 500000000000002 \
+  --impact-review /private/owg-salesforce-lifecycle/review-001.json \
+  --impact-sha256 '<exact-review_sha256-from-source-receipt>' \
+  --owg-log-id log_0123456789abcdef \
+  --confirm-owg-log-id log_0123456789abcdef \
+  --owg-port 8765 \
+  --output /private/owg-salesforce-lifecycle/impact-001.json \
+  --consent-local-owg-read --consent-private-impact
+```
+
+The CLI validates the owner-private, canonical source review, operator-pinned SHA-256, full source scope, pseudonymous Case set, non-write flags, exact log ID and current session **before making any local OWG HTTP request**. It then uses only the existing dashboard-authenticated `GET /v1/event-logs` and `POST /v1/event-logs/{log_id}/cases/query?case_type=source_case` endpoints at literal IPv4 loopback, with proxies and redirects disabled. The log must have **exactly one** matching `sf_<scope-hash-prefix>` source/case namespace. At most eight case queries, each limited to 100 returned case summaries and 64 KiB, inspect retained event counts without retrieving activities, resources or individual event contents. Local session revocation, source mismatch, malformed or truncated responses refuse the entire output.
+
+The new mode-0600 private JSON review records each stable hashed Case ID, source state, local evidence status (`observed`, `not_observed` or `unknown`) and retained event count **only when observed**, plus aggregate counts of soft-deleted/unresolved source Cases with observed OWG evidence. A bounded query that cannot determine a case's presence is `unknown`, not zero. The printed receipt is counts-only with a SHA-256 pin; the private file contains the local log ID but **no raw Salesforce IDs, host, bearer, session, activities, resources or source account namespace**. Hashed case IDs are still pseudonymous and should be retained/deleted under organizational policy.
+
+The source lifecycle snapshot and local OWG evidence are **not atomic**; both can change after their respective reads. OWG case presence is only locally retained history, not a live provider verification or a full retention inventory. No absence is evidence of hard deletion. An authorized human must separately assess retention, legal hold, deletion, access controls and the provenance of any requested downstream action. There is deliberately no automated deletion, approval, policy mutation or agent handoff.
+
 ## Safety and completeness
 
 The tool validates exact Salesforce HTTPS host and namespace/case scope before the request; it does not use system proxies or follow redirects. It defaults to one page; operators must explicitly set `--max-pages 2` through `--max-pages 8` when Salesforce may paginate. Each page is limited to 64 KiB; the entire selection is limited to 8 distinct Cases and 8 requests. A continuation must be a strict relative `/services/data/v60.0/query/<opaque-locator>` or `/services/data/v60.0/queryAll/<opaque-locator>` path on the **same confirmed origin**, with no query, fragment, redirect or path traversal. It requires stable `totalSize`, strictly ordered distinct selected IDs, exact boolean deletion states, nonempty intermediate pages and a final `done=true` page with no cursor and exact cumulative count. It refuses malformed/duplicate JSON keys, foreign rows, changed counts, truncated/over-budget/repeated/unsafe cursors, HTTP errors, revoked credentials, unsafe/private path failures and output overwrite. If a provider returns more pages than the operator approved, the run fails **without creating a review**. The private artifact and counts-only receipt record `pages_fetched` for auditing. No automatic retry. A query returning zero rows is an **all-unresolved review**, not a deletion certificate.
@@ -65,4 +94,4 @@ A source record can change immediately after read; the snapshot is not an ongoin
 
 ## Verification and rollout gates
 
-`tests/test_salesforce_case_lifecycle_review.py` uses a disposable **real local TCP** Salesforce-shaped `queryAll` endpoint (including multi-page cursor continuation) and checks active/deleted/missing distinction, namespace-compatible hashed case IDs, consent, permissions, malformed/partial results, revoked bearer, redirect and privacy/no-write behavior. The local loopback HTTP flag exists **only** for disposable acceptance; production requires a confirmed Salesforce HTTPS hostname. Synthetic transport does not constitute a live customer provider test. Before merging or claiming production readiness, require exact-head native Ubuntu/macOS/Windows pytest, browser, collaboration, scale, accessibility, starter and packaging/release checks and an authorized Salesforce sandbox run with appropriate scopes.
+`tests/test_salesforce_case_lifecycle_review.py` uses a disposable **real local TCP** Salesforce-shaped `queryAll` endpoint (including multi-page cursor continuation) and checks active/deleted/missing distinction, namespace-compatible hashed case IDs, consent, permissions, malformed/partial results, revoked bearer, redirect and privacy/no-write behavior. The impact-mode acceptance additionally exercises a pinned real source review and actual dashboard-session-authenticated FastAPI/DuckDB case-summary routes over local TCP, including wrong-source scope, revoked session, tampering, consent and non-write behavior. The local loopback HTTP flag exists **only** for disposable acceptance; production requires a confirmed Salesforce HTTPS hostname. Synthetic transport does not constitute a live customer provider test. Before merging or claiming production readiness, require exact-head native Ubuntu/macOS/Windows pytest, browser, collaboration, scale, accessibility, starter and packaging/release checks and an authorized Salesforce sandbox run with appropriate scopes.
