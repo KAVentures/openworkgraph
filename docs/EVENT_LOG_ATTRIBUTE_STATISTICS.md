@@ -78,6 +78,56 @@ refer **only to matching activity rows** when `activity` is specified.
 mode. Omit `activity` for the unchanged all-activity behavior.
 Saved analyses and reusable metric templates retain the exact selector.
 
+## Stage-bounded metrics (from one activity to the next)
+
+An analyst can optionally supply **both** `from_activity` and `to_activity`
+on an `event_attribute_statistic` metric. OWG locates the first observed
+`from_activity` in each selected full case and the first **strictly later**
+`to_activity`. It calculates the statistic over the events from the start
+**inclusive** to the end **exclusive**. This enables a question such as
+"What was the average observed amount between Receive and Approve?" rather
+than blending earlier or later stages. A prior `to_activity` does not end
+a stage; an end must occur *after* the selected start.
+
+```json
+{
+  "level": "cases",
+  "metrics": [{
+    "name": "review_stage_amount",
+    "kind": "event_attribute_statistic",
+    "attribute": "amount",
+    "unit": "EUR",
+    "statistic": "average",
+    "from_activity": "Receive",
+    "to_activity": "Approve",
+    "missing_policy": "complete"
+  }],
+  "measures": [{"fn": "avg", "of": "metric:review_stage_amount"}]
+}
+```
+
+The optional `activity` selector composes with this interval: only
+events of that exact activity *inside the interval* contribute. Both
+boundaries are exact case-sensitive strings bound as SQL parameters. Events
+are ordered by observed UTC timestamp and stable event ID to break ties;
+when timestamps tie, ordering reflects the stored ID, **not proven
+real-world causality**. No matching start, no later end, or no usable values
+produces **null**, never zero. No start or end can be inferred from
+unobserved source activity. The `available` versus `complete` missing
+policy applies to the *selected stage rows*, not events outside it.
+
+Coverage includes `cases_without_stage_start`,
+`cases_without_later_stage_end`, and
+`cases_without_complete_stage`; their counts are distinct from
+`cases_without_matching_activity` (which counts only complete stages
+with no events matching an optional activity selector).
+`flattened_case_event_rows_considered` counts only rows in complete
+observed stages. The coverage scope explicitly includes
+`stage_bounded`. Saved definitions and existing authenticated analysis
+and export contracts retain both boundaries. This does not prove that
+source events are complete or that the named activities correspond to
+approved business policy.
+
 `statistic` must be `average`, `minimum`, `maximum`, `median`, or `p90`.
 `missing_policy` is `available` (default) or `complete`:
 
