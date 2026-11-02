@@ -69,8 +69,9 @@ The output keeps automatic memberships and human-confirmed event IDs
 per-item reviewed event IDs. A two-hop confirmation attaches only the reviewed
 loose observation, **never** its intermediary; neither weak edge becomes a
 canonical link. The overlay and score identify human-reviewed gains, not
-improvements to autonomous reconstruction. and explicitly says that canonical membership is unchanged,
-human decisions are not source evidence, and business actions are unauthorized.
+improvements to autonomous reconstruction. They explicitly state that canonical
+membership is unchanged, human decisions are not source evidence, and business
+actions are unauthorized.
 Unconfirmed events remain unassigned. Changing an event, its private metadata,
 source scope, retention or deletion state invalidates the snapshot digest;
 altered packets, unsupported targets, duplicate decisions and forged
@@ -194,3 +195,54 @@ gains must never be attributed to automatic linking. The existing frozen
 family-holdout evaluator in evals/reconstruction and independently
 annotated consenting-user pilot remain mandatory, including interruption
 regression and rare interleaved/missing-observation cases.
+
+
+## Independent two-reviewer consensus (adjudicate)
+
+For higher-stakes ambiguous case linking, two operators can each inspect the
+**same authorized original evidence** independently and create separate
+decision documents in the ordinary `DECISION_FORMAT` described above. OWG
+cannot verify that the files were authored by different people: there are no
+reviewer signatures, identities, credentials or independent-review claims.
+
+    python -m scripts.reconstruction_review adjudicate \
+      --events /private/observations.json \
+      --packet /private/review-packet.json \
+      --reviewer-a /private/reviewer-a.json \
+      --reviewer-b /private/reviewer-b.json \
+      --output /private/adjudication.json
+
+The command replays the production linker and validates **each review** against
+the exact current source snapshot, including two-hop/intermediary
+contradictions. Only decisions with identical `event_id`, `item_id` and
+`action` in both reviews become consensus decisions. Conflicting candidate
+items, confirm-versus-reject, and one-sided decisions are explicitly listed as
+unresolved and remain **unassigned**. Events neither reviewer considered
+remain unreviewed. An agreed rejection is not a new case assignment.
+
+The private, create-only artifact includes both original opaque reviewer
+decision documents, their consensus, unresolved opaque event IDs and counts.
+It never includes raw work text, source URLs, labels or credentials. Its
+`reviewer_independence_verified` field is always false. Do not upload it to
+GitHub or a model. To resolve a disagreement, the operators must inspect the
+underlying evidence again and produce fresh reviews; no majority guess or
+automatic tie-breaker is provided.
+
+Use the resulting adjudication artifact **directly** as `--decisions` with
+the existing `apply` or `score` commands, or in a `score-batch` session
+manifest. Every use rederives both original reviewer decisions and the
+consensus from current source evidence, refusing altered adjudication counts,
+forged consensus, invalid reviewer inputs, stale packets or revoked evidence.
+The overlay reports `review_decision_provenance: two_reviewer_consensus`
+and the number of unresolved reviewer disagreements. Single-review files
+continue to work with `review_decision_provenance: single_reviewer`.
+Batch reports separate the number of consensus-reviewed sessions and
+unresolved disagreements, while **automatic baseline metrics remain separate**
+from human-assisted metrics.
+
+This is a review quality and adjudication workflow, **not** an autonomous
+case-linking improvement, an independent reviewer authentication system, or
+source-verified business truth. It does not change the production linker,
+canonical membership, tenant/consent boundaries, REST/MCP/dashboard, or
+authorize any agent or business action. Exact-head native CI, frozen family
+holdout and real consenting-user acceptance remain outstanding.
