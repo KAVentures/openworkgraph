@@ -171,6 +171,52 @@
     }
     return rows;
   }
+  // Restoration is a new, unreviewed proposal, not a rollback of the saved record.
+  // Inherited human confirmations and permission-like flags must never transfer.
+  function clearHistoricalConfirmations(value){
+    if(Array.isArray(value)){value.forEach(clearHistoricalConfirmations);return value;}
+    if(value&&typeof value==='object'){
+      for(const key of Object.keys(value)){
+        if(['user_confirmed','execution_authorized','outcomes_verified','observed_path_is_policy',
+            'automatic_branch_authorized'].includes(key))value[key]=false;
+        else clearHistoricalConfirmations(value[key]);
+      }
+    }
+    return value;
+  }
+  async function prepareHistoricalRestoration(previous,selected,generation,host){
+    return locked(async()=>{
+      if(generation!==revisionCompareGeneration||record!==selected||!host.isConnected)
+        throw new Error('The comparison changed; compare the saved revisions again.');
+      const id=selected.workflow_id;
+      // Re-read BOTH immutable references. A previously displayed comparison cannot
+      // resurrect a deleted revision or bypass a concurrent edit to the latest model.
+      const [latest,historical]=await Promise.all([
+        request('/v1/process-catalog/revision?'+new URLSearchParams({workflow_id:id})),
+        request('/v1/process-catalog/revision?'+new URLSearchParams({
+          workflow_id:id,revision:String(previous.revision)}))
+      ]);
+      if(generation!==revisionCompareGeneration||record!==selected||!host.isConnected)
+        throw new Error('The comparison changed while restoring; start again.');
+      if(latest.workflow_id!==id||latest.revision!==selected.revision||
+         latest.content_sha256!==selected.content_sha256||
+         historical.workflow_id!==id||historical.revision!==previous.revision||
+         historical.content_sha256!==previous.content_sha256||
+         historical.process_model?.format!=='openworkgraph.process-model.v1')
+        throw new Error('The saved revision or latest process changed. Refresh and compare again.');
+      if(!replaceDraft())return;
+      // Keep the CURRENT optimistic-concurrency revision for a future reviewed save,
+      // but never attach old/current evidence references to the restored model.
+      record={...latest,evidence_refs:[]};
+      model=clearHistoricalConfirmations(copy(historical.process_model));
+      changed();renderEditor();
+      status('UNSAVED restoration draft from r'+historical.revision+
+        ' against latest r'+latest.revision+'. Prior confirmations and evidence references were cleared. '+
+        'Review and explicitly save a new revision; current source state remains unverified.');
+      document.getElementById('owgCatalogEditor')?.scrollIntoView({block:'start'});
+    });
+  }
+
   async function compareSavedRevision(revision){
     return locked(async()=>{
       const selected=record,host=document.getElementById('owgCatalogRevisionCompare');
@@ -215,6 +261,11 @@
           }
           table.appendChild(body);wrap.appendChild(table);section.appendChild(wrap);
         }else section.appendChild(el('p','No stored-model difference detected. Source evidence and outcomes remain unverified.'));
+        if(revision<selected.revision){
+          section.appendChild(el('p','Restoration creates an UNSAVED draft from the historical model against the current latest revision. All earlier confirmations and evidence links are removed. A separate human review and new save are required.'));
+          section.appendChild(button('Prepare historical r'+revision+' as unsaved restoration draft',
+            ()=>prepareHistoricalRestoration(previous,selected,generation,host)));
+        }
         section.appendChild(button('Open compared revision r'+revision,
           ()=>load(selected.workflow_id,revision,previous.content_sha256)));
         host.replaceChildren(section);
