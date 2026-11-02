@@ -449,7 +449,7 @@ native exact-head CI remains required.
 
 ## Interruption-aware provisional episode partition (episodes)
 
-The local \`episodes\` command turns the existing production-linked membership
+The local `episodes` command turns the existing production-linked membership
 and conservative experimental direct/two-hop proposals into a **complete,
 chronologically ordered, noncanonical episode partition** of the admitted
 observations. This is a usable view of *when* a case-like work item appeared
@@ -461,8 +461,8 @@ in the observed sequence, not proof that the inferred work is one task.
       --output /private/provisional-episodes.json
 
 Every admitted event appears exactly once in one episode. Each episode
-separates \`production_linked_event_ids\`, \`experimental_proposed_event_ids\`
-and \`unassigned_event_ids\`. Unknown events remain unknown; a source-record
+separates `production_linked_event_ids`, `experimental_proposed_event_ids`
+and `unassigned_event_ids`. Unknown events remain unknown; a source-record
 singleton is not silently attached to a different record. A change of linked
 item, unknown gap, complete capture scope, app/source, tied timestamp or
 different observed literal record anchor starts a new episode. In particular,
@@ -473,7 +473,7 @@ provided the proposal engine independently supports them.
 
 The report includes counts of admitted versus unadmitted input rows, direct
 versus two-hop proposals, unknown observations, boundary reasons and
-\`eligible_review_truncated\`. An incomplete/truncated review queue is never
+`eligible_review_truncated`. An incomplete/truncated review queue is never
 presented as complete experimental coverage. No record references, work text,
 source URLs, credentials or tenant identities are exported; only opaque
 event/item IDs are included. The packet and source are rederived on every
