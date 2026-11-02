@@ -317,3 +317,32 @@ def test_account_change_after_first_read_prevents_second_source_read(local, monk
         assert rejected.status_code in (403, 409, 422)
         assert reads == [RB]
         assert not ledger._path().exists()
+
+
+def test_different_valid_record_link_conflicts_with_prior_ledger_before_io(local, monkeypatch):
+    """A valid new source link cannot silently rebind an existing invoice history."""
+    with TestClient(app) as client:
+        headers = _auth()
+        a, b, links = _setup(client, headers, monkeypatch)
+        monkeypatch.setattr(routes, "source_operation_receipt", _paid)
+        assert client.post(SINGLE, headers=headers, json={
+            **_cas(a), "confirm_source_verification": True, "record_link": links[1],
+        }).status_code == 200
+        alternate = "owg:r:" + "c" * 32
+        def scan_alternate(ref, **options):
+            data = _scan(ref, **options)
+            if ref == A:
+                data["related_owg_evidence"][0]["resource_ref"] = alternate
+            return data
+        monkeypatch.setattr(routes, "stripe_open_work_case_context", scan_alternate)
+        issued = client.post(BASE + "/operation-link", headers=headers, json={
+            **_cas(a), "confirm_source_scan": True,
+            "max_pages": 2, "resource_ref": alternate,
+        })
+        assert issued.status_code == 200, issued.text
+        monkeypatch.setattr(routes, "source_operation_receipt",
+                            lambda *_: pytest.fail("record mismatch must reject before source IO"))
+        rejected = _batch(client, headers, a, [links[0], issued.json()["record_link"]])
+        assert rejected.status_code in (403, 409, 422)
+        with sqlite3.connect(ledger._path()) as db:
+            assert db.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] == 1
