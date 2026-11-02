@@ -367,3 +367,48 @@ observed numeric outputs, missing-case withholding, declared units, a saved
 analysis replay, CSV export, invalid-operation refusal, and a mismatched-unit
 refusal. The tests are committed; they are **not claimed as native-passed**
 until the exact-head GitHub Actions checks execute.
+
+
+## One-action first-to-last completed stage change (dashboard)
+
+In **Build an analysis → Cases**, select **Numeric event values within each case
+or stage**. Enter a short base metric name (up to 34 characters), an exact
+retained event attribute, its declared unit, the statistic, missing-value
+policy, optional activity restriction, and **both** stage start and end.
+Choose **Compare first and last completed stages (3 metrics)** instead of
+adding one metric at a time.
+
+OWG atomically adds `<base>_first`, `<base>_last`, and `<base>_delta`:
+the first two evaluate the *same statistic* over the first and last completed
+start→end stage respectively; the third uses the version-1 typed arithmetic
+operation `subtract` with **last minus first**. A negative result therefore
+means the recorded value decreased. The dashboard automatically selects
+**Average <base>_delta** as the outer measure across cases. Change the outer
+measure if you need the total or another supported aggregation. A case with
+only one completed stage has a zero change **only if** both stage values
+exist; a case with no completed stage, or with missing/invalid values under
+the chosen policy, remains unknown and is omitted from numeric aggregates
+with coverage disclosed. Trailing unfinished stages are not mistaken for
+completed stages.
+
+The action requires three free slots out of the existing four-metric limit.
+It refuses incomplete stage boundaries, duplicate derived names, and
+overlong base names **before adding anything**. The three ordinary typed
+metrics remain visible and individually removable (remove the dependent
+delta first). The comparison uses the existing session-authenticated analysis
+endpoint, saved analysis definitions, coverage diagnostics, and JSON/CSV
+exports. It does not query providers, convert currencies, prove the original
+source is complete, or write business data.
+
+For example, an observed first approval stage with finite EUR values 2 and 4
+has average 3; a last completed stage with value 9 has average 9. The
+signed change is **+6 EUR** for that case. A second case with no valid
+last-stage value contributes **unknown**, not zero. Averages of the change
+are averages across cases with two observed stage values, not a guaranteed
+business improvement.
+
+The committed real-browser acceptance covers the button through the
+authenticated API, signed result, incomplete/missing cases, capacity,
+name collision, incomplete stage refusal, saved replay, CSV export, and WCAG
+audit. Passing native CI and real consenting-user validation are separate
+release gates.
