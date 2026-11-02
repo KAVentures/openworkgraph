@@ -5,7 +5,7 @@
   let shadowGeneration=0;
   let importGeneration=0,importDraft=null;
   let ruleCheckGeneration=0,sourceRuleGeneration=0;
-  let originGeneration=0;
+  let originGeneration=0,editGeneration=0;
   const el=(tag,text)=>{const n=document.createElement(tag);if(text!=null)n.textContent=String(text);return n;};
   const button=(text,fn)=>{const n=el('button',text);n.type='button';n.className='secondary';n.addEventListener('click',()=>Promise.resolve().then(fn).catch(error=>status(error.message)));return n;};
   const status=text=>{const n=document.getElementById('owgCatalogStatus');if(n)n.textContent=String(text);};
@@ -14,7 +14,7 @@
   function clearRuleChecks(){ruleCheckGeneration++;document.getElementById('owgCatalogRuleCheckResult')?.replaceChildren();}
   function clearSourceRuleChecks(){sourceRuleGeneration++;document.getElementById('owgCatalogSourceRuleResult')?.replaceChildren();}
   function clearOrigins(){originGeneration++;document.getElementById('owgCatalogOriginResult')?.replaceChildren();}
-  function changed(invalidateTables=true){if(invalidateTables&&model?.decision_tables?.length){for(const t of model.decision_tables)t.user_confirmed=false;document.querySelectorAll("input[data-table-confirmation]").forEach(n=>{n.checked=false;});}clearOrigins();clearSourceRuleChecks();reviewed=false;const check=document.getElementById('owgCatalogReviewed');if(check)check.checked=false;clearShadowReview();clearRuleChecks();}
+  function changed(invalidateTables=true){editGeneration++;if(invalidateTables&&model?.decision_tables?.length){for(const t of model.decision_tables)t.user_confirmed=false;document.querySelectorAll("input[data-table-confirmation]").forEach(n=>{n.checked=false;});}clearOrigins();clearSourceRuleChecks();reviewed=false;const check=document.getElementById('owgCatalogReviewed');if(check)check.checked=false;clearShadowReview();clearRuleChecks();}
   function field(parent,title,value,apply,options){
     const label=el('label',title+' '),input=el(options?'select':'input');
     if(options)options.forEach(value=>{const option=el('option',value);option.value=value;input.appendChild(option);});
@@ -59,12 +59,20 @@
   }
   function draftObserved(source){
     if(busy)throw new Error('Wait for the current process request.');
-    if(!replaceDraft())return;
-    if(!Array.isArray(source.path)||source.path.length<1||source.path.length>40||
-      source.path.some(step=>typeof step!=='string'||!step.trim()||step.length>240))
+    const validPath=path=>Array.isArray(path)&&path.length>=1&&path.length<=40&&
+      path.every(step=>typeof step==='string'&&!!step.trim()&&step.length<=240);
+    if(!validPath(source.path))
       throw new Error('A bounded observed sequence of 1–40 labels is required.');
+    // A second *observed* lane can be a human-proposed, editable TO-BE hypothesis.
+    // It is never evidence that this alternative is policy, approved or executable.
+    const hasAlternative=Object.prototype.hasOwnProperty.call(source,'proposedPath');
+    if(hasAlternative&&(!validPath(source.proposedPath)||
+      source.basis!=='selected_observed_variant'||
+      JSON.stringify(source.path)===JSON.stringify(source.proposedPath)))
+      throw new Error('A different complete observed alternative is required for a proposed TO-BE draft.');
+    if(!replaceDraft())return false;
     const basis=['selected_observed_variant','selected_source_audit'].includes(source.basis)?source.basis:'user_declared';
-    const activities=source.path.map((label,i)=>({id:'step_'+(i+1),
+    const activities=(hasAlternative?source.proposedPath:source.path).map((label,i)=>({id:'step_'+(i+1),
       label:/^[A-Za-z][A-Za-z0-9 _-]{0,63}$/.test(label)?label:'Activity '+(i+1),kind:'activity',implementation:'unmapped'}));
     model={format:'openworkgraph.process-model.v1',goal:'',owner_label:'',baseline_path:copy(source.path),
       baseline_source:basis,baseline_coverage:source.partial?'partial_source_audit':'bounded_candidate_sequence',
@@ -76,9 +84,12 @@
     record={workflow_id:null,revision:0,title:'Observed workflow proposal',process_model:copy(model),
       evidence_refs:(source.evidenceRefs||[]).filter(ref=>typeof ref==='string'&&/^execution:[A-Za-z0-9_-]+$/.test(ref)).slice(0,100)};
     reviewed=false;renderEditor();
-    status('Unsaved proposal from a bounded observation. Add a business goal and review every proposed label. Unsupported labels use Activity placeholders; the AS-IS baseline keeps the supplied sequence.');
+    status(hasAlternative?
+      'UNSAVED design comparison: AS-IS baseline is the selected observed lane; TO-BE activities are a DIFFERENT observed lane proposed by the user, not verified policy or an approved automation. Review and edit the business goal, every label, decisions and omissions before saving. Only AS-IS evidence refs are retained; alternative source lineage is not persisted. Unsupported labels use Activity placeholders.':
+      'Unsaved proposal from a bounded observation. Add a business goal and review every proposed label. Unsupported labels use Activity placeholders; the AS-IS baseline keeps the supplied sequence.');
     document.querySelector('[role=tab][data-tab=evidence]')?.click();
     document.getElementById('owgProcessCatalog')?.scrollIntoView({block:'start'});
+    return true;
   }
   async function inventory(next=false){
     if(!next)after='';
@@ -169,6 +180,117 @@
     });
     wrap.appendChild(drawing);return wrap;
   }
+
+  // A structural comparison of exact display labels, not a claim that an
+  // observed path is policy or that an alternative has the same case identity.
+  // Ordered LCS avoids incorrectly treating repeated activities as a set.
+  function designPathDifferences(baseline, activities) {
+    if(!Array.isArray(baseline)||!Array.isArray(activities)||
+       baseline.length>40||activities.length>40)return [];
+    const left=baseline, right=activities.map(activity=>activity.label);
+    const dp=Array.from({length:left.length+1},()=>Array(right.length+1).fill(0));
+    for(let i=left.length-1;i>=0;i--)
+      for(let j=right.length-1;j>=0;j--)
+        dp[i][j]=left[i]===right[j]?1+dp[i+1][j+1]:Math.max(dp[i+1][j],dp[i][j+1]);
+    const differences=[];
+    let i=0,j=0;
+    while(i<left.length||j<right.length){
+      if(i<left.length&&j<right.length&&left[i]===right[j]){i++;j++;}
+      else if(i<left.length&&(j===right.length||dp[i+1][j]>=dp[i][j+1]))
+        differences.push({kind:'as_is_only',label:left[i],position:i++ +1});
+      else differences.push({kind:'to_be_only',label:right[j],position:j++ +1});
+    }
+    return differences;
+  }
+  function renderDifferenceReview(host) {
+    const differences=designPathDifferences(model.baseline_path,model.activities);
+    const section=el('section');section.id='owgCatalogDifferenceReview';
+    section.setAttribute('aria-label','Review AS-IS and TO-BE differences');
+    section.append(el('h4','Clarify differences between observed AS-IS and proposed TO-BE'),
+      el('p','Exact displayed labels are aligned in order. An unmatched step can reflect a rename, reorder, missing observation or proposed change; this comparison cannot determine which. No source is read. A manual gate is a user-declared question, not evidence, policy, permission or executable logic.'));
+    const summary=el('p',differences.length+' unmatched ordered steps. '+
+      differences.filter(d=>d.kind==='as_is_only').length+' unmatched AS-IS and '+
+      differences.filter(d=>d.kind==='to_be_only').length+' unmatched TO-BE.');
+    section.appendChild(summary);
+    if(!differences.length){section.appendChild(el('p','No unmatched labels. This does not establish that the business processes are equivalent.'));host.appendChild(section);return;}
+    if(differences.length>12){
+      section.appendChild(el('p','More than 12 unmatched steps. Batch clarification is unavailable; review the graph and add individual manual review conditions below. Nothing was omitted from an approved ledger.'));
+      host.appendChild(section);return;
+    }
+    const snapshot=JSON.stringify({baseline:model.baseline_path,activities:model.activities.map(a=>[a.id,a.label]),
+      conditions:model.manual_review_conditions||[]});
+    const generation=editGeneration;
+    const rows=[];
+    const options=(control,values)=>{
+      for(const [value,label] of values){const option=el('option',label);option.value=value;control.appendChild(option);}
+    };
+    for(const [index,difference] of differences.entries()){
+      const row=el('fieldset'),legend=el('legend',(difference.kind==='as_is_only'?'Unmatched AS-IS':'Unmatched TO-BE')+
+        ' step '+difference.position+': '+difference.label);
+      row.appendChild(legend);
+      const confirm=el('input');confirm.type='checkbox';confirm.id='owgCatalogDifferenceConfirm'+index;
+      const confirmLabel=el('label',' Record a human-only clarification gate for this difference ');
+      confirmLabel.htmlFor=confirm.id;row.append(confirmLabel,confirm);
+      const control=(id,label,values)=>{
+        const wrap=el('label',label+' '),select=el('select');select.id=id+index;
+        options(select,values);wrap.htmlFor=select.id;wrap.appendChild(select);row.appendChild(wrap);return select;
+      };
+      const activity=control('owgCatalogDifferenceActivity','Review at proposed activity',
+        [['','Choose a proposed activity'],...model.activities.map(a=>[a.id,a.id+' · '+a.label])]);
+      const kind=control('owgCatalogDifferenceKind','Human review kind',
+        [['','Choose kind'],['decision_point','Decision point'],['exception_condition','Exception condition']]);
+      const response=control('owgCatalogDifferenceResponse','Required human response',
+        [['','Choose response'],['pause_for_review','Pause for review'],
+          ['request_source_recheck','Request source recheck'],['escalate_to_owner','Escalate to owner']]);
+      const labelWrap=el('label','Editable clarification label ');
+      const label=el('input');label.id='owgCatalogDifferenceLabel'+index;label.maxLength=64;
+      label.value=('Review '+(difference.kind==='as_is_only'?'unmatched AS-IS ':'proposed TO-BE ')+
+        String(difference.label).replace(/[^A-Za-z0-9 _-]/g,' ').replace(/\s+/g,' ').trim()).slice(0,64).trim();
+      labelWrap.htmlFor=label.id;labelWrap.appendChild(label);row.appendChild(labelWrap);
+      section.appendChild(row);
+      rows.push({confirm,activity,kind,response,label});
+    }
+    const note=el('p','Select each difference you want to address, choose an activity and human response, then add gates. Saving remains a separate reviewed action.');
+    note.id='owgCatalogDifferenceStatus';note.setAttribute('role','status');section.appendChild(note);
+    section.appendChild(button('Add selected human review gates',()=>{
+      const current=JSON.stringify({baseline:model?.baseline_path,
+        activities:model?.activities?.map(a=>[a.id,a.label]),
+        conditions:model?.manual_review_conditions||[]});
+      if(document.getElementById('owgCatalogDifferenceReview')!==section||
+         generation!==editGeneration||current!==snapshot){
+        note.textContent='The process or review changed. Refresh the graph preview and choose again; no gates added.';
+        return;
+      }
+      const selected=rows.filter(row=>row.confirm.checked);
+      if(!selected.length){note.textContent='Choose at least one difference; nothing changed.';return;}
+      const prior=model.manual_review_conditions||[];
+      if(prior.length+selected.length>12){
+        note.textContent='The process permits at most 12 manual review conditions. Nothing was added.';return;
+      }
+      const keys=new Set(prior.map(c=>[c.activity_id,c.kind,c.condition_label.toLowerCase()].join('|')));
+      const additions=[];
+      for(const row of selected){
+        const name=row.label.value.trim();
+        if(!model.activities.some(a=>a.id===row.activity.value)||
+           !['decision_point','exception_condition'].includes(row.kind.value)||
+           !['pause_for_review','request_source_recheck','escalate_to_owner'].includes(row.response.value)||
+           !/^[A-Za-z][A-Za-z0-9 _-]{0,63}$/.test(name)){
+          note.textContent='Every selected gate needs an existing activity, explicit kind and response, and a valid 1–64 character label starting with a letter. Nothing was added.';
+          return;
+        }
+        const key=[row.activity.value,row.kind.value,name.toLowerCase()].join('|');
+        if(keys.has(key)){note.textContent='Duplicate clarification gate. Nothing was added.';return;}
+        keys.add(key);
+        additions.push({activity_id:row.activity.value,kind:row.kind.value,
+          condition_label:name,response:row.response.value,source:'user_declared_unverified',
+          evaluated_by_owg:false,automatic_branch_authorized:false,executable:false});
+      }
+      model.manual_review_conditions=[...prior,...additions];
+      changed();renderEditor();
+      status('Added '+additions.length+' unverified human-only clarification gate(s). Review and save the entire process separately; no source, agent or business action was performed.');
+    }));
+    host.appendChild(section);
+  }
   function renderEditor(){
     clearOrigins();
     clearSourceRuleChecks();
@@ -220,6 +342,7 @@
     if(model.activities.some(node=>['parallel_split','parallel_join'].includes(node.kind)))host.appendChild(el('p',
       'Parallel splits run every branch and joins require every branch. This bounded design supports disjoint unconditional branch chains and complete nested paired blocks; conditional parallel regions are unsupported. SDK projects validate complete token-firing schedules and execute one customer-authorized activity at a time.'));
     host.appendChild(button('Refresh graph preview',()=>renderEditor()));
+    renderDifferenceReview(host);
     const mutate=fn=>{fn();changed();renderEditor();};
     model.activities.forEach((activity,index)=>{
       const row=el('fieldset');row.appendChild(el('legend',activity.id));
@@ -607,6 +730,6 @@
     panel.appendChild(host);
   }
   window.owgProcessCatalog={saveDesigner,draftObserved,draftDiscovered,openSaved:ref=>load(ref.workflow_id,ref.revision,ref.content_sha256)};
-  window.__owgProcessCatalogModel={linearModel};
+  window.__owgProcessCatalogModel={linearModel,designPathDifferences};
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install);else install();
 })();
