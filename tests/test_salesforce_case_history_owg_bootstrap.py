@@ -115,3 +115,17 @@ def test_second_same_scope_refused_without_duplicate_log(context):
     with pytest.raises(BootstrapError, match="already has a local log"):
         bootstrap(**approved(other, port, receipt))
     assert len(workspace.list_logs()["logs"]) == 1
+
+def test_concurrent_same_scope_readback_never_certifies_checkpoint():
+    from server.salesforce_case_history_owg_bootstrap import _verify_new
+    ns = "sf_" + "a" * 32
+    def item(log_id):
+        return {
+            "log_id": log_id, "source_format": "csv",
+            "events": 1, "rejected_events": 0,
+            "source_identity": {"namespaces": [{
+                "source_namespace": ns, "case_namespace": ns}]},
+        }
+    first, second = "log_" + "1" * 16, "log_" + "2" * 16
+    with pytest.raises(BootstrapError, match="Concurrent duplicate"):
+        _verify_new([item(first), item(second)], first, ns, 1, set())
