@@ -103,10 +103,11 @@ def _check_audit_grant(path: Path, scope: SelectedIncidents, *,
         raise AuditError("Audit grant revoked or does not match exact scope")
 
 
-def _url(scope: SelectedIncidents, *, since: str, until: str, offset: int) -> str:
+def _url(scope: SelectedIncidents, *, fields: tuple[str, ...], since: str, until: str, offset: int) -> str:
     if type(offset) is not int or offset not in range(0, PAGE_SIZE * MAX_PAGES, PAGE_SIZE):
         raise AuditError("Invalid bounded audit page offset")
     query = ("tablename=incident^documentkeyIN" + ",".join(sorted(scope.sys_ids))
+             + "^fieldnameIN" + ",".join(sorted(fields))
              + "^sys_created_on>=" + since + "^sys_created_on<=" + until
              + "^ORDERBYsys_created_on^ORDERBYsys_id")
     params = {
@@ -170,7 +171,7 @@ def _read_audit(scope: SelectedIncidents, *, grant_file: Path,
         _check_grant(grant_file, scope)
         _check_audit_grant(audit_grant_file, scope, fields=fields,
                            since=since, until=until)
-        url = _url(scope, since=since, until=until, offset=page * PAGE_SIZE)
+        url = _url(scope, fields=fields, since=since, until=until, offset=page * PAGE_SIZE)
         req = request.Request(url, method="GET", headers={
             "Authorization": "Bearer " + bearer,
             "Accept": "application/json",
