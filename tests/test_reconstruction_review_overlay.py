@@ -231,3 +231,124 @@ def test_cli_scoring_and_duplicate_decision_keys_are_refused(tmp_path: Path):
                   "--output", str(invalid_output))
     assert refused.returncode == 2
     assert not invalid_output.exists()
+
+
+def _fragment_events() -> list[dict]:
+    # e03 has a direct weak edge to anchored A; e04 only reaches A through
+    # the still-unassigned e03. The Terminal boundary avoids a direct e04
+    # anchor edge. No temporal-proximity-only link is eligible.
+    events = [_event(1, A), _event(2, A), _event(3), _event(4), _event(5)]
+    events[-1]["app"] = "Terminal"
+    return events
+
+
+def test_real_linker_two_hop_fragment_requires_review_without_promoting_intermediary():
+    events = _fragment_events()
+    before = linked_work_items(events)
+    packet = prepare_review_packet(events)
+    direct = next(row for row in packet["eligible_candidates"] if row["event_id"] == "e03")
+    fragment = next(row for row in packet["eligible_candidates"] if row["event_id"] == "e04")
+    assert direct["evidence_hops"] == 1
+    assert fragment["evidence_hops"] == 2
+    assert packet["eligible_direct_review_total"] >= 1
+    assert packet["eligible_fragment_review_total"] >= 1
+    [target] = fragment["candidate_items"]
+    assert target["witness_event_path"][0:2] == ["e04", "e03"]
+    assert len(target["witness_event_path"]) == 3
+    assert target["weak_relation_path"] == ["surface_continuity", "surface_continuity"]
+    assert target["distinct_intermediary_count"] >= 1
+    overlay = apply_review(events, packet, _decision(packet, "e04", target["item_id"], "confirm"))
+    item = next(row for row in overlay["items"] if row["item_id"] == target["item_id"])
+    assert item["human_confirmed_two_hop_event_ids"] == ["e04"]
+    assert item["human_confirmed_direct_event_ids"] == []
+    assert overlay["human_confirmed_two_hop_count"] == 1
+    assert overlay["human_confirmed_direct_count"] == 0
+    assert "e03" in overlay["unassigned_event_ids"]
+    assert "e05" in overlay["unassigned_event_ids"]
+    assert linked_work_items(events) == before
+    for forbidden in ("SECRET", "PRIVATE", "private.example", "/medical-notes"):
+        assert forbidden not in json.dumps(packet)
+        assert forbidden not in json.dumps(overlay)
+
+
+def test_two_hop_review_refuses_forged_path_revocation_and_cross_scope():
+    events = _fragment_events()
+    packet = prepare_review_packet(events)
+    fragment = next(row for row in packet["eligible_candidates"] if row["event_id"] == "e04")
+    item_id = fragment["candidate_items"][0]["item_id"]
+    decision = _decision(packet, "e04", item_id, "confirm")
+    forged = copy.deepcopy(packet)
+    next(row for row in forged["eligible_candidates"] if row["event_id"] == "e04")[
+        "candidate_items"][0]["witness_event_path"][1] = "e99"
+    with pytest.raises(ValueError, match="stale|altered"):
+        apply_review(events, forged, decision)
+    changed = copy.deepcopy(events)
+    changed[3]["organization_id"] = "other-tenant"
+    with pytest.raises(ValueError, match="stale|altered"):
+        apply_review(changed, packet, decision)
+    changed_source = copy.deepcopy(events)
+    changed_source[3]["source"] = "browser"
+    assert all(row["event_id"] != "e04" or row["evidence_hops"] != 2
+               for row in prepare_review_packet(changed_source)["eligible_candidates"])
+    changed_scope = copy.deepcopy(events)
+    changed_scope[3]["organization_id"] = "other-tenant"
+    assert all(row["event_id"] != "e04" or row["evidence_hops"] != 2
+               for row in prepare_review_packet(changed_scope)["eligible_candidates"])
+    with pytest.raises(ValueError):
+        apply_review(events, packet, {**decision, "decisions": decision["decisions"] * 2})
+
+
+def test_two_hop_independent_scoring_separates_human_gain_from_auto_f1():
+    events = _fragment_events()
+    packet = prepare_review_packet(events)
+    fragment = next(row for row in packet["eligible_candidates"] if row["event_id"] == "e04")
+    decision = _decision(packet, "e04", fragment["candidate_items"][0]["item_id"], "confirm")
+    truth = {
+        "workflows": [{"event_ids": ["e01", "e02", "e04"]}],
+        "noise_event_ids": ["e03", "e05"],
+    }
+    report = score_review(events, packet, decision, truth)
+    assert report["human_confirmed_two_hop_count"] == 1
+    assert report["human_confirmed_direct_count"] == 0
+    assert (report["human_assisted_overlay"]["workflow_assignment_f1"]
+            > report["automatic_baseline"]["workflow_assignment_f1"])
+    assert report["human_assisted_overlay"]["interruption_rejection"] == 1.0
+    assert report["automatic_model_improvement_claim"] is False
+
+
+def test_two_hop_cli_prepare_apply_and_score_with_actual_linker(tmp_path: Path):
+    events = _fragment_events()
+    events_path = tmp_path / "events.json"
+    events_path.write_text(json.dumps(events))
+    packet_path = tmp_path / "packet.json"
+    root = Path(__file__).resolve().parents[1]
+    def run(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, "-m", "scripts.reconstruction_review", *args],
+            cwd=root, capture_output=True, text=True, timeout=30,
+        )
+    assert run("prepare", "--events", str(events_path),
+               "--output", str(packet_path)).returncode == 0
+    packet = json.loads(packet_path.read_text())
+    fragment = next(row for row in packet["eligible_candidates"] if row["event_id"] == "e04")
+    decisions_path = tmp_path / "decisions.json"
+    decisions_path.write_text(json.dumps(_decision(
+        packet, "e04", fragment["candidate_items"][0]["item_id"], "confirm")))
+    overlay_path = tmp_path / "overlay.json"
+    result = run("apply", "--events", str(events_path), "--packet", str(packet_path),
+                 "--decisions", str(decisions_path), "--output", str(overlay_path))
+    assert result.returncode == 0, result.stderr
+    assert json.loads(overlay_path.read_text())["human_confirmed_two_hop_count"] == 1
+    truth_path = tmp_path / "truth.json"
+    truth_path.write_text(json.dumps({
+        "workflows": [{"event_ids": ["e01", "e02", "e04"]}],
+        "noise_event_ids": ["e03", "e05"],
+    }))
+    score_path = tmp_path / "score.json"
+    result = run("score", "--events", str(events_path), "--packet", str(packet_path),
+                 "--decisions", str(decisions_path), "--truth", str(truth_path),
+                 "--output", str(score_path))
+    assert result.returncode == 0, result.stderr
+    assert json.loads(score_path.read_text())["human_confirmed_two_hop_count"] == 1
+    assert "PRIVATE" not in overlay_path.read_text()
+    assert "PRIVATE" not in score_path.read_text()
