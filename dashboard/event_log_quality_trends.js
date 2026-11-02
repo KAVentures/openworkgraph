@@ -83,8 +83,65 @@
         'Reason counts describe recorded categories, not raw source rows.') :
         'Rejection reasons were not recorded for this batch.'};
   }
+
+  const SHA256 = /^[a-f0-9]{64}$/;
+  // Compare two user-selected *stored* batches without reading source events.
+  // Missing intermediate reports or a changed mapping make the whole comparison
+  // ineligible; unknown denominators suppress only the affected metric delta.
+  function comparePair(trends, baseline, target) {
+    const refuse = reason => ({status:reason, rows:[]});
+    if (!trends || !Array.isArray(trends.batches)) return refuse('No saved batch reports.');
+    if (!Number.isSafeInteger(baseline) || !Number.isSafeInteger(target) ||
+        baseline < 0 || target < 0) return refuse('Select two valid stored batches.');
+    if (baseline === target) return refuse('Select two different batches.');
+    if (baseline > target) return refuse('Choose an earlier baseline and a later target.');
+    if (target - baseline >= MAX_VISIBLE)
+      return refuse('Comparison exceeds the latest '+MAX_VISIBLE+' displayed batches.');
+    const byId = new Map();
+    for (const item of trends.batches.slice(-MAX_VISIBLE)) {
+      if (!item || !Number.isSafeInteger(item.batch) || item.batch < 0) continue;
+      if (byId.has(item.batch)) return refuse('Duplicate batch identifiers; comparison unavailable.');
+      byId.set(item.batch,item);
+    }
+    if (!byId.has(baseline) || !byId.has(target))
+      return refuse('Selected report is outside the displayed batch window.');
+    const expected = byId.get(baseline).transform_sha256;
+    if (typeof expected !== 'string' || !SHA256.test(expected))
+      return refuse('Transform digest unknown; comparison unavailable.');
+    for (let id=baseline; id<=target; id++) {
+      const item=byId.get(id);
+      if (!item) return refuse('Missing intermediate quality report; comparison unavailable.');
+      const digest=item.transform_sha256;
+      if (typeof digest !== 'string' || !SHA256.test(digest))
+        return refuse('Transform digest unknown; comparison unavailable.');
+      if (digest !== expected)
+        return refuse('Mapping changed between selected batches; comparison unavailable.');
+    }
+    function metric(item,key) {
+      const m=item.metrics && item.metrics[key] || {};
+      const n=m.count, d=m.denominator;
+      const valid=Number.isSafeInteger(n) && n>=0 && Number.isSafeInteger(d) && d>0 && n<=d;
+      return {count:count(n),denominator:count(d),
+        rate:valid ? rate(n/d) : 'Unknown',numeric:valid ? n/d : null};
+    }
+    const first=byId.get(baseline),last=byId.get(target);
+    const compared=METRICS.map(([key,title])=>{
+      const before=metric(first,key),after=metric(last,key);
+      const future=key==='future_dated_events';
+      const valid=!future && before.numeric!==null && after.numeric!==null;
+      return {metric:title,baseline_count:before.count,baseline_denominator:before.denominator,
+        baseline_rate:before.rate,target_count:after.count,
+        target_denominator:after.denominator,target_rate:after.rate,
+        change:valid ? change((after.numeric-before.numeric)*100) : 'Not comparable',
+        reason:future ? 'Different report reference times' :
+          valid ? 'Descriptive difference only' : 'Missing or invalid count/denominator'};
+    });
+    return {status:'Same verified transform across '+(target-baseline+1)+
+      ' contiguous stored reports; descriptive comparison only.',
+      baseline:label(baseline),target:label(target),rows:compared};
+  }
   if (typeof module !== 'undefined' && module.exports)
-    module.exports = {rows,csv,csvCell,count,rate,change,status,detail,reviewRows,MAX_VISIBLE,MAX_REASONS};
+    module.exports = {rows,csv,csvCell,count,rate,change,status,detail,reviewRows,comparePair,MAX_VISIBLE,MAX_REASONS};
   if (typeof document === 'undefined') return;
   const element = (tag,text) => {const e=document.createElement(tag);if(text!==undefined)e.textContent=text;return e;};
   const logId = () => document.getElementById('owgEventLogPick')?.value || '';
@@ -101,6 +158,19 @@
     message.id='owgQualityTrendsStatus';message.className='muted';
     message.setAttribute('role','status');message.setAttribute('aria-live','polite');
     const output=element('div');output.id='owgQualityTrendsTable';
+    const pairPanel=element('section');pairPanel.id='owgQualityPairCompare';
+    const baselineLabel=element('label','Baseline batch: ');
+    baselineLabel.htmlFor='owgQualityPairBaseline';
+    const pairBaseline=element('select');pairBaseline.id='owgQualityPairBaseline';pairBaseline.disabled=true;
+    baselineLabel.appendChild(pairBaseline);
+    const targetLabel=element('label','Target batch: ');
+    targetLabel.htmlFor='owgQualityPairTarget';
+    const pairTarget=element('select');pairTarget.id='owgQualityPairTarget';pairTarget.disabled=true;
+    targetLabel.appendChild(pairTarget);
+    const pairOutput=element('div');pairOutput.id='owgQualityPairRows';
+    pairPanel.append(element('h4','Compare two selected batches'),
+      element('p','Compare stored counts only. Both reports and every intervening batch must have the same verified mapping.'),
+      baselineLabel,targetLabel,pairOutput);
     const reviewPanel=element('section');reviewPanel.id='owgQualityReviewQueue';
     const reviewOutput=element('div');reviewOutput.id='owgQualityReviewRows';
     reviewPanel.append(element('h4','Batch quality review queue'),
@@ -112,10 +182,37 @@
     drillLabel.appendChild(drillSelect);
     const drillOutput=element('div');drillOutput.id='owgQualityBatchDetails';
     drill.append(element('h4','Batch rejection diagnostics'),drillLabel,drillOutput);
-    panel.append(element('h4','Import/append quality trends'),intro,run,download,message,reviewPanel,output,drill);
+    panel.append(element('h4','Import/append quality trends'),intro,run,download,message,pairPanel,reviewPanel,output,drill);
     quality.appendChild(panel);
     const selected=logId();let ticket=0,loaded=null,loadedReports=[];
     const current=(id,n)=>panel.isConnected && logId()===id && ticket===n;
+    function showPair() {
+      pairOutput.replaceChildren();
+      if (!loaded || logId()!==selected) return;
+      const result=comparePair(loaded,Number(pairBaseline.value),Number(pairTarget.value));
+      pairOutput.appendChild(element('p',result.status));
+      if (!result.rows.length) return;
+      const table=element('table');table.id='owgQualityPairTable';
+      const head=element('thead'),header=element('tr');
+      for (const title of ['Metric','Baseline count','Baseline denominator','Baseline rate',
+        'Target count','Target denominator','Target rate','Change','Interpretation']) {
+        const th=element('th',title);th.scope='col';header.appendChild(th);
+      }
+      head.appendChild(header);
+      const body=element('tbody');
+      for (const item of result.rows) {
+        const tr=element('tr');
+        for (const key of ['metric','baseline_count','baseline_denominator','baseline_rate',
+          'target_count','target_denominator','target_rate','change','reason'])
+          tr.appendChild(element('td',item[key]));
+        body.appendChild(tr);
+      }
+      table.append(head,body);
+      const wrap=element('div');wrap.className='table-wrap';wrap.appendChild(table);
+      pairOutput.appendChild(wrap);
+    }
+    pairBaseline.addEventListener('change',showPair);
+    pairTarget.addEventListener('change',showPair);
     function showDetail() {
       drillOutput.replaceChildren();
       if (!loaded || logId()!==selected) return;
@@ -138,7 +235,10 @@
     drillSelect.addEventListener('change',showDetail);
     function clearState() {
       ++ticket;loaded=null;loadedReports=[];download.disabled=true;run.disabled=false;
-      output.replaceChildren();reviewOutput.replaceChildren();drillSelect.disabled=true;drillSelect.replaceChildren();
+      output.replaceChildren();reviewOutput.replaceChildren();pairOutput.replaceChildren();
+      pairBaseline.disabled=true;pairTarget.disabled=true;
+      pairBaseline.replaceChildren();pairTarget.replaceChildren();
+      drillSelect.disabled=true;drillSelect.replaceChildren();
       drillOutput.replaceChildren();
     }
     const picker=document.getElementById('owgEventLogPick');
@@ -164,6 +264,18 @@
         for(const batch of available){const option=element('option',label(batch.batch));option.value=String(batch.batch);drillSelect.appendChild(option);}
         drillSelect.disabled=!available.length;
         if(available.length){drillSelect.value=String(available[available.length-1].batch);showDetail();}
+        for(const batch of available) {
+          for(const select of [pairBaseline,pairTarget]) {
+            const option=element('option',label(batch.batch));option.value=String(batch.batch);
+            select.appendChild(option);
+          }
+        }
+        pairBaseline.disabled=available.length<2;pairTarget.disabled=available.length<2;
+        if(available.length>=2) {
+          pairBaseline.value=String(available[0].batch);
+          pairTarget.value=String(available[available.length-1].batch);
+          showPair();
+        } else pairOutput.appendChild(element('p','At least two stored reports are required.'));
         const queue=reviewRows(trends);
         if (queue.length) {
           const table=element('table');table.id='owgQualityReviewTable';
