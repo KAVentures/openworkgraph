@@ -144,6 +144,8 @@ class EventAttributeStatistic(_Strict):
     # (exclusive), with deterministic (timestamp, event ID) ordering.
     from_activity: Name | None = None
     to_activity: Name | None = None
+    # First observed start (default), or last start with a strictly later end.
+    stage_occurrence: Literal["first", "last_completed"] = "first"
     missing_policy: Literal["available", "complete"] = "available"
 
 
@@ -267,9 +269,13 @@ def parse(spec: Any) -> AnalysisSpec:
     if parsed.metrics and parsed.level != "cases":
         raise workspace.EventLogWorkspaceError("case metrics apply to case-level analyses")
     for metric in parsed.metrics:
-        if metric.kind == "event_attribute_statistic" and ((metric.from_activity is None) != (metric.to_activity is None)):
-            raise workspace.EventLogWorkspaceError(
-                "stage-bounded event attribute statistics require both from_activity and to_activity")
+        if metric.kind == "event_attribute_statistic":
+            if (metric.from_activity is None) != (metric.to_activity is None):
+                raise workspace.EventLogWorkspaceError(
+                    "stage-bounded event attribute statistics require both from_activity and to_activity")
+            if metric.stage_occurrence != "first" and metric.from_activity is None:
+                raise workspace.EventLogWorkspaceError(
+                    "stage_occurrence=last_completed requires both from_activity and to_activity")
     try:
         expressions.units(parsed.metrics)
     except ValueError as exc:
@@ -384,15 +390,38 @@ def _metrics(conn, metrics: list[Any]) -> tuple[dict[str, str], list[dict[str, A
                     SELECT case_id, activity, attributes,
                         row_number() OVER (PARTITION BY case_id ORDER BY ts, event_id) AS ordinal
                     FROM ce WHERE case_id IN (SELECT case_id FROM qc)""")
-                conn.execute("""CREATE OR REPLACE TEMP TABLE qstage AS
-                    WITH starts AS (
-                        SELECT case_id, min(ordinal) AS start_pos FROM qordered
-                        WHERE activity = ? GROUP BY case_id)
-                    SELECT s.case_id, s.start_pos, min(e.ordinal) AS end_pos
-                    FROM starts s LEFT JOIN qordered e
-                      ON e.case_id = s.case_id AND e.ordinal > s.start_pos AND e.activity = ?
-                    GROUP BY s.case_id, s.start_pos""",
-                    [metric.from_activity, metric.to_activity])
+                if metric.stage_occurrence == "first":
+                    conn.execute("""CREATE OR REPLACE TEMP TABLE qstage AS
+                        WITH starts AS (
+                            SELECT case_id, min(ordinal) AS start_pos FROM qordered
+                            WHERE activity = ? GROUP BY case_id)
+                        SELECT s.case_id, s.start_pos, min(e.ordinal) AS end_pos
+                        FROM starts s LEFT JOIN qordered e
+                          ON e.case_id = s.case_id AND e.ordinal > s.start_pos AND e.activity = ?
+                        GROUP BY s.case_id, s.start_pos""",
+                        [metric.from_activity, metric.to_activity])
+                else:
+                    # One linear window pass finds the next observed end for
+                    # every start. Latest *completed* start wins, not an
+                    # unfinished trailing cycle.
+                    conn.execute("""CREATE OR REPLACE TEMP TABLE qstage AS
+                        WITH next_ends AS (
+                            SELECT case_id, activity, ordinal,
+                                min(CASE WHEN activity = ? THEN ordinal END)
+                                  OVER (PARTITION BY case_id ORDER BY ordinal
+                                        ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING) AS end_pos
+                            FROM qordered),
+                        starts AS (
+                            SELECT case_id, ordinal AS start_pos, end_pos
+                            FROM next_ends WHERE activity = ?),
+                        selected AS (
+                            SELECT case_id,
+                                max(start_pos) FILTER (WHERE end_pos IS NOT NULL) AS start_pos
+                            FROM starts GROUP BY case_id)
+                        SELECT s.case_id, s.start_pos, a.end_pos
+                        FROM selected s LEFT JOIN starts a
+                          ON a.case_id = s.case_id AND a.start_pos = s.start_pos""",
+                        [metric.to_activity, metric.from_activity])
                 missing_start = int(conn.execute("""SELECT count(*) FROM qc q WHERE NOT EXISTS
                     (SELECT 1 FROM qstage s WHERE s.case_id = q.case_id)""").fetchone()[0])
                 missing_end = int(conn.execute(
@@ -400,6 +429,16 @@ def _metrics(conn, metrics: list[Any]) -> tuple[dict[str, str], list[dict[str, A
                 extra["cases_without_stage_start"] = missing_start
                 extra["cases_without_later_stage_end"] = missing_end
                 extra["cases_without_complete_stage"] = missing_start + missing_end
+                if metric.stage_occurrence == "last_completed":
+                    # A subsequent unmatched start is not a failed or complete
+                    # stage. Disclose it separately from the selected value.
+                    extra["cases_with_trailing_unfinished_stage"] = int(conn.execute(
+                        """SELECT count(*) FROM qc q WHERE EXISTS (
+                            SELECT 1 FROM qordered e LEFT JOIN qstage s
+                              ON e.case_id = s.case_id
+                            WHERE e.case_id = q.case_id AND e.activity = ?
+                              AND e.ordinal > coalesce(s.end_pos, 0))""",
+                        [metric.from_activity]).fetchone()[0])
                 source = """FROM qordered e JOIN qstage s ON e.case_id = s.case_id
                     WHERE s.end_pos IS NOT NULL AND e.ordinal >= s.start_pos
                       AND e.ordinal < s.end_pos"""
@@ -422,11 +461,11 @@ def _metrics(conn, metrics: list[Any]) -> tuple[dict[str, str], list[dict[str, A
                     count(*) FILTER (WHERE finite_rows > 0 AND excluded_rows > 0),
                     count(*) FILTER (WHERE finite_rows = 0)
                 FROM qstat""").fetchone()
-            extra = dict(zip(("flattened_case_event_rows_considered",
+            extra.update(dict(zip(("flattened_case_event_rows_considered",
                               "event_rows_with_finite_attribute",
                               "event_rows_with_missing_invalid_or_nonfinite_attribute",
                               "cases_with_partial_attribute_coverage",
-                              "cases_with_no_finite_attribute"), (int(v or 0) for v in stats)))
+                              "cases_with_no_finite_attribute"), (int(v or 0) for v in stats))))
             # No matching activity is not a zero-valued metric or a complete
             # observation; it is a missing case, even with complete policy.
             absent = int(conn.execute("""SELECT count(*) FROM qc q
