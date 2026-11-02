@@ -285,3 +285,50 @@ must also pass on the exact PR head before merge. Synthetic tests are not
 customer acceptance. No claim is made that input amounts share a currency,
 that missing values are missing at random, that a recorded value reflects a
 source-of-truth balance, or that a statistical association is causal.
+
+
+## Dashboard: build scoped numeric statistics without writing JSON
+
+Open **Large event logs**, import or select an authorized local log, and choose
+**Analyse → Build an analysis → Cases**. In **Case metrics (optional)** choose
+**Numeric event values within each case or stage**. Give the metric a unique
+lower-case name, enter the exact imported numeric event-attribute key (for
+example `amount`) and its **declared** unit (for example `EUR`), and select
+one of: average, minimum, maximum, median, 90th percentile, total, or
+population standard deviation. These describe finite numeric values **within
+each observed case**; an outer measure (for example **Average** or **Total**)
+then aggregates the per-case results. No currencies are converted.
+
+Choose **Use available finite values** to omit invalid/missing values and
+disclose their counts, or **Require every matching event to have a finite
+value** to withhold incomplete cases. Optionally restrict the calculation to
+one exact activity. To analyse a completed stage instead of the whole case,
+select **both** a start and end activity and choose either **First observed
+completed stage** or **Last completed stage**. The start is included and the
+end is excluded; a trailing unfinished stage is never treated as complete.
+Partial stage selections are rejected in the form before any request.
+
+Click **Add metric to this analysis**, select a measure such as **Average
+<metric>** or **Total <metric>**, and run. The dashboard sends the typed
+`event_attribute_statistic` definition to the **existing authenticated
+analysis API**; it does not generate or execute arbitrary SQL. **Save metric
+for reuse** stores the exact selectors in the log's metric library; **Save
+analysis** stores the definitions and selected measures together. Existing
+JSON/CSV exports retain the resulting numeric values and disclosed coverage.
+Re-running a saved analysis reads the current retained log; it does **not**
+pin a source snapshot. Deleting the local log removes its saved definitions.
+
+**Worked example:** an observed case contains `Start(2), Work(4), End,
+Start(8), Work(10), End, Start(100)`. With `attribute=amount`,
+`statistic=average`, and stage `Start→End`, **first** produces 3 and
+**last completed** produces 9; the unfinished final start contributes to
+neither. Another case with `Start(5), Work(invalid), End` contributes 5
+under **available**, but is unknown under **complete**. Unknown is never
+silently counted as a zero. These examples are observed log arithmetic,
+not source-of-truth payment reconciliation or evidence of complete events.
+
+The committed Chromium browser acceptance exercises the form, invalid
+stage refusal, real local CSV import with an explicitly retained numeric
+attribute, session-authenticated analysis requests, last-completed versus
+first-stage results, saved metrics/analyses, CSV export and WCAG checks.
+Native CI and real consenting customer acceptance remain separate gates.
