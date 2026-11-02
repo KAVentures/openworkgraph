@@ -345,7 +345,7 @@ def test_two_hop_review_recomputes_after_retention_and_does_not_promote_membersh
     events = [event(1, A), event(2, A), event(3, None),
               event(4, None), event(5, None), event(6, B), event(7, B)]
     assert linked_work_items(events)["ambiguous_fragment_review_competing_count"] == 1
-    after = linked_work_items(events[:5] + [events[6]])
+    after = linked_work_items([events[0], *events[2:5], events[6]])
     # Neither source record now has two admitted observations. There is no
     # visible source-anchored item, so no review target may be invented.
     assert after["ambiguous_fragment_review_total"] == 0
