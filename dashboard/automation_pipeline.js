@@ -99,6 +99,47 @@
       source_read_authorized:false,verified_execution:false,verified_business_outcomes:false};
   }
 
+  // Read-only change in human review requirements between two recorded projects.
+  // Disappearing blockers are NOT independently resolved or authorized.
+  function compareProjectHandoffReadiness(journey,baselineId,candidateId,ideaId,createdAt){
+    const comparison=compareRecordedProjects(journey,baselineId,candidateId);
+    if(typeof ideaId!=='string'||!ideaId||ideaId.length>128||
+      !Array.isArray(journey.dataset_origins)||journey.dataset_origins.length>64||
+      journey.projects.some(p=>typeof p.project_id!=='string'||p.project_id.length>128))
+      throw new Error('Review basis is incomplete or invalid. Refresh the journey.');
+    const a=handoffDependencyReview(journey,baselineId,ideaId,createdAt);
+    const b=handoffDependencyReview(journey,candidateId,ideaId,createdAt);
+    if(a.basis.dataset_origins_truncated||b.basis.dataset_origins_truncated||
+      a.basis.reports_truncated||b.basis.reports_truncated)
+      throw new Error('Review coverage is truncated. Compare only a complete local journey.');
+    const oldPacket=handoffReviewPacket(journey,baselineId,ideaId,createdAt);
+    const newPacket=handoffReviewPacket(journey,candidateId,ideaId,createdAt);
+    const old=new Set(oldPacket.readiness.blockers),next=new Set(newPacket.readiness.blockers);
+    const stages=a.stages.map((row,index)=>{
+      const newer=b.stages[index];
+      if(!newer||newer.id!==row.id)throw new Error('Review stages cannot be compared.');
+      return {id:row.id,label:row.label,baseline_status:row.status,
+        candidate_status:newer.status,changed:row.status!==newer.status};
+    });
+    const identity=packet=>({
+      project_id:packet.project.project_id,idea_revision:packet.project.idea_revision,
+      spec_sha256:packet.project.spec_sha256,archive_sha256:packet.project.archive_sha256
+    });
+    return {
+      format:'openworkgraph.project-handoff-readiness-comparison.v1',
+      generated_at:createdAt,scope:'read_only_human_review',idea_id:ideaId,
+      baseline:identity(oldPacket),candidate:identity(newPacket),
+      artifact_fields_changed:comparison.changed_count,
+      blockers:{introduced:[...next].filter(k=>!old.has(k)).sort(),
+        no_longer_reported:[...old].filter(k=>!next.has(k)).sort(),
+        still_outstanding:[...next].filter(k=>old.has(k)).sort()},
+      stages,coverage:{baseline:a.coverage,candidate:b.coverage},
+      execution_authorized:false,source_read_authorized:false,
+      verified_execution:false,verified_business_outcomes:false,
+      handoff_review_complete:false
+    };
+  }
+
   // A bounded, read-only dependency review of the exact selected project.
   // It is a reviewer aid, NOT an authoritative cross-store lineage graph.
   // Source status is the locally recorded status, never a provider receipt.
@@ -647,6 +688,56 @@
               table.append(thead,tbody);
               const wrap=el('div',null,'table-wrap');wrap.style.overflowWrap='anywhere';
               wrap.appendChild(table);comparisonView.appendChild(wrap);
+              // Review changes across the seven dependency stages, not just hashes.
+              const readiness=compareProjectHandoffReadiness(data,
+                comparison.baseline_project_id,comparison.candidate_project_id,
+                idea.idea_id,new Date().toISOString());
+              const readinessSection=el('section');readinessSection.id='owgPipelineProjectReadinessDelta';
+              readinessSection.append(el('h6','Human handoff review changes'),
+                el('p','Recorded review differences only; disappearing checks are not verified as resolved. No execution permission.','muted'));
+              const blockerList=el('ul');
+              for(const [label,keys] of [
+                ['Newly reported checks',readiness.blockers.introduced],
+                ['No longer reported (not independently resolved)',readiness.blockers.no_longer_reported],
+                ['Still outstanding',readiness.blockers.still_outstanding]])
+                blockerList.appendChild(el('li',label+': '+(keys.length?keys.join(', ').replaceAll('_',' '):'None')));
+              const stageTable=el('table'),stageHead=el('tr');
+              for(const label of ['Evidence stage','Baseline status','Candidate status','Review change']){
+                const th=el('th',label);th.scope='col';stageHead.appendChild(th);
+              }
+              const stageThead=el('thead');stageThead.appendChild(stageHead);
+              const stageBody=el('tbody');
+              readiness.stages.forEach(stage=>{
+                const tr=el('tr'),th=el('th',stage.label);th.scope='row';
+                tr.append(th,el('td',stage.baseline_status.replaceAll('_',' ')),
+                  el('td',stage.candidate_status.replaceAll('_',' ')),
+                  el('td',stage.changed?'Changed; re-review':'Same recorded status'));
+                stageBody.appendChild(tr);
+              });
+              stageTable.append(stageThead,stageBody);
+              const stageWrap=el('div',null,'table-wrap');
+              stageWrap.style.overflowWrap='anywhere';stageWrap.appendChild(stageTable);
+              const exportReadiness=button('Download minimized handoff readiness comparison JSON','secondary');
+              exportReadiness.id='owgPipelineProjectReadinessDownload';
+              const readinessStatus=el('p','Comparison is local and read-only.','muted');
+              readinessStatus.setAttribute('role','status');readinessStatus.setAttribute('aria-live','polite');
+              exportReadiness.onclick=()=>{
+                if(generation!==detailGeneration||!comparisonView.contains(exportReadiness)||
+                  baselineProject.value!==comparison.baseline_project_id||
+                  candidateProject.value!==comparison.candidate_project_id)return;
+                try{
+                  const payload=JSON.stringify(readiness,null,2)+String.fromCharCode(10);
+                  const blob=new Blob([payload],{type:'application/json'});
+                  if(blob.size>65536)throw new Error('Comparison exceeds 64 KiB.');
+                  const url=URL.createObjectURL(blob),link=el('a');
+                  link.href=url;link.download='owg-project-handoff-readiness-comparison.json';
+                  document.body.appendChild(link);link.click();link.remove();
+                  setTimeout(()=>URL.revokeObjectURL(url),1000);
+                  readinessStatus.textContent='Downloaded review differences only. No consent, approval or execution was granted.';
+                }catch(e){readinessStatus.textContent=e.message;}
+              };
+              readinessSection.append(blockerList,stageWrap,exportReadiness,readinessStatus);
+              comparisonView.appendChild(readinessSection);
               const inspect=(label,id)=>{
                 const action=button(label,'secondary');
                 action.onclick=()=>{
@@ -1279,6 +1370,6 @@
     refresh().catch(e=>{status.textContent=e.message;});
   }
 
-  window.__owgPipelineModel={assessmentBody,portfolioView,handoffReviewPacket,handoffDependencyReview,compareHandoffReviewPackets,compareRecordedProjects,handoffInspectionWorklist,handoffInspectionSnapshotDigest,restoreHandoffInspectionKeys};
+  window.__owgPipelineModel={assessmentBody,portfolioView,handoffReviewPacket,handoffDependencyReview,compareHandoffReviewPackets,compareRecordedProjects,compareProjectHandoffReadiness,handoffInspectionWorklist,handoffInspectionSnapshotDigest,restoreHandoffInspectionKeys};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
