@@ -13,6 +13,7 @@ import sys
 from typing import Any
 
 from server.reconstruction_review_overlay import (
+    BATCH_FORMAT, MAX_BATCH_SESSIONS, aggregate_review_scores,
     apply_review, prepare_review_packet, score_review,
 )
 
@@ -61,16 +62,49 @@ def _write_private(path: str, document: dict[str, Any]) -> None:
         raise
 
 
+def _score_batch(manifest: Any) -> dict[str, Any]:
+    """Run the real linker and scorer on each explicitly selected local session."""
+    if type(manifest) is not dict or set(manifest) != {"format", "sessions"}:
+        raise ValueError("batch manifest must contain only format and sessions")
+    if manifest["format"] != "openworkgraph.reconstruction-review-manifest.v1":
+        raise ValueError("unsupported reconstruction batch manifest")
+    sessions = manifest["sessions"]
+    if type(sessions) is not list or not 2 <= len(sessions) <= MAX_BATCH_SESSIONS:
+        raise ValueError("batch requires 2 to 24 sessions")
+    reports = []
+    for session in sessions:
+        if type(session) is not dict or set(session) != {
+            "events", "packet", "decisions", "truth",
+        }:
+            raise ValueError("each session needs events, packet, decisions and truth")
+        if any(type(value) is not str or not 1 <= len(value) <= 4096
+               for value in session.values()):
+            raise ValueError("session file paths must be nonempty bounded strings")
+        events = _read_json(session["events"])
+        packet = _read_json(session["packet"], max_bytes=1024 * 1024)
+        decisions = _read_json(session["decisions"], max_bytes=128 * 1024)
+        truth = _read_json(session["truth"], max_bytes=1024 * 1024)
+        # score_review rederives the current evidence, rejects stale/forged
+        # packets and verifies complete independent labels before scoring.
+        reports.append(score_review(events, packet, decisions, truth))
+    return aggregate_review_scores(reports)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Human-reviewed, evidence-bound local reconstruction overlay"
     )
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("prepare", "apply", "score"):
+    for name in ("prepare", "apply", "score", "score-batch"):
         command = sub.add_parser(name)
-        command.add_argument("--events", required=True, help="consented local JSON event array")
+        if name == "score-batch":
+            command.add_argument("--manifest", required=True,
+                                 help="local list of independent annotated sessions")
+        else:
+            command.add_argument("--events", required=True,
+                                 help="consented local JSON event array")
         command.add_argument("--output", required=True, help="new local private JSON file")
-        if name != "prepare":
+        if name in ("apply", "score"):
             command.add_argument("--packet", required=True)
             command.add_argument("--decisions", required=True)
         if name == "score":
@@ -78,10 +112,13 @@ def main(argv: list[str] | None = None) -> int:
                                  help="independent complete local annotations")
     args = parser.parse_args(argv)
     try:
-        events = _read_json(args.events)
+        if args.command == "score-batch":
+            result = _score_batch(_read_json(args.manifest, max_bytes=128 * 1024))
+        else:
+            events = _read_json(args.events)
         if args.command == "prepare":
             result = prepare_review_packet(events)
-        else:
+        elif args.command != "score-batch":
             packet = _read_json(args.packet, max_bytes=1024 * 1024)
             decisions = _read_json(args.decisions, max_bytes=128 * 1024)
             if args.command == "apply":
