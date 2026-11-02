@@ -57,6 +57,48 @@
   }
 
 
+  // Read-only comparison of two pinned project exports in an authenticated journey.
+  function compareRecordedProjects(journey,baselineId,candidateId){
+    if(!journey||!Array.isArray(journey.projects)||journey.projects_truncated)
+      throw new Error('Project history is incomplete; refresh a full journey before comparing.');
+    if(typeof baselineId!=='string'||typeof candidateId!=='string'||!baselineId||
+      !candidateId||baselineId===candidateId)
+      throw new Error('Select two different recorded projects.');
+    const a=journey.projects.find(p=>p.project_id===baselineId);
+    const b=journey.projects.find(p=>p.project_id===candidateId);
+    if(!a||!b)throw new Error('A selected project is unavailable; refresh before comparing.');
+    const sha=v=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v);
+    const summary=p=>{
+      if(!Number.isSafeInteger(p.idea_revision)||p.idea_revision<1||
+        typeof p.idea_revision_is_current!=='boolean'||!sha(p.spec_sha256)||
+        !sha(p.archive_sha256)||!Array.isArray(p.reported_specifications)||
+        p.reported_specifications.length>64||!p.source_check_exports||
+        !Number.isSafeInteger(p.source_check_exports.count)||p.source_check_exports.count<0||
+        (p.source_check_exports.last_document_sha256!=null&&
+          !sha(p.source_check_exports.last_document_sha256)))
+        throw new Error('Project comparison metadata is invalid or incomplete.');
+      const counts=new Map();
+      for(const report of p.reported_specifications){
+        if(typeof report?.status!=='string'||!/^[a-z_]{1,64}$/.test(report.status))
+          throw new Error('A report status is invalid or unavailable.');
+        counts.set(report.status,(counts.get(report.status)||0)+1);
+      }
+      return [String(p.idea_revision),p.idea_revision_is_current?'Yes':'No (historical)',
+        p.spec_sha256,p.archive_sha256,
+        [...counts].sort(([x],[y])=>x.localeCompare(y)).map(([s,n])=>s+': '+n).join(' · ')||'None recorded',
+        String(p.source_check_exports.count),p.source_check_exports.last_document_sha256||'None recorded'];
+    };
+    const names=['Idea revision','Current idea revision','Specification SHA-256','ZIP SHA-256',
+      'Reported specification status counts','Recorded source-check export count',
+      'Latest source-check document SHA-256'];
+    const left=summary(a),right=summary(b);
+    const fields=names.map((label,i)=>({label,baseline:left[i],candidate:right[i],
+      changed:left[i]!==right[i]}));
+    return {baseline_project_id:baselineId,candidate_project_id:candidateId,
+      fields,changed_count:fields.filter(f=>f.changed).length,execution_authorized:false,
+      source_read_authorized:false,verified_execution:false,verified_business_outcomes:false};
+  }
+
   // Compare an imported point-in-time review packet against a freshly fetched local journey.
   // Never restore approval or trust imported fields as execution/verification evidence.
   function compareHandoffReviewPackets(saved,current){
@@ -467,6 +509,65 @@
           }
           const choice=select('owgPipelineJourneyProject',data.projects.map(p=>[p.project_id,'Idea revision '+p.idea_revision+' · '+p.created_at]));
           if(resume)choice.value=resume.projectId;
+          // Compare immutable exports without creating a project or contacting providers.
+          const projectCompare=el('section');projectCompare.id='owgPipelineProjectComparison';
+          projectCompare.append(el('h5','Compare two recorded project exports'),
+            el('p','Review pinned artifact hashes and report/source-check metadata from this local snapshot. This does not verify execution or business outcomes.','muted'));
+          const projectOptions=[['','Choose a recorded project'],...data.projects.map(p=>[
+            p.project_id,'Idea revision '+p.idea_revision+' · '+p.project_id])];
+          const baselineProject=select('owgPipelineCompareBaseline',projectOptions);
+          const candidateProject=select('owgPipelineCompareCandidate',projectOptions);
+          const compareProjects=button('Compare recorded project exports','secondary');
+          compareProjects.id='owgPipelineCompareProjects';
+          compareProjects.disabled=data.projects.length<2||!!data.projects_truncated;
+          const comparisonView=el('div','Choose two different projects, then compare explicitly.','muted');
+          comparisonView.id='owgPipelineProjectComparisonResult';
+          comparisonView.setAttribute('role','status');comparisonView.setAttribute('aria-live','polite');
+          const invalidateProjectComparison=()=>{
+            comparisonView.textContent='Selection changed. Compare explicitly again to review pinned records.';
+          };
+          baselineProject.onchange=invalidateProjectComparison;
+          candidateProject.onchange=invalidateProjectComparison;
+          compareProjects.onclick=()=>{
+            if(generation!==detailGeneration||!journeyHost.contains(projectCompare))return;
+            try{
+              const comparison=compareRecordedProjects(data,baselineProject.value,candidateProject.value);
+              comparisonView.replaceChildren(el('p',comparison.changed_count?
+                comparison.changed_count+' recorded artifact/metadata differences. Review the pinned projects before a new handoff.':
+                'No difference in compared recorded fields. Execution and business outcomes remain unverified.'));
+              const table=el('table'),head=el('tr');
+              for(const title of ['Recorded field','Baseline project','Candidate project','Comparison']){
+                const th=el('th',title);th.scope='col';head.appendChild(th);
+              }
+              const thead=el('thead');thead.appendChild(head);
+              const tbody=el('tbody');
+              for(const item of comparison.fields){
+                const tr=el('tr'),th=el('th',item.label);th.scope='row';
+                tr.append(th,el('td',item.baseline),el('td',item.candidate),
+                  el('td',item.changed?'Changed':'Matching recorded field'));
+                tbody.appendChild(tr);
+              }
+              table.append(thead,tbody);
+              const wrap=el('div',null,'table-wrap');wrap.style.overflowWrap='anywhere';
+              wrap.appendChild(table);comparisonView.appendChild(wrap);
+              const inspect=(label,id)=>{
+                const action=button(label,'secondary');
+                action.onclick=()=>{
+                  if(generation!==detailGeneration||!journeyHost.contains(projectCompare)||
+                    !data.projects.some(p=>p.project_id===id))return;
+                  choice.value=id;choice.onchange();choice.focus();
+                };
+                comparisonView.appendChild(action);
+              };
+              inspect('Inspect baseline exact project',comparison.baseline_project_id);
+              inspect('Inspect candidate exact project',comparison.candidate_project_id);
+              comparisonView.appendChild(el('p','Point-in-time local comparison only. No approval, source access, run attribution, execution or business outcome verification. Refresh the journey to check newer records.','muted'));
+            }catch(e){comparisonView.textContent=e.message;}
+          };
+          projectCompare.append(field('Baseline recorded project',baselineProject),
+            field('Candidate recorded project',candidateProject),compareProjects,comparisonView);
+          if(data.projects_truncated)projectCompare.appendChild(el('p',
+            'Project list truncated; compare only after complete history is available.','muted'));
           const artifact=el('div');artifact.id='owgPipelineJourneyArtifact';
           let resumeCompare=null;
           const render=()=>{
@@ -811,7 +912,7 @@
             if(!p.idea_revision_is_current)artifact.appendChild(el('p',
               'Historical idea revision: reopen and review the current idea before attempting new checks or report associations.','muted'));
           };
-          choice.onchange=render;journeyHost.append(field('Recorded project',choice),artifact);render();
+          choice.onchange=()=>{invalidateProjectComparison();render();};journeyHost.append(field('Recorded project',choice),projectCompare,artifact);render();
           if(resume&&resume.valid()&&generation===detailGeneration&&resumeCompare){
             await resumeCompare();
             if(resume.valid()&&generation===detailGeneration)
@@ -1028,6 +1129,6 @@
     refresh().catch(e=>{status.textContent=e.message;});
   }
 
-  window.__owgPipelineModel={assessmentBody,portfolioView,handoffReviewPacket,compareHandoffReviewPackets,handoffInspectionWorklist,handoffInspectionSnapshotDigest,restoreHandoffInspectionKeys};
+  window.__owgPipelineModel={assessmentBody,portfolioView,handoffReviewPacket,compareHandoffReviewPackets,compareRecordedProjects,handoffInspectionWorklist,handoffInspectionSnapshotDigest,restoreHandoffInspectionKeys};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
