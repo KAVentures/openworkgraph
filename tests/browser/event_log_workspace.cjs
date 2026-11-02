@@ -1040,7 +1040,7 @@ const path=require('node:path');
      'A,Start,2024-01-01T00:03:00Z,8','A,Work,2024-01-01T00:04:00Z,10','A,End,2024-01-01T00:05:00Z,',
      'A,Start,2024-01-01T00:06:00Z,100',
      'B,Start,2024-01-02T00:00:00Z,5','B,Work,2024-01-02T00:01:00Z,invalid','B,End,2024-01-02T00:02:00Z,'];
-   await page.locator('#owgEventLogFile').setInputFiles({name:'numeric-stage.csv',mimeType:'text/csv',buffer:Buffer.from(amountRows.join('\\n'))});
+   await page.locator('#owgEventLogFile').setInputFiles({name:'numeric-stage.csv',mimeType:'text/csv',buffer:Buffer.from(amountRows.join('\n'))});
    await page.locator('#owgEventLogDelimiter').selectOption(',');
    await page.waitForFunction(()=>document.querySelector('#owgEventLogAttributes')?.options.length===4);
    await page.locator('#owgEventLogName').fill('Observed numeric stages');
@@ -1071,7 +1071,7 @@ const path=require('node:path');
    await page.locator('#owgAnalysisMeasure2').selectOption('');
    await page.locator('#owgAnalysisBackground').uncheck();
    const [lastStageResponse]=await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),page.locator('#owgAnalysisRun').click()]);
-   assert.equal(lastStageResponse.status(),200,await lastStageResponse.text());
+   assert.equal(lastStageResponse.status(),200);
    const lastSpec=JSON.parse(lastStageResponse.request().postData());
    assert.deepEqual(lastSpec.metrics[0],{name:'last_review_avg',kind:'event_attribute_statistic',
      attribute:'amount',unit:'EUR',statistic:'average',missing_policy:'complete',
@@ -1089,7 +1089,7 @@ const path=require('node:path');
      page.getByRole('button',{name:'Run saved analysis Last completed review amounts',exact:true}).click()]);
    assert.deepEqual((await savedStatResponse.json()).rows,[[9]]);
    const [numericCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCsv').click()]);
-   assert.match(await fs.readFile(await numericCsv.path(),'utf8'),/avg_metric:last_review_avg\\r\\n9/);
+   assert.match(await fs.readFile(await numericCsv.path(),'utf8'),/avg_metric:last_review_avg\r\n9/);
 
    // Available policy keeps observed values but discloses invalid ones; totals are not inferred completeness.
    await page.locator('#owgMetricName').fill('first_review_total');
@@ -1099,7 +1099,7 @@ const path=require('node:path');
    await page.locator('#owgMetricAdd').click();
    await page.locator('#owgAnalysisMeasure1').selectOption('sum:metric:first_review_total');
    const [firstStageResponse]=await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')),page.locator('#owgAnalysisRun').click()]);
-   assert.equal(firstStageResponse.status(),200,await firstStageResponse.text());
+   assert.equal(firstStageResponse.status(),200);
    const firstStage=await firstStageResponse.json();
    assert.deepEqual(firstStage.rows,[[11]],'A first-stage 2+4 and B observed 5; invalid B Work omitted');
    assert.equal(firstStage.metrics[1].cases_with_value,2);
