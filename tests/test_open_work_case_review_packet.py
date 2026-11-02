@@ -205,9 +205,15 @@ def test_packet_forgery_expiry_and_revocation_fail_before_ledger_reads(local, mo
         assert _verify(client, headers, saved, {**packet, "extra": True}).status_code in (409, 422)
 
         now = datetime.now(timezone.utc)
-        monkeypatch.setattr(packets, "_clock", lambda _now: now + timedelta(hours=2))
-        assert _verify(client, headers, saved, packet).status_code in (409, 422)
-        monkeypatch.undo()
+        with monkeypatch.context() as patch:
+            patch.setattr(packets, "_clock", lambda _now: now + timedelta(hours=2))
+            assert _verify(client, headers, saved, packet).status_code in (409, 422)
+
+        tampered_case = deepcopy(packet)
+        tampered_case["case_digests"][0] = "f" * 64
+        assert _verify(client, headers, saved, tampered_case).status_code in (409, 422)
+        declarations.clear_case_declarations()
+        assert _verify(client, headers, saved, packet).status_code in (403, 409, 422)
 
 
 def test_packet_partial_coverage_auth_and_source_revocation(local, monkeypatch):
