@@ -400,3 +400,59 @@ disputed histories, no prior check, forgery, stale CAS, source-account
 replacement, revocation and no provider I/O during renewal. These committed
 synthetic tests are **not** real restricted-Stripe acceptance. Full exact-head
 native CI and a consenting live test-account pilot remain release gates.
+
+
+## Actionable historical outcome review (prerequisite-first)
+
+The existing local dashboard-session-authenticated
+`POST /v1/open-work/declarations/human-outcomes/evidence-triage`
+now includes an additive `review_action_plan` field. Submit the existing
+exact-CAS body (`work_item_ref`, `expected_revision`,
+`expected_edit_token`, `confirm_historical_review: true`,
+`max_cases: 1..4`). The server admits the reviewed owner dependency graph,
+reads the private HMAC-validated human and provider evidence ledgers, and
+derives a **prerequisite-first operator worklist**. No new endpoint, credential,
+source read, evidence write, cloud sync, or agent permission is introduced.
+
+Each case contains its opaque reference, selected prerequisite references,
+unresolved-prerequisite flags, historical evidence state, and ordered
+`operator_actions` with existing REST path hints. The plan distinguishes:
+
+- `record_human_assessment`: no retained explicit human assessment.
+- `review_human_provider_disagreement`: a declared Stripe-payment goal has
+  contradictory human assessment and historical provider evidence.
+- `obtain_signed_invoice_link`: an explicitly declared Stripe-payment goal
+  has no retained provider check and requires a separately authorized source
+  join before a fresh verification.
+- `fresh_declared_payment_check`: even an undisputed historical `paid`
+  check is not a current provider result; the existing explicit verify API
+  must re-admit owner/source/review and use a valid signed link.
+- `review_historical_provider_evidence`: a **non-payment** declared goal
+  lacks usable operation evidence. This action never routes non-payment goals
+  to the Stripe payment-verification API.
+- `expand_dependency_review`: the requested `max_cases` omitted one or
+  more reviewed prerequisites, so the root cannot be treated as fully covered.
+
+A selected dependent case reports `prerequisite_review_pending` when an
+included prerequisite has unresolved historical evidence or when the root
+has omitted prerequisites. It does **not** infer that a business obligation
+exists or that the dependent's actual execution is blocked. `review_state:
+historical_evidence_present` means only that the bounded historical review
+found no missing/contradictory ledger facts; it is **not** completion, current
+payment, settlement, customer success, or agent causality. Source state
+remains unknown until a separate explicit fresh check. These are operator
+suggestions, not action grants or automatic dispatch.
+
+The response contains only opaque case references, fixed action codes and
+fixed local REST route paths; never native invoice IDs, customer fields,
+provider credentials or raw receipt bodies. It is `Cache-Control: no-store`.
+The existing response fields remain unchanged. An invalid or revoked owner
+DAG, history, local source connection or dashboard session still fails closed.
+The underlying two ledger reads are not an atomic cross-store snapshot.
+
+`tests/test_open_work_case_review_actions.py` covers authenticated
+FastAPI/private SQLite planning for two reviewed dependency cases, mixed
+payment/nonpayment goals, historical paid versus human assessment,
+unscanned prerequisites, no-provider-I/O historical reads, revocation,
+response minimization and conflicting-edge refusal. Synthetic tests are not
+real Stripe/customer acceptance; all exact-head native CI remains required.
