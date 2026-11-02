@@ -93,6 +93,10 @@ def _verify_new(logs, log_id, namespace, expected, previous_ids):
     matching = [item for item in logs if item.get("log_id") == log_id]
     if len(matching) != 1:
         raise BootstrapError("New local log not independently readable")
+    # Another operator may have created the same scope after our preflight.
+    if any(item["log_id"] != log_id and _scope_matches(item, namespace)
+           for item in logs):
+        raise BootstrapError("Concurrent duplicate source scope; review local logs")
     item = matching[0]
     identity = item.get("source_identity")
     namespaces = identity.get("namespaces") if type(identity) is dict else None
