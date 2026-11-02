@@ -42,22 +42,27 @@ def read_imported_run(*, deployment_id: str, run_id: str, scope: str, secret: st
     path = monitoring.database_path()
     if not isinstance(path, Path) or path.is_symlink() or not path.is_file():
         raise CaseDeclarationError("no imported automation run available")
-    # Use the existing monitor's in-process lock and connection lifecycle.
-    # The run report itself is untrusted self-report, not provider evidence.
+    # Use a read-only DuckDB connection: the normal monitoring connection
+    # initializes/migrates schema and would mutate the database on a GET-like
+    # comparison. A concurrent writer is a refusal, never a partial result.
+    import duckdb
     with monitoring._LOCK:
         if path.is_symlink() or not path.is_file():
             raise CaseDeclarationError("no imported automation run available")
-        conn = monitoring._connect()
         try:
-            row = conn.execute(
-                """SELECT r.status, r.started_at, r.finished_at,
-                          r.outcome_reported_verified, d.runtime
-                   FROM runs r JOIN deployments d ON d.deployment_id = r.deployment_id
-                   WHERE r.deployment_id = ? AND r.run_id = ? LIMIT 1""",
-                [deployment_id, run_id],
-            ).fetchone()
-        finally:
-            conn.close()
+            conn = duckdb.connect(str(path), read_only=True)
+            try:
+                row = conn.execute(
+                    """SELECT r.status, r.started_at, r.finished_at,
+                              r.outcome_reported_verified, d.runtime
+                       FROM runs r JOIN deployments d ON d.deployment_id = r.deployment_id
+                       WHERE r.deployment_id = ? AND r.run_id = ? LIMIT 1""",
+                    [deployment_id, run_id],
+                ).fetchone()
+            finally:
+                conn.close()
+        except duckdb.Error:
+            raise CaseDeclarationError("imported automation run store unavailable") from None
     if row is None or row[0] not in _STATES or not isinstance(row[1], datetime):
         raise CaseDeclarationError("no imported automation run available")
     status, started, finished, reported, runtime = row
