@@ -19,6 +19,7 @@ MAX_EVENTS = 10_000
 MAX_SOURCE_BYTES = 8 * 1024 * 1024
 MAX_DECISIONS = 24
 ADJUDICATION_FORMAT = "openworkgraph.reconstruction-review-adjudication.v1"
+RESOLUTION_FORMAT = "openworkgraph.reconstruction-review-resolution.v1"
 
 
 def _source_digest(events: Any) -> str:
@@ -166,6 +167,65 @@ def adjudicate_review(
     }
 
 
+
+def resolve_review_disagreement(
+    events: list[dict[str, Any]], packet: dict[str, Any],
+    adjudication: dict[str, Any], arbiter: dict[str, Any],
+) -> dict[str, Any]:
+    """Resolve only contested review rows with an explicit third human decision.
+
+    A third review is NOT an automatic tie-break or proof of reviewer identity.
+    All three inputs and the combined decisions are replayed against the current
+    production-linker snapshot. Prior consensus cannot be changed.
+    """
+    if type(adjudication) is not dict or adjudication.get("format") != ADJUDICATION_FORMAT:
+        raise ValueError("resolution requires a two-reviewer adjudication artifact")
+    expected = adjudicate_review(
+        events, packet, adjudication.get("reviewer_a"), adjudication.get("reviewer_b"),
+    )
+    if adjudication != expected:
+        raise ValueError("adjudication artifact is stale or altered")
+    if type(arbiter) is not dict or arbiter.get("format") != DECISION_FORMAT:
+        raise ValueError("resolution requires an original third-reviewer decision document")
+    # Independently validate all third-reviewer choices and intermediary paths.
+    apply_review(events, packet, arbiter)
+    unresolved = set(expected["unresolved_event_ids"])
+    new_rows = arbiter["decisions"]
+    if not new_rows or any(row["event_id"] not in unresolved for row in new_rows):
+        raise ValueError("third reviewer may decide only unresolved review rows")
+    previous = expected["consensus_decisions"]["decisions"]
+    combined_by_id = {row["event_id"]: row for row in previous + new_rows}
+    # Preserve canonical packet ordering rather than trusting input order.
+    combined = {
+        "format": DECISION_FORMAT,
+        "evidence_sha256": expected["evidence_sha256"],
+        "decisions": [
+            dict(combined_by_id[row["event_id"]])
+            for row in packet["eligible_candidates"]
+            if row["event_id"] in combined_by_id
+        ],
+    }
+    # A third review must not contradict an agreed intermediary or two-hop
+    # decision, even when both documents are individually valid.
+    apply_review(events, packet, combined)
+    remaining = [
+        event_id for event_id in expected["unresolved_event_ids"]
+        if event_id not in {row["event_id"] for row in new_rows}
+    ]
+    return {
+        "format": RESOLUTION_FORMAT,
+        "evidence_sha256": expected["evidence_sha256"],
+        "adjudication": adjudication,
+        "third_reviewer_decisions": arbiter,
+        "resolved_decisions": combined,
+        "third_reviewer_resolved_count": len(new_rows),
+        "remaining_unresolved_event_ids": remaining,
+        "reviewer_independence_verified": False,
+        "human_resolution_not_source_evidence": True,
+        "canonical_membership_unchanged": True,
+    }
+
+
 def apply_review(
     events: list[dict[str, Any]], packet: dict[str, Any],
     decisions: dict[str, Any],
@@ -180,6 +240,22 @@ def apply_review(
     if type(packet) is not dict or packet != expected:
         raise ValueError("review packet is stale or altered; prepare again")
     adjudication = None
+    resolution = None
+    if type(decisions) is dict and decisions.get("format") == RESOLUTION_FORMAT:
+        if set(decisions) != {
+            "format", "evidence_sha256", "adjudication", "third_reviewer_decisions",
+            "resolved_decisions", "third_reviewer_resolved_count",
+            "remaining_unresolved_event_ids", "reviewer_independence_verified",
+            "human_resolution_not_source_evidence", "canonical_membership_unchanged",
+        }:
+            raise ValueError("invalid resolution artifact fields")
+        resolution = resolve_review_disagreement(
+            events, packet, decisions["adjudication"], decisions["third_reviewer_decisions"],
+        )
+        if decisions != resolution:
+            raise ValueError("resolution artifact was altered; resolve again")
+        adjudication = resolution["adjudication"]
+        decisions = resolution["resolved_decisions"]
     if type(decisions) is dict and decisions.get("format") == ADJUDICATION_FORMAT:
         if set(decisions) != {
             "format", "evidence_sha256", "reviewer_a", "reviewer_b",
@@ -303,9 +379,11 @@ def apply_review(
         "canonical_membership_unchanged": True,
         "human_decisions_are_not_source_evidence": True,
         "review_decision_provenance": (
+            "third_reviewer_resolution" if resolution else
             "two_reviewer_consensus" if adjudication else "single_reviewer"
         ),
         "unresolved_reviewer_disagreement_count": (
+            len(resolution["remaining_unresolved_event_ids"]) if resolution else
             len(adjudication["unresolved_event_ids"]) if adjudication else 0
         ),
         "reviewer_independence_verified": False,
@@ -441,7 +519,8 @@ def aggregate_review_scores(scores: list[dict[str, Any]]) -> dict[str, Any]:
         if type(confirmed) is not int or not 0 <= confirmed <= count:
             raise ValueError("invalid human confirmation count")
         provenance = report.get("review_decision_provenance", "single_reviewer")
-        if provenance not in ("single_reviewer", "two_reviewer_consensus"):
+        if provenance not in ("single_reviewer", "two_reviewer_consensus",
+                            "third_reviewer_resolution"):
             raise ValueError("invalid review provenance")
         unresolved = report.get("unresolved_reviewer_disagreement_count", 0)
         if type(unresolved) is not int or not 0 <= unresolved <= count:
@@ -469,6 +548,10 @@ def aggregate_review_scores(scores: list[dict[str, Any]]) -> dict[str, Any]:
         ),
         "human_confirmed_count": sum(
             session["human_confirmed_count"] for session in sessions
+        ),
+        "third_reviewer_resolution_session_count": sum(
+            session["review_decision_provenance"] == "third_reviewer_resolution"
+            for session in sessions
         ),
         "two_reviewer_consensus_session_count": sum(
             session["review_decision_provenance"] == "two_reviewer_consensus"
@@ -506,6 +589,7 @@ def aggregate_review_scores(scores: list[dict[str, Any]]) -> dict[str, Any]:
 
 __all__ = [
     "prepare_review_packet", "apply_review", "score_review", "adjudicate_review",
-    "PACKET_FORMAT", "DECISION_FORMAT", "ADJUDICATION_FORMAT", "BATCH_FORMAT",
+    "resolve_review_disagreement",
+    "PACKET_FORMAT", "DECISION_FORMAT", "ADJUDICATION_FORMAT", "RESOLUTION_FORMAT", "BATCH_FORMAT",
     "aggregate_review_scores",
 ]
