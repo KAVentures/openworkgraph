@@ -242,6 +242,92 @@ def test_invalid_activity_selector_refused_before_dataset_access(monkeypatch, ac
             "measures": [{"fn": "sum", "of": "metric:price"}]})
 
 
+
+def test_stage_bounded_statistics_use_ordered_complete_intervals_and_missingness(log):
+    # A prior End does not close a later Start; only the first later End does.
+    doc = (
+        "case,activity,time,amount\\n"
+        "a,Start,2024-03-01T00:00:00Z,2\\n"
+        "a,Work,2024-03-01T01:00:00Z,4\\n"
+        "a,End,2024-03-01T02:00:00Z,100\\n"
+        "b,End,2024-03-02T00:00:00Z,999\\n"
+        "b,Start,2024-03-02T01:00:00Z,3\\n"
+        "b,Work,2024-03-02T02:00:00Z,5\\n"
+        "b,End,2024-03-02T03:00:00Z,100\\n"
+        "c,Start,2024-03-03T00:00:00Z,1\\n"
+        "c,Work,2024-03-03T01:00:00Z,NaN\\n"
+        "c,End,2024-03-03T02:00:00Z,100\\n"
+        "d,Start,2024-03-04T00:00:00Z,7\\n"
+        "d,Work,2024-03-04T01:00:00Z,9\\n"
+        "e,Work,2024-03-05T00:00:00Z,6\\n"
+        "e,End,2024-03-05T01:00:00Z,10\\n"
+    ).encode()
+    selected = workspace.import_log(BytesIO(doc), name="stage", source_format="csv", mapping={
+        "case_column": "case", "activity_column": "activity", "timestamp_column": "time",
+        "attribute_columns": ["amount"]})["log_id"]
+    stage = {**metric(), "from_activity": "Start", "to_activity": "End"}
+    def analyze(m):
+        return query.run(selected, {"level": "cases", "metrics": [m],
+            "measures": [{"fn": "sum", "of": "metric:price"}]})
+    available = analyze(stage)
+    assert available["rows"] == [[8.0]]  # (2+4)/2 + (3+5)/2 + 1
+    cov = available["metrics"][0]
+    assert cov["flattened_case_event_rows_considered"] == 6
+    assert cov["event_rows_with_finite_attribute"] == 5
+    assert cov["event_rows_with_missing_invalid_or_nonfinite_attribute"] == 1
+    assert cov["cases_without_stage_start"] == 1
+    assert cov["cases_without_later_stage_end"] == 1
+    assert cov["cases_without_complete_stage"] == 2
+    assert cov["cases_with_value"] == 3
+    assert cov["cases_with_no_finite_attribute"] == 2
+    assert cov["coverage_scope"] == "selected_full_cases_stage_bounded_flattened_case_event_rows"
+    assert analyze({**stage, "missing_policy": "complete"})["rows"] == [[7.0]]
+    work = analyze({**stage, "activity": "Work"})
+    assert work["rows"] == [[9.0]]
+    assert work["metrics"][0]["cases_without_matching_activity"] == 0
+    assert work["metrics"][0]["coverage_scope"] == (
+        "selected_full_cases_stage_bounded_matching_activity_flattened_case_event_rows")
+    assert analyze({**stage, "from_activity": "Missing"})["rows"] == [[None]]
+    assert analyze({**stage, "to_activity": "Missing"})["rows"] == [[None]]
+    saved = query.save(selected, {"name": "Start-to-End stage", "spec": {
+        "level": "cases", "metrics": [stage], "measures": [{"fn": "sum", "of": "metric:price"}]}})
+    assert query.run(selected, query.list_saved(selected)["analyses"][0]["spec"])["rows"] == [[8.0]]
+    template = query.save_metric(selected, {"metric": stage})
+    assert query.list_metrics(selected)["metrics"][0]["metric"]["from_activity"] == "Start"
+    assert saved["spec"]["metrics"][0]["to_activity"] == "End"
+    query.delete_metric(selected, template["metric_id"])
+    json.dumps(available, allow_nan=False)
+
+
+def test_stage_boundaries_tied_timestamp_are_deterministic(log):
+    doc = (
+        "case,activity,time,amount\\n"
+        "a,Start,2024-04-01T00:00:00Z,2\\n"
+        "a,Work,2024-04-01T00:00:00Z,4\\n"
+        "a,End,2024-04-01T00:00:00Z,100\\n"
+    ).encode()
+    selected = workspace.import_log(BytesIO(doc), name="tied-stage", source_format="csv", mapping={
+        "case_column": "case", "activity_column": "activity", "timestamp_column": "time",
+        "attribute_columns": ["amount"]})["log_id"]
+    spec = {"level": "cases", "metrics": [{**metric(), "from_activity": "Start",
+        "to_activity": "End"}], "measures": [{"fn": "sum", "of": "metric:price"}]}
+    first = query.run(selected, spec)
+    assert all(query.run(selected, spec)["rows"] == first["rows"] for _ in range(3))
+    assert first["metrics"][0]["flattened_case_event_rows_considered"] <= 2
+
+
+@pytest.mark.parametrize("fields", [
+    {"from_activity": "Start"}, {"to_activity": "End"},
+    {"from_activity": "", "to_activity": "End"},
+    {"from_activity": "Start", "to_activity": ""},
+    {"from_activity": "Start", "to_activity": "End", "sql": "DROP TABLE ce"},
+])
+def test_stage_contract_requires_both_valid_boundaries_before_dataset(monkeypatch, fields):
+    monkeypatch.setattr(workspace, "_query", lambda *a, **kw: pytest.fail("dataset accessed"))
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        query.run("unused", {"level": "cases", "metrics": [{**metric(), **fields}],
+            "measures": [{"fn": "sum", "of": "metric:price"}]})
+
 def test_authenticated_http_analysis_save_and_denial(tmp_path):
     code = r'''
 from fastapi.testclient import TestClient
@@ -276,6 +362,11 @@ with TestClient(app) as client:
         assert scoped.json()["metrics"][0]["definition"]["activity"] == activity
         if activity == "Unseen":
             assert scoped.json()["metrics"][0]["cases_without_matching_activity"] == 2
+    stage = {**m, "from_activity": "A", "to_activity": "B"}
+    stage_response = client.post(base + "/analysis", json={**spec, "metrics": [stage]}, headers=headers)
+    assert stage_response.status_code == 200, stage_response.text
+    assert stage_response.json()["rows"] == [[15.0]]
+    assert stage_response.json()["metrics"][0]["definition"]["from_activity"] == "A"
     assert client.post(base + "/metrics", json={"metric": m}, headers=headers).status_code == 200
     saved = client.post(base + "/analyses", json={"name": "Verified contract", "spec": spec}, headers=headers)
     assert saved.status_code == 200, saved.text
