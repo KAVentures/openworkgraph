@@ -2173,7 +2173,7 @@
         if(!/^[a-z][a-z0-9_]{0,39}$/.test(ref)||ref===name)throw new Error('Choose an earlier metric for the '+side+' operand.');
         return {kind:'metric',name:ref};
       };
-      if(!['add','subtract','multiply','divide'].includes(values.operation))throw new Error('Choose the arithmetic operation.');
+      if(!['add','subtract','multiply','divide','minimum','maximum','average','absolute_difference'].includes(values.operation))throw new Error('Choose the arithmetic operation.');
       return {name,kind:'arithmetic',expression_version:'1',operation:values.operation,left:operand('left'),right:operand('right')};
     }
     if(values.kind==='event_attribute_statistic'){
@@ -2211,7 +2211,7 @@
     }
     if(m.kind==='arithmetic'){
       const text=o=>o.kind==='metric'?o.name:String(o.value)+' '+o.unit;
-      return m.name+': '+text(m.left)+' '+({add:'+',subtract:'−',multiply:'×',divide:'÷'}[m.operation])+' '+text(m.right);
+      return m.name+': '+text(m.left)+' '+({add:'+',subtract:'−',multiply:'×',divide:'÷',minimum:'minimum of',maximum:'maximum of',average:'average of',absolute_difference:'absolute difference of'}[m.operation])+' '+text(m.right);
     }
     return m.name+': '+(m.kind==='event_attribute_sum'?'sum of event attribute ':'case attribute ')+m.attribute+' ('+m.unit+')';
   }
@@ -2257,7 +2257,7 @@
     const mStageFrom=select('owgMetricStageFrom',[['','(whole case)'],...names]);
     const mStageTo=select('owgMetricStageTo',[['','(whole case)'],...names]);
     const mStageOccurrence=select('owgMetricStageOccurrence',[['first','First observed completed stage'],['last_completed','Last completed stage (ignore unfinished trailing stage)']]);
-    const mOperation=select('owgMetricOperation',[['add','Add'],['subtract','Subtract'],['multiply','Multiply'],['divide','Divide']]);
+    const mOperation=select('owgMetricOperation',[['add','Add'],['subtract','Subtract'],['multiply','Multiply'],['divide','Divide'],['minimum','Smaller of two values'],['maximum','Larger of two values'],['average','Average of two values'],['absolute_difference','Absolute difference (nonnegative)']]);
     const operands={};
     for(const side of ['left','right']){
       const title=side==='left'?'Left':'Right';
