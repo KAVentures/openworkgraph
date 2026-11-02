@@ -10,6 +10,146 @@
   const button=(text,cls)=>{const node=el('button',text,cls);node.type='button';return node;};
   const select=(id,options)=>{const node=document.createElement('select');node.id=id;options.forEach(([v,l])=>{const o=el('option',l);o.value=v;node.appendChild(o);});return node;};
 
+
+  // A portable review artifact, never an execution grant or independently verified outcome.
+  // Deliberately omit activity labels, raw cases, record refs, receipts and credentials.
+  function handoffReviewPacket(journey,projectId,ideaId,createdAt){
+    const project=(journey.projects||[]).find(item=>item.project_id===projectId);
+    if(!project)throw new Error('Select a recorded project before preparing its review packet.');
+    const process=journey.process_status||{},ref=process.process_reference||null;
+    const origins=(journey.dataset_origins||[]).slice(0,64).map(item=>({
+      status:item.status||'unknown',source_content_sha256:item.source_content_sha256||null,
+      selection_sha256:item.selection_sha256||null
+    }));
+    const originsTruncated=(journey.dataset_origins||[]).length>64;
+    const reportsTruncated=(project.reported_specifications||[]).length>64;
+    const reported=(project.reported_specifications||[]).slice(0,64).map(item=>({
+      status:item.status||'unknown',reported_run_count:Number.isSafeInteger(item.reported_run_count)&&item.reported_run_count>=0?item.reported_run_count:null
+    }));
+    const blockers=[];
+    if(!ref)blockers.push('no_exact_saved_process');
+    if(process.status!=='current')blockers.push('process_not_current');
+    if(originsTruncated)blockers.push('dataset_origin_list_truncated');
+    if(reportsTruncated)blockers.push('reported_specification_list_truncated');
+    if(!origins.length)blockers.push('dataset_origin_not_linked');
+    else if(origins.some(item=>item.status!=='current'))blockers.push('dataset_origin_not_current');
+    if(!['approved','implemented'].includes(journey.idea?.state))blockers.push('idea_not_approved');
+    if(!project.idea_revision_is_current)blockers.push('project_uses_historical_idea_revision');
+    if(!reported.length)blockers.push('no_imported_report');
+    else if(reported.some(item=>item.status!=='matching_reported_specification'))blockers.push('reported_specification_unverified');
+    // A matching reported specification is not a verified execution or business outcome.
+    blockers.push('execution_and_business_outcomes_unverified');
+    return {
+      format:'openworkgraph.evidence-handoff-review.v1',generated_at:createdAt,
+      scope:'human_review_only',execution_authorized:false,source_read_authorized:false,
+      idea:{idea_id:ideaId,revision:journey.idea?.revision??null,state:journey.idea?.state||'unknown'},
+      process:{workflow_id:ref?.workflow_id||null,revision:ref?.revision??null,
+        content_sha256:ref?.content_sha256||null,status:process.status||'unknown'},
+      dataset_origins:origins,dataset_origins_truncated:originsTruncated,
+      project:{project_id:project.project_id,idea_revision:project.idea_revision,
+        idea_revision_is_current:!!project.idea_revision_is_current,
+        spec_sha256:project.spec_sha256,archive_sha256:project.archive_sha256},
+      reported_specifications:reported,reported_specifications_truncated:reportsTruncated,
+      source_check_exports:{count:project.source_check_exports?.count||0,
+        last_document_sha256:project.source_check_exports?.last_document_sha256||null},
+      readiness:{human_review_required:true,blockers,verified_execution:false,verified_business_outcomes:false}
+    };
+  }
+
+
+  // Compare an imported point-in-time review packet against a freshly fetched local journey.
+  // Never restore approval or trust imported fields as execution/verification evidence.
+  function compareHandoffReviewPackets(saved,current){
+    const object=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
+    const sha=v=>v===null||(typeof v==='string'&&/^[a-f0-9]{64}$/.test(v));
+    const revision=v=>Number.isSafeInteger(v)&&v>=1;
+    const status=v=>typeof v==='string'&&/^[a-z_]{1,64}$/.test(v);
+    const fail=()=>{throw new Error('Invalid or unsupported review packet. Select a previously downloaded OWG handoff review JSON file.');};
+    const validate=packet=>{
+      if(!object(packet)||packet.format!=='openworkgraph.evidence-handoff-review.v1'||
+        packet.scope!=='human_review_only'||packet.execution_authorized!==false||
+        packet.source_read_authorized!==false||!object(packet.idea)||!object(packet.process)||
+        !object(packet.project)||!object(packet.readiness)||!object(packet.source_check_exports)||
+        !Array.isArray(packet.dataset_origins)||packet.dataset_origins.length>64||
+        !Array.isArray(packet.reported_specifications)||packet.reported_specifications.length>64||
+        typeof packet.dataset_origins_truncated!=='boolean'||
+        typeof packet.reported_specifications_truncated!=='boolean'||
+        !Array.isArray(packet.readiness.blockers)||packet.readiness.blockers.length>32||
+        packet.readiness.human_review_required!==true||
+        packet.readiness.verified_execution!==false||packet.readiness.verified_business_outcomes!==false||
+        typeof packet.idea.idea_id!=='string'||!packet.idea.idea_id||packet.idea.idea_id.length>128||
+        !revision(packet.idea.revision)||!status(packet.idea.state)||
+        typeof packet.project.project_id!=='string'||!packet.project.project_id||
+        packet.project.project_id.length>128||!revision(packet.project.idea_revision)||
+        typeof packet.project.idea_revision_is_current!=='boolean'||
+        !sha(packet.project.spec_sha256)||packet.project.spec_sha256===null||
+        !sha(packet.project.archive_sha256)||packet.project.archive_sha256===null||
+        (packet.process.workflow_id!==null&&(typeof packet.process.workflow_id!=='string'||packet.process.workflow_id.length>128))||
+        (packet.process.revision!==null&&!revision(packet.process.revision))||
+        !sha(packet.process.content_sha256)||!status(packet.process.status)||
+        !Number.isSafeInteger(packet.source_check_exports.count)||packet.source_check_exports.count<0||
+        !sha(packet.source_check_exports.last_document_sha256)||
+        packet.readiness.blockers.some(b=>!status(b))||
+        packet.dataset_origins.some(o=>!object(o)||!status(o.status)||!sha(o.source_content_sha256)||!sha(o.selection_sha256))||
+        packet.reported_specifications.some(o=>!object(o)||!status(o.status)||
+          (o.reported_run_count!==null&&(!Number.isSafeInteger(o.reported_run_count)||o.reported_run_count<0))))fail();
+    };
+    validate(saved);validate(current);
+    if(saved.idea.idea_id!==current.idea.idea_id||saved.project.project_id!==current.project.project_id)
+      throw new Error('Review packet belongs to another idea or project. Nothing was imported or approved.');
+    const fields=[
+      ['Saved process revision and digest',[saved.process.workflow_id,saved.process.revision,saved.process.content_sha256],
+        [current.process.workflow_id,current.process.revision,current.process.content_sha256]],
+      ['Saved process availability',saved.process.status,current.process.status],
+      ['Opportunity revision and state',[saved.idea.revision,saved.idea.state],[current.idea.revision,current.idea.state]],
+      ['Project revision and artifact hashes',[saved.project.idea_revision,saved.project.idea_revision_is_current,saved.project.spec_sha256,saved.project.archive_sha256],
+        [current.project.idea_revision,current.project.idea_revision_is_current,current.project.spec_sha256,current.project.archive_sha256]],
+      ['Dataset and cohort source checks',[saved.dataset_origins,saved.dataset_origins_truncated],
+        [current.dataset_origins,current.dataset_origins_truncated]],
+      ['Imported report status',[saved.reported_specifications,saved.reported_specifications_truncated],
+        [current.reported_specifications,current.reported_specifications_truncated]],
+      ['Recorded source-check exports',saved.source_check_exports,current.source_check_exports],
+      ['Human review blockers',saved.readiness.blockers,current.readiness.blockers]
+    ];
+    const changes=fields.filter(([,before,after])=>JSON.stringify(before)!==JSON.stringify(after)).map(([name])=>name);
+    return {status:changes.length?'changed':'matching_snapshot',changes,
+      execution_authorized:false,verified_execution:false,verified_business_outcomes:false};
+  }
+
+  // Portable, minimized human-inspection notes for a freshly compared exact project.
+  // Checked means locally inspected, never approved, resolved, source-verified or executed.
+  function handoffInspectionWorklist(saved,current,inspectedKeys,createdAt){
+    const comparison=compareHandoffReviewPackets(saved,current);
+    const entries=[
+      ...comparison.changes.map(label=>({kind:'changed_area',key:'change:'+label,label})),
+      ...current.readiness.blockers.map(key=>({kind:'outstanding_blocker',key:'blocker:'+key,label:key}))
+    ];
+    const allowed=new Set(entries.map(item=>item.key));
+    if(entries.length>40||!Array.isArray(inspectedKeys)||inspectedKeys.length>40||
+      new Set(inspectedKeys).size!==inspectedKeys.length||
+      inspectedKeys.some(key=>typeof key!=='string'||!allowed.has(key)))
+      throw new Error('Inspection selections do not match this fresh project comparison.');
+    const inspected=new Set(inspectedKeys);
+    return {
+      format:'openworkgraph.handoff-human-inspection.v1',generated_at:createdAt,
+      scope:'local_human_inspection_only',execution_authorized:false,
+      source_read_authorized:false,human_approval_granted:false,
+      verified_execution:false,verified_business_outcomes:false,
+      idea_id:current.idea.idea_id,project_id:current.project.project_id,
+      saved_basis:{process_revision:saved.process.revision,process_sha256:saved.process.content_sha256,
+        idea_revision:saved.idea.revision,project_spec_sha256:saved.project.spec_sha256,
+        project_archive_sha256:saved.project.archive_sha256},
+      current_basis:{process_revision:current.process.revision,process_sha256:current.process.content_sha256,
+        idea_revision:current.idea.revision,project_spec_sha256:current.project.spec_sha256,
+        project_archive_sha256:current.project.archive_sha256},
+      comparison_status:comparison.status,
+      items:entries.map(item=>({kind:item.kind,key:item.key,
+        inspected_locally:inspected.has(item.key)})),
+      inspected_count:inspected.size,pending_inspection_count:entries.length-inspected.size,
+      source_and_outcome_verification:'not_established'
+    };
+  }
+
   // Pure helper, exercised by tests: builds an assessment body or throws a readable error.
   function assessmentBody(values,revision){
     const ease={};
@@ -138,6 +278,8 @@
       }else if(idea.source.kind==='process_catalog'){
         box.appendChild(el('div','This source is a descriptive reference only; no saved process revision is linked.','muted'));
       }
+      // These selections are navigation hints only, never an authorization or a source read.
+      let preferredReportProjectId=null,preferredSourceProjectId=null;
       const journeyButton=button('View evidence journey','secondary');journeyButton.id='owgPipelineJourney';
       const journeyHost=el('div');journeyHost.id='owgPipelineJourneyResult';journeyHost.style.overflowWrap='anywhere';
       journeyButton.onclick=async()=>{
@@ -159,7 +301,55 @@
           stages.appendChild(el('li',ref?'Saved process '+ref.workflow_id+' · revision '+ref.revision+' · '+(sourceLabels[process.status]||'unknown status')+' · SHA-256 '+ref.content_sha256:'Saved process: no exact revision linked.'));
           stages.appendChild(el('li','Opportunity revision '+data.idea.revision+' · '+(STATE_LABELS[data.idea.state]||data.idea.state)+'. Review state does not grant execution authority.'));
           journeyHost.append(stages,el('div','Checked local references now, across separate stores. Refresh after changes. Reported specifications do not prove which artifact ran; source-check results are not retained here.','muted'));
-          if(!data.projects.length){journeyHost.appendChild(el('p','No project artifacts recorded.'));return;}
+          const guide=el('section');guide.id='owgPipelineJourneyGuide';
+          guide.appendChild(el('h5','Resume this evidence-to-implementation journey'));
+          const guideStatus=el('div',null,'muted');guideStatus.id='owgPipelineJourneyGuideStatus';
+          guideStatus.setAttribute('role','status');guideStatus.setAttribute('aria-live','polite');
+          const navigate=(id,description,activate=false)=>{
+            if(generation!==detailGeneration)return;
+            const target=box.querySelector('#'+id);
+            if(!target||target.disabled){guideStatus.textContent=description+' is unavailable for this idea or revision.';return;}
+            if(activate)target.click();
+            target.scrollIntoView?.({block:'nearest'});
+            target.focus?.();
+            guideStatus.textContent=description+' opened for this selected idea. No decision or business action was made.';
+          };
+          const processAction=button('Open exact saved process revision','secondary');
+          processAction.id='owgPipelineJourneyOpenProcess';
+          processAction.disabled=!ref||!['current','changed'].includes(process.status)||
+            typeof ref.content_sha256!=='string'||!ref.content_sha256;
+          processAction.onclick=async()=>{
+            if(generation!==detailGeneration||processAction.disabled)return;
+            processAction.disabled=true;
+            try{
+              if(!window.owgProcessCatalog?.openSaved)throw new Error('Process catalog unavailable.');
+              const opened=await window.owgProcessCatalog.openSaved(ref);
+              if(generation!==detailGeneration)return;
+              document.getElementById('owgCatalogEditor')?.scrollIntoView?.({block:'start'});
+              guideStatus.textContent='Requested exact linked revision '+ref.revision+'. Verify the catalog status; declining its unsaved-edit prompt keeps the previous draft. '+(process.status==='changed'?
+                'A newer process exists; the linked revision is historical.':'Fresh review is still required for any further decision.');
+            }catch(e){if(generation===detailGeneration)guideStatus.textContent='Could not reopen pinned revision: '+e.message;}
+            finally{if(generation===detailGeneration)processAction.disabled=false;}
+          };
+          guide.appendChild(processAction);
+          if(process.status!=='current')guide.appendChild(el('p',
+            'Process basis is '+String(process.status).replaceAll('_',' ')+'. Historical references are not silently replaced; review changes before any new project.','muted'));
+          const ideaAction=button('Continue at idea assessment or decision','secondary');
+          ideaAction.id='owgPipelineJourneyReviewIdea';
+          ideaAction.onclick=()=>navigate(box.querySelector('#owgPipelineAssess')?'owgPipelineAssess':'owgPipelineNote',
+            'Idea assessment or decision');
+          guide.appendChild(ideaAction);
+          if(data.dataset_origins?.some(origin=>origin.status!=='current')||!data.dataset_origins?.length)
+            guide.appendChild(el('p','Source snapshot coverage is missing, changed or unverified. This journey cannot certify original data completeness.','muted'));
+          guide.appendChild(guideStatus);journeyHost.appendChild(guide);
+          if(!data.projects.length){
+            journeyHost.appendChild(el('p','No project artifacts recorded.'));
+            const next=button('Continue at agent project export','secondary');next.id='owgPipelineJourneyExport';
+            next.disabled=!['approved','implemented'].includes(idea.state)||!ref||process.status!=='current';
+            next.onclick=()=>navigate('owgPipelineProjectDownload','Agent project export');
+            guide.insertBefore(next,guideStatus);
+            return;
+          }
           const choice=select('owgPipelineJourneyProject',data.projects.map(p=>[p.project_id,'Idea revision '+p.idea_revision+' · '+p.created_at]));
           const artifact=el('div');artifact.id='owgPipelineJourneyArtifact';
           const render=()=>{
@@ -176,6 +366,178 @@
             const checks=p.source_check_exports;
             artifact.append(el('h5','Source-check exports'),el('p',checks.count?checks.count+' recorded · latest '+checks.last_export_at+' · document SHA-256 '+checks.last_document_sha256+'. Receipt and result are not retained; no outcome can be inferred from this record.':'No source-check exports recorded.'));
             artifact.appendChild(el('p','Business outcomes and agent causality remain unverified.'));
+            const actions=el('div',null,'row');
+            const reportsAction=button('Review reports for this exact project','secondary');
+            reportsAction.id='owgPipelineJourneyReports';
+            reportsAction.onclick=()=>{
+              if(generation!==detailGeneration)return;
+              preferredReportProjectId=p.project_id;
+              navigate('owgPipelineReviewReports','Report-link review',true);
+            };
+            const sourceAction=button('Prepare source check for this exact project','secondary');
+            sourceAction.id='owgPipelineJourneySource';
+            sourceAction.disabled=!p.idea_revision_is_current;
+            sourceAction.onclick=()=>{
+              if(generation!==detailGeneration)return;
+              preferredSourceProjectId=p.project_id;
+              navigate('owgPipelineSourceChecks','Source-check form',true);
+            };
+
+            const packet=handoffReviewPacket(data,p.project_id,idea.idea_id,new Date().toISOString());
+            const review=el('div',null,'muted');review.id='owgPipelineJourneyReadiness';review.tabIndex=-1;
+            review.appendChild(el('div','Handoff review: '+packet.readiness.blockers.length+' outstanding checks. This is not permission to execute an agent.'));
+            const issues=el('ul');
+            const names={no_exact_saved_process:'Exact saved process missing',process_not_current:'Process revision changed or unavailable',
+              dataset_origin_not_linked:'Source dataset/cohort not linked',dataset_origin_not_current:'Source dataset/cohort changed or unavailable',
+              dataset_origin_list_truncated:'Source dataset/cohort checks truncated to 64',reported_specification_list_truncated:'Reported specification checks truncated to 64',
+              idea_not_approved:'Human opportunity approval missing',project_uses_historical_idea_revision:'Project based on historical idea revision',
+              no_imported_report:'No imported run report',reported_specification_unverified:'Reported specification unavailable or mismatched',
+              execution_and_business_outcomes_unverified:'Execution, causality and business outcomes not independently verified'};
+            packet.readiness.blockers.forEach(key=>issues.appendChild(el('li',names[key]||key)));
+            review.appendChild(issues);
+            const downloadPacket=button('Download review packet for this exact project','secondary');
+            downloadPacket.id='owgPipelineJourneyReviewPacket';
+            downloadPacket.onclick=()=>{
+              if(generation!==detailGeneration||choice.value!==p.project_id||!journeyHost.contains(downloadPacket))return;
+              const current=handoffReviewPacket(data,p.project_id,idea.idea_id,new Date().toISOString());
+              const blob=new Blob([JSON.stringify(current,null,2)+'\n'],{type:'application/json'});
+              const url=URL.createObjectURL(blob),link=el('a');
+              link.href=url;link.download='owg-evidence-handoff-review.json';
+              document.body.appendChild(link);link.click();link.remove();
+              setTimeout(()=>URL.revokeObjectURL(url),1000);
+              guideStatus.textContent='Downloaded the selected project review packet. Outstanding checks remain; no approval or execution permission was granted.';
+            };
+
+            // Local file read + explicit fresh authenticated journey fetch. No packet upload.
+            const priorPacket=input('owgPipelineJourneyPriorPacket','file');
+            priorPacket.accept='.json,application/json';
+            const comparePacket=button('Compare saved packet with current local evidence','secondary');
+            comparePacket.id='owgPipelineJourneyComparePacket';
+            const compareResult=el('div','Select a previously downloaded packet to check for drift.','muted');
+            compareResult.id='owgPipelineJourneyCompareResult';
+            compareResult.setAttribute('role','status');compareResult.setAttribute('aria-live','polite');
+            let comparisonSequence=0;
+            priorPacket.onchange=()=>{comparisonSequence++;compareResult.textContent='File selected. Compare explicitly to refresh local references.';};
+            comparePacket.onclick=async()=>{
+              if(generation!==detailGeneration||choice.value!==p.project_id||
+                !artifact.contains(compareResult))return;
+              const file=priorPacket.files?.[0];
+              if(!file){compareResult.textContent='Select a review packet JSON file first.';return;}
+              if(!file.size||file.size>65536){compareResult.textContent='Review packet must be a non-empty JSON file no larger than 64 KiB.';return;}
+              const requestSequence=++comparisonSequence;
+              comparePacket.disabled=true;
+              compareResult.textContent='Checking the saved packet against freshly fetched local references…';
+              try{
+                const saved=JSON.parse(await file.text());
+                if(generation!==detailGeneration||choice.value!==p.project_id||!artifact.contains(compareResult)||requestSequence!==comparisonSequence)return;
+                const fresh=await (await api('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/journey')).json();
+                if(generation!==detailGeneration||choice.value!==p.project_id||!artifact.contains(compareResult)||requestSequence!==comparisonSequence)return;
+                const latest=handoffReviewPacket(fresh,p.project_id,idea.idea_id,new Date().toISOString());
+                const comparison=compareHandoffReviewPackets(saved,latest);
+                compareResult.replaceChildren(el('p',comparison.status==='matching_snapshot'?
+                  'Recorded fields match the current local references. Execution, causality and business outcomes remain unverified.':
+                  'Recorded fields changed since the saved packet. Re-review these areas before any further decision.'));
+                // Explicit, ephemeral human inspection record: only hard-coded
+                // categories and current blocker keys, never imported free text.
+                const inspection=el('section');inspection.id='owgPipelineJourneyInspectionWorklist';
+                inspection.appendChild(el('h6','Human inspection worklist'));
+                inspection.appendChild(el('p','Mark items you inspected locally. This is not approval, resolution, source verification or permission to run an agent.','muted'));
+                const inspectionItems=[
+                  ...comparison.changes.map(label=>({key:'change:'+label,label:'Changed: '+label})),
+                  ...latest.readiness.blockers.map(key=>({key:'blocker:'+key,label:'Outstanding: '+(names[key]||'Additional human review requirement')}))
+                ];
+                const inspected=new Set(),inspectionList=el('ul');
+                const inspectionStatus=el('div',null,'muted');
+                inspectionStatus.setAttribute('role','status');
+                const updateInspectionStatus=()=>{inspectionStatus.textContent=inspected.size+' of '+inspectionItems.length+
+                  ' items inspected locally. All approval and verification gates remain open.';};
+                inspectionItems.forEach((item,index)=>{
+                  const check=input('owgPipelineInspection'+index,'checkbox');
+                  const label=el('label',item.label);label.prepend(check);
+                  const line=el('li');line.appendChild(label);inspectionList.appendChild(line);
+                  check.onchange=()=>{
+                    if(check.checked)inspected.add(item.key);else inspected.delete(item.key);
+                    updateInspectionStatus();
+                  };
+                });
+                updateInspectionStatus();
+                const exportInspection=button('Download human inspection worklist','secondary');
+                exportInspection.id='owgPipelineJourneyInspectionDownload';
+                exportInspection.onclick=()=>{
+                  if(generation!==detailGeneration||choice.value!==p.project_id||
+                    requestSequence!==comparisonSequence||!compareResult.contains(exportInspection))return;
+                  const record=handoffInspectionWorklist(saved,latest,[...inspected],new Date().toISOString());
+                  const blob=new Blob([JSON.stringify(record,null,2)+'\n'],{type:'application/json'});
+                  const url=URL.createObjectURL(blob),link=el('a');
+                  link.href=url;link.download='owg-human-inspection-worklist.json';
+                  document.body.appendChild(link);link.click();link.remove();
+                  setTimeout(()=>URL.revokeObjectURL(url),1000);
+                  guideStatus.textContent='Downloaded local inspection notes for this exact comparison. No approval or execution permission was granted.';
+                };
+                inspection.append(inspectionList,inspectionStatus,exportInspection);
+                compareResult.appendChild(inspection);
+                if(comparison.changes.length){
+                  const differences=el('ul');
+                  comparison.changes.forEach(name=>differences.appendChild(el('li',name)));
+                  compareResult.appendChild(differences);
+                  // Drift review is navigation only. Never infer authorization from a
+                  // matching packet, and never substitute a newer process revision.
+                  const followups=el('section');followups.id='owgPipelineJourneyDriftActions';
+                  followups.appendChild(el('h6','Review changed areas'));
+                  const changed=new Set(comparison.changes);
+                  const offer=(label,action,disabled=false,explanation='')=>{
+                    const control=button(label,'secondary');
+                    control.disabled=disabled;
+                    control.onclick=()=>{
+                      if(generation!==detailGeneration||choice.value!==p.project_id||
+                        !artifact.contains(followups)||control.disabled)return;
+                      action();
+                    };
+                    followups.appendChild(control);
+                    if(disabled&&explanation)followups.appendChild(el('p',explanation,'muted'));
+                  };
+                  const freshExactProcess=!!ref&&['current','changed'].includes(latest.process.status)&&
+                    latest.process.workflow_id===ref.workflow_id&&latest.process.revision===ref.revision&&
+                    latest.process.content_sha256===ref.content_sha256;
+                  if(changed.has('Saved process revision and digest')||changed.has('Saved process availability'))
+                    offer('Inspect exact saved process revision',()=>processAction.click(),
+                      processAction.disabled||!freshExactProcess,'The linked saved revision is unavailable or uncheckable on the fresh read. No newer revision will be substituted.');
+                  if(changed.has('Opportunity revision and state'))
+                    offer('Review opportunity assessment and decision',()=>ideaAction.click());
+                  if(changed.has('Project revision and artifact hashes'))
+                    offer('Inspect selected immutable project',()=>{
+                      choice.focus();guideStatus.textContent='Review the selected project ID and recorded hashes. Changing project requires an explicit selection; no export was started.';
+                    });
+                  if(changed.has('Imported report status'))
+                    offer('Review imported reports for this project',()=>reportsAction.click());
+                  if(changed.has('Recorded source-check exports'))
+                    offer('Prepare separate source review for this project',()=>sourceAction.click(),
+                      sourceAction.disabled||!latest.project.idea_revision_is_current,
+                      'Historical projects cannot prepare a source read. Review the current idea and project first.');
+                  if(changed.has('Dataset and cohort source checks'))
+                    followups.appendChild(el('p','Dataset or cohort evidence changed. Review the source origin and consent in its original workspace; this journey cannot repair or independently verify it.','muted'));
+                  if(changed.has('Human review blockers'))
+                    offer('Inspect outstanding human review checks',()=>{
+                      review.scrollIntoView?.({block:'nearest'});review.focus?.();
+                      guideStatus.textContent='Review the outstanding checks for this exact project. No approval or execution permission was granted.';
+                    });
+                  compareResult.appendChild(followups);
+                }
+              }catch(e){
+                if(generation===detailGeneration&&choice.value===p.project_id&&artifact.contains(compareResult)&&requestSequence===comparisonSequence)
+                  compareResult.textContent='Could not compare review packet: '+(e instanceof SyntaxError?'Invalid JSON.':e.message);
+              }finally{
+                if(generation===detailGeneration&&choice.value===p.project_id&&artifact.contains(compareResult))
+                  comparePacket.disabled=false;
+              }
+            };
+            actions.append(reportsAction,sourceAction,downloadPacket);
+            const packetImport=el('section');packetImport.append(
+              field('Previously downloaded review packet (local JSON only)',priorPacket),
+              comparePacket,compareResult);
+            artifact.append(review,actions,packetImport);
+            if(!p.idea_revision_is_current)artifact.appendChild(el('p',
+              'Historical idea revision: reopen and review the current idea before attempting new checks or report associations.','muted'));
           };
           choice.onchange=render;journeyHost.append(field('Recorded project',choice),artifact);render();
           if(data.projects_truncated)journeyHost.appendChild(el('p','Only the first '+data.max_projects+' projects are shown.'));
@@ -218,6 +580,8 @@
           const note=el('div');note.setAttribute('role','status');
           const help=el('div','Link a selected imported report only when its reported specification and attached design both match this exported project. These remain customer reports: individual runs, execution and outcomes are not independently verified.','muted');
           const artifact=select('owgPipelineReportProject',data.projects.map(p=>[p.project_id,'Idea revision '+p.idea_revision+' · '+p.created_at+' · '+p.spec_sha256.slice(0,12)+'…']));
+          if(preferredReportProjectId&&data.projects.some(p=>p.project_id===preferredReportProjectId))
+            artifact.value=preferredReportProjectId;
           const deployment=select('owgPipelineReportDeployment',data.deployments.map(d=>[d.deployment_id,d.name+' · '+d.runtime+' · '+d.reported_run_count+' reported runs']));
           const add=button('Link selected report','secondary');add.id='owgPipelineLinkReport';
           add.disabled=!data.monitoring_metadata_available||!data.projects.length||!data.deployments.length;
@@ -259,6 +623,8 @@
             const saved=await (await api('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/projects')).json();
             if(generation!==detailGeneration||view!==sourceView)return;
             const selected=select('owgPipelineSourceProject',saved.projects.map(p=>[p.project_id,'Idea revision '+p.idea_revision+' · '+p.created_at]));
+            if(preferredSourceProjectId&&saved.projects.some(p=>p.project_id===preferredSourceProjectId))
+              selected.value=preferredSourceProjectId;
             const expectation=select('owgPipelineSourceExpectation',[]);
             const sourceRef=input('owgPipelineSourceRecord','text','owg:r:…');sourceRef.maxLength=38;sourceRef.autocomplete='off';sourceRef.spellcheck=false;
             const confirmed=input('owgPipelineSourceConsent','checkbox');const consentText=el('label');consentText.append(confirmed,document.createTextNode(' Read this exact observed record and download the minimized source-check document. Existing provider opt-ins still apply.'));
@@ -380,6 +746,6 @@
     refresh().catch(e=>{status.textContent=e.message;});
   }
 
-  window.__owgPipelineModel={assessmentBody,portfolioView};
+  window.__owgPipelineModel={assessmentBody,portfolioView,handoffReviewPacket,compareHandoffReviewPackets,handoffInspectionWorklist};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();

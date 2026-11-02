@@ -138,6 +138,22 @@ const path=require('node:path');
    await page.getByRole('button',{name:'Open linked saved process',exact:true}).click();
    await page.locator('#owgCatalogStatus').filter({hasText:'Opened immutable revision 1.'}).waitFor();
    assert.equal(await page.getByRole('textbox',{name:'Business goal',exact:true}).inputValue(),'Review the selected renewal');
+   // Resume an exact saved design and focus the human assessment without
+   // creating a project or reading a provider.
+   let guidedWrites=0;
+   page.on('request',request=>{if(request.method()!=='GET'&&
+     /(agent-project|source-check-export|project-reports)/.test(request.url()))guidedWrites++;});
+   await page.locator('#owgPipelineJourney').click();
+   const guide=page.locator('#owgPipelineJourneyGuide');
+   await guide.getByRole('heading',{name:'Resume this evidence-to-implementation journey'}).waitFor();
+   assert(await guide.locator('#owgPipelineJourneyExport').isDisabled());
+   assert(await guide.locator('#owgPipelineJourneyOpenProcess').isEnabled());
+   page.once('dialog',dialog=>dialog.accept());
+   await guide.locator('#owgPipelineJourneyOpenProcess').click();
+   await guide.locator('#owgPipelineJourneyGuideStatus').filter({hasText:'Requested exact linked revision 1'}).waitFor();
+   await guide.locator('#owgPipelineJourneyReviewIdea').click();
+   assert.equal(await page.evaluate(()=>document.activeElement?.id),'owgPipelineAssess');
+   assert.equal(guidedWrites,0);
    assert(await page.locator('#owgPipelineProjectDownload').isDisabled());
    await page.getByRole('button',{name:'Move to Assessing',exact:true}).click();
    await page.locator('#owgPipelineStatus').filter({hasText:'Moved to Assessing.'}).waitFor();
@@ -148,7 +164,25 @@ const path=require('node:path');
    await page.locator('#owgPipelineStatus').filter({hasText:'Assessment saved.'}).waitFor();
    await page.getByRole('button',{name:'Move to Approved',exact:true}).click();
    await page.locator('#owgPipelineStatus').filter({hasText:'Moved to Approved.'}).waitFor();
+   // A delayed journey from an earlier idea view must not populate a newly
+   // opened detail view or re-enable its stale navigation controls.
+   let heldJourneyRoute,releaseJourney;
+   const journeyHeld=new Promise(resolve=>{releaseJourney=resolve;});
+   await page.route('**/v1/automation-pipeline/*/journey',route=>{heldJourneyRoute=route;releaseJourney();});
+   await page.evaluate(()=>{document.getElementById('owgPipelineJourney').dataset.oldView='yes';});
+   await page.locator('#owgPipelineJourney').click();await journeyHeld;
+   await page.evaluate(id=>window.dispatchEvent(new CustomEvent('owg-pipeline-open',{detail:{idea_id:id}})),linked.idea_id);
+   await page.waitForFunction(()=>document.getElementById('owgPipelineJourney')?.dataset.oldView!=='yes');
+   const staleResponse=page.waitForResponse(r=>r.url().endsWith('/'+linked.idea_id+'/journey'));
+   await heldJourneyRoute.continue();await staleResponse;await page.unroute('**/v1/automation-pipeline/*/journey');
+   assert.equal(await page.locator('#owgPipelineJourneyGuide').count(),0,'superseded journey cannot restore controls');
    const linkedBeforeExport=await page.evaluate(async id=>(await fetch('/v1/automation-pipeline/'+id)).json(),linked.idea_id);
+   await page.locator('#owgPipelineJourney').click();
+   await guide.locator('#owgPipelineJourneyExport').waitFor();
+   assert(await guide.locator('#owgPipelineJourneyExport').isEnabled());
+   await guide.locator('#owgPipelineJourneyExport').click();
+   assert.equal(await page.evaluate(()=>document.activeElement?.id),'owgPipelineProjectDownload');
+   assert.equal(guidedWrites,0,'navigation must not export an agent project');
    const [projectDownload,projectResponse]=await Promise.all([
      page.waitForEvent('download'),
      page.waitForResponse(r=>r.url().endsWith('/'+linked.idea_id+'/agent-project')&&r.request().method()==='POST'),
@@ -177,6 +211,172 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await page.locator('#owgPipelineProjects').getByRole('status').filter({hasText:'Project downloaded.'}).waitFor();
    const recorded=await page.evaluate(async id=>(await fetch('/v1/automation-pipeline/'+id+'/projects')).json(),linked.idea_id);
    assert.equal(recorded.projects.length,1);assert.equal(recorded.deployment_verified,false);
+   // Navigate into the exact selected project's existing read-only report and
+   // source-check forms. The latter still requires fresh explicit consent.
+   await page.locator('#owgPipelineJourney').click();
+   await page.locator('#owgPipelineJourneyProject').selectOption(manifest.project_id);
+   // Explicit, bounded review packet is reconstructed from persisted references,
+   // not an approval or a new source/provider read. It never includes raw case data.
+   const writesBeforePacket=guidedWrites;
+   const [handoffDownload]=await Promise.all([
+     page.waitForEvent('download'),
+     page.locator('#owgPipelineJourneyReviewPacket').click()
+   ]);
+   assert.equal(handoffDownload.suggestedFilename(),'owg-evidence-handoff-review.json');
+   const handoffPacket=JSON.parse(await fs.readFile(await handoffDownload.path(),'utf8'));
+   assert.equal(handoffPacket.format,'openworkgraph.evidence-handoff-review.v1');
+   assert.equal(handoffPacket.scope,'human_review_only');
+   assert.equal(handoffPacket.execution_authorized,false);
+   assert.equal(handoffPacket.source_read_authorized,false);
+   assert.equal(handoffPacket.idea.idea_id,linked.idea_id);
+   assert.equal(handoffPacket.idea.revision,linkedBeforeExport.revision);
+   assert.equal(handoffPacket.process.content_sha256,saved.content_sha256);
+   assert.equal(handoffPacket.project.project_id,manifest.project_id);
+   assert.equal(handoffPacket.project.spec_sha256,manifest.spec_sha256);
+   // The lineage manifest lives inside the ZIP, so it cannot carry the ZIP's own hash;
+   // compare with the hash of the downloaded archive instead.
+   assert.equal(handoffPacket.project.archive_sha256,projectResponse.headers()['x-owg-archive-sha256']);
+   assert(handoffPacket.readiness.blockers.includes('dataset_origin_not_linked'));
+   assert(handoffPacket.readiness.blockers.includes('no_imported_report'));
+   assert(handoffPacket.readiness.blockers.includes('execution_and_business_outcomes_unverified'));
+   assert.equal(handoffPacket.readiness.verified_business_outcomes,false);
+   assert.equal(guidedWrites,writesBeforePacket,'review packet must not write or read a provider');
+   assert(!JSON.stringify(handoffPacket).includes('PRIVATE_RAW_CASE_VALUE'));
+   assert(!JSON.stringify(handoffPacket).includes('owg:r:'));
+   // Importing a local review packet performs a fresh session-authenticated
+   // journey read and compares identities; it never restores approval.
+   const priorPacket=page.locator('#owgPipelineJourneyPriorPacket');
+   const setPacket=async packet=>priorPacket.setInputFiles({
+     name:'prior-handoff-review.json',mimeType:'application/json',
+     buffer:Buffer.from(JSON.stringify(packet))
+   });
+   await setPacket(handoffPacket);
+   const [comparisonResponse]=await Promise.all([
+     page.waitForResponse(r=>r.url().endsWith('/'+linked.idea_id+'/journey')&&r.request().method()==='GET'),
+     page.locator('#owgPipelineJourneyComparePacket').click()
+   ]);
+   assert.equal(comparisonResponse.status(),200);
+   await page.locator('#owgPipelineJourneyCompareResult').getByText(/Recorded fields match the current local references/).waitFor();
+   assert.equal(guidedWrites,writesBeforePacket,'local packet comparison must not write');
+   const matchingInspection=page.locator('#owgPipelineJourneyInspectionWorklist');
+   assert(await matchingInspection.locator('input[type=checkbox]').count()>0,
+     'even a matching snapshot still has outstanding human checks');
+   assert((await matchingInspection.textContent()).includes('All approval and verification gates remain open.'));
+
+   const alteredPacket=JSON.parse(JSON.stringify(handoffPacket));
+   alteredPacket.process.status='changed';
+   alteredPacket.project.spec_sha256='a'.repeat(64);
+   alteredPacket.source_check_exports.count+=1;
+   alteredPacket.readiness.blockers.push('idea_not_approved');
+   await setPacket(alteredPacket);
+   await page.locator('#owgPipelineJourneyComparePacket').click();
+   await page.locator('#owgPipelineJourneyCompareResult').getByText(/Recorded fields changed since the saved packet/).waitFor();
+   const comparisonText=await page.locator('#owgPipelineJourneyCompareResult').textContent();
+   assert(comparisonText.includes('Saved process availability'));
+   assert(comparisonText.includes('Project revision and artifact hashes'));
+   // Human-inspection checklist is local and never approves any of the
+   // underlying decision/source/execution gates. Export is pinned to both
+   // snapshots and contains no raw case, receipt or free-form user text.
+   const inspectionWorklist=page.locator('#owgPipelineJourneyInspectionWorklist');
+   const inspectionChecks=inspectionWorklist.locator('input[type=checkbox]');
+   assert(await inspectionChecks.count()>=5);
+   await inspectionChecks.first().focus();
+   await page.keyboard.press('Space');
+   assert(await inspectionChecks.first().isChecked(),'keyboard can mark inspected locally');
+   const [inspectionDownload]=await Promise.all([
+     page.waitForEvent('download'),
+     inspectionWorklist.locator('#owgPipelineJourneyInspectionDownload').click()
+   ]);
+   assert.equal(inspectionDownload.suggestedFilename(),'owg-human-inspection-worklist.json');
+   const inspectionRecord=JSON.parse(await fs.readFile(await inspectionDownload.path(),'utf8'));
+   assert.equal(inspectionRecord.format,'openworkgraph.handoff-human-inspection.v1');
+   assert.equal(inspectionRecord.scope,'local_human_inspection_only');
+   assert.equal(inspectionRecord.idea_id,linked.idea_id);
+   assert.equal(inspectionRecord.project_id,manifest.project_id);
+   assert.equal(inspectionRecord.saved_basis.project_spec_sha256,'a'.repeat(64));
+   assert.equal(inspectionRecord.current_basis.project_spec_sha256,manifest.spec_sha256);
+   assert.equal(inspectionRecord.current_basis.process_sha256,saved.content_sha256);
+   assert.equal(inspectionRecord.inspected_count,1);
+   assert(inspectionRecord.pending_inspection_count>0);
+   assert(inspectionRecord.items.some(item=>item.kind==='changed_area'&&item.inspected_locally));
+   assert(inspectionRecord.items.some(item=>item.kind==='outstanding_blocker'&&!item.inspected_locally));
+   for(const flag of ['execution_authorized','source_read_authorized','human_approval_granted',
+     'verified_execution','verified_business_outcomes'])assert.equal(inspectionRecord[flag],false);
+   assert.equal(inspectionRecord.source_and_outcome_verification,'not_established');
+   assert(!JSON.stringify(inspectionRecord).includes('PRIVATE_RAW_CASE_VALUE'));
+   assert(!JSON.stringify(inspectionRecord).includes('owg:r:'));
+   assert(!JSON.stringify(inspectionRecord).includes('raw_receipt'));
+   const invalidInspection=await page.evaluate(([oldPacket,newPacket])=>{
+     try{
+       window.__owgPipelineModel.handoffInspectionWorklist(oldPacket,newPacket,
+         ['change:invented-unreviewed-category'],'2026-11-02T00:00:00Z');
+       return false;
+     }catch{return true;}
+   },[alteredPacket,handoffPacket]);
+   assert.equal(invalidInspection,true,'cannot import arbitrary inspection or approval claims');
+   assert.equal(guidedWrites,writesBeforePacket,'inspection and export must not write or read source');
+   const driftActions=page.locator('#owgPipelineJourneyDriftActions');
+   assert(await driftActions.getByRole('button',{name:'Inspect exact saved process revision'}).isEnabled());
+   assert((await driftActions.textContent()).includes('Review changed areas'));
+   // Keyboard navigation is an explicit review action, not an automatic export.
+   await driftActions.getByRole('button',{name:'Inspect selected immutable project'}).focus();
+   await page.keyboard.press('Enter');
+   assert.equal(await page.evaluate(()=>document.activeElement.id),'owgPipelineJourneyProject');
+   await driftActions.getByRole('button',{name:'Prepare separate source review for this project'}).click();
+   await page.locator('#owgPipelineSourceProject').waitFor();
+   assert.equal(await page.locator('#owgPipelineSourceProject').inputValue(),manifest.project_id);
+   assert.equal(await page.locator('#owgPipelineSourceConsent').isChecked(),false);
+   await driftActions.getByRole('button',{name:'Inspect outstanding human review checks'}).click();
+   assert.equal(await page.evaluate(()=>document.activeElement.id),'owgPipelineJourneyReadiness');
+   assert.equal(guidedWrites,writesBeforePacket,'drift review navigation must not write or read source');
+   const wrongPacket=JSON.parse(JSON.stringify(handoffPacket));
+   wrongPacket.project.project_id='unrelated-project';
+   await setPacket(wrongPacket);
+   assert.equal(await page.locator('#owgPipelineJourneyInspectionWorklist').count(),0,
+     'new packet selection must invalidate old local inspection marks and download');
+   await page.locator('#owgPipelineJourneyComparePacket').click();
+   await page.locator('#owgPipelineJourneyCompareResult').filter({hasText:/belongs to another idea or project/}).waitFor();
+   assert.equal(await page.locator('#owgPipelineJourneyDriftActions').count(),0,'invalid packet must clear actionable review links');
+   await priorPacket.setInputFiles({name:'huge.json',mimeType:'application/json',buffer:Buffer.alloc(65537,32)});
+   await page.locator('#owgPipelineJourneyComparePacket').click();
+   await page.locator('#owgPipelineJourneyCompareResult').filter({hasText:/no larger than 64 KiB/}).waitFor();
+   await setPacket(handoffPacket);
+   assert.equal(guidedWrites,writesBeforePacket,'invalid packets must not write or upload');
+   // A different selected project must not inherit the first project's hashes.
+   const secondPacket=await page.evaluate((packet)=>{
+     const model=window.__owgPipelineModel;
+     const journey={idea:{revision:packet.idea.revision,state:'approved'},process_status:{status:'current',process_reference:packet.process},
+       projects:[{...packet.project,project_id:'second-project',spec_sha256:'b'.repeat(64),archive_sha256:'c'.repeat(64),
+         reported_specifications:[],source_check_exports:{count:0}}]};
+     return model.handoffReviewPacket(journey,'second-project',packet.idea.idea_id,'2026-11-02T00:00:00Z');
+   },handoffPacket);
+   assert.equal(secondPacket.project.project_id,'second-project');
+   assert.equal(secondPacket.project.spec_sha256,'b'.repeat(64));
+   assert.notEqual(secondPacket.project.spec_sha256,handoffPacket.project.spec_sha256);
+   const boundedPacket=await page.evaluate((packet)=>{
+     const journey={idea:{revision:packet.idea.revision,state:'approved'},
+       process_status:{status:'current',process_reference:packet.process},
+       dataset_origins:Array.from({length:65},()=>({status:'current',raw_case_text:'SECRET'})),
+       projects:[{...packet.project,project_id:'bounded',reported_specifications:Array.from({length:65},()=>({status:'matching_reported_specification',raw_receipt:'SECRET'})),
+         source_check_exports:{count:0}}]};
+     return window.__owgPipelineModel.handoffReviewPacket(journey,'bounded',packet.idea.idea_id,'2026-11-02T00:00:00Z');
+   },handoffPacket);
+   assert.equal(boundedPacket.dataset_origins.length,64);
+   assert.equal(boundedPacket.reported_specifications.length,64);
+   assert.equal(boundedPacket.dataset_origins_truncated,true);
+   assert.equal(boundedPacket.reported_specifications_truncated,true);
+   assert(boundedPacket.readiness.blockers.includes('dataset_origin_list_truncated'));
+   assert(boundedPacket.readiness.blockers.includes('reported_specification_list_truncated'));
+   assert(!JSON.stringify(boundedPacket).includes('SECRET'));
+   const writesBeforeNavigation=guidedWrites;
+   await page.locator('#owgPipelineJourneyReports').click();
+   await page.locator('#owgPipelineReportProject').waitFor();
+   assert.equal(await page.locator('#owgPipelineReportProject').inputValue(),manifest.project_id);
+   await page.locator('#owgPipelineJourneySource').click();
+   await page.locator('#owgPipelineSourceProject').waitFor();
+   assert.equal(await page.locator('#owgPipelineSourceProject').inputValue(),manifest.project_id);
+   assert.equal(await page.locator('#owgPipelineSourceConsent').isChecked(),false);
+   assert.equal(guidedWrites,writesBeforeNavigation,'stage navigation is read-only');
    // Source-state checks are explicitly confirmed and downloaded only. The
    // unobserved synthetic record must remain unknown and never reach a provider.
    let sourceDownloads=0;page.on('download',d=>{if(d.suggestedFilename()==='owg-project-source-check.json')sourceDownloads++;});
@@ -241,6 +441,42 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await page.locator('#owgPipelineReportLinks li').filter({hasText:'Matching reported specification'}).waitFor();
    const linkedReports=await page.evaluate(async id=>(await fetch('/v1/automation-pipeline/'+id+'/project-reports')).json(),linked.idea_id);
    assert.equal(linkedReports.links.length,1);assert.equal(linkedReports.business_outcomes_verified,false);
+   // Reopen the pinned journey after a dashboard restart in another tab.
+   const resumed=await context.newPage();
+   await resumed.goto(base+'/#session='+session);
+   await resumed.locator('[role=tab][data-tab=evidence]').click();
+   await resumed.locator('#owgPipelineCard').waitFor();
+   await resumed.evaluate(id=>window.dispatchEvent(new CustomEvent('owg-pipeline-open',{detail:{idea_id:id}})),linked.idea_id);
+   await resumed.locator('#owgPipelineProcessStatus').filter({hasText:'Current saved revision'}).waitFor();
+   await resumed.locator('#owgPipelineJourney').click();
+   await resumed.locator('#owgPipelineJourneyGuide').waitFor();
+   await resumed.locator('#owgPipelineJourneyProject').selectOption(manifest.project_id);
+   await resumed.locator('#owgPipelineJourneyArtifact').getByText(/Matching reported specification/).waitFor();
+   const [resumedDownload]=await Promise.all([resumed.waitForEvent('download'),
+     resumed.locator('#owgPipelineJourneyReviewPacket').click()]);
+   const resumedPacket=JSON.parse(await fs.readFile(await resumedDownload.path(),'utf8'));
+   assert.equal(resumedPacket.project.project_id,manifest.project_id);
+   assert.equal(resumedPacket.project.spec_sha256,manifest.spec_sha256);
+   assert.equal(resumedPacket.reported_specifications[0].status,'matching_reported_specification');
+   assert(!resumedPacket.readiness.blockers.includes('no_imported_report'));
+   assert(resumedPacket.readiness.blockers.includes('execution_and_business_outcomes_unverified'));
+   // A previously saved pre-report packet now reveals a real report-status drift.
+   await resumed.locator('#owgPipelineJourneyPriorPacket').setInputFiles({
+     name:'before-report.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(handoffPacket))
+   });
+   await resumed.locator('#owgPipelineJourneyComparePacket').click();
+   await resumed.locator('#owgPipelineJourneyCompareResult').getByText(/Recorded fields changed since the saved packet/).waitFor();
+   const resumedDrift=resumed.locator('#owgPipelineJourneyDriftActions');
+   await resumedDrift.getByRole('button',{name:'Review imported reports for this project'}).click();
+   await resumed.locator('#owgPipelineReportProject').waitFor();
+   assert.equal(await resumed.locator('#owgPipelineReportProject').inputValue(),manifest.project_id);
+   await resumedDrift.getByRole('button',{name:'Prepare separate source review for this project'}).click();
+   await resumed.locator('#owgPipelineSourceProject').waitFor();
+   assert.equal(await resumed.locator('#owgPipelineSourceProject').inputValue(),manifest.project_id);
+   assert.equal(await resumed.locator('#owgPipelineSourceConsent').isChecked(),false);
+
+   assert((await resumed.locator('#owgPipelineJourneyResult').textContent()).includes(manifest.spec_sha256));
+   await resumed.close();
    await page.locator('#owgPipelineJourney').click();
    const journey=page.locator('#owgPipelineJourneyResult');
    await journey.getByText('Dataset and cohort → process: origin is not linked.',{exact:true}).waitFor();
@@ -269,6 +505,25 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await page.locator('#owgPipelineProcessStatus').filter({hasText:'Process changed since this idea was created'}).waitFor();
    await page.locator('#owgPipelineJourney').click();
    await journey.getByText(/Saved process renewal_review · revision 1 · changed since this idea/).waitFor();
+   await guide.getByText(/Process basis is changed/).waitFor();
+   const [changedDownload]=await Promise.all([page.waitForEvent('download'),
+     page.locator('#owgPipelineJourneyReviewPacket').click()]);
+   const changedPacket=JSON.parse(await fs.readFile(await changedDownload.path(),'utf8'));
+   assert.equal(changedPacket.process.status,'changed');
+   assert(changedPacket.readiness.blockers.includes('process_not_current'));
+   await page.locator('#owgPipelineJourneyPriorPacket').setInputFiles({
+     name:'original-review.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(handoffPacket))
+   });
+   await page.locator('#owgPipelineJourneyComparePacket').click();
+   await page.locator('#owgPipelineJourneyCompareResult').getByText(/Recorded fields changed since the saved packet/).waitFor();
+   assert((await page.locator('#owgPipelineJourneyCompareResult').textContent()).includes('Saved process availability'));
+   assert(await page.locator('#owgPipelineJourneyDriftActions').getByRole('button',{name:'Inspect exact saved process revision'}).isEnabled());
+
+   assert(await guide.locator('#owgPipelineJourneyOpenProcess').isEnabled());
+   page.once('dialog',dialog=>dialog.accept());
+   await guide.locator('#owgPipelineJourneyOpenProcess').click();
+   await page.locator('#owgCatalogStatus').filter({hasText:'Opened immutable revision 1.'}).waitFor();
+   assert.equal(await page.getByRole('textbox',{name:'Business goal',exact:true}).inputValue(),'Review the selected renewal');
    await page.getByRole('button',{name:'Move to Implemented',exact:true}).click();
    await page.locator('#owgPipelineStatus').filter({hasText:'linked process changed or is unavailable'}).waitFor();
    assert.equal((await page.evaluate(async id=>(await fetch('/v1/automation-pipeline/'+id)).json(),linked.idea_id)).state,'approved');
@@ -285,6 +540,25 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await page.locator('#owgPipelineProcessStatus').filter({hasText:'Linked revision is unavailable'}).waitFor();
    await page.locator('#owgPipelineJourney').click();
    await journey.getByText(/Saved process renewal_review · revision 1 · unavailable/).waitFor();
+   assert(await guide.locator('#owgPipelineJourneyOpenProcess').isDisabled());
+   const [deletedDownload]=await Promise.all([page.waitForEvent('download'),
+     page.locator('#owgPipelineJourneyReviewPacket').click()]);
+   const deletedPacket=JSON.parse(await fs.readFile(await deletedDownload.path(),'utf8'));
+   assert.equal(deletedPacket.process.status,'unavailable');
+   assert(deletedPacket.readiness.blockers.includes('process_not_current'));
+   await page.locator('#owgPipelineJourneyPriorPacket').setInputFiles({
+     name:'original-review.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(handoffPacket))
+   });
+   await page.locator('#owgPipelineJourneyComparePacket').click();
+   await page.locator('#owgPipelineJourneyCompareResult').getByText(/Recorded fields changed since the saved packet/).waitFor();
+   assert(await page.locator('#owgPipelineJourneyDriftActions').getByRole('button',{name:'Inspect exact saved process revision'}).isDisabled(),
+     'unavailable process cannot be silently replaced with a newer revision');
+   const writesAfterDeletion=guidedWrites;
+   await page.locator('#owgPipelineJourneyComparePacket').click();
+   await page.locator('#owgPipelineJourneyCompareResult').getByText(/Recorded fields changed since the saved packet/).waitFor();
+   assert.equal(guidedWrites,writesAfterDeletion,'read-only comparison after source deletion must not write');
+
+
    assert(await page.getByRole('button',{name:'Open linked saved process',exact:true}).isDisabled());
    await page.setViewportSize({width:390,height:844});
    assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false,'no horizontal overflow at phone width');

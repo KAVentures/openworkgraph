@@ -1,11 +1,11 @@
 /* Explicit local process catalog. Same reviewed knowledge store, immutable revisions. */
 (() => {
   'use strict';
-  let record=null, model=null, reviewed=false, busy=false, after='';
+  let record=null, model=null, reviewed=false, busy=false, after='', restorationDraft=null;
   let shadowGeneration=0;
   let importGeneration=0,importDraft=null;
   let ruleCheckGeneration=0,sourceRuleGeneration=0;
-  let originGeneration=0,editGeneration=0;
+  let originGeneration=0,editGeneration=0,revisionCompareGeneration=0;
   const el=(tag,text)=>{const n=document.createElement(tag);if(text!=null)n.textContent=String(text);return n;};
   const button=(text,fn)=>{const n=el('button',text);n.type='button';n.className='secondary';n.addEventListener('click',()=>Promise.resolve().then(fn).catch(error=>status(error.message)));return n;};
   const status=text=>{const n=document.getElementById('owgCatalogStatus');if(n)n.textContent=String(text);};
@@ -14,7 +14,8 @@
   function clearRuleChecks(){ruleCheckGeneration++;document.getElementById('owgCatalogRuleCheckResult')?.replaceChildren();}
   function clearSourceRuleChecks(){sourceRuleGeneration++;document.getElementById('owgCatalogSourceRuleResult')?.replaceChildren();}
   function clearOrigins(){originGeneration++;document.getElementById('owgCatalogOriginResult')?.replaceChildren();}
-  function changed(invalidateTables=true){editGeneration++;if(invalidateTables&&model?.decision_tables?.length){for(const t of model.decision_tables)t.user_confirmed=false;document.querySelectorAll("input[data-table-confirmation]").forEach(n=>{n.checked=false;});}clearOrigins();clearSourceRuleChecks();reviewed=false;const check=document.getElementById('owgCatalogReviewed');if(check)check.checked=false;clearShadowReview();clearRuleChecks();}
+  function clearRevisionComparison(){revisionCompareGeneration++;document.getElementById('owgCatalogRevisionCompare')?.replaceChildren();}
+  function changed(invalidateTables=true){editGeneration++;if(invalidateTables&&model?.decision_tables?.length){for(const t of model.decision_tables)t.user_confirmed=false;document.querySelectorAll("input[data-table-confirmation]").forEach(n=>{n.checked=false;});}clearOrigins();clearRevisionComparison();clearSourceRuleChecks();reviewed=false;const check=document.getElementById('owgCatalogReviewed');if(check)check.checked=false;clearShadowReview();clearRuleChecks();}
   function field(parent,title,value,apply,options){
     const label=el('label',title+' '),input=el(options?'select':'input');
     if(options)options.forEach(value=>{const option=el('option',value);option.value=value;input.appendChild(option);});
@@ -51,7 +52,7 @@
       const draft=window.owgProcessDesigner.reviewedDraft();
       const saved=await request('/v1/process-catalog',{title:draft.business_goal_declared_by_user.slice(0,240),
         expected_revision:0,user_confirmed:true,process_model:linearModel(draft)});
-      record=saved;model=copy(saved.process_model);reviewed=false;renderEditor();
+      record=saved;model=copy(saved.process_model);restorationDraft=null;reviewed=false;renderEditor();
       status('Saved locally as revision '+saved.revision+'. Source CSV and native case IDs were not retained.');
       document.getElementById('owgProcessCatalog')?.scrollIntoView({block:'start'});
       return saved;
@@ -81,6 +82,7 @@
       activities,transitions:activities.slice(1).map((activity,i)=>({source:activities[i].id,target:activity.id,rule_id:null})),
       business_rules:[],entry_activity_id:activities[0].id,terminal_activity_ids:[activities.at(-1).id],
       outcome_expectations:[],opportunity_scenario:null,observed_path_is_policy:false,execution_authorized:false,outcomes_verified:false};
+    restorationDraft=null;
     record={workflow_id:null,revision:0,title:'Observed workflow proposal',process_model:copy(model),
       evidence_refs:(source.evidenceRefs||[]).filter(ref=>typeof ref==='string'&&/^execution:[A-Za-z0-9_-]+$/.test(ref)).slice(0,100)};
     reviewed=false;renderEditor();
@@ -111,7 +113,7 @@
       const params=new URLSearchParams({workflow_id:id});if(revision)params.set('revision',String(revision));
       const result=await request('/v1/process-catalog/revision?'+params);
       if(expectedHash&&result.content_sha256!==expectedHash)throw new Error('Linked process revision no longer matches its saved reference.');
-      record=result;model=copy(result.process_model);reviewed=false;renderEditor();
+      record=result;model=copy(result.process_model);restorationDraft=null;reviewed=false;renderEditor();
       status('Opened immutable revision '+record.revision+'. Saving requires review and the same latest revision.');
     });
   }
@@ -125,8 +127,155 @@
       if(JSON.stringify(model)!==JSON.stringify(submitted)||record.title!==title){
         record={...result,title:record.title};changed();renderEditor();status('Snapshot saved; newer local edits remain unsaved.');return;
       }
-      record=result;model=copy(result.process_model);reviewed=false;renderEditor();
+      record=result;model=copy(result.process_model);restorationDraft=null;reviewed=false;renderEditor();
       status('Saved revision '+record.revision+'. Earlier revisions remain available.');
+    });
+  }
+
+  // Compare two exact saved snapshots. Never derive approval from structural equality.
+  // Keys are stable model identities, not display labels; changed labels remain visible.
+  function revisionDifferences(older,newer){
+    const stable=value=>JSON.stringify(value,(_key,v)=>
+      v&&typeof v==='object'&&!Array.isArray(v)?
+        Object.fromEntries(Object.keys(v).sort().map(key=>[key,v[key]])):v);
+    const format=value=>{
+      const raw=typeof value==='string'?value:stable(value);
+      return raw===undefined?'—':raw.length>180?raw.slice(0,180)+'… [truncated]':raw;
+    };
+    const rows=[];
+    const add=(area,key,kind,before,after)=>rows.push({area,key,kind,before:format(before),after:format(after)});
+    const old=older.process_model,now=newer.process_model;
+    for(const key of ['title']){
+      if(stable(older[key])!==stable(newer[key]))add('Process',key,'changed',older[key],newer[key]);
+    }
+    for(const key of ['goal','owner_label','baseline_path','baseline_source','baseline_coverage',
+      'baseline_support_unit','supporting_case_count','entry_activity_id','terminal_activity_ids',
+      'opportunity_scenario']){
+      if(stable(old[key])!==stable(now[key]))add('Model',key,'changed',old[key],now[key]);
+    }
+    const collections=[
+      ['Activities','activities',item=>item.id],
+      ['Transitions','transitions',item=>item.source+' → '+item.target],
+      ['Business rules','business_rules',item=>item.id],
+      ['Manual review gates','manual_review_conditions',item=>item.activity_id+' · '+item.kind+' · '+item.condition_label],
+      ['Outcome expectations','outcome_expectations',item=>item.terminal_activity_id+' · '+item.operation],
+      ['Decision tables','decision_tables',(item,index)=>item.id||'table '+(index+1)]
+    ];
+    for(const [area,key,identify] of collections){
+      const before=new Map((old[key]||[]).map((item,index)=>[identify(item,index),item]));
+      const after=new Map((now[key]||[]).map((item,index)=>[identify(item,index),item]));
+      for(const id of [...new Set([...before.keys(),...after.keys()])].sort()){
+        if(!before.has(id))add(area,id,'added',undefined,after.get(id));
+        else if(!after.has(id))add(area,id,'removed',before.get(id),undefined);
+        else if(stable(before.get(id))!==stable(after.get(id)))add(area,id,'changed',before.get(id),after.get(id));
+      }
+    }
+    return rows;
+  }
+  // Restoration is a new, unreviewed proposal, not a rollback of the saved record.
+  // Inherited human confirmations and permission-like flags must never transfer.
+  function clearHistoricalConfirmations(value){
+    if(Array.isArray(value)){value.forEach(clearHistoricalConfirmations);return value;}
+    if(value&&typeof value==='object'){
+      for(const key of Object.keys(value)){
+        if(['user_confirmed','execution_authorized','outcomes_verified','observed_path_is_policy',
+            'automatic_branch_authorized'].includes(key))value[key]=false;
+        else clearHistoricalConfirmations(value[key]);
+      }
+    }
+    return value;
+  }
+  async function prepareHistoricalRestoration(previous,selected,generation,host){
+    return locked(async()=>{
+      if(generation!==revisionCompareGeneration||record!==selected||!host.isConnected)
+        throw new Error('The comparison changed; compare the saved revisions again.');
+      const id=selected.workflow_id;
+      // Re-read BOTH immutable references. A previously displayed comparison cannot
+      // resurrect a deleted revision or bypass a concurrent edit to the latest model.
+      const [latest,historical]=await Promise.all([
+        request('/v1/process-catalog/revision?'+new URLSearchParams({workflow_id:id})),
+        request('/v1/process-catalog/revision?'+new URLSearchParams({
+          workflow_id:id,revision:String(previous.revision)}))
+      ]);
+      if(generation!==revisionCompareGeneration||record!==selected||!host.isConnected)
+        throw new Error('The comparison changed while restoring; start again.');
+      if(latest.workflow_id!==id||latest.revision!==selected.revision||
+         latest.content_sha256!==selected.content_sha256||
+         historical.workflow_id!==id||historical.revision!==previous.revision||
+         historical.content_sha256!==previous.content_sha256||
+         historical.process_model?.format!=='openworkgraph.process-model.v1')
+        throw new Error('The saved revision or latest process changed. Refresh and compare again.');
+      if(!replaceDraft())return;
+      // Keep the CURRENT optimistic-concurrency revision for a future reviewed save,
+      // but never attach old/current evidence references to the restored model.
+      record={...latest,evidence_refs:[]};
+      model=clearHistoricalConfirmations(copy(historical.process_model));
+      restorationDraft={from:historical.revision,base:latest.revision};
+      changed();renderEditor();
+      status('UNSAVED restoration draft from r'+historical.revision+
+        ' against latest r'+latest.revision+'. Prior confirmations and evidence references were cleared. '+
+        'Review and explicitly save a new revision; current source state remains unverified.');
+      document.getElementById('owgCatalogEditor')?.scrollIntoView({block:'start'});
+    });
+  }
+
+  async function compareSavedRevision(revision){
+    return locked(async()=>{
+      const selected=record,host=document.getElementById('owgCatalogRevisionCompare');
+      if(!selected?.workflow_id||!Number.isInteger(selected.revision)||selected.revision<1||
+         !Number.isInteger(revision)||revision<1||revision===selected.revision||!host)
+        throw new Error('Open a saved revision and choose a different historical revision.');
+      const generation=++revisionCompareGeneration;
+      host.replaceChildren(el('p','Reading the selected immutable revision for comparison…'));
+      try{
+        const previous=await request('/v1/process-catalog/revision?'+new URLSearchParams({
+          workflow_id:selected.workflow_id,revision:String(revision)}));
+        if(generation!==revisionCompareGeneration||record!==selected||!host.isConnected)return;
+        if(previous.workflow_id!==selected.workflow_id||previous.revision!==revision||
+           !/^[0-9a-f]{64}$/.test(previous.content_sha256||'')||
+           !/^[0-9a-f]{64}$/.test(selected.content_sha256||'')||
+           previous.process_model?.format!=='openworkgraph.process-model.v1'||
+           selected.process_model?.format!=='openworkgraph.process-model.v1')
+          throw new Error('The compared revision or its immutable reference does not match.');
+        const changes=revisionDifferences(previous,selected);
+        const section=el('section');section.id='owgCatalogRevisionComparison';
+        section.setAttribute('aria-label','Saved process revision differences');
+        section.append(el('h4','Saved revision comparison · r'+revision+' → r'+selected.revision),
+          el('p','Compared r'+revision+' SHA-256 '+previous.content_sha256),
+          el('p','Opened saved r'+selected.revision+' SHA-256 '+selected.content_sha256),
+          el('p','Only stored snapshots are compared. Unsaved edits, current source state and business outcomes are NOT evaluated. Equal structure is not policy approval, evidence validity or permission to run an agent.'));
+        const summary=el('p',changes.length+' changed model entries. '+
+          (changes.length>120?'Only the first 120 are displayed; comparison is incomplete.':
+            'All detected stored-model differences are displayed.'));
+        summary.setAttribute('role','status');section.appendChild(summary);
+        if(changes.length){
+          const wrap=el('div');wrap.className='table-wrap';
+          const table=el('table'),thead=el('thead'),heading=el('tr');
+          for(const title of ['Area','Identity','Change','Compared r'+revision,'Opened r'+selected.revision])
+            heading.appendChild(el('th',title));
+          thead.appendChild(heading);table.appendChild(thead);
+          const body=el('tbody');
+          for(const change of changes.slice(0,120)){
+            const tr=el('tr');
+            for(const value of [change.area,change.key,change.kind,change.before,change.after])
+              tr.appendChild(el('td',value));
+            body.appendChild(tr);
+          }
+          table.appendChild(body);wrap.appendChild(table);section.appendChild(wrap);
+        }else section.appendChild(el('p','No stored-model difference detected. Source evidence and outcomes remain unverified.'));
+        if(revision<selected.revision){
+          section.appendChild(el('p','Restoration creates an UNSAVED draft from the historical model against the current latest revision. All earlier confirmations and evidence links are removed. A separate human review and new save are required.'));
+          section.appendChild(button('Prepare historical r'+revision+' as unsaved restoration draft',
+            ()=>prepareHistoricalRestoration(previous,selected,generation,host)));
+        }
+        section.appendChild(button('Open compared revision r'+revision,
+          ()=>load(selected.workflow_id,revision,previous.content_sha256)));
+        host.replaceChildren(section);
+      }catch(error){
+        if(generation===revisionCompareGeneration&&record===selected)
+          host.replaceChildren(el('p','Comparison unavailable: '+error.message));
+        throw error;
+      }
     });
   }
   async function history(before){
@@ -136,7 +285,12 @@
       const params=new URLSearchParams({workflow_id:workflowId,limit:'10'});if(before)params.set('before_revision',String(before));
       const result=await request('/v1/process-catalog/history?'+params),host=document.getElementById('owgCatalogHistory');
       host.replaceChildren(el('h4','Revision history'));
-      result.workflows.forEach(item=>host.appendChild(button('Open revision '+item.revision+' · '+item.saved_at,()=>load(workflowId,item.revision))));
+      result.workflows.forEach(item=>{
+        const row=el('p');row.appendChild(button('Open revision '+item.revision+' · '+item.saved_at,()=>load(workflowId,item.revision)));
+        if(item.revision!==record.revision)row.appendChild(button('Compare r'+item.revision+' with opened r'+record.revision,()=>compareSavedRevision(item.revision)));
+        host.appendChild(row);
+      });
+      const compare=el('div');compare.id='owgCatalogRevisionCompare';compare.setAttribute('aria-live','polite');host.appendChild(compare);
       if(result.has_more)host.appendChild(button('Older revisions',()=>history(result.next_before_revision)));
     });
   }
@@ -292,12 +446,19 @@
     host.appendChild(section);
   }
   function renderEditor(){
+    clearRevisionComparison();
     clearOrigins();
     clearSourceRuleChecks();
     clearRuleChecks();
     clearShadowReview();
     const host=document.getElementById('owgCatalogEditor');if(!host||!model)return;
     host.replaceChildren(el('h3',record.revision?'Review process · revision '+record.revision:'Review process · unsaved observed proposal'));
+    if(restorationDraft){
+      const warning=el('p','UNSAVED restoration draft from historical r'+restorationDraft.from+
+        ' against latest r'+restorationDraft.base+'. Earlier approvals and evidence references were cleared. ' +
+        'Source state remains unverified. Review and explicitly save a new revision.');
+      warning.id='owgCatalogRestorationDraft';warning.setAttribute('role','status');host.appendChild(warning);
+    }
     host.appendChild(el('p','Edits create a new revision. These are proposed designs and declared rules; they do not authorize an agent or establish company policy.'));
     if((record.evidence_refs||[]).some(ref=>ref.startsWith('urn:openworkgraph:local-log-discovery:'))){
       const origin=el('div');origin.id='owgCatalogOriginResult';origin.style.overflowWrap='anywhere';
@@ -488,7 +649,7 @@
     actions.appendChild(button('Delete all revisions',()=>locked(async()=>{
       if(!window.confirm('Delete this saved process and ALL revisions from local reviewed knowledge?'))return;
       await request('/v1/process-catalog/forget',{workflow_id:record.workflow_id,user_confirmed:true});
-      record=null;model=null;reviewed=false;host.replaceChildren();status('Process revisions deleted locally. Downloaded exports are separate copies.');
+      record=null;model=null;restorationDraft=null;reviewed=false;host.replaceChildren();status('Process revisions deleted locally. Downloaded exports are separate copies.');
     })));
     }
     host.appendChild(actions);
@@ -696,7 +857,7 @@
     if(!value||!Array.isArray(value.activities)||!value.activities.length||!Array.isArray(value.transitions))
       throw new Error('A discovered process model is required.');
     if(!replaceDraft())return false;
-    model=copy(value);
+    restorationDraft=null;model=copy(value);
     record={workflow_id:null,revision:0,title:String(source.logName?'Discovered from '+source.logName:'Discovered process draft').slice(0,240),
       process_model:copy(model),evidence_refs:typeof source.sourceReference==='string'&&/^urn:openworkgraph:local-log-discovery:[0-9a-f]{64}$/.test(source.sourceReference)?[source.sourceReference]:[]};
     reviewed=false;renderEditor();
@@ -709,7 +870,7 @@
     if(busy)throw new Error('Wait for the current process request.');
     if(value!==importDraft)throw new Error('Preview the selected BPMN again before opening its draft.');
     if(!replaceDraft())return;
-    record={workflow_id:null,revision:0,title:'Imported BPMN design',evidence_refs:[]};
+    restorationDraft=null;record={workflow_id:null,revision:0,title:'Imported BPMN design',evidence_refs:[]};
     model=copy(value.process_model);record.process_model=copy(model);reviewed=false;renderEditor();
     status('Opened an unsaved declared BPMN design. Review its goal, labels, branch rules and source documentation before saving. No observations, permissions or executable implementations were imported.');
     document.getElementById('owgCatalogEditor')?.scrollIntoView({block:'start'});
@@ -730,6 +891,6 @@
     panel.appendChild(host);
   }
   window.owgProcessCatalog={saveDesigner,draftObserved,draftDiscovered,openSaved:ref=>load(ref.workflow_id,ref.revision,ref.content_sha256)};
-  window.__owgProcessCatalogModel={linearModel,designPathDifferences};
+  window.__owgProcessCatalogModel={linearModel,designPathDifferences,revisionDifferences};
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install);else install();
 })();

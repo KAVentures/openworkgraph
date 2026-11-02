@@ -70,15 +70,75 @@ const path=require('node:path');
   await predicate.locator('..').getByLabel('User-confirmed rule',{exact:true}).check();
   await page.locator('#owgCatalogReviewed').check();await page.getByRole('button',{name:'Save new revision',exact:true}).click();
   await page.locator('#owgCatalogStatus').filter({hasText:'Saved revision 2.'}).waitFor();assert.equal(saves,2);
+  // R5: exact saved-revision comparison is an explicit read-only review step.
+  // It must compare the saved rule/predicate change, not unsaved editor state.
+  let comparisonReads=0,comparisonWrites=0;
+  page.on('request',request=>{
+    const pathname=new URL(request.url()).pathname;
+    if(pathname==='/v1/process-catalog/revision'&&request.method()==='GET')comparisonReads++;
+    if(request.method()!=='GET'&&!['/v1/process-catalog/check-rules','/v1/process-catalog/import-bpmn'].includes(pathname))comparisonWrites++;
+  });
+  await page.getByRole('button',{name:'Load revision history',exact:true}).click();
+  const compare=page.getByRole('button',{name:'Compare r1 with opened r2',exact:true});
+  await compare.focus();await page.keyboard.press('Enter');
+  const differences=page.locator('#owgCatalogRevisionComparison');
+  await differences.waitFor();
+  const diffText=await differences.textContent();
+  assert.match(diffText,/Saved revision comparison · r1 → r2/);
+  assert.match(diffText,/Compared r1 SHA-256 [0-9a-f]{64}/);
+  assert.match(diffText,/Opened saved r2 SHA-256 [0-9a-f]{64}/);
+  assert.match(diffText,/Business rules/);
+  assert.match(diffText,/import_rule_2/);
+  assert.match(diffText,/changed model entries/);
+  assert.match(diffText,/Unsaved edits, current source state and business outcomes are NOT evaluated/);
+  assert.equal(comparisonReads,1,'only the selected immutable revision is fetched');
+  assert.equal(comparisonWrites,0,'comparison must never write or read a provider');
+  assert.equal(saves,2);
+  page.once('dialog',dialog=>dialog.accept()); // Confirm replacing the opened model.
+  await differences.getByRole('button',{name:'Open compared revision r1',exact:true}).click();
+  await page.locator('#owgCatalogStatus').filter({hasText:'Opened immutable revision 1.'}).waitFor();
+  assert.equal(await page.locator('#owgCatalogRevisionComparison').count(),0,'navigation invalidates prior comparison');
+  await page.getByRole('button',{name:'Load saved designs',exact:true}).click();
+  page.once('dialog',dialog=>dialog.accept()); // Explicitly reopen the current saved revision.
+  await page.getByRole('button',{name:/^Imported BPMN design · r2$/}).click();
+  await page.locator('#owgCatalogStatus').filter({hasText:'Opened immutable revision 2.'}).waitFor();
+  await page.getByRole('button',{name:'Load revision history',exact:true}).click();
+  await page.getByRole('button',{name:'Compare r1 with opened r2',exact:true}).click();
+  await page.locator('#owgCatalogRevisionComparison').waitFor();
+  // Editing the open model revokes a stale comparison without changing the saved snapshot.
+  await editor.getByLabel('Process owner',{exact:true}).fill('Unsaved reviewer');
+  assert.equal(await page.locator('#owgCatalogRevisionComparison').count(),0);
+  assert.equal(saves,2);
+  page.once('dialog',dialog=>dialog.accept());
+  await page.getByRole('button',{name:/^Imported BPMN design · r2$/}).click();
+  await page.locator('#owgCatalogStatus').filter({hasText:'Opened immutable revision 2.'}).waitFor();
+  assert.equal(comparisonWrites,0);
   const route=['import_step_1','import_step_2','import_step_3','import_step_5','import_step_6'];
   const facts={cases:[{case_id:'case_1',facts:{approval:{status:'approved'},unused:'PRIVATE_RAW_CASE_VALUE'},activity_ids:route},
     {case_id:'case_2',facts:{approval:{status:'rejected'}},activity_ids:route},{case_id:'case_3',facts:{},activity_ids:route}]};
   let factRequests=0;page.on('request',request=>{if(new URL(request.url()).pathname==='/v1/process-catalog/check-rules')factRequests++;});
-  await page.getByLabel('Choose authorized case-facts JSON',{exact:true}).setInputFiles({name:'owned-facts.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(facts))});
+  const caseFactsFile={name:'owned-facts.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(facts))};
+  await page.getByLabel('Choose authorized case-facts JSON',{exact:true}).setInputFiles(caseFactsFile);
   assert.equal(factRequests,0);assert(await page.getByRole('button',{name:'Check facts against saved rules',exact:true}).isDisabled());
-  await page.getByLabel('I authorize local analysis of the case facts in this selected file.',{exact:true}).check();assert.equal(factRequests,0);
-  const checked=page.waitForResponse(response=>new URL(response.url()).pathname==='/v1/process-catalog/check-rules');
-  await page.getByRole('button',{name:'Check facts against saved rules',exact:true}).click();const report=await (await checked).json();
+  const caseFactsConsent=page.getByLabel('I authorize local analysis of the case facts in this selected file.',{exact:true});
+  const caseFactsInput=page.getByLabel('Choose authorized case-facts JSON',{exact:true});
+  await caseFactsConsent.check();assert.equal(factRequests,0);
+  // Loading saved revisions can rebuild the editor. If the browser replaced the file
+  // control between the upload and confirmation, explicitly reselect and re-consent.
+  if((await caseFactsInput.evaluate(input=>input.files?.length||0))===0){
+    await caseFactsInput.setInputFiles(caseFactsFile);
+    await caseFactsConsent.check();
+  }
+  await page.waitForFunction(()=>{
+    const input=document.querySelector('input[aria-label="Choose authorized case-facts JSON"]');
+    const button=[...document.querySelectorAll('button')].find(item=>item.textContent==='Check facts against saved rules');
+    return input?.files?.length===1&&button&&!button.disabled;
+  });
+  const [checked]=await Promise.all([
+    page.waitForResponse(response=>new URL(response.url()).pathname==='/v1/process-catalog/check-rules'),
+    page.getByRole('button',{name:'Check facts against saved rules',exact:true}).click(),
+  ]);
+  const report=await checked.json();
   assert.equal(report.process_reference.revision,2);assert.equal(report.rule_result_counts.matched,1);
   assert.equal(report.rule_result_counts.not_matched,1);assert.equal(report.rule_result_counts.unknown,1);
   assert.equal(report.business_policy_compliance_verified,false);assert.equal(report.execution_permissions_granted,false);
@@ -100,6 +160,58 @@ assert all('PRIVATE_XML_GATEWAY' not in row[0] and 'PRIVATE_SOURCE_DOC' not in r
 assert c.execute('SELECT COUNT(*) FROM events').fetchone()[0]==0
 `,path.join(scratch,'data','workflow_observer.db')],{encoding:'utf8'});
   assert.equal(disk.status,0,disk.stderr);assert.deepEqual(errors,[]);
+  // Restoration is a new reviewed revision, never an automatic rollback.
+  await page.getByRole('button',{name:'Load revision history',exact:true}).click();
+  await page.getByRole('button',{name:'Compare r1 with opened r2',exact:true}).click();
+  const restoreView=page.locator('#owgCatalogRevisionComparison');await restoreView.waitFor();
+  const restore=restoreView.getByRole('button',{name:'Prepare historical r1 as unsaved restoration draft',exact:true});
+  // A changed latest digest is a hard refusal, even when the comparison was valid.
+  const revisionRoute='**/v1/process-catalog/revision?*';
+  await page.route(revisionRoute,async route=>{
+    if(new URL(route.request().url()).searchParams.has('revision'))return route.continue();
+    const response=await route.fetch(),payload=await response.json();
+    payload.content_sha256='0'.repeat(64);
+    await route.fulfill({response,json:payload});
+  });
+  await restore.click();
+  await page.locator('#owgCatalogStatus').filter({hasText:'The saved revision or latest process changed.'}).waitFor();
+  assert.equal(saves,2);assert.equal(comparisonWrites,0);
+  await page.unroute(revisionRoute);
+  page.once('dialog',dialog=>dialog.accept());
+  await restore.focus();await page.keyboard.press('Enter');
+  await page.locator('#owgCatalogStatus').filter({hasText:'UNSAVED restoration draft from r1 against latest r2.'}).waitFor();
+  assert.equal(saves,2,'preparing a restoration must not persist or execute anything');
+  assert.match(await page.locator('#owgCatalogRestorationDraft').textContent(),/UNSAVED restoration draft from historical r1 against latest r2/);
+  assert.equal(await page.locator('#owgCatalogReviewed').isChecked(),false);
+  assert.equal(await page.locator('#owgCatalogRevisionComparison').count(),0);
+  await page.locator('#owgCatalogReviewed').check();
+  await page.getByRole('button',{name:'Save new revision',exact:true}).click();
+  await page.locator('#owgCatalogStatus').filter({hasText:'Saved revision 3.'}).waitFor();
+  assert.equal(saves,3,'restoration requires a distinct explicit reviewed save');
+  assert.equal(await page.locator('#owgCatalogRestorationDraft').count(),0);
+  // Restore r2, whose imported predicate was user-confirmed, and verify that
+  // even a previously confirmed business rule becomes unconfirmed in the draft.
+  await page.getByRole('button',{name:'Load revision history',exact:true}).click();
+  await page.getByRole('button',{name:'Compare r2 with opened r3',exact:true}).click();
+  await page.locator('#owgCatalogRevisionComparison').waitFor();
+  page.once('dialog',dialog=>dialog.accept());
+  await page.getByRole('button',{name:'Prepare historical r2 as unsaved restoration draft',exact:true}).click();
+  await page.locator('#owgCatalogStatus').filter({hasText:'UNSAVED restoration draft from r2 against latest r3.'}).waitFor();
+  const restoredPredicate=editor.locator('.owg-rule-predicate').filter({hasText:'Structured conditions · import_rule_2'});
+  assert.equal(await restoredPredicate.locator('..').getByLabel('User-confirmed rule',{exact:true}).isChecked(),false);
+  assert.equal(await page.locator('#owgCatalogReviewed').isChecked(),false);
+  assert.match(await page.locator('#owgCatalogRestorationDraft').textContent(),/UNSAVED restoration draft from historical r2 against latest r3/);
+  assert.equal(saves,3);
+  await page.locator('#owgCatalogReviewed').check();
+  await page.getByRole('button',{name:'Save new revision',exact:true}).click();
+  await page.locator('#owgCatalogStatus').filter({hasText:'Saved revision 4.'}).waitFor();
+  assert.equal(saves,4);
+  assert.equal(await page.locator('#owgCatalogRestorationDraft').count(),0);
+  await page.getByRole('button',{name:'Load revision history',exact:true}).click();
+  await page.getByRole('button',{name:/^Open revision 1 ·/}).waitFor();
+  for(const revision of [1,2,3,4])
+    assert.equal(await page.getByRole('button',{name:new RegExp('^Open revision '+revision+' ·')}).count(),1);
+  assert.deepEqual(errors,[]);
   console.log('BPMN import browser acceptance passed: explicit preview, unreviewed branch/merge draft, inert annotations, no source IDs/notes in saved model, reviewed save, nonexecuting export, unsupported-semantics rejection and mobile.');
  }finally{
   if(browser)await browser.close();server.kill('SIGTERM');
