@@ -1105,7 +1105,10 @@ def test_two_single_record_tabs_cannot_bridge_through_shared_loose_transfer_comp
         result = linked_work_items(ordered)
         assert set(_items(result)) == {("e01", "e05"), ("e02", "e06"), ("e03", "e04")}
         assert _items(result)[("e03", "e04")]["link_basis"] == {"clipboard_transfer": 1}
-        assert result["ambiguous_tab_component_attachments_suppressed"] == 2
+        # Both tab attachments are withheld: the interleaved one by the one-sided
+        # interleaving abstention, the other as a competing component target.
+        assert result["ambiguous_tab_component_attachments_suppressed"] == 1
+        assert result["ambiguous_single_record_tab_interleaving_abstentions"] == 1
         assert result["unlinked_observation_count"] == 0
         assert result["candidate_links"] == []
 

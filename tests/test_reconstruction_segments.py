@@ -60,7 +60,10 @@ def test_unreferenced_or_other_tenant_activity_does_not_claim_an_interruption():
                                 event(4, B, org="tenant-b"), event(5, A)])
     a = item(result, A)
     assert a["activity_segment_count"] == 1
-    assert a["activity_segments"][0]["event_ids"] == ["e0001", "e0003", "e0005"]
+    # The loose same-app step bracketed by A joins A (RECONSTRUCTION_APP_FOCUS.md);
+    # the other tenant's B row is neither a member nor an interruption.
+    assert a["activity_segments"][0]["event_ids"] == ["e0001", "e0002", "e0003", "e0005"]
+    assert a["link_basis"] == {"same_app_bracketed_record": 1, "same_record": 2}
     assert "tenant-b" not in json.dumps(result)
     assert "SECRET" not in json.dumps(result)
 

@@ -463,7 +463,11 @@ def test_cross_app_interruption_is_bounded_and_recomputed_after_retention():
     retained = [row for row in short if row["event_id"] != "e04"]
     result = linked_work_items(retained)
     assert result["observed_single_record_cross_app_focus_links"] == 0
-    assert result["ambiguous_single_record_tab_interleaving_abstentions"] == 1
+    # Without the return anchor there is no cross-app recovery; the pre-switch
+    # click keeps its one-sided tab membership (RECONSTRUCTION_TAB_FOCUS.md).
+    assert result["ambiguous_single_record_tab_interleaving_abstentions"] == 0
+    assert groups(result)[("e01", "e02")]["link_basis"] == {"same_tab_single_record": 1}
+    assert result["unlinked_observation_count"] == 1
 
 
 def test_unreferenced_named_app_switch_blocks_one_sided_browser_assignment():
