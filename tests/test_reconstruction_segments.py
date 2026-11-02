@@ -397,8 +397,9 @@ def test_exact_record_change_after_clean_unreferenced_member_splits_at_new_ancho
         ["e0001", "e0002"], ["e0003"]]
     assert [s["boundary_before"] for s in projected["activity_segments"]] == [
         [], ["observed_member_record_change"]]
-    # The unreferenced member has no newly invented source-record identity.
-    assert rows[1]["ref"] is None
+    # The unreferenced member has no newly invented source-record identity
+    # (the linker uses "" for "no reference").
+    assert rows[1]["ref"] == ""
 
 
 def test_many_within_item_record_switches_keep_exact_episode_count():
