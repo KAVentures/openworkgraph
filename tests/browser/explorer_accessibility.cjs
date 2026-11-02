@@ -859,7 +859,7 @@ const path=require('node:path');
    await page.locator('#owgExplorerCompareEvidenceB').filter({hasText:/Inspected 1 exact/}).waitFor();
    await target.selectOption('A');await twoSidedCheck.check();
    await compareB.selectOption('0');
-   assert.equal(await twoSidedDraft.isDisabled(),true,'reconfiguring lanes revokes review');
+   assert.equal(await twoSidedDraft.count(),0,'reconfiguring lanes destroys stale approval controls');
    await compareB.selectOption('1');await compare.click();
    await inspectA.click();
    await page.locator('#owgExplorerCompareEvidenceA').filter({hasText:/Inspected 1 exact/}).waitFor();
