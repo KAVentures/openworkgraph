@@ -150,6 +150,45 @@
     };
   }
 
+
+  // Bind an exported inspection checklist to the *whole* saved/current review
+  // comparison, not only the process/project hashes. This prevents a later
+  // report, source, blocker or coverage change from silently restoring marks.
+  // The digest is a change detector, NOT a signature or approval.
+  const inspectionStableJSON=value=>JSON.stringify(value,(key,item)=>
+    item&&typeof item==='object'&&!Array.isArray(item)?
+      Object.fromEntries(Object.keys(item).sort().map(name=>[name,item[name]])):item);
+  async function handoffInspectionSnapshotDigest(saved,current){
+    compareHandoffReviewPackets(saved,current);
+    const withoutTimestamp=packet=>{const {generated_at,...basis}=packet;return basis;};
+    const encoded=new TextEncoder().encode(inspectionStableJSON([
+      withoutTimestamp(saved),withoutTimestamp(current)
+    ]));
+    const bytes=new Uint8Array(await crypto.subtle.digest('SHA-256',encoded));
+    return [...bytes].map(value=>value.toString(16).padStart(2,'0')).join('');
+  }
+
+  // Never interpret imported notes as policy, source verification or an
+  // execution grant. Reject even valid-looking notes from a changed snapshot.
+  function restoreHandoffInspectionKeys(record,saved,current,snapshotDigest){
+    const fail=()=>{throw new Error('Inspection worklist does not match this exact fresh comparison. Reinspect and download a new worklist.');};
+    if(!record||typeof record!=='object'||Array.isArray(record)||
+      typeof record.generated_at!=='string'||record.generated_at.length>64||
+      !/^[a-f0-9]{64}$/.test(snapshotDigest)||
+      record.comparison_sha256!==snapshotDigest||
+      !Array.isArray(record.items)||record.items.length>40||
+      record.items.some(item=>!item||typeof item!=='object'||
+        typeof item.inspected_locally!=='boolean'))fail();
+    const inspected=record.items.filter(item=>item.inspected_locally).map(item=>item.key);
+    let expected;
+    try{
+      expected={...handoffInspectionWorklist(saved,current,inspected,record.generated_at),
+        comparison_sha256:snapshotDigest};
+    }catch{fail();}
+    if(inspectionStableJSON(record)!==inspectionStableJSON(expected))fail();
+    return inspected;
+  }
+
   // Pure helper, exercised by tests: builds an assessment body or throws a readable error.
   function assessmentBody(values,revision){
     const ease={};
@@ -446,13 +485,14 @@
                   ...comparison.changes.map(label=>({key:'change:'+label,label:'Changed: '+label})),
                   ...latest.readiness.blockers.map(key=>({key:'blocker:'+key,label:'Outstanding: '+(names[key]||'Additional human review requirement')}))
                 ];
-                const inspected=new Set(),inspectionList=el('ul');
+                const inspected=new Set(),inspectionList=el('ul'),inspectionChecksByKey=new Map();
                 const inspectionStatus=el('div',null,'muted');
                 inspectionStatus.setAttribute('role','status');
                 const updateInspectionStatus=()=>{inspectionStatus.textContent=inspected.size+' of '+inspectionItems.length+
                   ' items inspected locally. All approval and verification gates remain open.';};
                 inspectionItems.forEach((item,index)=>{
                   const check=input('owgPipelineInspection'+index,'checkbox');
+                  inspectionChecksByKey.set(item.key,check);
                   const label=el('label',item.label);label.prepend(check);
                   const line=el('li');line.appendChild(label);inspectionList.appendChild(line);
                   check.onchange=()=>{
@@ -463,18 +503,70 @@
                 updateInspectionStatus();
                 const exportInspection=button('Download human inspection worklist','secondary');
                 exportInspection.id='owgPipelineJourneyInspectionDownload';
-                exportInspection.onclick=()=>{
+                exportInspection.onclick=async()=>{
                   if(generation!==detailGeneration||choice.value!==p.project_id||
                     requestSequence!==comparisonSequence||!compareResult.contains(exportInspection))return;
-                  const record=handoffInspectionWorklist(saved,latest,[...inspected],new Date().toISOString());
-                  const blob=new Blob([JSON.stringify(record,null,2)+'\n'],{type:'application/json'});
-                  const url=URL.createObjectURL(blob),link=el('a');
-                  link.href=url;link.download='owg-human-inspection-worklist.json';
-                  document.body.appendChild(link);link.click();link.remove();
-                  setTimeout(()=>URL.revokeObjectURL(url),1000);
-                  guideStatus.textContent='Downloaded local inspection notes for this exact comparison. No approval or execution permission was granted.';
+                  exportInspection.disabled=true;
+                  try{
+                    const record=handoffInspectionWorklist(saved,latest,[...inspected],new Date().toISOString());
+                    record.comparison_sha256=await handoffInspectionSnapshotDigest(saved,latest);
+                    if(generation!==detailGeneration||choice.value!==p.project_id||
+                      requestSequence!==comparisonSequence||!compareResult.contains(exportInspection))return;
+                    const blob=new Blob([JSON.stringify(record,null,2)+'\n'],{type:'application/json'});
+                    const url=URL.createObjectURL(blob),link=el('a');
+                    link.href=url;link.download='owg-human-inspection-worklist.json';
+                    document.body.appendChild(link);link.click();link.remove();
+                    setTimeout(()=>URL.revokeObjectURL(url),1000);
+                    guideStatus.textContent='Downloaded local inspection notes for this exact comparison. No approval or execution permission was granted.';
+                  }catch(e){inspectionStatus.textContent='Could not export local inspection notes: '+e.message;}
+                  finally{exportInspection.disabled=false;}
                 };
-                inspection.append(inspectionList,inspectionStatus,exportInspection);
+                const importInspection=input('owgPipelineJourneyInspectionImportFile','file');
+                importInspection.accept='.json,application/json';
+                const restoreInspection=button('Restore local inspection marks for this exact comparison','secondary');
+                restoreInspection.id='owgPipelineJourneyInspectionRestore';
+                const restoreStatus=el('div','Only an exact matching, explicitly selected worklist can restore local checkmarks.','muted');
+                restoreStatus.id='owgPipelineJourneyInspectionRestoreStatus';
+                restoreStatus.setAttribute('role','status');restoreStatus.setAttribute('aria-live','polite');
+                let restoreSequence=0;
+                importInspection.onchange=()=>{
+                  restoreSequence++;
+                  restoreStatus.textContent='Inspection file selected. Restore explicitly; no approval is imported.';
+                };
+                restoreInspection.onclick=async()=>{
+                  if(generation!==detailGeneration||choice.value!==p.project_id||
+                    requestSequence!==comparisonSequence||!compareResult.contains(restoreInspection))return;
+                  const file=importInspection.files?.[0];
+                  if(!file||!file.size||file.size>65536){
+                    restoreStatus.textContent='Select a non-empty inspection JSON file no larger than 64 KiB.';return;
+                  }
+                  const seq=++restoreSequence;
+                  restoreInspection.disabled=true;
+                  restoreStatus.textContent='Checking inspection notes against the exact fresh comparison…';
+                  try{
+                    const record=JSON.parse(await file.text());
+                    const digest=await handoffInspectionSnapshotDigest(saved,latest);
+                    if(generation!==detailGeneration||choice.value!==p.project_id||
+                      requestSequence!==comparisonSequence||seq!==restoreSequence||
+                      importInspection.files?.[0]!==file||!compareResult.contains(restoreInspection))return;
+                    const keys=restoreHandoffInspectionKeys(record,saved,latest,digest);
+                    const allowed=new Set(keys);
+                    inspected.clear();
+                    inspectionChecksByKey.forEach((check,key)=>{
+                      check.checked=allowed.has(key);
+                      if(check.checked)inspected.add(key);
+                    });
+                    updateInspectionStatus();
+                    restoreStatus.textContent='Restored '+inspected.size+
+                      ' local inspection marks for this exact comparison. No approvals or verification were restored.';
+                  }catch(e){
+                    restoreStatus.textContent='Inspection marks not restored: '+
+                      (e instanceof SyntaxError?'Invalid JSON.':e.message);
+                  }finally{restoreInspection.disabled=false;}
+                };
+                inspection.append(inspectionList,inspectionStatus,exportInspection,
+                  field('Previously downloaded human inspection worklist (local JSON only)',importInspection),
+                  restoreInspection,restoreStatus);
                 compareResult.appendChild(inspection);
                 if(comparison.changes.length){
                   const differences=el('ul');
@@ -746,6 +838,6 @@
     refresh().catch(e=>{status.textContent=e.message;});
   }
 
-  window.__owgPipelineModel={assessmentBody,portfolioView,handoffReviewPacket,compareHandoffReviewPackets,handoffInspectionWorklist};
+  window.__owgPipelineModel={assessmentBody,portfolioView,handoffReviewPacket,compareHandoffReviewPackets,handoffInspectionWorklist,handoffInspectionSnapshotDigest,restoreHandoffInspectionKeys};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
