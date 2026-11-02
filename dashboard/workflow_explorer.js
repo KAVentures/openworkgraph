@@ -783,6 +783,124 @@
       completeDesignEvidence(state.lane, state.ids);
   }
 
+
+  // Portable design checkpoints are local comparison hints, not approvals,
+  // provider receipts, executable artifacts, or persistent source records.
+  function currentDesignSelection(state) {
+    return designReview === state && selectedId === state.candidateId &&
+      selectedExample === state.lane && JSON.stringify(currentWindow) === state.windowJSON;
+  }
+  function exactObjectKeys(value, keys) {
+    return !!(value && typeof value === 'object' && !Array.isArray(value) &&
+      Object.keys(value).sort().join('|') === [...keys].sort().join('|'));
+  }
+  async function designCheckpointFingerprint(state) {
+    if (!window.crypto?.subtle || typeof TextEncoder === 'undefined')
+      throw new Error('SHA-256 unavailable; no weaker checkpoint fingerprint will be substituted.');
+    const canonical = JSON.stringify({
+      reviewed_group: {workflow_id: state.reviewedId, revision: state.reviewedRevision},
+      variant_number: state.lane.index + 1,
+      window_utc: JSON.parse(state.windowJSON),
+      structural_steps: state.lane.structural,
+      selected_execution_ids: [...state.ids].sort()
+    });
+    const bytes = await window.crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical));
+    return Array.from(new Uint8Array(bytes), byte => byte.toString(16).padStart(2, '0')).join('');
+  }
+  async function downloadDesignCheckpoint(state, checkbox, note) {
+    if (!checkbox.checked || !currentDesignReview(state) || !state.reviewedId ||
+        !Number.isSafeInteger(state.reviewedRevision) || state.reviewedRevision < 1) {
+      note.textContent = 'A saved reviewed group, fresh exact evidence inspection and explicit confirmation are required.';
+      return;
+    }
+    try {
+      const fingerprint = await designCheckpointFingerprint(state);
+      if (!checkbox.checked || !currentDesignReview(state)) return;
+      const packet = {
+        schema: 'openworkgraph.observed_design_checkpoint.v1',
+        kind: 'local_non_executing_design_review_checkpoint',
+        created_at_utc: new Date().toISOString(),
+        execution_permitted: false, source_identity_verified: false,
+        process_saved: false, approval_restored_on_import: false,
+        reviewed_group: {workflow_id: state.reviewedId, revision: state.reviewedRevision},
+        selected_evidence: {
+          variant_number: state.lane.index + 1,
+          window_utc: JSON.parse(state.windowJSON),
+          selected_execution_count: state.ids.length,
+          structural_step_count: state.lane.structural.length,
+          fingerprint_sha256: fingerprint
+        },
+        limitations: ['No raw step labels or execution references are included.',
+          'A digest is a comparison aid, not a signature or provider authentication.',
+          'Import never restores evidence inspection, approval, or authorization.']
+      };
+      const url = URL.createObjectURL(new Blob([JSON.stringify(packet, null, 2) + '\n'],
+        {type: 'application/json;charset=utf-8'}));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'owg-observed-design-checkpoint.json';
+      document.body.appendChild(link);
+      try { link.click(); } finally { link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
+      note.textContent = 'Local design checkpoint downloaded. It contains only a scope and SHA-256 fingerprint, not approval or source proof.';
+    } catch (error) {
+      note.textContent = 'Checkpoint unavailable: ' + String(error?.message || error) + ' Nothing was sent.';
+    }
+  }
+  async function importDesignCheckpoint(file, state, checkbox, next, note) {
+    checkbox.checked = false;
+    next.disabled = true;
+    if (!currentDesignSelection(state)) return;
+    try {
+      if (!state.reviewedId || !Number.isSafeInteger(state.reviewedRevision) ||
+          state.reviewedRevision < 1)
+        throw new Error('Open the same saved reviewed group before importing.');
+      if (!file || file.size > 16384 || file.size < 2)
+        throw new Error('Checkpoint missing or exceeds the 16 KiB limit.');
+      const packet = JSON.parse(await file.text());
+      if (!currentDesignSelection(state)) return;
+      if (!exactObjectKeys(packet, ['schema', 'kind', 'created_at_utc',
+          'execution_permitted', 'source_identity_verified', 'process_saved',
+          'approval_restored_on_import', 'reviewed_group', 'selected_evidence', 'limitations']) ||
+          packet.schema !== 'openworkgraph.observed_design_checkpoint.v1' ||
+          packet.kind !== 'local_non_executing_design_review_checkpoint' ||
+          packet.execution_permitted !== false ||
+          packet.source_identity_verified !== false ||
+          packet.process_saved !== false ||
+          packet.approval_restored_on_import !== false ||
+          typeof packet.created_at_utc !== 'string' ||
+          !/^\d{4}-\d{2}-\d{2}T/.test(packet.created_at_utc) ||
+          !Number.isFinite(Date.parse(packet.created_at_utc)) ||
+          !Array.isArray(packet.limitations) ||
+          !packet.limitations.every(item => typeof item === 'string' && item.length <= 200))
+        throw new Error('Not a safe, unexecuted OWG design checkpoint v1.');
+      const group = packet.reviewed_group;
+      const evidence = packet.selected_evidence;
+      if (!exactObjectKeys(group, ['workflow_id', 'revision']) ||
+          group.workflow_id !== state.reviewedId ||
+          group.revision !== state.reviewedRevision ||
+          !exactObjectKeys(evidence, ['variant_number', 'window_utc',
+            'selected_execution_count', 'structural_step_count', 'fingerprint_sha256']) ||
+          evidence.variant_number !== state.lane.index + 1 ||
+          evidence.selected_execution_count !== state.ids.length ||
+          evidence.structural_step_count !== state.lane.structural.length ||
+          !/^[a-f0-9]{64}$/.test(evidence.fingerprint_sha256))
+        throw new Error('Checkpoint revision, variant or evidence scope differs.');
+      const expectedWindow = JSON.parse(state.windowJSON);
+      if (!exactObjectKeys(evidence.window_utc, Object.keys(expectedWindow)) ||
+          Object.keys(expectedWindow).some(key => evidence.window_utc[key] !== expectedWindow[key]))
+        throw new Error('Checkpoint period differs from the selected evidence.');
+      const fingerprint = await designCheckpointFingerprint(state);
+      if (!currentDesignSelection(state)) return;
+      if (fingerprint !== evidence.fingerprint_sha256)
+        throw new Error('Checkpoint fingerprint differs: steps or retained execution references changed.');
+      note.textContent = 'Checkpoint matches this saved revision, exact variant, period and retained-reference fingerprint. ' +
+        'It does NOT restore source inspection or approval. Inspect current evidence and confirm again before opening an unsaved catalog draft.';
+    } catch (error) {
+      if (currentDesignSelection(state))
+        note.textContent = 'Checkpoint refused: ' + String(error?.message || error) + ' No approval restored.';
+    }
+  }
+
   function openDesignReview(candidate, lane) {
     const host = document.getElementById('owgExplorerDesignReview');
     if (!host || selectedId !== candidate.candidate_cluster_id || selectedExample !== lane) return;
@@ -799,7 +917,9 @@
       activeBundle?.provenance?.truncated === true;
     const eligible = completeDesignEvidence(lane, ids);
     const state = {candidateId: candidate.candidate_cluster_id, lane, ids: [...ids],
-      windowJSON: JSON.stringify(currentWindow), evidenceGeneration: latestEvidenceRequest};
+      windowJSON: JSON.stringify(currentWindow), evidenceGeneration: latestEvidenceRequest,
+      reviewedId: candidate.reviewed_workflow_id || null,
+      reviewedRevision: candidate.reviewed_revision};
     designReview = state;
     host.replaceChildren();
     const panel = element('section', null, 'note');
@@ -872,10 +992,36 @@
       }
     }, true);
     next.disabled = true;
+    const packetStatus = element('p',
+      'Optional portable checkpoint: compare this reviewed variant after reopening OWG. ' +
+      'No approval, source evidence or process is restored.', 'muted');
+    packetStatus.id = 'owgExplorerDesignCheckpointStatus';
+    packetStatus.setAttribute('role', 'status');
+    const exportCheckpoint = button('Download reviewed design checkpoint', () =>
+      downloadDesignCheckpoint(state, checkbox, packetStatus), true);
+    exportCheckpoint.disabled = true;
+    const importLabel = element('label', 'Reopen a design checkpoint JSON ');
+    const importInput = element('input');
+    importInput.type = 'file';
+    importInput.accept = '.json,application/json';
+    importInput.id = 'owgExplorerDesignCheckpointImport';
+    importInput.disabled = !state.reviewedId;
+    importLabel.appendChild(importInput);
+    importInput.addEventListener('change', async () => {
+      const file = importInput.files?.[0];
+      importInput.value = '';
+      await importDesignCheckpoint(file, state, checkbox, next, packetStatus);
+      exportCheckpoint.disabled = true;
+    });
     checkbox.addEventListener('change', () => {
-      next.disabled = !checkbox.checked || !currentDesignReview(state);
+      const valid = checkbox.checked && currentDesignReview(state);
+      next.disabled = !valid;
+      exportCheckpoint.disabled = !valid || !state.reviewedId;
     });
     panel.appendChild(next);
+    panel.appendChild(exportCheckpoint);
+    panel.appendChild(importLabel);
+    panel.appendChild(packetStatus);
     host.appendChild(panel);
   }
 
