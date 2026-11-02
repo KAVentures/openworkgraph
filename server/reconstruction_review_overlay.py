@@ -192,12 +192,12 @@ AUTO_PROPOSAL_FORMAT = "openworkgraph.reconstruction-auto-proposals.v1"
 def propose_automatic_review(
     events: list[dict[str, Any]], packet: dict[str, Any],
 ) -> dict[str, Any]:
-    """Conservative *experimental* deterministic membership proposals.
+    """Experimental two-sided record proposals, including witnessed fragments.
 
-    The production linker supplies the eligible direct weak candidates.
-    Matching literal source-record anchors on both sides of one singleton
-    suggest, but do not prove, its membership. No canonical join occurs.
-    This deliberately abstains on two-hop paths and competing candidates.
+    A two-hop fragment may be proposed only after its *actual* weak-path
+    intermediary independently qualifies for a direct, exact-record bracket
+    proposal to the same item. This is one bounded propagation step, never a
+    transitive chain, source assertion or canonical membership change.
     """
     expected, linked, groups = _snapshot(events)
     if type(packet) is not dict or packet != expected:
@@ -211,34 +211,31 @@ def propose_automatic_review(
     }
     proposals: list[dict[str, str]] = []
     abstentions: dict[str, int] = {}
+    # The literal source reference is used only in-memory for matching. Never
+    # write it to the proposal artifact or expose it in the CLI output.
+    direct_seed_records: dict[str, tuple[str, Any]] = {}
 
     def abstain(reason: str) -> None:
         abstentions[reason] = abstentions.get(reason, 0) + 1
 
-    for candidate in expected["eligible_candidates"]:
-        if candidate["evidence_hops"] != 1:
-            abstain("two_hop_requires_human_review")
-            continue
-        targets = candidate["candidate_items"]
-        if candidate["candidate_items_truncated"] or len(targets) != 1:
-            abstain("competing_or_incomplete_candidates")
-            continue
-        pivot = rows[positions[candidate["event_id"]]]
+    def exact_brackets(event_id: str) -> tuple[str, Any] | None:
+        pivot = rows[positions[event_id]]
         scope = pivot.get("scope")
         if (
             not isinstance(scope, tuple) or len(scope) != 4
             or not all(isinstance(part, str) and part for part in scope)
-            or not pivot.get("app") or pivot.get("source") in ("", "unknown")
+            or not isinstance(pivot.get("app"), str) or not pivot["app"]
+            or not isinstance(pivot.get("source"), str)
+            or pivot["source"] in ("", "unknown")
             or pivot.get("reference_tainted") or pivot.get("ephemeral_claim_tainted")
             or pivot.get("action_claim_malformed") or pivot.get("ref")
         ):
-            abstain("invalid_or_incomplete_capture")
-            continue
+            return None
 
         def anchor(direction: int) -> tuple[str | None, Any] | None:
             previous_time = pivot["observed_at"]
             for distance in range(1, _MAX_CONTEXT_INTERVENING + 2):
-                index = positions[pivot["event_id"]] + direction * distance
+                index = positions[event_id] + direction * distance
                 if not 0 <= index < len(rows):
                     return None
                 row = rows[index]
@@ -259,24 +256,69 @@ def propose_automatic_review(
             return None
 
         before, after = anchor(-1), anchor(1)
+        if (before is None or after is None or before[0] is None
+                or before[0] != after[0] or before[1] != after[1]):
+            return None
+        return before[0], before[1]
+
+    # Stage one: a direct weak edge plus two independent matching literal
+    # anchors. Candidate list completeness is mandatory for each proposal.
+    for candidate in expected["eligible_candidates"]:
+        if candidate["evidence_hops"] != 1:
+            continue
+        targets = candidate["candidate_items"]
+        if candidate["candidate_items_truncated"] or len(targets) != 1:
+            abstain("competing_or_incomplete_candidates")
+            continue
+        bracket = exact_brackets(candidate["event_id"])
         target = targets[0]["item_id"]
-        if (
-            before is None or after is None
-            or before[0] != target or after[0] != target
-            or before[1] != after[1]
-        ):
+        if bracket is None or bracket[0] != target:
             abstain("missing_or_conflicting_exact_record_brackets")
             continue
+        direct_seed_records[candidate["event_id"]] = bracket
         proposals.append({
             "event_id": candidate["event_id"],
             "item_id": target,
             "basis": "same_literal_record_brackets_and_unique_weak_candidate",
         })
+
+    # Stage two: no recursive propagation. A fragment must have a single
+    # witnessed target and a directly proposed intermediary, with its own
+    # independently verified brackets for the *same literal record*.
+    for candidate in expected["eligible_candidates"]:
+        if candidate["evidence_hops"] != 2:
+            continue
+        targets = candidate["candidate_items"]
+        if candidate["candidate_items_truncated"] or len(targets) != 1:
+            abstain("competing_or_incomplete_two_hop_candidates")
+            continue
+        target = targets[0]
+        witness = target.get("witness_event_path")
+        if (not isinstance(witness, list) or len(witness) != 3
+                or witness[0] != candidate["event_id"]):
+            abstain("invalid_two_hop_witness")
+            continue
+        middle_seed = direct_seed_records.get(witness[1])
+        if middle_seed is None or middle_seed[0] != target["item_id"]:
+            abstain("two_hop_missing_anchored_direct_seed")
+            continue
+        bracket = exact_brackets(candidate["event_id"])
+        if bracket is None or bracket != middle_seed:
+            abstain("two_hop_missing_or_conflicting_record_brackets")
+            continue
+        proposals.append({
+            "event_id": candidate["event_id"],
+            "item_id": target["item_id"],
+            "basis": "same_literal_record_brackets_and_anchored_direct_two_hop_seed",
+        })
+    direct_count = len(direct_seed_records)
     return {
         "format": AUTO_PROPOSAL_FORMAT,
         "evidence_sha256": expected["evidence_sha256"],
         "proposed_assignments": proposals,
         "proposal_count": len(proposals),
+        "direct_proposal_count": direct_count,
+        "two_hop_proposal_count": len(proposals) - direct_count,
         "abstention_counts": dict(sorted(abstentions.items())),
         "visible_candidate_count": len(expected["eligible_candidates"]),
         "eligible_review_total": expected["eligible_review_total"],
