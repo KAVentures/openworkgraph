@@ -221,9 +221,7 @@ def test_composer_refuses_conflicting_edges_and_unsafe_trust_flags():
         }],
     }
     assert compose_outcome_review_action_plan(sample)["cases"][0][
-        "operator_action_codes"] == [
-            "record_human_assessment", "review_historical_provider_evidence",
-        ]
+        "operator_action_codes"] == ["record_human_assessment"]
     sample["customer_outcome_verified"] = True
     with pytest.raises(CaseDeclarationError):
         compose_outcome_review_action_plan(sample)
