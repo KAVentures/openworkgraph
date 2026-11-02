@@ -21,6 +21,12 @@ The packet includes an actionable **human-review blocker list**: missing or chan
 
 This is an **optional review artifact**, not an agent configuration, signed receipt, independent verification, approval, or execution token. Downloading never calls a provider, runs a model, links a report, saves an idea, authorizes tools or initiates a business write. A human must still use the existing separate review and authorized runtime controls.
 
+## Recheck an earlier review packet against current local evidence
+
+In the selected project's evidence journey, choose **Previously downloaded review packet (local JSON only)** and **Compare saved packet with current local evidence**. OWG reads the file **only in the browser** (64 KiB maximum), validates the v1 human-review-only schema and its non-executable flags, and performs a fresh session-authenticated `GET /v1/automation-pipeline/{idea_id}/journey`. It never uploads the packet or performs a provider read. The comparison refuses packets from another idea or project, malformed JSON, invalid hashes/revisions and oversized files.
+
+A matching result means only that the recorded process/idea/project identities and SHA-256 hashes, source-snapshot statuses, imported report statuses, source-check export counters/hashes and review blockers agree with the **new local read**. Changed categories are named for review, without rendering arbitrary text from the file. Refreshing the journey or switching project invalidates the comparison UI; late responses cannot populate the new selection. This is **not** a cryptographic signature, an approval, a live source verification or proof of execution, agent causality or business outcome. Revocation/retention may make prior evidence unavailable, and a point-in-time match cannot establish original data completeness. Re-check immediately before any separately authorized action.
+
 ## Safety and limitations
 
 - The guide adds **navigation only**. It never automatically saves a process, approves an opportunity, exports a project, links a report, reads a provider, grants tool permissions or executes an agent. Existing REST/MCP and dashboard controls retain their behavior.
@@ -31,6 +37,6 @@ This is an **optional review artifact**, not an agent configuration, signed rece
 
 ## Acceptance and test boundaries
 
-`tests/browser/automation_pipeline.cjs` covers the real browser path: saved design → linked idea → guided process reopen and assessment focus → explicit project export → exact project-specific report/source navigation → imported report → reopen after a second browser session → changed/deleted process refusal. It asserts stage navigation does not perform project/source/report writes, preserves the source-read consent gate, downloads and parses the exact project review packet, rechecks it after restart and changed/deleted source, verifies separate project selection and raw-data omission, and runs the existing axe/WCAG and narrow-screen checks.
+`tests/browser/automation_pipeline.cjs` covers the real browser path: saved design → linked idea → guided process reopen and assessment focus → explicit project export → exact project-specific report/source navigation → imported report → reopen after a second browser session → changed/deleted process refusal. It asserts stage navigation does not perform project/source/report writes, preserves the source-read consent gate, downloads and parses the exact project review packet, reimports it locally with a fresh authenticated read, rejects unrelated and oversized packets, reports changed hashes and process status after source drift/deletion, rechecks it after restart and changed/deleted source, verifies separate project selection and raw-data omission, and runs the existing axe/WCAG and narrow-screen checks.
 
 Native Ubuntu/macOS/Windows pytest, Chromium, collaboration, accessibility, scale, starter and packaging/release checks are **required before merge**. Synthetic and browser fixtures are not a consenting multi-team pilot, real source-backed validation or verified business outcomes. Those remain the separate #370 R25 acceptance gates.
