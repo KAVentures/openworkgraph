@@ -5,7 +5,10 @@ from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import hashlib
+from io import BytesIO
 import os
+import socket
+import time
 from threading import Thread
 from urllib import parse
 
@@ -13,7 +16,7 @@ import pytest
 
 from scripts.salesforce_case_history import _key
 from server.salesforce_case_lifecycle_review import (
-    LifecycleReviewError, FORMAT, main, review,
+    LifecycleReviewError, FORMAT, IMPACT_FORMAT, main, review, impact,
 )
 
 CASE_A = "500000000000001"
@@ -523,3 +526,184 @@ def test_cli_previous_review_requires_explicit_separate_consent(private_dir,
     assert '"changed": 2' in printed
     for secret in (CASE_A, CASE_B, CASE_C, TOKEN, "sandbox"):
         assert secret not in printed
+
+
+# Actual local FastAPI/DuckDB over TCP, not a simulated OWG HTTP response.
+SESSION = "local-dashboard-session-token-for-impact-tests"
+
+
+@pytest.fixture
+def owg_context(tmp_path, monkeypatch):
+    import duckdb  # Required native integration dependency, never silently skip.
+    import uvicorn
+    from fastapi import FastAPI
+    from server import event_log_routes as routes
+    from server import event_log_workspace as workspace
+
+    monkeypatch.setattr(workspace, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(routes, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(routes, "dashboard_session_valid", lambda value: value == SESSION)
+    seen = []
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def observe(request, call_next):
+        seen.append((request.method, request.url.path))
+        return await call_next(request)
+
+    app.include_router(routes.router)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    sock.listen(128)
+    port = sock.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port,
+                                           log_level="error", lifespan="off"))
+    thread = Thread(target=lambda: server.run(sockets=[sock]), daemon=True)
+    thread.start()
+    for _ in range(200):
+        if server.started:
+            break
+        time.sleep(.025)
+    assert server.started
+    try:
+        yield port, workspace, routes, seen
+    finally:
+        server.should_exit = True
+        thread.join(timeout=8)
+        sock.close()
+        assert not thread.is_alive()
+
+
+def _retained_log(workspace, source_review, *, wrong_namespace=False):
+    from server.salesforce_case_history_incremental import _canonical
+    scope = json.loads(source_review.read_text())["scope_sha256"]
+    ns = "sf_" + scope[:32]
+    if wrong_namespace:
+        ns = "sf_" + "f" * 32 if ns != "sf_" + "f" * 32 else "sf_" + "e" * 32
+    csv = ("case_id,activity,timestamp,source_event_id\\n"
+           + _key("sandbox", "case", CASE_A)
+           + ",Case created,2026-10-01T01:00:00+00:00,"
+           + _key("sandbox", "history", "017000000000001") + "\\n"
+           + _key("sandbox", "case", CASE_B)
+           + ",Status: Open,2026-10-02T01:00:00+00:00,"
+           + _key("sandbox", "history", "017000000000002") + "\\n").encode()
+    result = workspace.import_log(BytesIO(csv), name="Selected Salesforce evidence",
+                                  source_format="csv", mapping={
+                                      "case_column": "case_id",
+                                      "activity_column": "activity",
+                                      "timestamp_column": "timestamp",
+                                      "event_id_column": "source_event_id",
+                                      "source_namespace": ns,
+                                      "case_namespace": ns,
+                                  })
+    return result["log_id"]
+
+
+def _impact_args(origin, previous, digest, output, log_id, port, **extra):
+    return dict(instance=origin, confirm_host="127.0.0.1",
+                namespace="sandbox", cases=[CASE_A, CASE_B, CASE_C],
+                previous_review=previous, previous_sha256=digest,
+                output=output, log_id=log_id, confirm_log_id=log_id,
+                port=port, session=SESSION, allow_loopback_http=True,
+                consent_local_owg_read=True, consent_private_impact=True,
+                **extra)
+
+
+def test_real_source_review_to_authenticated_owg_retained_evidence_impact(
+        private_dir, owg_context, monkeypatch, capsys):
+    port, workspace, _, seen = owg_context
+    source = private_dir / "source.json"
+    with provider() as (origin, source_calls):
+        receipt = run(origin, source)
+    assert len(source_calls) == 1
+    log_id = _retained_log(workspace, source)
+    output = private_dir / "impact.json"
+    result = impact(**_impact_args(origin, source, receipt["review_sha256"],
+                                   output, log_id, port))
+    assert result["format"] == IMPACT_FORMAT
+    assert result["status"] == "impact_review_created"
+    assert result["counts"] == {
+        "source_soft_deleted_with_owg_evidence": 1,
+        "source_unresolved_with_owg_evidence": 0,
+        "owg_cases_observed": 2, "owg_cases_not_observed": 1,
+        "owg_cases_unknown": 0,
+    }
+    artifact = json.loads(output.read_text())
+    assert artifact["source_review_sha256"] == receipt["review_sha256"]
+    assert artifact["owg_log_id"] == log_id
+    assert artifact["deletion_or_retention_authorized"] is False
+    assert artifact["owg_deletion_performed"] is False
+    assert artifact["checkpoint_advanced"] is False
+    rows = {row["case_id"]: row for row in artifact["case_impacts"]}
+    assert rows[_key("sandbox", "case", CASE_A)]["owg_events"] == 1
+    assert rows[_key("sandbox", "case", CASE_B)]["owg_events"] == 1
+    assert rows[_key("sandbox", "case", CASE_C)]["owg_evidence"] == "not_observed"
+    assert len(seen) == 4
+    assert seen[0] == ("GET", "/v1/event-logs")
+    assert all(method == "POST" and path.endswith("/cases/query")
+               for method, path in seen[1:])
+    assert source.read_bytes()
+    assert workspace.list_logs()["logs"][0]["events"] == 2
+    assert os.name != "posix" or output.stat().st_mode & 0o077 == 0
+    combined = output.read_text() + json.dumps(result)
+    for secret in (CASE_A, CASE_B, CASE_C, TOKEN, SESSION, "sandbox", origin):
+        assert secret not in combined
+    monkeypatch.setenv("OWG_DASHBOARD_SESSION", SESSION)
+    cli_output = private_dir / "cli-impact.json"
+    cli = ["--instance", origin, "--confirm-host", "127.0.0.1",
+           "--namespace", "sandbox", "--case", CASE_A, "--case", CASE_B,
+           "--case", CASE_C, "--impact-review", str(source),
+           "--impact-sha256", receipt["review_sha256"],
+           "--owg-log-id", log_id, "--confirm-owg-log-id", log_id,
+           "--owg-port", str(port), "--output", str(cli_output),
+           "--allow-loopback-http"]
+    before = len(seen)
+    assert main(cli) == 2
+    assert len(seen) == before
+    assert main(cli + ["--consent-local-owg-read", "--consent-private-impact"]) == 0
+    assert len(seen) == before + 4
+    assert "impact_review_created" in capsys.readouterr().out
+
+
+def test_impact_refuses_tamper_consent_scope_and_revoked_local_session(
+        private_dir, owg_context, monkeypatch):
+    import server.salesforce_case_lifecycle_review as module
+    port, workspace, routes, seen = owg_context
+    source = private_dir / "source.json"
+    with provider() as (origin, _):
+        receipt = run(origin, source)
+    log_id = _retained_log(workspace, source)
+    args = _impact_args(origin, source, receipt["review_sha256"],
+                        private_dir / "refused.json", log_id, port)
+    for update in (
+        {"consent_local_owg_read": False},
+        {"consent_private_impact": False},
+        {"previous_sha256": "0" * 64},
+        {"confirm_log_id": "log_" + "0" * 16},
+        {"session": "bad"},
+    ):
+        with pytest.raises(LifecycleReviewError):
+            impact(**{**args, **update})
+    assert seen == []
+    # A wrong source namespace is refused by the actual authenticated API.
+    foreign = _retained_log(workspace, source, wrong_namespace=True)
+    with pytest.raises(LifecycleReviewError):
+        impact(**{**args, "log_id": foreign, "confirm_log_id": foreign})
+    assert not args["output"].exists()
+    seen.clear()
+    monkeypatch.setattr(routes, "dashboard_session_valid", lambda value: False)
+    with pytest.raises(LifecycleReviewError):
+        impact(**args)
+    assert seen == [("GET", "/v1/event-logs")]
+    assert not args["output"].exists()
+    seen.clear()
+    monkeypatch.setattr(routes, "dashboard_session_valid", lambda value: value == SESSION)
+    # Pinned review validation happens before any OWG request.
+    altered = private_dir / "altered-source.json"
+    altered.write_text(source.read_text().replace('"review_required":true',
+                                                  '"review_required":false'))
+    altered.chmod(0o600)
+    with pytest.raises(LifecycleReviewError):
+        impact(**{**args, "previous_review": altered})
+    assert seen == []
+    assert not args["output"].exists()
