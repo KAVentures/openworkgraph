@@ -263,6 +263,8 @@ async def _read_reviewed_dependency_evidence(scope: str, payload: dict[str, Any]
     The caller must already have authenticated the local dashboard session,
     validated exact request fields, and obtained the current source scope.
     """
+    pages = payload["max_pages"]
+    count = payload["max_cases"]
     try:
         before = await asyncio.to_thread(list_case_declarations, scope)
         admitted, signature = admitted_case_dossier_snapshot(
