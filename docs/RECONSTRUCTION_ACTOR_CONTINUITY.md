@@ -18,8 +18,8 @@ item exposes:
 - `observed_same_record_actor_changes`: at most 24 consecutive observed
   changes *within one exact source record*, each with response-local
   `record_01` / `participant_01` labels, source event IDs, UTC timestamps,
-  return indicator, and a count of intervening admitted observations in that
-  same tenant. `continuity_unverified: true` and `handoff_verified: false`
+  return indicator, and `intervening_same_tenant_observation_count` for
+  validated observations between the endpoints in the same tenant. `continuity_unverified: true` and `handoff_verified: false`
   are always explicit.
 - `same_time_cross_actor_order_suppressed` and
   `incomplete_actor_scope_observations_suppressed`: boundaries withheld
