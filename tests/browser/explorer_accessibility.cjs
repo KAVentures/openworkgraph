@@ -758,20 +758,20 @@ const path=require('node:path');
    });
    const readsBeforeCheckpointImport=evidenceReads;
    await uploadCheckpoint({...checkpoint,execution_permitted:true});
-   assert.match(await page.locator('#owgExplorerDesignCheckpointStatus').textContent(),/Checkpoint refused/);
+   await page.locator('#owgExplorerDesignCheckpointStatus').filter({hasText:/Not a safe, unexecuted/}).waitFor();
    await uploadCheckpoint({...checkpoint,reviewed_group:{...checkpoint.reviewed_group,revision:99}});
-   assert.match(await page.locator('#owgExplorerDesignCheckpointStatus').textContent(),/revision, variant or evidence scope differs/);
+   await page.locator('#owgExplorerDesignCheckpointStatus').filter({hasText:/revision, variant or evidence scope differs/}).waitFor();
    await uploadCheckpoint({...checkpoint,selected_evidence:{
      ...checkpoint.selected_evidence,fingerprint_sha256:'0'.repeat(64)}});
-   assert.match(await page.locator('#owgExplorerDesignCheckpointStatus').textContent(),/fingerprint differs/);
+   await page.locator('#owgExplorerDesignCheckpointStatus').filter({hasText:/fingerprint differs/}).waitFor();
    await checkpointInput.setInputFiles({
      name:'oversized-checkpoint.json',mimeType:'application/json',buffer:Buffer.alloc(16385,65)
    });
-   assert.match(await page.locator('#owgExplorerDesignCheckpointStatus').textContent(),/16 KiB limit/);
+   await page.locator('#owgExplorerDesignCheckpointStatus').filter({hasText:/16 KiB limit/}).waitFor();
    await checkpointInput.setInputFiles({
      name:'observed-design-checkpoint.json',mimeType:'application/json',buffer:checkpointBytes
    });
-   assert.match(await page.locator('#owgExplorerDesignCheckpointStatus').textContent(),/Checkpoint matches/);
+   await page.locator('#owgExplorerDesignCheckpointStatus').filter({hasText:/Checkpoint matches/}).waitFor();
    assert.equal(evidenceReads,readsBeforeCheckpointImport,'import makes no background evidence read');
    assert.equal(await continueDesign.isDisabled(),true,'matching checkpoint never restores approval');
    await audit(page,'#owgWorkflowExplorer','Reopened unapproved design checkpoint');
