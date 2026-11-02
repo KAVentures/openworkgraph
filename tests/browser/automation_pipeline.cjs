@@ -1271,7 +1271,9 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await page.locator('#owgPipelinePortfolioAuditNext').click();
    await page.locator('#owgPipelinePortfolioAuditStatus')
      .filter({hasText:'Page 2 of 2 (13–'}).waitFor();
-   await heldPageRoute.continue();
+   // Superseded page fetch may already be aborted; releasing the held route
+   // must not turn a correctly cancelled request into a test failure.
+   await heldPageRoute.continue().catch(()=>{});
    await page.unroute('**/v1/automation-pipeline/*/journey');
    assert.match(await page.locator('#owgPipelinePortfolioAuditPage').textContent(),/Page 2 of 2/);
    assert.equal(await page.locator('#owgPipelinePortfolioAuditResults tbody tr').count(),
