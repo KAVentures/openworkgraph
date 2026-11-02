@@ -331,27 +331,27 @@ def test_stage_contract_requires_both_valid_boundaries_before_dataset(monkeypatc
 
 def test_last_completed_stage_compares_rework_cycles_and_reports_unfinished_tail(log):
     doc = (
-        "case,activity,time,amount\\n"
-        "a,Start,2024-05-01T00:00:00Z,1\\n"
-        "a,Work,2024-05-01T01:00:00Z,2\\n"
-        "a,End,2024-05-01T02:00:00Z,100\\n"
-        "a,Start,2024-05-01T03:00:00Z,7\\n"
-        "a,Work,2024-05-01T04:00:00Z,9\\n"
-        "a,End,2024-05-01T05:00:00Z,100\\n"
-        "a,Start,2024-05-01T06:00:00Z,50\\n"
-        "b,Start,2024-05-02T00:00:00Z,3\\n"
-        "b,Work,2024-05-02T01:00:00Z,5\\n"
-        "b,End,2024-05-02T02:00:00Z,100\\n"
-        "b,Start,2024-05-02T03:00:00Z,11\\n"
-        "b,Work,2024-05-02T04:00:00Z,NaN\\n"
-        "b,End,2024-05-02T05:00:00Z,100\\n"
-        "c,Start,2024-05-03T00:00:00Z,4\\n"
-        "c,Work,2024-05-03T01:00:00Z,6\\n"
-        "d,Work,2024-05-04T00:00:00Z,8\\n"
-        "d,End,2024-05-04T01:00:00Z,100\\n"
-        "e,Start,2024-05-05T00:00:00Z,2\\n"
-        "e,Start,2024-05-05T01:00:00Z,10\\n"
-        "e,End,2024-05-05T02:00:00Z,100\\n"
+        "case,activity,time,amount\n"
+        "a,Start,2024-05-01T00:00:00Z,1\n"
+        "a,Work,2024-05-01T01:00:00Z,2\n"
+        "a,End,2024-05-01T02:00:00Z,100\n"
+        "a,Start,2024-05-01T03:00:00Z,7\n"
+        "a,Work,2024-05-01T04:00:00Z,9\n"
+        "a,End,2024-05-01T05:00:00Z,100\n"
+        "a,Start,2024-05-01T06:00:00Z,50\n"
+        "b,Start,2024-05-02T00:00:00Z,3\n"
+        "b,Work,2024-05-02T01:00:00Z,5\n"
+        "b,End,2024-05-02T02:00:00Z,100\n"
+        "b,Start,2024-05-02T03:00:00Z,11\n"
+        "b,Work,2024-05-02T04:00:00Z,NaN\n"
+        "b,End,2024-05-02T05:00:00Z,100\n"
+        "c,Start,2024-05-03T00:00:00Z,4\n"
+        "c,Work,2024-05-03T01:00:00Z,6\n"
+        "d,Work,2024-05-04T00:00:00Z,8\n"
+        "d,End,2024-05-04T01:00:00Z,100\n"
+        "e,Start,2024-05-05T00:00:00Z,2\n"
+        "e,Start,2024-05-05T01:00:00Z,10\n"
+        "e,End,2024-05-05T02:00:00Z,100\n"
     ).encode()
     selected = workspace.import_log(BytesIO(doc), name="rework-stage", source_format="csv", mapping={
         "case_column": "case", "activity_column": "activity", "timestamp_column": "time",
@@ -395,11 +395,11 @@ def test_last_completed_stage_compares_rework_cycles_and_reports_unfinished_tail
 
 def test_same_activity_stage_last_completed_and_unfinished_final_occurrence(log):
     doc = (
-        "case,activity,time,amount\\n"
-        "a,Review,2024-06-01T00:00:00Z,1\\n"
-        "a,Review,2024-06-01T01:00:00Z,3\\n"
-        "a,Review,2024-06-01T02:00:00Z,5\\n"
-        "b,Review,2024-06-02T00:00:00Z,7\\n"
+        "case,activity,time,amount\n"
+        "a,Review,2024-06-01T00:00:00Z,1\n"
+        "a,Review,2024-06-01T01:00:00Z,3\n"
+        "a,Review,2024-06-01T02:00:00Z,5\n"
+        "b,Review,2024-06-02T00:00:00Z,7\n"
     ).encode()
     selected = workspace.import_log(BytesIO(doc), name="same-stage", source_format="csv", mapping={
         "case_column": "case", "activity_column": "activity", "timestamp_column": "time",
