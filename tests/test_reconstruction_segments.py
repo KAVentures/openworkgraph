@@ -283,6 +283,9 @@ def test_other_tab_episode_rejects_ties_clipboard_and_mismatched_anchors():
     assert len(boundary(lambda _a, _b, c: c.update(source="desktop_capture"))) == 1
     assert len(boundary(lambda _a, b, _c: b.update(
         event_type="clipboard_copy", metadata={"clipboard_transfer_id": "transfer-x"}))) == 1
+    assert len(boundary(lambda _a, b, _c: b.update(event_type="clipboard_copy"))) == 1
+    assert len(boundary(lambda _a, b, _c: b.update(event_type="clipboard_paste"))) == 1
+    assert len(boundary(lambda a, _b, _c: a.update(event_type="clipboard_copy"))) == 1
 
 
 def test_other_tab_interruption_preserves_foreign_record_precedence_and_api():
