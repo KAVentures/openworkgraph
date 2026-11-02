@@ -60,7 +60,9 @@ def _seal_material(
     *, scope: str, secret: str,
 ) -> tuple[str, bytes]:
     material = _checked_material(selected, histories)
-    _graph, _source, key = _bindings(selected["root_signature"], scope, secret)
+    graph_binding, source_binding, key = _bindings(selected["root_signature"], scope, secret)
+    material["graph_binding"] = graph_binding
+    material["source_binding"] = source_binding
     return _mac(key, b"declared-payment-preflight-state", _canonical(material)), key
 
 
@@ -78,18 +80,17 @@ def issue_payment_preflight(
     expiry = min(current + _TTL, *expiries)
     if expiry <= current:
         raise CaseDeclarationError("expired owner payment review")
-    unsigned = {
-        "format": _TOKEN_FORMAT,
-        "work_item_ref": "",
-        "snapshot_seal": snapshot_seal,
-        "issued_at": current.isoformat(), "expires_at": expiry.isoformat(),
-    }
-    # The root is supplied separately: dependency ordering may be prerequisite-first.
+    # The root is identified by its full signature, not positional order.
     root_refs = [ref for ref in selected["ordered"]
                  if selected["cases"][ref]["signature"] == selected["root_signature"]]
     if len(root_refs) != 1:
         raise CaseDeclarationError("ambiguous declared payment root")
-    unsigned["work_item_ref"] = root_refs[0]
+    unsigned = {
+        "format": _TOKEN_FORMAT,
+        "work_item_ref": root_refs[0],
+        "snapshot_seal": snapshot_seal,
+        "issued_at": current.isoformat(), "expires_at": expiry.isoformat(),
+    }
     token = {**unsigned, "seal": _mac(key, b"declared-payment-preflight-token", _canonical(unsigned))}
     cases = []
     for ref in selected["ordered"]:
