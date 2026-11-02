@@ -26,8 +26,16 @@ def _read_json(path: str, *, max_bytes: int = _MAX_JSON) -> Any:
         raise ValueError("input exceeds the local review size limit")
     def refuse_constant(value: str) -> None:
         raise ValueError("nonfinite JSON constant is not supported")
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate JSON object key is not supported")
+            result[key] = value
+        return result
     try:
-        return json.loads(raw, parse_constant=refuse_constant)
+        return json.loads(raw, parse_constant=refuse_constant,
+                          object_pairs_hook=unique_object)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("invalid UTF-8 JSON input") from exc
 
