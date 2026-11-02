@@ -313,4 +313,5 @@ def test_single_record_tab_two_independent_interleaved_returns_remain_separate()
     item = groups(result)[("e01", "e02", "e04", "e06", "e07")]
     assert item["link_basis"]["same_tab_single_record_interleaved_bracketed"] == 2
     assert result["observed_single_record_interleaved_focus_links"] == 2
-    assert ("e03", "e05") not in groups(result)
+    assert ("e03", "e05") in groups(result)
+    assert not groups(result)[("e03", "e05")]["cross_record_join"]
