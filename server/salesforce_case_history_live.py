@@ -25,8 +25,8 @@ MAX_CASES = 8
 MAX_RECORDS = 200
 MAX_RESPONSE_BYTES = 262144
 MAX_WINDOW = timedelta(days=31)
-HOST = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+\\Z")
-TOKEN = re.compile(r"[!-~]{16,8192}\\Z")
+HOST = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+\Z")
+TOKEN = re.compile(r"[!-~]{16,8192}\Z")
 
 
 class LiveHistoryError(ValueError):
@@ -74,7 +74,7 @@ def _instance(value, confirm_host, allow_loopback_http):
 
 def _utc(value):
     if type(value) is not str or not re.fullmatch(
-            r"\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z", value):
+            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", value):
         raise LiveHistoryError("Explicit second-precision UTC timestamp required")
     try:
         dt = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
@@ -103,8 +103,8 @@ def _scope(instance, confirm_host, namespace, cases, since, until,
     parent = output.parent
     try:
         info = parent.lstat()
-        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
-                or info.st_mode & 0o077):
+        if (not stat.S_ISDIR(info.st_mode) or (hasattr(os, "getuid") and info.st_uid != os.getuid())
+                or (os.name == "posix" and info.st_mode & 0o077)):
             raise LiveHistoryError("Private owner-only output directory required")
         if output.exists() or output.is_symlink():
             raise LiveHistoryError("Output already exists")
@@ -198,7 +198,7 @@ def extract(instance, confirm_host, namespace, cases, since, until, token,
     raw_csv = io.StringIO(newline="")
     writer = csv.DictWriter(raw_csv,
                             fieldnames=["Id", "CaseId", "CreatedDate", "Field", "NewValue"],
-                            lineterminator="\\n")
+                            lineterminator="\n")
     writer.writeheader()
     writer.writerows(rows)
     try:
