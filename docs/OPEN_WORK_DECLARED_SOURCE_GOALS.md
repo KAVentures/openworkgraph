@@ -283,3 +283,60 @@ customer success, a discharged business obligation, or agent causality. No
 agent execution grant, default polling, cloud upload or new source permission
 is created. Synthetic FastAPI/private-SQLite tests are not live restricted
 Stripe/customer acceptance; exact-head native CI remains a separate gate.
+
+
+## Explicit independent-portfolio preflight (local-only)
+
+For **two to four independent** currently owner-reviewed Stripe payment-goal
+cases, first issue the same sealed source links used by
+`POST /v1/open-work/declarations/source-goals/verify-portfolio-payments`.
+Then send:
+
+```json
+{
+  "confirm_historical_review": true,
+  "selections": [
+    {
+      "work_item_ref": "owg:w:<opaque-ref-a>",
+      "expected_revision": 1,
+      "expected_edit_token": "<current-owner-token-a>",
+      "record_link": {"<exact signed source link A>": "from operation-link"}
+    },
+    {
+      "work_item_ref": "owg:w:<opaque-ref-b>",
+      "expected_revision": 1,
+      "expected_edit_token": "<current-owner-token-b>",
+      "record_link": {"<exact signed source link B>": "from operation-link"}
+    }
+  ]
+}
+```
+
+to `POST /v1/open-work/declarations/source-goals/preview-portfolio-payments`
+using an authenticated **local dashboard** session. The link objects above are
+illustrative placeholders; pass the complete unmodified objects returned by
+`operation-link`. The response shows only bounded historical paid/unknown
+observations, check/dispute counts, and per-case remaining private event slots.
+It does **not** read Stripe, append evidence, reserve global case capacity,
+authorize an agent, or establish that an invoice is currently paid.
+
+The response contains `expected_preflight`, a five-minute HMAC-sealed,
+source-scoped checkpoint binding the ordered selection, owner revisions,
+dependency signatures, signed record identities, and complete retained
+HMAC-validated histories. To request fresh verification, explicitly send the
+same `selections`, `confirm_source_verification: true`, and the unchanged
+`expected_preflight` token to `verify-portfolio-payments`. A forged,
+expired, reordered, disputed, newly checked, revoked, or cross-account
+checkpoint is rejected **before** Stripe reads. An operator can still use the
+existing explicit verification route without a token; it performs the existing
+review, evidence-integrity, and transaction-time checks. The dependency
+preview's optional `expected_preflight` is also accepted by its corresponding
+verification route.
+
+Both portfolio and dependency provider checks are **sequential**, not an
+atomic Stripe snapshot. Successful local evidence appends use one atomic
+SQLite transaction, but no local checkpoint creates a cross-process
+revocation transaction or establishes bank settlement, customer satisfaction,
+business obligation discharge, or agent causality. Restricted Stripe TEST
+account acceptance, signed native client validation and held-out independent
+customer-outcome adjudication remain outstanding.
