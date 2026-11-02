@@ -20,7 +20,7 @@ import secrets
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, ValidationError, model_serializer
 
 from . import event_log_cohorts as cohorts
 from . import event_log_expressions as expressions
@@ -166,6 +166,16 @@ class TimeOfWeekFilter(_Strict):
     # Explicit disjoint cells for overnight schedules: unlike weekdays × hours,
     # Sunday 22:00 and Monday 01:00 select only those two clock hours.
     slots: list[TimeOfWeekCell] | None = Field(default=None, min_length=1, max_length=168)
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if self.slots is not None:
+            # Saved analyses and returned specs must be parseable again.
+            # The implicit Cartesian defaults are not explicit user input.
+            data.pop("weekdays", None)
+            data.pop("hours", None)
+        return data
 
 
 class AnalysisSpec(_Strict):
