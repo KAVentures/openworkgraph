@@ -97,7 +97,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("prepare", "adjudicate", "resolve", "apply", "score", "score-batch"):
-        command = sub.add_parser(name)
+        command = sub.add_parser(
+            name, help=("prepare weak candidates with bounded interleaving record context"
+                        if name == "prepare" else None),
+        )
         if name == "score-batch":
             command.add_argument("--manifest", required=True,
                                  help="local list of independent annotated sessions")
