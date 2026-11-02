@@ -252,6 +252,21 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    assert.equal(secondPacket.project.project_id,'second-project');
    assert.equal(secondPacket.project.spec_sha256,'b'.repeat(64));
    assert.notEqual(secondPacket.project.spec_sha256,handoffPacket.project.spec_sha256);
+   const boundedPacket=await page.evaluate((packet)=>{
+     const journey={idea:{revision:packet.idea.revision,state:'approved'},
+       process_status:{status:'current',process_reference:packet.process},
+       dataset_origins:Array.from({length:65},()=>({status:'current',raw_case_text:'SECRET'})),
+       projects:[{...packet.project,project_id:'bounded',reported_specifications:Array.from({length:65},()=>({status:'matching_reported_specification',raw_receipt:'SECRET'})),
+         source_check_exports:{count:0}}]};
+     return window.__owgPipelineModel.handoffReviewPacket(journey,'bounded',packet.idea.idea_id,'2026-11-02T00:00:00Z');
+   },handoffPacket);
+   assert.equal(boundedPacket.dataset_origins.length,64);
+   assert.equal(boundedPacket.reported_specifications.length,64);
+   assert.equal(boundedPacket.dataset_origins_truncated,true);
+   assert.equal(boundedPacket.reported_specifications_truncated,true);
+   assert(boundedPacket.readiness.blockers.includes('dataset_origin_list_truncated'));
+   assert(boundedPacket.readiness.blockers.includes('reported_specification_list_truncated'));
+   assert(!JSON.stringify(boundedPacket).includes('SECRET'));
    const writesBeforeNavigation=guidedWrites;
    await page.locator('#owgPipelineJourneyReports').click();
    await page.locator('#owgPipelineReportProject').waitFor();
