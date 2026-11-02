@@ -59,12 +59,20 @@
   }
   function draftObserved(source){
     if(busy)throw new Error('Wait for the current process request.');
-    if(!replaceDraft())return;
-    if(!Array.isArray(source.path)||source.path.length<1||source.path.length>40||
-      source.path.some(step=>typeof step!=='string'||!step.trim()||step.length>240))
+    const validPath=path=>Array.isArray(path)&&path.length>=1&&path.length<=40&&
+      path.every(step=>typeof step==='string'&&!!step.trim()&&step.length<=240);
+    if(!validPath(source.path))
       throw new Error('A bounded observed sequence of 1–40 labels is required.');
+    // A second *observed* lane can be a human-proposed, editable TO-BE hypothesis.
+    // It is never evidence that this alternative is policy, approved or executable.
+    const hasAlternative=Object.prototype.hasOwnProperty.call(source,'proposedPath');
+    if(hasAlternative&&(!validPath(source.proposedPath)||
+      source.basis!=='selected_observed_variant'||
+      JSON.stringify(source.path)===JSON.stringify(source.proposedPath)))
+      throw new Error('A different complete observed alternative is required for a proposed TO-BE draft.');
+    if(!replaceDraft())return false;
     const basis=['selected_observed_variant','selected_source_audit'].includes(source.basis)?source.basis:'user_declared';
-    const activities=source.path.map((label,i)=>({id:'step_'+(i+1),
+    const activities=(hasAlternative?source.proposedPath:source.path).map((label,i)=>({id:'step_'+(i+1),
       label:/^[A-Za-z][A-Za-z0-9 _-]{0,63}$/.test(label)?label:'Activity '+(i+1),kind:'activity',implementation:'unmapped'}));
     model={format:'openworkgraph.process-model.v1',goal:'',owner_label:'',baseline_path:copy(source.path),
       baseline_source:basis,baseline_coverage:source.partial?'partial_source_audit':'bounded_candidate_sequence',
@@ -76,9 +84,12 @@
     record={workflow_id:null,revision:0,title:'Observed workflow proposal',process_model:copy(model),
       evidence_refs:(source.evidenceRefs||[]).filter(ref=>typeof ref==='string'&&/^execution:[A-Za-z0-9_-]+$/.test(ref)).slice(0,100)};
     reviewed=false;renderEditor();
-    status('Unsaved proposal from a bounded observation. Add a business goal and review every proposed label. Unsupported labels use Activity placeholders; the AS-IS baseline keeps the supplied sequence.');
+    status(hasAlternative?
+      'UNSAVED design comparison: AS-IS baseline is the selected observed lane; TO-BE activities are a DIFFERENT observed lane proposed by the user, not verified policy or an approved automation. Review and edit the business goal, every label, decisions and omissions before saving. Only AS-IS evidence refs are retained; alternative source lineage is not persisted. Unsupported labels use Activity placeholders.':
+      'Unsaved proposal from a bounded observation. Add a business goal and review every proposed label. Unsupported labels use Activity placeholders; the AS-IS baseline keeps the supplied sequence.');
     document.querySelector('[role=tab][data-tab=evidence]')?.click();
     document.getElementById('owgProcessCatalog')?.scrollIntoView({block:'start'});
+    return true;
   }
   async function inventory(next=false){
     if(!next)after='';
