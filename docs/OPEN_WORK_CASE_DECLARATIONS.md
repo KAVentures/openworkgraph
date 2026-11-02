@@ -1536,3 +1536,72 @@ changed flow, partial prerequisite coverage, forgery/expiry/refusal before
 ledger IO, privacy and source revocation with synthetic provider data.
 Cross-platform exact-head CI and real-provider/customer acceptance remain
 separate requirements.
+
+
+## Fresh provider operation + reviewed human outcome triage (explicit local REST, M4)
+
+The opt-in `POST /v1/open-work/declarations/human-outcomes/fresh-evidence-triage`
+provides one operator-facing check that **does not mistake a historical paid
+receipt for a current source state**. It combines the existing separately
+integrity-checked private human/provider histories across a reviewed root case
+and up to three prerequisites with **one fresh independent Stripe operation
+receipt for the root case only**. This is an actual authorized source-read path,
+not another locally derived historical status.
+
+First explicitly issue an exact source-joined `record_link` through
+`POST /v1/open-work/declarations/operation-link` (see above). Then send an
+authenticated local `OWG-Session` with exact JSON:
+
+```json
+{
+  "work_item_ref": "owg:w:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "expected_revision": 1,
+  "expected_edit_token": "<current opaque edit token>",
+  "confirm_historical_review": true,
+  "confirm_source_verification": true,
+  "max_cases": 4,
+  "record_link": {"format": "openworkgraph.local-case-record-link.v1", "...": "entire unmodified signed link"}
+}
+```
+
+Both confirmations are required. The signed link, exact owner revision and
+entire reviewed dependency DAG are checked before the provider request.
+The local source account, every selected child's independent review and
+retention, and both HMAC-protected histories are admitted. After the source
+request, the same source, root DAG, signed link and historical review are
+rechecked; any intervening correction, dispute, revocation, disconnect or
+graph edit fails closed. This is still not an atomic cross-process provider
+transaction, and the read may have occurred before a subsequent revocation.
+
+The response contains `historical_review` (human assessments/corrections,
+historical provider checks/disputes, declared dependency edges, missing
+coverage) and `fresh_root_provider` (current source-confirmed
+`paid` or `unknown`, timestamp when verified, typed review-attention
+reasons). `historical_paid_not_freshly_reconfirmed` explicitly distinguishes
+a previous paid observation from an unavailable/invalid fresh receipt.
+`fresh_paid_differs_from_retained_provider_history` does not automatically
+rewrite a historical ledger. Prerequisites are **historical-only** in this
+call; `all_prerequisites_freshly_checked` is always false, even if every
+historical prerequisite is included.
+
+The fresh source read is explicit, bounded to **one** previously source-joined
+invoice, and read-only. A source outage, stale/contradictory receipt or invalid
+provider evidence yields `unknown`, never an inferred unpaid status. The
+fresh result is not persisted; repeat the explicit request to recheck.
+No customer/native IDs, invoice amounts, free text, credentials or raw
+receipts enter the response; no automatic polling, cloud sync or business
+writes are introduced. `Cache-Control: no-store` is set.
+
+**Critical outcome boundary:** even `fresh paid` plus human `met` proves
+neither that the owner-declared expected business outcome was achieved nor
+customer satisfaction, agent causality, an obligation or agent execution
+authorization. Those fields remain false. Real restricted Stripe test-account
+acceptance and independent customer adjudication are not established by
+synthetic FastAPI/private-SQLite integration tests.
+
+`tests/test_open_work_case_fresh_outcome_triage.py` covers the real
+authenticated route and local SQLite history, fresh paid versus absent
+historical evidence, historical paid versus source outage, partial
+prerequisites, forged links and missing confirmation before source IO,
+mid-read review revocation/history changes, privacy and invalid source
+verification. Required native cross-platform CI remains a separate gate.
