@@ -1297,3 +1297,80 @@ FastAPI/private-SQLite integration coverage is in
 fixtures, including no-source reads, partial histories, disputes, privacy,
 revocation during traversal, tampering, and exact-CAS/authorization refusal.
 Native CI and real-provider/customer acceptance remain separate gates.
+
+
+## Explicit human-assessed business outcome feedback (local M4 milestone)
+
+A reviewed case's **declared expected outcome** is not the same as a
+source-reported invoice payment, a completed agent action, or the actual
+customer/business outcome. The optional local **human assessment history**
+adds an explicit feedback channel, while preserving that distinction. It
+does not certify a customer outcome, independently verify a business goal,
+authorize an agent, or change any source system.
+
+Three dashboard-session-only JSON POST endpoints are available:
+
+- \`/v1/open-work/declarations/human-outcomes/assess\`: exact current
+  \`work_item_ref\`, \`expected_revision\`, \`expected_edit_token\`,
+  \`confirm_human_assessment: true\`, \`human_status\` (\`met\`, \`not_met\`,
+  \`unknown\`), and \`reason_code\` (\`owner_review\`,
+  \`customer_feedback_reviewed\`, \`external_evidence_reviewed\`).
+  These are **reason labels**, not submitted or independently verified
+  customer records. A human can explicitly record a status only after
+  reviewing the currently approved goal and full prerequisite graph.
+- \`/v1/open-work/declarations/human-outcomes/history\`: only the exact
+  case ref/revision/edit token. Returns bounded, retained assessments
+  without a Stripe/provider read, with
+  \`provenance: explicit_local_human_assessment_not_independently_verified\`
+  and all provider/customer/outcome verification flags **false**.
+- \`/v1/open-work/declarations/human-outcomes/correct\`: exact case CAS,
+  \`confirm_human_correction: true\`, \`target_sequence\` (the **latest**
+  assessment/correction event sequence), and replacement \`human_status\`.
+  Appends a \`correction\` event referencing that sequence; the previous
+  assessment remains visible and unmodified. A stale correction target is
+  rejected rather than silently overwriting another operator's review.
+
+Example assessment body (opaque refs shown as placeholders):
+
+\`\`\`json
+{
+  "work_item_ref": "owg:w:<32-lowercase-hex>",
+  "expected_revision": 1,
+  "expected_edit_token": "<current-32-hex-incarnation>",
+  "confirm_human_assessment": true,
+  "human_status": "unknown",
+  "reason_code": "owner_review"
+}
+\`\`\`
+
+The private SQLite store is capped at 50 cases, 32 append-only events per
+case and 2 MiB. Each event carries only an opaque case ref, HMAC-bound
+source/reviewed-DAG fingerprints, fixed human status and reason codes,
+monotonic UTC timestamp, expiry, and HMAC-chained event integrity. It does
+not store customer names, native IDs, free-text reasons, receipts, amounts,
+credentials or raw activity. Retention never exceeds the owner's original
+review expiry, configured human-history retention, or seven days. Changed
+source account, review incarnation or prerequisite graph cannot rebind an
+old assessment. Explicit review deletion and source disconnect/clear scrub
+the private store; deleting a declaration also scrubs the store because
+its dependent approvals are invalidated. Default-OFF use creates no store.
+
+Each call requires a local dashboard session, a separately configured
+Stripe source scope, the exact current owner declaration and entire
+reviewed dependency DAG. The source is **not contacted** by these APIs;
+source connection is used only as a scope/consent boundary. The backend
+re-admits that scope and graph before and after local storage operations,
+but this does not constitute production multi-tenant RBAC or an atomic
+cross-process revocation fence. All responses are no-store and contain
+\`expected_outcome_verified: false\`,
+\`customer_outcome_verified: false\`,
+\`provider_operation_verified: false\`, and
+\`agent_execution_authorized: false\`.
+
+\`tests/test_open_work_case_outcome_reviews.py\` exercises authenticated
+FastAPI + private SQLite persistence, correction history, stale-target
+refusal, integrity tampering, prerequisite invalidation, review deletion,
+source disconnect, retention and privacy with synthetic local cases.
+Native CI, signed-client acceptance, independent customer outcome
+adjudication, real-provider testing and held-out A/B/C commercial trials
+are **not established** by those synthetic tests.
