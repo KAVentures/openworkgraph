@@ -130,7 +130,7 @@ def test_validation_confirmation_and_optimistic_correction(local):
         headers = _auth()
         saved = _cases(client, headers)
         assert client.post(BASE + "/human-outcomes/history",
-                           json=_cas(saved)).status_code == 403
+                           json=_cas(saved)).status_code == 401
         assert client.post(BASE + "/human-outcomes/assess", headers=headers,
                            json={**_cas(saved), "confirm_human_assessment": False,
                                  "human_status": "met", "reason_code": "owner_review"}).status_code == 403
@@ -138,9 +138,9 @@ def test_validation_confirmation_and_optimistic_correction(local):
         assert _assess(client, headers, saved, "met", "untrusted_free_text").status_code == 422
         assert _correct(client, headers, saved).status_code == 422
         assert _assess(client, headers, saved).status_code == 200
-        assert _correct(client, headers, saved, 2).status_code == 422
+        assert _correct(client, headers, saved, 2).status_code == 409
         assert _correct(client, headers, saved, 1).status_code == 200
-        assert _correct(client, headers, saved, 1).status_code == 422
+        assert _correct(client, headers, saved, 1).status_code == 409
         assert _correct(client, headers, saved, 2, "not_met").status_code == 200
         assert _history(client, headers, saved).json()["event_count"] == 3
 
@@ -297,7 +297,7 @@ def test_dependency_human_history_requires_review_and_fails_closed(local):
         saved = _cases(client, headers)
         assert client.post(BASE + "/human-outcomes/dependency-history",
                            json={**_cas(saved), "confirm_historical_review": True,
-                                 "max_cases": 2}).status_code == 403
+                                 "max_cases": 2}).status_code == 401
         assert _dependency_history(client, headers, saved, confirm=False).status_code == 403
         for count in (0, 5, True, "2"):
             assert _dependency_history(client, headers, saved, max_cases=count).status_code == 422
