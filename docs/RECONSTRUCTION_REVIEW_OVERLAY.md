@@ -3,7 +3,7 @@
 This is an **operator-facing functional review workflow**, not an automatic
 semantic case linker or an authorization to execute anything. The existing
 read-only workflow-evidence API already reports ambiguous singleton-to-item
-candidates. This CLI turns *only those actually visible candidate edges* into
+candidates. This CLI turns *only those actually visible direct or two-hop weak candidate paths* into
 explicit, locally reviewed membership overlays and allows independently
 annotated sessions to be scored. It never changes the canonical OWG event
 store, source records, default API grouping, permissions or consent.
@@ -22,11 +22,17 @@ From the repository root:
 
 The packet contains a SHA-256 digest of the *exact JSON evidence snapshot*,
 admitted observation/item counts, a bounded list of existing eligible
-unassigned event IDs, and typed weak candidate item IDs. It contains no raw
+unassigned event IDs, and typed weak candidate item IDs. One-hop entries carry
+`evidence_hops: 1` and their weak relation types. Two-hop entries carry
+`evidence_hops: 2`, the exact three opaque witness event IDs, the two weak
+relation types, and a distinct-intermediary count. The intermediary stays
+unassigned unless separately and explicitly reviewed. It contains no raw
 work text, URL, hostname, clipboard contents or resource reference. It does
-not display hidden, unanchored or non-singleton target components. At most 24
-eligible events and four candidate items per event are displayed; totals and
-truncation are explicit. If more than 50 linked items exist, select a smaller
+not display hidden, unanchored or non-singleton target components. At most **24 total** direct-plus-two-hop eligible events and four candidate
+items per event are displayed; direct and two-hop totals and truncation are
+explicit. Direct candidates are shown first; overflow is never silently
+represented as zero. An incomplete two-hop scan refuses packet preparation;
+select a smaller authorized window. If more than 50 linked items exist, select a smaller
 authorized window instead of silently reviewing a partial item population.
 
 After **independent human review of the original authorized evidence**, create
@@ -54,7 +60,11 @@ is a **new human annotation**, not source-verified business identity.
       --output /private/reviewed-overlay.json
 
 The output keeps automatic memberships and human-confirmed event IDs
-**separately**, and explicitly says that canonical membership is unchanged,
+**separately**, including distinct one-hop and two-hop confirmation counts and
+per-item reviewed event IDs. A two-hop confirmation attaches only the reviewed
+loose observation, **never** its intermediary; neither weak edge becomes a
+canonical link. The overlay and score identify human-reviewed gains, not
+improvements to autonomous reconstruction. and explicitly says that canonical membership is unchanged,
 human decisions are not source evidence, and business actions are unauthorized.
 Unconfirmed events remain unassigned. Changing an event, its private metadata,
 source scope, retention or deletion state invalidates the snapshot digest;
@@ -105,9 +115,12 @@ without interruption-rejection regression; this feature does not claim it.
   shared scorer's pairwise-order and assignment work. Malformed, nonfinite or
   unsupported JSON is refused. Outputs are newly created private files.
 - Review eligibility comes from the current production linker and its existing
-  visible, source-anchored direct weak candidate queue, never from a caller's
-  asserted target or time proximity. Two-hop fragments remain review-only and
-  are not silently promoted.
+  visible, source-anchored direct weak candidate queue **and** its independently
+  witnessed two-hop fragment queue, never from a caller's asserted target or
+  time proximity. Two-hop fragments remain review-only and are promoted into
+  the **noncanonical human overlay only by explicit operator confirmation**;
+  intermediate observations are not transitively assigned. Incomplete fragment
+  scans, forged paths, hidden targets and cross-scope weak edges are refused.
 - REST, MCP, dashboard, export, capture, Discovery Mode, retention and tenant
   isolation are unchanged. The CLI must be invoked only over evidence the
   operator is already authorized to access. Revocation requires re-export and
