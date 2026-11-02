@@ -16,6 +16,14 @@ _MAX_SEGMENTS = 16
 _MAX_SEGMENT_EVENT_IDS = 20
 
 
+def _clipboard_action(action: Any) -> bool:
+    """A clipboard action is not independent evidence of tab focus."""
+    return isinstance(action, str) and (
+        action in ("copy", "cut", "paste")
+        or action.endswith(("_copy", "_cut", "_paste"))
+    )
+
+
 def observed_activity_segments(
     rows: list[dict[str, Any]],
     member_ids: list[str],
@@ -86,7 +94,7 @@ def observed_activity_segments(
                 and not row["reference_tainted"]
                 and not row.get("ephemeral_claim_tainted", False)
                 and not row.get("action_claim_malformed", False)
-                and row["action"] not in ("copy", "paste")
+                and not _clipboard_action(row["action"])
                 and isinstance(tab, str) and bool(tab)
                 and isinstance(app, str) and app not in ("", "unknown", "other",
                                                          "other app", "unknown app")
@@ -160,6 +168,9 @@ def observed_activity_segments(
                         and row["app"] == previous_row["app"]
                         and row["source"] == previous_row["source"]
                         and row["source"] not in ("", "unknown", "other")
+                        and not row["transfer"] and not previous_row["transfer"]
+                        and not _clipboard_action(row["action"])
+                        and not _clipboard_action(previous_row["action"])
                         and row["app"] not in ("", "unknown", "other",
                                               "other app", "unknown app")
                         and not row.get("ephemeral_claim_tainted", False)
