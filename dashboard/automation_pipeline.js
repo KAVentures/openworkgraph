@@ -99,6 +99,101 @@
       source_read_authorized:false,verified_execution:false,verified_business_outcomes:false};
   }
 
+  // A bounded, read-only dependency review of the exact selected project.
+  // It is a reviewer aid, NOT an authoritative cross-store lineage graph.
+  // Source status is the locally recorded status, never a provider receipt.
+  function handoffDependencyReview(journey,projectId,ideaId,createdAt){
+    const packet=handoffReviewPacket(journey,projectId,ideaId,createdAt);
+    const sha=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
+    const project=packet.project,process=packet.process;
+    if(!sha(project.spec_sha256)||!sha(project.archive_sha256)||
+      !Number.isSafeInteger(project.idea_revision)||project.idea_revision<1||
+      !Number.isSafeInteger(packet.idea.revision)||packet.idea.revision<1||
+      !Number.isSafeInteger(packet.source_check_exports.count)||
+      packet.source_check_exports.count<0||
+      (packet.source_check_exports.last_document_sha256!==null&&
+        !sha(packet.source_check_exports.last_document_sha256)))
+      throw new Error('Project dependency evidence is incomplete or invalid. Refresh the journey.');
+    const originCount=packet.dataset_origins.length;
+    const originCurrent=originCount>0&&!packet.dataset_origins_truncated&&
+      packet.dataset_origins.every(origin=>origin.status==='current');
+    const processCurrent=process.status==='current'&&!!process.workflow_id&&
+      Number.isSafeInteger(process.revision)&&process.revision>0&&sha(process.content_sha256);
+    const ideaCurrent=['approved','implemented'].includes(packet.idea.state)&&
+      project.idea_revision_is_current&&project.idea_revision===packet.idea.revision;
+    const reportCount=packet.reported_specifications.length;
+    const reportsMatching=reportCount>0&&!packet.reported_specifications_truncated&&
+      packet.reported_specifications.every(report=>report.status==='matching_reported_specification');
+    const checksRecorded=packet.source_check_exports.count>0&&
+      sha(packet.source_check_exports.last_document_sha256);
+    const rows=[];
+    const add=(id,label,status,basis,note,depends_on=[])=>{
+      const affected_by=depends_on.filter(dep=>rows.find(row=>row.id===dep)?.status!=='locally_current'&&
+        rows.find(row=>row.id===dep)?.status!=='human_review_recorded'&&
+        rows.find(row=>row.id===dep)?.status!=='artifact_recorded');
+      rows.push({id,label,status,basis,note,depends_on,affected_by});
+    };
+    add('dataset','Dataset / cohort origin',
+      originCurrent?'locally_current':originCount?'needs_review':'missing',
+      originCount+' origin checks'+(packet.dataset_origins_truncated?' (truncated)':''),
+      'Recorded source status is not independently verified completeness.');
+    add('process','Saved process design',
+      processCurrent?'locally_current':process.workflow_id?'needs_review':'missing',
+      process.revision===null?'No exact revision':('Revision '+process.revision+
+        ' · SHA-256 '+(sha(process.content_sha256)?process.content_sha256:'unavailable')),
+      'The saved design digest is not proof of observed work.',['dataset']);
+    add('opportunity','Human opportunity decision',
+      ideaCurrent?'human_review_recorded':'needs_review',
+      'Revision '+packet.idea.revision+' · '+packet.idea.state,
+      'A recorded approval is not an agent execution grant.',['dataset','process']);
+    add('project','Immutable agent project export',
+      project.idea_revision_is_current?'artifact_recorded':'historical',
+      'Idea revision '+project.idea_revision+' · spec '+project.spec_sha256+
+        ' · ZIP '+project.archive_sha256,
+      'Artifact hashes identify an export, not a deployed or executed agent.',
+      ['dataset','process','opportunity']);
+    add('reports','Imported execution reports',
+      reportsMatching?'customer_reported_only':reportCount?'needs_review':'missing',
+      reportCount+' reported specifications'+
+        (packet.reported_specifications_truncated?' (truncated)':''),
+      'Even a matching customer-reported specification cannot prove individual execution.',
+      ['project']);
+    add('source_checks','Recorded source-check exports',
+      checksRecorded?'export_hash_only':packet.source_check_exports.count?'needs_review':'missing',
+      packet.source_check_exports.count+' export records · latest digest '+
+        (packet.source_check_exports.last_document_sha256||'unavailable'),
+      'Only export hashes are retained; source receipts and outcomes are not verified.',
+      ['project']);
+    add('outcomes','Independent execution and business outcomes','unverified',
+      'No independently verified run, causality or business outcome',
+      'Human validation with authorized source evidence remains required.',
+      ['dataset','process','opportunity','project','reports','source_checks']);
+    return {
+      format:'openworkgraph.handoff-dependency-review.v1',
+      generated_at:createdAt,scope:'read_only_human_review',
+      idea_id:packet.idea.idea_id,project_id:project.project_id,
+      execution_authorized:false,source_read_authorized:false,
+      verified_execution:false,verified_business_outcomes:false,
+      handoff_review_complete:false,
+      basis:{process_revision:process.revision,process_sha256:process.content_sha256,
+        idea_revision:packet.idea.revision,project_idea_revision:project.idea_revision,
+        project_spec_sha256:project.spec_sha256,project_archive_sha256:project.archive_sha256,
+        dataset_origins:packet.dataset_origins.map(origin=>({
+          status:origin.status==='current'?'current':'needs_review',
+          source_content_sha256:sha(origin.source_content_sha256)?origin.source_content_sha256:null,
+          selection_sha256:sha(origin.selection_sha256)?origin.selection_sha256:null
+        })),
+        dataset_origins_truncated:packet.dataset_origins_truncated,
+        reports_truncated:packet.reported_specifications_truncated},
+      coverage:{stages:rows.length,
+        locally_current_or_recorded:rows.filter(row=>['locally_current','human_review_recorded','artifact_recorded'].includes(row.status)).length,
+        needs_human_review:rows.filter(row=>!['locally_current','human_review_recorded','artifact_recorded'].includes(row.status)).length,
+        upstream_basis_current:originCurrent&&processCurrent&&ideaCurrent&&project.idea_revision_is_current,
+        independent_outcomes_verified:false},
+      stages:rows,review_blockers:packet.readiness.blockers
+    };
+  }
+
   // Compare an imported point-in-time review packet against a freshly fetched local journey.
   // Never restore approval or trust imported fields as execution/verification evidence.
   function compareHandoffReviewPackets(saved,current){
@@ -908,7 +1003,60 @@
             const packetImport=el('section');packetImport.append(
               field('Previously downloaded review packet or resumable review bundle (local JSON only)',priorPacket),
               comparePacket,compareResult);
-            artifact.append(review,actions,packetImport);
+            // Make the dependency chain inspectable without treating it as
+            // authoritative lineage or a handoff authorization. Rebuilt on each
+            // exact-project selection and discarded on journey refresh.
+            const dependencyButton=button('Review evidence dependencies for this project','secondary');
+            dependencyButton.id='owgPipelineDependencyReview';
+            const dependencyHost=el('section');dependencyHost.id='owgPipelineDependencyResult';
+            dependencyHost.setAttribute('role','status');
+            dependencyHost.setAttribute('aria-live','polite');
+            dependencyButton.onclick=()=>{
+              if(generation!==detailGeneration||choice.value!==p.project_id||
+                !artifact.contains(dependencyButton))return;
+              try{
+                const audit=handoffDependencyReview(data,p.project_id,idea.idea_id,new Date().toISOString());
+                const summary=el('p',audit.coverage.locally_current_or_recorded+' of '+
+                  audit.coverage.stages+' recorded stages have locally current/reviewed/artifact status; '+
+                  audit.coverage.needs_human_review+' require further review. '+
+                  'All independent outcome and execution gates remain unverified.');
+                const table=el('table'),head=el('tr');
+                for(const label of ['Dependency stage','Recorded status','Pinned basis / coverage','Review impact']){
+                  const th=el('th',label);th.scope='col';head.appendChild(th);
+                }
+                const thead=el('thead');thead.appendChild(head);
+                const tbody=el('tbody');
+                audit.stages.forEach(stage=>{
+                  const tr=el('tr'),th=el('th',stage.label);th.scope='row';
+                  tr.append(th,el('td',stage.status.replaceAll('_',' ')),
+                    el('td',stage.basis),
+                    el('td',(stage.affected_by.length?
+                      'Earlier unresolved basis: '+stage.affected_by.join(', ')+'. ':'')+stage.note));
+                  tbody.appendChild(tr);
+                });
+                table.append(thead,tbody);
+                const wrap=el('div',null,'table-wrap');wrap.style.overflowWrap='anywhere';
+                wrap.appendChild(table);
+                const download=button('Download minimized dependency review JSON','secondary');
+                download.id='owgPipelineDependencyDownload';
+                download.onclick=()=>{
+                  if(generation!==detailGeneration||choice.value!==p.project_id||
+                    !dependencyHost.contains(download))return;
+                  const current=handoffDependencyReview(data,p.project_id,idea.idea_id,new Date().toISOString());
+                  const body=JSON.stringify(current,null,2)+'\n';
+                  if(body.length>65536){dependencyHost.appendChild(el('p','Dependency review exceeds the 64 KiB export limit.','muted'));return;}
+                  const url=URL.createObjectURL(new Blob([body],{type:'application/json'}));
+                  const link=el('a');link.href=url;link.download='owg-handoff-dependency-review.json';
+                  document.body.appendChild(link);link.click();link.remove();
+                  setTimeout(()=>URL.revokeObjectURL(url),1000);
+                  guideStatus.textContent='Downloaded the exact-project local dependency review. No source read, approval or agent action occurred.';
+                };
+                dependencyHost.replaceChildren(el('h6','Evidence dependency and coverage review'),
+                  summary,wrap,el('p','This is a point-in-time local review map, not authoritative cross-store lineage. '+
+                  'A stale upstream basis affects downstream handoff review but does not change immutable artifact hashes.','muted'),download);
+              }catch(e){dependencyHost.textContent='Cannot review dependency coverage: '+e.message;}
+            };
+            artifact.append(review,dependencyButton,dependencyHost,actions,packetImport);
             if(!p.idea_revision_is_current)artifact.appendChild(el('p',
               'Historical idea revision: reopen and review the current idea before attempting new checks or report associations.','muted'));
           };
@@ -1129,6 +1277,6 @@
     refresh().catch(e=>{status.textContent=e.message;});
   }
 
-  window.__owgPipelineModel={assessmentBody,portfolioView,handoffReviewPacket,compareHandoffReviewPackets,compareRecordedProjects,handoffInspectionWorklist,handoffInspectionSnapshotDigest,restoreHandoffInspectionKeys};
+  window.__owgPipelineModel={assessmentBody,portfolioView,handoffReviewPacket,handoffDependencyReview,compareHandoffReviewPackets,compareRecordedProjects,handoffInspectionWorklist,handoffInspectionSnapshotDigest,restoreHandoffInspectionKeys};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
