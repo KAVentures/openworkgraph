@@ -49,7 +49,7 @@ def run(log, stat="average", policy="available", **kw):
 
 @pytest.mark.parametrize(("statistic", "expected"), [
     ("average", 20.0), ("minimum", 15.0), ("maximum", 25.0),
-    ("median", 20.0), ("p90", 24.0)])
+    ("median", 20.0), ("p90", 24.0), ("total", 35.0), ("population_stddev", 5.0)])
 def test_available_statistics_use_only_finite_numeric_events(log, statistic, expected):
     result = run(log, statistic)
     assert result["rows"] == [[expected]]
@@ -79,6 +79,8 @@ def test_complete_policy_withholds_partially_observed_case(log):
     assert run(log, "maximum", "complete")["rows"] == [[20.0]]
     assert run(log, "median", "complete")["rows"] == [[15.0]]
     assert run(log, "p90", "complete")["rows"] == [[19.0]]
+    assert run(log, "total", "complete")["rows"] == [[30.0]]
+    assert run(log, "population_stddev", "complete")["rows"] == [[5.0]]
 
 
 @pytest.mark.parametrize(("statistic", "expected"), [
@@ -413,6 +415,63 @@ def test_same_activity_stage_last_completed_and_unfinished_final_occurrence(log)
     assert response["metrics"][0]["cases_without_later_stage_end"] == 1
 
 
+def test_scoped_totals_and_population_spread_across_activity_and_stage(log):
+    # Real imported rows: after-stage Pay is excluded from the stage total,
+    # missing values remain unknown, and a recorded zero is not unknown.
+    doc = (
+        "case,activity,time,amount\\n"
+        "a,Receive,2024-07-01T00:00:00Z,2\\n"
+        "a,Pay,2024-07-01T01:00:00Z,4\\n"
+        "a,Approve,2024-07-01T02:00:00Z,100\\n"
+        "a,Pay,2024-07-01T03:00:00Z,16\\n"
+        "b,Receive,2024-07-02T00:00:00Z,7\\n"
+        "b,Pay,2024-07-02T01:00:00Z,invalid\\n"
+        "b,Approve,2024-07-02T02:00:00Z,100\\n"
+        "c,Receive,2024-07-03T00:00:00Z,5\\n"
+        "c,Approve,2024-07-03T01:00:00Z,100\\n"
+        "d,Receive,2024-07-04T00:00:00Z,NaN\\n"
+        "d,Pay,2024-07-04T01:00:00Z,NaN\\n"
+        "d,Approve,2024-07-04T02:00:00Z,100\\n"
+        "e,Receive,2024-07-05T00:00:00Z,0\\n"
+        "e,Pay,2024-07-05T01:00:00Z,0\\n"
+        "e,Approve,2024-07-05T02:00:00Z,100\\n"
+    ).encode()
+    selected = workspace.import_log(BytesIO(doc), name="scoped-total-spread",
+        source_format="csv", mapping={"case_column": "case",
+        "activity_column": "activity", "timestamp_column": "time",
+        "attribute_columns": ["amount"]})["log_id"]
+
+    def analyze(stat, **fields):
+        m = {**metric(stat), **fields}
+        return query.run(selected, {"level": "cases", "metrics": [m],
+            "measures": [{"fn": "sum", "of": "metric:price"}]})
+
+    pay = analyze("total", activity="Pay")
+    assert pay["rows"] == [[20.0]]  # a=4+16, e=0; invalid b/d withheld, c absent
+    assert pay["metrics"][0]["cases_with_value"] == 2
+    assert pay["metrics"][0]["cases_without_matching_activity"] == 1
+    assert pay["metrics"][0]["unit"] == "EUR"
+    assert analyze("population_stddev", activity="Pay")["rows"] == [[6.0]]
+    stage = {"from_activity": "Receive", "to_activity": "Approve"}
+    total = analyze("total", **stage)
+    assert total["rows"] == [[18.0]]  # a=6, b=7 (partial), c=5, e=0
+    assert total["metrics"][0]["cases_with_value"] == 4
+    assert total["metrics"][0]["cases_with_partial_attribute_coverage"] == 1
+    assert analyze("total", missing_policy="complete", **stage)["rows"] == [[11.0]]
+    assert analyze("population_stddev", **stage)["rows"] == [[1.0]]
+    assert analyze("population_stddev", missing_policy="complete", **stage)["rows"] == [[1.0]]
+    # Saved metrics and analyses preserve the new typed statistic and its stage.
+    m = {**metric("total"), **stage}
+    spec = {"level": "cases", "metrics": [m],
+        "measures": [{"fn": "sum", "of": "metric:price"}]}
+    template = query.save_metric(selected, {"metric": m})
+    assert query.list_metrics(selected)["metrics"][0]["metric"]["statistic"] == "total"
+    query.delete_metric(selected, template["metric_id"])
+    saved = query.save(selected, {"name": "Stage totals", "spec": spec})
+    assert query.run(selected, saved["spec"])["rows"] == [[18.0]]
+    json.dumps(total, allow_nan=False)
+
+
 @pytest.mark.parametrize("fields", [
     {"stage_occurrence": "last_completed"},
     {"stage_occurrence": "unknown", "from_activity": "A", "to_activity": "B"},
@@ -447,6 +506,11 @@ with TestClient(app) as client:
     assert r.status_code == 200 and r.headers["cache-control"] == "no-store", r.text
     assert r.json()["rows"] == [[15.0]]
     assert r.json()["metrics"][0]["cases_excluded_by_complete_policy"] == 1
+    for statistic, expected in (("total", 35.0), ("population_stddev", 5.0)):
+        extra = client.post(base + "/analysis", json={**spec, "metrics": [{**m, "statistic": statistic}]}, headers=headers)
+        assert extra.status_code == 200, extra.text
+        assert extra.json()["rows"] == [[expected]]
+        assert extra.json()["metrics"][0]["definition"]["statistic"] == statistic
     for statistic, expected in (("median", 15.0), ("p90", 19.0)):
         other = client.post(base + "/analysis", json={**spec, "metrics": [{**m, "statistic": statistic}]}, headers=headers)
         assert other.status_code == 200, other.text

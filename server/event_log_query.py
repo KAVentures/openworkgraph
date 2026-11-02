@@ -131,12 +131,12 @@ class EventAttributeSum(_Strict):
 
 
 class EventAttributeStatistic(_Strict):
-    """Finite numeric event-attribute statistic per selected full case."""
+    """Finite numeric event-attribute statistic per selected full case (including scoped totals and population spread)."""
     name: MetricName
     kind: Literal["event_attribute_statistic"]
     attribute: AttributeName
     unit: Unit
-    statistic: Literal["average", "minimum", "maximum", "median", "p90"]
+    statistic: Literal["average", "minimum", "maximum", "median", "p90", "total", "population_stddev"]
     # Optional exact activity selector. Only matching event rows contribute;
     # unmatched cases remain unknown rather than becoming zero.
     activity: Name | None = None
@@ -381,7 +381,8 @@ def _metrics(conn, metrics: list[Any]) -> tuple[dict[str, str], list[dict[str, A
             # event linked to two objects is counted once in *each* case, not
             # twice in one case. Restrict to selected cases before aggregating.
             aggregate = {"average": "avg(v)", "minimum": "min(v)", "maximum": "max(v)",
-                         "median": "quantile_cont(v, 0.5)", "p90": "quantile_cont(v, 0.9)"}[metric.statistic]
+                         "median": "quantile_cont(v, 0.5)", "p90": "quantile_cont(v, 0.9)",
+                          "total": "sum(v)", "population_stddev": "stddev_pop(v)"}[metric.statistic]
             stage_selected = metric.from_activity is not None
             if stage_selected:
                 # Use the same stable event order as the case trace. A prior

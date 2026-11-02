@@ -2,7 +2,7 @@
 
 The existing **local dashboard-session-only** event-log analysis API now accepts a typed
 `event_attribute_statistic` case metric. It calculates the average, minimum,
-maximum, median or 90th percentile (p90) of a selected **finite numeric event attribute within each selected full
+maximum, median, 90th percentile (p90), total or population standard deviation of a selected **finite numeric event attribute within each selected full
 case**, then lets an analyst aggregate those case values (for example, the
 average of per-case average amounts, or the maximum case peak). This is useful
 when an imported CSV/XES/OCEL log carries an explicitly mapped numeric value,
@@ -29,6 +29,52 @@ event-log routes; `Authorization: OWG-Session <local-session>`):
   "measures": [{"fn": "avg", "of": "metric:case_mean_amount"}]
 }
 ```
+
+## Scoped totals and within-case variability
+
+Use `"statistic": "total"` for a **sum of finite observed values per case**,
+rather than multiplying an average by a guessed event count. Unlike the older
+`event_attribute_sum` case metric, the typed statistic supports an exact
+`activity` selector and `from_activity`/`to_activity` stage bounds (including
+`stage_occurrence: last_completed`). This is useful for comparing the total
+recorded `Pay` and `Refund` amounts within the same observed case, or
+total values recorded in the first versus last completed review stage.
+
+Use `"statistic": "population_stddev"` for the population standard
+deviation **within each case's selected finite event values**, computed as
+the square root of the mean squared deviation using population denominator
+`N` (not sample denominator `N-1`). One valid observation has spread
+zero; zero valid observations yield **null**, not zero. Neither metric
+asserts source completeness. The declared unit is retained unchanged.
+
+```json
+{
+  "level": "cases",
+  "metrics": [
+    {"name": "pay_total", "kind": "event_attribute_statistic",
+     "attribute": "amount", "unit": "EUR", "statistic": "total",
+     "activity": "Pay", "missing_policy": "complete"},
+    {"name": "pay_spread", "kind": "event_attribute_statistic",
+     "attribute": "amount", "unit": "EUR", "statistic": "population_stddev",
+     "activity": "Pay", "missing_policy": "available"}
+  ],
+  "measures": [
+    {"fn": "sum", "of": "metric:pay_total"},
+    {"fn": "avg", "of": "metric:pay_spread"}
+  ]
+}
+```
+
+Both metrics use existing finite-value diagnostics. Under `available`,
+invalid/missing/nonfinite event values are omitted and disclosed; under
+`complete`, **any** such value in the selected activity/stage withholds
+that case's metric. An observed total of zero is valid, while a case with
+no matching rows or no finite values remains unknown. A numeric aggregate
+that overflows to infinity is withheld, never exported as a valid total.
+For OCEL flattening, an event linked to multiple selected case objects
+contributes once to each object's case metric, not to a verified ledger.
+A `sum` of case totals can therefore double-count business events across
+objects and is not automatically a reconciled financial total.
 
 ## Activity-specific metrics (same case, different event types)
 
@@ -177,7 +223,8 @@ and export contracts retain both boundaries and the explicit stage occurrence se
 source events are complete or that the named activities correspond to
 approved business policy.
 
-`statistic` must be `average`, `minimum`, `maximum`, `median`, or `p90`.
+`statistic` must be `average`, `minimum`, `maximum`, `median`, `p90`,
+`total`, or `population_stddev`.
 `missing_policy` is `available` (default) or `complete`:
 
 - **available:** use finite numeric values actually present in each case;
