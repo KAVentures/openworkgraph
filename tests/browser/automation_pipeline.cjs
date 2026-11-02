@@ -455,10 +455,11 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    assert((await page.locator('#owgPipelineJourneyCompareResult').textContent()).includes('Saved process availability'));
    // Report drift leads to the selected project's existing report-review controls.
    const changedActions=page.locator('#owgPipelineJourneyDriftActions');
+   const writesBeforeDriftReview=guidedWrites;
    await changedActions.getByRole('button',{name:'Review imported reports for this project'}).click();
    await page.locator('#owgPipelineReportProject').waitFor();
    assert.equal(await page.locator('#owgPipelineReportProject').inputValue(),manifest.project_id);
-   assert.equal(guidedWrites,writesBeforeNavigation,'drift navigation must not create report links or source reads');
+   assert.equal(guidedWrites,writesBeforeDriftReview,'drift navigation must not create report links or source reads');
 
    assert(await guide.locator('#owgPipelineJourneyOpenProcess').isEnabled());
    page.once('dialog',dialog=>dialog.accept());
