@@ -200,7 +200,13 @@ def remove_review_intention(work_item_ref: str, *, now: datetime | None = None) 
             )
             try:
                 purge_case_declaration(work_item_ref)
+                from .open_work_case_operation_ledger import clear_operation_evidence
+                clear_operation_evidence(work_item_ref)
             except (OSError, ValueError, sqlite3.DatabaseError):
+                # If a targeted auxiliary purge fails, erase all retained
+                # operation evidence rather than preserve revoked authority.
+                from .open_work_case_operation_ledger import clear_operation_evidence
+                clear_operation_evidence()
                 # A corrupt/unreadable auxiliary ledger must never prevent
                 # explicit deletion of the primary reviewed case. Erase all
                 # auxiliary declarations rather than retain an orphan.
@@ -216,6 +222,8 @@ def clear_review_intentions() -> None:
         # Existing Stripe disconnect/replacement and session-only retention
         # cleanup must also erase the additive, local-only case fact ledger.
         from .open_work_case_declarations import clear_case_declarations
+        from .open_work_case_operation_ledger import clear_operation_evidence
+        clear_operation_evidence()
         clear_case_declarations()
         path = _path()
         try:
