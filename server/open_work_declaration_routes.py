@@ -57,6 +57,9 @@ from .open_work_case_declared_portfolio_payment import (
 from .open_work_case_declared_portfolio_preflight import (
     issue_portfolio_payment_preflight, validate_portfolio_payment_preflight,
 )
+from .open_work_case_declared_link_renewal import (
+    validate_historical_payment_record_link, renew_declared_payment_record_link,
+)
 from .open_work_case_review_packet import (
     issue_review_packet, validate_review_packet, compare_review_packet,
 )
@@ -1741,6 +1744,48 @@ async def read_local_declared_stripe_payment_goal_history(request: Request, resp
             secret=secret, guard=guard,
         )
         result = compose_historical_declared_payment_goal(admitted, history)
+        await asyncio.to_thread(guard)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/v1/open-work/declarations/source-goals/renew-record-link")
+async def renew_local_declared_payment_record_link(request: Request, response: Response):
+    """Renew a historical invoice link after a retained independent check.
+
+    This uses only a current reviewed case and its private HMAC evidence. It
+    neither scans Stripe's open inventory nor reads payment status; the
+    separate explicit verify-payment API still performs the fresh source read.
+    """
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_historical_review", "record_link",
+    })
+    if payload["confirm_historical_review"] is not True:
+        raise HTTPException(403, "explicit historical payment link renewal review required")
+    try:
+        admitted, signature, secret, guard = await _operation_ledger_admission(scope, payload)
+        require_declared_payment_goal(admitted)
+        # Authenticate the expired original before reading any private ledger.
+        resource_ref = validate_historical_payment_record_link(
+            payload["record_link"], admitted, signature, scope=scope, secret=secret,
+        )
+        await asyncio.to_thread(guard)
+        await _recheck_source(scope)
+        history = await asyncio.to_thread(
+            read_operation_evidence, admitted, signature, scope=scope,
+            secret=secret, guard=guard, resource_ref=resource_ref,
+        )
+        await asyncio.to_thread(guard)
+        result = renew_declared_payment_record_link(
+            admitted, signature, payload["record_link"], history,
+            scope=scope, secret=secret,
+        )
         await asyncio.to_thread(guard)
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
         raise _safe_error(exc) from None
