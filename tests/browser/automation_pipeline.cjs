@@ -329,6 +329,16 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await inspectionWorklist.locator('#owgPipelineJourneyInspectionRestoreStatus')
      .filter({hasText:/does not match this exact fresh comparison/}).waitFor();
    assert(!await inspectionChecks.first().isChecked(),'wrong-project worklist must not restore marks');
+   const legacyInspection={...inspectionRecord};
+   delete legacyInspection.comparison_sha256;
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionImportFile').setInputFiles({
+     name:'legacy-inspection.json',mimeType:'application/json',
+     buffer:Buffer.from(JSON.stringify(legacyInspection))
+   });
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionRestore').click();
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionRestoreStatus')
+     .filter({hasText:/does not match this exact fresh comparison/}).waitFor();
+   assert(!await inspectionChecks.first().isChecked(),'old unbound worklists must not restore marks');
    const forgedInspection={...inspectionRecord,execution_authorized:true};
    await inspectionWorklist.locator('#owgPipelineJourneyInspectionImportFile').setInputFiles({
      name:'forged-inspection.json',mimeType:'application/json',
@@ -546,6 +556,17 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    });
    await resumed.locator('#owgPipelineJourneyComparePacket').click();
    await resumed.locator('#owgPipelineJourneyCompareResult').getByText(/Recorded fields changed since the saved packet/).waitFor();
+   // The report was imported after the original inspection. A previously
+   // exported inspection record must not be replayed on this changed basis.
+   await resumed.locator('#owgPipelineJourneyInspectionImportFile').setInputFiles({
+     name:'pre-report-inspection.json',mimeType:'application/json',
+     buffer:Buffer.from(JSON.stringify(inspectionRecord))
+   });
+   await resumed.locator('#owgPipelineJourneyInspectionRestore').click();
+   await resumed.locator('#owgPipelineJourneyInspectionRestoreStatus')
+     .filter({hasText:/does not match this exact fresh comparison/}).waitFor();
+   assert(!await resumed.locator('#owgPipelineJourneyInspectionWorklist input[type=checkbox]').first().isChecked(),
+     'source/report drift cannot replay old inspection marks');
    const resumedDrift=resumed.locator('#owgPipelineJourneyDriftActions');
    await resumedDrift.getByRole('button',{name:'Review imported reports for this project'}).click();
    await resumed.locator('#owgPipelineReportProject').waitFor();
