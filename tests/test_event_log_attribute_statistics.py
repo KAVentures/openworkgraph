@@ -465,6 +465,13 @@ with TestClient(app) as client:
     assert stage_response.status_code == 200, stage_response.text
     assert stage_response.json()["rows"] == [[15.0]]
     assert stage_response.json()["metrics"][0]["definition"]["from_activity"] == "A"
+    latest_stage = {**stage, "stage_occurrence": "last_completed"}
+    latest = client.post(base + "/analysis", json={**spec, "metrics": [latest_stage]}, headers=headers)
+    assert latest.status_code == 200, latest.text
+    assert latest.json()["rows"] == [[15.0]]
+    assert latest.json()["metrics"][0]["definition"]["stage_occurrence"] == "last_completed"
+    assert latest.json()["metrics"][0]["cases_with_trailing_unfinished_stage"] == 0
+    assert client.post(base + "/metrics", json={"metric": latest_stage}, headers=headers).status_code == 200
     assert client.post(base + "/metrics", json={"metric": m}, headers=headers).status_code == 200
     saved = client.post(base + "/analyses", json={"name": "Verified contract", "spec": spec}, headers=headers)
     assert saved.status_code == 200, saved.text
