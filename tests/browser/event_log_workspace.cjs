@@ -744,10 +744,15 @@ const path=require('node:path');
    await page.locator('#owgEventLogAnalyze').click();
    await page.locator('#owgQuarantine').filter({hasText:'1 rows kept (1 time without a UTC offset)'}).waitFor();
    assert.match(await page.locator('#owgQuarantine').textContent(),/C99Receive2024-01-05 09:00:00time without a UTC offset/);
+   // Release is enabled only by a preview of the exact offset (#530).
+   assert.equal(await page.locator('#owgQuarantineRelease').isDisabled(),true,'release needs a preview');
    await page.locator('#owgQuarantineOffset').fill('local');
-   await page.locator('#owgQuarantineRelease').click();
+   await page.locator('#owgQuarantinePreview').click();
    await page.locator('#owgQuarantineStatus').filter({hasText:'+01:00'}).waitFor();
+   assert.equal(await page.locator('#owgQuarantineRelease').isDisabled(),true,'an unconfirmed offset cannot be released');
    await page.locator('#owgQuarantineOffset').fill('+01:00');
+   await page.locator('#owgQuarantinePreview').click();
+   await page.locator('#owgQuarantineStatus').filter({hasText:'Preview: 1 of 1'}).waitFor();
    await page.locator('#owgQuarantineRelease').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Released 1 of 1 kept rows assuming UTC+01:00: 1 events added; 0 rows still kept.'}).waitFor();
    assert.match(await page.locator('#owgEventLogPick option:checked').textContent(),/277 events/);
