@@ -86,6 +86,77 @@ def test_release_applies_one_recorded_offset_decision_through_the_append_path():
     assert [x["kind"] for x in quarantine.quarantine(log)["decisions"]] == ["release", "release", "discard"]
 
 
+
+def test_preview_is_counts_only_nonmutating_and_guarded_release_matches_it():
+    made = _import()
+    log = made["log_id"]
+    before = quarantine.quarantine(log)
+    summary_before = workspace.summary(log)["events"]
+    preview = quarantine.preview(log, {"naive_timestamp_offset": "+01:00"})
+    assert preview["format"] == "openworkgraph.quarantine-release-preview.v1"
+    assert preview["rows_considered"] == 4
+    assert preview["rows_eligible"] == 2
+    assert preview["rows_still_rejected"] == 2
+    assert preview["events_added"] is None  # deduplication is not predicted
+    assert len(preview["expected_preview_sha256"]) == 64
+    assert quarantine.quarantine(log) == before
+    assert workspace.summary(log)["events"] == summary_before
+    assert "bob" not in str(preview) and "north" not in str(preview)
+    assert preview == quarantine.preview(log, {"naive_timestamp_offset": "+01:00"})
+    different = quarantine.preview(log, {"naive_timestamp_offset": "-05:00"})
+    assert different["expected_preview_sha256"] != preview["expected_preview_sha256"]
+    with pytest.raises(workspace.EventLogWorkspaceError, match="preview"):
+        quarantine.release(log, {"naive_timestamp_offset": "-05:00",
+                                 "expected_preview_sha256": preview["expected_preview_sha256"]})
+    assert workspace.summary(log)["events"] == summary_before
+    assert quarantine.quarantine(log)["decisions"] == []
+    released = quarantine.release(log, {"naive_timestamp_offset": "+01:00",
+                                        "expected_preview_sha256": preview["expected_preview_sha256"]})
+    assert released["decision"]["rows_released"] == preview["rows_eligible"]
+    assert released["decision"]["rows_still_kept"] == preview["rows_still_rejected"]
+    assert workspace.summary(log)["events"] == summary_before + 2
+    with pytest.raises(workspace.EventLogWorkspaceError, match="preview"):
+        quarantine.release(log, {"naive_timestamp_offset": "+01:00",
+                                 "expected_preview_sha256": preview["expected_preview_sha256"]})
+
+
+def test_preview_rejects_invalid_input_and_stale_discard_without_mutation():
+    made = _import()
+    log = made["log_id"]
+    for bad in (None, [], {}, {"naive_timestamp_offset": "local"},
+                {"naive_timestamp_offset": "+01:00", "batch": True},
+                {"naive_timestamp_offset": "+01:00", "extra": "secret"}):
+        with pytest.raises(workspace.EventLogWorkspaceError):
+            quarantine.preview(log, bad)
+    preview = quarantine.preview(log, {"naive_timestamp_offset": "Z", "batch": 0})
+    with pytest.raises(workspace.EventLogWorkspaceError, match="SHA-256"):
+        quarantine.release(log, {"naive_timestamp_offset": "Z",
+                                 "expected_preview_sha256": "abc"})
+    assert quarantine.quarantine(log)["decisions"] == []
+    quarantine.discard(log, {"batch": 0})
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        quarantine.release(log, {"naive_timestamp_offset": "Z", "batch": 0,
+                                 "expected_preview_sha256": preview["expected_preview_sha256"]})
+    assert workspace.summary(log)["events"] == 2
+
+
+def test_batch_scoped_preview_does_not_release_another_batch():
+    made = _import()
+    log = made["log_id"]
+    newer = ("case,activity,time,who,region\n"
+             "c9,Receive,2024-02-01 09:00:00,ann,east\n"
+             "c9,Close,2024-02-01T10:00:00Z,ann,east\n")
+    workspace.append_log(log, BytesIO(newer.encode()), source_format="csv",
+                         mapping={**MAPPING, "keep_rejected": True})
+    preview = quarantine.preview(log, {"naive_timestamp_offset": "+01:00", "batch": 1})
+    assert preview["rows_considered"] == 1 and preview["rows_eligible"] == 1
+    result = quarantine.release(log, {"naive_timestamp_offset": "+01:00", "batch": 1,
+                                      "expected_preview_sha256": preview["expected_preview_sha256"]})
+    assert result["decision"]["rows_released"] == 1
+    assert quarantine.quarantine(log, batch=0)["rows_kept"] == 4
+    assert quarantine.quarantine(log, batch=1)["rows_kept"] == 0
+
+
 def test_an_offset_decision_at_import_is_explicit_and_changes_the_transform():
     default = _import(keep=False)
     decided = _import(keep=False, naive_timestamp_offset="-05:00")
@@ -150,11 +221,19 @@ with TestClient(app) as client:
     bearer = {"Authorization": "Bearer " + local_auth.ensure_api_token()}
     assert client.get(base, headers=bearer).status_code in (401, 403)
     assert client.post(base + "/release", json={"naive_timestamp_offset": "Z"}, headers=bearer).status_code in (401, 403)
+    assert client.post(base + "/preview", json={"naive_timestamp_offset": "Z"}, headers=bearer).status_code in (401, 403)
+    assert client.post(base + "/preview", json={"naive_timestamp_offset": "Z"}).status_code in (401, 403)
     review = client.get(base, headers=headers)
     assert review.status_code == 200 and review.headers["cache-control"] == "no-store"
     assert review.json()["rows"][0]["activity"] == "B"
     assert client.post(base + "/release", json={"naive_timestamp_offset": "local"}, headers=headers).status_code == 422
-    released = client.post(base + "/release", json={"naive_timestamp_offset": "Z"}, headers=headers)
+    assert client.post(base + "/preview", json={"naive_timestamp_offset": "local"}, headers=headers).status_code == 422
+    preview = client.post(base + "/preview", json={"naive_timestamp_offset": "Z"}, headers=headers)
+    assert preview.status_code == 200 and preview.headers["cache-control"] == "no-store", preview.text
+    assert preview.json()["rows_eligible"] == 1 and preview.json()["rows_considered"] == 1
+    assert "activity" not in preview.json() and "rows" not in preview.json()
+    released = client.post(base + "/release", json={"naive_timestamp_offset": "Z",
+        "expected_preview_sha256": preview.json()["expected_preview_sha256"]}, headers=headers)
     assert released.status_code == 200 and released.json()["decision"]["events_added"] == 1, released.text
     assert client.post(base + "/discard", json={}, headers=headers).json()["decision"]["rows_discarded"] == 0
     decided = client.post("/v1/event-logs/import?format=csv&name=y&case_column=case&activity_column=activity"
