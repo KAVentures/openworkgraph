@@ -23,9 +23,9 @@ def event(n, ref=A, *, actor="alice-private", app="BrowserSecret",
         "app": app, "source": "desktop", "event_type": "click",
         "metadata": metadata, "window_title": "PRIVATE CUSTOMER",
     }
+    row.update(organization_id=org, actor_id=actor, device_id="private-device")
     if complete:
-        row.update(organization_id=org, actor_id=actor,
-                   device_id="private-device", session_id="private-session")
+        row["session_id"] = "private-session"
     return row
 
 
