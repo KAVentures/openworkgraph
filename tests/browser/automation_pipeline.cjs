@@ -1207,6 +1207,8 @@ with zipfile.ZipFile(sys.argv[1]) as z:
      }
      return ids;
    });
+   // Force a real list refresh even if a previous test left Approved selected.
+   await page.locator('#owgPipelineFilter').selectOption('');
    await page.locator('#owgPipelineFilter').selectOption('approved');
    await page.waitForFunction(()=>document.querySelector('#owgPipelinePortfolioAuditPage')?.textContent.includes('Page 1 of 2'));
    assert(await page.locator('#owgPipelinePortfolioAuditPrevious').isDisabled());
