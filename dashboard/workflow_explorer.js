@@ -792,7 +792,8 @@
   }
   function exactObjectKeys(value, keys) {
     return !!(value && typeof value === 'object' && !Array.isArray(value) &&
-      Object.keys(value).sort().join('|') === [...keys].sort().join('|'));
+      Object.keys(value).length === keys.length &&
+      keys.every(key => Object.prototype.hasOwnProperty.call(value, key)));
   }
   async function designCheckpointFingerprint(state) {
     if (!window.crypto?.subtle || typeof TextEncoder === 'undefined')
