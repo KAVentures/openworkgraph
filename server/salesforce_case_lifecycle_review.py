@@ -20,11 +20,19 @@ from server.salesforce_case_history_live import (
 )
 from server.salesforce_case_history_incremental import (
     _scope_hash, _private_parent, _new_private, _canonical, _digest,
+    _read_private,
 )
 
 FORMAT = "openworkgraph.salesforce-case-lifecycle-review.v1"
 MAX_BYTES = 65536
 MAX_PAGES = 8
+STATES = ("active", "soft_deleted", "unresolved")
+BASE_KEYS = frozenset({
+    "format", "scope_sha256", "checked_at_utc", "selected_cases",
+    "pages_fetched", "case_states", "counts", "source_completeness",
+    "missing_means_deleted", "hard_deletion_proven", "review_required",
+    "owg_deletion_performed", "source_writes_performed", "checkpoint_advanced",
+})
 
 
 class LifecycleReviewError(ValueError):
@@ -106,8 +114,89 @@ def _read(opener, origin, bearer, cases, *, max_pages=1):
     raise LifecycleReviewError("Lifecycle page limit reached")
 
 
+
+def _previous(path, expected_sha256, scope, namespace, cases):
+    """Read a pinned, owner-private earlier review before any source request.
+
+    A digest is an operator-supplied integrity pin, not a signature or identity
+    assertion. Never infer deletion from a prior/current missing row.
+    """
+    if (not isinstance(path, Path) or type(expected_sha256) is not str
+            or re.fullmatch(r"[a-f0-9]{64}", expected_sha256) is None):
+        raise LifecycleReviewError("Previous review and exact digest required")
+    try:
+        raw = _read_private(path, MAX_BYTES)
+        prior = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique,
+                           parse_constant=_nonfinite)
+    except (OSError, ValueError, UnicodeError, TypeError, RecursionError):
+        raise LifecycleReviewError("Invalid private previous review") from None
+    if (type(prior) is not dict or raw != _canonical(prior)
+            or _digest(raw) != expected_sha256
+            or set(prior) not in (BASE_KEYS, BASE_KEYS | {"comparison"})
+            or prior.get("format") != FORMAT or prior.get("scope_sha256") != scope
+            or type(prior.get("selected_cases")) is not int
+            or prior["selected_cases"] != len(cases)
+            or type(prior.get("pages_fetched")) is not int
+            or not 1 <= prior["pages_fetched"] <= MAX_PAGES
+            or prior.get("source_completeness") != "unknown"
+            or any(prior.get(flag) is not expected for flag, expected in (
+                ("missing_means_deleted", False), ("hard_deletion_proven", False),
+                ("review_required", True), ("owg_deletion_performed", False),
+                ("source_writes_performed", False), ("checkpoint_advanced", False),
+            ))):
+        raise LifecycleReviewError("Previous review scope or schema mismatch")
+    try:
+        stamp = prior["checked_at_utc"]
+        if (type(stamp) is not str
+                or re.fullmatch(r"\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z", stamp) is None):
+            raise ValueError("invalid timestamp")
+        datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ")
+        rows = prior["case_states"]
+        expected_ids = sorted(_key(namespace, "case", case) for case in cases)
+        if (type(rows) is not list or len(rows) != len(cases)
+                or [row["case_id"] for row in rows] != expected_ids
+                or any(type(row) is not dict or set(row) != {"case_id", "source_state"}
+                       or type(row["source_state"]) is not str
+                       or row["source_state"] not in STATES for row in rows)):
+            raise ValueError("invalid prior rows")
+        counts = {name: sum(row["source_state"] == name for row in rows)
+                  for name in STATES}
+        if prior["counts"] != counts or type(prior["counts"]) is not dict:
+            raise ValueError("invalid prior counts")
+        if "comparison" in prior:
+            comparison = prior["comparison"]
+            if (type(comparison) is not dict or
+                    set(comparison) != {"previous_review_sha256", "previous_checked_at_utc",
+                                        "transitions", "changed", "unchanged"}
+                    or type(comparison["previous_review_sha256"]) is not str
+                    or re.fullmatch(r"[a-f0-9]{64}", comparison["previous_review_sha256"]) is None
+                    or type(comparison["previous_checked_at_utc"]) is not str
+                    or type(comparison["changed"]) is not int
+                    or type(comparison["unchanged"]) is not int
+                    or type(comparison["transitions"]) is not list
+                    or len(comparison["transitions"]) != len(cases)):
+                raise ValueError("invalid prior comparison")
+            transitions = comparison["transitions"]
+            if (any(type(row) is not dict
+                    or set(row) != {"case_id", "previous_state", "current_state"}
+                    or row["case_id"] != rows[i]["case_id"]
+                    or row["current_state"] != rows[i]["source_state"]
+                    or row["previous_state"] not in STATES
+                    for i, row in enumerate(transitions))
+                    or comparison["changed"] != sum(
+                        row["previous_state"] != row["current_state"] for row in transitions)
+                    or comparison["unchanged"] != sum(
+                        row["previous_state"] == row["current_state"] for row in transitions)):
+                raise ValueError("invalid prior transitions")
+    except (KeyError, ValueError, TypeError, IndexError):
+        raise LifecycleReviewError("Previous review validation refused") from None
+    return prior
+
+
 def review(*, instance, confirm_host, namespace, cases, token, output,
-           allow_loopback_http=False, opener=None, max_pages=1):
+           allow_loopback_http=False, opener=None, max_pages=1,
+           previous_review=None, previous_sha256=None,
+           consent_compare_previous=False):
     """Bounded real read and a private, digest-bound case-state review, with no writes."""
     if type(max_pages) is not int or not 1 <= max_pages <= MAX_PAGES:
         raise LifecycleReviewError("Explicit page bound must be 1–8")
@@ -120,6 +209,14 @@ def review(*, instance, confirm_host, namespace, cases, token, output,
     _private_parent(output)
     if output.exists() or output.is_symlink():
         raise LifecycleReviewError("Review path already exists")
+    if previous_review is None:
+        if previous_sha256 is not None or consent_compare_previous:
+            raise LifecycleReviewError("Previous review and consent must agree")
+        prior = None
+    else:
+        if consent_compare_previous is not True:
+            raise LifecycleReviewError("Separate previous-review comparison consent required")
+        prior = _previous(previous_review, previous_sha256, scope, namespace, cases)
     transport = opener if opener is not None else request.build_opener(
         request.ProxyHandler({}), _NoRedirect())
     found, pages = _read(transport, origin, token, cases, max_pages=max_pages)
@@ -140,18 +237,42 @@ def review(*, instance, confirm_host, namespace, cases, token, output,
         "owg_deletion_performed": False, "source_writes_performed": False,
         "checkpoint_advanced": False,
     }
+    if prior is not None:
+        if prior["checked_at_utc"] > artifact["checked_at_utc"]:
+            raise LifecycleReviewError("Previous review is newer than current read")
+        old = {row["case_id"]: row["source_state"] for row in prior["case_states"]}
+        transitions = [
+            {"case_id": row["case_id"], "previous_state": old[row["case_id"]],
+             "current_state": row["source_state"]}
+            for row in states
+        ]
+        changed = sum(row["previous_state"] != row["current_state"]
+                      for row in transitions)
+        artifact["comparison"] = {
+            "previous_review_sha256": previous_sha256,
+            "previous_checked_at_utc": prior["checked_at_utc"],
+            "transitions": transitions, "changed": changed,
+            "unchanged": len(transitions) - changed,
+        }
     payload = _canonical(artifact)
     try:
         _new_private(output, payload)
     except (OSError, ValueError):
         raise LifecycleReviewError("Private review creation refused") from None
-    return {
+    receipt = {
         "format": FORMAT, "status": "review_created",
         "selected_cases": len(cases), "pages_fetched": pages, "counts": counts,
         "review_sha256": _digest(payload), "review_required": True,
         "source_completeness": "unknown", "checkpoint_advanced": False,
         "owg_deletion_performed": False, "source_writes_performed": False,
     }
+    if prior is not None:
+        receipt["comparison"] = {
+            "changed": artifact["comparison"]["changed"],
+            "unchanged": artifact["comparison"]["unchanged"],
+            "previous_review_sha256": previous_sha256,
+        }
+    return receipt
 
 
 def main(argv=None):
@@ -162,6 +283,9 @@ def main(argv=None):
     parser.add_argument("--case", action="append", dest="cases", required=True)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--max-pages", type=int, default=1)
+    parser.add_argument("--previous-review", type=Path)
+    parser.add_argument("--previous-sha256")
+    parser.add_argument("--consent-compare-previous-review", action="store_true")
     parser.add_argument("--consent-source-lifecycle-read", action="store_true")
     parser.add_argument("--consent-private-review", action="store_true")
     parser.add_argument("--allow-loopback-http", action="store_true",
@@ -174,7 +298,10 @@ def main(argv=None):
                         namespace=args.namespace, cases=args.cases,
                         token=os.environ.get("OWG_SALESFORCE_READ_TOKEN"),
                         output=args.output, allow_loopback_http=args.allow_loopback_http,
-                        max_pages=args.max_pages)
+                        max_pages=args.max_pages,
+                        previous_review=args.previous_review,
+                        previous_sha256=args.previous_sha256,
+                        consent_compare_previous=args.consent_compare_previous_review)
         print(json.dumps(result, sort_keys=True))
         return 0
     except (LifecycleReviewError, ValueError, TypeError, OSError, OverflowError):
