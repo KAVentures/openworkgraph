@@ -54,6 +54,9 @@ from .open_work_case_declared_portfolio_payment import (
     same_selected_portfolio_payment_reviews,
     compose_selected_portfolio_payment_result,
 )
+from .open_work_case_declared_portfolio_preflight import (
+    issue_portfolio_payment_preflight, validate_portfolio_payment_preflight,
+)
 from .open_work_case_review_packet import (
     issue_review_packet, validate_review_packet, compare_review_packet,
 )
@@ -1811,7 +1814,7 @@ async def verify_local_declared_dependency_payment_goals(request: Request, respo
     payload = await _body(request, {
         "work_item_ref", "expected_revision", "expected_edit_token",
         "confirm_source_verification", "record_links",
-    })
+    }, {"expected_preflight"})
     if payload["confirm_source_verification"] is not True:
         raise HTTPException(403, "explicit dependency provider verification required")
     try:
@@ -1900,6 +1903,56 @@ async def verify_local_declared_dependency_payment_goals(request: Request, respo
     return result
 
 
+@router.post("/v1/open-work/declarations/source-goals/preview-portfolio-payments")
+async def preview_local_declared_portfolio_payment_goals(request: Request, response: Response):
+    """Review selected historical evidence and issue a short-lived stale-check seal.
+
+    This explicit local planning action never contacts Stripe or appends evidence.
+    It does not reserve global ledger capacity or authorize fresh verification.
+    """
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {"confirm_historical_review", "selections"})
+    if payload["confirm_historical_review"] is not True:
+        raise HTTPException(403, "explicit portfolio historical payment review required")
+    try:
+        secret = await asyncio.to_thread(_read_or_create_secret, ".open_work_reference_key")
+        snapshot = await asyncio.to_thread(list_case_declarations, scope)
+        selected = admit_selected_portfolio_payment_links(
+            snapshot, selections=payload["selections"], scope=scope, secret=secret,
+        )
+
+        def guard() -> None:
+            if _source_scope() != scope:
+                raise CaseDeclarationError("source scope changed during portfolio preflight")
+            current = list_case_declarations(scope)
+            rechecked = admit_selected_portfolio_payment_links(
+                current, selections=payload["selections"], scope=scope, secret=secret,
+            )
+            if not same_selected_portfolio_payment_reviews(selected, rechecked):
+                raise CaseDeclarationError("stale selected portfolio reviews changed")
+
+        histories = {}
+        for ref in selected["ordered"]:
+            case = selected["cases"][ref]
+            histories[ref] = await asyncio.to_thread(
+                read_operation_evidence, case["admitted"], case["signature"],
+                scope=scope, secret=secret, guard=guard,
+                resource_ref=case["resource_ref"],
+            )
+            await asyncio.to_thread(guard)
+            await _recheck_source(scope)
+        result = issue_portfolio_payment_preflight(
+            selected, histories, scope=scope, secret=secret,
+        )
+        await asyncio.to_thread(guard)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
 @router.post("/v1/open-work/declarations/source-goals/verify-portfolio-payments")
 async def verify_local_declared_portfolio_payment_goals(request: Request, response: Response):
     """Check 2–4 independently selected reviewed invoices, then commit atomically.
@@ -1910,7 +1963,9 @@ async def verify_local_declared_portfolio_payment_goals(request: Request, respon
     """
     _dashboard_only(request)
     scope = await _require_scope()
-    payload = await _body(request, {"confirm_source_verification", "selections"})
+    payload = await _body(
+        request, {"confirm_source_verification", "selections"}, {"expected_preflight"},
+    )
     if payload["confirm_source_verification"] is not True:
         raise HTTPException(403, "explicit portfolio source verification required")
     try:
@@ -1940,6 +1995,11 @@ async def verify_local_declared_portfolio_payment_goals(request: Request, respon
                 resource_ref=case["resource_ref"],
             )
         await asyncio.to_thread(guard)
+        if "expected_preflight" in payload:
+            validate_portfolio_payment_preflight(
+                payload["expected_preflight"], selected, previous,
+                scope=scope, secret=secret,
+            )
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
         raise _safe_error(exc) from None
     await _recheck_source(scope)
