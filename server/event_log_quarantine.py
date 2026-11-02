@@ -67,7 +67,7 @@ def quarantine(log_id: str, batch: int | None = None, after: int = 0, limit: int
             conn.close()
     page = [{"batch": b, "row": n, "position": b * 1_000_000_000 + n, "reasons": json.loads(r), **json.loads(v)}
             for b, n, r, v in rows[:int(limit)]]
-    return {"batches": batches, "rows_kept": sum(b["rows"] for b in batches), "reasons": reasons,
+    return {"batches": batches, "rows_kept": sum(b["rows"] for b in batches if batch is None or b["batch"] == batch), "reasons": reasons,
             "rows": page, "next_after": page[-1]["position"] if len(rows) > int(limit) else None,
             "decisions": decisions, "max_rows_per_batch": workspace.MAX_QUARANTINED_ROWS, "note": REVIEW_NOTE}
 
