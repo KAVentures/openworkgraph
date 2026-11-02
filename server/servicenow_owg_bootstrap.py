@@ -14,9 +14,14 @@ import re
 import sys
 from urllib import error, parse, request
 
-from .servicenow_incident_journal import JournalError, _private_directory
+from .servicenow_incident_journal import (
+    JournalError, _csv_rows, _private_directory, _scope_digest,
+    update_journal, verify_existing_scope,
+)
 from .servicenow_incident_staging import SelectedIncidents, StagingError
-from .servicenow_incident_sync import SyncError, _check_grant
+from .servicenow_incident_sync import (
+    SyncError, _check_grant, project_csv, read_selected_once,
+)
 from .servicenow_owg_append import (
     AppendError, MAX_RESPONSE_BYTES, _LOG, _opener, _pairs_unique,
     _payload, _session,
@@ -135,10 +140,17 @@ def bootstrap(*, instance: str, tenant: str, incident_ids: list[str],
               grant_file: Path, timezone_name: str, journal: Path,
               log_name: str, confirm_log_name: str, port: int,
               consent_journal_read: bool = False, consent_local_import: bool = False,
-              session: str | None = None, opener=None):
+              session: str | None = None, opener=None,
+              read_selected: bool = False, consent_source_read: bool = False,
+              since: str | None = None, token: str | None = None,
+              provider_opener=None):
     """Create and independently verify one selected-source OWG event log."""
     if consent_journal_read is not True or consent_local_import is not True:
         raise BootstrapError("Separate journal-read and local-import consents required")
+    if type(read_selected) is not bool or type(consent_source_read) is not bool:
+        raise BootstrapError("Invalid selected-source read mode")
+    if read_selected is not consent_source_read or (not read_selected and since is not None):
+        raise BootstrapError("Selected-source read requires separate explicit consent")
     if (type(log_name) is not str or not NAME.fullmatch(log_name)
             or confirm_log_name != log_name or type(port) is not int
             or not 1 <= port <= 65535):
@@ -148,7 +160,9 @@ def bootstrap(*, instance: str, tenant: str, incident_ids: list[str],
                               sys_ids=tuple(incident_ids),
                               consented=True, grant_current=True)
     scope.require_authority()
-    body, count, namespace = _payload(scope, timezone_name, journal, grant_file)
+    # The first local log may be bootstrapped from a previously reviewed journal
+    # or from one newly authorized selected-source read. Never fetch a provider
+    # row without a current grant and a duplicate-source preflight.
     _private_directory(journal.parent)
     lock = journal.with_name(journal.name + ".bootstrap.lock")
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
@@ -160,6 +174,32 @@ def bootstrap(*, instance: str, tenant: str, incident_ids: list[str],
     try:
         transport = _opener() if opener is None else opener
         _check_grant(grant_file, scope)
+        added = replayed = 0
+        if read_selected:
+            # Preflight the existing journal *and* the destination before any
+            # provider HTTPS request. The grant is rechecked by the reader,
+            # projection-to-journal transaction and import path.
+            verify_existing_scope(scope, timezone_name=timezone_name,
+                                  journal_file=journal)
+            selected_namespace = "snow_" + _scope_digest(scope, timezone_name)[:32]
+            existing = _inventory(transport, port, session)
+            if any(_same_scope(row, selected_namespace) for row in existing):
+                raise BootstrapError("Selected source already has a local log; use journal append")
+            staged = read_selected_once(
+                scope, grant_file=grant_file, token=token, since=since,
+                opener=provider_opener,
+            )
+            csv_text, _ = project_csv(scope, staged, timezone_name=timezone_name)
+            incoming = _csv_rows(csv_text)
+            if not incoming:
+                raise BootstrapError("Selected read returned no importable snapshots")
+            _, added, replayed = update_journal(
+                scope, timezone_name=timezone_name, journal_file=journal,
+                grant_file=grant_file, incoming=incoming,
+            )
+        body, count, namespace = _payload(scope, timezone_name, journal, grant_file)
+        # Check again after the selected read: another authorized operator
+        # could have created a log while the provider request was in flight.
         before = _inventory(transport, port, session)
         if any(_same_scope(row, namespace) for row in before):
             raise BootstrapError("Selected source already has a local log; use journal append")
@@ -178,13 +218,16 @@ def bootstrap(*, instance: str, tenant: str, incident_ids: list[str],
         return {"format": FORMAT, "status": "bootstrapped", "log_id": new_id,
                 "journal_snapshots": count, "events": count, "rejected_events": 0,
                 "owg_import_readback_verified": True,
-                "provider_read_performed": False, "source_writes_performed": False,
+                "provider_read_performed": read_selected,
+                "new_journal_snapshots": added,
+                "replayed_journal_snapshots": replayed,
+                "source_writes_performed": False,
                 "historical_completeness": "unknown"}
     finally:
         lock.unlink(missing_ok=True)
 
 
-def main(argv=None, *, opener=None):
+def main(argv=None, *, opener=None, provider_opener=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--instance", required=True)
     parser.add_argument("--tenant", required=True)
@@ -197,6 +240,11 @@ def main(argv=None, *, opener=None):
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--consent-local-journal-read", action="store_true")
     parser.add_argument("--consent-local-import", action="store_true")
+    parser.add_argument("--read-selected", action="store_true",
+                        help="One explicit selected ServiceNow HTTPS GET before first import")
+    parser.add_argument("--consent-selected-read", action="store_true",
+                        help="Separate consent for the provider GET")
+    parser.add_argument("--since", help="Optional explicit provider-local lower bound")
     args = parser.parse_args(argv)
     try:
         result = bootstrap(
@@ -206,6 +254,10 @@ def main(argv=None, *, opener=None):
             confirm_log_name=args.confirm_log_name, port=args.port,
             consent_journal_read=args.consent_local_journal_read,
             consent_local_import=args.consent_local_import,
+            read_selected=args.read_selected,
+            consent_source_read=args.consent_selected_read,
+            since=args.since, token=os.environ.get("OWG_SERVICENOW_TOKEN"),
+            provider_opener=provider_opener,
             session=os.environ.get("OWG_DASHBOARD_SESSION"), opener=opener)
         print(json.dumps(result, sort_keys=True))
         return 0
