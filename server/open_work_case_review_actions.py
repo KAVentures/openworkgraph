@@ -40,6 +40,7 @@ def compose_outcome_review_action_plan(triage: dict[str, Any]) -> dict[str, Any]
             or triage.get("included_case_count") != len(rows)
             or type(omitted) is not int or omitted < 0
             or not isinstance(edges, list) or len(edges) > 8
+            or not isinstance(rows[-1], dict)
             or triage.get("work_item_ref") != rows[-1].get("work_item_ref")
             or triage.get("customer_outcome_verified") is not False
             or triage.get("source_read_performed") is not False
@@ -66,6 +67,7 @@ def compose_outcome_review_action_plan(triage: dict[str, Any]) -> dict[str, Any]
 
     plans = []
     unresolved: dict[str, bool] = {}
+    blocked_by_ancestors: dict[str, bool] = {}
     for row in rows:
         ref = row["work_item_ref"]
         human = row.get("latest_human_assessed_status")
@@ -82,7 +84,9 @@ def compose_outcome_review_action_plan(triage: dict[str, Any]) -> dict[str, Any]
                 or not isinstance(row.get("owner_declared_expected_outcome_code"), str)
                 or row.get("work_item_ref") != ref):
             raise CaseDeclarationError("invalid reviewed case action evidence")
-        payment = row["owner_declared_expected_outcome_code"] == _PAYMENT
+        outcome = row["owner_declared_expected_outcome_code"]
+        payment = outcome == _PAYMENT
+        operation = outcome == "operation_receipt_reviewed"
         conflict = payment and ((human == "met" and provider != "paid")
                                 or (provider == "paid" and human in ("not_met", "unknown")
                                     and assessments > 0))
@@ -96,14 +100,17 @@ def compose_outcome_review_action_plan(triage: dict[str, Any]) -> dict[str, Any]
                 actions.append("obtain_signed_invoice_link")
             # Even a historical paid receipt is not a current verification.
             actions.append("fresh_declared_payment_check")
-        elif not checks or provider == "unknown" or disputes:
+        elif operation and (not checks or provider == "unknown" or disputes):
             actions.append("review_historical_provider_evidence")
         if ref == refs[-1] and omitted:
             actions.insert(0, "expand_dependency_review")
-        needs_review = (not assessments or not checks or provider == "unknown"
-                        or conflict or bool(disputes))
+        needs_review = (not assessments or human == "unknown" or conflict or
+                        ((payment or operation) and
+                         (not checks or provider == "unknown" or bool(disputes))))
         unresolved[ref] = bool(needs_review)
-        pending = [pre for pre in prerequisites[ref] if unresolved[pre]]
+        pending = [pre for pre in prerequisites[ref]
+                   if unresolved[pre] or blocked_by_ancestors[pre]]
+        blocked_by_ancestors[ref] = bool(pending)
         plans.append({
             "work_item_ref": ref,
             "role": row.get("role"),
