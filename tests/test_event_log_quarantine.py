@@ -143,7 +143,7 @@ def test_preview_rejects_invalid_input_and_stale_discard_without_mutation():
 def test_batch_scoped_preview_does_not_release_another_batch():
     made = _import()
     log = made["log_id"]
-    newer = "case,activity,time,who,region\\nc9,Receive,2024-02-01 09:00:00,ann,east\\n"
+    newer = "case,activity,time,who,region\nc9,Receive,2024-02-01 09:00:00,ann,east\n"
     workspace.append_log(log, BytesIO(newer.encode()), source_format="csv",
                          mapping={**MAPPING, "keep_rejected": True})
     preview = quarantine.preview(log, {"naive_timestamp_offset": "+01:00", "batch": 1})
