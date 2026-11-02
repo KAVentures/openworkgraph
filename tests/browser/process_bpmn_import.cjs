@@ -162,12 +162,14 @@ assert c.execute('SELECT COUNT(*) FROM events').fetchone()[0]==0
   await restore.focus();await page.keyboard.press('Enter');
   await page.locator('#owgCatalogStatus').filter({hasText:'UNSAVED restoration draft from r1 against latest r2.'}).waitFor();
   assert.equal(saves,2,'preparing a restoration must not persist or execute anything');
+  assert.match(await page.locator('#owgCatalogRestorationDraft').textContent(),/UNSAVED restoration draft from historical r1 against latest r2/);
   assert.equal(await page.locator('#owgCatalogReviewed').isChecked(),false);
   assert.equal(await page.locator('#owgCatalogRevisionComparison').count(),0);
   await page.locator('#owgCatalogReviewed').check();
   await page.getByRole('button',{name:'Save new revision',exact:true}).click();
   await page.locator('#owgCatalogStatus').filter({hasText:'Saved revision 3.'}).waitFor();
   assert.equal(saves,3,'restoration requires a distinct explicit reviewed save');
+  assert.equal(await page.locator('#owgCatalogRestorationDraft').count(),0);
   // Restore r2, whose imported predicate was user-confirmed, and verify that
   // even a previously confirmed business rule becomes unconfirmed in the draft.
   await page.getByRole('button',{name:'Load revision history',exact:true}).click();
@@ -179,11 +181,13 @@ assert c.execute('SELECT COUNT(*) FROM events').fetchone()[0]==0
   const restoredPredicate=editor.locator('.owg-rule-predicate').filter({hasText:'Structured conditions · import_rule_2'});
   assert.equal(await restoredPredicate.locator('..').getByLabel('User-confirmed rule',{exact:true}).isChecked(),false);
   assert.equal(await page.locator('#owgCatalogReviewed').isChecked(),false);
+  assert.match(await page.locator('#owgCatalogRestorationDraft').textContent(),/UNSAVED restoration draft from historical r2 against latest r3/);
   assert.equal(saves,3);
   await page.locator('#owgCatalogReviewed').check();
   await page.getByRole('button',{name:'Save new revision',exact:true}).click();
   await page.locator('#owgCatalogStatus').filter({hasText:'Saved revision 4.'}).waitFor();
   assert.equal(saves,4);
+  assert.equal(await page.locator('#owgCatalogRestorationDraft').count(),0);
   await page.getByRole('button',{name:'Load revision history',exact:true}).click();
   for(const revision of [1,2,3,4])
     assert.equal(await page.getByRole('button',{name:new RegExp('^Open revision '+revision+' ·')}).count(),1);
