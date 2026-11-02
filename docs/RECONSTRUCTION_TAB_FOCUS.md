@@ -116,7 +116,9 @@ claims, timestamp ties and tainted capture do not supply an admissible
 a named interruption; ordinary legacy tab evidence may still be ambiguous.
 Observed switches are not proof that another case exists or that a handoff
 occurred. This changes only derived, ephemeral membership from retained
-consented events; removal of the final A anchor removes the recovered links.
+consented events; removal of the final A anchor removes the **two-sided
+recovery basis**. A pre-switch click may retain legacy single-record-tab
+membership, while a post-switch click must remain unassigned.
 The response additionally exposes
 `single_record_tab_unreferenced_app_switch_requires_two_sided_focus` and
 `unreferenced_app_switches_are_negative_not_case_identity` as contract flags.
