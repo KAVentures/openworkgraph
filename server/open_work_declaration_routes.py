@@ -1027,7 +1027,6 @@ async def check_local_operation_evidence_ledger(request: Request, response: Resp
         resource_ref = validate_case_record_link(
             payload["record_link"], admitted, signature, scope=scope, secret=secret,
         )
-        await asyncio.to_thread(guard)
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
         raise _safe_error(exc) from None
     await _recheck_source(scope)
@@ -1667,6 +1666,7 @@ async def verify_local_declared_stripe_payment_goal(request: Request, response: 
         resource_ref = validate_case_record_link(
             payload["record_link"], admitted, signature, scope=scope, secret=secret,
         )
+        await asyncio.to_thread(guard)
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
         raise _safe_error(exc) from None
     await _recheck_source(scope)
