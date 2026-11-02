@@ -35,6 +35,9 @@ from .open_work_case_dependency_history import compose_dependency_operation_hist
 from .open_work_case_human_dependency_history import compose_dependency_human_outcomes
 from .open_work_case_outcome_reconciliation import compose_outcome_evidence_triage
 from .open_work_case_fresh_outcome_triage import compose_fresh_outcome_triage
+from .open_work_case_outcome_portfolio import (
+    portfolio_fingerprint, validate_page_token, compose_outcome_portfolio,
+)
 from .open_work_case_review_packet import (
     issue_review_packet, validate_review_packet, compare_review_packet,
 )
@@ -1547,6 +1550,89 @@ async def check_local_fresh_outcome_evidence_triage(request: Request, response: 
         verified = project_case_operation_verification(admitted, resource_ref, receipt)
         result = compose_fresh_outcome_triage(historical_after, verified)
         await asyncio.to_thread(guard)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result
+
+
+@router.post("/v1/open-work/declarations/human-outcomes/portfolio-triage")
+async def read_local_outcome_portfolio_triage(request: Request, response: Response):
+    """Review the bounded CURRENT owner-declared portfolio, not one case DAG.
+
+    Page tokens bind the entire approved portfolio's incarnation/revisions,
+    not just the returned page. Each case's full prerequisite DAG is admitted
+    independently before its two HMAC-validated historical ledger reads.
+    """
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "confirm_historical_review", "max_cases", "offset",
+        "expected_portfolio_digest",
+    })
+    if payload["confirm_historical_review"] is not True:
+        raise HTTPException(403, "explicit portfolio outcome history review required")
+    count, offset = payload["max_cases"], payload["offset"]
+    if (type(count) is not int or not 1 <= count <= 10 or
+            type(offset) is not int or not 0 <= offset <= 50):
+        raise HTTPException(422, "bounded portfolio page required")
+    try:
+        before = await asyncio.to_thread(list_case_declarations, scope)
+        secret = await asyncio.to_thread(
+            _read_or_create_secret, ".open_work_reference_key",
+        )
+        digest = portfolio_fingerprint(before, scope=scope, secret=secret)
+        validate_page_token(payload["expected_portfolio_digest"], digest, offset=offset)
+        rows = sorted(before["items"], key=lambda row: row["work_item_ref"])
+        if offset > len(rows):
+            raise CaseDeclarationError("stale portfolio page offset")
+        from functools import partial
+        targets = []
+        for row in rows[offset:offset + count]:
+            ref = row["work_item_ref"]
+            admitted, signature = admitted_case_dossier_snapshot(
+                before, work_item_ref=ref,
+                expected_revision=row["revision"],
+                expected_edit_token=row["edit_token"],
+            )
+            guard = partial(
+                _operation_ledger_guard, scope, ref,
+                row["revision"], row["edit_token"], signature,
+            )
+            targets.append((row, admitted, signature, guard))
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    entries = []
+    for row, admitted, signature, guard in targets:
+        try:
+            await asyncio.to_thread(guard)
+            provider = await asyncio.to_thread(
+                read_operation_evidence, admitted, signature,
+                scope=scope, secret=secret, guard=guard,
+            )
+            await asyncio.to_thread(guard)
+            await _recheck_source(scope)
+            human = await asyncio.to_thread(
+                read_human_outcomes, admitted, signature,
+                scope=scope, secret=secret, guard=guard,
+            )
+            await asyncio.to_thread(guard)
+            current = await asyncio.to_thread(list_case_declarations, scope)
+            if portfolio_fingerprint(current, scope=scope, secret=secret) != digest:
+                raise CaseDeclarationError("stale reviewed portfolio changed during history read")
+        except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+            raise _safe_error(exc) from None
+        await _recheck_source(scope)
+        entries.append((row, provider, human))
+    try:
+        current = await asyncio.to_thread(list_case_declarations, scope)
+        if portfolio_fingerprint(current, scope=scope, secret=secret) != digest:
+            raise CaseDeclarationError("stale reviewed portfolio changed during history read")
+        result = compose_outcome_portfolio(
+            entries, total=len(rows), offset=offset, fingerprint=digest,
+        )
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
         raise _safe_error(exc) from None
     await _recheck_source(scope)
