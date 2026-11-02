@@ -113,7 +113,7 @@ def environment(tmp_path, monkeypatch):
         "version": 1, "enabled": True, "consented": True,
         "host": HOST, "tenant_scope": "team-a", "sys_ids": [INCIDENT],
         "table": "sys_audit", "fields": ["state", "priority"],
-        "since": SINCE, "until": UNTIL,
+        "since": SINCE, "until": UNTIL, "timezone": "UTC",
     }))
     if os.name == "posix":
         grant.chmod(0o600)
