@@ -102,6 +102,7 @@ def _paid(ref, operation):
         "provider_reported_state": "paid",
         "verification_scope": "authenticated_source_provider_operational_state",
         "verified_at": datetime.now(timezone.utc).isoformat(),
+        "business_objective_verified": False,
         "customer_outcome_verified": False,
         "agent_caused_operation_verified": False,
         "agent_execution_authorized": False, "read_only": True,
@@ -250,3 +251,38 @@ def test_auth_and_confirmation_refuse_before_source_io(local, monkeypatch):
             "max_pages": 2, "resource_ref": R}
     assert client.post(LINK, headers=headers, json=data).status_code == 403
     assert client.post(LINK, json={**data, "confirm_source_scan": True}).status_code == 403
+
+
+def test_source_account_switch_invalidates_link_before_provider_io(local, monkeypatch):
+    client, headers = TestClient(app), _auth()
+    saved = _cases(client, headers)
+    monkeypatch.setattr(routes, "stripe_open_work_case_context", lambda ref, **opts: _scan(ref))
+    link = _issue(client, headers, saved).json()["record_link"]
+    local["id"] = "acct_different"
+    monkeypatch.setattr(routes, "source_operation_receipt",
+                        lambda *_a, **_k: pytest.fail("foreign source link read"))
+    assert _verify(client, headers, saved, link).status_code in (403, 409, 422)
+
+
+@pytest.mark.parametrize("alter", [
+    lambda p: p.update(provider="github"),
+    lambda p: p.update(provider_reported_state="open"),
+    lambda p: p.update(business_objective_verified=True),
+    lambda p: p.update(customer_outcome_verified=True),
+    lambda p: p.update(verified_at=(datetime.now(timezone.utc) -
+                                    timedelta(hours=2)).isoformat()),
+])
+def test_contradictory_or_stale_provider_receipt_remains_unknown(local, monkeypatch, alter):
+    client, headers = TestClient(app), _auth()
+    saved = _cases(client, headers)
+    monkeypatch.setattr(routes, "stripe_open_work_case_context", lambda ref, **opts: _scan(ref))
+    link = _issue(client, headers, saved).json()["record_link"]
+    def receipt(ref, op):
+        result = _paid(ref, op)
+        alter(result)
+        return result
+    monkeypatch.setattr(routes, "source_operation_receipt", receipt)
+    response = _verify(client, headers, saved, link)
+    assert response.status_code == 200, response.text
+    assert response.json()["provider_operation_state"] == "unknown"
+    assert response.json()["provider_operation_verified"] is False

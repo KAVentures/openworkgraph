@@ -152,6 +152,7 @@ def project_case_operation_verification(
         and receipt.get("provider_record_kind") == "invoice"
         and receipt.get("provider_reported_state") == "paid"
         and receipt.get("verification_scope") == "authenticated_source_provider_operational_state"
+        and receipt.get("business_objective_verified") is False
         and receipt.get("customer_outcome_verified") is False
         and receipt.get("agent_caused_operation_verified") is False
         and receipt.get("agent_execution_authorized") is False

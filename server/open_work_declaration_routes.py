@@ -571,7 +571,7 @@ async def issue_local_case_operation_link(request: Request, response: Response):
             stripe_open_work_case_context, payload["work_item_ref"],
             explicit_scan_authorized=True, max_pages=pages,
         )
-    except (ValueError, OSError, TypeError, sqlite3.DatabaseError):
+    except (ValueError, OSError, TypeError, CaseDeclarationError, sqlite3.DatabaseError):
         scanned = {
             "format": "openworkgraph.open-work-case-context.v1",
             "work_item_ref": payload["work_item_ref"],
@@ -631,7 +631,7 @@ async def verify_local_case_provider_operation(request: Request, response: Respo
         receipt = await asyncio.to_thread(
             source_operation_receipt, resource_ref, "stripe_invoice_paid",
         )
-    except (ValueError, OSError, TypeError, sqlite3.DatabaseError):
+    except (ValueError, OSError, TypeError, CaseDeclarationError, sqlite3.DatabaseError):
         receipt = None
     await _recheck_source(scope)
     try:
