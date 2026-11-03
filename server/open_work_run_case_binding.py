@@ -176,3 +176,26 @@ def revoke_binding(*, scope: str, actor: str, secret: str, case_ref: str, run_re
             db.rollback()
             raise CaseDeclarationError("binding ledger unavailable") from None
     return deleted
+
+
+def clear_binding_scope(scope: str) -> int:
+    """Erase every actor's bindings for a disconnected/replaced source scope.
+
+    Called only by the trusted local source-change guard, never by an agent or
+    a client-supplied scope. Uses one transaction so concurrent readers cannot
+    observe a partially cleared source ledger. Missing stores are not created.
+    """
+    if not isinstance(scope, str) or not _SCOPE.fullmatch(scope):
+        raise CaseDeclarationError("invalid binding source scope")
+    with _database(False) as db:
+        if db is None:
+            return 0
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            result = db.execute("DELETE FROM bindings WHERE scope=?", (scope,))
+            removed = result.rowcount
+            db.commit()
+        except sqlite3.Error:
+            db.rollback()
+            raise CaseDeclarationError("binding ledger unavailable") from None
+    return removed
