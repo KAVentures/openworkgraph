@@ -736,7 +736,7 @@
           };
           cell.appendChild(action);tr.appendChild(cell);
           const inspectedCell=el('td');
-          const inspected=input('owgPipelinePilotInspected','checkbox');
+          const inspected=el('input');inspected.type='checkbox';
           inspected.checked=pilotInspected.has(item.idea_id);
           inspected.setAttribute('aria-label','Mark locally inspected (not approved) '+(idea?.title||item.idea_id));
           inspected.onchange=()=>{
