@@ -4,6 +4,7 @@ A human status is an assertion, not independently verified business success.
 """
 from datetime import datetime, timezone
 import os
+from contextlib import closing
 import sqlite3
 
 import pytest
@@ -188,7 +189,7 @@ def test_integrity_failure_and_graph_version_change_fail_closed(local):
         headers = _auth()
         saved = _cases(client, headers)
         assert _assess(client, headers, saved).status_code == 200
-        with sqlite3.connect(outcomes._path()) as db:
+        with closing(sqlite3.connect(outcomes._path())) as db, db:  # close it: Windows cannot delete an open file
             db.execute("UPDATE assessments SET human_status='not_met' WHERE work_item_ref=?", (B,))
         assert _history(client, headers, saved).status_code == 422
         outcomes.clear_human_outcome_reviews()
@@ -302,7 +303,7 @@ def test_dependency_human_history_requires_review_and_fails_closed(local):
         for count in (0, 5, True, "2"):
             assert _dependency_history(client, headers, saved, max_cases=count).status_code == 422
         assert _assess(client, headers, saved).status_code == 200
-        with sqlite3.connect(outcomes._path()) as db:
+        with closing(sqlite3.connect(outcomes._path())) as db, db:  # close it: Windows cannot delete an open file
             db.execute("UPDATE assessments SET human_status='not_met' WHERE work_item_ref=?", (B,))
         assert _dependency_history(client, headers, saved).status_code == 422
         outcomes.clear_human_outcome_reviews()
