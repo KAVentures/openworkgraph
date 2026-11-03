@@ -20,7 +20,7 @@ import tempfile
 from urllib import error, parse, request
 
 from .m365_outlook_selected import (
-    _ID, _LABEL, _TOKEN, _instant, _opener, _pairs, _private_parent,
+    OutlookError, _ID, _LABEL, _TOKEN, _instant, _opener, _pairs, _private_parent,
 )
 
 FORMAT = "openworkgraph.m365-outlook-delta.v1"
@@ -48,6 +48,14 @@ def _scope(tenant, mailbox, folder):
             or folder in (".", "..")):
         raise DeltaError("Invalid folder scope")
     return hashlib.sha256((tenant + "\0" + mailbox + "\0" + folder).encode()).hexdigest()
+
+
+def _delta_private_parent(path):
+    """Retain the selected adapter's strict owner-only gate, with delta API errors."""
+    try:
+        _private_parent(path)
+    except OutlookError:
+        raise DeltaError("Private delta directory unavailable or unsafe") from None
 
 
 def _private_read(path, limit):
@@ -178,7 +186,7 @@ def _candidate(previous, scope, folder, confirmed):
         return _initial(folder)
     if confirmed is not True:
         raise DeltaError("Explicit previous import confirmation required")
-    _private_parent(previous.parent)
+    _delta_private_parent(previous.parent)
     try:
         value = json.loads(_private_read(previous, MAX_CANDIDATE_BYTES).decode("utf-8"),
                            object_pairs_hook=_pairs)
@@ -241,7 +249,7 @@ def export_delta(*, tenant, mailbox, folder_id, grant_file: Path,
             or any(os.path.abspath(p) == os.path.abspath(grant_file)
                    for p in (output, candidate))):
         raise DeltaError("Invalid private artifact paths")
-    _private_parent(output.parent)
+    _delta_private_parent(output.parent)
     if any(p.exists() or p.is_symlink() for p in (output, candidate)):
         raise DeltaError("Delta artifacts must be new")
     _grant(grant_file, tenant, mailbox, folder_id)
