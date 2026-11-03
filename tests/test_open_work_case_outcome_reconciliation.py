@@ -3,6 +3,7 @@
 Synthetic source adapters validate contracts, NOT real Stripe/customer outcomes.
 """
 from datetime import datetime, timezone
+from contextlib import closing
 import sqlite3
 
 import pytest
@@ -224,7 +225,7 @@ def test_tampering_and_revocation_during_join_fail_closed(local, monkeypatch):
         headers = _auth()
         saved = _cases(client, headers)
         _assess(client, headers, saved)
-        with sqlite3.connect(human._path()) as db:
+        with closing(sqlite3.connect(human._path())) as db, db:  # close it: Windows cannot delete an open file
             db.execute("UPDATE assessments SET human_status='not_met' WHERE work_item_ref=?", (B,))
         assert _triage(client, headers, saved).status_code in (409, 422)
         human.clear_human_outcome_reviews()
