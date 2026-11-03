@@ -82,3 +82,20 @@ def test_actual_production_queue_digest_and_empty_candidates():
         consent=True)
     assert result["proposals"] == []
     assert result["evidence_sha256"] == queue["evidence_sha256"]
+
+
+def test_competing_only_status_remains_eligible(monkeypatch):
+    queue = queue_for(("a", "b"))
+    queue["queue"][0]["review_status"] = "conflicted"
+    queue["queue"][0]["risk_reasons"] = ["competing_candidate_components"]
+    monkeypatch.setattr(assignment, "prioritized_review_queue", lambda events, limit: queue)
+    result = assignment.semantic_assignment([], manifest(("a", "b", .93)), consent=True)
+    assert [(r["event_id"], r["toward_event_id"]) for r in result["proposals"]] == [("a", "b")]
+
+
+def test_conflicted_status_without_declared_safe_reason_is_refused(monkeypatch):
+    queue = queue_for(("a", "b"))
+    queue["queue"][0]["review_status"] = "conflicted"
+    monkeypatch.setattr(assignment, "prioritized_review_queue", lambda events, limit: queue)
+    with pytest.raises(ValueError, match="eligible"):
+        assignment.semantic_assignment([], manifest(("a", "b", .93)), consent=True)
