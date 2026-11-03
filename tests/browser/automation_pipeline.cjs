@@ -179,6 +179,13 @@ const path=require('node:path');
      /(agent-project|source-check-export|project-reports)/.test(request.url()))guidedWrites++;});
    await page.locator('#owgPipelineJourney').click();
    const guide=page.locator('#owgPipelineJourneyGuide');
+   const pilotReadiness=page.locator('#owgPipelinePilotReadiness');
+   await pilotReadiness.waitFor();
+   assert.equal(await pilotReadiness.locator('li').count(),4,'four live journey prerequisites');
+   assert.match(await pilotReadiness.textContent(),/Agent handoff remains unauthorized/);
+   assert.equal(await pilotReadiness.locator('li[data-reviewable="false"]').count()>0,true,
+     'unknown or incomplete pilot evidence must remain visibly blocked');
+
    await guide.getByRole('heading',{name:'Resume this evidence-to-implementation journey'}).waitFor();
    assert(await guide.locator('#owgPipelineJourneyExport').isDisabled());
    assert(await guide.locator('#owgPipelineJourneyOpenProcess').isEnabled());
