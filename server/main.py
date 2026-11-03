@@ -674,6 +674,13 @@ def event_log_quality_trends_script() -> FileResponse:
                         media_type="application/javascript", headers={"Cache-Control": "no-store"})
 
 
+@app.get("/event-log-linked-attributes.js")
+def event_log_linked_attributes_script() -> FileResponse:
+    """Static dashboard UI only; the joined analysis API remains session-protected."""
+    return FileResponse(ROOT / "dashboard" / "event_log_linked_attributes.js",
+                        media_type="application/javascript", headers={"Cache-Control": "no-store"})
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard():
     return DASHBOARD.read_text(encoding="utf-8")

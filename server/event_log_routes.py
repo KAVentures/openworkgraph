@@ -45,6 +45,7 @@ from . import event_log_prediction_monitoring as prediction_monitoring
 from . import event_log_quality as quality
 from . import event_log_quarantine as quarantine
 from . import event_log_query as analysis
+from . import event_log_linked_attribute_analysis as linked_attribute_analysis
 from . import analysis_snapshot_export
 from . import event_log_signals as signals
 from . import event_log_signal_inbox as signal_inbox
@@ -561,6 +562,18 @@ async def event_log_prediction_monitoring(request: Request, log_id: str):
     spec = await _json_body(request, "monitoring settings", strict=True)
     try:
         result = await run_in_threadpool(prediction_monitoring.monitor, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/linked-attribute-analysis")
+async def event_log_linked_attribute_analysis(request: Request, log_id: str):
+    """Read-only cardinality-aware joined object attribute breakdown (R9)."""
+    _require_dashboard(request)
+    spec = await _json_body(request, "linked attribute analysis", strict=True, limit=8192)
+    try:
+        result = await run_in_threadpool(linked_attribute_analysis.analyze, log_id, spec)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
