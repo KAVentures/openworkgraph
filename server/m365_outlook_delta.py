@@ -99,8 +99,8 @@ def _valid_link(value, folder, kind):
         parenthesized = ("/v1.0/me/mailfolders('"
                          + parse.quote(folder, safe="") + "')/messages/delta")
         if (parts.scheme != "https" or parts.netloc != "graph.microsoft.com"
-                or parts.fragment or parts.path.lower() not in
-                (canonical.lower(), parenthesized.lower())
+                or parts.fragment or parts.path not in (canonical, canonical.replace("mailFolders", "mailfolders"),
+                                      parenthesized, parenthesized.replace("mailfolders", "mailFolders"))
                 or not parts.query or len(parts.query) > 6000):
             raise DeltaError("Unsafe Graph continuation")
         pairs = parse.parse_qsl(parts.query, keep_blank_values=True,
@@ -182,7 +182,7 @@ def _candidate(previous, scope, folder, confirmed):
     except (ValueError, UnicodeError, RecursionError):
         raise DeltaError("Invalid prior delta candidate") from None
     required = {"format", "scope_sha256", "csv_name", "csv_sha256",
-                "cursor_url", "status", "events", "removals", "pages"}
+                "cursor_url", "status", "events", "removals", "removed_case_ids", "pages"}
     if (type(value) is not dict or set(value) != required
             or value["format"] != FORMAT or value["scope_sha256"] != scope
             or value["status"] != "candidate_requires_confirmed_import"
@@ -191,7 +191,12 @@ def _candidate(previous, scope, folder, confirmed):
             or type(value["csv_sha256"]) is not str or not SHA.fullmatch(value["csv_sha256"])
             or any(type(value[k]) is not int or value[k] < 0 for k in ("events", "removals", "pages"))
             or not 1 <= value["pages"] <= MAX_PAGES
-            or value["events"] + value["removals"] > MAX_RECORDS):
+            or value["events"] + value["removals"] > MAX_RECORDS
+            or type(value["removed_case_ids"]) is not list
+            or len(value["removed_case_ids"]) != value["removals"]
+            or len(set(value["removed_case_ids"])) != value["removals"]
+            or any(type(x) is not str or not re.fullmatch(r"outlookcase:[0-9a-f]{64}", x)
+                   for x in value["removed_case_ids"])):
         raise DeltaError("Prior delta candidate scope or schema mismatch")
     csv_path = previous.parent / value["csv_name"]
     if hashlib.sha256(_private_read(csv_path, 2 * 1024 * 1024)).hexdigest() != value["csv_sha256"]:
@@ -274,7 +279,7 @@ def export_delta(*, tenant, mailbox, folder_id, grant_file: Path,
         for value in values:
             kind_record, case, source_id, row = _record(value, namespace)
             if kind_record == "removed":
-                if source_id in observations:
+                if any(key[0] == source_id for key in observations):
                     raise DeltaError("Conflicting Graph delta lifecycle")
                 removed[source_id] = case
             else:
@@ -298,7 +303,8 @@ def export_delta(*, tenant, mailbox, folder_id, grant_file: Path,
         "format": FORMAT, "scope_sha256": namespace,
         "csv_name": output.name, "csv_sha256": hashlib.sha256(csv_bytes).hexdigest(),
         "cursor_url": cursor, "status": "candidate_requires_confirmed_import",
-        "events": len(rows), "removals": len(removed), "pages": pages,
+        "events": len(rows), "removals": len(removed),
+        "removed_case_ids": sorted(removed.values()), "pages": pages,
     }
     # CSV first, then its SHA-bound candidate. Failure never advances a cursor.
     _publish(output, csv_bytes, grant_file, tenant, mailbox, folder_id)
