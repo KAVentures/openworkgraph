@@ -3,6 +3,7 @@
 A fake provider does not prove real Stripe acceptance or a customer outcome.
 """
 from datetime import datetime, timezone
+from contextlib import closing
 import sqlite3
 
 import pytest
@@ -170,7 +171,7 @@ def test_persisted_paid_unknown_dispute_and_read_without_provider(local, monkeyp
             R, "in_PRIVATE", "PRIVATE", "acct_local_private",
             "edit_token", "record_binding", "graph_binding", "source_binding",
         ))
-    with sqlite3.connect(ledger._path()) as db:
+    with closing(sqlite3.connect(ledger._path())) as db, db:  # close it: Windows cannot delete an open file
         contents = str(db.execute("SELECT * FROM evidence").fetchall())
     assert all(private not in contents for private in (
         R, "in_PRIVATE", "PRIVATE", "acct_local_private",
@@ -190,7 +191,7 @@ def test_revocation_disconnection_and_retention_prevent_history_access(local, mo
     assert _history(client, headers, saved).status_code == 200
     reviews.remove_review_intention(B)
     assert _history(client, headers, saved).status_code in (403, 409, 422)
-    with sqlite3.connect(ledger._path()) as db:
+    with closing(sqlite3.connect(ledger._path())) as db, db:  # close it: Windows cannot delete an open file
         assert db.execute("SELECT count(*) FROM evidence").fetchone()[0] == 0
     reviews.clear_review_intentions()
     assert not ledger._path().exists()
@@ -206,7 +207,7 @@ def test_mid_provider_read_revocation_never_commits(local, monkeypatch):
     monkeypatch.setattr(routes, "source_operation_receipt", revoke)
     assert _check(client, headers, saved, link).status_code in (403, 409, 422)
     if ledger._path().exists():
-        with sqlite3.connect(ledger._path()) as db:
+        with closing(sqlite3.connect(ledger._path())) as db, db:  # close it: Windows cannot delete an open file
             assert db.execute("SELECT count(*) FROM evidence").fetchone()[0] == 0
 
 
@@ -234,7 +235,7 @@ def test_history_integrity_tampering_and_dispute_validation(local, monkeypatch):
     assert _check(client, headers, saved, link).status_code == 200
     assert _dispute(client, headers, saved, seq=999).status_code in (409, 422)
     assert _dispute(client, headers, saved, reason="paid_verified").status_code in (409, 422)
-    with sqlite3.connect(ledger._path()) as db:
+    with closing(sqlite3.connect(ledger._path())) as db, db:  # close it: Windows cannot delete an open file
         db.execute("UPDATE evidence SET provider_state='unknown' WHERE seq=1")
     assert _history(client, headers, saved).status_code in (409, 422)
     assert _check(client, headers, saved, link).status_code in (409, 422)

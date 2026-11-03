@@ -67,7 +67,11 @@ const path=require('node:path');
    await page.locator('#owgGroupHistory').filter({hasText:'Revision 1 · Invoice review'}).waitFor();
    assert.match(await page.locator('#owgExplorerDetail h3').textContent(),/Reviewed group · Accounts review/);
    await page.evaluate(()=>{window.copyText=text=>{window.groupingHandoffForTest=text;};});
-   await page.getByRole('button',{name:'Copy AI handoff request',exact:true}).click();
+   // Agent handoff now goes through an explicit review panel before anything is copied.
+   await page.getByRole('button',{name:'Review safe agent handoff',exact:true}).click();
+   await page.locator('#owgExplorerHandoffConfirmed').check();
+   await page.getByRole('button',{name:'Copy reviewed investigation request',exact:true}).click();
+   await page.waitForFunction(()=>typeof window.groupingHandoffForTest==='string');
    const handoff=await page.evaluate(()=>window.groupingHandoffForTest);
    assert.match(handoff,/get_workflow_knowledge/);assert.match(handoff,/require revision 4/);
    await page.setViewportSize({width:390,height:844});
