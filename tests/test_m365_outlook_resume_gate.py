@@ -14,7 +14,7 @@ def _run(tmp_path, *, receipt_changes=None, current=5, consent=True, reviewed=Tr
     csv_path = tmp_path / "events.csv"
     receipt_path = tmp_path / "receipt.json"
     receipt = {
-        "format": RECEIPT_FORMAT, "status": "verified", "log_id": "log123",
+        "format": RECEIPT_FORMAT, "status": "verified", "log_id": "log_0123456789abcdef",
         "csv_sha256": "a" * 64, "checkpoint_advanced": False,
         "provider_requests": 0, "events_before": 3, "events_after": 5,
         "added_events": 2, "duplicate_events_skipped": 0, "batch": 1,
@@ -29,13 +29,13 @@ def _run(tmp_path, *, receipt_changes=None, current=5, consent=True, reviewed=Tr
           patch("server.m365_outlook_resume_gate._delta_private_parent"),
           patch("server.m365_outlook_resume_gate._private_read", side_effect=lambda p, n: p.read_bytes()),
           patch("server.m365_outlook_resume_gate._session", return_value="session"),
-          patch("server.m365_outlook_resume_gate._inventory", return_value=[{"log_id": "log123"}]),
+          patch("server.m365_outlook_resume_gate._inventory", return_value=[{"log_id": "log_0123456789abcdef"}]),
           patch("server.m365_outlook_resume_gate._target", return_value=current)):
         return authorize_resume(
             tenant="tenant", mailbox="mailbox", folder="folder",
             grant_file=tmp_path / "grant", candidate=candidate,
             csv_path=csv_path, receipt_file=receipt_path,
-            log_id="log123", confirm_log_id="log123",
+            log_id="log_0123456789abcdef", confirm_log_id="log_0123456789abcdef",
             port=8765, session="session", consent_local_read=consent,
             confirm_removals_reviewed=reviewed, opener=object())
 
