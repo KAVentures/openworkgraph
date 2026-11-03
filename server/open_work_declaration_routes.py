@@ -1681,6 +1681,52 @@ async def manage_local_imported_run_binding(request: Request, response: Response
             "customer_outcome_verified": False, "agent_execution_authorized": False}
 
 
+@router.post("/v1/open-work/declarations/human-outcomes/revoke-case-run-bindings")
+async def revoke_local_case_run_bindings(request: Request, response: Response):
+    """Explicit operator-only removal of all own run associations for one case.
+
+    Does not require a remembered imported run ID or grant any run/outcome authority.
+    Other sessions, cases and source scopes are never targeted.
+    """
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_historical_review", "confirm_case_binding_revocation", "max_cases",
+    })
+    if (payload["confirm_historical_review"] is not True
+            or payload["confirm_case_binding_revocation"] is not True):
+        raise HTTPException(403, "explicit case run-binding revocation review required")
+    triage, admitted, signature, secret = await _load_review_triage(scope, payload)
+    try:
+        await asyncio.to_thread(
+            _operation_ledger_guard, scope, payload["work_item_ref"],
+            payload["expected_revision"], payload["expected_edit_token"], signature,
+        )
+        await _recheck_source(scope)
+        repeated, refreshed, refreshed_signature, _ = await _load_review_triage(scope, payload)
+        if (triage != repeated or signature != refreshed_signature
+                or refreshed["work_item_ref"] != admitted["work_item_ref"]):
+            raise CaseDeclarationError("case review changed during revocation")
+        actor = hashlib.sha256(request.headers["authorization"].encode("utf-8")).hexdigest()
+        from .open_work_run_case_binding import revoke_case_bindings
+        removed = await asyncio.to_thread(
+            revoke_case_bindings, scope=scope, actor=actor, secret=secret,
+            case_ref=payload["work_item_ref"],
+        )
+        await asyncio.to_thread(
+            _operation_ledger_guard, scope, payload["work_item_ref"],
+            payload["expected_revision"], payload["expected_edit_token"], signature,
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return {"revoked_count": removed, "association": "operator_confirmed",
+            "run_case_identity_independently_verified": False,
+            "customer_outcome_verified": False, "agent_execution_authorized": False}
+
+
 @router.post("/v1/open-work/declarations/human-outcomes/progress-checkpoint")
 async def issue_local_outcome_review_progress(request: Request, response: Response):
     """Seal historical human/provider review and unresolved action baseline."""
