@@ -199,3 +199,30 @@ def clear_binding_scope(scope: str) -> int:
             db.rollback()
             raise CaseDeclarationError("binding ledger unavailable") from None
     return removed
+
+
+
+def revoke_case_bindings(*, scope: str, actor: str, secret: str, case_ref: str) -> int:
+    """Operator bulk-revoke this actor's associations for one admitted case.
+
+    Caller must independently authenticate the actor and recheck current source,
+    case declaration, consent and retention. No run ID is required; a mistaken
+    association can be removed even when the imported run is no longer retained.
+    """
+    _validate(scope, case_ref, "owg:run:" + "0" * 32, "0" * 64, 1)
+    key = _actor_key(secret, scope, actor)
+    _retention()  # Revocation is permitted only with an admitted policy.
+    with _database(False) as db:
+        if db is None:
+            return 0
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            removed = db.execute(
+                "DELETE FROM bindings WHERE actor_key=? AND scope=? AND case_ref=?",
+                (key, scope, case_ref),
+            ).rowcount
+            db.commit()
+        except sqlite3.Error:
+            db.rollback()
+            raise CaseDeclarationError("binding ledger unavailable") from None
+    return removed
