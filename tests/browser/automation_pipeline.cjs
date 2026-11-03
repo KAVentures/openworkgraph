@@ -1361,6 +1361,34 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    assert.equal(triageModel.all.source_read_authorized,false);
    assert.equal(triageModel.all.verified_business_outcomes,false);
    assert(triageModel.invalidFilter&&triageModel.invalidLimit&&triageModel.forgedRefused);
+   // Search is restricted to explicitly reviewed pages, applied before the 24-row cap.
+   const searched=await page.evaluate(record=>{
+     const triage=window.__owgPipelineModel.portfolioReviewTriage;
+     const eligible=record.pages.flatMap(p=>p.items.map(item=>({
+       idea_id:item.idea_id,title:'Reviewed candidate '+item.idea_id
+     })));
+     const pages=new Map(record.pages.map(p=>[p.page_number,{
+       reviewed_at:p.reviewed_at,items:p.items
+     }]));
+     const id=eligible[0].idea_id;
+     const exact=triage(eligible,pages,'all',24,id);
+     const title=triage(eligible,pages,'all',24,'REVIEWED CANDIDATE '+id);
+     const absent=triage(eligible,new Map([[1,pages.get(1)]]),'all',24,
+       eligible.at(-1).idea_id);
+     let invalid=false;
+     try{triage(eligible,pages,'all',24,'x'.repeat(129));}catch{invalid=true;}
+     return {id,exact,title,absent,invalid};
+   },combined);
+   assert(searched.exact.items.some(item=>item.idea_id===searched.id));
+   assert(searched.title.items.some(item=>item.idea_id===searched.id));
+   assert.equal(searched.absent.matching_count,0);
+   assert(searched.invalid);
+   assert.equal(searched.exact.execution_authorized,false);
+   assert.equal(searched.exact.source_read_authorized,false);
+   assert(await page.locator('#owgPipelinePortfolioTriageSearch').isVisible());
+   await page.locator('#owgPipelinePortfolioTriageSearch').fill('no-such-reviewed-opportunity');
+   assert.equal(await page.locator('#owgPipelinePortfolioTriageRows tbody tr').count(),0);
+   await page.locator('#owgPipelinePortfolioTriageSearch').fill('');
    assert(await page.locator('#owgPipelinePortfolioTriageFilter').isEnabled());
    await page.locator('#owgPipelinePortfolioTriageFilter').selectOption('no_recorded_project');
    assert.match(await page.locator('#owgPipelinePortfolioTriageSummary').textContent(),
