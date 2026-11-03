@@ -170,8 +170,10 @@ def compose_run_outcome_review(
         payment = outcome == "stripe_invoice_paid_reported"
         historical_paid_after = (payment and provider_state == "paid"
                                  and case_timing == "on_or_after_reported_finish")
+        # The generic triage may flag missing provider history for a human-only
+        # goal; only the goal-aware action plan determines review necessity.
         review_pending = (review_state != "historical_evidence_present"
-                          or bool(pending) or bool(attention)
+                          or bool(pending)
                           or bool(plan.get("prerequisite_review_pending", False)))
         comparisons.append({
             "work_item_ref": row["work_item_ref"],
