@@ -282,6 +282,109 @@ def read_human_outcomes(admitted: dict[str, Any], signature: tuple, *,
                     guard=guard, mode="history")
 
 
+
+def record_human_outcomes_batch(
+    targets: list[tuple[dict[str, Any], tuple, Callable[[], None],
+                        str, str, int]], *, scope: str, secret: str,
+) -> list[dict[str, Any]]:
+    """Append 1–4 explicit, independent human assessments atomically.
+
+    Every target is already owner/DAG-admitted by the REST caller. The expected
+    retained event count is a per-case optimistic concurrency precondition.
+    This is a local SQLite atomic write, NOT a cross-process revocation fence,
+    provider verification, or a customer/business outcome certificate.
+    """
+    if not isinstance(targets, list) or not 1 <= len(targets) <= 4:
+        raise CaseDeclarationError("invalid bounded human assessment batch")
+    days = _retention_days()
+    if days is None:
+        raise CaseDeclarationError("review retention does not permit human outcome history")
+    prepared = []
+    seen: set[str] = set()
+    for admitted, signature, guard, status, reason, expected_count in targets:
+        ref = admitted["work_item_ref"]
+        if (ref in seen or status not in _STATUSES or reason not in _REASONS or
+                type(expected_count) is not int or not 0 <= expected_count < _MAX_EVENTS):
+            raise CaseDeclarationError("invalid or duplicate human assessment selection")
+        seen.add(ref)
+        graph, source, key = _bindings(signature, scope, secret)
+        expiry = _parse_utc(admitted["owner_declaration"]["expires_at"])
+        if expiry <= _clock(None):
+            raise CaseDeclarationError("stale reviewed declaration expiry")
+        prepared.append((ref, graph, source, key, expiry, guard,
+                         status, reason, expected_count))
+    # Do not acquire the review lock while holding the SQLite write lock.
+    for item in prepared:
+        item[5]()
+    with _database(create=True) as db:
+        assert db is not None
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            now = _clock(None)
+            total_cases = db.execute(
+                "SELECT COUNT(DISTINCT work_item_ref) FROM assessments"
+            ).fetchone()[0]
+            rows_by_ref = []
+            new_cases = 0
+            # Validate *all* histories and capacity before the first insert.
+            for ref, graph, source, key, expiry, _guard, status, reason, expected in prepared:
+                rows = _rows(db, ref)
+                if rows and (rows[0]["graph_binding"] != graph or
+                             rows[0]["source_binding"] != source or
+                             any(_parse_utc(r["expires_at"]) > expiry or
+                                 now >= _parse_utc(r["expires_at"]) or
+                                 now - _parse_utc(r["assessed_at"]) >= timedelta(days=days)
+                                 for r in rows)):
+                    raise CaseDeclarationError("stale human outcome history")
+                _validate(rows, graph=graph, source=source, key=key,
+                          now=now, days=days)
+                if len(rows) != expected:
+                    raise CaseDeclarationError("changed human outcome event count")
+                if not rows:
+                    new_cases += 1
+                rows_by_ref.append(rows)
+            if total_cases + new_cases > _MAX_CASES:
+                raise CaseDeclarationError("human outcome case capacity reached")
+            results = []
+            for (ref, graph, source, key, expiry, _guard, status, reason,
+                 _expected), rows in zip(prepared, rows_by_ref):
+                stamp = now
+                if rows and stamp <= _parse_utc(rows[-1]["assessed_at"]):
+                    stamp = _parse_utc(rows[-1]["assessed_at"]) + timedelta(microseconds=1)
+                deadline = min(expiry, stamp + timedelta(days=days),
+                               stamp + timedelta(days=7))
+                if rows:
+                    deadline = min(deadline, *(_parse_utc(r["expires_at"]) for r in rows))
+                if deadline <= stamp:
+                    raise CaseDeclarationError("human outcome retention expired")
+                unsigned = dict(
+                    work_item_ref=ref, seq=len(rows) + 1,
+                    graph_binding=graph, source_binding=source,
+                    kind="assessment", human_status=status,
+                    reason_code=reason, target_seq=None,
+                    assessed_at=stamp.isoformat(), expires_at=deadline.isoformat(),
+                    prev_mac=rows[-1]["mac"] if rows else "",
+                )
+                row = {**unsigned, "mac": _mac(key, b"human-outcome-event", _canonical(unsigned))}
+                db.execute(
+                    "INSERT INTO assessments (" + ",".join(_FIELDS) + ") VALUES (" +
+                    ",".join("?" for _ in _FIELDS) + ")",
+                    tuple(row[name] for name in _FIELDS),
+                )
+                results.append(_result(ref, [*rows, row]))
+            db.execute("COMMIT")
+        except Exception:
+            db.execute("ROLLBACK")
+            raise
+    try:
+        for item in prepared:
+            item[5]()
+    except Exception:
+        clear_human_outcome_reviews()
+        raise
+    return results
+
+
 def clear_human_outcome_reviews(work_item_ref: str | None = None) -> None:
     path = _path()
     if work_item_ref is None:
@@ -306,4 +409,4 @@ def clear_human_outcome_reviews(work_item_ref: str | None = None) -> None:
 
 
 __all__ = ["record_human_outcome", "correct_human_outcome",
-           "read_human_outcomes", "clear_human_outcome_reviews"]
+           "read_human_outcomes", "record_human_outcomes_batch", "clear_human_outcome_reviews"]
