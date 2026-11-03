@@ -25,16 +25,16 @@ def manifest(*scores):
 
 
 def test_global_matching_beats_greedy(monkeypatch):
-    # Greedy picks AB=.99 and CD=.81 (1.80); global picks AC+BD=1.92.
+    # Greedy picks AB=.99 and CD=.80 (1.79); global picks AC+BD=1.80.
     monkeypatch.setattr(assignment, "prioritized_review_queue",
                         lambda events, limit: queue_for(("a", "b"), ("a", "c"),
                                                          ("b", "d"), ("c", "d")))
-    scores = manifest(("a", "b", .99), ("a", "c", .96),
-                      ("b", "d", .96), ("c", "d", .81))
+    scores = manifest(("a", "b", .99), ("a", "c", .90),
+                      ("b", "d", .90), ("c", "d", .80))
     result = assignment.semantic_assignment([], scores, consent=True)
     assert {(r["event_id"], r["toward_event_id"]) for r in result["proposals"]} == {
         ("a", "c"), ("b", "d")}
-    assert result["global_score_sum"] == 1.92
+    assert result["global_score_sum"] == 1.8
     assert result["canonical_membership_unchanged"] is True
     assert result["authoritative"] is False
 
