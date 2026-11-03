@@ -82,6 +82,26 @@ Existing root-level fields remain in the response for compatibility;
 the new matrix adds per-prerequisite visibility without changing the
 request or authorizing any action.
 
+## Operator review worklist
+
+The same comparison now returns `operator_review_worklist` and
+`operator_review_worklist_count`. The list contains **only selected cases
+still needing human review**, in prerequisite-first order. Each entry carries
+the opaque case reference, its root/prerequisite role, existing operator
+action codes and explicit reasons such as `human_assessment_unknown`,
+`disputed_provider_evidence`, `payment_state_not_established`, or
+`prerequisite_review_unresolved`. The `owner_review_required` fallback
+covers review states not represented by those narrower reasons. These are
+review prompts, **not executable instructions or proof of obligation**;
+`requires_human_decision` is true and `execution_authorized` is false.
+
+When the DAG selection is partial, omitted prerequisites are not invented
+as worklist entries: use `unscanned_prerequisite_count` and
+`case_review_coverage` to identify incomplete coverage. A paid root can
+still appear because its prerequisites need review. A human-only goal
+does not acquire a payment-state requirement. The existing matrix and
+root-level fields remain unchanged.
+
 ## Privacy and failure behavior
 
 - Local authenticated dashboard only; no MCP or agent execution permission.
