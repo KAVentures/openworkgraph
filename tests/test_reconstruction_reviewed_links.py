@@ -76,11 +76,17 @@ def test_no_merge_of_distinct_record_claims_through_loose_bridge():
     events = [event("a", 0, ref="issue-a"),
               event("loose", 1), event("b", 2, ref="issue-b")]
     manifest = review_candidates(events)
-    assert manifest["candidate_count"] >= 1
+    # The production linker correctly suppresses candidates between distinct
+    # explicit record identities; review cannot manufacture a missing edge.
+    assert manifest["candidate_count"] == 0
     decisions = {"version": 1, "evidence_sha256": manifest["evidence_sha256"],
-                 "accepted": manifest["candidates"]}
+                 "accepted": []}
     result = review_candidates(events, decisions)
     assert not any({"a", "b"} <= set(group) for group in result["proposed_groups"])
+    with pytest.raises(ValueError, match="unknown"):
+        review_candidates(events, accept(manifest, {
+            "event_id": "b", "toward_event_id": "a",
+            "relation": "same_tab_unreferenced"}))
 
 
 def test_rejects_malformed_review_and_bounds():
