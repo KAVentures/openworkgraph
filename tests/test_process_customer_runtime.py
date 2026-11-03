@@ -141,13 +141,21 @@ async def source(request):
     # Real OWG receipt logic reads this separately held synthetic source state.
     # It never trusts the tool's success reply or the client's own outcome claim.
     def graph(*args,**kwargs):
-        return {'record_observed':ref=='owg:r:'+'b'*32,
-            'record_identity_complete_within_retained_window':True,
+        # The fields production record_graph and the Jira adapter emit for one exact, scoped issue.
+        now=datetime.now(timezone.utc).isoformat()
+        return {'resource_ref':ref,'record_observed':ref=='owg:r:'+'b'*32,
+            'record_identity_complete_within_retained_window':True,'source_event_limit_reached':False,
+            'source_rows_scoped_to_exact_record':True,'source_log_join_supported':True,
+            'source_window':{'since':None,'until':None},
             'record_type':{'provider':'jira','kind':'issue'},'source_evidence':{
-                'availability':'source_reported','source_state_reported':True,
-                'verified_at':datetime.now(timezone.utc).isoformat(),
+                'provider':'jira','availability':'source_reported','source_state_reported':True,
+                'verification_method':'explicit_opt_in_site_verified_oauth_jira_issue_status_read',
+                'verified_at':now,
                 'source_state':'done' if state['resolved'] else 'open',
-                'verified_operational_outcome':{'verified':state['resolved'],'kind':'jira_issue_resolved'}}}
+                'verified_operational_outcome':{'kind':'jira_issue_resolved','verified':state['resolved'],
+                    'status':'resolved' if state['resolved'] else 'unverified',
+                    'source_timestamp':now if state['resolved'] else None,
+                    'scope':'jira_issue_only_not_customer_acknowledgement_or_refund'}}}
     return JSONResponse(source_operation_receipt(ref,op,record_reader=graph))
 async def rule_source(request):
     from server.process_source_rule_checks import SourceRuleCheck,current_source_state_receipt
