@@ -35,6 +35,7 @@ from .open_work_case_dependency_history import compose_dependency_operation_hist
 from .open_work_case_human_dependency_history import compose_dependency_human_outcomes
 from .open_work_case_outcome_reconciliation import compose_outcome_evidence_triage
 from .open_work_case_run_outcome_review import read_imported_run, compose_run_outcome_review
+from .open_work_run_case_binding import clear_binding_scope
 from .open_work_case_review_actions import compose_outcome_review_action_plan
 from .open_work_case_review_progress import (
     issue_review_progress, validate_review_progress, compare_review_progress,
@@ -182,6 +183,9 @@ async def _recheck_source(scope: str) -> None:
         await asyncio.to_thread(clear_operation_evidence)
         await asyncio.to_thread(clear_human_outcome_reviews)
         await asyncio.to_thread(clear_case_declarations)
+        # Revoke every actor's durable run/case associations for the old scope.
+        # Failure is fail-closed: do not return an apparently valid response.
+        await asyncio.to_thread(clear_binding_scope, scope)
         raise HTTPException(409, "local source connection changed")
 
 

@@ -68,3 +68,36 @@ def test_rejects_invalid_scopes_and_symlink(ledger):
     (ledger / binding._DB).symlink_to(outside)
     with pytest.raises(CaseDeclarationError):
         binding.bind_run(**arguments(), now=datetime.now(timezone.utc))
+
+
+def test_disconnect_purges_all_actors_only_in_old_scope(ledger, monkeypatch):
+    import asyncio
+    from fastapi import HTTPException
+    from server import open_work_declaration_routes as routes
+
+    now = datetime(2026, 11, 3, tzinfo=timezone.utc)
+    second = "owg:scope:" + "f" * 32
+    binding.bind_run(**arguments(actor="operator-a"), now=now)
+    binding.bind_run(**arguments(actor="operator-b"), now=now)
+    binding.bind_run(**{**arguments(), "scope": second}, now=now)
+    monkeypatch.setattr(routes, "_source_scope", lambda: second)
+    monkeypatch.setattr(routes, "clear_operation_evidence", lambda: None)
+    monkeypatch.setattr(routes, "clear_human_outcome_reviews", lambda: None)
+    monkeypatch.setattr(routes, "clear_case_declarations", lambda: None)
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(routes._recheck_source(SCOPE))
+    assert error.value.status_code == 409
+    assert binding.get_binding(**arguments(actor="operator-a"), now=now) is None
+    assert binding.get_binding(**arguments(actor="operator-b"), now=now) is None
+    assert binding.get_binding(**{**arguments(), "scope": second}, now=now) is not None
+    assert binding.clear_binding_scope(SCOPE) == 0
+    assert binding.clear_binding_scope(second) == 1
+    assert binding.get_binding(**{**arguments(), "scope": second}, now=now) is None
+
+
+def test_scope_purge_rejects_untrusted_scope_without_creating_store(ledger):
+    with pytest.raises(CaseDeclarationError):
+        binding.clear_binding_scope("owg:scope:../other")
+    assert not list(ledger.iterdir())
+    assert binding.clear_binding_scope(SCOPE) == 0
+    assert not list(ledger.iterdir())
