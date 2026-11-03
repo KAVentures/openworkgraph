@@ -101,3 +101,40 @@ def test_scope_purge_rejects_untrusted_scope_without_creating_store(ledger):
     assert not list(ledger.iterdir())
     assert binding.clear_binding_scope(SCOPE) == 0
     assert not list(ledger.iterdir())
+
+
+
+def test_bulk_case_revoke_is_actor_and_case_scoped_across_connections(ledger):
+    now = datetime(2026, 11, 3, tzinfo=timezone.utc)
+    other_case = "owg:w:" + "e" * 32
+    other_scope = "owg:scope:" + "f" * 32
+    other_run = "owg:run:" + "f" * 32
+    binding.bind_run(**arguments(), now=now)
+    binding.bind_run(**{**arguments(), "run_ref": other_run}, now=now)
+    binding.bind_run(**arguments(actor="operator-b"), now=now)
+    binding.bind_run(**{**arguments(), "case_ref": other_case}, now=now)
+    binding.bind_run(**{**arguments(), "scope": other_scope}, now=now)
+    assert binding.revoke_case_bindings(
+        scope=SCOPE, actor="operator-a", secret=SECRET, case_ref=CASE,
+    ) == 2
+    assert binding.get_binding(**arguments(), now=now) is None
+    assert binding.get_binding(**{**arguments(), "run_ref": other_run}, now=now) is None
+    assert binding.get_binding(**arguments(actor="operator-b"), now=now) is not None
+    assert binding.get_binding(**{**arguments(), "case_ref": other_case}, now=now) is not None
+    assert binding.get_binding(**{**arguments(), "scope": other_scope}, now=now) is not None
+    assert binding.revoke_case_bindings(
+        scope=SCOPE, actor="operator-a", secret=SECRET, case_ref=CASE,
+    ) == 0
+
+
+def test_bulk_case_revoke_absent_store_and_invalid_scope(ledger):
+    assert binding.revoke_case_bindings(
+        scope=SCOPE, actor="operator-a", secret=SECRET, case_ref=CASE,
+    ) == 0
+    assert not list(ledger.iterdir())
+    with pytest.raises(CaseDeclarationError):
+        binding.revoke_case_bindings(
+            scope="owg:scope:../other", actor="operator-a",
+            secret=SECRET, case_ref=CASE,
+        )
+    assert not list(ledger.iterdir())
