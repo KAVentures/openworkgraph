@@ -1617,6 +1617,66 @@ async def compare_local_imported_run_to_outcome(request: Request, response: Resp
     return result
 
 
+@router.post("/v1/open-work/declarations/human-outcomes/imported-run-binding")
+async def manage_local_imported_run_binding(request: Request, response: Response):
+    """Session-scoped operator binding; never independent run identity or success."""
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_historical_review", "confirm_run_comparison",
+        "max_cases", "deployment_id", "run_id", "action",
+    })
+    if payload["confirm_historical_review"] is not True or payload["confirm_run_comparison"] is not True:
+        raise HTTPException(403, "explicit run and historical review required")
+    if payload["action"] not in ("bind", "read", "revoke"):
+        raise HTTPException(422, "invalid binding action")
+    from .open_work_run_case_binding import bind_run, get_binding, revoke_binding
+    triage, admitted, signature, secret = await _load_review_triage(scope, payload)
+    try:
+        run = await asyncio.to_thread(read_imported_run,
+            deployment_id=payload["deployment_id"], run_id=payload["run_id"],
+            scope=scope, secret=secret)
+        await asyncio.to_thread(_operation_ledger_guard, scope, payload["work_item_ref"],
+            payload["expected_revision"], payload["expected_edit_token"], signature)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    repeated, refreshed, refreshed_signature, _ = await _load_review_triage(scope, payload)
+    try:
+        second_run = await asyncio.to_thread(read_imported_run,
+            deployment_id=payload["deployment_id"], run_id=payload["run_id"],
+            scope=scope, secret=secret)
+        if (repeated != triage or refreshed_signature != signature
+                or refreshed["work_item_ref"] != admitted["work_item_ref"]
+                or second_run != run):
+            raise CaseDeclarationError("run or case review changed during binding")
+        await asyncio.to_thread(_operation_ledger_guard, scope, payload["work_item_ref"],
+            payload["expected_revision"], payload["expected_edit_token"], signature)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    actor = hashlib.sha256(request.headers["authorization"].encode("utf-8")).hexdigest()
+    fields = dict(scope=scope, actor=actor, secret=secret,
+        case_ref=payload["work_item_ref"], run_ref=run["run_ref"])
+    try:
+        if payload["action"] == "revoke":
+            result = {"revoked": await asyncio.to_thread(revoke_binding, **fields)}
+        else:
+            fields.update(fingerprint=run["run_snapshot_fingerprint"],
+                          revision=payload["expected_revision"])
+            result = await asyncio.to_thread(
+                bind_run if payload["action"] == "bind" else get_binding, **fields)
+        await asyncio.to_thread(_operation_ledger_guard, scope, payload["work_item_ref"],
+            payload["expected_revision"], payload["expected_edit_token"], signature)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return {"binding": result, "run_case_identity_independently_verified": False,
+            "customer_outcome_verified": False, "agent_execution_authorized": False}
+
+
 @router.post("/v1/open-work/declarations/human-outcomes/progress-checkpoint")
 async def issue_local_outcome_review_progress(request: Request, response: Response):
     """Seal historical human/provider review and unresolved action baseline."""

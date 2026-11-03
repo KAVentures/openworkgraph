@@ -1,0 +1,19 @@
+# Local run-to-case binding ledger (experimental)
+
+This module adds a durable local operator-confirmed association between an imported automation run and an Open Work case. It is **not** a source-verified join, proof of an outcome, agent execution authority, or customer success. The existing manually selected comparison API is unchanged.
+
+## Integration contract
+
+Call `bind_run(scope, actor, secret, case_ref, run_ref, fingerprint, revision)` only after independently re-admitting the authenticated actor, current case declaration/revision, retained source scope, consent and imported-run snapshot. The module cannot authenticate HTTP requests or infer those grants. Use `get_binding` only after repeating those checks; it refuses expired, mismatched-fingerprint and mismatched-revision associations. Use `revoke_binding` for explicit removal. Return values explicitly mark identity and customer outcomes unverified.
+
+The local SQLite ledger resides in the private authentication directory, with an opaque keyed actor identifier, bounded row count and a maximum seven-day TTL subject to the shorter retention policy. No provider credentials, customer names, raw run steps or case contents are stored. Reads never create the database. A missing retention policy fails closed. Deletion of the local ledger or disconnect/revocation must be coordinated by the integrating authenticated service.
+
+## Outstanding acceptance gates
+
+This first backend slice is **not yet wired to REST/MCP/dashboard** and must not be exposed without authorization, revocation and deletion integration. Independently checked run identity, multi-process grant invalidation, live-provider acceptance, customer-outcome adjudication, and held-out A/B/C commercial trials are separate unfinished milestones. Synthetic unit tests alone do not establish production readiness.
+
+## Authenticated local dashboard REST integration
+
+POST `/v1/open-work/declarations/human-outcomes/imported-run-binding` with an active `owg-session` dashboard session and exact JSON fields: `work_item_ref`, `expected_revision`, `expected_edit_token`, `confirm_historical_review: true`, `confirm_run_comparison: true`, `max_cases` (1–4), `deployment_id`, `run_id`, and `action` (`bind`, `read`, `revoke`). It returns a minimized `binding` (or null for an absent association) and explicit false identity/outcome/authorization flags. The session credential is not persisted; associations are scoped to its opaque digest and become inaccessible from another session.
+
+Every operation re-admits the local source, declaration revision and exact edit token, reads the current imported run and independently retained provider/human histories twice, refuses changed snapshots, and rechecks the source and ledger guard. It never calls a provider, authorizes execution or equates reported success with customer outcome. The route is intentionally dashboard-only, not MCP/agent-exposed. Source disconnect/replacement changes scope and prevents access to old associations; physical cleanup of inaccessible scope rows remains subject to retention and is not proof of immediate erasure. Revocation is explicit. This is a local operator review tool, not independently verified run identity or real-provider acceptance.
