@@ -81,6 +81,8 @@ jobs:
         run: |
           npm install --prefix "$RUNNER_TEMP/owg-browser" playwright@1.64.1 bpmn-js@18.31.0 axe-core@4.10.3
           node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install --with-deps chromium
+      - name: Verify linked business-attribute analysis in authenticated Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_linked_attributes.cjs
       - name: Verify shared process browser lifecycle
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_collaboration.cjs
       - name: Verify declared dependencies and change-impact navigation in Chromium
@@ -145,8 +147,6 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/opportunity_alternatives.cjs
       - name: Verify the local event-log workspace import, analytics, export and deletion
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_workspace.cjs
-      - name: Verify linked business-attribute analysis in authenticated Chromium
-        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_linked_attributes.cjs
       - name: Verify supplied source-event IDs and key-preserving CSV round trips
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_source_identity.cjs
       - name: Verify cancellable local analysis jobs in Chromium
