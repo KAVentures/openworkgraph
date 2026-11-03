@@ -383,12 +383,24 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await page.locator('#owgPipelineSourceChecks').click();
    await page.locator('#owgPipelineSourceExpectation option').waitFor({state:'attached'});
    assert(await page.locator('#owgPipelineSourceExport').isDisabled());
-   // Every completed options load clears consent on purpose; let loading settle (consent
-   // becomes enabled) before confirming, then wait for the export to enable.
-   await page.waitForFunction(()=>!document.querySelector('#owgPipelineSourceConsent').disabled);
+   // Every options reload or re-render clears the record and consent on purpose. On a slow
+   // runner that can land after the form was filled, so fill again until a valid record plus
+   // consent enables the export; the export must never enable without both.
    const sourceA='owg:r:'+'a'.repeat(32),sourceB='owg:r:'+'b'.repeat(32),sourceC='owg:r:'+'c'.repeat(32);
-   await page.locator('#owgPipelineSourceRecord').fill(sourceA);await page.locator('#owgPipelineSourceConsent').check();
-   await page.waitForFunction(()=>!document.querySelector('#owgPipelineSourceExport').disabled,null,{timeout:10000});
+   let sourceReady=false;
+   for(let attempt=0;attempt<5&&!sourceReady;attempt++){
+     await page.waitForFunction(()=>{const c=document.querySelector('#owgPipelineSourceConsent');return c&&!c.disabled;});
+     await page.locator('#owgPipelineSourceRecord').fill(sourceA);
+     assert(await page.locator('#owgPipelineSourceExport').isDisabled(),'a record without consent cannot export');
+     await page.locator('#owgPipelineSourceConsent').check();
+     sourceReady=await page.waitForFunction(()=>!document.querySelector('#owgPipelineSourceExport').disabled,null,{timeout:3000})
+       .then(()=>true,()=>false);
+   }
+   assert(sourceReady,'a valid record and explicit consent enable the source-check export: '+JSON.stringify(await page.evaluate(()=>{
+     const q=id=>document.querySelector('#'+id);
+     return {consent:q('owgPipelineSourceConsent')?.checked,consentDisabled:q('owgPipelineSourceConsent')?.disabled,
+       exportDisabled:q('owgPipelineSourceExport')?.disabled,record:q('owgPipelineSourceRecord')?.value,
+       options:q('owgPipelineSourceExpectation')?.options.length};})));
    await page.locator('#owgPipelineSourceRecord').fill(sourceB);
    assert.equal(await page.locator('#owgPipelineSourceConsent').isChecked(),false);
    assert(await page.locator('#owgPipelineSourceExport').isDisabled());
