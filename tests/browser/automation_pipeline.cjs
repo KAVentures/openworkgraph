@@ -101,6 +101,39 @@ const path=require('node:path');
    assert.equal(implemented.execution_authorized,false);
    assert.equal(implemented.history.filter(h=>h.state==='approved').at(-1).assessment.minutes_per_case,1);
 
+
+   // A portfolio handoff audit is an explicit bounded GET-only review.
+   // An implemented state without an export is not a verified handoff.
+   let portfolioWrites=0;
+   const observePortfolio=request=>{
+     if(request.method()!=='GET'&&/\/v1\/automation-pipeline/.test(request.url()))
+       portfolioWrites++;
+   };
+   page.on('request',observePortfolio);
+   await page.locator('#owgPipelinePortfolioAudit').focus();
+   await page.keyboard.press('Enter');
+   await page.locator('#owgPipelinePortfolioAuditStatus')
+     .filter({hasText:'1 reviewed of 1 eligible'}).waitFor();
+   assert.match(await page.locator('#owgPipelinePortfolioAuditResults tbody').textContent(),
+     /No recorded project.*Export a reviewed project first/s);
+   const [emptyPortfolioDownload]=await Promise.all([
+     page.waitForEvent('download'),
+     page.locator('#owgPipelinePortfolioAuditDownload').click()
+   ]);
+   const emptyPortfolio=JSON.parse(await fs.readFile(await emptyPortfolioDownload.path(),'utf8'));
+   assert.equal(emptyPortfolio.format,'openworkgraph.portfolio-handoff-review.v1');
+   assert.equal(emptyPortfolio.complete_coverage,false);
+   assert.equal(emptyPortfolio.items[0].status,'no_export');
+   assert.equal(emptyPortfolio.items[0].project_id,null);
+   assert.equal(emptyPortfolio.execution_authorized,false);
+   assert.equal(emptyPortfolio.source_read_authorized,false);
+   assert.equal(portfolioWrites,0);
+   await page.locator('#owgPipelinePortfolioAuditResults')
+     .getByRole('button',{name:'Open opportunity Copy approved prices into renewals'}).click();
+   await page.locator('#owgPipelineDetail h3')
+     .filter({hasText:'Copy approved prices into renewals'}).waitFor();
+   page.off('request',observePortfolio);
+
    await page.locator('#owgPipelineFilter').selectOption('rejected');
    await page.locator('#owgPipelineList').getByText('No ideas in this view.').waitFor();
    await page.locator('#owgPipelineFilter').selectOption('');
@@ -128,6 +161,7 @@ const path=require('node:path');
    await page.locator('#owgCatalogList').getByRole('button',{name:'Saved renewal review · r1',exact:true}).click();
    await page.getByRole('textbox',{name:'Business goal',exact:true}).fill('UNSAVED goal must stay outside the idea');
    await page.getByRole('button',{name:'Add saved revision to automation pipeline',exact:true}).click();
+   await page.locator('#owgPipelineDetail h3').filter({hasText:'Saved renewal review'}).waitFor();
    await page.locator('#owgPipelineProcessStatus').filter({hasText:'Current saved revision'}).waitFor();
    assert.match(await page.locator('#owgPipelineDetail').textContent(),/Review the selected renewal/);
    assert.doesNotMatch(await page.locator('#owgPipelineDetail').textContent(),/UNSAVED/);
@@ -211,6 +245,68 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await page.locator('#owgPipelineProjects').getByRole('status').filter({hasText:'Project downloaded.'}).waitFor();
    const recorded=await page.evaluate(async id=>(await fetch('/v1/automation-pipeline/'+id+'/projects')).json(),linked.idea_id);
    assert.equal(recorded.projects.length,1);assert.equal(recorded.deployment_verified,false);
+
+   // Reuse actual saved-process/approved-idea/recorded-project backend data
+   // in the portfolio inbox, not synthetic fixtures or a new export.
+   let inboxWrites=0;
+   const observeInbox=request=>{
+     if(request.method()!=='GET'&&/\/v1\/automation-pipeline/.test(request.url()))
+       inboxWrites++;
+   };
+   page.on('request',observeInbox);
+   await page.locator('#owgPipelinePortfolioAudit').focus();
+   await page.keyboard.press('Enter');
+   await page.locator('#owgPipelinePortfolioAuditStatus')
+     .filter({hasText:'1 reviewed of 1 eligible'}).waitFor();
+   assert.match(await page.locator('#owgPipelinePortfolioAuditResults tbody').textContent(),
+     /Review required.*execution and business outcomes unverified/s);
+   const [inboxDownload]=await Promise.all([
+     page.waitForEvent('download'),
+     page.locator('#owgPipelinePortfolioAuditDownload').click()
+   ]);
+   const inbox=JSON.parse(await fs.readFile(await inboxDownload.path(),'utf8'));
+   assert.equal(inbox.complete_coverage,true,'all loaded journeys checked, not outcomes verified');
+   assert.equal(inbox.items[0].project_id,manifest.project_id);
+   assert.equal(inbox.items[0].spec_sha256,manifest.spec_sha256);
+   assert.equal(inbox.items[0].archive_sha256,projectResponse.headers()['x-owg-archive-sha256']);
+   assert(inbox.items[0].blockers.includes('execution_and_business_outcomes_unverified'));
+   assert.equal(inbox.verified_business_outcomes,false);
+   assert(!JSON.stringify(inbox).includes('PRIVATE_RAW_CASE_VALUE'));
+   assert(!JSON.stringify(inbox).includes('owg:r:'));
+   assert.equal(inboxWrites,0,'inbox review and download must only GET');
+
+   // A state refresh invalidates an in-flight inbox request; late responses
+   // cannot recreate old navigation controls.
+   let heldInboxRoute,releaseInbox;
+   const inboxHeld=new Promise(resolve=>{releaseInbox=resolve;});
+   await page.route('**/v1/automation-pipeline/*/journey',route=>{
+     heldInboxRoute=route;releaseInbox();
+   });
+   await page.locator('#owgPipelinePortfolioAudit').click();
+   await inboxHeld;
+   await page.locator('#owgPipelineFilter').selectOption('rejected');
+   await page.locator('#owgPipelinePortfolioAuditResults tbody tr').waitFor({state:'detached'});
+   await heldInboxRoute.continue();
+   await page.unroute('**/v1/automation-pipeline/*/journey');
+   assert.equal(await page.locator('#owgPipelinePortfolioAuditResults tbody tr').count(),0,
+     'late portfolio response must not revive invalidated evidence');
+   await page.locator('#owgPipelineFilter').selectOption('');
+   await page.locator('#owgPipelinePortfolioAudit').click();
+   await page.locator('#owgPipelinePortfolioAuditStatus')
+     .filter({hasText:'1 reviewed of 1 eligible'}).waitFor();
+   await page.locator('#owgPipelinePortfolioAuditResults')
+     .getByRole('button',{name:/Open exact project review for Saved renewal review/}).click();
+   await page.locator('#owgPipelineJourneyProject').waitFor();
+   assert.equal(await page.locator('#owgPipelineJourneyProject').inputValue(),manifest.project_id);
+   assert.match(await page.locator('#owgPipelineJourneyReadiness').textContent(),/Handoff review/);
+   const inboxAudit=await page.evaluate(async()=>window.axe.run(
+     document.querySelector('#owgPipelinePortfolioAuditSection'),{
+       runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},
+       resultTypes:['violations']}));
+   assert.deepEqual(inboxAudit.violations.map(v=>v.id),[]);
+   assert.equal(inboxWrites,0,'navigation is GET-only, not approval or execution');
+   page.off('request',observeInbox);
+
    // Navigate into the exact selected project's existing read-only report and
    // source-check forms. The latter still requires fresh explicit consent.
    await page.locator('#owgPipelineJourney').click();
@@ -240,6 +336,22 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    assert(handoffPacket.readiness.blockers.includes('no_imported_report'));
    assert(handoffPacket.readiness.blockers.includes('execution_and_business_outcomes_unverified'));
    assert.equal(handoffPacket.readiness.verified_business_outcomes,false);
+   // The first project view (without importing a packet) must offer actual
+   // blocker-specific human review routes, never claim to resolve a blocker.
+   const blockers=page.locator('#owgPipelineJourneyReadiness');
+   assert.match(await blockers.textContent(),/Return to the originating event-log workspace/);
+   assert.equal(await blockers.locator('#owgPipelineBlocker_no_imported_report').count(),1);
+   await blockers.locator('#owgPipelineBlocker_no_imported_report').focus();
+   await page.keyboard.press('Enter');
+   await page.locator('#owgPipelineReportProject').waitFor();
+   assert.equal(await page.locator('#owgPipelineReportProject').inputValue(),manifest.project_id);
+   await blockers.locator('#owgPipelineBlocker_execution_and_business_outcomes_unverified').click();
+   await page.locator('#owgPipelineSourceProject').waitFor();
+   assert.equal(await page.locator('#owgPipelineSourceProject').inputValue(),manifest.project_id);
+   assert.equal(await page.locator('#owgPipelineSourceConsent').isChecked(),false);
+   assert.match(await blockers.locator('#owgPipelineJourneyBlockerStatus').textContent(),/blocker remains outstanding/);
+   assert.match(await blockers.textContent(),/Execution, causality and business outcomes not independently verified/);
+   assert.equal(guidedWrites,writesBeforePacket,'first-view blocker routes are navigation only');
    assert.equal(guidedWrites,writesBeforePacket,'review packet must not write or read a provider');
    assert(!JSON.stringify(handoffPacket).includes('PRIVATE_RAW_CASE_VALUE'));
    assert(!JSON.stringify(handoffPacket).includes('owg:r:'));
@@ -306,6 +418,225 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    assert(!JSON.stringify(inspectionRecord).includes('PRIVATE_RAW_CASE_VALUE'));
    assert(!JSON.stringify(inspectionRecord).includes('owg:r:'));
    assert(!JSON.stringify(inspectionRecord).includes('raw_receipt'));
+   assert.match(inspectionRecord.comparison_sha256,/^[a-f0-9]{64}$/);
+   // One portable file carries the saved packet and the exact comparison-bound
+   // inspection notes. The browser must re-fetch the current journey on import.
+   const [bundleDownload]=await Promise.all([
+     page.waitForEvent('download'),
+     inspectionWorklist.locator('#owgPipelineJourneyBundleDownload').click()
+   ]);
+   assert.equal(bundleDownload.suggestedFilename(),'owg-resumable-human-review.json');
+   const reviewBundle=JSON.parse(await fs.readFile(await bundleDownload.path(),'utf8'));
+   assert.equal(reviewBundle.format,'openworkgraph.handoff-human-review-bundle.v1');
+   assert.equal(reviewBundle.scope,'local_human_review_only');
+   assert.equal(reviewBundle.execution_authorized,false);
+   assert.equal(reviewBundle.source_read_authorized,false);
+   assert.deepEqual(reviewBundle.saved_packet,alteredPacket);
+   assert.equal(reviewBundle.inspection_worklist.inspected_count,1);
+   assert.equal(reviewBundle.inspection_worklist.comparison_sha256,inspectionRecord.comparison_sha256);
+   assert(!JSON.stringify(reviewBundle).includes('PRIVATE_RAW_CASE_VALUE'));
+   assert(!JSON.stringify(reviewBundle).includes('raw_receipt'));
+   // The first-class entry point must resume without manually locating the
+   // idea, choosing a project or opening the previous review panel.
+   const directResume=await context.newPage();
+   let directResumeWrites=0;
+   directResume.on('request',request=>{
+     if(request.url().startsWith(base+'/v1/')&&!['GET','HEAD','OPTIONS'].includes(request.method()))
+       directResumeWrites++;
+   });
+   await directResume.goto(base+'/#session='+session);
+   await directResume.locator('[role=tab][data-tab=evidence]').click();
+   await directResume.locator('#owgPipelineResumeBundleFile').setInputFiles({
+     name:'resume-from-home.json',mimeType:'application/json',
+     buffer:Buffer.from(JSON.stringify(reviewBundle))
+   });
+   assert.equal(await directResume.locator('#owgPipelineJourneyProject').count(),0,
+     'no idea or project was manually opened');
+   await directResume.locator('#owgPipelineResumeBundle').focus();
+   await directResume.keyboard.press('Enter');
+   await directResume.locator('#owgPipelineResumeStatus')
+     .filter({hasText:/Fresh comparison completed/}).waitFor();
+   assert.equal(await directResume.locator('#owgPipelineJourneyProject').inputValue(),manifest.project_id);
+   await directResume.locator('#owgPipelineJourneyInspectionRestoreStatus')
+     .filter({hasText:/Resumed 1 local inspection marks from one review bundle/}).waitFor();
+   assert(await directResume.locator('#owgPipelineJourneyInspectionWorklist input[type=checkbox]').first().isChecked());
+   assert.equal(await directResume.locator('#owgPipelineSourceConsent').count(),0,
+     'resume does not even open the consent-gated source-check form');
+   assert.equal(directResumeWrites,0,'direct resume uses only authenticated local GETs');
+   // A valid-looking but unavailable project must never silently switch to
+   // another project or replay inspection marks.
+   const missingProjectBundle=JSON.parse(JSON.stringify(reviewBundle));
+   missingProjectBundle.saved_packet.project.project_id='deleted-project-id';
+   missingProjectBundle.inspection_worklist.project_id='deleted-project-id';
+   await directResume.locator('#owgPipelineResumeBundleFile').setInputFiles({
+     name:'deleted-project.json',mimeType:'application/json',
+     buffer:Buffer.from(JSON.stringify(missingProjectBundle))
+   });
+   await directResume.locator('#owgPipelineResumeBundle').click();
+   await directResume.locator('#owgPipelineResumeStatus')
+     .filter({hasText:/Exact saved project is unavailable or deleted/}).waitFor();
+   assert.equal(await directResume.locator('#owgPipelineJourneyProject').count(),0,
+     'unavailable project refuses fallback selection');
+   for(const bad of [
+     {...reviewBundle,execution_authorized:true},
+     {...reviewBundle,extra_approval:true},
+     {...reviewBundle,inspection_worklist:{...reviewBundle.inspection_worklist,human_approval_granted:true}}
+   ]){
+     await directResume.locator('#owgPipelineResumeBundleFile').setInputFiles({
+       name:'forged-review.json',mimeType:'application/json',
+       buffer:Buffer.from(JSON.stringify(bad))
+     });
+     await directResume.locator('#owgPipelineResumeBundle').click();
+     await directResume.locator('#owgPipelineResumeStatus')
+       .filter({hasText:/Could not resume review/}).waitFor();
+   }
+   await directResume.locator('#owgPipelineResumeBundleFile').setInputFiles({
+     name:'oversized-review.json',mimeType:'application/json',buffer:Buffer.alloc(65537,65)
+   });
+   await directResume.locator('#owgPipelineResumeBundle').click();
+   await directResume.locator('#owgPipelineResumeStatus')
+     .filter({hasText:/no larger than 64 KiB/}).waitFor();
+   assert.equal(directResumeWrites,0,'invalid, oversized and missing-project resumes never write');
+   // Changing the selected file while the authenticated journey is in flight
+   // must invalidate that response rather than restoring old marks.
+   let releaseDirectJourney,journeyWasHeld;
+   const directJourneyHeld=new Promise(resolve=>{releaseDirectJourney=resolve;});
+   const directJourneyReached=new Promise(resolve=>{journeyWasHeld=resolve;});
+   await directResume.route('**/v1/automation-pipeline/'+linked.idea_id+'/journey',async route=>{
+     journeyWasHeld();await directJourneyHeld;await route.continue();
+   });
+   await directResume.locator('#owgPipelineResumeBundleFile').setInputFiles({
+     name:'race-original.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(reviewBundle))
+   });
+   await directResume.locator('#owgPipelineResumeBundle').click();
+   await directJourneyReached;
+   await directResume.locator('#owgPipelineResumeBundleFile').setInputFiles({
+     name:'race-changed.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(reviewBundle))
+   });
+   releaseDirectJourney();
+   await directResume.locator('#owgPipelineResumeStatus')
+     .filter({hasText:/File selected. Resume explicitly/}).waitFor();
+   assert.equal(await directResume.locator('#owgPipelineJourneyProject').count(),0,
+     'stale journey response cannot select a project after the file changes');
+   assert.equal(directResumeWrites,0,'stale resume never writes');
+   await directResume.close();
+   // A local file can resume only the same explicit human inspection after
+   // reopening the dashboard. This never changes server-side approval state.
+   await inspectionChecks.first().uncheck();
+   const inspectionFilePayload={
+     name:'previous-inspection.json',mimeType:'application/json',
+     buffer:Buffer.from(JSON.stringify(inspectionRecord))
+   };
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionImportFile').setInputFiles(inspectionFilePayload);
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionRestore').click();
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionRestoreStatus')
+     .filter({hasText:/Restored 1 local inspection marks/}).waitFor();
+   assert(await inspectionChecks.first().isChecked(),'same-comparison import restores a local mark');
+   await inspectionChecks.first().uncheck();
+   const wrongInspection={...inspectionRecord,project_id:'unrelated-project'};
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionImportFile').setInputFiles({
+     name:'wrong-inspection.json',mimeType:'application/json',
+     buffer:Buffer.from(JSON.stringify(wrongInspection))
+   });
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionRestore').click();
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionRestoreStatus')
+     .filter({hasText:/does not match this exact fresh comparison/}).waitFor();
+   assert(!await inspectionChecks.first().isChecked(),'wrong-project worklist must not restore marks');
+   const legacyInspection={...inspectionRecord};
+   delete legacyInspection.comparison_sha256;
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionImportFile').setInputFiles({
+     name:'legacy-inspection.json',mimeType:'application/json',
+     buffer:Buffer.from(JSON.stringify(legacyInspection))
+   });
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionRestore').click();
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionRestoreStatus')
+     .filter({hasText:/does not match this exact fresh comparison/}).waitFor();
+   assert(!await inspectionChecks.first().isChecked(),'old unbound worklists must not restore marks');
+   const forgedInspection={...inspectionRecord,execution_authorized:true};
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionImportFile').setInputFiles({
+     name:'forged-inspection.json',mimeType:'application/json',
+     buffer:Buffer.from(JSON.stringify(forgedInspection))
+   });
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionRestore').click();
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionRestoreStatus')
+     .filter({hasText:/does not match this exact fresh comparison/}).waitFor();
+   assert(!await inspectionChecks.first().isChecked(),'imported execution claims are rejected');
+   const staleInspection={...inspectionRecord,comparison_sha256:'f'.repeat(64)};
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionImportFile').setInputFiles({
+     name:'stale-inspection.json',mimeType:'application/json',
+     buffer:Buffer.from(JSON.stringify(staleInspection))
+   });
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionRestore').click();
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionRestoreStatus')
+     .filter({hasText:/does not match this exact fresh comparison/}).waitFor();
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionImportFile').setInputFiles({
+     name:'oversized-inspection.json',mimeType:'application/json',
+     buffer:Buffer.alloc(65537,0x20)
+   });
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionRestore').click();
+   await inspectionWorklist.locator('#owgPipelineJourneyInspectionRestoreStatus')
+     .filter({hasText:/no larger than 64 KiB/}).waitFor();
+   assert.equal(guidedWrites,writesBeforePacket,'worklist reimport must remain read-only');
+
+   const inspectionRestart=await context.newPage();
+   let inspectionRestartWrites=0;
+   inspectionRestart.on('request',r=>{
+     if(r.url().startsWith(base+'/v1/')&&!['GET','HEAD','OPTIONS'].includes(r.method()))
+       inspectionRestartWrites++;
+   });
+   await inspectionRestart.goto(base+'/#session='+session);
+   await inspectionRestart.locator('[role=tab][data-tab=evidence]').click();
+   await inspectionRestart.locator('#owgPipelineCard').waitFor();
+   await inspectionRestart.evaluate(id=>window.dispatchEvent(new CustomEvent(
+     'owg-pipeline-open',{detail:{idea_id:id}})),linked.idea_id);
+   await inspectionRestart.locator('#owgPipelineProcessStatus').filter({hasText:'Current saved revision'}).waitFor();
+   await inspectionRestart.locator('#owgPipelineJourney').click();
+   await inspectionRestart.locator('#owgPipelineJourneyGuide').waitFor();
+   await inspectionRestart.locator('#owgPipelineJourneyProject').selectOption(manifest.project_id);
+   await inspectionRestart.locator('#owgPipelineJourneyPriorPacket').setInputFiles({
+     name:'original-review.json',mimeType:'application/json',
+     buffer:Buffer.from(JSON.stringify(alteredPacket))
+   });
+   await inspectionRestart.locator('#owgPipelineJourneyComparePacket').click();
+   await inspectionRestart.locator('#owgPipelineJourneyInspectionWorklist').waitFor();
+   const restartedChecks=inspectionRestart.locator('#owgPipelineJourneyInspectionWorklist input[type=checkbox]');
+   assert(!await restartedChecks.first().isChecked(),'restart never silently restores inspection marks');
+   await inspectionRestart.locator('#owgPipelineJourneyInspectionImportFile').setInputFiles(inspectionFilePayload);
+   await inspectionRestart.locator('#owgPipelineJourneyInspectionRestore').focus();
+   await inspectionRestart.keyboard.press('Enter');
+   await inspectionRestart.locator('#owgPipelineJourneyInspectionRestoreStatus')
+     .filter({hasText:/Restored 1 local inspection marks/}).waitFor();
+   assert(await restartedChecks.first().isChecked(),'explicit keyboard import resumes the exact inspection after restart');
+   // Repeating with a single bundle needs only one file selection and one
+   // explicit compare action, not a second worklist selection.
+   await inspectionRestart.locator('#owgPipelineJourneyPriorPacket').setInputFiles({
+     name:'resumable-review.json',mimeType:'application/json',
+     buffer:Buffer.from(JSON.stringify(reviewBundle))
+   });
+   await inspectionRestart.locator('#owgPipelineJourneyComparePacket').focus();
+   await inspectionRestart.keyboard.press('Enter');
+   await inspectionRestart.locator('#owgPipelineJourneyInspectionRestoreStatus')
+     .filter({hasText:/Resumed 1 local inspection marks from one review bundle/}).waitFor();
+   assert(await inspectionRestart.locator('#owgPipelineJourneyInspectionWorklist input[type=checkbox]').first().isChecked());
+   // Wrapper-level forged authorization and unrelated project are refused.
+   for(const forgedBundle of [
+     {...reviewBundle,execution_authorized:true},
+     {...reviewBundle,saved_packet:{...reviewBundle.saved_packet,project:{
+       ...reviewBundle.saved_packet.project,project_id:'wrong-project'}}},
+     {...reviewBundle,source_read_authorized:true},
+     {...reviewBundle,extra_approval:true}
+   ]){
+     await inspectionRestart.locator('#owgPipelineJourneyPriorPacket').setInputFiles({
+       name:'invalid-review-bundle.json',mimeType:'application/json',
+       buffer:Buffer.from(JSON.stringify(forgedBundle))
+     });
+     await inspectionRestart.locator('#owgPipelineJourneyComparePacket').click();
+     await inspectionRestart.locator('#owgPipelineJourneyCompareResult')
+       .filter({hasText:/Invalid human review bundle|belongs to another idea or project/}).waitFor();
+     assert.equal(await inspectionRestart.locator('#owgPipelineJourneyInspectionWorklist').count(),0);
+   }
+   assert.equal(inspectionRestartWrites,0,'review restoration never writes server state');
+   await inspectionRestart.close();
    const invalidInspection=await page.evaluate(([oldPacket,newPacket])=>{
      try{
        window.__owgPipelineModel.handoffInspectionWorklist(oldPacket,newPacket,
@@ -481,6 +812,29 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    });
    await resumed.locator('#owgPipelineJourneyComparePacket').click();
    await resumed.locator('#owgPipelineJourneyCompareResult').getByText(/Recorded fields changed since the saved packet/).waitFor();
+   // The report was imported after the original inspection. A single-file
+   // review bundle still shows drift, but cannot restore old inspection marks.
+   await resumed.locator('#owgPipelineJourneyPriorPacket').setInputFiles({
+     name:'stale-review-bundle.json',mimeType:'application/json',
+     buffer:Buffer.from(JSON.stringify(reviewBundle))
+   });
+   await resumed.locator('#owgPipelineJourneyComparePacket').click();
+   await resumed.locator('#owgPipelineJourneyCompareResult')
+     .getByText(/Recorded fields changed since the saved packet/).waitFor();
+   await resumed.locator('#owgPipelineJourneyInspectionRestoreStatus')
+     .filter({hasText:/Bundle inspection marks not restored/}).waitFor();
+   assert(!await resumed.locator('#owgPipelineJourneyInspectionWorklist input[type=checkbox]').first().isChecked());
+   // The report was imported after the original inspection. A previously
+   // exported inspection record must not be replayed on this changed basis.
+   await resumed.locator('#owgPipelineJourneyInspectionImportFile').setInputFiles({
+     name:'pre-report-inspection.json',mimeType:'application/json',
+     buffer:Buffer.from(JSON.stringify(inspectionRecord))
+   });
+   await resumed.locator('#owgPipelineJourneyInspectionRestore').click();
+   await resumed.locator('#owgPipelineJourneyInspectionRestoreStatus')
+     .filter({hasText:/does not match this exact fresh comparison/}).waitFor();
+   assert(!await resumed.locator('#owgPipelineJourneyInspectionWorklist input[type=checkbox]').first().isChecked(),
+     'source/report drift cannot replay old inspection marks');
    const resumedDrift=resumed.locator('#owgPipelineJourneyDriftActions');
    await resumedDrift.getByRole('button',{name:'Review imported reports for this project'}).click();
    await resumed.locator('#owgPipelineReportProject').waitFor();
@@ -526,6 +880,11 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    const changedPacket=JSON.parse(await fs.readFile(await changedDownload.path(),'utf8'));
    assert.equal(changedPacket.process.status,'changed');
    assert(changedPacket.readiness.blockers.includes('process_not_current'));
+   assert(await page.locator('#owgPipelineBlocker_process_not_current').isEnabled(),
+     'changed but retained exact revision can be reviewed');
+   await page.locator('#owgPipelineBlocker_process_not_current').focus();
+   await page.keyboard.press('Enter');
+   await page.locator('#owgCatalogStatus').filter({hasText:'Opened immutable revision 1.'}).waitFor();
    await page.locator('#owgPipelineJourneyPriorPacket').setInputFiles({
      name:'original-review.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(handoffPacket))
    });
@@ -561,6 +920,9 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    const deletedPacket=JSON.parse(await fs.readFile(await deletedDownload.path(),'utf8'));
    assert.equal(deletedPacket.process.status,'unavailable');
    assert(deletedPacket.readiness.blockers.includes('process_not_current'));
+   assert(await page.locator('#owgPipelineBlocker_process_not_current').isDisabled(),
+     'deleted exact revision must not route to a newer or invented process');
+   assert.match(await page.locator('#owgPipelineJourneyReadiness').textContent(),/Unavailable for this historical or uncheckable reference/);
    await page.locator('#owgPipelineJourneyPriorPacket').setInputFiles({
      name:'original-review.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(handoffPacket))
    });
@@ -575,6 +937,490 @@ with zipfile.ZipFile(sys.argv[1]) as z:
 
 
    assert(await page.getByRole('button',{name:'Open linked saved process',exact:true}).isDisabled());
+   // Two real immutable project exports from distinct approved idea revisions.
+   // The comparison is an explicit read-only dashboard action, not a synthetic
+   // fixture or an agent deployment.
+   await page.evaluate(async()=>{
+     const process_model={goal:'Review a comparison case',baseline_source:'user_declared',
+       baseline_coverage:'user_declared_design',baseline_path:['Review'],
+       activities:[{id:'review',label:'Review'}],transitions:[],
+       entry_activity_id:'review',terminal_activity_ids:['review'],
+       outcome_expectations:[{terminal_activity_id:'review',operation:'github_pr_merged',user_confirmed:true}]};
+     const response=await fetch('/v1/process-catalog',{method:'POST',
+       headers:{'Content-Type':'application/json'},
+       body:JSON.stringify({workflow_id:'project_comparison_review',title:'Project comparison review',
+         process_model,user_confirmed:true,expected_revision:0})});
+     if(!response.ok)throw new Error('Could not create saved comparison process: '+response.status);
+   });
+   await page.getByRole('button',{name:'Load saved designs',exact:true}).click();
+   // The catalog still holds the earlier unsaved goal edit; replacing it asks for confirmation.
+   page.once('dialog',dialog=>dialog.accept());
+   await page.locator('#owgCatalogList').getByRole('button',{name:'Project comparison review · r1',exact:true}).click();
+   await page.getByRole('button',{name:'Add saved revision to automation pipeline',exact:true}).click();
+   await page.locator('#owgPipelineProcessStatus').filter({hasText:'Current saved revision'}).waitFor();
+   await page.getByRole('button',{name:'Move to Assessing',exact:true}).click();
+   await page.locator('#owgPipelineStatus').filter({hasText:'Moved to Assessing.'}).waitFor();
+   for(const key of ['rules_based','structured_inputs','process_stability','digital_inputs','low_exception_rate'])
+     await page.locator('#owgPipelineQ_'+key).selectOption('4');
+   await page.locator('#owgPipelineCases').fill('100');
+   await page.locator('#owgPipelineMinutes').fill('10');
+   await page.locator('#owgPipelineShare').fill('50');
+   await page.locator('#owgPipelineAssess').click();
+   await page.locator('#owgPipelineStatus').filter({hasText:'Assessment saved.'}).waitFor();
+   await page.getByRole('button',{name:'Move to Approved',exact:true}).click();
+   await page.locator('#owgPipelineStatus').filter({hasText:'Moved to Approved.'}).waitFor();
+   const [baselineExport,baselineResponse]=await Promise.all([
+     page.waitForEvent('download'),
+     page.waitForResponse(r=>r.url().endsWith('/agent-project')&&r.request().method()==='POST'),
+     page.locator('#owgPipelineProjectDownload').click()
+   ]);
+   await fs.readFile(await baselineExport.path());
+   const baselineId=baselineResponse.headers()['x-owg-project-id'];
+   await page.locator('#owgPipelineProjects').getByRole('status').filter({hasText:'Project downloaded.'}).waitFor();
+   await page.locator('#owgPipelineMinutes').fill('8');
+   await page.locator('#owgPipelineAssess').click();
+   await page.locator('#owgPipelineStatus').filter({hasText:'Approval cleared; review the new assessment.'}).waitFor();
+   await page.getByRole('button',{name:'Move to Approved',exact:true}).click();
+   await page.locator('#owgPipelineStatus').filter({hasText:'Moved to Approved.'}).waitFor();
+   const [candidateExport,candidateResponse]=await Promise.all([
+     page.waitForEvent('download'),
+     page.waitForResponse(r=>r.url().endsWith('/agent-project')&&r.request().method()==='POST'),
+     page.locator('#owgPipelineProjectDownload').click()
+   ]);
+   await fs.readFile(await candidateExport.path());
+   const candidateId=candidateResponse.headers()['x-owg-project-id'];
+   assert.notEqual(baselineId,candidateId,'different approved revisions create different pinned projects');
+   await page.locator('#owgPipelineProjects').getByRole('status').filter({hasText:'Project downloaded.'}).waitFor();
+   await page.locator('#owgPipelineJourney').click();
+   await page.locator('#owgPipelineProjectComparison').waitFor();
+   // Real backend process + approved opportunity + two immutable exported projects.
+   // Read-only dependency coverage is a reviewer aid, not an authorization.
+   let dependencyWrites=0;
+   const observeDependency=request=>{
+     if(request.url().startsWith(base+'/v1/')&&!['GET','HEAD','OPTIONS'].includes(request.method()))
+       dependencyWrites++;
+   };
+   page.on('request',observeDependency);
+   await page.locator('#owgPipelineJourneyProject').selectOption(candidateId);
+   await page.locator('#owgPipelineDependencyReview').focus();
+   await page.keyboard.press('Enter');
+   const dependencyPanel=page.locator('#owgPipelineDependencyResult');
+   await dependencyPanel.getByText('Evidence dependency and coverage review').waitFor();
+   assert.equal(await dependencyPanel.locator('tbody tr').count(),7);
+   assert.match(await dependencyPanel.locator('tbody tr').filter({hasText:'Dataset / cohort origin'}).textContent(),/missing/);
+   assert.match(await dependencyPanel.locator('tbody tr').filter({hasText:'Immutable agent project export'}).textContent(),/Earlier unresolved basis: dataset/);
+   assert.match(await dependencyPanel.textContent(),/independent outcome and execution gates remain unverified/i);
+   const [dependencyDownload]=await Promise.all([
+     page.waitForEvent('download'),
+     dependencyPanel.locator('#owgPipelineDependencyDownload').click()
+   ]);
+   assert.equal(dependencyDownload.suggestedFilename(),'owg-handoff-dependency-review.json');
+   const dependencyArtifact=JSON.parse(await fs.readFile(await dependencyDownload.path(),'utf8'));
+   assert.equal(dependencyArtifact.format,'openworkgraph.handoff-dependency-review.v1');
+   assert.equal(dependencyArtifact.scope,'read_only_human_review');
+   assert.equal(dependencyArtifact.project_id,candidateId);
+   assert.equal(dependencyArtifact.execution_authorized,false);
+   assert.equal(dependencyArtifact.source_read_authorized,false);
+   assert.equal(dependencyArtifact.handoff_review_complete,false);
+   assert.equal(dependencyArtifact.verified_business_outcomes,false);
+   assert.equal(dependencyArtifact.coverage.stages,7);
+   assert.equal(dependencyArtifact.coverage.upstream_basis_current,false);
+   assert(dependencyArtifact.stages.find(s=>s.id==='project').affected_by.includes('dataset'));
+   assert(dependencyArtifact.stages.find(s=>s.id==='reports').affected_by.includes('dataset'),
+     'incomplete source coverage propagates through a recorded project to its reports');
+   assert(dependencyArtifact.stages.find(s=>s.id==='source_checks').affected_by.includes('dataset'));
+   assert(!JSON.stringify(dependencyArtifact).includes('PRIVATE_RAW_CASE_VALUE'));
+   assert(!JSON.stringify(dependencyArtifact).includes('owg:r:'));
+   const dependencyAudit=await page.evaluate(async()=>window.axe.run(
+     document.querySelector('#owgPipelineDependencyResult'),
+     {runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},
+       resultTypes:['violations']}));
+   assert.deepEqual(dependencyAudit.violations.map(v=>v.id),[]);
+   await page.locator('#owgPipelineJourneyProject').selectOption(baselineId);
+   assert.equal(await page.locator('#owgPipelineDependencyResult tbody tr').count(),0,
+     'switching project must discard old dependency evidence');
+   await page.locator('#owgPipelineDependencyReview').click();
+   assert.match(await page.locator('#owgPipelineDependencyResult tbody tr')
+     .filter({hasText:'Immutable agent project export'}).textContent(),/historical/);
+   const dependencyRefusal=await page.evaluate(()=>{
+     const model=window.__owgPipelineModel;
+     const sha=x=>x.repeat(64);
+     const journey={
+       idea:{idea_id:'i',revision:2,state:'approved'},
+       process_status:{status:'changed',process_reference:{
+         workflow_id:'w',revision:1,content_sha256:sha('a')}},
+       dataset_origins:[{status:'unavailable',source_content_sha256:sha('b'),selection_sha256:sha('c')}],
+       projects:[{project_id:'p',idea_revision:1,idea_revision_is_current:false,
+         spec_sha256:sha('d'),archive_sha256:sha('e'),
+         reported_specifications:[{status:'matching_reported_specification',reported_run_count:4}],
+         source_check_exports:{count:1,last_document_sha256:sha('f')}}]
+     };
+     const review=model.handoffDependencyReview(journey,'p','i','2026-11-02T00:00:00Z');
+     let wrongProjectRejected=false;
+     try{model.handoffDependencyReview(journey,'another','i','2026-11-02T00:00:00Z');}
+     catch{wrongProjectRejected=true;}
+     return {wrongProjectRejected,coverage:review.coverage,
+       process:review.stages.find(s=>s.id==='process'),
+       project:review.stages.find(s=>s.id==='project'),
+       report:review.stages.find(s=>s.id==='reports'),
+       outcome:review.stages.find(s=>s.id==='outcomes')};
+   });
+   assert(dependencyRefusal.wrongProjectRejected,'unavailable exact project must refuse');
+   assert.equal(dependencyRefusal.process.status,'needs_review');
+   assert.equal(dependencyRefusal.project.status,'historical');
+   assert(dependencyRefusal.project.affected_by.includes('dataset'));
+   assert(dependencyRefusal.project.affected_by.includes('process'));
+   assert.equal(dependencyRefusal.report.status,'customer_reported_only');
+   assert.equal(dependencyRefusal.outcome.status,'unverified');
+   assert.equal(dependencyRefusal.coverage.upstream_basis_current,false);
+   assert.equal(dependencyWrites,0,'dependency review, download and project navigation never write');
+   page.off('request',observeDependency);
+   const comparePanel=page.locator('#owgPipelineProjectComparison');
+   assert(await comparePanel.locator('#owgPipelineCompareProjects').isEnabled());
+   let comparisonWrites=0;
+   const observeComparison=request=>{
+     if(request.url().startsWith(base+'/v1/')&&!['GET','HEAD','OPTIONS'].includes(request.method()))
+       comparisonWrites++;
+   };
+   page.on('request',observeComparison);
+   await comparePanel.locator('#owgPipelineCompareBaseline').selectOption(baselineId);
+   await comparePanel.locator('#owgPipelineCompareCandidate').selectOption(candidateId);
+   await comparePanel.locator('#owgPipelineCompareProjects').focus();
+   await page.keyboard.press('Enter');
+   await comparePanel.locator('#owgPipelineProjectComparisonResult')
+     .filter({hasText:/recorded artifact\/metadata differences/}).waitFor();
+   const comparisonRows=comparePanel.locator('#owgPipelineProjectComparisonResult > .table-wrap tbody tr');
+   assert.equal(await comparisonRows.count(),7);
+   assert.match(await comparisonRows.filter({hasText:'Idea revision'}).first().textContent(),/Changed/);
+   // Only the idea assessment changed; the specification comes from the same saved process
+   // revision and is identical, while the ZIP records the new idea revision.
+   assert.match(await comparisonRows.filter({hasText:'Specification SHA-256'}).textContent(),/Matching recorded field/);
+   assert.match(await comparisonRows.filter({hasText:'ZIP SHA-256'}).textContent(),/Changed/);
+   assert.match(await comparisonRows.filter({hasText:'Reported specification status counts'}).textContent(),/None recorded/);
+   assert.match(await comparePanel.textContent(),/Execution and business outcomes remain unverified/);
+   // Functional comparison of actual exported projects' outstanding review
+   // requirements; no approval or execution is inferred from a disappearing check.
+   const readinessPanel=comparePanel.locator('#owgPipelineProjectReadinessDelta');
+   await readinessPanel.getByText('Human handoff review changes').waitFor();
+   assert.equal(await readinessPanel.locator('tbody tr').count(),7);
+   assert.match(await readinessPanel.textContent(),/No longer reported \(not independently resolved\)/);
+   assert.match(await readinessPanel.locator('tbody tr')
+     .filter({hasText:'Immutable agent project export'}).textContent(),/historical.*artifact recorded.*Changed/s);
+   const [readinessDownload]=await Promise.all([
+     page.waitForEvent('download'),
+     (async()=>{
+       await readinessPanel.locator('#owgPipelineProjectReadinessDownload').focus();
+       await page.keyboard.press('Enter');
+     })()
+   ]);
+   const readinessJson=await fs.readFile(await readinessDownload.path(),'utf8');
+   assert(Buffer.byteLength(readinessJson)<=65536);
+   const readinessRecord=JSON.parse(readinessJson);
+   assert.equal(readinessRecord.format,'openworkgraph.project-handoff-readiness-comparison.v1');
+   assert.equal(readinessRecord.baseline.project_id,baselineId);
+   assert.equal(readinessRecord.candidate.project_id,candidateId);
+   assert.equal(readinessRecord.execution_authorized,false);
+   assert.equal(readinessRecord.source_read_authorized,false);
+   assert.equal(readinessRecord.verified_execution,false);
+   assert.equal(readinessRecord.verified_business_outcomes,false);
+   assert.equal(readinessRecord.handoff_review_complete,false);
+   assert.equal(readinessRecord.stages.length,7);
+   assert(readinessRecord.stages.some(stage=>stage.id==='project'&&stage.changed));
+   assert(readinessRecord.blockers.no_longer_reported.includes('project_uses_historical_idea_revision'));
+   assert(!readinessJson.includes('PRIVATE_RAW_CASE_VALUE'));
+   assert(!readinessJson.includes('owg:r:'));
+   const readinessAudit=await page.evaluate(async()=>window.axe.run(
+     document.querySelector('#owgPipelineProjectReadinessDelta'),
+     {runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},
+       resultTypes:['violations']}));
+   assert.deepEqual(readinessAudit.violations.map(v=>v.id),[]);
+   await comparePanel.getByRole('button',{name:'Inspect baseline exact project'}).focus();
+   await page.keyboard.press('Enter');
+   assert.equal(await page.locator('#owgPipelineJourneyProject').inputValue(),baselineId);
+   assert.match(await page.locator('#owgPipelineJourneyArtifact').textContent(),/historical idea revision/);
+   assert.equal(await comparePanel.getByRole('button',{name:'Inspect candidate exact project'}).count(),0,
+     'changing the selected project invalidates old comparison navigation');
+   await comparePanel.locator('#owgPipelineCompareProjects').click();
+   await comparePanel.getByRole('button',{name:'Inspect candidate exact project'}).click();
+   assert.equal(await page.locator('#owgPipelineJourneyProject').inputValue(),candidateId);
+   assert.equal(await page.locator('#owgPipelineSourceConsent').count(),0,
+     'comparison never opens source consent');
+   await comparePanel.locator('#owgPipelineCompareCandidate').selectOption(baselineId);
+   await comparePanel.locator('#owgPipelineCompareProjects').click();
+   await comparePanel.locator('#owgPipelineProjectComparisonResult')
+     .filter({hasText:'Select two different recorded projects.'}).waitFor();
+   assert.equal(await comparePanel.locator('tbody tr').count(),0);
+   const refusal=await page.evaluate(()=>{
+     const model=window.__owgPipelineModel;
+     const project={project_id:'a',idea_revision:1,idea_revision_is_current:true,
+       spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),
+       reported_specifications:[],source_check_exports:{count:0,last_document_sha256:null}};
+     const data={projects:[project,{...project,project_id:'b'}],projects_truncated:true};
+     try{model.compareRecordedProjects(data,'a','b');return false;}catch{return true;}
+   });
+   assert(refusal,'truncated project list refuses apparently complete comparison');
+   const readinessRefusals=await page.evaluate(()=>{
+     const model=window.__owgPipelineModel,sha=c=>c.repeat(64);
+     const p={project_id:'a',idea_revision:1,idea_revision_is_current:false,
+       spec_sha256:sha('a'),archive_sha256:sha('b'),reported_specifications:[],
+       source_check_exports:{count:0,last_document_sha256:null}};
+     const data={idea:{idea_id:'i',revision:2,state:'approved'},
+       process_status:{status:'current',process_reference:{
+         workflow_id:'w',revision:1,content_sha256:sha('c')}},
+       dataset_origins:[{status:'current',source_content_sha256:sha('d'),
+         selection_sha256:sha('e')}],
+       projects:[p,{...p,project_id:'b',idea_revision:2,idea_revision_is_current:true}]};
+     const run=d=>model.compareProjectHandoffReadiness(d,'a','b','i','2026-11-02T00:00:00Z');
+     const normal=run(data);
+     let truncatedOrigin=false,truncatedReport=false,wrongProject=false;
+     try{run({...data,dataset_origins:Array.from({length:65},()=>data.dataset_origins[0])});}
+     catch{truncatedOrigin=true;}
+     try{run({...data,projects:[{...p,reported_specifications:Array.from({length:65},()=>({
+       status:'matching_reported_specification',reported_run_count:1}))},data.projects[1]]});}
+     catch{truncatedReport=true;}
+     try{model.compareProjectHandoffReadiness(data,'a','missing','i','2026-11-02T00:00:00Z');}
+     catch{wrongProject=true;}
+     return {normal,truncatedOrigin,truncatedReport,wrongProject};
+   });
+   assert(readinessRefusals.truncatedOrigin&&readinessRefusals.truncatedReport&&
+     readinessRefusals.wrongProject,'incomplete or wrong-project review comparisons refuse');
+   assert(readinessRefusals.normal.blockers.no_longer_reported.includes('project_uses_historical_idea_revision'));
+   assert.equal(readinessRefusals.normal.coverage.baseline.stages,7);
+   assert.equal(readinessRefusals.normal.coverage.candidate.stages,7);
+
+   const compareAudit=await page.evaluate(async()=>window.axe.run(
+     document.querySelector('#owgPipelineProjectComparison'),
+     {runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},
+       resultTypes:['violations']}));
+   assert.deepEqual(compareAudit.violations.map(v=>v.id),[]);
+   page.off('request',observeComparison);
+   assert.equal(comparisonWrites,0,'comparison and pinned-project navigation never write');
+
+   // Real backend, >12 approved opportunities: explicitly review every page,
+   // not just the 12 most recently updated ideas. Audit reads must stay GET-only.
+   const pagedIdeaIds=await page.evaluate(async()=>{
+     const post=async(url,body)=>{
+       const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+         body:JSON.stringify(body)});
+       if(!r.ok)throw new Error('Paged audit setup failed: '+url+' '+r.status+' '+await r.text());
+       return r.json();
+     };
+     const ids=[];
+     for(let i=0;i<13;i++){
+       const created=await post('/v1/automation-pipeline',{
+         title:'Paged handoff candidate '+String(i+1).padStart(2,'0'),
+         description:'Explicit local portfolio review test',
+         source:{kind:'manual',reference:'paged-acceptance'}});
+       const assessing=await post('/v1/automation-pipeline/'+created.idea_id+'/transition',
+         {to:'assessing',expected_revision:created.revision});
+       const assessed=await post('/v1/automation-pipeline/'+created.idea_id+'/assess',{
+         ease:{rules_based:4,structured_inputs:4,process_stability:4,
+           digital_inputs:4,low_exception_rate:4},
+         cases_per_month:10,minutes_per_case:2,eligible_share:0.5,
+         compliance_review_needed:false,expected_revision:assessing.revision});
+       const approved=await post('/v1/automation-pipeline/'+created.idea_id+'/transition',
+         {to:'approved',note:'Human approved for review only',
+           expected_revision:assessed.revision});
+       if(approved.state!=='approved')throw new Error('Expected approved idea');
+       ids.push(created.idea_id);
+     }
+     return ids;
+   });
+   // Force a real list refresh even if a previous test left Approved selected.
+   await page.locator('#owgPipelineFilter').selectOption('');
+   await page.locator('#owgPipelineFilter').selectOption('approved');
+   await page.waitForFunction(()=>document.querySelector('#owgPipelinePortfolioAuditPage')?.textContent.includes('Page 1 of 2'));
+   assert(await page.locator('#owgPipelinePortfolioAuditPrevious').isDisabled());
+   assert(await page.locator('#owgPipelinePortfolioAuditNext').isEnabled());
+   let pagedReviewWrites=0;
+   const observePagedReview=request=>{
+     if(request.method()!=='GET'&&/\/v1\/automation-pipeline/.test(request.url()))
+       pagedReviewWrites++;
+   };
+   page.on('request',observePagedReview);
+   await page.locator('#owgPipelinePortfolioAudit').focus();
+   await page.keyboard.press('Enter');
+   await page.locator('#owgPipelinePortfolioAuditStatus')
+     .filter({hasText:'Page 1 of 2 (1–12)'}).waitFor();
+   const [firstPageDownload]=await Promise.all([
+     page.waitForEvent('download'),page.locator('#owgPipelinePortfolioAuditDownload').click()]);
+   const firstPage=JSON.parse(await fs.readFile(await firstPageDownload.path(),'utf8'));
+   assert.equal(firstPage.page_number,1);
+   assert.equal(firstPage.page_count,2);
+   assert.equal(firstPage.page_start_index,1);
+   assert.equal(firstPage.page_end_index,12);
+   assert.equal(firstPage.reviewed_count,12);
+   assert.equal(firstPage.unreviewed_before_count,0);
+   assert.equal(firstPage.unreviewed_after_count,firstPage.eligible_count-12);
+   assert.equal(firstPage.complete_coverage,false);
+   assert.equal(firstPage.execution_authorized,false);
+   assert.equal(firstPage.source_read_authorized,false);
+   assert.equal(firstPage.verified_business_outcomes,false);
+   assert.match(await page.locator('#owgPipelinePortfolioCumulativeStatus').textContent(),
+     /1 of 2 pages explicitly reviewed/);
+   const [partialCombinedDownload]=await Promise.all([
+     page.waitForEvent('download'),
+     page.locator('#owgPipelinePortfolioCombinedDownload').click()]);
+   const partialCombined=JSON.parse(await fs.readFile(await partialCombinedDownload.path(),'utf8'));
+   assert.equal(partialCombined.format,'openworkgraph.portfolio-handoff-multipage-review.v1');
+   assert.deepEqual(partialCombined.reviewed_page_numbers,[1]);
+   assert.deepEqual(partialCombined.unreviewed_page_numbers,[2]);
+   assert.equal(partialCombined.reviewed_count,12);
+   assert.equal(partialCombined.complete_coverage,false);
+   assert.equal(partialCombined.execution_authorized,false);
+   assert.equal(partialCombined.source_read_authorized,false);
+   assert.equal(partialCombined.verified_business_outcomes,false);
+   await page.locator('#owgPipelinePortfolioAuditNext').focus();
+   await page.keyboard.press('Enter');
+   await page.locator('#owgPipelinePortfolioAuditStatus')
+     .filter({hasText:'Page 2 of 2 (13–'}).waitFor();
+   assert(await page.locator('#owgPipelinePortfolioAuditNext').isDisabled());
+   assert(await page.locator('#owgPipelinePortfolioAuditPrevious').isEnabled());
+   const [secondPageDownload]=await Promise.all([
+     page.waitForEvent('download'),page.locator('#owgPipelinePortfolioAuditDownload').click()]);
+   const secondPage=JSON.parse(await fs.readFile(await secondPageDownload.path(),'utf8'));
+   assert.equal(secondPage.page_number,2);
+   assert.equal(secondPage.page_start_index,13);
+   assert.equal(secondPage.page_end_index,secondPage.eligible_count);
+   assert.equal(secondPage.unreviewed_before_count,12);
+   assert.equal(secondPage.unreviewed_after_count,0);
+   assert.equal(secondPage.omitted_count,12);
+   assert.equal(secondPage.complete_coverage,false);
+   assert.equal(new Set([...firstPage.items,...secondPage.items].map(x=>x.idea_id)).size,
+     firstPage.eligible_count,'no opportunity duplicated or omitted between pages');
+   for(const id of pagedIdeaIds)
+     assert([...firstPage.items,...secondPage.items].some(item=>item.idea_id===id));
+   assert.equal(pagedReviewWrites,0,'reviewing and downloading pages must never write');
+   const [combinedDownload]=await Promise.all([
+     page.waitForEvent('download'),
+     page.locator('#owgPipelinePortfolioCombinedDownload').focus().then(()=>page.keyboard.press('Enter'))]);
+   const combined=JSON.parse(await fs.readFile(await combinedDownload.path(),'utf8'));
+   assert.deepEqual(combined.reviewed_page_numbers,[1,2]);
+   assert.deepEqual(combined.unreviewed_page_numbers,[]);
+   assert.equal(combined.reviewed_count,firstPage.eligible_count);
+   assert.equal(combined.unreviewed_count,0);
+   assert.equal(combined.pages.length,2);
+   assert.equal(combined.pages[0].start_index,1);
+   assert.equal(combined.pages[1].start_index,13);
+   assert(combined.pages.every(p=>typeof p.reviewed_at==='string'&&p.reviewed_at.includes('T')));
+   assert.equal(combined.complete_coverage,false,
+     'missing projects must not become complete evidence just because both pages were read');
+   assert.equal(combined.verified_execution,false);
+   assert.equal(combined.verified_business_outcomes,false);
+   assert.equal(new Set(combined.pages.flatMap(p=>p.items.map(i=>i.idea_id))).size,
+     firstPage.eligible_count);
+   const invalidCombined=await page.evaluate(()=>{
+     const combine=window.__owgPipelineModel.combinedPortfolioHandoffReview;
+     const ids=[{idea_id:'same'},{idea_id:'same'}];
+     const wrong=new Map([[1,{reviewed_at:'2026-11-02T22:00:00Z',
+       items:[{idea_id:'wrong',status:'human_review_required'}]}]]);
+     const fails=(basis,pages)=>{try{combine(basis,pages,'now');return false;}catch{return true;}};
+     return [fails(ids,new Map()),fails([{idea_id:'expected'}],wrong)];
+   });
+   assert.deepEqual(invalidCombined,[true,true],
+     'duplicate identities and mismatched page records must refuse combination');
+
+
+   // Triage only the authenticated local pages explicitly reviewed above.
+   const triageModel=await page.evaluate(record=>{
+     const triage=window.__owgPipelineModel.portfolioReviewTriage;
+     const eligible=record.pages.flatMap(p=>p.items.map(item=>({idea_id:item.idea_id})));
+     const pages=new Map(record.pages.map(p=>[p.page_number,{
+       reviewed_at:p.reviewed_at,items:p.items}]));
+     const all=triage(eligible,pages);
+     const missing=triage(eligible,pages,'no_recorded_project');
+     const partial=triage(eligible,new Map([[1,pages.get(1)]]));
+     const rejects=(key,limit,p=pages)=>{
+       try{triage(eligible,p,key,limit);return false;}catch{return true;}
+     };
+     const forged=new Map([[1,{reviewed_at:pages.get(1).reviewed_at,
+       items:pages.get(1).items.map((item,i)=>i===0?{
+         ...item,blockers:['unrecognized_authorization_grant']}:item)}],
+       [2,pages.get(2)]]);
+     const twentyFive=Array.from({length:25},(_,i)=>({idea_id:'synthetic-'+i}));
+     const syntheticPages=new Map([1,2,3].map((n,i)=>[n,{
+       reviewed_at:'2026-11-03T00:00:00Z',
+       items:twentyFive.slice(i*12,i*12+12).map(x=>({
+         ...x,status:'no_export',project_id:null,blockers:['no_recorded_project']}))}]));
+     const capped=triage(twentyFive,syntheticPages,'no_recorded_project');
+     return {all,missing,partial,capped,
+       invalidFilter:rejects('not_a_real_blocker',24),
+       invalidLimit:rejects('all',25),
+       forgedRefused:rejects('all',24,forged)};
+   },combined);
+   assert.equal(triageModel.all.matching_count,combined.reviewed_count);
+   assert.equal(triageModel.all.unreviewed_count,0);
+   assert.equal(triageModel.partial.reviewed_count,12);
+   assert.equal(triageModel.partial.unreviewed_count,combined.reviewed_count-12);
+   assert.equal(triageModel.missing.matching_count,
+     combined.pages.flatMap(p=>p.items).filter(item=>item.status==='no_export').length);
+   assert.equal(triageModel.capped.matching_count,25);
+   assert.equal(triageModel.capped.items.length,24);
+   assert.equal(triageModel.capped.omitted_count,1);
+   assert.equal(triageModel.all.execution_authorized,false);
+   assert.equal(triageModel.all.source_read_authorized,false);
+   assert.equal(triageModel.all.verified_business_outcomes,false);
+   assert(triageModel.invalidFilter&&triageModel.invalidLimit&&triageModel.forgedRefused);
+   assert(await page.locator('#owgPipelinePortfolioTriageFilter').isEnabled());
+   await page.locator('#owgPipelinePortfolioTriageFilter').selectOption('no_recorded_project');
+   assert.match(await page.locator('#owgPipelinePortfolioTriageSummary').textContent(),
+     new RegExp(triageModel.missing.matching_count+' matching opportunities'));
+   assert.equal(await page.locator('#owgPipelinePortfolioTriageRows tbody tr').count(),
+     triageModel.missing.items.length);
+   await page.locator('#owgPipelinePortfolioTriageRows tbody button').first().focus();
+   await page.keyboard.press('Enter');
+   await page.locator('#owgPipelineDetail h3').filter({hasText:/Paged handoff candidate/}).waitFor();
+   assert.equal(pagedReviewWrites,0,'triage navigation and filtering must not write');
+   if(combined.pages.some(p=>p.items.some(item=>item.status==='human_review_required'))){
+     await page.locator('#owgPipelinePortfolioTriageFilter')
+       .selectOption('execution_and_business_outcomes_unverified');
+     await page.locator('#owgPipelinePortfolioTriageRows tbody button').first().click();
+     await page.locator('#owgPipelineJourneyProject').waitFor();
+     await page.locator('#owgPipelineBlockerItem_execution_and_business_outcomes_unverified').waitFor();
+     assert.equal(await page.evaluate(()=>document.activeElement?.id),
+       'owgPipelineBlockerItem_execution_and_business_outcomes_unverified');
+     assert.equal(pagedReviewWrites,0);
+   }
+
+   // Switching pages immediately revokes the prior page's export and row actions.
+   // A held response from the previous page cannot repopulate the new page.
+   let heldPageRoute,notifyHeld;
+   const routeHeld=new Promise(resolve=>{notifyHeld=resolve;});
+   await page.route('**/v1/automation-pipeline/*/journey',async route=>{
+     if(!heldPageRoute){heldPageRoute=route;notifyHeld();}
+     else await route.continue();
+   });
+   await page.locator('#owgPipelinePortfolioAuditPrevious').click();
+   await routeHeld;
+   assert.equal(await page.locator('#owgPipelinePortfolioAuditDownload').count(),0);
+   await page.locator('#owgPipelinePortfolioAuditNext').click();
+   await page.locator('#owgPipelinePortfolioAuditStatus')
+     .filter({hasText:'Page 2 of 2 (13–'}).waitFor();
+   // Superseded page fetch may already be aborted; releasing the held route
+   // must not turn a correctly cancelled request into a test failure.
+   await heldPageRoute.continue().catch(()=>{});
+   await page.unroute('**/v1/automation-pipeline/*/journey');
+   assert.match(await page.locator('#owgPipelinePortfolioAuditPage').textContent(),/Page 2 of 2/);
+   assert.equal(await page.locator('#owgPipelinePortfolioAuditResults tbody tr').count(),
+     secondPage.reviewed_count,'stale previous-page response must not render');
+   const pagedAxe=await page.evaluate(async()=>window.axe.run(
+     document.querySelector('#owgPipelinePortfolioAuditSection'),
+     {runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},
+       resultTypes:['violations']}));
+   assert.deepEqual(pagedAxe.violations.map(v=>v.id),[]);
+   page.off('request',observePagedReview);
+   assert.equal(pagedReviewWrites,0);
+   await page.locator('#owgPipelineSearch').fill('changed filter invalidates review');
+   assert(await page.locator('#owgPipelinePortfolioTriageFilter').isDisabled());
+   assert.equal(await page.locator('#owgPipelinePortfolioTriageRows tbody tr').count(),0);
+   assert(await page.locator('#owgPipelinePortfolioCombinedDownload').isDisabled());
+   assert.match(await page.locator('#owgPipelinePortfolioCumulativeStatus').textContent(),
+     /0 of 2 pages explicitly reviewed/);
+   assert.equal(await page.locator('#owgPipelinePortfolioAuditResults tbody tr').count(),0);
+   await page.locator('#owgPipelineSearch').fill('');
+   assert(await page.locator('#owgPipelinePortfolioCombinedDownload').isDisabled());
+   assert.equal(pagedReviewWrites,0,'combined export and invalidation must not write');
+
    await page.setViewportSize({width:390,height:844});
    assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false,'no horizontal overflow at phone width');
    assert.deepEqual(errors,[]);
