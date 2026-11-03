@@ -22,6 +22,7 @@ from .work_profile import _canonical_surface
 from .workflow_candidates import cluster_runs
 from .record_evidence import record_linked_activity
 from .record_case_lanes import record_case_lanes
+from .label_topic_links import label_topic_work_items
 from .work_item_links import linked_work_items
 
 FORMAT = "openworkgraph.workflow-evidence.v1"
@@ -904,8 +905,10 @@ def list_workflow_evidence_candidates(
     rank_by_navigation: bool = False,
     navigation_summary_only: bool = False,
     include_transition_maps: bool = False,
+    label_topics: bool = False,
     _raw_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    """``label_topics`` is the user's opt-in to let linking read captured titles/labels."""
     raw = _load(limit=source_event_limit, since=since, until=until) if _raw_events is None else _raw_events
     if rank_by_navigation:
         from .context_layers import candidate_tasks
@@ -1042,6 +1045,8 @@ def list_workflow_evidence_candidates(
         "record_linked_activity": record_linked_activity(raw, max_groups=bounded),
         "record_case_lanes": record_case_lanes(raw, max_lanes=bounded),
         "linked_work_items": linked_work_items(raw, max_items=bounded),
+        **({"label_topic_work_items": label_topic_work_items(raw, max_items=bounded)}
+           if label_topics else {}),
         "preferred_navigation": "candidate_clusters",
         "minimum_cluster_quality": float(min_cluster_quality),
         "suppressed_low_specificity_clusters": sum(
