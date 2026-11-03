@@ -1,0 +1,7 @@
+# Structural corroboration scorer (Worker C)
+
+Run `python -m server.reconstruction_structured_scoring --events observations.json --consent` on a locally authorized bounded observation export. The CLI uses the **production** candidate review queue and merged global assignment algorithm; output is JSON containing non-authoritative, human-review-only proposals. It does not change canonical membership, read raw work text, call a model/provider, write to a source or authorize an agent.
+
+A candidate must have at least two **distinct** observed weak-signal families (tab and surface), not two repetitions of one family. Unsafe record/scope/taint vetoes from the review queue remain enforced. The generated score (0.84) is a fixed admission weight, **not a calibrated probability**. The existing global assignment still enforces one-to-one competition and ambiguity abstention. No proposal on single-signal evidence is an intentional safe outcome.
+
+This is a conservative deterministic baseline and does **not** establish semantic understanding, autonomous assignment accuracy, the family-held-out F1 >= 0.90 or contamination <= 0.05 thresholds, or consenting-user pilot acceptance. The current production candidate generator may not emit two distinct relation families for a single pair, so zero proposals are possible. Evaluate held-out recall and contamination before expanding eligibility. Consent is an explicit operator assertion; this CLI does not grant work-text access.
