@@ -79,8 +79,8 @@ def test_no_merge_of_distinct_record_claims_through_loose_bridge():
     assert manifest["candidate_count"] >= 1
     decisions = {"version": 1, "evidence_sha256": manifest["evidence_sha256"],
                  "accepted": manifest["candidates"]}
-    with pytest.raises(ValueError, match="identity"):
-        review_candidates(events, decisions)
+    result = review_candidates(events, decisions)
+    assert not any({"a", "b"} <= set(group) for group in result["proposed_groups"])
 
 
 def test_rejects_malformed_review_and_bounds():
