@@ -112,6 +112,9 @@
       last = null;
       json.disabled = csv.disabled = true;
       output.replaceChildren();
+      // An edit while a request is in flight supersedes it; allow a new run
+      // rather than leaving the button disabled by the old request's finally.
+      run.disabled = !related.options.length || !logId || !caseType;
       if (current()) status.textContent = 'Parameters changed. Run the analysis again.';
     };
     related.addEventListener('change', clear);
