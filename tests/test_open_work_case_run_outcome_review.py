@@ -440,6 +440,16 @@ def test_prerequisite_matrix_preserves_paid_root_but_refuses_success_inference()
     assert result["case_outcome_comparisons"][0]["provider_check_vs_reported_run_finish"] == "no_historical_provider_check"
     assert result["customer_outcome_verified"] is False
     assert result["agent_caused_outcome_verified"] is False
+    # A human-only prerequisite with a human assessment must not acquire a
+    # fabricated Stripe provider-check obligation from generic triage reasons.
+    rows[0]["latest_human_assessed_status"] = "met"
+    rows[0]["human_assessment_count"] = 1
+    rows[0]["review_attention"] = ["provider_check_missing"]
+    plan["cases"][0]["review_state"] = "historical_evidence_present"
+    plan["cases"][1]["prerequisites_with_unresolved_review"] = []
+    no_false_provider_duty = review.compose_run_outcome_review(run, triage, plan)
+    assert no_false_provider_duty["cases_requiring_review"] == 0
+    assert no_false_provider_duty["case_outcome_comparisons"][0]["review_pending"] is False
     plan["cases"].reverse()
     with pytest.raises(declarations.CaseDeclarationError):
         review.compose_run_outcome_review(run, triage, plan)
