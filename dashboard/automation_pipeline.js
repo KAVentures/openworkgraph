@@ -1110,6 +1110,36 @@
           stages.appendChild(el('li',ref?'Saved process '+ref.workflow_id+' · revision '+ref.revision+' · '+(sourceLabels[process.status]||'unknown status')+' · SHA-256 '+ref.content_sha256:'Saved process: no exact revision linked.'));
           stages.appendChild(el('li','Opportunity revision '+data.idea.revision+' · '+(STATE_LABELS[data.idea.state]||data.idea.state)+'. Review state does not grant execution authority.'));
           journeyHost.append(stages,el('div','Checked local references now, across separate stores. Refresh after changes. Reported specifications do not prove which artifact ran; source-check results are not retained here.','muted'));
+          // Live, read-only pilot readiness: a status from the current authenticated
+          // journey, not a consent grant or an authorization to execute.
+          const readiness=el('section');readiness.id='owgPipelinePilotReadiness';
+          readiness.setAttribute('aria-label','Pilot journey readiness');
+          readiness.appendChild(el('h5','Pilot journey readiness (review only)'));
+          const origins=Array.isArray(data.dataset_origins)?data.dataset_origins:[];
+          const projects=Array.isArray(data.projects)?data.projects:[];
+          const checks=[
+            ['Dataset reference',origins.length>0&&origins.every(x=>x.status==='current'),
+              origins.length?'Every linked origin must be current.':'No dataset origin is linked.'],
+            ['Saved process',!!ref&&process.status==='current',
+              ref?'Pinned revision must still be current.':'An exact saved process revision is required.'],
+            ['Human opportunity decision',['approved','implemented'].includes(data.idea?.state),
+              'Approval is a review decision, never execution authorization.'],
+            ['Implementation evidence',projects.some(p=>p.idea_revision_is_current&&
+              Array.isArray(p.reported_specifications)&&p.reported_specifications.length>0&&
+              p.reported_specifications.every(r=>r.status==='matching_reported_specification')),
+              'A current project and matching reported specification are required; reports are not verified runs.']
+          ];
+          const readinessList=el('ol');readinessList.id='owgPipelinePilotReadinessChecks';
+          checks.forEach(([name,ok,explanation])=>{
+            const item=el('li',(ok?'Reviewable: ':'Blocked / unknown: ')+name+'. '+explanation);
+            item.dataset.reviewable=String(ok);readinessList.appendChild(item);
+          });
+          const readyCount=checks.filter(x=>x[1]).length;
+          const readinessStatus=el('p',readyCount+' of '+checks.length+
+            ' prerequisites reviewable. Agent handoff remains unauthorized; independently verify consent, scope, source checks and actual outcomes.','muted');
+          readinessStatus.setAttribute('role','status');
+          readiness.append(readinessList,readinessStatus);
+          journeyHost.appendChild(readiness);
           const guide=el('section');guide.id='owgPipelineJourneyGuide';
           guide.appendChild(el('h5','Resume this evidence-to-implementation journey'));
           const guideStatus=el('div',null,'muted');guideStatus.id='owgPipelineJourneyGuideStatus';
