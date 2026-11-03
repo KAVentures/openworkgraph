@@ -60,6 +60,28 @@ values. They prevent accidental collisions but are not anonymization: status
 labels and transaction codes still describe business activity, so review the
 output before sharing.
 
+## Incremental exports
+
+SAP assigns change numbers from one ascending number range per system, so a
+change number works as a checkpoint. Every report includes `next_after_change`,
+the highest change number it projected. Pass it back for the next export:
+
+```sh
+python scripts/sap_change_documents.py cdhdr-later.csv \
+  --namespace erp-prod --object-class VERKBELEG --object 0000012345 \
+  --utc-offset +01:00 --after-change 0000001005 \
+  --output selected-sap-events-2.csv
+```
+
+Only change documents with a higher change number are projected; earlier ones
+are counted as `before_checkpoint_rows`. Load the result with **Event logs →
+Append** to the same log. Event keys are stable, so overlapping or repeated
+increments are skipped as duplicates rather than doubled. Keep the namespace,
+object class, selected objects, status field and UTC offset the same across
+increments. An export with nothing after the checkpoint is refused rather than
+producing an empty file. The checkpoint is an SAP-internal change number, not a
+business value, but it does reveal how many changes the system has recorded.
+
 ## Limits
 
 Change documents only cover fields with change-document logging enabled, and

@@ -76,8 +76,14 @@ def _label(value: str) -> str:
 
 
 def project(headers: bytes, *, namespace: str, object_class: str, objects: list[str], utc_offset: str,
-            positions: bytes | None = None, status_field: str | None = None) -> tuple[str, dict]:
-    """Return canonical CSV and a sample-free report, or refuse the whole export."""
+            positions: bytes | None = None, status_field: str | None = None,
+            after_change: str | None = None) -> tuple[str, dict]:
+    """Return canonical CSV and a sample-free report, or refuse the whole export.
+
+    ``after_change`` is an incremental checkpoint: only change documents with a higher
+    change number are projected. SAP assigns change numbers from one ascending range
+    per system, so the report's ``next_after_change`` resumes the next export.
+    """
     if (not isinstance(namespace, str) or not NAMESPACE.fullmatch(namespace)
             or not isinstance(object_class, str) or not OBJECT_CLASS.fullmatch(object_class)
             or not isinstance(objects, list) or not 1 <= len(objects) <= MAX_OBJECTS
@@ -89,9 +95,12 @@ def project(headers: bytes, *, namespace: str, object_class: str, objects: list[
     if status_field is not None and (not isinstance(status_field, str) or not FIELD.fullmatch(status_field)):
         raise ExportError("Name the status field as TABNAME.FNAME")
     zone = _offset(utc_offset)
+    if after_change is not None and (not isinstance(after_change, str) or not CHANGE_NUMBER.fullmatch(after_change)):
+        raise ExportError("The checkpoint is a change number of 1–10 digits")
+    checkpoint = int(after_change) if after_change is not None else None
     selected = set(objects)
     counts = dict(header_rows=0, unselected_rows=0, other_class_rows=0, duplicate_rows=0,
-                  position_rows=0, status_positions=0)
+                  position_rows=0, status_positions=0, before_checkpoint_rows=0)
     documents: dict[tuple[str, str], tuple[str, datetime, str]] = {}
     for row in _rows(headers, HEADER_COLUMNS, "CDHDR"):
         counts["header_rows"] += 1
@@ -103,6 +112,9 @@ def project(headers: bytes, *, namespace: str, object_class: str, objects: list[
             continue
         if not CHANGE_NUMBER.fullmatch(row["CHANGENR"]) or not TCODE.fullmatch(row["TCODE"]):
             raise ExportError("A selected change document has an invalid change number or transaction code")
+        if checkpoint is not None and int(row["CHANGENR"]) <= checkpoint:
+            counts["before_checkpoint_rows"] += 1
+            continue
         if row["CHANGE_IND"] not in ("I", "U"):
             raise ExportError("A selected change document has an unsupported change indicator")
         try:
@@ -120,6 +132,8 @@ def project(headers: bytes, *, namespace: str, object_class: str, objects: list[
             counts["duplicate_rows"] += 1
         documents[key] = value
     if not documents:
+        if checkpoint is not None:
+            raise ExportError("No selected change documents after the checkpoint")
         raise ExportError("No selected change documents were found")
     statuses: dict[tuple[str, str], str] = {}
     if positions is not None:
@@ -156,6 +170,8 @@ def project(headers: bytes, *, namespace: str, object_class: str, objects: list[
               "events": len(events), "status_events": len(statuses),
               "tied_timestamp_events": len(times) - len(set(times)),
               "declared_utc_offset": utc_offset, "projection": "change_documents_and_declared_status_only",
+              "after_change": after_change,
+              "next_after_change": str(max(int(number) for _, number in documents)),
               "source_completeness": "unknown", "identity_basis": "caller_declared_namespace_and_literal_ids",
               "users_or_old_values_copied": False, "business_writes_performed": False}
     return output.getvalue(), report
@@ -171,6 +187,7 @@ def main() -> int:
     parser.add_argument("--object", action="append", required=True, dest="objects",
                         help="Literal OBJECTID; repeat up to 32")
     parser.add_argument("--utc-offset", required=True, help="The SAP system time zone's offset, e.g. +01:00")
+    parser.add_argument("--after-change", help="Checkpoint: only change numbers above this; use the last report's next_after_change")
     parser.add_argument("--output", type=Path, required=True, help="New CSV path; existing files are refused")
     args = parser.parse_args()
     try:
@@ -182,7 +199,8 @@ def main() -> int:
                 positions = handle.read(MAX_BYTES + 1)
         content, report = project(headers, namespace=args.namespace, object_class=args.object_class,
                                   objects=args.objects, utc_offset=args.utc_offset,
-                                  positions=positions, status_field=args.status_field)
+                                  positions=positions, status_field=args.status_field,
+                                  after_change=args.after_change)
         with args.output.open("x", encoding="utf-8", newline="") as handle:
             handle.write(content)
         print(json.dumps(report, sort_keys=True))

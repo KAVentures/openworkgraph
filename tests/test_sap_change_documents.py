@@ -145,3 +145,34 @@ def test_cli_writes_a_new_file_and_refuses_to_overwrite(tmp_path):
     again = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=60)
     assert again.returncode == 2 and json.loads(again.stdout)["status"] == "refused"
     assert ORDER not in again.stdout
+
+
+def test_checkpoint_keeps_only_later_change_documents_and_reports_the_next_one():
+    rows = [header(), header(number="1001", ind="U", tcode="VA02"), header(number="1005", ind="U", tcode="VA02")]
+    full, first = run(rows)
+    assert first["next_after_change"] == "1005" and first["after_change"] is None
+    later, report = run(rows, after_change="1001")
+    assert len(list(csv.DictReader(io.StringIO(later)))) == 1
+    assert report["before_checkpoint_rows"] == 2 and report["next_after_change"] == "1005"
+    # The later event is byte-identical to the same event in the full projection.
+    assert later.splitlines()[1] in full.splitlines()
+    with pytest.raises(ExportError, match="after the checkpoint"):
+        run(rows, after_change="1005")
+    with pytest.raises(ExportError, match="checkpoint"):
+        run(rows, after_change="12a")
+
+
+def test_incremental_exports_append_without_duplicates(tmp_path, monkeypatch):
+    monkeypatch.setattr(workspace, "DATA_DIR", tmp_path)
+    mapping = {"case_column": "case_id", "activity_column": "activity", "timestamp_column": "timestamp"}
+    first_rows = [header(), header(number="1001", time="101500", tcode="VA02", ind="U")]
+    first, report = run(first_rows)
+    log = workspace.import_log(io.BytesIO(first.encode()), name="sap", source_format="csv", mapping=mapping)["log_id"]
+    # A later, overlapping export: the checkpoint drops what was already imported.
+    later_rows = first_rows + [header(number="1002", time="120000", tcode="VA02", ind="U")]
+    later, _ = run(later_rows, after_change=report["next_after_change"])
+    appended = workspace.append_log(log, io.BytesIO(later.encode()), source_format="csv", mapping=mapping)
+    assert appended["added_events"] == 1 and appended["duplicate_events_skipped"] == 0
+    # Re-appending the same increment is skipped as duplicates rather than doubled.
+    again = workspace.append_log(log, io.BytesIO(later.encode()), source_format="csv", mapping=mapping)
+    assert again["added_events"] == 0 and again["duplicate_events_skipped"] == 1
