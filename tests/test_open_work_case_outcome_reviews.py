@@ -4,8 +4,8 @@ A human status is an assertion, not independently verified business success.
 """
 from datetime import datetime, timezone
 import os
-from contextlib import closing
 import sqlite3
+from contextlib import contextmanager
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,6 +16,17 @@ from server import open_work_declaration_routes as routes
 from server import open_work_case_outcome_reviews as outcomes
 from server.local_auth import create_dashboard_session
 from server.secure_app import app
+
+
+@contextmanager
+def _closed_sqlite(path):
+    """Preserve transactional context semantics and release handles on Windows."""
+    db = sqlite3.connect(path)
+    try:
+        with db:
+            yield db
+    finally:
+        db.close()
 
 A, B = ("owg:w:" + c * 32 for c in "ab")
 BASE = "/v1/open-work/declarations"
@@ -189,7 +200,7 @@ def test_integrity_failure_and_graph_version_change_fail_closed(local):
         headers = _auth()
         saved = _cases(client, headers)
         assert _assess(client, headers, saved).status_code == 200
-        with closing(sqlite3.connect(outcomes._path())) as db, db:  # close it: Windows cannot delete an open file
+        with _closed_sqlite(outcomes._path()) as db:
             db.execute("UPDATE assessments SET human_status='not_met' WHERE work_item_ref=?", (B,))
         assert _history(client, headers, saved).status_code == 422
         outcomes.clear_human_outcome_reviews()
@@ -303,7 +314,7 @@ def test_dependency_human_history_requires_review_and_fails_closed(local):
         for count in (0, 5, True, "2"):
             assert _dependency_history(client, headers, saved, max_cases=count).status_code == 422
         assert _assess(client, headers, saved).status_code == 200
-        with closing(sqlite3.connect(outcomes._path())) as db, db:  # close it: Windows cannot delete an open file
+        with _closed_sqlite(outcomes._path()) as db:
             db.execute("UPDATE assessments SET human_status='not_met' WHERE work_item_ref=?", (B,))
         assert _dependency_history(client, headers, saved).status_code == 422
         outcomes.clear_human_outcome_reviews()
