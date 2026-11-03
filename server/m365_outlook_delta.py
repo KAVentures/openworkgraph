@@ -157,8 +157,11 @@ def _record(value, namespace):
     if (not FIELDS.issubset(value) or set(value) - FIELDS - META
             or type(value["isRead"]) is not bool):
         raise DeltaError("Unexpected Graph metadata fields")
-    received = _instant(value["receivedDateTime"])
-    modified = _instant(value["lastModifiedDateTime"])
+    try:
+        received = _instant(value["receivedDateTime"])
+        modified = _instant(value["lastModifiedDateTime"])
+    except (ValueError, TypeError, OverflowError):
+        raise DeltaError("Invalid Graph message timestamps") from None
     if modified < received:
         raise DeltaError("Invalid Graph message timestamps")
     revision = identity + "\0" + modified + "\0" + str(value["isRead"])
@@ -194,9 +197,9 @@ def _candidate(previous, scope, folder, confirmed):
             or value["events"] + value["removals"] > MAX_RECORDS
             or type(value["removed_case_ids"]) is not list
             or len(value["removed_case_ids"]) != value["removals"]
-            or len(set(value["removed_case_ids"])) != value["removals"]
             or any(type(x) is not str or not re.fullmatch(r"outlookcase:[0-9a-f]{64}", x)
-                   for x in value["removed_case_ids"])):
+                   for x in value["removed_case_ids"])
+            or len(set(value["removed_case_ids"])) != value["removals"]):
         raise DeltaError("Prior delta candidate scope or schema mismatch")
     csv_path = previous.parent / value["csv_name"]
     if hashlib.sha256(_private_read(csv_path, 2 * 1024 * 1024)).hexdigest() != value["csv_sha256"]:
@@ -233,6 +236,7 @@ def export_delta(*, tenant, mailbox, folder_id, grant_file: Path,
             or not _TOKEN.fullmatch(token)):
         raise DeltaError("Invalid Graph bearer")
     if (output.suffix != ".csv" or candidate.suffix != ".json"
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\.csv", output.name)
             or output.parent != candidate.parent or output == candidate
             or any(os.path.abspath(p) == os.path.abspath(grant_file)
                    for p in (output, candidate))):
