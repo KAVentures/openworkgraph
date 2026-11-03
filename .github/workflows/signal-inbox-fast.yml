@@ -14,10 +14,11 @@ on:
 permissions:
   contents: read
 
-# A newer push to the same pull request supersedes its queued and running checks; pushes to
-# branches and manual runs each get their own group, so they are never cancelled.
+# A newer push to the same pull request supersedes its queued and running checks. Pushes to a
+# branch share one group without cancel-in-progress: a running main build always finishes, and
+# only the newest waiting one is kept. Manual runs get their own group.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

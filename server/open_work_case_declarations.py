@@ -26,7 +26,14 @@ _REF = re.compile(r"^owg:w:[0-9a-f]{32}$")
 _SCOPE = re.compile(r"^owg:scope:[0-9a-f]{32}$")
 _EDIT_TOKEN = re.compile(r"^[0-9a-f]{32}$")
 _GOALS = frozenset({"review_source_state", "assess_declared_policy", "verify_operation"})
-_EXPECTED = frozenset({"human_review_recorded", "source_state_rechecked", "operation_receipt_reviewed"})
+_EXPECTED = frozenset({"human_review_recorded", "source_state_rechecked", "operation_receipt_reviewed", "stripe_invoice_paid_reported"})
+
+
+def _valid_goal_outcome_pair(goal: str, outcome: str) -> bool:
+    # Existing combinations remain backward compatible.
+    return outcome != "stripe_invoice_paid_reported" or goal == "verify_operation"
+
+
 _FILENAME = ".open_work_case_declarations.sqlite3"
 _MAX_ITEMS = 50
 _MAX_DEPENDENCIES = 8
@@ -409,6 +416,7 @@ def _stored_fields_valid(row: tuple[Any, ...]) -> bool:
         isinstance(scope, str) and _SCOPE.fullmatch(scope) is not None and
         isinstance(goal, str) and goal in _GOALS and
         isinstance(outcome, str) and outcome in _EXPECTED and
+        _valid_goal_outcome_pair(goal, outcome) and
         type(revision) is int and 1 <= revision <= _MAX_REVISION and
         # An initial approval has no later edit: its two clocks must match.
         # A future-dated updated_at with revision=1 cannot be a valid
@@ -653,7 +661,8 @@ def save_case_declaration(
     _check_ref(work_item_ref, _REF, "work item reference")
     _check_ref(scope_ref, _SCOPE, "source scope")
     if (not isinstance(goal_code, str) or not isinstance(expected_outcome_code, str) or
-        goal_code not in _GOALS or expected_outcome_code not in _EXPECTED):
+        goal_code not in _GOALS or expected_outcome_code not in _EXPECTED or
+        not _valid_goal_outcome_pair(goal_code, expected_outcome_code)):
         raise CaseDeclarationError("unsupported declared goal or expected outcome")
     if type(expected_revision) is not int or not 0 <= expected_revision < _MAX_REVISION:
         raise CaseDeclarationError("invalid expected revision")
@@ -1041,6 +1050,7 @@ def create_case_declaration_batch(
             not isinstance(item["expected_outcome_code"], str) or
             item["goal_code"] not in _GOALS or
             item["expected_outcome_code"] not in _EXPECTED or
+            not _valid_goal_outcome_pair(item["goal_code"], item["expected_outcome_code"]) or
             type(item["expected_revision"]) is not int or
             item["expected_revision"] != 0 or
             item["expected_edit_token"] is not None):
@@ -1204,6 +1214,7 @@ def revise_case_declaration_batch(
             item["goal_code"] not in _GOALS or
             not isinstance(item["expected_outcome_code"], str) or
             item["expected_outcome_code"] not in _EXPECTED or
+            not _valid_goal_outcome_pair(item["goal_code"], item["expected_outcome_code"]) or
             type(item["expected_revision"]) is not int or
             not 1 <= item["expected_revision"] < _MAX_REVISION or
             not isinstance(item["expected_edit_token"], str) or
