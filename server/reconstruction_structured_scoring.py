@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .reconstruction_review_queue import prioritized_review_queue
+from .work_item_links import link_observations
 from .reconstruction_semantic_assignment import semantic_assignment
 from .reconstruction_reviewed_links import MAX_BYTES, MAX_EVENTS
 
@@ -38,20 +39,33 @@ def corroborated_assignment(events: list[dict[str, Any]], *, consent: bool = Fal
     queue = prioritized_review_queue(events, limit=500)
     if queue["truncated"]:
         raise ValueError("candidate queue truncated")
+    # Evidence families corroborate *component* pairs, not necessarily the
+    # same raw event pair. One component may contain several exact-record or
+    # observed-transfer events; independent weak observations can originate
+    # from different members without sharing identical endpoint event IDs.
+    linked = link_observations(events)
+    roots = {event_id: root for root, members in linked["members"].items()
+             for event_id in members}
     families: dict[tuple[str, str], set[str]] = defaultdict(set)
+    representatives: dict[tuple[str, str], list[tuple[str, str]]] = defaultdict(list)
     for row in queue["queue"]:
         if row["risk_reasons"] and set(row["risk_reasons"]) != {"competing_candidate_components"}:
             continue
         family = FAMILY.get(row["relation"])
-        if family:
-            key = tuple(sorted((row["event_id"], row["toward_event_id"])))
-            families[key].add(family)
-    # No single weak signal can meet the threshold. Avoid inventing semantic
-    # confidence from proximity or repeating a single family.
+        if not family:
+            continue
+        a, b = row["event_id"], row["toward_event_id"]
+        if a not in roots or b not in roots or roots[a] == roots[b]:
+            continue
+        key = tuple(sorted((roots[a], roots[b])))
+        families[key].add(family)
+        representatives[key].append(tuple(sorted((a, b))))
+    # One scored representative per independently corroborated component pair.
+    # Do not count repetitions within a signal family as new evidence.
     scored = [
-        {"event_id": a, "toward_event_id": b, "score": 0.84}
-        for (a, b), signals in sorted(families.items())
-        if len(signals) >= 2
+        {"event_id": pair[0], "toward_event_id": pair[1], "score": 0.84}
+        for key, signals in sorted(families.items()) if len(signals) >= 2
+        for pair in [min(representatives[key])]
     ]
     if len(scored) > MAX_PAIRS:
         raise ValueError("too many corroborated pairs")
