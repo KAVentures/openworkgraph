@@ -328,7 +328,9 @@
     reported_specification_unverified:'Reported specification not verified',
     execution_and_business_outcomes_unverified:'Execution and outcomes unverified'
   };
-  function portfolioReviewTriage(eligible,pages,filter='all',limit=24){
+  function portfolioReviewTriage(eligible,pages,filter='all',limit=24,query=''){
+    if(typeof query!=='string'||query.length>128)throw new Error('Invalid review search.');
+    const needle=query.trim().toLocaleLowerCase();
     if(!Number.isSafeInteger(limit)||limit<1||limit>24)
       throw new Error('Invalid bounded triage limit.');
     const combined=combinedPortfolioHandoffReview(eligible,pages,'local_review');
@@ -351,12 +353,17 @@
     }
     if(filter!=='all'&&!counts.has(filter))
       throw new Error('Select a blocker reported in explicitly reviewed pages.');
-    const matched=filter==='all'?all:all.filter(item=>item.blockers.includes(filter));
+    const byBlocker=filter==='all'?all:all.filter(item=>item.blockers.includes(filter));
+    const matched=needle?byBlocker.filter(item=>{
+      const idea=index.get(item.idea_id);
+      return item.idea_id.toLocaleLowerCase().includes(needle)||
+        (typeof idea?.title==='string'&&idea.title.toLocaleLowerCase().includes(needle));
+    }):byBlocker;
     return {reviewed_count:combined.reviewed_count,
       unreviewed_count:combined.unreviewed_count,
       reviewed_page_numbers:combined.reviewed_page_numbers,
       unreviewed_page_numbers:combined.unreviewed_page_numbers,
-      filter,matching_count:matched.length,omitted_count:Math.max(0,matched.length-limit),
+      filter,query:query.trim(),matching_count:matched.length,omitted_count:Math.max(0,matched.length-limit),
       categories:[...counts].sort(([a],[b])=>a.localeCompare(b))
         .map(([key,count])=>({key,label:PORTFOLIO_TRIAGE_LABELS[key],count})),
       items:matched.slice(0,limit),execution_authorized:false,
@@ -619,6 +626,8 @@
     const auditSection=el('section');auditSection.id='owgPipelinePortfolioAuditSection';
     const auditTriageFilter=select('owgPipelinePortfolioTriageFilter',[['all','All explicitly reviewed opportunities']]);
     auditTriageFilter.disabled=true;
+    const auditTriageSearch=input('owgPipelinePortfolioTriageSearch','search','Search reviewed opportunity title or ID');
+    auditTriageSearch.maxLength=128;
     const auditTriageSummary=el('div','Review at least one page to triage its blockers.','muted');
     auditTriageSummary.id='owgPipelinePortfolioTriageSummary';
     auditTriageSummary.setAttribute('role','status');
@@ -627,7 +636,8 @@
     const auditTriageSection=el('section');auditTriageSection.id='owgPipelinePortfolioTriageSection';
     auditTriageSection.append(el('h4','Triage outstanding checks from reviewed pages'),
       el('p','Filter only pages you explicitly checked. Unreviewed pages are unknown, not clear. Opening a check only navigates to local human review.','muted'),
-      field('Outstanding review check',auditTriageFilter),auditTriageSummary,auditTriageHost);
+      field('Outstanding review check',auditTriageFilter),
+      field('Find in explicitly reviewed pages',auditTriageSearch),auditTriageSummary,auditTriageHost);
     auditSection.append(el('h3','Human handoff review inbox'),
       el('p','Review approved or implemented opportunities in explicit pages of up to 12. Each page is a fresh, point-in-time local read; other pages are not certified, approved or executed.','muted'),
       auditNavigation,auditButton,auditStatus,auditHost,auditCumulative,auditCombinedDownload,auditTriageSection);
@@ -676,7 +686,7 @@
         }));
         auditTriageFilter.value=choices.some(([key])=>key===prior)?prior:'all';
         auditTriageFilter.disabled=false;
-        const selected=portfolioReviewTriage(auditEligible(),auditPages,auditTriageFilter.value);
+        const selected=portfolioReviewTriage(auditEligible(),auditPages,auditTriageFilter.value,24,auditTriageSearch.value);
         auditTriageSummary.textContent=selected.matching_count+' matching opportunities in '+
           selected.reviewed_count+' explicitly reviewed; '+selected.unreviewed_count+
           ' loaded opportunities on unreviewed pages are unknown. Showing '+
@@ -729,6 +739,7 @@
       }
     }
     auditTriageFilter.onchange=renderTriage;
+    auditTriageSearch.oninput=renderTriage;
     function clearCumulative(reason){
       ++auditGeneration;
       if(auditAbort)auditAbort.abort();
