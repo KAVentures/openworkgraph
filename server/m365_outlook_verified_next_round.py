@@ -43,7 +43,14 @@ def run_verified_next_round(*, tenant, mailbox, folder, log_id, confirm_log_id,
     if output == previous_csv or candidate == previous_candidate:
         raise ReceiptError("Next-round artifacts must be distinct")
     # A handoff must already exist. Never create one as a side effect of the read.
-    prior_sha = hashlib.sha256(_private_read(previous_candidate, MAX_CANDIDATE_BYTES)).hexdigest()
+    try:
+        prior = json.loads(_private_read(previous_candidate, MAX_CANDIDATE_BYTES))
+        prior_sha = prior["csv_sha256"]
+        if (type(prior_sha) is not str or len(prior_sha) != 64
+                or any(c not in "0123456789abcdef" for c in prior_sha)):
+            raise ValueError("Invalid prior candidate digest")
+    except (ValueError, KeyError, TypeError, UnicodeError):
+        raise ReceiptError("Prior candidate invalid") from None
     identity = hashlib.sha256(_canonical({
         "candidate_sha256": prior_sha, "log_id": log_id,
     })).hexdigest()
