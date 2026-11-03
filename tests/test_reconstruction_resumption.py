@@ -159,3 +159,66 @@ def test_private_cli_create_only_stale_and_revoked_evidence_refusal(tmp_path: Pa
     source.write_text(json.dumps([event(1, A), event(2, A)]))
     assert run(refused).returncode == 2
     assert not refused.exists()
+
+
+def test_multiple_independent_returns_form_one_source_anchored_chain():
+    # A -> B -> A -> B -> A: two independently verified resumptions,
+    # not a single collapsed work episode or a temporal guess.
+    events = [event(n, A if n in (1, 2, 5, 6, 9, 10) else B)
+              for n in range(1, 11)]
+    result = reconstruct(events)
+    assert result["episode_count"] == 5
+    assert result["resumption_count"] == 2
+    assert result["resumption_chain_count"] == 1
+    assert result["chained_resumption_edge_count"] == 2
+    assert result["standalone_resumption_edge_count"] == 0
+    [chain] = result["resumption_chains"]
+    assert chain["episode_ids"] == [
+        "episode_00001", "episode_00003", "episode_00005",
+    ]
+    assert chain["resumption_edge_indexes"] == [0, 1]
+    assert chain["resumption_count"] == 2
+    assert chain["intervening_observation_count"] == 4
+    assert chain["other_case_observation_count"] == 4
+    assert chain["unknown_observation_count"] == 0
+    assert chain["interruption_classes"] == ["other_production_linked_item"]
+    assert chain["all_links_independently_anchored"] is True
+    assert chain["business_case_identity_verified"] is False
+    assert result["episodes"][0]["event_ids"] == ["e001", "e002"]
+    assert result["episodes"][2]["event_ids"] == ["e005", "e006"]
+    assert result["episodes"][4]["event_ids"] == ["e009", "e010"]
+
+
+def test_chain_refuses_to_bridge_unverified_second_interruption():
+    events = [event(n, A if n in (1, 2, 5, 6, 9, 10) else B)
+              for n in range(1, 11)]
+    # Tied timestamps in the second interruption invalidate only its
+    # candidate return. The earlier verified edge remains standalone.
+    events[7]["observed_at"] = events[6]["observed_at"]
+    result = reconstruct(events)
+    assert result["resumption_count"] == 1
+    assert result["resumption_chain_count"] == 0
+    assert result["resumption_chains"] == []
+    assert result["chained_resumption_edge_count"] == 0
+    assert result["standalone_resumption_edge_count"] == 1
+    assert result["abstention_counts"].get(
+        "nonmonotonic_or_tied_observations", 0
+    ) >= 1
+
+
+def test_chain_preserves_unknown_and_other_case_interruption_counts():
+    events = [event(1, A), event(2, A), event(3, B), event(4, B),
+              event(5, A), event(6, A), event(7), event(8, A), event(9, A)]
+    events[6]["app"] = "Slack"
+    result = reconstruct(events)
+    assert result["resumption_count"] == 2
+    assert result["resumption_chain_count"] == 1
+    [chain] = result["resumption_chains"]
+    assert chain["resumption_edge_indexes"] == [0, 1]
+    assert chain["interruption_classes"] == [
+        "other_production_linked_item", "unassigned_observations",
+    ]
+    assert chain["other_case_observation_count"] == 2
+    assert chain["unknown_observation_count"] == 1
+    assert chain["intervening_observation_count"] == 3
+    assert chain["canonical_membership_unchanged"] is True
