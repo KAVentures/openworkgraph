@@ -141,7 +141,7 @@ def _state(path):
 
 def prepare(*, instance, confirm_host, namespace, cases, bootstrap_since,
             until, overlap_hours, token, checkpoint, manifest, output,
-            allow_loopback_http=False, opener=None):
+            allow_loopback_http=False, opener=None, max_pages=1):
     """Live source GET; no checkpoint mutation. Returns a counts-only review receipt."""
     _paths(checkpoint, manifest, output)
     if (manifest.exists() or manifest.is_symlink() or output.exists()
@@ -174,7 +174,7 @@ def prepare(*, instance, confirm_host, namespace, cases, bootstrap_since,
     since = start.strftime("%Y-%m-%dT%H:%M:%SZ")
     result = extract(instance, confirm_host, namespace, cases, since, until,
                      token, output, allow_loopback_http=allow_loopback_http,
-                     opener=opener)
+                     opener=opener, max_pages=max_pages)
     created = result["csv_created"]
     csv_sha = _digest(_read_private(output, MAX_CSV)) if created else None
     record = {
@@ -190,6 +190,7 @@ def prepare(*, instance, confirm_host, namespace, cases, bootstrap_since,
     return {"format": FORMAT, "status": "prepared", "manifest_sha256": _digest(payload),
             "scope_sha256": scope, "events": record["events"],
             "source_rows": record["source_rows"], "csv_created": created,
+            "pages_fetched": result["pages_fetched"],
             "checkpoint_advanced": False, "source_completeness": "unknown",
             "provider_writes_performed": False}
 
@@ -295,6 +296,7 @@ def main(argv=None):
     p.add_argument("--bootstrap-since")
     p.add_argument("--until", required=True)
     p.add_argument("--overlap-hours", type=int, default=24)
+    p.add_argument("--max-pages", type=int, default=1)
     p.add_argument("--checkpoint", required=True, type=Path)
     p.add_argument("--manifest", required=True, type=Path)
     p.add_argument("--output", required=True, type=Path)
@@ -318,7 +320,8 @@ def main(argv=None):
                              overlap_hours=args.overlap_hours,
                              token=os.environ.get("OWG_SALESFORCE_READ_TOKEN"),
                              checkpoint=args.checkpoint, manifest=args.manifest,
-                             output=args.output, allow_loopback_http=args.allow_loopback_http)
+                             output=args.output, allow_loopback_http=args.allow_loopback_http,
+                             max_pages=args.max_pages)
         else:
             result = commit(checkpoint=args.checkpoint, manifest=args.manifest,
                             confirm_manifest_sha256=args.confirm_manifest_sha256,

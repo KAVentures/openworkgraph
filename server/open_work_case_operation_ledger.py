@@ -295,7 +295,8 @@ def _insert(db: sqlite3.Connection, row: dict[str, Any]) -> None:
 def _operate(admitted: dict[str, Any], signature: tuple, *, scope: str,
              secret: str, guard: Callable[[], None], mode: str,
              resource_ref: str | None = None, verification: dict | None = None,
-             target_seq: int | None = None, reason: str | None = None) -> dict[str, Any]:
+             target_seq: int | None = None, reason: str | None = None,
+              expected_history: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     graph, source, key, expiry = _context(admitted, signature, scope, secret)
     ref = admitted["work_item_ref"]
     record = _record(key, resource_ref) if resource_ref is not None else None
@@ -337,7 +338,15 @@ def _operate(admitted: dict[str, Any], signature: tuple, *, scope: str,
         try:
             now = _clock(None)
             rows = _load(db, admitted, graph, source, key, expiry, now)
+            if mode == "history" and record is not None and rows and rows[0]["record_binding"] != record:
+                raise CaseDeclarationError("conflicting source-joined case record")
             if mode == "check":
+                # The caller captured this exact private history before a potentially
+                # slow source read. Compare inside the SQLite write transaction so
+                # another process cannot append/dispute between comparison and insert.
+                # Existing callers without a checkpoint remain backward-compatible.
+                if expected_history is not None and _result(ref, rows)["events"] != expected_history:
+                    raise CaseDeclarationError("operation evidence changed during source verification")
                 if not rows and db.execute("SELECT COUNT(DISTINCT work_item_ref) FROM evidence").fetchone()[0] >= _MAX_CASES:
                     raise CaseDeclarationError("operation evidence case capacity reached")
                 event = _event(
@@ -380,16 +389,111 @@ def _operate(admitted: dict[str, Any], signature: tuple, *, scope: str,
 
 def append_operation_evidence(admitted: dict[str, Any], signature: tuple, *,
                               scope: str, secret: str, resource_ref: str,
-                              verification: dict, guard: Callable[[], None]) -> dict[str, Any]:
+                              verification: dict, guard: Callable[[], None],
+                              expected_history: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     return _operate(admitted, signature, scope=scope, secret=secret,
                     guard=guard, mode="check", resource_ref=resource_ref,
-                    verification=verification)
+                    verification=verification, expected_history=expected_history)
+
+
+def append_operation_evidence_batch(
+    items: list[dict[str, Any]], *, scope: str, secret: str,
+    guard: Callable[[], None],
+) -> dict[str, dict[str, Any]]:
+    """Atomically append one checked provider state for each distinct reviewed case.
+
+    Source I/O is already finished by the caller. A stale history, disputed
+    check, invalid receipt, full ledger or storage failure rolls back *every*
+    new event. No review/source lock is acquired while SQLite holds its lock.
+    """
+    if not isinstance(items, list) or not 1 <= len(items) <= 4:
+        raise CaseDeclarationError("invalid bounded provider evidence batch")
+    prepared = []
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            raise CaseDeclarationError("invalid provider evidence batch entry")
+        admitted = item.get("admitted")
+        signature = item.get("signature")
+        resource_ref = item.get("resource_ref")
+        verification = item.get("verification")
+        expected = item.get("expected_history")
+        if not isinstance(admitted, dict) or not isinstance(signature, tuple):
+            raise CaseDeclarationError("invalid provider evidence case binding")
+        ref = admitted.get("work_item_ref")
+        if not isinstance(ref, str) or ref in seen:
+            raise CaseDeclarationError("duplicate provider evidence batch case")
+        seen.add(ref)
+        graph, source, key, expiry = _context(admitted, signature, scope, secret)
+        record = _record(key, resource_ref)
+        if (not isinstance(expected, list) or
+            not isinstance(verification, dict) or
+            verification.get("format") != "openworkgraph.local-case-provider-operation-verification.v1" or
+            verification.get("work_item_ref") != ref or
+            verification.get("resource_ref") != resource_ref or
+            verification.get("expected_operation") != "stripe_invoice_paid" or
+            verification.get("provider_operation_state") not in ("paid", "unknown") or
+            verification.get("provider_operation_verified") is not
+                (verification.get("provider_operation_state") == "paid") or
+            any(verification.get(flag) is not False for flag in (
+                "customer_outcome_verified", "expected_outcome_verified",
+                "agent_caused_operation_verified", "agent_execution_authorized"))):
+            raise CaseDeclarationError("invalid independent provider batch receipt")
+        stamp = verification.get("provider_verified_at")
+        if verification["provider_operation_state"] == "paid":
+            verified = _parse_utc(stamp)
+            now = _clock(None)
+            if verified > now + timedelta(minutes=5) or now - verified > timedelta(minutes=15):
+                raise CaseDeclarationError("stale independent provider batch receipt")
+            stamp = verified.isoformat()
+        elif stamp is not None:
+            raise CaseDeclarationError("unknown batch check cannot carry paid receipt")
+        prepared.append((ref, admitted, graph, source, key, expiry, record,
+                         verification["provider_operation_state"], stamp, expected))
+    guard()
+    with _database(create=True) as db:
+        if db is None:
+            raise CaseDeclarationError("operation ledger unavailable")
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            results: dict[str, dict[str, Any]] = {}
+            existing_cases = db.execute(
+                "SELECT COUNT(DISTINCT work_item_ref) FROM evidence"
+            ).fetchone()[0]
+            for (ref, admitted, graph, source, key, expiry, record,
+                 state, stamp, expected) in prepared:
+                rows = _load(db, admitted, graph, source, key, expiry, _clock(None))
+                if _result(ref, rows)["events"] != expected:
+                    raise CaseDeclarationError("operation evidence changed during dependency verification")
+                if not rows:
+                    if existing_cases >= _MAX_CASES:
+                        raise CaseDeclarationError("operation evidence case capacity reached")
+                    existing_cases += 1
+                event = _event(
+                    ref, rows, graph=graph, source=source, record=record,
+                    key=key, expiry=expiry, kind="check", state=state,
+                    verified_at=stamp,
+                )
+                _insert(db, event)
+                rows.append(event)
+                results[ref] = _result(ref, rows)
+            db.execute("COMMIT")
+        except Exception:
+            db.execute("ROLLBACK")
+            raise
+    try:
+        guard()
+    except Exception:
+        clear_operation_evidence()
+        raise
+    return results
 
 
 def read_operation_evidence(admitted: dict[str, Any], signature: tuple, *,
-                            scope: str, secret: str, guard: Callable[[], None]) -> dict[str, Any]:
+                            scope: str, secret: str, guard: Callable[[], None],
+                            resource_ref: str | None = None) -> dict[str, Any]:
     return _operate(admitted, signature, scope=scope, secret=secret,
-                    guard=guard, mode="history")
+                    guard=guard, mode="history", resource_ref=resource_ref)
 
 
 def dispute_operation_evidence(admitted: dict[str, Any], signature: tuple, *,
@@ -424,4 +528,5 @@ def clear_operation_evidence(work_item_ref: str | None = None) -> None:
 
 
 __all__ = ["append_operation_evidence", "read_operation_evidence",
-           "dispute_operation_evidence", "clear_operation_evidence"]
+           "dispute_operation_evidence", "clear_operation_evidence",
+           "append_operation_evidence_batch"]

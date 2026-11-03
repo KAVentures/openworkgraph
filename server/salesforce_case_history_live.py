@@ -23,6 +23,7 @@ from scripts.salesforce_case_history import ID, ExportError, project
 FORMAT = "openworkgraph.salesforce-live-case-history.v1"
 MAX_CASES = 8
 MAX_RECORDS = 200
+MAX_PAGES = 8
 MAX_RESPONSE_BYTES = 262144
 MAX_WINDOW = timedelta(days=31)
 HOST = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+\Z")
@@ -125,75 +126,110 @@ def _query(cases, since, until):
     )
 
 
-def _fetch(opener, origin, bearer, cases, since, until):
+def _fetch(opener, origin, bearer, cases, since, until, *, max_pages=1):
+    """Follow at most eight strictly same-origin Salesforce query cursor pages."""
     url = origin + "/services/data/v60.0/query?" + parse.urlencode(
         {"q": _query(cases, since, until)})
-    req = request.Request(url, method="GET", headers={
-        "Authorization": "Bearer " + bearer, "Accept": "application/json",
-        "Cache-Control": "no-store",
-    })
-    try:
-        with opener.open(req, timeout=10) as response:
-            status, final = response.status, response.geturl()
-            media = response.headers.get("Content-Type", "").split(";", 1)[0].lower().strip()
-            raw = response.read(MAX_RESPONSE_BYTES + 1)
-    except (OSError, error.URLError, ValueError):
-        raise LiveHistoryError("Salesforce read refused") from None
-    if (status != 200 or final != url or media != "application/json"
-            or len(raw) > MAX_RESPONSE_BYTES):
-        raise LiveHistoryError("Salesforce response refused")
-    try:
-        data = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique,
-                          parse_constant=_nonfinite)
-    except (UnicodeError, ValueError, TypeError, RecursionError):
-        raise LiveHistoryError("Invalid Salesforce JSON response") from None
-    if (type(data) is not dict or type(data.get("done")) is not bool
-            or data["done"] is not True or "nextRecordsUrl" in data
-            or type(data.get("totalSize")) is not int
-            or type(data.get("records")) is not list
-            or data["totalSize"] != len(data["records"])
-            or len(data["records"]) > MAX_RECORDS):
-        raise LiveHistoryError("Incomplete or oversized Salesforce result")
+    seen_urls = set()
+    seen_ids = set()
     rows = []
-    for entry in data["records"]:
-        if type(entry) is not dict:
-            raise LiveHistoryError("Invalid Salesforce CaseHistory row")
-        if not {"Id", "CaseId", "CreatedDate", "Field", "NewValue"} <= set(entry):
-            raise LiveHistoryError("Missing Salesforce CaseHistory fields")
-        if (type(entry["CaseId"]) is not str or entry["CaseId"] not in cases
-                or type(entry["Id"]) is not str or ID.fullmatch(entry["Id"]) is None
-                or type(entry["CreatedDate"]) is not str
-                or type(entry["Field"]) is not str
-                or entry["Field"] not in {"created", "Status"}
-                or (entry["NewValue"] is not None
-                    and type(entry["NewValue"]) is not str)):
-            raise LiveHistoryError("Foreign or invalid Salesforce history row")
-        stamp = entry["CreatedDate"]
+    expected_total = None
+    last_order = None
+    for page in range(1, max_pages + 1):
+        if url in seen_urls:
+            raise LiveHistoryError("Repeated Salesforce query cursor")
+        seen_urls.add(url)
+        req = request.Request(url, method="GET", headers={
+            "Authorization": "Bearer " + bearer, "Accept": "application/json",
+            "Cache-Control": "no-store",
+        })
         try:
-            moment = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
-            if moment.tzinfo is None:
-                raise ValueError()
-            moment = moment.astimezone(timezone.utc)
-        except (ValueError, OverflowError):
-            raise LiveHistoryError("Invalid source timestamp") from None
-        if not _utc(since) <= moment < _utc(until):
-            raise LiveHistoryError("Source row outside selected window")
-        rows.append({key: (entry[key] if entry[key] is not None else "")
-                     for key in ("Id", "CaseId", "CreatedDate", "Field", "NewValue")})
-    return rows
+            with opener.open(req, timeout=10) as response:
+                status, final = response.status, response.geturl()
+                media = response.headers.get("Content-Type", "").split(";", 1)[0].lower().strip()
+                raw = response.read(MAX_RESPONSE_BYTES + 1)
+        except (OSError, error.URLError, ValueError):
+            raise LiveHistoryError("Salesforce read refused") from None
+        if (status != 200 or final != url or media != "application/json"
+                or len(raw) > MAX_RESPONSE_BYTES):
+            raise LiveHistoryError("Salesforce response refused")
+        try:
+            data = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique,
+                              parse_constant=_nonfinite)
+        except (UnicodeError, ValueError, TypeError, RecursionError):
+            raise LiveHistoryError("Invalid Salesforce JSON response") from None
+        if (type(data) is not dict or type(data.get("done")) is not bool
+                or type(data.get("totalSize")) is not int
+                or not 0 <= data["totalSize"] <= MAX_RECORDS
+                or type(data.get("records")) is not list
+                or len(rows) + len(data["records"]) > MAX_RECORDS):
+            raise LiveHistoryError("Incomplete or oversized Salesforce result")
+        if expected_total is None:
+            expected_total = data["totalSize"]
+        elif expected_total != data["totalSize"]:
+            raise LiveHistoryError("Salesforce result count changed between pages")
+        if len(rows) + len(data["records"]) > expected_total:
+            raise LiveHistoryError("Salesforce returned excess rows")
+        for entry in data["records"]:
+            if type(entry) is not dict:
+                raise LiveHistoryError("Invalid Salesforce CaseHistory row")
+            if not {"Id", "CaseId", "CreatedDate", "Field", "NewValue"} <= set(entry):
+                raise LiveHistoryError("Missing Salesforce CaseHistory fields")
+            if (type(entry["CaseId"]) is not str or entry["CaseId"] not in cases
+                    or type(entry["Id"]) is not str or ID.fullmatch(entry["Id"]) is None
+                    or entry["Id"] in seen_ids
+                    or type(entry["CreatedDate"]) is not str
+                    or type(entry["Field"]) is not str
+                    or entry["Field"] not in {"created", "Status"}
+                    or (entry["NewValue"] is not None
+                        and type(entry["NewValue"]) is not str)):
+                raise LiveHistoryError("Foreign, duplicate or invalid Salesforce history row")
+            stamp = entry["CreatedDate"]
+            try:
+                moment = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+                if moment.tzinfo is None:
+                    raise ValueError()
+                moment = moment.astimezone(timezone.utc)
+            except (ValueError, OverflowError):
+                raise LiveHistoryError("Invalid source timestamp") from None
+            if not _utc(since) <= moment < _utc(until):
+                raise LiveHistoryError("Source row outside selected window")
+            order = (moment, entry["Id"])
+            if last_order is not None and order < last_order:
+                raise LiveHistoryError("Salesforce page order changed")
+            last_order = order
+            seen_ids.add(entry["Id"])
+            rows.append({key: (entry[key] if entry[key] is not None else "")
+                         for key in ("Id", "CaseId", "CreatedDate", "Field", "NewValue")})
+        if data["done"]:
+            if "nextRecordsUrl" in data or len(rows) != expected_total:
+                raise LiveHistoryError("Incomplete Salesforce query result")
+            return rows, page
+        cursor = data.get("nextRecordsUrl")
+        # Salesforce query locator is an opaque relative path, never an arbitrary URL.
+        if (type(cursor) is not str
+                or not re.fullmatch(
+                    r"/services/data/v60\.0/query/[A-Za-z0-9_-]{1,200}", cursor)
+                or not data["records"] or page == max_pages):
+            raise LiveHistoryError("Unfinished or unsafe Salesforce query cursor")
+        url = origin + cursor
+    raise LiveHistoryError("Salesforce query page limit reached")
 
 
 def extract(instance, confirm_host, namespace, cases, since, until, token,
-            output, *, allow_loopback_http=False, opener=None):
-    """One bounded real HTTPS read; private new CSV only, with counts-only receipt."""
+            output, *, allow_loopback_http=False, opener=None, max_pages=1):
+    """Bounded real HTTPS read; private new CSV only, with counts-only receipt."""
+    if type(max_pages) is not int or not 1 <= max_pages <= MAX_PAGES:
+        raise LiveHistoryError("Explicit page bound must be 1–8")
     origin = _scope(instance, confirm_host, namespace, cases, since, until,
                     token, output, allow_loopback_http)
     transport = opener if opener is not None else request.build_opener(
         request.ProxyHandler({}), _NoRedirect())
-    rows = _fetch(transport, origin, token, cases, since, until)
+    rows, pages = _fetch(transport, origin, token, cases, since, until,
+                         max_pages=max_pages)
     if not rows:
         return {"format": FORMAT, "status": "no_selected_history",
-                "source_rows": 0, "csv_created": False,
+                "source_rows": 0, "csv_created": False, "pages_fetched": pages,
                 "source_completeness": "unknown", "source_writes_performed": False}
     raw_csv = io.StringIO(newline="")
     writer = csv.DictWriter(raw_csv,
@@ -219,7 +255,8 @@ def extract(instance, confirm_host, namespace, cases, since, until, token,
     except OSError:
         raise LiveHistoryError("Private CSV creation refused") from None
     return {"format": FORMAT, "status": "exported", "csv_created": True,
-            "source_rows": len(rows), "events": counts["events"],
+            "source_rows": len(rows), "pages_fetched": pages,
+            "events": counts["events"],
             "duplicate_rows": counts["duplicate_rows"],
             "represented_cases": counts["represented_cases"],
             "source_completeness": "unknown", "source_writes_performed": False}
@@ -234,6 +271,7 @@ def main(argv=None, *, opener=None):
     parser.add_argument("--since", required=True)
     parser.add_argument("--until", required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--max-pages", type=int, default=1)
     parser.add_argument("--consent-selected-read", action="store_true")
     parser.add_argument("--consent-private-export", action="store_true")
     parser.add_argument("--allow-loopback-http", action="store_true",
@@ -245,7 +283,8 @@ def main(argv=None, *, opener=None):
         result = extract(
             args.instance, args.confirm_host, args.namespace, args.cases,
             args.since, args.until, os.environ.get("OWG_SALESFORCE_READ_TOKEN"),
-            args.output, allow_loopback_http=args.allow_loopback_http, opener=opener)
+            args.output, allow_loopback_http=args.allow_loopback_http,
+            opener=opener, max_pages=args.max_pages)
         print(json.dumps(result, sort_keys=True))
         return 0
     except (LiveHistoryError, OSError, TypeError, ValueError, OverflowError):
