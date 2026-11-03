@@ -50,7 +50,8 @@ def semantic_assignment(
     allowed = {}
     for row in queue["queue"]:
         key = tuple(sorted((row["event_id"], row["toward_event_id"])))
-        if set(row["risk_reasons"]) <= {"competing_candidate_components"}:
+        if (row.get("review_status") == "inspect" and
+                set(row["risk_reasons"]) <= {"competing_candidate_components"}):
             allowed[key] = row
     weighted: dict[tuple[str, str], float] = {}
     for entry in entries:
