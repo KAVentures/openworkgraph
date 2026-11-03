@@ -2,6 +2,7 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 import hashlib
+import asyncio
 
 import pytest
 from fastapi import HTTPException
@@ -18,8 +19,11 @@ class Request:
     headers = {"authorization": "owg-session example", "content-type": "application/json"}
 
 
-@pytest.mark.asyncio
-async def test_binding_create_read_revoke_through_authenticated_route(monkeypatch):
+def test_binding_create_read_revoke_through_authenticated_route(monkeypatch):
+    asyncio.run(_exercise_binding_create_read_revoke(monkeypatch))
+
+
+async def _exercise_binding_create_read_revoke(monkeypatch):
     from server import open_work_run_case_binding as ledger
     from tempfile import TemporaryDirectory
     with TemporaryDirectory() as directory:
@@ -52,8 +56,11 @@ async def test_binding_create_read_revoke_through_authenticated_route(monkeypatc
         assert (await routes.manage_local_imported_run_binding(Request(), response))["binding"] is None
 
 
-@pytest.mark.asyncio
-async def test_binding_requires_dashboard_session(monkeypatch):
+def test_binding_requires_dashboard_session(monkeypatch):
+    asyncio.run(_exercise_binding_requires_dashboard_session(monkeypatch))
+
+
+async def _exercise_binding_requires_dashboard_session(monkeypatch):
     monkeypatch.setattr(routes, "_dashboard_only", lambda req: (_ for _ in ()).throw(HTTPException(403)))
     with pytest.raises(HTTPException) as exc:
         await routes.manage_local_imported_run_binding(Request(), SimpleNamespace(headers={}))
