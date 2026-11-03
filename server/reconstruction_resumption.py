@@ -15,6 +15,65 @@ MAX_INTERRUPTING_EVENTS = 128
 MAX_RESUMPTIONS = 512
 
 
+def _resumption_chains(edges: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Group only consecutive accepted returns to the same anchored work item.
+
+    An abstained or missing edge breaks continuity: never bridge over an
+    unverified return, even if the first and last item labels are equal.
+    """
+    active: dict[str, list[int]] = {}
+    completed: list[list[int]] = []
+    for index, edge in enumerate(edges):
+        item = edge["linked_item_id"]
+        current = active.get(item)
+        if current and edges[current[-1]]["to_episode_id"] == edge["from_episode_id"]:
+            current.append(index)
+        else:
+            if current and len(current) >= 2:
+                completed.append(current)
+            active[item] = [index]
+    completed.extend(run for run in active.values() if len(run) >= 2)
+    completed.sort(key=lambda run: run[0])
+
+    chains: list[dict[str, Any]] = []
+    for run in completed:
+        members = [edges[index] for index in run]
+        classes = [
+            kind for kind in (
+                "other_production_linked_item",
+                "unassigned_observations",
+                "experimental_proposal_gap",
+            )
+            if any(kind in member["interruption_classes"] for member in members)
+        ]
+        chains.append({
+            "chain_id": f"chain_{len(chains) + 1:05d}",
+            "linked_item_id": members[0]["linked_item_id"],
+            "episode_ids": [members[0]["from_episode_id"]]
+                           + [member["to_episode_id"] for member in members],
+            "resumption_edge_indexes": run,
+            "resumption_count": len(run),
+            "intervening_observation_count": sum(
+                member["intervening_observation_count"] for member in members
+            ),
+            "other_case_observation_count": sum(
+                member["other_case_observation_count"] for member in members
+            ),
+            "unknown_observation_count": sum(
+                member["unknown_observation_count"] for member in members
+            ),
+            "experimental_proposal_observation_count": sum(
+                member["experimental_proposal_observation_count"]
+                for member in members
+            ),
+            "interruption_classes": classes,
+            "all_links_independently_anchored": True,
+            "business_case_identity_verified": False,
+            "canonical_membership_unchanged": True,
+        })
+    return chains
+
+
 def reconstruct_resumptions(
     events: list[dict[str, Any]], packet: dict[str, Any],
 ) -> dict[str, Any]:
@@ -148,11 +207,17 @@ def reconstruct_resumptions(
         if len(edges) > MAX_RESUMPTIONS:
             raise ValueError("too many resumption links; select a smaller authorized window")
 
+    chains = _resumption_chains(edges)
+    chained_edge_count = sum(chain["resumption_count"] for chain in chains)
     return {
         "format": RESUMPTION_FORMAT,
         "evidence_sha256": expected["evidence_sha256"],
         "episode_count": len(episodes),
         "resumption_count": len(edges),
+        "resumption_chain_count": len(chains),
+        "resumption_chains": chains,
+        "chained_resumption_edge_count": chained_edge_count,
+        "standalone_resumption_edge_count": len(edges) - chained_edge_count,
         "unanchored_episode_count": unanchored,
         "abstention_counts": dict(sorted(abstentions.items())),
         "resumption_edges": edges,
