@@ -135,7 +135,8 @@ def test_complete_two_page_round_exports_hashed_events_and_removal_review(privat
     assert len(manifest["removed_case_ids"]) == 1
     assert manifest["removed_case_ids"][0].startswith("outlookcase:")
     for artifact in (params["output"], params["candidate"]):
-        assert os.stat(artifact).st_mode & 0o077 == 0
+        if os.name == "posix":  # Windows has no POSIX permission bits
+            assert os.stat(artifact).st_mode & 0o077 == 0
         assert TOKEN not in artifact.read_text()
         assert ID_A not in artifact.read_text()
         assert ID_B not in artifact.read_text()
@@ -162,8 +163,10 @@ def test_confirmed_prior_import_resumes_exact_delta_cursor(private):
 
 @pytest.mark.parametrize("failure", [
     "read_consent", "export_consent", "revoked", "wrong_scope",
-    "existing_csv", "existing_candidate", "bad_token", "unsafe_dir",
-    "unconfirmed_resume", "tampered_prior_csv", "unsafe_prior_dir", "wrong_folder",
+    "existing_csv", "existing_candidate", "bad_token",
+    pytest.param("unsafe_dir", marks=pytest.mark.skipif(os.name != "posix", reason="POSIX directory permissions do not exist on Windows")),
+    "unconfirmed_resume", "tampered_prior_csv",
+    pytest.param("unsafe_prior_dir", marks=pytest.mark.skipif(os.name != "posix", reason="POSIX directory permissions do not exist on Windows")), "wrong_folder",
 ])
 def test_preflight_refuses_without_provider_request(private, failure):
     params = args(private)

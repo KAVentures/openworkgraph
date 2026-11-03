@@ -120,7 +120,8 @@ def test_real_graph_request_contract_and_private_owg_csv(setup):
     assert ID_A not in args["output"].read_text()
     assert ID_B not in args["output"].read_text()
     assert TOKEN not in args["output"].read_text()
-    assert os.stat(args["output"]).st_mode & 0o077 == 0
+    if os.name == "posix":  # Windows has no POSIX permission bits
+        assert os.stat(args["output"]).st_mode & 0o077 == 0
     replay = options(setup, output="replay.csv")
     export_selected(**replay, opener=Graph([message(ID_A), message(ID_B, read=False)]))
     assert replay["output"].read_bytes() == args["output"].read_bytes()
@@ -134,7 +135,8 @@ def test_real_graph_request_contract_and_private_owg_csv(setup):
 
 @pytest.mark.parametrize("failure", [
     "read_consent", "export_consent", "grant_revoked", "wrong_scope",
-    "wrong_token", "existing_output", "unsafe_directory",
+    "wrong_token", "existing_output",
+    pytest.param("unsafe_directory", marks=pytest.mark.skipif(os.name != "posix", reason="POSIX directory permissions do not exist on Windows")),
 ])
 def test_preflight_refuses_without_graph_calls(setup, failure):
     args = options(setup)
