@@ -380,6 +380,9 @@ def test_imported_run_comparison_includes_prerequisite_first_matrix_and_partial_
         assert partial.json()["selected_case_count"] == 1
         assert partial.json()["case_review_coverage"] == "partial"
         assert partial.json()["unscanned_prerequisite_count"] == 1
+        assert partial.json()["operator_review_worklist_count"] == 1
+        assert partial.json()["operator_review_worklist"][0]["work_item_ref"] == CASE
+        assert partial.json()["operator_review_worklist"][0]["execution_authorized"] is False
         assert partial.json()["case_outcome_comparisons"][0]["review_pending"] is True
 
 
@@ -436,6 +439,11 @@ def test_prerequisite_matrix_preserves_paid_root_but_refuses_success_inference()
     assert result["narrow_historical_paid_observed_after_reported_finish"] is True
     assert result["cases_with_historical_paid_observed_after_reported_finish"] == 1
     assert result["cases_requiring_review"] == 2
+    assert result["operator_review_worklist_count"] == 2
+    assert [entry["work_item_ref"] for entry in result["operator_review_worklist"]] == [prerequisite, CASE]
+    assert "human_assessment_unknown" in result["operator_review_worklist"][0]["review_reason_codes"]
+    assert "prerequisite_review_unresolved" in result["operator_review_worklist"][1]["review_reason_codes"]
+    assert all(entry["execution_authorized"] is False for entry in result["operator_review_worklist"])
     assert result["case_outcome_comparisons"][1]["review_pending"] is True
     assert result["case_outcome_comparisons"][0]["provider_check_vs_reported_run_finish"] == "no_historical_provider_check"
     assert result["customer_outcome_verified"] is False
@@ -449,6 +457,8 @@ def test_prerequisite_matrix_preserves_paid_root_but_refuses_success_inference()
     plan["cases"][1]["prerequisites_with_unresolved_review"] = []
     no_false_provider_duty = review.compose_run_outcome_review(run, triage, plan)
     assert no_false_provider_duty["cases_requiring_review"] == 0
+    assert no_false_provider_duty["operator_review_worklist"] == []
+    assert no_false_provider_duty["operator_review_worklist_count"] == 0
     assert no_false_provider_duty["case_outcome_comparisons"][0]["review_pending"] is False
     plan["cases"].reverse()
     with pytest.raises(declarations.CaseDeclarationError):
