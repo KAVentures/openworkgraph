@@ -89,7 +89,7 @@ Normal operation does not store:
 - clipboard contents
 - password-field values
 - selected text
-- screenshots or screen recordings by default
+- screenshots or screen recordings by default (full screen capture is a separate opt-in; see Screenshots)
 - browser URL query strings or fragments
 
 The keyboard sensor reports counts/timing only.
@@ -268,6 +268,23 @@ When you turn on "Did agent work hold up?" in History:
 ## Screenshots
 
 Screenshot capture exists as disabled code/config support but is disabled in the normal configuration and is not part of the current product direction or standard exports. The current privacy strategy assumes useful workflow inference should work without continuous screenshots or recording.
+
+### Full screen capture (opt-in)
+
+How much to capture is the user's choice. In **Privacy → Full screen capture** (or
+`PUT /v1/screen-capture` with `{"mode": "full", "acknowledge": "full-screen-capture-v1"}`)
+the desktop recorder saves every connected monitor at native resolution when a window
+or document span starts, on each click and scroll, and every `screenshot_interval_seconds`
+(default 20, minimum 5) while the span stays open. **Also read text on screen**
+(`ocr_enabled`) runs Tesseract on this computer, when installed, and saves the text next to
+each image.
+
+- Off by default; turning it on needs the explicit acknowledgement above.
+- Images, recognized text and a per-capture manifest (`<id>.json`) stay in the local
+  screenshots folder. Events only carry a `screen_capture` summary: capture ids, monitor
+  count, OCR status and whether text was recognized. They never carry paths or text.
+- Never record lists, private-window markers and Pause still apply. The setting
+  hot-reloads, so turning it off stops new captures at the next poll.
 
 ## Titles: kept, with sensitive details tokenized (v0.108)
 

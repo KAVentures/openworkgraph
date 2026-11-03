@@ -13,6 +13,7 @@ from pathlib import Path
 
 import httpx
 
+from . import screen_capture
 from .platform import active_window, screen_locked, system_idle_seconds
 from .accessibility import element_at_position
 from .interactions import (
@@ -81,6 +82,10 @@ def load_config(path: Path) -> dict:
         "away_after_seconds": 300,
         "screenshot_interval_seconds": 20,
         "screenshots_enabled": False,
+        # Opt-in "full": every monitor at native resolution on span start, each
+        # interaction and every screenshot_interval_seconds; stays on device.
+        "screen_capture_mode": "off",
+        "screen_text_ocr_enabled": False,
         "upload_screenshots": False,
         "excluded_apps": ["1Password", "Bitwarden", "KeePass", "Keychain Access", "Messages", "iMessage", "WhatsApp", "Signal", "Telegram"],
         "excluded_title_patterns": ["password", "private", "incognito", "bank"],
@@ -107,6 +112,9 @@ def load_config(path: Path) -> dict:
 
 
 _LIVE_EXCLUSION_KEYS = ("excluded_apps", "excluded_title_patterns")
+# Full screen capture is a user choice that must also stop immediately when
+# turned off, so it hot-reloads with the exclusions.
+_LIVE_CAPTURE_KEYS = ("screen_capture_mode", "screen_text_ocr_enabled")
 
 
 def refresh_live_exclusions(config_path: Path, cfg: dict, cache: dict) -> bool:
@@ -137,6 +145,8 @@ def refresh_live_exclusions(config_path: Path, cfg: dict, cache: dict) -> bool:
         raw = value.get(key)
         if isinstance(raw, list):
             cfg[key] = list(raw)
+    cfg["screen_capture_mode"] = screen_capture.mode(value)
+    cfg["screen_text_ocr_enabled"] = value.get("screen_text_ocr_enabled") is True
     cache["stamp"] = stamp
     return True
 
@@ -146,7 +156,26 @@ def _live_public_window(config_path: Path, cfg: dict, cache: dict, window=None) 
     return _public_window(window if window is not None else active_window(), cfg)
 
 
-def screenshot(event_id: str) -> str | None:
+_SCREEN_MANIFESTS: dict[str, dict] = {}
+
+
+def take_screen_manifest(event_id: str) -> dict | None:
+    return _SCREEN_MANIFESTS.pop(event_id, None)
+
+
+def _capture(event_id: str, cfg: dict) -> str | None:
+    """Full mode passes the config; the legacy call shape is kept otherwise."""
+    return screenshot(event_id, cfg) if screen_capture.full_mode(cfg) else screenshot(event_id)
+
+
+def screenshot(event_id: str, cfg: dict | None = None) -> str | None:
+    if screen_capture.full_mode(cfg):
+        manifest = screen_capture.capture_all_monitors(
+            event_id, S_SCREEN, ocr=bool((cfg or {}).get("screen_text_ocr_enabled")))
+        if manifest is None:
+            return None
+        _SCREEN_MANIFESTS[event_id] = manifest
+        return manifest["images"][0]["path"]
     try:
         import mss
         from PIL import Image
@@ -322,8 +351,14 @@ def _focus_span_event(
     screenshot_path: str | None = None,
     activity: dict | None = None,
     boundary_reason: str = "focus_change",
+    screen_captures: list[dict] | None = None,
 ) -> dict:
     activity = dict(activity or {})
+    captures = [item for item in (screen_captures or []) if item]
+    capture_summary = screen_capture.event_summary(captures[0]) if captures else {}
+    if capture_summary:
+        capture_summary["screen_capture"]["capture_count"] = len(captures)
+        capture_summary["screen_capture"]["capture_ids"] = [item["event_id"] for item in captures[:50]]
     return {
         "event_id": str(uuid.uuid4()),
         "observed_at": started_at,
@@ -343,6 +378,7 @@ def _focus_span_event(
             "activity": activity,
             "privacy": {"key_identities": False, "typed_values": False},
             **(state.get("business_context") or {}),
+            **capture_summary,
         },
     }
 
@@ -469,8 +505,8 @@ def _interaction_event(*, raw: RawInteraction, cfg: dict, session_id: str) -> di
 
     event_id = str(uuid.uuid4())
     shot = None
-    if cfg.get("interaction_screenshots_enabled") and not state["excluded"]:
-        shot = screenshot(event_id)
+    if (cfg.get("interaction_screenshots_enabled") or screen_capture.full_mode(cfg)) and not state["excluded"]:
+        shot = _capture(event_id, cfg)
 
     return {
         "event_id": event_id,
@@ -485,6 +521,7 @@ def _interaction_event(*, raw: RawInteraction, cfg: dict, session_id: str) -> di
         "metadata": metadata | {
             "excluded": state["excluded"],
             "screenshot_captured_locally": bool(shot),
+            **screen_capture.event_summary(take_screen_manifest(event_id)),
         },
     }
 
@@ -640,6 +677,8 @@ def _run_locked(config_path: Path) -> None:
     current_started_wall = ""
     current_started_mono = 0.0
     current_screenshot: str | None = None
+    current_captures: list[dict] = []
+    last_capture_mono = 0.0
     # A same-app title change becomes a boundary only after it persists.
     pending_doc = ""
     pending_count = 0
@@ -791,6 +830,7 @@ def _run_locked(config_path: Path) -> None:
             screenshot_path=current_screenshot,
             activity=activity,
             boundary_reason=reason,
+            screen_captures=current_captures,
         ), outbox)
 
     def emit_away(end_mono: float, reason: str) -> None:
@@ -810,18 +850,27 @@ def _run_locked(config_path: Path) -> None:
 
     def open_span(state: dict, key, wall: str, mono: float) -> None:
         nonlocal current_state, current_key, current_doc, current_started_wall, current_started_mono, current_screenshot
+        nonlocal current_captures, last_capture_mono
         current_state = state
         current_key = key
         current_doc = state.get("document_key", "") if _document_tracking(state, cfg) else ""
         current_started_wall = wall
         current_started_mono = mono
         current_screenshot = None
-        if cfg.get("screenshots_enabled") and not state["excluded"]:
-            current_screenshot = screenshot(str(uuid.uuid4()))
+        current_captures = []
+        if (cfg.get("screenshots_enabled") or screen_capture.full_mode(cfg)) and not state["excluded"]:
+            capture_id = str(uuid.uuid4())
+            current_screenshot = _capture(capture_id, cfg)
+            manifest = take_screen_manifest(capture_id)
+            if manifest:
+                current_captures.append(manifest)
+            last_capture_mono = mono
         clear_pending()
 
     def close_span() -> None:
         nonlocal current_state, current_key, current_doc, current_started_wall, current_started_mono, current_screenshot
+        nonlocal current_captures
+        current_captures = []
         current_state, current_key, current_doc = None, None, ""
         current_started_wall, current_started_mono, current_screenshot = "", 0.0, None
         clear_pending()
@@ -941,6 +990,16 @@ def _run_locked(config_path: Path) -> None:
                 pending = (pending_doc, pending_count, pending_wall, pending_mono, pending_state)
                 open_span(current_state, current_key, now_wall, now_mono)
                 pending_doc, pending_count, pending_wall, pending_mono, pending_state = pending
+
+        if (current_state is not None and not away and not current_state["excluded"]
+                and screen_capture.full_mode(cfg)
+                and now_mono - last_capture_mono >= screen_capture.interval_seconds(cfg)):
+            capture_id = str(uuid.uuid4())
+            if _capture(capture_id, cfg):
+                manifest = take_screen_manifest(capture_id)
+                if manifest:
+                    current_captures.append(manifest)
+            last_capture_mono = now_mono
 
         if watch_clipboard:
             token = clipboard_change_token()

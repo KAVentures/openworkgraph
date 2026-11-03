@@ -205,6 +205,14 @@
           <div><h3>Experimental Open Work AI tools</h3><div class="muted">Allow your existing local AI connector to expose two extra read-only tools: get_case_context and verify_case_operation. This does not enable AI access, saved-history access, source scans, or business actions. Reconnect your AI app to refresh its tool list.</div><div class="muted" id="pvOpenWorkMcpStatus" role="status" aria-live="polite">Checking…</div></div>
           <div class="pv-control"><button type="button" role="switch" class="sw" aria-label="Experimental Open Work AI tools" id="pvOpenWorkMcpSwitch" aria-checked="false"></button></div>
         </div>
+        <div class="pv-row" id="pvScreenCaptureRow">
+          <div><h3>Full screen capture</h3><div class="muted">Off by default. When on, the desktop recorder saves every monitor at full resolution when you switch windows, on each click or scroll, and every <span id="pvScreenInterval">20</span> seconds. Everything visible is captured, including other people's messages and personal content. Images stay on this computer. Apps, sites and title words in Never record below are still skipped, and Pause stops capture.</div></div>
+          <div class="pv-control"><button type="button" class="sw" role="switch" id="pvScreenCaptureSwitch" aria-checked="false" aria-label="Full screen capture"></button></div>
+        </div>
+        <div class="pv-row pv-sub" id="pvScreenOcrRow">
+          <div><h3>Also read text on screen</h3><div class="muted">Recognizes the text in each capture on this computer (needs Tesseract installed) and saves it next to the image.</div><div class="muted" id="pvScreenOcrStatus" role="status" aria-live="polite"></div></div>
+          <div class="pv-control"><button type="button" class="sw" role="switch" id="pvScreenOcrSwitch" aria-checked="false" aria-label="Read text in screen captures"></button></div>
+        </div>
         <div class="pv-row" id="pvWorkTextRow">
           <div><h3>Capture visible work text for AI</h3><div class="muted">Off by default. When enabled, the paired browser sensor automatically saves redacted visible page text and drafts on permitted sites. This is separate from ordinary activity recording. Sensitive surfaces are blocked, but filtering cannot guarantee perfect removal of private information. Content stays on this computer unless you separately enable cloud synchronization below.</div></div>
           <div class="pv-control"><button type="button" class="sw" role="switch" id="pvWorkTextSwitch" aria-checked="false" aria-label="Capture visible browser work text"></button></div>
@@ -309,6 +317,16 @@
         : redacted ? 'Recommended. Titles keep their meaning: "Re: Contract for PERSON_1A2B3C - Gmail".'
         : 'Off: AI apps get titles exactly as stored. Names are already tokenized before storage, but anything the detector missed is shown.';
     }
+    // Full screen capture is a separate, explicit choice; default OFF.
+    const screenOn = p.screen?.mode === 'full';
+    setSwitch('#pvScreenCaptureSwitch', screenOn);
+    setSwitch('#pvScreenOcrSwitch', !!p.screen?.ocr_enabled);
+    const screenOcr = $('#pvScreenOcrSwitch');
+    if (screenOcr) screenOcr.disabled = !screenOn;
+    const ocrStatus = $('#pvScreenOcrStatus');
+    if (ocrStatus) ocrStatus.textContent = p.screen && !p.screen.ocr_available ? 'Tesseract is not installed on this computer, so text is not recognized yet.' : '';
+    const screenInterval = $('#pvScreenInterval');
+    if (screenInterval && p.screen?.interval_seconds) screenInterval.textContent = String(Math.round(p.screen.interval_seconds));
     // Separate work-text capture and AI read grants; both default OFF.
     setSwitch('#pvWorkTextSwitch', !!p.workText?.capture_enabled);
     setSwitch('#pvWorkTextAiSwitch', !!p.workText?.ai_read_enabled);
@@ -651,6 +669,24 @@
       window.refreshAiContextDetail?.();
       renderPrivacy();
     };
+    panel.querySelector('#pvScreenCaptureSwitch').onclick = async () => {
+      const enabled = privacy.screen?.mode === 'full';
+      if (!enabled && !confirm('Turn on full screen capture? Every monitor is saved at full resolution on each window switch, click, scroll and interval, including anything personal or confidential that is visible. Images stay on this computer.')) return;
+      try {
+        privacy.screen = await api('/v1/screen-capture', send('PUT', enabled ? {mode: 'off'}
+          : {mode: 'full', acknowledge: privacy.screen?.acknowledgement_version || 'full-screen-capture-v1'}));
+        toast(enabled ? 'Full screen capture turned off.' : 'Full screen capture on for new activity.');
+      } catch (error) { toast(error.message || 'Could not change screen capture.'); }
+      renderPrivacy();
+    };
+    panel.querySelector('#pvScreenOcrSwitch').onclick = async () => {
+      if (privacy.screen?.mode !== 'full') return;
+      try {
+        privacy.screen = await api('/v1/screen-capture', send('PUT', {ocr_enabled: !privacy.screen.ocr_enabled}));
+        toast(privacy.screen.ocr_enabled ? 'Text in captures will be recognized on this computer.' : 'Screen text recognition off.');
+      } catch (error) { toast(error.message || 'Could not change screen text recognition.'); }
+      renderPrivacy();
+    };
     panel.querySelector('#pvWorkTextSwitch').onclick = async () => {
       const enabled = !!privacy.workText?.capture_enabled;
       if (!enabled && !confirm('Enable automatic browser work-text capture? Email/page text and drafts may contain sensitive information that filters cannot always detect. Content stays local unless you separately opt into cloud synchronization below. Local retention defaults to 7 days. Turning capture off deletes saved text.')) return;
@@ -736,13 +772,13 @@
     if (privacyLoading) return;
     privacyLoading = true;
     try {
-      const [capture, policy, access, history, detail, browser, lists, workText] = await Promise.all([
+      const [capture, policy, access, history, detail, browser, lists, workText, screen] = await Promise.all([
         api('/v1/capture/status').catch(() => null), api('/v1/history-policy').catch(() => null), api('/v1/ai-access').catch(() => null),
         api('/v1/history/ai-access').catch(() => null), api('/v1/ai-context').catch(() => null),
         api('/v1/browser-signal-settings').catch(() => null), api('/v1/capture-exclusions').catch(() => null),
-        api('/v1/work-text/policy').catch(() => null),
+        api('/v1/work-text/policy').catch(() => null), api('/v1/screen-capture').catch(() => null),
       ]);
-      Object.assign(privacy, {capture, policy, access, history: history?.access || null, detail, browser, lists, workText});
+      Object.assign(privacy, {capture, policy, access, history: history?.access || null, detail, browser, lists, workText, screen});
       renderPrivacy();
       renderHero();
     } finally { privacyLoading = false; }

@@ -11,7 +11,7 @@ from typing import Any
 from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
 
-from . import capture_exclusions
+from . import capture_exclusions, screen_capture_settings
 from .main import ROOT
 from .update_check import update_status
 from .secure_app import app
@@ -25,6 +25,20 @@ async def put_capture_exclusions(request: Request) -> dict[str, Any]:
     try:
         payload = await request.json()
         return capture_exclusions.update(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def get_screen_capture() -> dict[str, Any]:
+    return screen_capture_settings.current()
+
+
+async def put_screen_capture(request: Request) -> dict[str, Any]:
+    try:
+        payload = await request.json()
+        return screen_capture_settings.update(payload)
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -60,6 +74,8 @@ async def _inject_basic_mode_script(request: Request, call_next):
 if not getattr(app.state, "owg_basic_mode_installed", False):
     app.add_api_route("/v1/capture-exclusions", get_capture_exclusions, methods=["GET"])
     app.add_api_route("/v1/capture-exclusions", put_capture_exclusions, methods=["PUT"])
+    app.add_api_route("/v1/screen-capture", get_screen_capture, methods=["GET"])
+    app.add_api_route("/v1/screen-capture", put_screen_capture, methods=["PUT"])
     app.add_api_route("/basic-mode.js", basic_mode_script, methods=["GET"])
     app.add_api_route("/v1/update-status", update_status, methods=["GET"])
     from .analysis_handoff import analysis_preview
@@ -71,4 +87,5 @@ if not getattr(app.state, "owg_basic_mode_installed", False):
     app.state.owg_basic_mode_installed = True
 
 
-__all__ = ["basic_mode_script", "get_capture_exclusions", "put_capture_exclusions", "update_status"]
+__all__ = ["basic_mode_script", "get_capture_exclusions", "get_screen_capture", "put_capture_exclusions",
+           "put_screen_capture", "update_status"]
