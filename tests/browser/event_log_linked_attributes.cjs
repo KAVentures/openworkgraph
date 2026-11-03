@@ -118,6 +118,25 @@ const path = require('node:path');
     assert.equal(await page.locator('#owgLinkedJSON').isDisabled(), true);
     await page.locator('#owgLinkedRun').click();
     assert.equal(joinedReads, 1, 'out-of-range group limit is rejected locally');
+
+    // A late response must never resurrect a stale analysis after input edits.
+    await page.locator('#owgLinkedLimit').fill('50');
+    await page.locator('#owgLinkedAttribute').fill('region');
+    await page.route('**/linked-attribute-analysis', async route => {
+      const actual = await route.fetch();
+      await new Promise(resolve => setTimeout(resolve, 250));
+      await route.fulfill({response: actual});
+    });
+    const lateResponse = page.waitForResponse(response =>
+      response.url().includes('/linked-attribute-analysis') && response.request().method() === 'POST');
+    await page.locator('#owgLinkedRun').click();
+    await page.locator('#owgLinkedAttribute').fill('different_region');
+    assert.equal(await page.locator('#owgLinkedRun').isDisabled(), false,
+      'editing during a request must allow a new explicit run');
+    await lateResponse;
+    assert.equal(await page.locator('#owgLinkedResults').textContent(), '',
+      'superseded response must not repopulate results');
+    await page.unroute('**/linked-attribute-analysis');
     await page.locator('#owgEventLogCaseType').selectOption('invoice');
     assert.equal(await page.locator('#owgLinkedAttributes').count(), 0,
       'changing case notion invalidates the old analysis and exports');
