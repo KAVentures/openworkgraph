@@ -371,6 +371,38 @@
       verified_business_outcomes:false};
   }
 
+  // Human pilot follow-up classification, not a permission or an execution decision.
+  // A disposition is only valid for a locally inspected row on an explicitly reviewed page.
+  const PILOT_DISPOSITIONS=['needs_evidence','supervised_trial_candidate','not_suitable'];
+  function pilotDispositionWorklist(eligible,pages,inspected,dispositions,createdAt){
+    const combined=combinedPortfolioHandoffReview(eligible,pages,createdAt);
+    if(!(inspected instanceof Set)||!(dispositions instanceof Map))
+      throw new Error('Invalid local pilot inspection state.');
+    const reviewedIds=new Set(combined.pages.flatMap(page=>page.items.map(item=>item.idea_id)));
+    if([...inspected].some(id=>!reviewedIds.has(id))||
+      [...dispositions].some(([id,value])=>!reviewedIds.has(id)||
+        !inspected.has(id)||!PILOT_DISPOSITIONS.includes(value)))
+      throw new Error('Local pilot dispositions are stale or not inspected.');
+    const rows=combined.pages.flatMap(page=>page.items.map(item=>({
+      idea_id:item.idea_id,project_id:item.project_id||null,
+      reviewed_page:page.page_number,
+      inspected_locally:inspected.has(item.idea_id),
+      follow_up_disposition:dispositions.get(item.idea_id)||null,
+      outstanding_checks:item.status==='unavailable'?['evidence_unavailable']:
+        item.status==='no_export'?['no_recorded_project']:[...item.blockers]
+    })));
+    return {format:'openworkgraph.pilot-handoff-worklist.v2',
+      scope:'local_human_review_only',generated_at:combined.generated_at,
+      eligible_count:combined.eligible_count,reviewed_count:combined.reviewed_count,
+      unreviewed_count:combined.unreviewed_count,
+      reviewed_page_numbers:combined.reviewed_page_numbers,
+      unreviewed_page_numbers:combined.unreviewed_page_numbers,
+      complete_coverage:combined.complete_coverage,
+      source_read_authorized:false,human_approval_granted:false,
+      execution_authorized:false,verified_execution:false,
+      verified_business_outcomes:false,rows};
+  }
+
   // Compare an imported point-in-time review packet against a freshly fetched local journey.
   // Never restore approval or trust imported fields as execution/verification evidence.
   function compareHandoffReviewPackets(saved,current){
@@ -650,6 +682,7 @@
     let latestIdeas=[],refreshGeneration=0,resumeGeneration=0,auditGeneration=0,auditPageIndex=0,auditAbort=null;
     const auditPages=new Map();let auditBasis=null,triageGeneration=0;
     const pilotInspected=new Set(); // Ephemeral local inspection only; never approval or execution.
+    const pilotDispositions=new Map(); // Ephemeral follow-up plans, never authorization.
     const auditSnapshot=()=>JSON.stringify(auditEligible().map(i=>
       [i.idea_id,i.revision,i.state,i.updated_at||'']));
     function updateCumulative(){
@@ -700,7 +733,7 @@
           ' matches; '+selected.omitted_count+' omitted from this bounded view.':'.')+
           ' No independent outcome verification or authorization.';
         const table=el('table'),head=el('tr'),body=el('tbody');
-        ['Opportunity','Reviewed page','Outstanding checks','Human review','Pilot inspection'].forEach(name=>
+        ['Opportunity','Reviewed page','Outstanding checks','Human review','Pilot inspection','Pilot follow-up'].forEach(name=>
           head.appendChild(el('th',name)));
         for(const item of selected.items){
           const idea=latestIdeas.find(i=>i.idea_id===item.idea_id);
@@ -745,12 +778,33 @@
               inspected.checked=false;return;
             }
             if(inspected.checked)pilotInspected.add(item.idea_id);
-            else pilotInspected.delete(item.idea_id);
+            else {pilotInspected.delete(item.idea_id);pilotDispositions.delete(item.idea_id);}
+            disposition.value=pilotDispositions.get(item.idea_id)||'';
+            disposition.disabled=!inspected.checked;
             auditStatus.textContent=pilotInspected.size+' opportunities marked inspected locally; no blockers cleared, approvals or agent actions.';
           };
           const inspectedLabel=el('label');
           inspectedLabel.append(inspected,document.createTextNode(' Inspected locally'));
           inspectedCell.appendChild(inspectedLabel);tr.appendChild(inspectedCell);
+          const dispositionCell=el('td');
+          const disposition=select('owgPilotDisposition_'+item.idea_id,[
+            ['','Undecided'],['needs_evidence','Needs evidence'],
+            ['supervised_trial_candidate','Candidate for supervised trial'],
+            ['not_suitable','Not suitable for trial']]);
+          disposition.setAttribute('aria-label','Local pilot follow-up for '+(idea?.title||item.idea_id));
+          disposition.value=pilotDispositions.get(item.idea_id)||'';
+          disposition.disabled=!inspected.checked;
+          disposition.onchange=()=>{
+            if(request!==auditGeneration||triageRequest!==triageGeneration||
+              auditBasis!==auditSnapshot()||!auditPages.has(item.page_number)||
+              !pilotInspected.has(item.idea_id)){
+              disposition.value='';disposition.disabled=true;return;
+            }
+            if(disposition.value)pilotDispositions.set(item.idea_id,disposition.value);
+            else pilotDispositions.delete(item.idea_id);
+            auditStatus.textContent='Local follow-up plan updated. No consent, approval or agent action.';
+          };
+          dispositionCell.appendChild(disposition);tr.appendChild(dispositionCell);
           body.appendChild(tr);
         }
         const thead=el('thead');thead.appendChild(head);table.append(thead,body);
@@ -771,22 +825,8 @@
         // Export every explicitly inspected row, not the 24-row UI preview.
         const combined=combinedPortfolioHandoffReview(auditEligible(),auditPages,new Date().toISOString());
         portfolioReviewTriage(auditEligible(),auditPages,'all');
-        const rows=combined.pages.flatMap(page=>page.items.map(item=>({
-          idea_id:item.idea_id,project_id:item.project_id||null,
-          reviewed_page:page.page_number,
-          inspected_locally:pilotInspected.has(item.idea_id),
-          outstanding_checks:item.status==='unavailable'?['evidence_unavailable']:
-            item.status==='no_export'?['no_recorded_project']:[...item.blockers]
-        })));
-        const record={format:'openworkgraph.pilot-handoff-worklist.v1',
-          scope:'local_human_review_only',generated_at:combined.generated_at,
-          eligible_count:combined.eligible_count,reviewed_count:combined.reviewed_count,
-          unreviewed_count:combined.unreviewed_count,
-          reviewed_page_numbers:combined.reviewed_page_numbers,
-          unreviewed_page_numbers:combined.unreviewed_page_numbers,
-          complete_coverage:combined.complete_coverage,
-          source_read_authorized:false,execution_authorized:false,
-          verified_business_outcomes:false,rows};
+        const record=pilotDispositionWorklist(auditEligible(),auditPages,
+          pilotInspected,pilotDispositions,combined.generated_at);
         const serialized=JSON.stringify(record);
         if(serialized.length>65536)throw new Error('Pilot worklist exceeds 64 KiB; use reviewed-page exports instead.');
         const url=URL.createObjectURL(new Blob([serialized],{type:'application/json'}));
@@ -801,7 +841,7 @@
     function clearCumulative(reason){
       ++auditGeneration;
       if(auditAbort)auditAbort.abort();
-      auditAbort=null;auditPages.clear();pilotInspected.clear();auditBasis=null;auditPageIndex=0;
+      auditAbort=null;auditPages.clear();pilotInspected.clear();pilotDispositions.clear();auditBasis=null;auditPageIndex=0;
       auditHost.replaceChildren();auditButton.disabled=false;
       auditStatus.textContent=reason||'Review cleared. Explicitly check pages again.';
       syncAuditPages();updateCumulative();
@@ -1853,6 +1893,6 @@
     refresh().catch(e=>{status.textContent=e.message;});
   }
 
-  window.__owgPipelineModel={assessmentBody,portfolioView,handoffReviewPacket,handoffDependencyReview,compareHandoffReviewPackets,compareRecordedProjects,compareProjectHandoffReadiness,portfolioHandoffRow,combinedPortfolioHandoffReview,portfolioReviewTriage,handoffInspectionWorklist,handoffInspectionSnapshotDigest,restoreHandoffInspectionKeys};
+  window.__owgPipelineModel={assessmentBody,portfolioView,handoffReviewPacket,handoffDependencyReview,compareHandoffReviewPackets,compareRecordedProjects,compareProjectHandoffReadiness,portfolioHandoffRow,combinedPortfolioHandoffReview,portfolioReviewTriage,handoffInspectionWorklist,handoffInspectionSnapshotDigest,restoreHandoffInspectionKeys,pilotDispositionWorklist};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
