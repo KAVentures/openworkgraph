@@ -14,10 +14,10 @@ def _args(tmp_path):
     for directory in ("prior", "journal", "handoff", "next"):
         (tmp_path / directory).mkdir(mode=0o700)
     prior = tmp_path / "prior" / "round1.json"
-    prior.write_text('{"candidate":"example"}')
+    prior.write_text(json.dumps({"csv_sha256": "a" * 64}))
     prior.chmod(0o600)
     identity = hashlib.sha256(_canonical({
-        "candidate_sha256": hashlib.sha256(prior.read_bytes()).hexdigest(),
+        "candidate_sha256": "a" * 64,
         "log_id": "log_test",
     })).hexdigest()
     handoff = tmp_path / "handoff" / ("handoff-" + identity + ".json")
