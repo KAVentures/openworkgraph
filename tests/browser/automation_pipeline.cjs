@@ -161,7 +161,7 @@ const path=require('node:path');
    await page.locator('#owgCatalogList').getByRole('button',{name:'Saved renewal review · r1',exact:true}).click();
    await page.getByRole('textbox',{name:'Business goal',exact:true}).fill('UNSAVED goal must stay outside the idea');
    await page.getByRole('button',{name:'Add saved revision to automation pipeline',exact:true}).click();
-   await page.locator('#owgPipelineDetail h3').filter({hasText:'Project comparison review'}).waitFor();
+   await page.locator('#owgPipelineDetail h3').filter({hasText:'Saved renewal review'}).waitFor();
    await page.locator('#owgPipelineProcessStatus').filter({hasText:'Current saved revision'}).waitFor();
    assert.match(await page.locator('#owgPipelineDetail').textContent(),/Review the selected renewal/);
    assert.doesNotMatch(await page.locator('#owgPipelineDetail').textContent(),/UNSAVED/);
@@ -295,7 +295,7 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await page.locator('#owgPipelinePortfolioAuditStatus')
      .filter({hasText:'1 reviewed of 1 eligible'}).waitFor();
    await page.locator('#owgPipelinePortfolioAuditResults')
-     .getByRole('button',{name:/Open exact project review for Project comparison review/}).click();
+     .getByRole('button',{name:/Open exact project review for Saved renewal review/}).click();
    await page.locator('#owgPipelineJourneyProject').waitFor();
    assert.equal(await page.locator('#owgPipelineJourneyProject').inputValue(),manifest.project_id);
    assert.match(await page.locator('#owgPipelineJourneyReadiness').textContent(),/Handoff review/);
@@ -953,6 +953,8 @@ with zipfile.ZipFile(sys.argv[1]) as z:
      if(!response.ok)throw new Error('Could not create saved comparison process: '+response.status);
    });
    await page.getByRole('button',{name:'Load saved designs',exact:true}).click();
+   // The catalog still holds the earlier unsaved goal edit; replacing it asks for confirmation.
+   page.once('dialog',dialog=>dialog.accept());
    await page.locator('#owgCatalogList').getByRole('button',{name:'Project comparison review · r1',exact:true}).click();
    await page.getByRole('button',{name:'Add saved revision to automation pipeline',exact:true}).click();
    await page.locator('#owgPipelineProcessStatus').filter({hasText:'Current saved revision'}).waitFor();
@@ -1090,7 +1092,9 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    const comparisonRows=comparePanel.locator('#owgPipelineProjectComparisonResult > .table-wrap tbody tr');
    assert.equal(await comparisonRows.count(),7);
    assert.match(await comparisonRows.filter({hasText:'Idea revision'}).first().textContent(),/Changed/);
-   assert.match(await comparisonRows.filter({hasText:'Specification SHA-256'}).textContent(),/Changed/);
+   // Only the idea assessment changed; the specification comes from the same saved process
+   // revision and is identical, while the ZIP records the new idea revision.
+   assert.match(await comparisonRows.filter({hasText:'Specification SHA-256'}).textContent(),/Matching recorded field/);
    assert.match(await comparisonRows.filter({hasText:'ZIP SHA-256'}).textContent(),/Changed/);
    assert.match(await comparisonRows.filter({hasText:'Reported specification status counts'}).textContent(),/None recorded/);
    assert.match(await comparePanel.textContent(),/Execution and business outcomes remain unverified/);

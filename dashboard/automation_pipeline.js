@@ -1080,7 +1080,7 @@
             try{
               const comparison=compareRecordedProjects(data,baselineProject.value,candidateProject.value);
               comparisonView.replaceChildren(el('p',comparison.changed_count?
-                comparison.changed_count+' recorded artifact/metadata differences. Review the pinned projects before a new handoff.':
+                comparison.changed_count+' recorded artifact/metadata differences. Review the pinned projects before a new handoff. Execution and business outcomes remain unverified.':
                 'No difference in compared recorded fields. Execution and business outcomes remain unverified.'));
               const table=el('table'),head=el('tr');
               for(const title of ['Recorded field','Baseline project','Candidate project','Comparison']){
@@ -1355,7 +1355,7 @@
                     if(generation!==detailGeneration||choice.value!==p.project_id||
                       requestSequence!==comparisonSequence||!compareResult.contains(exportBundle))return;
                     const bundle=handoffReviewBundle(saved,record);
-                    const payload=JSON.stringify(bundle,null,2)+'\\n';
+                    const payload=JSON.stringify(bundle,null,2)+'\n';
                     const blob=new Blob([payload],{type:'application/json'});
                     if(blob.size>65536)throw new Error('Bundle exceeds 64 KiB. Use separate review and inspection files.');
                     const url=URL.createObjectURL(blob),link=el('a');
@@ -1494,7 +1494,9 @@
                   comparePacket.disabled=false;
               }
             };
-            if(resume&&p.project_id===resume.projectId)resumeCompare=async()=>{
+            // Only a saved review bundle carries a file to re-compare; opening an exact
+            // project from the portfolio inbox just selects it.
+            if(resume&&resume.file instanceof File&&p.project_id===resume.projectId)resumeCompare=async()=>{
               // Reuse the exact same fresh authenticated comparison and digest
               // validation as manual import; the file never leaves the browser.
               const transfer=new DataTransfer();
