@@ -42,10 +42,10 @@ def _controlled_persist(event, outbox):
     return _real_persist(prepared, outbox)
 
 
-def _controlled_screenshot(event_id: str):
+def _controlled_screenshot(event_id: str, *args, **kwargs):
     if not _recording():
         return None
-    return _real_screenshot(event_id)
+    return _real_screenshot(event_id, *args, **kwargs)
 
 
 def _controlled_activity_record(self, kind, occurred_mono):
