@@ -195,6 +195,33 @@ def compose_run_outcome_review(
             "customer_outcome_verified": False,
             "agent_caused_outcome_verified": False,
         })
+    # A concrete operator worklist, ordered by dependency rather than by the
+    # imported run's untrusted success flag. Only the reviewed cases are listed;
+    # omitted prerequisites are disclosed separately, never guessed.
+    review_worklist = []
+    for case in comparisons:
+        if not case["review_pending"]:
+            continue
+        reasons = []
+        if case["disputed_check_count"]:
+            reasons.append("disputed_provider_evidence")
+        if case["latest_human_assessed_status"] == "unknown":
+            reasons.append("human_assessment_unknown")
+        if (case["owner_declared_expected_outcome_code"] == "stripe_invoice_paid_reported"
+                and case["historical_last_provider_state"] == "unknown"):
+            reasons.append("payment_state_not_established")
+        if case["prerequisites_with_unresolved_review"]:
+            reasons.append("prerequisite_review_unresolved")
+        if not reasons:
+            reasons.append("owner_review_required")
+        review_worklist.append({
+            "work_item_ref": case["work_item_ref"],
+            "role": case["role"],
+            "review_reason_codes": reasons,
+            "operator_action_codes": case["operator_action_codes"],
+            "requires_human_decision": True,
+            "execution_authorized": False,
+        })
     root = rows[-1]
     root_plan = plans[-1]
     provider = root.get("historical_last_provider_state")
@@ -239,6 +266,8 @@ def compose_run_outcome_review(
         "unscanned_prerequisite_count": triage["unscanned_prerequisite_count"],
         "all_prerequisites_reviewed": triage["all_declared_prerequisites_included"],
         "case_outcome_comparisons": comparisons,
+        "operator_review_worklist": review_worklist,
+        "operator_review_worklist_count": len(review_worklist),
         "selected_case_count": len(comparisons),
         "cases_requiring_review": sum(bool(case["review_pending"]) for case in comparisons),
         "cases_with_historical_paid_observed_after_reported_finish": sum(
