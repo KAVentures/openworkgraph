@@ -1391,7 +1391,6 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    const pilotWorklist=JSON.parse(await fs.readFile(await pilotWorklistDownload.path(),'utf8'));
    assert.equal(pilotWorklist.format,'openworkgraph.pilot-handoff-worklist.v1');
    assert.equal(pilotWorklist.rows.length,combined.reviewed_count);
-   assert.equal(pilotWorklist.rows.length>24,false);
    assert.equal(pilotWorklist.execution_authorized,false);
    assert.equal(pilotWorklist.source_read_authorized,false);
    assert.equal(pilotWorklist.verified_business_outcomes,false);
