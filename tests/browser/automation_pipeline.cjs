@@ -1385,12 +1385,21 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    assert(searched.invalid);
    assert.equal(searched.exact.execution_authorized,false);
    assert.equal(searched.exact.source_read_authorized,false);
+   // Human inspection is an ephemeral local annotation, not a cleared blocker or approval.
+   const firstPilotInspection=page.locator('#owgPipelinePortfolioTriageRows input[type="checkbox"]').first();
+   assert(await firstPilotInspection.isVisible());
+   await firstPilotInspection.focus();
+   await page.keyboard.press('Space');
+   assert(await firstPilotInspection.isChecked());
+   const inspectedIdeaId=combined.pages.flatMap(p=>p.items)[0].idea_id;
    const [pilotWorklistDownload]=await Promise.all([
      page.waitForEvent('download'),
      page.locator('#owgPipelinePortfolioPilotWorklist').focus().then(()=>page.keyboard.press('Enter'))]);
    const pilotWorklist=JSON.parse(await fs.readFile(await pilotWorklistDownload.path(),'utf8'));
    assert.equal(pilotWorklist.format,'openworkgraph.pilot-handoff-worklist.v1');
    assert.equal(pilotWorklist.rows.length,combined.reviewed_count);
+   assert.equal(pilotWorklist.rows.filter(row=>row.inspected_locally).length,1);
+   assert.equal(pilotWorklist.rows.find(row=>row.idea_id===inspectedIdeaId)?.inspected_locally,true);
    assert.equal(pilotWorklist.execution_authorized,false);
    assert.equal(pilotWorklist.source_read_authorized,false);
    assert.equal(pilotWorklist.verified_business_outcomes,false);
