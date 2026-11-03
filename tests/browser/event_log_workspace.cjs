@@ -1226,7 +1226,7 @@ const path=require('node:path');
    // comparison from the selected numeric attribute and missing-value policy.
    await page.locator('#owgMetricName').fill('review');
    await page.locator('#owgMetricStatistic').selectOption('average');
-   await page.locator('#owgMetricMissingPolicy').selectOption('available');
+   await page.locator('#owgMetricMissingPolicy').selectOption('complete');
    await page.locator('#owgMetricStageFrom').selectOption('Start');
    await page.locator('#owgMetricStageTo').selectOption('End');
    assert.equal(await page.locator('#owgMetricCompareStages').isVisible(),true);
@@ -1268,11 +1268,11 @@ const path=require('node:path');
    const deltaSpec=JSON.parse(stageDeltaResponse.request().postData());
    assert.equal(deltaSpec.metrics.length,3);
    assert.deepEqual(deltaSpec.metrics.slice(0,2).map(m=>[m.name,m.statistic,m.stage_occurrence,m.missing_policy,m.unit]),
-     [['review_first','average','first','available','EUR'],['review_last','average','last_completed','available','EUR']]);
+     [['review_first','average','first','complete','EUR'],['review_last','average','last_completed','complete','EUR']]);
    assert.deepEqual(deltaSpec.metrics[2],{name:'review_delta',kind:'arithmetic',expression_version:'1',
      operation:'subtract',left:{kind:'metric',name:'review_last'},right:{kind:'metric',name:'review_first'}});
    const deltaResult=await stageDeltaResponse.json();
-   assert.deepEqual(deltaResult.rows,[[6]],'A: last mean 9 minus first mean 3; incomplete B remains unknown');
+   assert.deepEqual(deltaResult.rows,[[6]],'A: last mean 9 minus first mean 3; B has an invalid in-stage value, so complete policy keeps it unknown');
    assert.equal(deltaResult.metrics[2].cases_with_value,1);
    assert.equal(deltaResult.metrics[2].cases_with_missing_operand,1);
    assert.equal(deltaResult.metrics[2].unit,'EUR');
