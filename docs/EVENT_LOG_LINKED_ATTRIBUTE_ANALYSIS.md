@@ -10,6 +10,40 @@ For example, an `order` case may be linked through a co-observed event to an
 such invoice and one unambiguous stored invoice definition can be counted under
 that region. No inferred temporal joins or external provider reads are made.
 
+## Dashboard: Analyze linked business attributes
+
+After explicitly importing a local **OCEL 2.0** log with at least two object types,
+open **Evidence → Large event logs**, select the stored log and the desired
+case notion, and choose **Analyse**. Under **Build an analysis** is a separate
+**Analyze linked business attributes** section. Choose the related object type,
+enter a supplied attribute name (for example `region`), choose 1–100 groups,
+then click **Analyze linked attributes** or activate it with Enter.
+
+The dashboard makes no joined-analysis request until this explicit action. It
+uses the existing authenticated local session and current log/case notion,
+and renders the exact API resolution counts: resolved, unlinked, ambiguous,
+missing attribute and oversized attribute. The table shows only resolved
+supplied values, observed case counts and median **elapsed** seconds. It also
+shows the number of omitted groups/cases and the examined event/link budgets.
+Changing the log, case notion or inputs clears stale results and disables
+exports; responses for superseded selections cannot reappear.
+
+**Download linked analysis JSON** explicitly exports the full returned
+counts-only response. **Download linked analysis CSV** explicitly exports the
+visible grouped rows; spreadsheet-formula-leading source values are prefixed
+to prevent CSV formula execution. No automatic download, provider read,
+cross-log join, raw case/object identifiers, AI handoff or business action
+occurs. The dashboard does not yet expose the API's optional cohort filters,
+saved-metric expressions or time-varying as-of joins. Use the REST API below
+for typed cohort selection; do not present this UI as general PQL.
+
+A native Chromium acceptance is registered in `.github/workflows/tests.yml`
+and covers actual OCEL import, keyboard-triggered session-authenticated
+analysis, unresolved/multi-linked cases, local input refusal, JSON/CSV
+downloads including formula safety and case-change invalidation. The
+backend's separate tests cover authorization, tenant/log isolation and
+ambiguous object definitions. Neither constitutes real-customer acceptance.
+
 ## Authenticated REST request
 
 ```http
