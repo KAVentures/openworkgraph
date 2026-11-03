@@ -163,7 +163,7 @@ def test_confirmed_prior_import_resumes_exact_delta_cursor(private):
 @pytest.mark.parametrize("failure", [
     "read_consent", "export_consent", "revoked", "wrong_scope",
     "existing_csv", "existing_candidate", "bad_token", "unsafe_dir",
-    "unconfirmed_resume", "tampered_prior_csv", "wrong_folder",
+    "unconfirmed_resume", "tampered_prior_csv", "unsafe_prior_dir", "wrong_folder",
 ])
 def test_preflight_refuses_without_provider_request(private, failure):
     params = args(private)
@@ -185,13 +185,15 @@ def test_preflight_refuses_without_provider_request(private, failure):
         params["token"] = "secret\nleak"
     elif failure == "unsafe_dir":
         params["output"].parent.chmod(0o755)
-    elif failure in ("unconfirmed_resume", "tampered_prior_csv"):
+    elif failure in ("unconfirmed_resume", "tampered_prior_csv", "unsafe_prior_dir"):
         prior = args(private, "prior")
         export_delta(**prior, opener=Graph([page([message(ID_A)])]))
         params["previous_candidate"] = prior["candidate"]
-        params["confirm_previous_import"] = failure == "tampered_prior_csv"
+        params["confirm_previous_import"] = failure != "unconfirmed_resume"
         if failure == "tampered_prior_csv":
             prior["output"].write_text("TAMPERED")
+        elif failure == "unsafe_prior_dir":
+            prior["candidate"].parent.chmod(0o755)
     elif failure == "wrong_folder":
         params["folder_id"] = "foreign-folder"
     graph = Graph([page([message(ID_A)])])
