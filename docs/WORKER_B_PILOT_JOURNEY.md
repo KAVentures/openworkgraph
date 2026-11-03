@@ -1,0 +1,7 @@
+# Authenticated pilot journey readiness
+
+Open an automation opportunity, then select **View evidence journey**. The **Pilot journey readiness (review only)** section evaluates four prerequisites from the freshly fetched authenticated journey response: linked dataset origins, exact saved process revision, human opportunity decision, and current project with matching reported specification. Each is explicitly marked **Reviewable** or **Blocked / unknown**. A missing origin, historical process revision, undecided idea or missing current project is never silently treated as ready.
+
+These indicators are navigation and human triage aids, **not** permission checks or an execution gate. Even four reviewable prerequisites do not authorize agent execution, provider access, source reads or destructive actions. The underlying reported specification does not prove a real run or business outcome. Continue through the existing review packet, source-check and human handoff controls; separately verify fresh consent, actor/tenant scope, retention/revocation, source integrity and explicit action approval. Refresh the journey after any upstream change; a prior rendered view is not an immutable authorization.
+
+Browser acceptance in `tests/browser/automation_pipeline.cjs` exercises the authenticated journey, all four rendered prerequisites, explicit unauthorized status and at least one blocked/unknown prerequisite. Real consenting-customer pilot acceptance and independently source-verified outcomes remain outstanding under #326 and #264.
