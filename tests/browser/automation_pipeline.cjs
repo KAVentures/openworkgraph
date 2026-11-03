@@ -383,9 +383,12 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    await page.locator('#owgPipelineSourceChecks').click();
    await page.locator('#owgPipelineSourceExpectation option').waitFor({state:'attached'});
    assert(await page.locator('#owgPipelineSourceExport').isDisabled());
+   // Every completed options load clears consent on purpose; let loading settle (consent
+   // becomes enabled) before confirming, then wait for the export to enable.
+   await page.waitForFunction(()=>!document.querySelector('#owgPipelineSourceConsent').disabled);
    const sourceA='owg:r:'+'a'.repeat(32),sourceB='owg:r:'+'b'.repeat(32),sourceC='owg:r:'+'c'.repeat(32);
    await page.locator('#owgPipelineSourceRecord').fill(sourceA);await page.locator('#owgPipelineSourceConsent').check();
-   assert(await page.locator('#owgPipelineSourceExport').isEnabled());
+   await page.waitForFunction(()=>!document.querySelector('#owgPipelineSourceExport').disabled,null,{timeout:10000});
    await page.locator('#owgPipelineSourceRecord').fill(sourceB);
    assert.equal(await page.locator('#owgPipelineSourceConsent').isChecked(),false);
    assert(await page.locator('#owgPipelineSourceExport').isDisabled());
