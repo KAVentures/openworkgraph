@@ -649,6 +649,7 @@
 
     let latestIdeas=[],refreshGeneration=0,resumeGeneration=0,auditGeneration=0,auditPageIndex=0,auditAbort=null;
     const auditPages=new Map();let auditBasis=null,triageGeneration=0;
+    const pilotInspected=new Set(); // Ephemeral local inspection only; never approval or execution.
     const auditSnapshot=()=>JSON.stringify(auditEligible().map(i=>
       [i.idea_id,i.revision,i.state,i.updated_at||'']));
     function updateCumulative(){
@@ -699,7 +700,7 @@
           ' matches; '+selected.omitted_count+' omitted from this bounded view.':'.')+
           ' No independent outcome verification or authorization.';
         const table=el('table'),head=el('tr'),body=el('tbody');
-        ['Opportunity','Reviewed page','Outstanding checks','Human review'].forEach(name=>
+        ['Opportunity','Reviewed page','Outstanding checks','Human review','Pilot inspection'].forEach(name=>
           head.appendChild(el('th',name)));
         for(const item of selected.items){
           const idea=latestIdeas.find(i=>i.idea_id===item.idea_id);
@@ -733,7 +734,24 @@
               auditStatus.textContent='Opened a local human-review check for the selected opportunity. No blocker was cleared and no provider or agent action occurred.';
             }catch(e){if(request===auditGeneration)auditStatus.textContent=e.message;}
           };
-          cell.appendChild(action);tr.appendChild(cell);body.appendChild(tr);
+          cell.appendChild(action);tr.appendChild(cell);
+          const inspectedCell=el('td');
+          const inspected=input('owgPipelinePilotInspected','checkbox');
+          inspected.checked=pilotInspected.has(item.idea_id);
+          inspected.setAttribute('aria-label','Mark locally inspected (not approved) '+(idea?.title||item.idea_id));
+          inspected.onchange=()=>{
+            if(request!==auditGeneration||triageRequest!==triageGeneration||
+              auditBasis!==auditSnapshot()||!auditPages.has(item.page_number)){
+              inspected.checked=false;return;
+            }
+            if(inspected.checked)pilotInspected.add(item.idea_id);
+            else pilotInspected.delete(item.idea_id);
+            auditStatus.textContent=pilotInspected.size+' opportunities marked inspected locally; no blockers cleared, approvals or agent actions.';
+          };
+          const inspectedLabel=el('label');
+          inspectedLabel.append(inspected,document.createTextNode(' Inspected locally'));
+          inspectedCell.appendChild(inspectedLabel);tr.appendChild(inspectedCell);
+          body.appendChild(tr);
         }
         const thead=el('thead');thead.appendChild(head);table.append(thead,body);
         const wrap=el('div',null,'table-wrap');wrap.appendChild(table);
@@ -756,6 +774,7 @@
         const rows=combined.pages.flatMap(page=>page.items.map(item=>({
           idea_id:item.idea_id,project_id:item.project_id||null,
           reviewed_page:page.page_number,
+          inspected_locally:pilotInspected.has(item.idea_id),
           outstanding_checks:item.status==='unavailable'?['evidence_unavailable']:
             item.status==='no_export'?['no_recorded_project']:[...item.blockers]
         })));
@@ -782,7 +801,7 @@
     function clearCumulative(reason){
       ++auditGeneration;
       if(auditAbort)auditAbort.abort();
-      auditAbort=null;auditPages.clear();auditBasis=null;auditPageIndex=0;
+      auditAbort=null;auditPages.clear();pilotInspected.clear();auditBasis=null;auditPageIndex=0;
       auditHost.replaceChildren();auditButton.disabled=false;
       auditStatus.textContent=reason||'Review cleared. Explicitly check pages again.';
       syncAuditPages();updateCumulative();
