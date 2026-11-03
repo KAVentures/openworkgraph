@@ -632,12 +632,15 @@
     auditTriageSummary.id='owgPipelinePortfolioTriageSummary';
     auditTriageSummary.setAttribute('role','status');
     auditTriageSummary.setAttribute('aria-live','polite');
+    const auditWorklistDownload=button('Download reviewed pilot worklist','secondary');
+    auditWorklistDownload.id='owgPipelinePortfolioPilotWorklist';
+    auditWorklistDownload.disabled=true;
     const auditTriageHost=el('div');auditTriageHost.id='owgPipelinePortfolioTriageRows';
     const auditTriageSection=el('section');auditTriageSection.id='owgPipelinePortfolioTriageSection';
     auditTriageSection.append(el('h4','Triage outstanding checks from reviewed pages'),
       el('p','Filter only pages you explicitly checked. Unreviewed pages are unknown, not clear. Opening a check only navigates to local human review.','muted'),
       field('Outstanding review check',auditTriageFilter),
-      field('Find in explicitly reviewed pages',auditTriageSearch),auditTriageSummary,auditTriageHost);
+      field('Find in explicitly reviewed pages',auditTriageSearch),auditTriageSummary,auditTriageHost,auditWorklistDownload);
     auditSection.append(el('h3','Human handoff review inbox'),
       el('p','Review approved or implemented opportunities in explicit pages of up to 12. Each page is a fresh, point-in-time local read; other pages are not certified, approved or executed.','muted'),
       auditNavigation,auditButton,auditStatus,auditHost,auditCumulative,auditCombinedDownload,auditTriageSection);
@@ -664,6 +667,7 @@
     function renderTriage(){
       const triageRequest=++triageGeneration;
       auditTriageHost.replaceChildren();
+      auditWorklistDownload.disabled=true;
       if(!auditPages.size){
         auditTriageFilter.disabled=true;
         const emptyOption=el('option','All explicitly reviewed opportunities');emptyOption.value='all';
@@ -686,6 +690,7 @@
         }));
         auditTriageFilter.value=choices.some(([key])=>key===prior)?prior:'all';
         auditTriageFilter.disabled=false;
+        auditWorklistDownload.disabled=false;
         const selected=portfolioReviewTriage(auditEligible(),auditPages,auditTriageFilter.value,24,auditTriageSearch.value);
         auditTriageSummary.textContent=selected.matching_count+' matching opportunities in '+
           selected.reviewed_count+' explicitly reviewed; '+selected.unreviewed_count+
@@ -738,6 +743,40 @@
         auditTriageSummary.textContent='Cannot triage this review: '+e.message;
       }
     }
+    auditWorklistDownload.onclick=()=>{
+      if(!auditPages.size||auditBasis!==auditSnapshot()){
+        auditWorklistDownload.disabled=true;
+        auditStatus.textContent='The reviewed pilot worklist is stale. Explicitly review the loaded pages again.';
+        return;
+      }
+      try{
+        // Export every explicitly inspected row, not the 24-row UI preview.
+        const combined=combinedPortfolioHandoffReview(auditEligible(),auditPages,new Date().toISOString());
+        portfolioReviewTriage(auditEligible(),auditPages,'all');
+        const rows=combined.pages.flatMap(page=>page.items.map(item=>({
+          idea_id:item.idea_id,project_id:item.project_id||null,
+          reviewed_page:page.page_number,
+          outstanding_checks:item.status==='unavailable'?['evidence_unavailable']:
+            item.status==='no_export'?['no_recorded_project']:[...item.blockers]
+        })));
+        const record={format:'openworkgraph.pilot-handoff-worklist.v1',
+          scope:'local_human_review_only',generated_at:combined.generated_at,
+          eligible_count:combined.eligible_count,reviewed_count:combined.reviewed_count,
+          unreviewed_count:combined.unreviewed_count,
+          reviewed_page_numbers:combined.reviewed_page_numbers,
+          unreviewed_page_numbers:combined.unreviewed_page_numbers,
+          complete_coverage:combined.complete_coverage,
+          source_read_authorized:false,execution_authorized:false,
+          verified_business_outcomes:false,rows};
+        const serialized=JSON.stringify(record);
+        if(serialized.length>65536)throw new Error('Pilot worklist exceeds 64 KiB; use reviewed-page exports instead.');
+        const url=URL.createObjectURL(new Blob([serialized],{type:'application/json'}));
+        const link=el('a');link.href=url;link.download='owg-human-pilot-worklist.json';
+        document.body.appendChild(link);link.click();link.remove();
+        setTimeout(()=>URL.revokeObjectURL(url),1000);
+        auditStatus.textContent='Downloaded explicitly reviewed human pilot checks only. No consent, provider read, approval or agent action.';
+      }catch(e){auditStatus.textContent='Cannot export pilot worklist: '+e.message;}
+    };
     auditTriageFilter.onchange=renderTriage;
     auditTriageSearch.oninput=renderTriage;
     function clearCumulative(reason){

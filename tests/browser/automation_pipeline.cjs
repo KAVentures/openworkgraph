@@ -1385,6 +1385,18 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    assert(searched.invalid);
    assert.equal(searched.exact.execution_authorized,false);
    assert.equal(searched.exact.source_read_authorized,false);
+   const [pilotWorklistDownload]=await Promise.all([
+     page.waitForEvent('download'),
+     page.locator('#owgPipelinePortfolioPilotWorklist').focus().then(()=>page.keyboard.press('Enter'))]);
+   const pilotWorklist=JSON.parse(await fs.readFile(await pilotWorklistDownload.path(),'utf8'));
+   assert.equal(pilotWorklist.format,'openworkgraph.pilot-handoff-worklist.v1');
+   assert.equal(pilotWorklist.rows.length,combined.reviewed_count);
+   assert.equal(pilotWorklist.execution_authorized,false);
+   assert.equal(pilotWorklist.source_read_authorized,false);
+   assert.equal(pilotWorklist.verified_business_outcomes,false);
+   assert(pilotWorklist.rows.every(row=>Array.isArray(row.outstanding_checks)&&
+     row.outstanding_checks.length>0));
+   assert.equal(pagedReviewWrites,0,'pilot worklist must remain read-only');
    assert(await page.locator('#owgPipelinePortfolioTriageSearch').isVisible());
    await page.locator('#owgPipelinePortfolioTriageSearch').fill('no-such-reviewed-opportunity');
    assert.equal(await page.locator('#owgPipelinePortfolioTriageRows tbody tr').count(),0);
@@ -1440,6 +1452,7 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    assert.equal(pagedReviewWrites,0);
    await page.locator('#owgPipelineSearch').fill('changed filter invalidates review');
    assert(await page.locator('#owgPipelinePortfolioTriageFilter').isDisabled());
+   assert(await page.locator('#owgPipelinePortfolioPilotWorklist').isDisabled());
    assert.equal(await page.locator('#owgPipelinePortfolioTriageRows tbody tr').count(),0);
    assert(await page.locator('#owgPipelinePortfolioCombinedDownload').isDisabled());
    assert.match(await page.locator('#owgPipelinePortfolioCumulativeStatus').textContent(),
