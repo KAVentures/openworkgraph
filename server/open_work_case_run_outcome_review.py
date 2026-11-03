@@ -129,6 +129,70 @@ def compose_run_outcome_review(
         if (not isinstance(row, dict) or not isinstance(plan, dict)
                 or row.get("work_item_ref") != plan.get("work_item_ref")):
             raise CaseDeclarationError("conflicting reviewed case evidence")
+    # One imported run may be operator-associated with a reviewed DAG, but
+    # evidence for a paid root must not conceal missing/disputed prerequisites.
+    # Preserve each exact reviewed case in prerequisite-first order.
+    comparisons = []
+    for row, plan in zip(rows, plans):
+        outcome = row.get("owner_declared_expected_outcome_code")
+        provider_state = row.get("historical_last_provider_state")
+        human_state = row.get("latest_human_assessed_status")
+        checks = row.get("provider_check_count")
+        disputes = row.get("disputed_check_count")
+        assessments = row.get("human_assessment_count", 0)
+        checked_at = row.get("last_historical_provider_check_at")
+        pending = plan.get("prerequisites_with_unresolved_review")
+        actions = plan.get("operator_action_codes", [])
+        attention = row.get("review_attention", [])
+        review_state = plan.get("review_state", "unknown")
+        if (outcome not in ("human_review_recorded", "source_state_rechecked",
+                            "operation_receipt_reviewed", "stripe_invoice_paid_reported")
+                or provider_state not in ("paid", "unknown")
+                or human_state not in ("met", "not_met", "unknown")
+                or type(checks) is not int or not 0 <= checks <= 32
+                or type(disputes) is not int or not 0 <= disputes <= checks
+                or type(assessments) is not int or not 0 <= assessments <= 32
+                or (checks == 0 and (provider_state != "unknown" or checked_at is not None))
+                or (checks > 0 and not isinstance(checked_at, str))
+                or not isinstance(pending, list) or any(not isinstance(x, str) for x in pending)
+                or not isinstance(actions, list) or any(not isinstance(x, str) for x in actions)
+                or not isinstance(attention, list) or any(not isinstance(x, str) for x in attention)
+                or review_state not in ("attention_required", "historical_evidence_present", "unknown")):
+            raise CaseDeclarationError("invalid prerequisite run outcome comparison")
+        if checked_at is None:
+            case_timing = "no_historical_provider_check"
+        elif run.get("reported_finished_at") is None:
+            case_timing = "run_has_no_reported_finish"
+        else:
+            case_timing = ("on_or_after_reported_finish"
+                           if _parse_utc(checked_at) >= _parse_utc(run["reported_finished_at"])
+                           else "before_reported_finish")
+        payment = outcome == "stripe_invoice_paid_reported"
+        historical_paid_after = (payment and provider_state == "paid"
+                                 and case_timing == "on_or_after_reported_finish")
+        review_pending = (review_state != "historical_evidence_present"
+                          or bool(pending) or bool(attention)
+                          or bool(plan.get("prerequisite_review_pending", False)))
+        comparisons.append({
+            "work_item_ref": row["work_item_ref"],
+            "role": row.get("role"),
+            "owner_declared_expected_outcome_code": outcome,
+            "latest_human_assessed_status": human_state,
+            "human_assessment_count": assessments,
+            "historical_last_provider_state": provider_state,
+            "provider_check_count": checks,
+            "disputed_check_count": disputes,
+            "last_historical_provider_check_at": checked_at,
+            "provider_check_vs_reported_run_finish": case_timing,
+            "narrow_historical_paid_observed_after_reported_finish": bool(historical_paid_after),
+            "review_attention": attention,
+            "prerequisites_with_unresolved_review": pending,
+            "operator_action_codes": actions,
+            "review_pending": review_pending,
+            "historical_provider_state_is_not_current": True,
+            "customer_outcome_verified": False,
+            "agent_caused_outcome_verified": False,
+        })
     root = rows[-1]
     root_plan = plans[-1]
     provider = root.get("historical_last_provider_state")
@@ -172,6 +236,16 @@ def compose_run_outcome_review(
         "unresolved_prerequisite_refs": pending,
         "unscanned_prerequisite_count": triage["unscanned_prerequisite_count"],
         "all_prerequisites_reviewed": triage["all_declared_prerequisites_included"],
+        "case_outcome_comparisons": comparisons,
+        "selected_case_count": len(comparisons),
+        "cases_requiring_review": sum(bool(case["review_pending"]) for case in comparisons),
+        "cases_with_historical_paid_observed_after_reported_finish": sum(
+            bool(case["narrow_historical_paid_observed_after_reported_finish"])
+            for case in comparisons
+        ),
+        "case_review_coverage": (
+            "complete" if triage["all_declared_prerequisites_included"] else "partial"
+        ),
         "review_action_plan": action_plan,
         "operator_selected_run_case_association_only": True,
         "run_case_identity_independently_verified": False,
