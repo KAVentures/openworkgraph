@@ -307,3 +307,139 @@ def test_reimported_run_steps_invalidate_fingerprint_without_exposing_content(lo
     assert before["run_ref"] == after["run_ref"]
     assert before["run_snapshot_fingerprint"] != after["run_snapshot_fingerprint"]
     assert "PRIVATE customer data" not in str(after)
+
+
+def test_imported_run_comparison_includes_prerequisite_first_matrix_and_partial_coverage(local, monkeypatch):
+    """Actual FastAPI/SQLite/DuckDB path: a root review cannot hide an unreviewed prerequisite."""
+    prerequisite = "owg:w:" + "b" * 32
+    reviews.save_review_intention(
+        prerequisite, "assess_follow_up", provider_candidate_currently_open=True,
+        now=datetime.now(timezone.utc),
+    )
+    dep = monitoring.import_report(_run())["deployment"]["deployment_id"]
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("historical comparison must not contact the source")
+
+    monkeypatch.setattr(routes, "stripe_open_work_case_context", forbidden)
+    monkeypatch.setattr(routes, "source_operation_receipt", forbidden)
+    with TestClient(app) as client:
+        headers = _auth()
+        prerequisite_saved = client.post(BASE, headers=headers, json={
+            "confirm_owner_declaration": True,
+            "work_item_ref": prerequisite,
+            "goal_code": "verify_operation",
+            "expected_outcome_code": "human_review_recorded",
+            "depends_on_work_item_refs": [],
+            "expected_revision": 0, "expected_edit_token": None,
+        })
+        assert prerequisite_saved.status_code == 200, prerequisite_saved.text
+        root_saved = client.post(BASE, headers=headers, json={
+            "confirm_owner_declaration": True,
+            "work_item_ref": CASE,
+            "goal_code": "verify_operation",
+            "expected_outcome_code": "stripe_invoice_paid_reported",
+            "depends_on_work_item_refs": [prerequisite],
+            "expected_revision": 0, "expected_edit_token": None,
+        })
+        assert root_saved.status_code == 200, root_saved.text
+        saved = root_saved.json()
+        assessed = client.post(BASE + "/human-outcomes/assess", headers=headers, json={
+            "work_item_ref": CASE, "expected_revision": saved["revision"],
+            "expected_edit_token": saved["edit_token"],
+            "confirm_human_assessment": True,
+            "human_status": "met", "reason_code": "owner_review",
+        })
+        assert assessed.status_code == 200, assessed.text
+        payload = _payload(saved, dep)
+        payload["max_cases"] = 2
+        response = client.post(ENDPOINT, headers=headers, json=payload)
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["selected_case_count"] == 2
+        assert data["case_review_coverage"] == "complete"
+        assert data["cases_requiring_review"] == 2
+        assert [row["work_item_ref"] for row in data["case_outcome_comparisons"]] == [
+            prerequisite, CASE,
+        ]
+        first, root = data["case_outcome_comparisons"]
+        assert first["owner_declared_expected_outcome_code"] == "human_review_recorded"
+        assert first["provider_check_vs_reported_run_finish"] == "no_historical_provider_check"
+        assert first["narrow_historical_paid_observed_after_reported_finish"] is False
+        assert first["review_pending"] is True
+        assert root["latest_human_assessed_status"] == "met"
+        assert root["historical_last_provider_state"] == "unknown"
+        assert root["prerequisites_with_unresolved_review"] == [prerequisite]
+        assert root["review_pending"] is True
+        assert data["customer_outcome_verified"] is False
+        assert data["agent_caused_outcome_verified"] is False
+        assert "acct_PRIVATE" not in response.text
+        payload["max_cases"] = 1
+        partial = client.post(ENDPOINT, headers=headers, json=payload)
+        assert partial.status_code == 200, partial.text
+        assert partial.json()["selected_case_count"] == 1
+        assert partial.json()["case_review_coverage"] == "partial"
+        assert partial.json()["unscanned_prerequisite_count"] == 1
+        assert partial.json()["case_outcome_comparisons"][0]["review_pending"] is True
+
+
+def test_prerequisite_matrix_preserves_paid_root_but_refuses_success_inference():
+    prerequisite = "owg:w:" + "b" * 32
+    rows = [
+        {
+            "work_item_ref": prerequisite, "role": "prerequisite",
+            "owner_declared_expected_outcome_code": "human_review_recorded",
+            "latest_human_assessed_status": "unknown",
+            "human_assessment_count": 0,
+            "historical_last_provider_state": "unknown",
+            "provider_check_count": 0, "disputed_check_count": 0,
+            "last_historical_provider_check_at": None,
+            "review_attention": ["human_assessment_missing"],
+        },
+        {
+            "work_item_ref": CASE, "role": "root",
+            "owner_declared_expected_outcome_code": "stripe_invoice_paid_reported",
+            "latest_human_assessed_status": "met",
+            "human_assessment_count": 1,
+            "historical_last_provider_state": "paid",
+            "provider_check_count": 1, "disputed_check_count": 0,
+            "last_historical_provider_check_at": "2026-11-02T09:06:00+00:00",
+            "review_attention": [],
+        },
+    ]
+    triage = {
+        "format": "openworkgraph.local-reviewed-outcome-evidence-triage.v1",
+        "work_item_ref": CASE, "included_case_count": 2,
+        "all_declared_prerequisites_included": True,
+        "unscanned_prerequisite_count": 0,
+        "customer_outcome_verified": False, "source_read_performed": False,
+        "case_reviews": rows,
+    }
+    plan = {
+        "format": "openworkgraph.local-reviewed-outcome-action-plan.v1",
+        "work_item_ref": CASE,
+        "cases": [
+            {"work_item_ref": prerequisite, "review_state": "attention_required",
+             "prerequisites_with_unresolved_review": [],
+             "operator_action_codes": ["record_human_assessment"]},
+            {"work_item_ref": CASE, "review_state": "historical_evidence_present",
+             "prerequisites_with_unresolved_review": [prerequisite],
+             "operator_action_codes": ["fresh_declared_payment_check"]},
+        ],
+    }
+    run = {
+        "reported_run_status": "succeeded",
+        "reported_finished_at": "2026-11-02T09:05:00+00:00",
+    }
+    result = review.compose_run_outcome_review(run, triage, plan)
+    assert result["historical_last_provider_state"] == "paid"
+    assert result["narrow_historical_paid_observed_after_reported_finish"] is True
+    assert result["cases_with_historical_paid_observed_after_reported_finish"] == 1
+    assert result["cases_requiring_review"] == 2
+    assert result["case_outcome_comparisons"][1]["review_pending"] is True
+    assert result["case_outcome_comparisons"][0]["provider_check_vs_reported_run_finish"] == "no_historical_provider_check"
+    assert result["customer_outcome_verified"] is False
+    assert result["agent_caused_outcome_verified"] is False
+    plan["cases"].reverse()
+    with pytest.raises(declarations.CaseDeclarationError):
+        review.compose_run_outcome_review(run, triage, plan)
