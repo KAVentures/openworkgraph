@@ -185,7 +185,9 @@ def test_real_tcp_loopback_five_gets_and_no_proxy_or_identity_download():
     ("/Schemas", b'{"schemas":[],"schemas":[]}'),
     ("/ServiceProviderConfig", b"{" + b"x" * 65537 + b"}"),
     ("/ResourceTypes", _list([{"id": "User", "endpoint": "/Users", "schema": USER}])),
-])
+# Short ids: pytest copies the test id into PYTEST_CURRENT_TEST, and Windows caps an
+# environment variable at 32767 characters, which the 64 KiB body's repr exceeds.
+], ids=["users-identity-leak", "schemas-duplicate-key", "spc-oversized", "resource-types-incomplete"])
 def test_real_tcp_invalid_response_refused(path, value):
     with _local_server(bad_path=path, bad_value=value) as (base, calls):
         with pytest.raises(ProbeError):
