@@ -375,12 +375,30 @@ Identifiable-membership family macro on the committed corpus:
 | Record lanes | 0.541 | 0.000 | 0.476 | 0.000 |
 | Linked items | 0.574 | 0.000 | 0.524 | 0.000 |
 | Linked items + accepting every candidate (diagnostic only) | 0.708 | 0.050 | 0.649 | 0.125 |
+| Linked items + label topics (opt-in) | 0.809 | 0.000 | 0.700 | 0.000 |
 
 Accepting the ambiguous candidates raises F1 but breaks the contamination gate on the
 holdout, which is why OWG leaves them to the reader. Interruption rejection stays at 1.0.
 The remaining gap to 0.90 comes from workflows whose records are related only by meaning
 (for example a renewal email, an account and a price sheet). Deterministic structural
 signals cannot see that, so closing it needs a model-graded run (A2).
+
+### Opt-in label topics
+
+When the user chooses to let OWG read the window titles and UI labels it already captured,
+`server/label_topic_links.py` adds one signal on top of linked items: observations in the same
+exact capture scope that share a distinctive topic word (not generic UI vocabulary, not the
+app or site name, present in two to 60% of the scope's observations) are merged. It never
+merges two different records of the same provider and kind, and topic words are never
+returned. Discovery returns it as `label_topic_work_items` only with `label_topics=true`.
+
+    python -m evals.reconstruction.owg_native --split development --grouping linked_items_with_label_topics
+
+Tuning used the development split only (gated F1 0.608 -> 0.882, contamination 0.0). The
+holdout was then scored once: gated F1 0.524 -> 0.700 with contamination 0.0. That is still
+below 0.90; the remaining cases need domain meaning (an account or price sheet belongs to a
+renewal) that shared words do not carry, so they still need the model-graded run (A2).
+`tests/test_label_topic_links.py` holds these floors.
 `tests/test_work_item_links.py` holds these floors.
 
 ## Ablations

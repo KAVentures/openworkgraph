@@ -422,6 +422,32 @@ def predict_linked_items(case: dict[str, Any], *, accept_candidates: bool = Fals
     }
 
 
+def predict_label_topic_items(case: dict[str, Any]) -> dict[str, Any]:
+    """Opt-in label-topic grouping: structural items merged by shared title/label topics."""
+    from server.label_topic_links import label_topic_members
+
+    members = [ids for ids in label_topic_members(_visible_linked_source_events(case))["members"]
+               if len(ids) >= 2]
+    assigned = {event_id for ids in members for event_id in ids}
+    all_ids = _presented_event_ids(case["presented_evidence"])
+    return {
+        "case_id": case["case_id"],
+        "workflows": [{
+            "prediction_id": f"topic_item_{index}",
+            "event_ids": ids,
+            "ordered_event_ids": ids,
+            "automation_relevant_event_ids": ids,
+            "ui_mechanic_event_ids": [],
+        } for index, ids in enumerate(members, start=1)],
+        "unassigned_event_ids": [event_id for event_id in all_ids if event_id not in assigned],
+        "insufficient_evidence": False,
+    }
+
+
+def score_label_topic_items(cases: list[dict[str, Any]]) -> dict[str, Any]:
+    return aggregate(cases, [predict_label_topic_items(case) for case in cases])
+
+
 def score_linked_items(cases: list[dict[str, Any]], *, accept_candidates: bool = False) -> dict[str, Any]:
     return aggregate(cases, [predict_linked_items(case, accept_candidates=accept_candidates) for case in cases])
 
@@ -434,7 +460,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Score OWG's exact-record lanes on the reconstruction corpus")
     parser.add_argument("--cases", help="optional exported JSONL corpus")
     parser.add_argument("--split", choices=("all", "development", "holdout"), default="all")
-    parser.add_argument("--grouping", choices=("record_lanes", "linked_items", "linked_items_accepting_candidates"),
+    parser.add_argument("--grouping", choices=("record_lanes", "linked_items", "linked_items_accepting_candidates",
+                                 "linked_items_with_label_topics"),
                         default="record_lanes")
     args = parser.parse_args(argv)
     cases = load_cases(Path(args.cases)) if args.cases else load_cases()
@@ -443,6 +470,8 @@ def main(argv: list[str] | None = None) -> int:
         cases = split_cases(cases, args.split)
     if args.grouping == "record_lanes":
         report = score_record_lanes(cases)
+    elif args.grouping == "linked_items_with_label_topics":
+        report = score_label_topic_items(cases)
     else:
         report = score_linked_items(cases, accept_candidates=args.grouping != "linked_items")
     print(json.dumps(report, indent=2, sort_keys=True))
