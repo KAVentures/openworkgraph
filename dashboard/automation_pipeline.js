@@ -1397,15 +1397,35 @@
             review.append(issues,blockerStatus);
             const downloadPacket=button('Download review packet for this exact project','secondary');
             downloadPacket.id='owgPipelineJourneyReviewPacket';
-            downloadPacket.onclick=()=>{
-              if(generation!==detailGeneration||choice.value!==p.project_id||!journeyHost.contains(downloadPacket))return;
-              const current=handoffReviewPacket(data,p.project_id,idea.idea_id,new Date().toISOString());
-              const blob=new Blob([JSON.stringify(current,null,2)+'\n'],{type:'application/json'});
-              const url=URL.createObjectURL(blob),link=el('a');
-              link.href=url;link.download='owg-evidence-handoff-review.json';
-              document.body.appendChild(link);link.click();link.remove();
-              setTimeout(()=>URL.revokeObjectURL(url),1000);
-              guideStatus.textContent='Downloaded the selected project review packet. Outstanding checks remain; no approval or execution permission was granted.';
+            // A handoff packet is an explicit fresh review of the selected immutable
+            // project, not a snapshot silently exported after the underlying state moves.
+            downloadPacket.onclick=async()=>{
+              if(downloadPacket.disabled||generation!==detailGeneration||
+                choice.value!==p.project_id||!journeyHost.contains(downloadPacket))return;
+              const requestGeneration=generation,selectedProject=p.project_id;
+              downloadPacket.disabled=true;
+              guideStatus.textContent='Rechecking the exact project and current evidence before download…';
+              try{
+                const fresh=await (await api('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/journey')).json();
+                if(requestGeneration!==detailGeneration||choice.value!==selectedProject||
+                  !journeyHost.contains(downloadPacket))return;
+                const original=handoffReviewPacket(data,selectedProject,idea.idea_id,'');
+                const current=handoffReviewPacket(fresh,selectedProject,idea.idea_id,'');
+                if(JSON.stringify(original)!==JSON.stringify(current)){
+                  guideStatus.textContent='Evidence or review state changed. Packet withheld. Refresh the evidence journey and inspect the exact project again.';
+                  return;
+                }
+                current.generated_at=new Date().toISOString();
+                const blob=new Blob([JSON.stringify(current,null,2)+'\n'],{type:'application/json'});
+                const url=URL.createObjectURL(blob),link=el('a');
+                link.href=url;link.download='owg-evidence-handoff-review.json';
+                document.body.appendChild(link);link.click();link.remove();
+                setTimeout(()=>URL.revokeObjectURL(url),1000);
+                guideStatus.textContent='Fresh selected-project review packet downloaded. Outstanding checks remain; no approval or execution permission was granted.';
+              }catch(e){
+                if(requestGeneration===detailGeneration&&journeyHost.contains(downloadPacket))
+                  guideStatus.textContent='Packet withheld: '+e.message+'. Refresh evidence and retry.';
+              }finally{downloadPacket.disabled=false;}
             };
 
             // Local file read + explicit fresh authenticated journey fetch. No packet upload.
