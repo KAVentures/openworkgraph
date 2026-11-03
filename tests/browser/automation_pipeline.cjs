@@ -343,6 +343,25 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    assert(handoffPacket.readiness.blockers.includes('no_imported_report'));
    assert(handoffPacket.readiness.blockers.includes('execution_and_business_outcomes_unverified'));
    assert.equal(handoffPacket.readiness.verified_business_outcomes,false);
+   // Fresh handoff is a real authenticated GET, and a changed review basis
+   // must refuse export instead of silently handing off stale state.
+   const journeyRoute='**/v1/automation-pipeline/'+linked.idea_id+'/journey';
+   let handoffReads=0,refusedDownloads=0;
+   const countRefused=()=>{refusedDownloads++;};
+   page.on('download',countRefused);
+   await page.route(journeyRoute,async route=>{
+     handoffReads++;
+     const response=await route.fetch();
+     const changed=await response.json();
+     changed.idea={...changed.idea,revision:changed.idea.revision+1};
+     await route.fulfill({response,json:changed});
+   });
+   await page.locator('#owgPipelineJourneyReviewPacket').click();
+   await page.locator('#owgPipelineJourneyGuideStatus').filter({hasText:'Packet withheld'}).waitFor();
+   assert.equal(handoffReads,1);
+   assert.equal(refusedDownloads,0,'changed review basis must not trigger a download');
+   await page.unroute(journeyRoute);
+   page.off('download',countRefused);
    // The first project view (without importing a packet) must offer actual
    // blocker-specific human review routes, never claim to resolve a blocker.
    const blockers=page.locator('#owgPipelineJourneyReadiness');

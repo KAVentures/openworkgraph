@@ -1,0 +1,7 @@
+# Fresh evidence handoff review (Worker B)
+
+In the authenticated automation pipeline, open an idea and select **View evidence journey**, then the exact recorded project. **Download review packet for this exact project** now makes a fresh session-authenticated journey GET before exporting a local JSON packet. The selected immutable project, idea revision/state, process reference/status, source origins and reported specification status must still match the displayed evidence. If any review basis has changed, if the project disappeared, or if the request fails, no packet is downloaded; refresh the evidence journey and inspect the new basis first.
+
+This is a review-only handoff: the JSON does not grant consent, authorize source reads or agent execution, establish causality, or verify business outcomes. It does not contact providers, write project state, or automatically select a replacement revision. Existing approval and authorization gates remain separate. A fresh packet is only current at the instant of the successful check; recipients must independently revalidate before any later action.
+
+Browser acceptance: the existing authenticated journey downloads a packet through the live API; a changed idea revision returned by a fresh journey request causes a visible refusal and no download. All six exact-head workflows and required native jobs remain mandatory before merge. Real consenting-user pilot acceptance is separate from this synthetic regression.
