@@ -53,6 +53,35 @@ or that the automation caused anything.** The run timestamps and the
 association between that run and case are supplied/selected by humans or
 automation reports, not independently established.
 
+## Prerequisite-first case outcome matrix
+
+For `max_cases` 1–4, `case_outcome_comparisons` is an ordered array of
+**exactly the admitted cases** (prerequisites before the selected root).
+Each row retains the owner's declared outcome code, the latest separate
+human assessment, historical provider state, number of provider checks and
+disputes, the last historical check time relative to the imported run's
+*self-reported* finish, review attention, unresolved prerequisite references
+and existing operator action codes. The boolean
+`narrow_historical_paid_observed_after_reported_finish` is meaningful
+**only for an explicitly declared Stripe payment-state goal**. A human-only
+goal never becomes a payment obligation because a generic provider check is
+missing.
+
+`cases_requiring_review` counts selected rows that need their own review
+or have unresolved reviewed prerequisites. Thus a root with a retained
+historical paid receipt can **still require review** when an earlier case
+has no human assessment. `case_review_coverage` is `partial` when
+`max_cases` omits declared prerequisites, and
+`unscanned_prerequisite_count` reports the omitted count. An incomplete
+selection is not evidence that omitted cases were completed or that the
+root's dependency graph is satisfied. This is a **read-only review matrix**,
+not an independently verified run-to-case match, fresh provider state,
+customer completion, payment settlement or agent causality.
+
+Existing root-level fields remain in the response for compatibility;
+the new matrix adds per-prerequisite visibility without changing the
+request or authorizing any action.
+
 ## Privacy and failure behavior
 
 - Local authenticated dashboard only; no MCP or agent execution permission.
