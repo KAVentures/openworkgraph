@@ -164,7 +164,8 @@ def test_private_cli_create_only_stale_and_revoked_evidence_refusal(tmp_path: Pa
 def test_multiple_independent_returns_form_one_source_anchored_chain():
     # A -> B -> A -> B -> A: two independently verified resumptions,
     # not a single collapsed work episode or a temporal guess.
-    events = [event(n, A if n in (1, 2, 5, 6, 9, 10) else B)
+    events = [event(n, A if n in (1, 2, 5, 6, 9, 10)
+                    else B if n in (3, 4) else "owg:r:" + "c" * 32)
               for n in range(1, 11)]
     result = reconstruct(events)
     assert result["episode_count"] == 5
@@ -190,7 +191,8 @@ def test_multiple_independent_returns_form_one_source_anchored_chain():
 
 
 def test_chain_refuses_to_bridge_unverified_second_interruption():
-    events = [event(n, A if n in (1, 2, 5, 6, 9, 10) else B)
+    events = [event(n, A if n in (1, 2, 5, 6, 9, 10)
+                    else B if n in (3, 4) else "owg:r:" + "c" * 32)
               for n in range(1, 11)]
     # Tied timestamps in the second interruption invalidate only its
     # candidate return. The earlier verified edge remains standalone.
