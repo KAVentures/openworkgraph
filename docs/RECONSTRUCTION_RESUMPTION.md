@@ -60,6 +60,27 @@ references, titles, URLs, work text, provider object IDs, timestamps and
 credentials. The original episode partition may contain opaque event IDs;
 keep this artifact private. The evidence SHA binds it to the local snapshot.
 
+## Repeated-return chains
+
+The same private output now includes `resumption_chains`, plus
+`resumption_chain_count`, `chained_resumption_edge_count`, and
+`standalone_resumption_edge_count`. A chain contains **at least two
+independently accepted** consecutive resumption edges of the same production
+item, with opaque ordered `episode_ids` and zero-based
+`resumption_edge_indexes` into the unchanged `resumption_edges` array.
+The chain sums the observed other-case, unknown and experimental-gap counts
+across those edges, preserving all interruption classes and the original
+separate episodes.
+
+For `A → B → A → C → A`, the three A episodes can form one chain with
+two observed candidate resumptions. If either return abstains because of
+taint, tied time, scope, record conflict or budget, **no chain bridges that
+missing edge**; independently accepted single returns remain visible as
+standalone edges. Chains are an inspection convenience, not inferred source
+identity, a continuous task duration, verified case completion or a new
+canonical merge. The existing 512-edge budget also bounds chain size and
+the output refuses over-budget inputs rather than silently truncating.
+
 ## Acceptance and limitations
 
 The real-linker regression covers A→B→A, A→unknown→A, A→B→unknown→A,
