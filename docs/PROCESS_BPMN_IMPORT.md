@@ -15,6 +15,43 @@ are not source-log activities and need no business-tool mapping in generated
 projects. Import supports exclusive loops when the graph has an unambiguous
 entry and a route to a terminal.
 
+### Pools, message flows and lanes
+
+A collaboration is accepted when exactly one pool holds the imported process and every
+other pool is a black box (a participant without a process), such as Customer or Bank.
+Message flows between the process and those pools do not change the internal control
+flow. Each becomes a note on its task, for example "Receives Service request from
+Customer (message flow; no control-flow effect)", which the review guard keeps visible.
+Lane names, including nested lanes, become the existing descriptive responsibility
+labels of the tasks and gateways they contain. They are not verified identities or
+permissions. Root `message`, `error` and `escalation` definitions are read for names
+only.
+
+Collaborations where another pool has its own process, conversations, pool multiplicity,
+payload schemas, and message flows that do not connect the process with another pool are
+refused.
+
+### Boundary events, task loops and call activities
+
+These are rewritten into tasks, exclusive gateways and rule-guarded transitions with the
+same control flow. The preview lists them in `lowered_constructs` and adds a warning per
+kind. Every generated rule starts unconfirmed.
+
+- **Interrupting error, timer and escalation boundary events:** the task is followed by an
+  exclusive "Outcome of <task>" choice. One branch is "<task> completed normally"; the
+  others read, for example, "Error Declined (CardDeclined) raised by Charge card" or
+  "Timer (PT2H) elapsed during Charge card". The task needs exactly one plain outgoing
+  transition.
+- **Standard loops and sequential multi-instance tasks:** the task is followed by an
+  exclusive "Repeat <task>" choice that runs it again ("Another iteration/instance of …
+  is needed", including any loop condition or cardinality text) or continues.
+- **Call activities:** imported as one step. The called process is named in a review note
+  and is not expanded.
+
+Refused, because a rewrite would change their meaning: non-interrupting boundary events,
+message, signal and other boundary triggers, parallel multi-instance tasks, loops that
+test before the first run, and call activities with data mappings or extensions.
+
 ### Embedded subprocesses
 
 A plain embedded `subProcess` is inlined into the parent graph, which is exact for
@@ -33,7 +70,7 @@ multi-instance subprocesses, boundary events, triggered start events, several
 start/end events, empty subprocesses and conditional or labelled entry/exit
 transitions are rejected.
 
-Paired inclusive gateways are supported (see [inclusive gateways](PARALLEL_PROCESS_MODELS.md#inclusive-or-gateways)). Conditional parallel regions, unpaired inclusive gateways, other subprocess semantics, event
+Paired inclusive gateways, single-process collaborations with black-box pools, and lanes are supported (see [inclusive gateways](PARALLEL_PROCESS_MODELS.md#inclusive-or-gateways)). Conditional parallel regions, unpaired inclusive gateways, other subprocess semantics, event
 triggers, message collaborations, external imports, executable extensions, scripts
 and loop characteristics are rejected. Their semantics are not flattened into an
 incorrect serial graph.

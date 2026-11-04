@@ -82,7 +82,6 @@ def test_subprocess_documentation_becomes_a_review_note():
     sub(PLAIN_BODY.replace('<sequenceFlow id="i1" sourceRef="ss" targetRef="t1"/>',
                            '<sequenceFlow id="i1" sourceRef="ss" targetRef="t1" name="only if"/>')),
     '<transaction id="sp">' + PLAIN_BODY + '</transaction>',
-    '<callActivity id="sp" calledElement="other"/>',
 ])
 def test_subprocess_semantics_that_inlining_cannot_preserve_are_refused(inner):
     with pytest.raises(BPMNImportError):
