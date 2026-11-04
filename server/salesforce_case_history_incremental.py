@@ -6,6 +6,7 @@ an exclusive local checkpoint. This is not a scheduler or verified import receip
 """
 from __future__ import annotations
 
+from server.connector_oauth import connector_token as _connector_token
 import argparse
 from datetime import timedelta
 import hashlib
@@ -318,7 +319,7 @@ def main(argv=None):
                              namespace=args.namespace, cases=args.cases,
                              bootstrap_since=args.bootstrap_since, until=args.until,
                              overlap_hours=args.overlap_hours,
-                             token=os.environ.get("OWG_SALESFORCE_READ_TOKEN"),
+                             token=_connector_token("OWG_SALESFORCE_READ_TOKEN"),
                              checkpoint=args.checkpoint, manifest=args.manifest,
                              output=args.output, allow_loopback_http=args.allow_loopback_http,
                              max_pages=args.max_pages)

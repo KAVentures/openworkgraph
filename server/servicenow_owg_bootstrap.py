@@ -7,6 +7,7 @@ No scheduler, provider write or automatic retry of an uncertain local import.
 """
 from __future__ import annotations
 
+from .connector_oauth import connector_token as _connector_token
 import argparse
 import json
 import os
@@ -257,7 +258,7 @@ def main(argv=None, *, opener=None, provider_opener=None):
             consent_local_import=args.consent_local_import,
             read_selected=args.read_selected,
             consent_source_read=args.consent_selected_read,
-            since=args.since, token=os.environ.get("OWG_SERVICENOW_TOKEN"),
+            since=args.since, token=_connector_token("OWG_SERVICENOW_TOKEN"),
             provider_opener=provider_opener,
             session=os.environ.get("OWG_DASHBOARD_SESSION"), opener=opener)
         print(json.dumps(result, sort_keys=True))

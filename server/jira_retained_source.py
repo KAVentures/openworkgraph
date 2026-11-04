@@ -49,6 +49,14 @@ def configuration(env):
     host = str(env.get('OWG_JIRA_HOST', '')).strip().lower()
     cloud = str(env.get('OWG_JIRA_CLOUD_ID', '')).strip().lower()
     token = str(env.get('OWG_JIRA_OAUTH_ACCESS_TOKEN', '')).strip()
+    connection = str(env.get('OWG_JIRA_OAUTH_CONNECTION', '')).strip()
+    if connection:
+        from .connector_oauth import OAuthError, bearer_for
+        try:
+            token = bearer_for(connection, 'atlassian')
+        except OAuthError:
+            # Expired, reused or revoked refresh grants fail closed; reconnect explicitly.
+            raise JiraIngestionError('jira_oauth_renewal_failed_reconnect_required') from None
     if (not _TENANT.fullmatch(host) or not _CLOUD_ID.fullmatch(cloud)
             or not 1 <= len(token) <= 4096 or any(ord(c) < 33 or ord(c) > 126 for c in token)):
         raise JiraIngestionError('jira_configuration_unavailable')

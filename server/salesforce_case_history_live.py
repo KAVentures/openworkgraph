@@ -6,6 +6,7 @@ completeness is implied.
 """
 from __future__ import annotations
 
+from server.connector_oauth import connector_token as _connector_token
 import argparse
 import csv
 from datetime import datetime, timedelta, timezone
@@ -282,7 +283,7 @@ def main(argv=None, *, opener=None):
             raise LiveHistoryError("Explicit source and local export consents required")
         result = extract(
             args.instance, args.confirm_host, args.namespace, args.cases,
-            args.since, args.until, os.environ.get("OWG_SALESFORCE_READ_TOKEN"),
+            args.since, args.until, _connector_token("OWG_SALESFORCE_READ_TOKEN"),
             args.output, allow_loopback_http=args.allow_loopback_http,
             opener=opener, max_pages=args.max_pages)
         print(json.dumps(result, sort_keys=True))

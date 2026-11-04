@@ -6,6 +6,7 @@ An uncertain OWG POST is never retried automatically.
 """
 from __future__ import annotations
 
+from .connector_oauth import connector_token as _connector_token
 import argparse
 import json
 import os
@@ -189,7 +190,7 @@ def main(argv=None, *, provider_opener=None, opener=None):
             consent_source_read=args.consent_selected_read,
             consent_journal_update=args.consent_local_journal_update,
             consent_local_append=args.consent_local_append,
-            since=args.since, token=os.environ.get("OWG_SERVICENOW_TOKEN"),
+            since=args.since, token=_connector_token("OWG_SERVICENOW_TOKEN"),
             session=os.environ.get("OWG_DASHBOARD_SESSION"),
             provider_opener=provider_opener, opener=opener,
         )

@@ -59,7 +59,9 @@ def _put(conn, profile):
 
 def _binding(config):
     # A reference to this exact credential/configuration, never the credential.
-    return hmac.new(ensure_api_token().encode(), json.dumps(config).encode(), hashlib.sha256).hexdigest()
+    host, cloud, token = config
+    identity = getattr(token, 'credential_identity', None) or token
+    return hmac.new(ensure_api_token().encode(), json.dumps([host, cloud, identity]).encode(), hashlib.sha256).hexdigest()
 
 
 def _scope(refs, host):
@@ -146,7 +148,8 @@ def _create(refs, *, issue_keys=None, confirm_reads, confirm_retention, confirm_
     keys = _scope(refs, config[0]) if basis == 'observed_refs' else _native_scope(issue_keys)
     profile_id = 'jira_' + secrets.token_hex(12)
     profile = {'profile_id': profile_id, 'host': config[0], 'cloud_id': config[1],
-               'credential_reference': 'environment:OWG_JIRA_OAUTH_ACCESS_TOKEN',
+               'credential_reference': getattr(config[2], 'credential_identity', None)
+                   or 'environment:OWG_JIRA_OAUTH_ACCESS_TOKEN',
                'configuration_binding': _binding(config), 'resource_refs': list(refs or []), 'issue_keys': keys,
                'selection_basis': basis,
                'enabled': True, 'revision': 1, 'log_id': None, 'account_binding': None,
