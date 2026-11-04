@@ -21,7 +21,8 @@ class StructuralModel(BaseModel):
 class Activity(StructuralModel):
     id: Identifier
     label: ActivityLabel
-    kind: Literal['activity', 'decision', 'routing', 'start', 'end', 'parallel_split', 'parallel_join'] = 'activity'
+    kind: Literal['activity', 'decision', 'routing', 'start', 'end', 'parallel_split', 'parallel_join',
+                  'inclusive_split', 'inclusive_join'] = 'activity'
     implementation: Literal['unmapped', 'api', 'deterministic', 'ai_agent', 'computer_use', 'human'] = 'unmapped'
     responsibility_label: str = Field(default='', max_length=120)
 
@@ -165,10 +166,10 @@ class ProcessModel(StructuralModel):
         for activity in self.activities:
             if activity.id not in self.terminal_activity_ids and not outgoing[activity.id]:
                 raise ValueError('Nonterminal activities must have an outgoing transition')
-            if activity.kind == 'decision':
+            if activity.kind in {'decision', 'inclusive_split'}:
                 branches = [e for e in self.transitions if e.source == activity.id]
                 if len(branches) < 2 or any(not e.rule_id for e in branches):
-                    raise ValueError('Decision branches require at least two explicitly referenced rules')
+                    raise ValueError('Decision and inclusive branches require at least two explicitly referenced rules')
             elif activity.kind != 'parallel_split' and len(outgoing[activity.id]) > 1:
                 raise ValueError('Branching activities must be marked as decisions')
             if activity.kind == 'routing' and (activity.id in self.terminal_activity_ids or len(outgoing[activity.id]) != 1):
@@ -190,7 +191,7 @@ class ProcessModel(StructuralModel):
             raise ValueError('Every activity must be reachable from the entry')
         if reachable(self.terminal_activity_ids, incoming) != known:
             raise ValueError('Every activity must have a path to a terminal')
-        if any(node.kind in {'parallel_split','parallel_join'} for node in self.activities):
+        if any(node.kind in {'parallel_split','parallel_join','inclusive_split','inclusive_join'} for node in self.activities):
             from .process_parallel import parallel_regions
             parallel_regions(self)
         validate_tables(self)
@@ -199,7 +200,7 @@ class ProcessModel(StructuralModel):
     def linear_path(self) -> list[str] | None:
         """Only return a path when no loop, decision or branch would be lost."""
         outgoing = {edge.source: edge.target for edge in self.transitions}
-        if any(a.kind in {'decision','parallel_split','parallel_join'} for a in self.activities):
+        if any(a.kind in {'decision','parallel_split','parallel_join','inclusive_split','inclusive_join'} for a in self.activities):
             return None
         by_id = {a.id: a.label for a in self.activities}
         path, seen = [], set()

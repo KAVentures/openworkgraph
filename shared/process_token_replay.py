@@ -32,6 +32,21 @@ class _Net:
         automaton = EdgeTokenModel(model)
         self.nodes = automaton.nodes
         self.incoming, self.outgoing = automaton.incoming, automaton.outgoing
+        self.inclusive_inside = automaton.inclusive_inside
+        # Per inclusive split: outgoing place -> activity labels on that branch.
+        from .process_parallel import parallel_regions
+        self.branch_labels: dict[str, dict[int, frozenset[str]]] = {}
+        for region in parallel_regions(model):
+            if region.get("kind") != "inclusive_split":
+                continue
+            mapping = {}
+            for place, edge in enumerate(model.transitions):
+                if edge.source != region["split"]:
+                    continue
+                branch = next((b for b in region["branches"] if b and b[0] == edge.target), [])
+                mapping[place] = frozenset(self.nodes[n].label for n in branch if self.nodes[n].kind == "activity")
+            self.branch_labels[region["split"]] = mapping
+        self.future: frozenset[str] = frozenset()
         self.place_target: dict[int, str] = {}
         for identifier, places in self.incoming.items():
             for place in places:
@@ -48,12 +63,27 @@ class _Net:
         places = self.incoming[identifier]
         if self.nodes[identifier].kind == "parallel_join":
             return [list(places)] if places and all(marking[p] > 0 for p in places) else []
+        if self.nodes[identifier].kind == "inclusive_join":
+            arrived = [p for p in places if marking[p] > 0]
+            busy = any(marking[p] > 0 for p in self.inclusive_inside[identifier])
+            return [arrived] if arrived and not busy else []
         return [[place] for place in places if marking[place] > 0]
 
     def emissions(self, identifier: str) -> list[list[int]]:
         places = self.outgoing[identifier]
         if self.nodes[identifier].kind == "parallel_split":
             return [list(places)]
+        if self.nodes[identifier].kind == "inclusive_split":
+            # Prefer exactly the branches whose activities still appear later in the trace;
+            # otherwise the smallest subsets, so no branch is started without evidence.
+            subsets = [[p for bit, p in enumerate(places) if mask >> bit & 1] for mask in range(1, 1 << len(places))]
+            labels = self.branch_labels.get(identifier, {})
+            preferred = [p for p in places if labels.get(p, frozenset()) & self.future]
+            ordered = sorted(subsets, key=len)
+            if preferred:
+                ordered.remove(preferred)
+                ordered.insert(0, preferred)
+            return ordered
         return [[place] for place in places] or [[]]
 
 
@@ -74,7 +104,7 @@ def _silent_closure(net: _Net, marking: Counter, goal, goal_key) -> tuple[Counte
     Returns (marking, tokens consumed, tokens produced) or None within budget.
     Results are memoized per (marking, goal) because variants share prefixes.
     """
-    cache_key = (_key(marking), goal_key)
+    cache_key = (_key(marking), goal_key, net.future if net.branch_labels else None)
     if cache_key not in net.closures:
         found = _search(net, marking, goal)
         net.closures[cache_key] = None if found is None else (Counter(found[0]), found[1], found[2])
@@ -134,6 +164,7 @@ def replay_path(path: tuple[str, ...] | list[str], model, *, _net: _Net | None =
             consumed += 1
             missing_at[label] += 1
             continue
+        net.future = frozenset(path[index:])
         reached = _silent_closure(net, marking, enabled_for(label), label)
         if reached is not None:
             marking, used, made = reached

@@ -21,7 +21,7 @@ def validate_spec(spec):
         if spec.get('decision_table_contract') != runtime_contract(model):
             kind='ordered FIRST' if any(t.hit_policy=='FIRST' for t in model.decision_tables) else 'UNIQUE'
             raise ValueError('Decision tables require the exported current-source '+kind+' contract')
-    parallel = any(node.get('kind') in {'parallel_split','parallel_join'} for node in spec['process_model']['activities'])
+    parallel = any(node.get('kind') in {'parallel_split','parallel_join','inclusive_split','inclusive_join'} for node in spec['process_model']['activities'])
     if parallel:
         if (spec.get('control_flow_contract') != 'openworkgraph.parallel-node-firing-plan.v1'
                 or spec.get('execution_schedule') != 'serial_token_valid_node_order'):

@@ -7,6 +7,12 @@ from heapq import heappop, heappush
 from itertools import count
 
 PARALLEL_KINDS = {'parallel_split', 'parallel_join'}
+INCLUSIVE_KINDS = {'inclusive_split', 'inclusive_join'}
+BLOCK_KINDS = PARALLEL_KINDS | INCLUSIVE_KINDS
+SPLIT_KINDS = {'parallel_split': 'parallel_join', 'inclusive_split': 'inclusive_join'}
+JOIN_KINDS = set(SPLIT_KINDS.values())
+# Inclusive splits emit any non-empty subset of their branches (at most 2^8 - 1).
+MAX_INCLUSIVE_BRANCHES = 8
 MAX_ALIGNMENT_STATES = 100_000
 MAX_BATCH_ALIGNMENT_STATES = 200_000
 MAX_FIRING_REPLAY_WORK = 100_000
@@ -18,6 +24,9 @@ def parallel_regions(model):
     A branch is a linear chain of activities/routing or complete nested blocks.
     Branch macros retain each nested split, all its branches and its join. No
     conditional, crossing, escaping or partially joined region is flattened.
+    Inclusive blocks have the same shape, but every branch leaving the split
+    carries a rule and one or more branches run; their join waits for exactly
+    the branches that started.
     """
     nodes = {node.id: node for node in model.activities}
     outgoing, incoming = defaultdict(list), defaultdict(list)
@@ -26,8 +35,10 @@ def parallel_regions(model):
         outgoing[edge.source].append(edge.target);incoming[edge.target].append(edge.source)
         if edge.rule_id:
             conditional_sources.add(edge.source)
-            if nodes[edge.source].kind in PARALLEL_KINDS:
+            if nodes[edge.source].kind in PARALLEL_KINDS or nodes[edge.source].kind == 'inclusive_join':
                 raise ValueError('Parallel gateway transitions cannot have conditional rules')
+        elif nodes[edge.source].kind == 'inclusive_split':
+            raise ValueError('Every inclusive branch requires a rule that says when it runs')
     regions, paired, visiting = {}, {}, set()
 
     def parse(split):
@@ -41,14 +52,15 @@ def parallel_regions(model):
             raise ValueError('Parallel splits require a single entry; merge exclusive arrivals explicitly first')
         if not 2 <= len(outgoing[split]) <= 8:
             raise ValueError('Parallel splits require 2–8 unconditional branches')
+        join_kind = SPLIT_KINDS[nodes[split].kind]
         visiting.add(split)
         paths, joins = [], []
         for first in outgoing[split]:
             path=[];cursor=first
-            while nodes[cursor].kind != 'parallel_join':
+            while nodes[cursor].kind not in JOIN_KINDS:
                 if cursor in path or cursor in conditional_sources or len(incoming[cursor]) != 1:
                     raise ValueError('Parallel branches must be disjoint unconditional paths or complete nested blocks')
-                if nodes[cursor].kind == 'parallel_split':
+                if nodes[cursor].kind in SPLIT_KINDS:
                     child = parse(cursor)
                     block = [cursor] + [step for branch in child['branches'] for step in branch] + [child['join']]
                     if set(block) & set(path):
@@ -63,8 +75,8 @@ def parallel_regions(model):
                     raise ValueError('Parallel branches cannot escape or terminate before the paired join')
                 cursor=outgoing[cursor][0]
             paths.append(path);joins.append(cursor)
-        if len(set(joins)) != 1 or joins[0] in paired:
-            raise ValueError('Every parallel split requires its own common join')
+        if len(set(joins)) != 1 or joins[0] in paired or nodes[joins[0]].kind != join_kind:
+            raise ValueError('Every parallel or inclusive split requires its own common join of the same kind')
         join=joins[0]
         ends={path[-1] if path else split for path in paths}
         if set(incoming[join]) != ends or len(incoming[join]) != len(paths):
@@ -76,23 +88,24 @@ def parallel_regions(model):
             raise ValueError('Parallel branches must not share nodes before their join')
         paired[join]=split
         regions[split]={'split':split,'join':join,'branches':paths}
+        if nodes[split].kind=='inclusive_split':regions[split]['kind']='inclusive_split'
         visiting.remove(split)
         return regions[split]
 
     for node in model.activities:
-        if node.kind == 'parallel_split':parse(node.id)
+        if node.kind in SPLIT_KINDS:parse(node.id)
     blocks = [{region['split'], region['join']} | {step for path in region['branches'] for step in path}
               for region in regions.values()]
     for index, block in enumerate(blocks):
         if any(block & other and not (block < other or other < block) for other in blocks[index + 1:]):
             raise ValueError('Parallel regions must be disjoint or completely nested; crossing blocks are unsupported')
     for node in model.activities:
-        if node.kind == 'parallel_join' and (node.id not in paired or node.id==model.entry_activity_id or len(outgoing[node.id]) != 1
+        if node.kind in JOIN_KINDS and (node.id not in paired or node.id==model.entry_activity_id or len(outgoing[node.id]) != 1
                                             or node.id in model.terminal_activity_ids):
             raise ValueError('Parallel joins require one paired split and one continuation')
-        if node.kind == 'parallel_split' and node.id in model.terminal_activity_ids:
+        if node.kind in SPLIT_KINDS and node.id in model.terminal_activity_ids:
             raise ValueError('Parallel splits cannot be terminal')
-    return [regions[node.id] for node in model.activities if node.kind == 'parallel_split']
+    return [regions[node.id] for node in model.activities if node.kind in SPLIT_KINDS]
 
 
 class _BudgetReached(Exception):pass
@@ -101,7 +114,7 @@ class _BudgetReached(Exception):pass
 class EdgeTokenModel:
     """Shared visible-activity semantics for alignment and prefix replay."""
     def __init__(self, model):
-        parallel_regions(model)
+        regions = parallel_regions(model)
         self.nodes={node.id:node for node in model.activities}
         self.incoming,self.outgoing=defaultdict(list),defaultdict(list)
         for place,edge in enumerate(model.transitions):
@@ -111,6 +124,22 @@ class EdgeTokenModel:
         self.done=frozenset({-2})
         self.incoming[model.entry_activity_id].append(-1)
         for terminal in model.terminal_activity_ids:self.outgoing[terminal]=[-2]
+        # Places strictly inside each inclusive block, excluding its join arrivals:
+        # the join may fire only once no started branch still holds a token.
+        self.inclusive_inside={}
+        for region in regions:
+            if region.get('kind')!='inclusive_split':continue
+            members={region['split']}|{step for path in region['branches'] for step in path}
+            inside={place for place,edge in enumerate(model.transitions)
+                    if edge.source in members and edge.target!=region['join']}
+            self.inclusive_inside[region['join']]=frozenset(inside)
+
+    def _emissions(self, identifier, node):
+        places=self.outgoing[identifier]
+        if node.kind=='parallel_split':return [frozenset(places)]
+        if node.kind=='inclusive_split':
+            return [frozenset(p for bit,p in enumerate(places) if mask>>bit&1) for mask in range(1,1<<len(places))]
+        return [frozenset({place}) for place in places]
 
     def firings(self, marking):
         for identifier,node in self.nodes.items():
@@ -119,9 +148,11 @@ class EdgeTokenModel:
             if node.kind=='parallel_join':
                 if len(arrived)!=len(self.incoming[identifier]):continue
                 consumptions=[frozenset(arrived)]
+            elif node.kind=='inclusive_join':
+                if marking & self.inclusive_inside[identifier]:continue
+                consumptions=[frozenset(arrived)]
             else:consumptions=[frozenset({place}) for place in arrived]
-            emissions=([frozenset(self.outgoing[identifier])] if node.kind=='parallel_split'
-                       else [frozenset({place}) for place in self.outgoing[identifier]])
+            emissions=self._emissions(identifier,node)
             for consumed in consumptions:
                 for emitted in emissions:
                     yield node,(marking-consumed)|emitted,emitted

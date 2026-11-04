@@ -323,7 +323,7 @@
     });
     model.activities.forEach((activity,i)=>{
       const p=positions.get(activity.id),group=svg('g',{role:'button',tabindex:0,'aria-label':'Edit activity '+activity.id});
-      const rect=svg('rect',{x:p.x,y:p.y,width:175,height:50,rx:['decision','routing','parallel_split','parallel_join'].includes(activity.kind)?22:5,fill:'#f1f7f4',stroke:'#557e70'});
+      const rect=svg('rect',{x:p.x,y:p.y,width:175,height:50,rx:['decision','routing','parallel_split','parallel_join','inclusive_split','inclusive_join'].includes(activity.kind)?22:5,fill:'#f1f7f4',stroke:'#557e70'});
       const text=svg('text',{x:p.x+8,y:p.y+20,'font-size':12});text.textContent=(activity.kind.startsWith('parallel_')?'+ ':'')+activity.label.slice(0,22);
       const sub=svg('text',{x:p.x+8,y:p.y+38,'font-size':10});sub.textContent=activity.responsibility_label?
         ('Responsibility: '+activity.responsibility_label).slice(0,27):activity.id+' · '+activity.kind;
@@ -502,13 +502,15 @@
     host.appendChild(el('p','Responsibility labels describe who should handle a step. They are user declarations and grant no access, review or execution permissions.'));
     if(model.activities.some(node=>['parallel_split','parallel_join'].includes(node.kind)))host.appendChild(el('p',
       'Parallel splits run every branch and joins require every branch. This bounded design supports disjoint unconditional branch chains and complete nested paired blocks; conditional parallel regions are unsupported. SDK projects validate complete token-firing schedules and execute one customer-authorized activity at a time.'));
+    if(model.activities.some(node=>['inclusive_split','inclusive_join'].includes(node.kind)))host.appendChild(el('p',
+      'Inclusive splits run one or more branches: each branch has its own rule, and the join waits for exactly the branches that started. Rules stay unconfirmed until you confirm them; if no rule applies at run time, the generated project stops for review.'));
     host.appendChild(button('Refresh graph preview',()=>renderEditor()));
     renderDifferenceReview(host);
     const mutate=fn=>{fn();changed();renderEditor();};
     model.activities.forEach((activity,index)=>{
       const row=el('fieldset');row.appendChild(el('legend',activity.id));
       const label=field(row,'Activity '+activity.id,activity.label,value=>activity.label=value);label.id='owgCatalogActivity'+index;
-      field(row,'Kind '+activity.id,activity.kind,value=>activity.kind=value,['activity','decision','routing','start','end','parallel_split','parallel_join']);
+      field(row,'Kind '+activity.id,activity.kind,value=>activity.kind=value,['activity','decision','routing','start','end','parallel_split','parallel_join','inclusive_split','inclusive_join']);
       field(row,'Implementation '+activity.id,activity.implementation,value=>activity.implementation=value,['unmapped','api','deterministic','ai_agent','computer_use','human']);
       const responsibility=field(row,'Responsibility '+activity.id,activity.responsibility_label||'',value=>activity.responsibility_label=value);
       responsibility.maxLength=120;
@@ -811,7 +813,7 @@
   }
   function installBPMNImport(parent){
     const section=el('details');section.id='owgBPMNImport';section.appendChild(el('summary','Import a BPMN design as an unreviewed draft'));
-    section.appendChild(el('p','Select an authorized UTF-8 BPMN 2.0 file (128 KiB maximum). Preview supports tasks, plain start/end events, exclusive choices/merges and paired parallel gateways with disjoint unconditional branches and complete nested paired blocks. Plain embedded subprocesses (one start and end, no loops, boundary or event triggers) are inlined and their grouping is shown. Conditional parallel regions, inclusive gateways, other subprocesses, call activities, event triggers, collaborations and executable extensions are rejected. XML never executes. No process is saved until separate graph review and Save.'));
+    section.appendChild(el('p','Select an authorized UTF-8 BPMN 2.0 file (128 KiB maximum). Preview supports tasks, plain start/end events, exclusive choices/merges and paired parallel gateways with disjoint unconditional branches and complete nested paired blocks. Plain embedded subprocesses (one start and end, no loops, boundary or event triggers) are inlined and their grouping is shown. Paired inclusive gateways are supported. Conditional parallel regions, unpaired inclusive gateways, other subprocesses, call activities, event triggers, collaborations and executable extensions are rejected. XML never executes. No process is saved until separate graph review and Save.'));
     const file=el('input');file.type='file';file.accept='.bpmn,.xml,application/xml,application/bpmn+xml';
     file.setAttribute('aria-label','Choose BPMN process design');
     const preview=button('Preview selected BPMN',()=>previewBPMN(file));preview.id='owgBPMNPreview';preview.disabled=true;
