@@ -1,12 +1,16 @@
 """Bounded descriptive BPMN import. XML is data, never an execution policy.
 
 Support serial/exclusive choice and properly nested paired parallel regions.
-Conditional parallel, inclusive, subprocess and event-driven semantics must not be
+Plain embedded subprocesses (one start, one end, single plain entry and exit, no
+boundary events, loops, multi-instance or event triggers) are inlined, which is
+exact for those semantics; the grouping is reported for review. Conditional
+parallel, inclusive, other subprocess and event-driven semantics must not be
 flattened into an incorrect sequential model. No XML resolution, provider calls or persistence.
 """
 from __future__ import annotations
 
 from collections import Counter
+import copy
 from hashlib import sha256
 import re
 import json
@@ -75,6 +79,75 @@ def _name(element):
     return element.tag[len(BPMN)+2:]
 
 
+MAX_SUBPROCESS_DEPTH = 3
+_SUB_ALLOWED_ATTRS = {'id', 'name'}
+
+
+def _plain_flow(flow):
+    """A flow carrying no condition, documentation or label."""
+    return not len(flow) and not (flow.get('name') or '').strip()
+
+
+def _inline_subprocesses(container, inlined, depth=0):
+    """Replace each plain embedded subprocess in ``container`` by its contents.
+
+    Exact only because entry/exit are single plain flows and the body has one
+    start and one end event; anything else is refused, never approximated.
+    ``inlined`` collects (subprocess_id, label, member_source_ids).
+    """
+    subprocesses=[child for child in list(container) if _name(child)=='subProcess']
+    if not subprocesses:
+        return
+    if depth>=MAX_SUBPROCESS_DEPTH:
+        raise BPMNImportError('Embedded subprocesses may be nested at most 3 levels deep')
+    for sub in subprocesses:
+        if set(sub.attrib)-_SUB_ALLOWED_ATTRS:
+            raise BPMNImportError('Event subprocesses, transactions and subprocess execution attributes are unsupported')
+        _inline_subprocesses(sub, inlined, depth+1)
+        sub_id=sub.get('id','')
+        body=[child for child in sub if _name(child) not in {'incoming','outgoing','documentation'}]
+        docs=[child for child in sub if _name(child)=='documentation']
+        for child in body:
+            if _name(child) not in FLOW_NODES|{'sequenceFlow'}:
+                raise BPMNImportError('Subprocess loops, multi-instance, boundary events and other semantics cannot be flattened')
+        flows=[child for child in body if _name(child)=='sequenceFlow']
+        nodes=[child for child in body if _name(child)!='sequenceFlow']
+        starts=[node for node in nodes if _name(node)=='startEvent']
+        ends=[node for node in nodes if _name(node)=='endEvent']
+        if len(starts)!=1 or len(ends)!=1:
+            raise BPMNImportError('An embedded subprocess needs exactly one plain start and one plain end event')
+        start_id,end_id=starts[0].get('id'),ends[0].get('id')
+        for event in (starts[0],ends[0]):
+            if any(_name(child) not in {'incoming','outgoing'} for child in event):
+                raise BPMNImportError('Subprocess start/end events must be plain')
+        start_out=[flow for flow in flows if flow.get('sourceRef')==start_id]
+        end_in=[flow for flow in flows if flow.get('targetRef')==end_id]
+        if (len(start_out)!=1 or len(end_in)!=1 or not _plain_flow(start_out[0])
+                or any(flow.get('targetRef')==start_id or flow.get('sourceRef')==end_id for flow in flows)):
+            raise BPMNImportError('A subprocess start and end need exactly one plain internal transition each')
+        siblings=[child for child in container if _name(child)=='sequenceFlow']
+        entry=[flow for flow in siblings if flow.get('targetRef')==sub_id]
+        exit_=[flow for flow in siblings if flow.get('sourceRef')==sub_id]
+        if len(entry)!=1 or len(exit_)!=1 or not _plain_flow(exit_[0]):
+            raise BPMNImportError('An embedded subprocess needs one incoming and one plain outgoing transition')
+        # Entry goes to the first inner step; the last inner flow continues to the exit target.
+        entry[0].set('targetRef',start_out[0].get('targetRef'))
+        end_in[0].set('targetRef',exit_[0].get('targetRef'))
+        members=[node.get('id','') for node in nodes if node not in (starts[0],ends[0])]
+        if not members:
+            raise BPMNImportError('An embedded subprocess must contain at least one step')
+        position=list(container).index(sub)
+        container.remove(sub);container.remove(exit_[0])
+        hoisted=[child for child in body if child not in (starts[0],ends[0],start_out[0])]
+        for doc in docs:
+            if (doc.text or '').strip():
+                note=ET.Element('{'+BPMN+'}documentation');note.text='Subprocess documentation: '+doc.text.strip()
+                hoisted.append(note)
+        for offset,child in enumerate(hoisted):
+            container.insert(position+offset,child)
+        inlined.append((sub_id,(sub.get('name') or '').strip(),members))
+
+
 def import_bpmn(raw: bytes):
     if not isinstance(raw,bytes) or not raw or len(raw)>MAX_BYTES:
         raise BPMNImportError('BPMN must be a nonempty UTF-8 file of at most 128 KiB')
@@ -114,7 +187,9 @@ def import_bpmn(raw: bytes):
             raise BPMNImportError('Import one process only; collaborations, external imports and executable extensions are unsupported')
     if len(processes)!=1:
         raise BPMNImportError('Import exactly one BPMN process at a time')
-    process=processes[0]
+    process=copy.deepcopy(processes[0])
+    inlined=[]
+    _inline_subprocesses(process,inlined)
     nodes,flows,notes=[],[],[]
     manual_by_source, responsibility_by_source=[],{}
     table_by_source={}
@@ -289,6 +364,7 @@ def import_bpmn(raw: bytes):
     if any(kind in {'parallel_split','parallel_join'} for kind in source_kinds.values()):
         warnings.append('parallel_semantics_preserved_sdk_uses_serial_token_valid_schedule')
     if tables:warnings.append('decision_tables_retained_as_unconfirmed_declarations_not_dmn_execution')
+    if inlined:warnings.append('embedded_subprocesses_inlined_grouping_not_saved_in_model')
     if label_corrections:warnings.append('unsupported_or_missing_labels_use_placeholders')
     if notes:warnings.append('documentation_requires_separate_manual_review_and_is_not_saved_with_the_model')
     if manual_conditions:warnings.append('unevaluated_manual_review_guards_retained_in_the_model')
@@ -298,6 +374,9 @@ def import_bpmn(raw: bytes):
     return {'format':'openworkgraph.bpmn-draft-import.v1','process_model':model.model_dump(),
         'source_sha256':sha256(raw).hexdigest(),'source_node_ids':mapping,
         'documentation_notes':notes,'placeholder_label_count':len(label_corrections),
+        'inlined_subprocesses':[{'label':label if _LABEL.fullmatch(label) else '',
+            'activity_ids':[mapping[member] for member in members if member in mapping]}
+            for _,label,members in inlined],
         'label_corrections':label_corrections,
         'retained_manual_review_condition_count':len(model.manual_review_conditions),
         'retained_responsibility_label_count':len(responsibility_by_source),

@@ -15,9 +15,28 @@ are not source-log activities and need no business-tool mapping in generated
 projects. Import supports exclusive loops when the graph has an unambiguous
 entry and a route to a terminal.
 
-Conditional parallel regions, inclusive gateways, subprocesses, event triggers, message collaborations,
-external imports, executable extensions, scripts and loop characteristics are
-rejected. Their semantics are not flattened into an incorrect serial graph.
+### Embedded subprocesses
+
+A plain embedded `subProcess` is inlined into the parent graph, which is exact for
+these semantics: one plain start event and one plain end event inside, a single
+plain internal transition out of the start and into the end, one incoming and one
+plain outgoing transition in the parent, at least one inner step, and at most three
+levels of nesting. Inner tasks, exclusive choices and paired parallel regions follow
+the normal rules. The preview reports each subprocess as `inlined_subprocesses`
+(label and the positional activity IDs it contained) and adds the warning
+`embedded_subprocesses_inlined_grouping_not_saved_in_model`. The saved model and
+exports are flat, so the grouping is for review only. Subprocess documentation
+becomes a review note.
+
+Event subprocesses (`triggeredByEvent`), transactions, call activities, loop or
+multi-instance subprocesses, boundary events, triggered start events, several
+start/end events, empty subprocesses and conditional or labelled entry/exit
+transitions are rejected.
+
+Conditional parallel regions, inclusive gateways, other subprocess semantics, event
+triggers, message collaborations, external imports, executable extensions, scripts
+and loop characteristics are rejected. Their semantics are not flattened into an
+incorrect serial graph.
 Tasks with implicit branching are rejected; use an explicit gateway.
 [Parallel regions](PARALLEL_PROCESS_MODELS.md) require disjoint unconditional
 branch chains, which may contain complete nested paired regions, and a complete
