@@ -89,6 +89,9 @@ def build_runtime_spec(packet: dict) -> dict:
                     execution_schedule='serial_token_valid_node_order')
     if model.decision_tables:
         from .process_decision_tables import runtime_contract
+        if any(t.required_decisions for t in model.decision_tables):
+            raise ValueError('Generated projects do not yet run dependent decision tables; '
+                             'check them against supplied cases instead')
         spec['decision_table_contract'] = runtime_contract(model)
     origin = packet.get('organization_catalog_reference')
     if origin is not None:

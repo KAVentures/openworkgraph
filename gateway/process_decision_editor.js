@@ -10,7 +10,9 @@
     for(const table of model.decision_tables){
       const box=el('section');box.appendChild(el('h5',table.id+' · '+table.decision_activity_id+(table.hit_policy==='FIRST'?' · FIRST':'')+' · '+(table.user_confirmed?'user confirmed':'unconfirmed')));
       box.appendChild(el('p','Effective '+table.effective_from+' to '+(table.effective_until||'no declared end')+' · Source basis: '+table.source_basis.label+' · '+table.source_basis.document_sha256+' (human-declared digest, not independently verified)'));
-      const list=el('ul');for(const [index,row] of table.rows.entries())list.appendChild(el('li',(table.hit_policy==='FIRST'?(index+1)+'. ':'')+row.id+' · rule '+row.rule_id+' → '+row.target_activity_id));box.appendChild(list);host.appendChild(box);
+      const list=el('ul');for(const [index,row] of table.rows.entries())list.appendChild(el('li',(table.hit_policy==='FIRST'?(index+1)+'. ':'')+row.id+' · rule '+row.rule_id+' → '+row.target_activity_id));box.appendChild(list);
+      for(const r of table.required_decisions||[])box.appendChild(el('p','Requires decision '+r.table_id+': its selected next step is the fact '+r.fact_path+'. If it selects no step, this table is withheld.'));
+      host.appendChild(box);
     }
   }
   function render(model,host,changed){
@@ -73,10 +75,27 @@
           }
           list.appendChild(item);
         });box.appendChild(list);
+        const requires=el('ul');
+        (table.required_decisions||[]).forEach((r,i)=>{
+          const item=el('li','Requires '+r.table_id+' as fact '+r.fact_path+' ');
+          const drop=button('Remove',()=>{table.required_decisions.splice(i,1);if(!table.required_decisions.length)delete table.required_decisions;invalidate();paint();});
+          drop.setAttribute('aria-label','Remove required decision '+r.table_id+' from '+table.id);item.appendChild(drop);requires.appendChild(item);
+        });
+        box.appendChild(requires);
+        const others=(model.decision_tables||[]).filter(t=>t.id!==table.id&&!(table.required_decisions||[]).some(r=>r.table_id===t.id));
+        if(others.length&&(table.required_decisions?.length||0)<8){
+          const other=el('select');other.setAttribute('aria-label','Required decision for '+table.id);
+          others.forEach(t=>{const o=el('option',t.id+' · '+t.decision_activity_id);o.value=t.id;other.appendChild(o);});
+          const path=el('input');path.maxLength=240;path.placeholder='/decisions/name';path.setAttribute('aria-label','Fact path for required decision '+table.id);
+          box.append(other,path,button('Add required decision '+table.id,()=>{
+            if(!/^(\/[A-Za-z_][A-Za-z0-9_]{0,63}){1,8}$/.test(path.value)){notice.textContent='Use a fact path such as /decisions/credit (letters, digits and underscores).';return;}
+            (table.required_decisions??=[]).push({table_id:other.value,fact_path:path.value});invalidate();paint();
+          }));
+        }
         box.appendChild(button('Synchronize rows '+table.id,()=>{try{table.rows=rowsFor(table.decision_activity_id,table.hit_policy==='FIRST'?table.rows:[]);invalidate();paint();}catch(e){notice.textContent=e.message;}}));
         const label=el('label',' I confirm this exact table, referenced rules, source basis and effective dates'+(table.hit_policy==='FIRST'?', and declared row precedence':'')+' '+table.id+' '),check=el('input');check.type='checkbox';check.dataset.tableConfirmation=table.id;check.checked=table.user_confirmed;
         check.onchange=()=>{table.user_confirmed=check.checked;changed(false);};label.appendChild(check);box.appendChild(label);
-        box.appendChild(button('Remove table '+table.id,()=>{model.decision_tables.splice(index,1);if(!model.decision_tables.length)delete model.decision_tables;invalidate();paint();}));
+        box.appendChild(button('Remove table '+table.id,()=>{const [removed]=model.decision_tables.splice(index,1);for(const t of model.decision_tables){if(t.required_decisions){t.required_decisions=t.required_decisions.filter(r=>r.table_id!==removed.id);if(!t.required_decisions.length)delete t.required_decisions;}}if(!model.decision_tables.length)delete model.decision_tables;invalidate();paint();}));
       }
     }
     paint();return section;

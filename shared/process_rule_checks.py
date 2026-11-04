@@ -65,10 +65,8 @@ def check_case_rules(record,cases,as_of_date=None):
                           'conditions':result['conditions'] if result else []})
         tables=[]
         if model.decision_tables:
-            from .process_decision_tables import evaluate_table
-            by_rule={r.id:r for r in model.business_rules}
-            for table in model.decision_tables:
-                check=evaluate_table(table,by_rule,case.facts,as_of_date)
+            from .process_decision_tables import evaluate_decisions
+            for table,check in zip(model.decision_tables,evaluate_decisions(model,case.facts,as_of_date)):
                 if route is not None and (not route_valid or table.decision_activity_id not in route):
                     check.update(status='not_evaluated_invalid_route' if not route_valid else 'not_on_proposed_route',
                                  rows=[],selected_target_activity_id=None)
