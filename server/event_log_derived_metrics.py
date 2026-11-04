@@ -16,6 +16,7 @@ MAX_NODES = 64
 MAX_DEPTH = 12
 MAX_FIELDS = 32
 MAX_NUMBER_DIGITS = 24
+MAX_DECIMAL_MAGNITUDE = 18
 OPERATORS = {"add", "subtract", "multiply", "divide", "coalesce"}
 
 
@@ -39,6 +40,8 @@ def _number(value: Any) -> Decimal | None:
         raise MetricDefinitionError("invalid number") from exc
     if not result.is_finite():
         raise MetricDefinitionError("non-finite number")
+    if result and abs(result.adjusted()) > MAX_DECIMAL_MAGNITUDE:
+        raise MetricDefinitionError("numeric magnitude exceeds safe bound")
     return result
 
 
@@ -103,7 +106,7 @@ def _evaluate(node: dict[str, Any], row: Mapping[str, Any]) -> Decimal | None:
             value = left / right
     except (InvalidOperation, OverflowError, ZeroDivisionError):
         return None
-    return value if value.is_finite() else None
+    return value if value.is_finite() and (not value or abs(value.adjusted()) <= MAX_DECIMAL_MAGNITUDE) else None
 
 
 def evaluate(
@@ -151,6 +154,8 @@ def summarize_rows(
             continue
         non_null += 1
         total += value
+        if total and abs(total.adjusted()) > MAX_DECIMAL_MAGNITUDE:
+            raise MetricDefinitionError("aggregate magnitude exceeds safe bound")
         minimum = value if minimum is None else min(minimum, value)
         maximum = value if maximum is None else max(maximum, value)
     return {
