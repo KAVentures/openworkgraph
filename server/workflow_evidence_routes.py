@@ -530,6 +530,7 @@ def get_workflow_evidence_families(
     navigation_summary_only: bool = False,
     include_transition_maps: bool = False,
     label_topics: bool = False,
+    semantic_links: bool = False,
 ) -> dict[str, Any]:
     try:
         return list_workflow_evidence_candidates(
@@ -546,6 +547,7 @@ def get_workflow_evidence_families(
             navigation_summary_only=navigation_summary_only,
             include_transition_maps=include_transition_maps,
             label_topics=label_topics,
+            semantic_links=semantic_links,
         )
     except (TypeError, ValueError, WorkflowEvidenceError) as exc:
         raise HTTPException(status_code=422, detail=str(exc) or "invalid workflow-evidence query") from exc
@@ -1002,6 +1004,23 @@ def export_process_agent_project(workflow_id: str = Query(pattern=_PROCESS_ID), 
         'Cache-Control': 'no-store',
         'Content-Disposition': 'attachment; filename="openworkgraph-openai-agents-project.zip"',
     })
+
+
+@app.get('/v1/semantic-linker')
+def get_semantic_linker(request: Request) -> Response:
+    from .local_source_routes import _require_dashboard
+    from .semantic_linker import settings
+    _require_dashboard(request)
+    return JSONResponse(settings(), headers={'Cache-Control': 'no-store'})
+
+
+@app.put('/v1/semantic-linker')
+async def put_semantic_linker(request: Request) -> Response:
+    from .local_source_routes import _require_dashboard
+    from .semantic_linker import SemanticLinkerError, configure
+    _require_dashboard(request)
+    try:return JSONResponse(configure(await _process_json(request, maximum=2048)), headers={'Cache-Control': 'no-store'})
+    except SemanticLinkerError as exc:raise HTTPException(409, str(exc)) from None
 
 
 @app.post('/v1/process-catalog/clarify')

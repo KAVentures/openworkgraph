@@ -889,6 +889,16 @@ def build_workflow_evidence(
     return bundle
 
 
+def _semantic_suggestions(raw: list[dict[str, Any]]) -> dict[str, Any]:
+    """Opt-in model suggestions; an unavailable linker is reported, never fatal."""
+    from .semantic_linker import SemanticLinkerError, configured_completion, suggest
+    try:
+        return suggest(raw, configured_completion())
+    except SemanticLinkerError as exc:
+        return {"format": "openworkgraph.semantic-link-suggestions.v1", "suggestions": [],
+                "unavailable": str(exc), "merged_into_canonical_evidence": False}
+
+
 def list_workflow_evidence_candidates(
     *,
     since: str | None = None,
@@ -906,6 +916,7 @@ def list_workflow_evidence_candidates(
     navigation_summary_only: bool = False,
     include_transition_maps: bool = False,
     label_topics: bool = False,
+    semantic_links: bool = False,
     _raw_events: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """``label_topics`` is the user's opt-in to let linking read captured titles/labels."""
@@ -1047,6 +1058,7 @@ def list_workflow_evidence_candidates(
         "linked_work_items": linked_work_items(raw, max_items=bounded),
         **({"label_topic_work_items": label_topic_work_items(raw, max_items=bounded)}
            if label_topics else {}),
+        **({"semantic_link_suggestions": _semantic_suggestions(raw)} if semantic_links else {}),
         "preferred_navigation": "candidate_clusters",
         "minimum_cluster_quality": float(min_cluster_quality),
         "suppressed_low_specificity_clusters": sum(
