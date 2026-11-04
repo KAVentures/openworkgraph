@@ -1,0 +1,9 @@
+# Bound-run retained provider-evidence history (experimental)
+
+The local dashboard-only POST `/v1/open-work/declarations/human-outcomes/bound-run-evidence-history` joins an **operator-confirmed** imported run/case binding to the existing **case-wide** retained provider-evidence ledger. It makes a single explicitly reviewed, read-only API request possible without a fresh Stripe request or a new storage system.
+
+Send JSON with `work_item_ref`, `expected_revision`, `expected_edit_token`, `confirm_historical_review: true`, `confirm_run_comparison: true`, `max_cases` (1–4), `deployment_id`, `run_id`, and the existing signed `record_link`. Authenticate using an existing local `owg-session` dashboard session. The same retained historical review, current case revision, source scope, signed record link, run snapshot fingerprint and actor-owned binding are required as for the source comparison. Reads recheck the run/binding and source after accessing the HMAC-protected ledger. The response is `no-store`.
+
+The returned `case_provider_evidence_history` is **case-wide**, not a run-specific receipt. `evidence_scope` explicitly says `case_wide_not_run_attributed`. A paid invoice, operation receipt or historical review does **not** prove that the imported agent run caused the operation or that a customer outcome occurred. The response sets these verification and authorization claims to false. There is no provider IO, write, automatic grant or background sync.
+
+A missing/revoked/expired binding, changed imported run, changed case revision, invalid record link, missing source grant or corrupted ledger denies the read. Retention and source disconnection continue to govern the underlying ledgers. Real provider acceptance, independently authenticated run-specific receipts, cross-process consistency and matched held-out A/B/C trials remain separate unfinished milestones under #247.
