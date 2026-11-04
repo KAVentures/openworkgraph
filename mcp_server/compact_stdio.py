@@ -13,6 +13,7 @@ from .workflow_evidence_tools import register_workflow_evidence_tools
 from .record_graph_tools import register_record_graph_tools
 from .case_context_tools import register_case_context_tools
 from .outcome_receipt_tools import register_outcome_receipt_tools
+from .dispatch_tools import register_dispatch_tools
 from server.open_work_mcp_settings import experimental_tools_enabled
 
 
@@ -27,6 +28,7 @@ register_record_graph_tools(mcp, _secure_runtime)
 if experimental_tools_enabled():
     register_case_context_tools(mcp, _secure_runtime)
     register_outcome_receipt_tools(mcp, _secure_runtime)
+    register_dispatch_tools(mcp, _secure_runtime)
 
 
 if __name__ == "__main__":
