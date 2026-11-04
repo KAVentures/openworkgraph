@@ -255,6 +255,19 @@
         <div class="muted" id="pvScheduleStatus" role="status" aria-live="polite"></div>
         <div id="pvScheduleList" aria-label="Scheduled jobs"></div>
       </div>
+      <div class="card" id="pvOAuth">
+        <h2>Business system sign-in</h2>
+        <div class="muted">Connect a business system with an app you registered in your own tenant. You approve the access at the provider; tokens stay encrypted on this computer and are never shown to AI. Connecting reads nothing by itself: each connector still asks before reading.</div>
+        <div class="pv-delete">
+          <select id="pvOAuthProvider" aria-label="Provider"><option value="salesforce">Salesforce</option><option value="servicenow">ServiceNow</option><option value="microsoft">Microsoft 365</option><option value="atlassian">Atlassian (Jira)</option><option value="zendesk">Zendesk</option></select>
+          <input type="text" id="pvOAuthHost" placeholder="Host or tenant (e.g. acme.my.salesforce.com)" aria-label="Provider host or tenant" spellcheck="false">
+          <input type="text" id="pvOAuthClient" placeholder="Client ID" aria-label="Client ID" spellcheck="false">
+          <input type="password" id="pvOAuthSecret" placeholder="Client secret (only if required)" aria-label="Client secret (optional)" autocomplete="off">
+          <button type="button" class="secondary" id="pvOAuthConnect">Connect</button>
+        </div>
+        <div class="muted" id="pvOAuthStatus" role="status" aria-live="polite"></div>
+        <div id="pvOAuthList" aria-label="Connected business systems"></div>
+      </div>
       <div class="card" id="pvDelete">
         <h2>Delete recorded activity</h2>
         <div class="muted">Removes activity from this computer. It cannot be undone. Anything shared with an organization is not recalled. If cloud work-text sharing was enabled, corresponding uploaded copies are removed on the next successful synchronization; while this computer is offline, they may remain available for up to seven days.</div>
@@ -749,6 +762,43 @@
       refreshSchedules();
     };
     refreshSchedules();
+    const oauthList = panel.querySelector('#pvOAuthList');
+    const oauthStatus = panel.querySelector('#pvOAuthStatus');
+    const refreshOAuth = async () => {
+      const state = await api('/v1/connector-oauth').catch(() => null);
+      if (!oauthList || !state) return;
+      oauthList.replaceChildren();
+      for (const conn of state.connections || []) {
+        const line = document.createElement('div');
+        line.className = 'pv-row pv-sub';
+        const text = document.createElement('span');
+        text.textContent = conn.label + (conn.host ? ' · ' + conn.host : '') + ' · connected ' + String(conn.connected_at || '').slice(0, 10);
+        const remove = document.createElement('button');
+        remove.type = 'button'; remove.className = 'secondary'; remove.textContent = 'Disconnect';
+        remove.onclick = async () => {
+          if (!confirm('Disconnect ' + conn.label + '? OWG revokes the sign-in where the provider allows it and forgets it here.')) return;
+          try {
+            const result = await api('/v1/connector-oauth/disconnect', send('POST', {connection_id: conn.connection_id}));
+            if (oauthStatus) oauthStatus.textContent = 'Disconnected (' + result.provider_revocation.replaceAll('_', ' ') + ').';
+          } catch (error) { if (oauthStatus) oauthStatus.textContent = error.message || 'Could not disconnect.'; }
+          refreshOAuth();
+        };
+        line.append(text, remove);
+        oauthList.append(line);
+      }
+    };
+    panel.querySelector('#pvOAuthConnect').onclick = async () => {
+      const value = id => panel.querySelector(id).value.trim();
+      try {
+        const result = await api('/v1/connector-oauth/begin', send('POST', {provider: value('#pvOAuthProvider'),
+          host: value('#pvOAuthHost') || null, client_id: value('#pvOAuthClient'), client_secret: value('#pvOAuthSecret') || null}));
+        panel.querySelector('#pvOAuthSecret').value = '';
+        window.open(result.authorization_url, '_blank', 'noopener');
+        if (oauthStatus) oauthStatus.textContent = 'Approve access in the new tab, then return here. Register ' + result.redirect_uri + ' as the redirect URI of your app.';
+        setTimeout(refreshOAuth, 15000);
+      } catch (error) { if (oauthStatus) oauthStatus.textContent = error.message || 'Could not start sign-in.'; }
+    };
+    refreshOAuth();
     panel.querySelector('#pvWorkTextSwitch').onclick = async () => {
       const enabled = !!privacy.workText?.capture_enabled;
       if (!enabled && !confirm('Enable automatic browser work-text capture? Email/page text and drafts may contain sensitive information that filters cannot always detect. Content stays local unless you separately opt into cloud synchronization below. Local retention defaults to 7 days. Turning capture off deletes saved text.')) return;

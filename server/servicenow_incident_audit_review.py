@@ -4,6 +4,7 @@ Neither phase writes to ServiceNow. Prepared CSV and manifest remain private.
 """
 from __future__ import annotations
 
+from .connector_oauth import connector_token as _connector_token
 import argparse
 import csv
 from datetime import datetime
@@ -159,7 +160,7 @@ def prepare(args, *, provider_opener=None, local_opener=None):
     rows = _read_audit(
         scope, grant_file=args.grant_file, audit_grant_file=args.audit_grant_file,
         fields=fields, since=args.since, until=args.until, zone_name=args.timezone,
-        token=os.environ.get("OWG_SERVICENOW_TOKEN"), opener=provider_opener,
+        token=_connector_token("OWG_SERVICENOW_TOKEN"), opener=provider_opener,
     )
     body = _csv_bytes(rows)
     _authority(args, scope, fields)

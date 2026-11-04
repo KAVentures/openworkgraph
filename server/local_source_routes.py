@@ -436,3 +436,5 @@ from .jira_retained_routes import router as retained_jira_router
 router.include_router(retained_jira_router)
 from .local_scheduler_routes import router as local_scheduler_router
 router.include_router(local_scheduler_router)
+from .connector_oauth_routes import router as connector_oauth_router
+router.include_router(connector_oauth_router)
