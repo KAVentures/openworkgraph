@@ -312,6 +312,33 @@ WCAG/mobile. The shared browser runs with `OWG_TEST_FIRST_POLICY=1` to cover the
 same shared review, tenant, export and identity boundaries as UNIQUE. These
 synthetic results certify no customer's policy or deployment.
 
+## Decision dependencies
+
+A decision table can require other decisions, like a DMN `requiredDecision`. Each entry in
+`required_decisions` names another table in the same design and a fact path, for example
+`{"table_id": "credit_table", "fact_path": "/decisions/credit"}`. The dependent table's
+rules then test that path, for example `/decisions/credit eq "good"`.
+
+- Tables are checked in dependency order. The required table's selected next step (its
+  target activity ID) is placed at the fact path in a copy of the case facts.
+- If a required table selects no step (unknown, gap, overlap, not effective,
+  unconfirmed), the dependent table reports `dependency_unresolved` and names the
+  `blocking_decision_table_id`. Nothing is guessed.
+- Supplied case facts may not already contain a required decision's path; the dependent
+  table then reports `dependency_fact_conflict`.
+- Unknown tables, self-references, cycles, duplicate or nested fact paths are refused
+  when the design is validated. Tables without dependencies serialize exactly as before.
+- The per-rule list in a case check still evaluates each rule against the supplied facts
+  only; the decision-table results carry the dependency-aware outcome.
+- BPMN export keeps the declaration in the table's documentation, and BPMN import reads it
+  back. DMN export and generated agent projects refuse designs with dependent tables for
+  now (DMN outputs are step labels, while dependencies pass step IDs); use supplied-case
+  checks instead.
+
+In the catalog editor, each decision table has **Add required decision** (choose the
+other table and a fact path). Changing or removing a dependency clears table
+confirmations, and removing a table removes the dependencies on it.
+
 ## Reusable rule library
 
 Reviewed rules can be kept in a local, versioned rule library and reused across designs

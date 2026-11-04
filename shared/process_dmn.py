@@ -162,6 +162,9 @@ def export_dmn(packet: dict[str, Any]) -> str:
     model = ProcessModel.model_validate(packet["process_model"])
     if not model.decision_tables:
         raise DMNError("This revision has no decision tables to export")
+    if any(t.required_decisions for t in model.decision_tables):
+        # OWG passes the selected step ID; DMN outputs here are step labels.
+        raise DMNError("Decision dependencies cannot be written as DMN required decisions exactly; export without them")
     rules = {r.id: r for r in model.business_rules}
     labels = {a.id: a.label for a in model.activities}
     ET.register_namespace("", DMN)

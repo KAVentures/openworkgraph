@@ -691,7 +691,7 @@
           const clauses=el('ol');for(const condition of rule.conditions)clauses.appendChild(el('li',reasons[condition.status]+' · '+condition.reason.replaceAll('_',' ')));
           detail.appendChild(clauses);row.appendChild(detail);list.appendChild(row);
         }
-        for(const table of item.decision_tables||[])list.appendChild(el('li','Decision table '+table.table_id+' · '+table.status.replaceAll('_',' ')+(table.selected_target_activity_id?' → '+table.selected_target_activity_id:'')+(table.proposed_branch_agrees===false?' · proposed branch disagrees':'')));
+        for(const table of item.decision_tables||[])list.appendChild(el('li','Decision table '+table.table_id+' · '+table.status.replaceAll('_',' ')+(table.selected_target_activity_id?' → '+table.selected_target_activity_id:'')+(table.blocking_decision_table_id?' · waiting on '+table.blocking_decision_table_id:'')+(table.proposed_branch_agrees===false?' · proposed branch disagrees':'')));
         group.appendChild(list);output.appendChild(group);
       }
       output.appendChild(button('Download minimized rule-check report',()=>{
