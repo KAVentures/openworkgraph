@@ -253,6 +253,12 @@
           <button type="button" class="danger-quiet" data-delete="all">Everything</button>
         </div>
       </div>
+      <div class="card" id="pvBackup">
+        <h2>Back up recorded activity</h2>
+        <div class="muted">Saves a verified copy of everything OpenWorkGraph keeps on this computer to the backup folder. Add a passphrase (12+ characters) to also include this computer's keys and encrypt the file. Restoring is done with OpenWorkGraph closed: <code>python -m server.local_backup restore</code>.</div>
+        <div class="pv-delete"><input type="password" id="pvBackupPass" autocomplete="new-password" placeholder="Optional passphrase" aria-label="Backup passphrase (optional)"><button type="button" class="secondary" id="pvBackupCreate">Back up now</button></div>
+        <div class="muted" id="pvBackupStatus" role="status" aria-live="polite"></div>
+      </div>
       <div class="muted pv-more">More controls (separate retention for agents, saved sessions, browser profiles, organization sharing) are in the <button type="button" class="linkish" id="pvShowAdvanced">Advanced</button> view.</div>`;
     main.insertBefore(panel, $('#panel-settings') || null);
     bindPrivacy(panel);
@@ -706,6 +712,16 @@
       catch (error) { toast(error.message || 'Could not save.'); }
       window.refreshAiContextDetail?.();
       renderPrivacy();
+    };
+    panel.querySelector('#pvBackupCreate').onclick = async () => {
+      const status = panel.querySelector('#pvBackupStatus');
+      const pass = panel.querySelector('#pvBackupPass');
+      status.textContent = 'Backing up…';
+      try {
+        const result = await api('/v1/local-backups', send('POST', pass.value ? {passphrase: pass.value} : {}));
+        pass.value = '';
+        status.textContent = `Saved ${result.file_count} files to ${result.archive}${result.encrypted ? ' (encrypted, includes keys)' : ' (keys not included)'}.`;
+      } catch (error) { status.textContent = error.message || 'Backup failed.'; }
     };
     panel.querySelector('#pvScreenCaptureSwitch').onclick = async () => {
       const enabled = privacy.screen?.mode === 'full';
