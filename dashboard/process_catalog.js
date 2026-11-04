@@ -301,7 +301,7 @@
     const response=await fetch((format==='agent-project'?'/v1/process-catalog/agent-project?':'/v1/process-catalog/export?')+new URLSearchParams({workflow_id:exportedRecord.workflow_id,revision:String(exportedRecord.revision),format}),{cache:'no-store'});
     if(!response.ok)throw new Error('Could not export saved revision.');
     const url=URL.createObjectURL(await response.blob());
-    const anchor=el('a');anchor.href=url;anchor.download='owg-process-r'+exportedRecord.revision+'.'+({pdd:'txt',json:'json',bpmn:'bpmn','agent-project':'zip'}[format]);
+    const anchor=el('a');anchor.href=url;anchor.download='owg-process-r'+exportedRecord.revision+'.'+({pdd:'txt',json:'json',bpmn:'bpmn',dmn:'dmn','agent-project':'zip'}[format]);
     document.body.appendChild(anchor);anchor.click();anchor.remove();setTimeout(()=>URL.revokeObjectURL(url),3000);
     status('Exported saved revision '+exportedRecord.revision+'. Unsaved editor changes are excluded.');
   }
@@ -639,7 +639,7 @@
     const project=button('Download OpenAI Agents project',()=>download('agent-project'));
     if(record.process_model?.decision_tables?.length)actions.appendChild(el('p','Decision-table projects need separately reviewed current-source '+(record.process_model.decision_tables.some(t=>t.hit_policy==='FIRST')?'UNIQUE/FIRST bindings, declared FIRST row precedence':'UNIQUE bindings')+' and UTC effective dates before execution.'));
     actions.appendChild(project);
-    ['json','bpmn','pdd'].forEach(format=>actions.appendChild(button('Export saved '+format.toUpperCase(),()=>download(format))));
+    ['json','bpmn','pdd',...(record.process_model?.decision_tables?.length?['dmn']:[])].forEach(format=>actions.appendChild(button('Export saved '+format.toUpperCase(),()=>download(format))));
     actions.appendChild(button('Add screenshots to saved PDD',()=>{
       window.dispatchEvent(new CustomEvent('owg-process-pdd-source',{detail:{workflow_id:record.workflow_id,revision:record.revision,content_sha256:record.content_sha256}}));
     }));
@@ -655,7 +655,7 @@
     })));
     }
     host.appendChild(actions);
-    if(record.revision){renderRuleChecks(host);renderSourceRuleChecks(host);renderShadowReview(host);renderClarification(host);}
+    if(record.revision){renderRuleChecks(host);renderSourceRuleChecks(host);renderShadowReview(host);renderClarification(host);renderDMNImport(host);}
     const historyHost=el('div');historyHost.id='owgCatalogHistory';host.appendChild(historyHost);
   }
   function renderRuleChecks(host){
@@ -760,6 +760,36 @@
     consent.addEventListener('change',()=>{clearSourceRuleChecks();run.disabled=!consent.checked||!/^owg:r:[0-9a-f]{32}$/.test(ref.value);});
     section.append(typeLabel,refLabel,load,choicesLabel,notice,consentLabel,run,
       button('Clear current-source rule check',()=>{invalidate();ref.value='';choices.value='';}),output);host.appendChild(section);
+  }
+  function renderDMNImport(host){
+    const decisions=(record.process_model?.activities||[]).filter(a=>a.kind==='decision');
+    if(!decisions.length)return;
+    const section=el('section');section.id='owgCatalogDMN';
+    section.append(el('h4','Import a DMN decision table'),el('p','Read one DMN decision table into a decision of this saved design. Only simple conditions (=, not, <, <=, >, >=, lists, null) and one output naming the next step are accepted. Imported rules and the table start unconfirmed and are opened in the editor; nothing is saved until you review and save.'));
+    const decision=el('select');decision.setAttribute('aria-label','Decision step');
+    decisions.forEach(d=>{const o=el('option',d.label);o.value=d.id;decision.appendChild(o);});
+    const from=el('input');from.type='date';from.setAttribute('aria-label','Effective from');
+    const file=el('input');file.type='file';file.accept='.dmn,.xml,application/xml';file.setAttribute('aria-label','Choose DMN file');
+    const output=el('div');output.setAttribute('role','status');
+    section.append(decision,from,file,button('Preview DMN table',()=>locked(async()=>{
+      const selected=record,source=file.files?.[0];
+      if(!source||source.size>256*1024)throw new Error('Choose a DMN file of at most 256 KiB.');
+      if(!from.value)throw new Error('Enter the date the table takes effect.');
+      await window.__owgAuthReady;
+      const response=await fetch('/v1/process-catalog/import-dmn?'+new URLSearchParams({workflow_id:selected.workflow_id,revision:String(selected.revision),
+        decision_activity_id:decision.value,effective_from:from.value}),{method:'POST',headers:{'Content-Type':'application/xml'},body:source,cache:'no-store'});
+      const value=await response.json().catch(()=>({}));
+      if(!response.ok)throw new Error(String(value.detail||'DMN import failed'));
+      if(record!==selected)return;
+      output.replaceChildren(el('p',value.proposed_rules.length+' unconfirmed rules · '+value.hit_policy+' hit policy'));
+      const list=el('ul');value.proposed_rules.forEach(r=>list.appendChild(el('li',r.text)));output.appendChild(list);
+      output.appendChild(button('Open proposal in editor',()=>{
+        if(model&&!window.confirm('Replace the editor contents with this DMN proposal?'))return;
+        model=copy(value.proposed_process_model);reviewed=false;renderEditor();
+        status('Opened the DMN proposal as unsaved edits of revision '+selected.revision+'. Review and confirm its rules, then save a new revision.');
+      }));
+    })),output);
+    host.appendChild(section);
   }
   function renderClarification(host){
     const section=el('section');section.id='owgCatalogClarification';

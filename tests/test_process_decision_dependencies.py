@@ -131,3 +131,11 @@ def test_dependencies_survive_bpmn_round_trip_and_block_generated_projects():
     with pytest.raises(ValueError, match='dependent decision'):
         build_runtime_spec(dict(deepcopy(packet), format='openworkgraph.versioned-process-export.v1',
                                 execution_authorization=False))
+
+
+def test_dmn_export_refuses_dependencies_instead_of_dropping_them():
+    from shared.process_dmn import DMNError, export_dmn
+    packet = {'workflow_id': 'loan', 'revision': 1, 'content_sha256': 'b' * 64, 'process_model': model().model_dump()}
+    with pytest.raises(DMNError, match='dependencies'):
+        export_dmn(packet)
+    assert 'decisionTable' in export_dmn(dict(packet, process_model=model(dependency=False).model_dump()))
