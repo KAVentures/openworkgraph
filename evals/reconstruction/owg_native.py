@@ -448,7 +448,7 @@ def score_label_topic_items(cases: list[dict[str, Any]]) -> dict[str, Any]:
     return aggregate(cases, [predict_label_topic_items(case) for case in cases])
 
 
-def predict_semantic_items(case: dict[str, Any], complete) -> dict[str, Any]:
+def predict_semantic_items(case: dict[str, Any], complete, *, consensus: bool = False) -> dict[str, Any]:
     """Label-topic items plus accepted semantic-linker suggestions (needs a model)."""
     from server.label_topic_links import label_topic_members
     from server.semantic_linker import SemanticLinkerError, suggest
@@ -456,7 +456,7 @@ def predict_semantic_items(case: dict[str, Any], complete) -> dict[str, Any]:
     events = _visible_linked_source_events(case)
     members = [list(ids) for ids in label_topic_members(events)["members"]]
     try:
-        suggestions = suggest(events, complete)["suggestions"]
+        suggestions = suggest(events, complete, consensus=consensus)["suggestions"]
     except SemanticLinkerError:
         suggestions = []  # an unusable model answer leaves OWG's own grouping unchanged
     owner = {event_id: index for index, ids in enumerate(members) for event_id in ids}
@@ -497,8 +497,8 @@ def cached_completion(complete, cache_path: Path | None):
     return run
 
 
-def score_semantic_items(cases: list[dict[str, Any]], complete) -> dict[str, Any]:
-    return aggregate(cases, [predict_semantic_items(case, complete) for case in cases])
+def score_semantic_items(cases: list[dict[str, Any]], complete, *, consensus: bool = False) -> dict[str, Any]:
+    return aggregate(cases, [predict_semantic_items(case, complete, consensus=consensus) for case in cases])
 
 
 def score_linked_items(cases: list[dict[str, Any]], *, accept_candidates: bool = False) -> dict[str, Any]:
@@ -523,6 +523,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--semantic-cache", type=Path,
                         help="JSON replay cache; with --semantic-replay-only no model is called")
     parser.add_argument("--semantic-replay-only", action="store_true")
+    parser.add_argument("--semantic-consensus", action="store_true",
+                        help="ask twice in different item orders and keep only agreed links")
     args = parser.parse_args(argv)
     cases = load_cases(Path(args.cases)) if args.cases else load_cases()
     if args.split != "all":
@@ -540,7 +542,8 @@ def main(argv: list[str] | None = None) -> int:
             if not args.semantic_base_url or not args.semantic_model:
                 parser.error("--semantic-base-url and --semantic-model are required (or use --semantic-replay-only)")
             live = http_completion(args.semantic_base_url, args.semantic_model, os.environ.get(args.semantic_key_env))
-        report = score_semantic_items(cases, cached_completion(live, args.semantic_cache))
+        report = score_semantic_items(cases, cached_completion(live, args.semantic_cache),
+                                      consensus=args.semantic_consensus)
     else:
         report = score_linked_items(cases, accept_candidates=args.grouping != "linked_items")
     print(json.dumps(report, indent=2, sort_keys=True))

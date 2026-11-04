@@ -410,8 +410,21 @@ are refused, and an unusable answer leaves OWG's grouping unchanged.
 
 With perfect grouping decisions this hybrid reaches gated development F1 1.0 with
 contamination 0.0 (`tests/test_semantic_linker.py`). The items are therefore pure
-enough, and accuracy depends on the model's decisions. A real model has not been
-run yet. To measure one:
+enough, and accuracy depends on the model's decisions.
+
+First real run: Qwen2.5-7B-Instruct (Q4_K_M) on a local llama.cpp server, temperature 0.
+The prompt was tuned on the development split only, then the holdout was scored once
+(identifiable-membership family macro):
+
+| Setting | Dev F1 | Dev contamination | Holdout F1 | Holdout contamination |
+|---|---:|---:|---:|---:|
+| Label topics only (no model) | 0.882 | 0.000 | 0.700 | 0.000 |
+| + 7B linker, single answer | 0.889 | 0.095 | 0.700 | 0.125 |
+| + 7B linker, `--semantic-consensus` | 0.834 | 0.048 | 0.575 | 0.125 |
+
+A 7B model makes confident wrong merges, so it does not beat label topics on the holdout
+and breaks the contamination gate. The linker therefore stays off by default. Whether a
+frontier model reaches the 0.90 / 0.05 gate is still unmeasured. To measure one:
 
     OPENAI_API_KEY=... python -m evals.reconstruction.owg_native --split development \
       --grouping linked_items_with_semantic_linker --semantic-base-url https://api.openai.com/v1 \
