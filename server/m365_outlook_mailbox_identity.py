@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 from urllib import error, request
 
@@ -19,13 +20,14 @@ from .m365_outlook_verified_append_receipt import _exclusive_private
 FORMAT = "openworkgraph.m365-mailbox-identity.v1"
 URL = "https://graph.microsoft.com/v1.0/me?%24select=id,userPrincipalName,mail"
 MAX_BYTES = 8192
+ADDRESS = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_\x60{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9.-]{0,253}[A-Za-z0-9])?\\Z", re.ASCII)
 
 
 class IdentityError(ValueError):
     """Non-sensitive identity verification refusal."""
 
 
-def _parse_identity(raw: bytes, expected_mailbox: str):
+def _parse_identity(raw: bytes, expected_address: str):
     if type(raw) is not bytes or len(raw) > MAX_BYTES:
         raise IdentityError("Invalid Graph identity response size")
     try:
@@ -43,7 +45,7 @@ def _parse_identity(raw: bytes, expected_mailbox: str):
                 and (type(value["@odata.context"]) is not str or len(value["@odata.context"]) > 1024))):
         raise IdentityError("Invalid Graph identity fields")
     # Exact identity matching only. Do not treat aliases or display names as authority.
-    mailbox = expected_mailbox.casefold()
+    mailbox = expected_address.casefold()
     matched_upn = value["userPrincipalName"].casefold() == mailbox
     matched_mail = value.get("mail") is not None and value["mail"].casefold() == mailbox
     if not matched_upn and not matched_mail:
@@ -51,12 +53,14 @@ def _parse_identity(raw: bytes, expected_mailbox: str):
     return value["id"], matched_upn, matched_mail
 
 
-def preflight(*, tenant, mailbox, folder, grant_file: Path, output: Path,
+def preflight(*, tenant, mailbox, folder, expected_address, grant_file: Path, output: Path,
               token, consent_graph_read=False, consent_private_report=False,
               opener=None):
     if consent_graph_read is not True or consent_private_report is not True:
         raise IdentityError("Separate Graph read and private report consent required")
     scope = _scope(tenant, mailbox, folder)
+    if type(expected_address) is not str or len(expected_address) > 320 or not ADDRESS.fullmatch(expected_address):
+        raise IdentityError("Invalid expected mailbox address")
     if type(token) is not str or not 1 <= len(token) <= 4096 or not _TOKEN.fullmatch(token):
         raise IdentityError("Invalid Graph bearer token")
     grant_file, output = Path(grant_file), Path(output)
@@ -80,11 +84,12 @@ def preflight(*, tenant, mailbox, folder, grant_file: Path, output: Path,
         if isinstance(exc, IdentityError):
             raise
         raise IdentityError("Graph identity read unavailable") from None
-    identity, upn, mail = _parse_identity(raw, mailbox)
+    identity, upn, mail = _parse_identity(raw, expected_address)
     _grant(grant_file, tenant, mailbox, folder)
     report = {
         "format": FORMAT, "status": "mailbox_identity_observed",
         "scope_sha256": scope,
+        "expected_address_sha256": hashlib.sha256(expected_address.casefold().encode()).hexdigest(),
         "provider_user_id_sha256": hashlib.sha256(identity.encode()).hexdigest(),
         "response_sha256": hashlib.sha256(raw).hexdigest(),
         "upn_matched": upn, "mail_matched": mail,
@@ -103,7 +108,7 @@ def preflight(*, tenant, mailbox, folder, grant_file: Path, output: Path,
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
-    for key in ("tenant", "mailbox", "folder"):
+    for key in ("tenant", "mailbox", "folder", "expected-address"):
         p.add_argument("--" + key, required=True)
     for key in ("grant-file", "output"):
         p.add_argument("--" + key, type=Path, required=True)
@@ -113,6 +118,7 @@ def main(argv=None):
     try:
         print(json.dumps(preflight(
             tenant=a.tenant, mailbox=a.mailbox, folder=a.folder,
+            expected_address=a.expected_address,
             grant_file=a.grant_file, output=a.output,
             token=os.environ.get("OWG_M365_GRAPH_TOKEN"),
             consent_graph_read=a.consent_graph_read,
