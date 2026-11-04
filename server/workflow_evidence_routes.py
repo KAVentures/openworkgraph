@@ -1113,6 +1113,77 @@ def list_process_clarification_decisions(request: Request, workflow_id: str = Qu
                         headers={'Cache-Control': 'no-store'})
 
 
+def _rule_library_call(request, operation, *args, **kwargs):
+    from .local_source_routes import _require_dashboard
+    from .process_rule_library import RuleLibraryError
+    _require_dashboard(request)
+    try:
+        return JSONResponse(operation(*args, **kwargs), headers={'Cache-Control': 'no-store'})
+    except RuleLibraryError as exc:
+        raise HTTPException(409, str(exc)) from None
+
+
+@app.get('/v1/process-catalog/rule-library')
+def list_rule_library(request: Request) -> Response:
+    from . import process_rule_library as library
+    return _rule_library_call(request, library.listing)
+
+
+@app.get('/v1/process-catalog/rule-library/set')
+def get_rule_library_set(request: Request, rule_set_id: str = Query(pattern=r'^rs_[0-9a-f]{16}$'),
+                         revision: int | None = Query(default=None, ge=1)) -> Response:
+    from . import process_rule_library as library
+    return _rule_library_call(request, library.get, rule_set_id, revision)
+
+
+@app.post('/v1/process-catalog/rule-library')
+async def save_rule_library_set(request: Request) -> Response:
+    from . import process_rule_library as library
+    from .local_source_routes import _require_dashboard
+    _require_dashboard(request)
+    return _rule_library_call(request, library.save, await _process_json(request, maximum=256 * 1024))
+
+
+@app.post('/v1/process-catalog/rule-library/link')
+async def link_rule_library_rule(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID),
+                                 revision: int = Query(ge=1)) -> Response:
+    """Proposed model where one design rule uses a library rule; the design is not saved."""
+    from . import process_rule_library as library
+    from .local_source_routes import _require_dashboard
+    _require_dashboard(request)
+    value = await _process_json(request, maximum=4096)
+    allowed = {'rule_id', 'rule_set_id', 'library_rule_id', 'library_revision'}
+    if not set(value) <= allowed or not all(isinstance(value.get(k), str) for k in ('rule_id', 'rule_set_id', 'library_rule_id')):
+        raise HTTPException(422, 'rule_id, rule_set_id and library_rule_id are required')
+    pinned = value.get('library_revision')
+    if pinned is not None and (not isinstance(pinned, int) or isinstance(pinned, bool) or pinned < 1):
+        raise HTTPException(422, 'library_revision must be a positive integer')
+    record = _catalog_record(workflow_id, revision)
+    def proposal():
+        model = library.link(record['process_model'], value['rule_id'], value['rule_set_id'],
+                             value['library_rule_id'], pinned)
+        return {'based_on': {'workflow_id': workflow_id, 'revision': revision,
+                             'content_sha256': record['content_sha256']},
+                'proposed_process_model': model, 'process_model_saved': False, 'evaluates_rules': False}
+    return _rule_library_call(request, proposal)
+
+
+@app.get('/v1/process-catalog/rule-library/drift')
+def rule_library_drift(request: Request) -> Response:
+    """Latest saved designs that use an outdated or locally edited library rule."""
+    from . import process_rule_library as library
+    def scan():
+        records, after = [], ''
+        for _ in range(50):
+            page = _knowledge.page('local', after=after, limit=100)
+            records.extend(r for r in page['workflows'] if r.get('process_model'))
+            if not page['has_more']:
+                break
+            after = page['next_after']
+        return library.drift(records)
+    return _rule_library_call(request, scan)
+
+
 @app.get('/v1/process-catalog/opportunities')
 def get_process_opportunities(currency: str = Query(default='USD', pattern='^(USD|EUR|GBP|SEK)$')) -> Response:
     return JSONResponse(_catalog.opportunities(currency), headers={'Cache-Control': 'no-store'})

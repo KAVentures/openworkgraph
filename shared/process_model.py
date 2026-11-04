@@ -45,16 +45,27 @@ class Activity(StructuralModel):
         return result
 
 
+class LibraryReference(StructuralModel):
+    """Pinned link from a design's rule to one revision of a reusable rule-library rule."""
+    rule_set_id: str = Field(pattern=r'^rs_[0-9a-f]{16}$')
+    revision: int = Field(ge=1, le=100_000)
+    rule_id: Identifier
+    content_sha256: str = Field(pattern=r'^[a-f0-9]{64}$')
+
+
 class BusinessRule(StructuralModel):
     id: Identifier
     text: str = Field(min_length=1, max_length=2000)
     user_confirmed: StrictBool = False
     predicate:RulePredicate | None = None
+    library_ref: LibraryReference | None = None
 
     @model_serializer(mode='wrap')
     def preserve_unstructured_rule_hashes(self,handler):
         result=handler(self)
         if self.predicate is None:result.pop('predicate',None)
+        # Unlinked rules keep the exact digest they had before the rule library existed.
+        if self.library_ref is None:result.pop('library_ref',None)
         return result
 
     @field_validator('text')
