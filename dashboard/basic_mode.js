@@ -194,7 +194,7 @@
           <div class="pv-control"><button type="button" class="secondary" id="pvStripeSource" onclick="openLocalStripeSource()">Manage Stripe read-only source</button></div>
         </div>
         <div class="pv-row pv-sub" id="pvOpenWorkRow">
-          <div><h3>Open Work: invoice preview</h3><div class="muted">Optional read-only check for open invoices in your connected Stripe account, including invoices never shown in OWG. Past-due dates indicate candidates for review, not verified collection duties. No customer details or amounts are stored or shared with AI.</div><div class="muted" id="pvOpenWorkResult" role="status" aria-live="polite"></div><div id="pvOpenWorkCases" aria-label="Open invoice candidates"></div><div class="muted" id="pvOpenWorkReviewResult" role="status" aria-live="polite"></div><button type="button" class="secondary" id="pvOpenWorkReviewLoad">View saved reviews</button><div id="pvOpenWorkReviews" aria-label="Locally saved case reviews"></div></div>
+          <div><h3>Open Work: invoice preview</h3><div class="muted">Optional read-only check for open invoices in your connected Stripe account, including invoices never shown in OWG. Past-due dates indicate candidates for review, not verified collection duties. No customer details or amounts are stored or shared with AI.</div><div class="muted" id="pvOpenWorkResult" role="status" aria-live="polite"></div><div id="pvOpenWorkCases" aria-label="Open invoice candidates"></div><div class="muted" id="pvOpenWorkReviewResult" role="status" aria-live="polite"></div><button type="button" class="secondary" id="pvOpenWorkReviewLoad">View saved reviews</button> <label class="muted"><input type="checkbox" id="pvDispatchEnabled"> Let connected agents pick up cases I offer (no extra permissions; turning this off withdraws all offers)</label><div id="pvOpenWorkReviews" aria-label="Locally saved case reviews"></div></div>
           <div class="pv-control"><button type="button" class="secondary" id="pvOpenWorkScan">Preview open invoices</button></div>
         </div>
         <div class="pv-row pv-sub" id="pvGitHubOpenWorkRow">
@@ -202,7 +202,7 @@
           <div class="pv-control"><button type="button" class="secondary" id="pvGitHubOpenWorkScan">Preview open PRs</button></div>
         </div>
         <div class="pv-row pv-sub" id="pvOpenWorkMcpRow">
-          <div><h3>Experimental Open Work AI tools</h3><div class="muted">Allow your existing local AI connector to expose two extra read-only tools: get_case_context and verify_case_operation. This does not enable AI access, saved-history access, source scans, or business actions. Reconnect your AI app to refresh its tool list.</div><div class="muted" id="pvOpenWorkMcpStatus" role="status" aria-live="polite">Checking…</div></div>
+          <div><h3>Experimental Open Work AI tools</h3><div class="muted">Allow your existing local AI connector to expose two extra read-only tools: get_case_context and verify_case_operation, plus list/claim/report tools for cases you explicitly offer to agents below. This does not enable AI access, saved-history access, source scans, or business actions. Reconnect your AI app to refresh its tool list.</div><div class="muted" id="pvOpenWorkMcpStatus" role="status" aria-live="polite">Checking…</div></div>
           <div class="pv-control"><button type="button" role="switch" class="sw" aria-label="Experimental Open Work AI tools" id="pvOpenWorkMcpSwitch" aria-checked="false"></button></div>
         </div>
         <div class="pv-row" id="pvScreenCaptureRow">
@@ -463,8 +463,13 @@
     const reviewLoad = panel.querySelector('#pvOpenWorkReviewLoad');
     const reviews = panel.querySelector('#pvOpenWorkReviews');
     const reviewStatus = panel.querySelector('#pvOpenWorkReviewResult');
+    const dispatchToggle = panel.querySelector('#pvDispatchEnabled');
+    let dispatchState = null;
     const refreshSavedReviews = async () => {
       if (!reviews) return;
+      dispatchState = await api('/v1/open-work/dispatch').catch(() => null);
+      if (dispatchToggle) dispatchToggle.checked = !!dispatchState?.enabled;
+      const offers = new Map((dispatchState?.offers || []).map(o => [o.work_item_ref, o]));
       const result = await api('/v1/open-work/reviews');
       reviews.replaceChildren();
       const items = Array.isArray(result.items) ? result.items : [];
@@ -497,8 +502,41 @@
             if (reviewStatus) reviewStatus.textContent = 'Could not delete the local review intention.';
           } finally { remove.disabled = false; }
         };
-        line.append(description, remove);
+        const offered = offers.get(item.work_item_ref);
+        const handoff = document.createElement('button');
+        handoff.type = 'button';
+        handoff.className = 'secondary';
+        handoff.textContent = offered ? 'Withdraw from agents' : 'Offer to agents';
+        handoff.disabled = !dispatchState?.enabled;
+        handoff.onclick = async () => {
+          handoff.disabled = true;
+          try {
+            if (offered) await api('/v1/open-work/dispatch/offers/withdraw', send('POST', {work_item_ref: item.work_item_ref}));
+            else {
+              if (!confirm('Offer this case to connected agents? They get the opaque case reference and your review intent only, and must use their own authorized tools.')) return;
+              await api('/v1/open-work/dispatch/offers', send('POST', {work_item_ref: item.work_item_ref, confirm_offer: true}));
+            }
+            await refreshSavedReviews();
+          } catch (error) {
+            if (reviewStatus) reviewStatus.textContent = error.message || 'Could not change the agent offer.';
+          } finally { handoff.disabled = !dispatchState?.enabled; }
+        };
+        if (offered) {
+          const report = offered.last_report;
+          description.textContent += ' · ' + (offered.claimed_by ? 'claimed by ' + offered.claimed_by
+            : report ? 'agent reported "' + report.outcome + '" (unverified)' : 'offered to agents');
+        }
+        line.append(description, handoff, remove);
         reviews.append(line);
+      }
+    };
+    if (dispatchToggle) dispatchToggle.onchange = async () => {
+      try {
+        await api('/v1/open-work/dispatch/settings', send('POST', {enabled: dispatchToggle.checked}));
+        await refreshSavedReviews();
+      } catch (error) {
+        dispatchToggle.checked = !dispatchToggle.checked;
+        if (reviewStatus) reviewStatus.textContent = error.message || 'Could not change agent dispatch.';
       }
     };
     if (reviewLoad) reviewLoad.onclick = () => refreshSavedReviews().catch(() => {
