@@ -5,6 +5,7 @@ No directory enumeration, identity/credential output, retries or provisioning wr
 """
 from __future__ import annotations
 
+from server.connector_oauth import connector_token as _connector_token
 import argparse
 import base64
 import json
@@ -219,7 +220,7 @@ def main(argv=None, *, graph_opener=None, owg_opener=None, stdin=None):
         receipt = reconcile(
             args.graph_origin, args.owg_base_url, args.confirm_owg_host,
             args.confirm_provider, args.confirm_tenant,
-            os.environ.get("OWG_ENTRA_READ_TOKEN"),
+            _connector_token("OWG_ENTRA_READ_TOKEN"),
             os.environ.get("OWG_SCIM_PROBE_TOKEN"), raw,
             allow_loopback_http=args.allow_loopback_http,
             graph_opener=graph_opener, owg_opener=owg_opener)
