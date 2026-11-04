@@ -123,9 +123,9 @@ meeting at one join of the same kind.
 - Conformance alignment and token replay accept any non-empty subset of branches,
   in any interleaving. Token replay chooses the branches whose activities appear
   later in the trace, so a case that skips a branch is not counted as missing it.
-- Generated agent projects use the same token-firing contract as parallel blocks.
-  The planner fires only branches whose rules apply; if none applies, the run stops
-  for review.
+- Generated agent projects check a proposed plan with the same token-firing contract
+  as parallel blocks. The rules of the branches the plan chose are reported as
+  unconfirmed and unevaluated, and the check grants no execution permission.
 - BPMN import maps `inclusiveGateway` to these kinds, and export writes it back.
   Conditions on an inclusive join, a default on a join, or a gateway that is both
   split and join are rejected.

@@ -503,7 +503,7 @@
     if(model.activities.some(node=>['parallel_split','parallel_join'].includes(node.kind)))host.appendChild(el('p',
       'Parallel splits run every branch and joins require every branch. This bounded design supports disjoint unconditional branch chains and complete nested paired blocks; conditional parallel regions are unsupported. SDK projects validate complete token-firing schedules and execute one customer-authorized activity at a time.'));
     if(model.activities.some(node=>['inclusive_split','inclusive_join'].includes(node.kind)))host.appendChild(el('p',
-      'Inclusive splits run one or more branches: each branch has its own rule, and the join waits for exactly the branches that started. Rules stay unconfirmed until you confirm them; if no rule applies at run time, the generated project stops for review.'));
+      'Inclusive splits run one or more branches: each branch has its own rule, and the join waits for exactly the branches that started. Rules stay unconfirmed until you confirm them. Generated projects check that a plan is a valid token flow and list the rules of the branches it chose; they do not evaluate those rules.'));
     host.appendChild(button('Refresh graph preview',()=>renderEditor()));
     renderDifferenceReview(host);
     const mutate=fn=>{fn();changed();renderEditor();};
