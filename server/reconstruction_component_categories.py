@@ -46,8 +46,7 @@ def component_category_proposals(events: list[dict[str, Any]], *, consent: bool 
         if not isinstance(values, list) or len(values) > 16 or any(
             not isinstance(v, str) or not _TAG.fullmatch(v) for v in values
         ):
-            invalid.add(eid)
-            continue
+            raise ValueError("invalid structured semantic category metadata")
         if eid in tags:
             invalid.add(eid)
         else:
