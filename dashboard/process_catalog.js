@@ -655,7 +655,7 @@
     })));
     }
     host.appendChild(actions);
-    if(record.revision){renderRuleChecks(host);renderSourceRuleChecks(host);renderShadowReview(host);}
+    if(record.revision){renderRuleChecks(host);renderSourceRuleChecks(host);renderShadowReview(host);renderClarification(host);}
     const historyHost=el('div');historyHost.id='owgCatalogHistory';host.appendChild(historyHost);
   }
   function renderRuleChecks(host){
@@ -760,6 +760,43 @@
     consent.addEventListener('change',()=>{clearSourceRuleChecks();run.disabled=!consent.checked||!/^owg:r:[0-9a-f]{32}$/.test(ref.value);});
     section.append(typeLabel,refLabel,load,choicesLabel,notice,consentLabel,run,
       button('Clear current-source rule check',()=>{invalidate();ref.value='';choices.value='';}),output);host.appendChild(section);
+  }
+  function renderClarification(host){
+    const section=el('section');section.id='owgCatalogClarification';
+    section.append(el('h4','Clarify this design with your documents'),
+      el('p','Paste policy or SOP text. OWG cites the exact statements behind each rule and step, shows where documents disagree, and asks only what is still open. Documents are treated as untrusted text and are not stored; your answers are recorded for this saved revision. Nothing changes the design until you save a new revision.'));
+    const title=el('input');title.type='text';title.placeholder='Document title';title.setAttribute('aria-label','Document title');
+    const text=el('textarea');text.rows=6;text.setAttribute('aria-label','Document text');
+    const output=el('div');output.id='owgCatalogClarifyResult';output.setAttribute('role','status');
+    const docs=()=>text.value.trim()?[{title:title.value.trim()||'Document',text:text.value}]:[];
+    const run=async()=>{
+      const selected=record;
+      const query='?'+new URLSearchParams({workflow_id:selected.workflow_id,revision:selected.revision});
+      const result=await request('/v1/process-catalog/clarify'+query,{documents:docs()});
+      if(record!==selected)return;
+      output.replaceChildren(el('p',result.questions.length+' open questions · '+result.answered_question_count+' already answered for revision '+result.revision+' · '+result.statement_count+' statements read'));
+      if(result.instruction_like_statements.length)output.appendChild(el('p',result.instruction_like_statements.length+' statement(s) read like instructions to the system and were ignored.'));
+      for(const q of result.questions){
+        const box=el('section');box.appendChild(el('h5',q.prompt));
+        const cites=el('ul');
+        for(const c of q.citations)cites.appendChild(el('li','“'+c.text+'” — '+c.document_title));
+        for(const conflict of q.contradictions)cites.appendChild(el('li','Disagreement ('+conflict.kind.replaceAll('_',' ')+'): '+conflict.statements.map(c=>'“'+c.text+'”').join(' vs ')));
+        box.appendChild(cites);
+        const answer=el('input');answer.type='text';answer.placeholder='Your answer (optional)';answer.setAttribute('aria-label','Answer to: '+q.prompt);
+        box.appendChild(answer);
+        for(const choice of q.allowed_decisions){
+          box.appendChild(button(choice[0].toUpperCase()+choice.slice(1),()=>locked(async()=>{
+            const cited=[...q.citations.map(c=>c.statement_id),...q.contradictions.flatMap(c=>c.statements.map(s=>s.statement_id))].slice(0,5);
+            const res=await request('/v1/process-catalog/clarify/decide'+query,{documents:docs(),
+              decision:{question_id:q.question_id,decision:choice,answer:answer.value,cited_statement_ids:[...new Set(cited)].slice(0,5)}});
+            status(res.proposed_change?'Decision recorded. Confirming this rule is proposed for the next revision; review the rule and save to apply it.':'Decision recorded for revision '+selected.revision+'.');
+            await run();
+          })));
+        }
+        output.appendChild(box);
+      }
+    };
+    section.append(title,text,button('Find open questions',()=>locked(run)),output);host.appendChild(section);
   }
   function renderShadowReview(host){
     const section=el('section');section.appendChild(el('h4','Review a shadow evaluation'));
