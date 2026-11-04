@@ -811,7 +811,7 @@
   }
   function installBPMNImport(parent){
     const section=el('details');section.id='owgBPMNImport';section.appendChild(el('summary','Import a BPMN design as an unreviewed draft'));
-    section.appendChild(el('p','Select an authorized UTF-8 BPMN 2.0 file (128 KiB maximum). Preview supports tasks, plain start/end events, exclusive choices/merges and paired parallel gateways with disjoint unconditional branches and complete nested paired blocks. Conditional parallel regions, inclusive gateways, subprocesses, event triggers, collaborations and executable extensions are rejected. XML never executes. No process is saved until separate graph review and Save.'));
+    section.appendChild(el('p','Select an authorized UTF-8 BPMN 2.0 file (128 KiB maximum). Preview supports tasks, plain start/end events, exclusive choices/merges and paired parallel gateways with disjoint unconditional branches and complete nested paired blocks. Plain embedded subprocesses (one start and end, no loops, boundary or event triggers) are inlined and their grouping is shown. Conditional parallel regions, inclusive gateways, other subprocesses, call activities, event triggers, collaborations and executable extensions are rejected. XML never executes. No process is saved until separate graph review and Save.'));
     const file=el('input');file.type='file';file.accept='.bpmn,.xml,application/xml,application/bpmn+xml';
     file.setAttribute('aria-label','Choose BPMN process design');
     const preview=button('Preview selected BPMN',()=>previewBPMN(file));preview.id='owgBPMNPreview';preview.disabled=true;
