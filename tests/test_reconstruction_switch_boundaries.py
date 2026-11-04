@@ -4,11 +4,11 @@ from server.reconstruction_switch_boundaries import switch_boundaries
 
 
 def event(n, ref, second, *, org="org1"):
-    return {"event_id": f"event-{n}", "event_type": "page_view",
+    return {"event_id": f"event-{n}", "event_type": "page_view", "source": "browser",
             "observed_at": f"2026-11-04T08:00:{second:02d}+00:00",
             "organization_id": org,
             "metadata": {"resource_reference": {
-                "reference": ref, "provider": "jira", "kind": "issue",
+                "resource_ref": "owg:r:" + ref.lower() * 32, "provider": "github", "resource_kind": "issue",
                 "host": "jira.example.com"}}}
 
 
