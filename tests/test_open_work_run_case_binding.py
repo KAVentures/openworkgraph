@@ -138,3 +138,50 @@ def test_bulk_case_revoke_absent_store_and_invalid_scope(ledger):
             secret=SECRET, case_ref=CASE,
         )
     assert not list(ledger.iterdir())
+
+
+def test_case_inventory_is_bounded_actor_scoped_and_revision_sensitive(ledger):
+    now = datetime(2026, 11, 3, tzinfo=timezone.utc)
+    other_case = "owg:w:" + "e" * 32
+    other_scope = "owg:scope:" + "f" * 32
+    other_run = "owg:run:" + "f" * 32
+    empty = binding.list_case_bindings(scope=SCOPE, actor="operator-a", secret=SECRET,
+                                       case_ref=CASE, revision=1, now=now)
+    assert empty["items"] == []
+    assert not list(ledger.iterdir())
+    binding.bind_run(**arguments(), now=now)
+    binding.bind_run(**{**arguments(), "run_ref": other_run}, now=now)
+    binding.bind_run(**arguments(actor="operator-b"), now=now)
+    binding.bind_run(**{**arguments(), "case_ref": other_case}, now=now)
+    binding.bind_run(**{**arguments(), "scope": other_scope}, now=now)
+    result = binding.list_case_bindings(scope=SCOPE, actor="operator-a", secret=SECRET,
+                                        case_ref=CASE, revision=1, now=now)
+    assert [x["run_ref"] for x in result["items"]] == sorted([RUN, other_run])
+    assert all(x["declaration_state"] == "current_revision" for x in result["items"])
+    assert result["source_read_performed"] is False
+    assert result["run_snapshots_rechecked"] is False
+    assert result["agent_execution_authorized"] is False
+    assert binding.list_case_bindings(scope=SCOPE, actor="operator-b", secret=SECRET,
+                                      case_ref=CASE, revision=1, now=now)["items"] == [result["items"][0]]
+    stale = binding.list_case_bindings(scope=SCOPE, actor="operator-a", secret=SECRET,
+                                       case_ref=CASE, revision=2, now=now)
+    assert all(x["declaration_state"] == "stale_revision" for x in stale["items"])
+    assert binding.list_case_bindings(scope=SCOPE, actor="operator-a", secret=SECRET,
+                                      case_ref=CASE, revision=1,
+                                      now=now + timedelta(days=4))["items"] == []
+    assert binding.revoke_case_bindings(scope=SCOPE, actor="operator-a", secret=SECRET,
+                                        case_ref=CASE) == 2
+    assert binding.list_case_bindings(scope=SCOPE, actor="operator-a", secret=SECRET,
+                                      case_ref=CASE, revision=1, now=now)["items"] == []
+
+
+def test_inventory_retention_and_invalid_scope_fail_closed(ledger, monkeypatch):
+    with pytest.raises(CaseDeclarationError):
+        binding.list_case_bindings(scope="../other", actor="operator-a", secret=SECRET,
+                                   case_ref=CASE, revision=1)
+    assert not list(ledger.iterdir())
+    monkeypatch.setattr(binding, "read_policy", lambda: {"human_retention": {"mode": "disabled"}})
+    with pytest.raises(CaseDeclarationError):
+        binding.list_case_bindings(scope=SCOPE, actor="operator-a", secret=SECRET,
+                                   case_ref=CASE, revision=1)
+    assert not list(ledger.iterdir())
