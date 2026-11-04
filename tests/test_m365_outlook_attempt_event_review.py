@@ -26,7 +26,9 @@ def _setup(monkeypatch, tmp_path):
                "log_id": "log_" + "a" * 16,
                "csv_sha256": hashlib.sha256(body).hexdigest(),
                "automatic_retry": False, "checkpoint_advanced": False}
-    (tmp_path / "receipt-1.json.attempt").write_text(json.dumps(attempt))
+    latch = tmp_path / "receipt-1.json.attempt"
+    latch.write_text(json.dumps(attempt))
+    latch.chmod(0o600)  # Production creates owner-only latches; never weaken the reader.
     monkeypatch.setattr(review, "_delta_private_parent", lambda p: None)
     monkeypatch.setattr(review, "_scope", lambda *a: scope)
     monkeypatch.setattr(review, "_grant", lambda *a: None)
