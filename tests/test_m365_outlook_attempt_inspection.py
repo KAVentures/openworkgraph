@@ -17,7 +17,7 @@ def _setup(tmp_path):
     latch = private / "receipt-test.json.attempt"
     latch.write_text(json.dumps({
         "format": ATTEMPT_FORMAT, "status": "attempt_started",
-        "log_id": "target123", "csv_sha256": "a" * 64,
+        "log_id": "log_0123456789abcdef", "csv_sha256": "a" * 64,
         "checkpoint_advanced": False, "automatic_retry": False,
     }))
     latch.chmod(0o600)
@@ -27,8 +27,8 @@ def _setup(tmp_path):
 def _call(receipt, **kwargs):
     options = dict(tenant="tenant", mailbox="mailbox", folder="folder",
                    grant_file=receipt.parent / "grant.json",
-                   receipt_file=receipt, log_id="target123",
-                   confirm_log_id="target123", port=8765,
+                   receipt_file=receipt, log_id="log_0123456789abcdef",
+                   confirm_log_id="log_0123456789abcdef", port=8765,
                    session="session", consent_local_read=True,
                    opener=object())
     options.update(kwargs)
@@ -41,7 +41,7 @@ def test_live_inventory_read_is_indeterminate_and_never_writes(tmp_path):
          patch("server.m365_outlook_attempt_inspection._scope", return_value="a" * 64), \
          patch("server.m365_outlook_attempt_inspection._session", return_value="session"), \
          patch("server.m365_outlook_attempt_inspection._inventory", return_value=[
-             {"log_id": "target123", "source_format": "csv", "events": 12,
+             {"log_id": "log_0123456789abcdef", "source_format": "csv", "events": 12,
               "source_identity": {"namespaces": [{
                   "source_namespace": "m365_" + "a" * 32,
                   "case_namespace": "m365_" + "a" * 32}]}}
