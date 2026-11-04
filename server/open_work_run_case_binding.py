@@ -226,3 +226,42 @@ def revoke_case_bindings(*, scope: str, actor: str, secret: str, case_ref: str) 
             db.rollback()
             raise CaseDeclarationError("binding ledger unavailable") from None
     return removed
+
+
+def list_case_bindings(*, scope: str, actor: str, secret: str, case_ref: str,
+                       revision: int, now: datetime | None = None) -> dict:
+    """Read a bounded, session-owned inventory; no provider or run identity claim.
+
+    Callers MUST independently admit the session, source, declaration and
+    retention before and after this read. A changed revision is displayed as
+    stale, never silently accepted as an authoritative association.
+    """
+    _validate(scope, case_ref, "owg:run:" + "0" * 32, "0" * 64, revision)
+    key = _actor_key(secret, scope, actor)
+    current = _now(now).isoformat()
+    _retention()
+    with _database(False) as db:
+        if db is None:
+            rows = []
+        else:
+            try:
+                rows = db.execute("""SELECT run_ref, revision
+                    FROM bindings WHERE actor_key=? AND scope=? AND case_ref=?
+                    AND expires_at > ? ORDER BY run_ref LIMIT ?""",
+                    (key, scope, case_ref, current, _MAX_ROWS + 1)).fetchall()
+            except sqlite3.Error:
+                raise CaseDeclarationError("binding ledger unavailable") from None
+    if len(rows) > _MAX_ROWS:
+        raise CaseDeclarationError("binding inventory capacity exceeded")
+    return {
+        "format": "openworkgraph.local-case-run-bindings.v1",
+        "case_ref": case_ref,
+        "items": [{"run_ref": ref, "declaration_state":
+                   "current_revision" if saved_revision == revision else "stale_revision",
+                   "run_identity_independently_verified": False,
+                   "customer_outcome_verified": False}
+                  for ref, saved_revision in rows],
+        "source_read_performed": False,
+        "run_snapshots_rechecked": False,
+        "agent_execution_authorized": False,
+    }
