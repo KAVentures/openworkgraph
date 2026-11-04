@@ -662,8 +662,55 @@ const path=require('node:path');
    await page.locator('#owgAnalysisStatus').filter({hasText:'Analysis saved.'}).waitFor();
    await page.getByRole('button',{name:'Remove metric half_wait',exact:true}).click();
    await page.getByRole('button',{name:'Remove metric to_approval',exact:true}).click();
+   // Saved arithmetic templates now restore the complete earlier-first metric
+   // graph from the authenticated per-log library in one atomic UI action.
    await page.getByRole('button',{name:'Add saved metric half_wait',exact:true}).click();
-   await page.locator('#owgAnalysisStatus').filter({hasText:'Add earlier metric to_approval first.'}).waitFor();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Added 2 saved metrics in dependency order'}).waitFor();
+   await page.locator('#owgMetricList').filter({hasText:'to_approval: time from the first Receive to the first Approve'}).waitFor();
+   await page.locator('#owgMetricList').filter({hasText:'half_wait: to_approval ÷ 2 ratio'}).waitFor();
+   await page.locator('#owgAnalysisMeasure1').selectOption('median:metric:half_wait');
+   assert.equal(await page.locator('#owgAnalysisSave').isDisabled(),true);
+   const [bundledResponse]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/analysis')),page.locator('#owgAnalysisRun').click()]);
+   assert.equal(bundledResponse.status(),200);
+   assert.deepEqual((await bundledResponse.json()).rows,arithmeticResult.rows);
+   const [bundledCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCsv').click()]);
+   assert.match(await fs.readFile(await bundledCsv.path(),'utf8'),/rework,21600/);
+   await page.locator('#owgAnalysisName').fill('Bundled approval wait');
+   await page.locator('#owgAnalysisSave').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Analysis saved.'}).waitFor();
+   const [bundledReplay]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/analysis')),page.getByRole('button',{name:'Run saved analysis Bundled approval wait',exact:true}).click()]);
+   assert.deepEqual((await bundledReplay.json()).rows,arithmeticResult.rows);
+   await page.getByRole('button',{name:'Add saved metric to_approval',exact:true}).click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'already has a metric named to_approval'}).waitFor();
+   // Missing, conflicting, cyclic and over-budget dependencies never partially
+   // modify a draft; identical existing definitions are safely reused.
+   const bundleCases=await page.evaluate(()=>{
+     const resolve=window.__owgEventLogModel.savedMetricBundle;
+     const base={name:'base',kind:'activity_count',activity:'Receive'};
+     const derived={name:'derived',kind:'arithmetic',expression_version:'1',operation:'add',
+       left:{kind:'metric',name:'base'},right:{kind:'constant',value:1,unit:'ratio'}};
+     const check=(entries,current=[])=>{try{return resolve(derived,entries,current).map(m=>m.name);}catch(e){return e.message;}};
+     const cycleA={...derived,name:'derived',left:{kind:'metric',name:'base'}};
+     const cycleB={...derived,name:'base',left:{kind:'metric',name:'derived'}};
+     const existing=[{name:'other1',kind:'activity_count',activity:'Start'},
+       {name:'other2',kind:'activity_count',activity:'Start'},
+       {name:'other3',kind:'activity_count',activity:'Start'}];
+     const before=JSON.stringify(existing);
+     const capacity=check([base,derived],existing);
+     return {complete:check([base,derived]),missing:check([derived]),
+       conflict:check([base,derived],[{...base,activity:'Approve'}]),
+       ambiguous:check([base,{...base,activity:'Approve'},derived]),
+       cycle:check([cycleA,cycleB]),capacity,unchanged:JSON.stringify(existing)===before,
+       reuse:check([base,derived],[{activity:'Receive',kind:'activity_count',name:'base'}])};
+   });
+   assert.deepEqual(bundleCases.complete,['base','derived']);
+   assert.deepEqual(bundleCases.reuse,['derived']);
+   assert.match(bundleCases.missing,/Missing saved dependency base/);
+   assert.match(bundleCases.conflict,/different definition/);
+   assert.match(bundleCases.ambiguous,/conflicting templates/);
+   assert.match(bundleCases.cycle,/dependency cycle/);
+   assert.match(bundleCases.capacity,/exceed four case metrics/);
+   assert.equal(bundleCases.unchanged,true);
    const [rerunArithmetic]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/analysis')),page.getByRole('button',{name:'Run saved analysis Half approval wait',exact:true}).click()]);
    assert.deepEqual((await rerunArithmetic.json()).rows,arithmeticResult.rows);
    await page.getByRole('button',{name:'Add saved metric to_approval',exact:true}).click();
@@ -1021,6 +1068,568 @@ const path=require('node:path');
    const [literalExport]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCsv').click()]);
    const literalExportPath=path.join(scratch,'literal-variant-analysis.csv');await literalExport.saveAs(literalExportPath);
    assert.match(await fs.readFile(literalExportPath,'utf8'),/""A > B""/);
+   page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
+   // R9 dashboard authoring: an actual numeric CSV, not a mocked API or hand-written spec.
+   const statValidation=await page.evaluate(()=>{
+     const build=window.__owgEventLogModel.caseMetric;
+     const base={kind:'event_attribute_statistic',name:'amounts',attribute:'amount',unit:'EUR',
+       statistic:'population_stddev',missingPolicy:'available',stageFrom:'Start',stageTo:'End',stageOccurrence:'last_completed'};
+     const good=build(base);
+     const invalid=values=>{try{build({...base,...values});return 'accepted';}catch(e){return e.message;}};
+     return {good,missingEnd:invalid({stageTo:''}),unknownStat:invalid({statistic:'arbitrary'}),
+       invalidPolicy:invalid({missingPolicy:'ignore'}),invalidUnit:invalid({unit:''})};
+   });
+   assert.deepEqual(statValidation.good,{name:'amounts',kind:'event_attribute_statistic',attribute:'amount',unit:'EUR',
+     statistic:'population_stddev',missing_policy:'available',from_activity:'Start',to_activity:'End',stage_occurrence:'last_completed'});
+   assert.match(statValidation.missingEnd,/both stage start and end/);
+   assert.match(statValidation.unknownStat,/supported within-case statistic/);
+   assert.match(statValidation.invalidPolicy,/missing numeric values/);
+   assert.match(statValidation.invalidUnit,/unit/);
+
+   const amountRows=['case_id,step,time,amount',
+     'A,Start,2024-01-01T00:00:00Z,2','A,Work,2024-01-01T00:01:00Z,4','A,End,2024-01-01T00:02:00Z,',
+     'A,Start,2024-01-01T00:03:00Z,8','A,Work,2024-01-01T00:04:00Z,10','A,End,2024-01-01T00:05:00Z,',
+     'A,Start,2024-01-01T00:06:00Z,100',
+     'B,Start,2024-01-02T00:00:00Z,5','B,Work,2024-01-02T00:01:00Z,invalid','B,End,2024-01-02T00:02:00Z,'];
+   await page.locator('#owgEventLogFile').setInputFiles({name:'numeric-stage.csv',mimeType:'text/csv',buffer:Buffer.from(amountRows.join('\n'))});
+   await page.locator('#owgEventLogDelimiter').selectOption(',');
+   await page.waitForFunction(()=>document.querySelector('#owgEventLogAttributes')?.options.length===4);
+   await page.locator('#owgEventLogName').fill('Observed numeric stages');
+   await page.locator('#owgEventLogCase').selectOption('case_id');
+   await page.locator('#owgEventLogActivity').selectOption('step');
+   await page.locator('#owgEventLogTime').selectOption('time');
+   await page.locator('#owgEventLogAttributes').selectOption(['amount']);
+   await page.locator('#owgEventLogConsent').check();
+   await page.locator('#owgEventLogImport').click();
+   await page.locator('#owgEventLogStatus').filter({hasText:'Imported 10 events'}).waitFor();
+   await page.locator('#owgEventLogAnalyze').click();
+   await page.locator('#owgMetricKind').selectOption('event_attribute_statistic');
+   assert.equal(await page.locator('#owgMetricStatistic').isVisible(),true);
+   assert.equal(await page.locator('#owgMetricStageFrom').isVisible(),true);
+   await page.locator('#owgMetricName').fill('last_review_avg');
+   await page.locator('#owgMetricAttribute').fill('amount');await page.locator('#owgMetricUnit').fill('EUR');
+   await page.locator('#owgMetricStatistic').selectOption('average');
+   await page.locator('#owgMetricMissingPolicy').selectOption('complete');
+   await page.locator('#owgMetricStageFrom').selectOption('Start');
+   await page.locator('#owgMetricAdd').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Choose both stage start and end'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList').textContent(),'');
+   await page.locator('#owgMetricStageTo').selectOption('End');
+   await page.locator('#owgMetricStageOccurrence').selectOption('last_completed');
+   await page.locator('#owgMetricAdd').click();
+   await page.locator('#owgMetricList').filter({hasText:'last_review_avg: average of event attribute amount from Start to End (last_completed completed stage)'}).waitFor();
+   await page.locator('#owgAnalysisMeasure1').selectOption('avg:metric:last_review_avg');
+   await page.locator('#owgAnalysisMeasure2').selectOption('');
+   await page.locator('#owgAnalysisBackground').uncheck();
+   const [lastStageResponse]=await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),page.locator('#owgAnalysisRun').click()]);
+   assert.equal(lastStageResponse.status(),200);
+   const lastSpec=JSON.parse(lastStageResponse.request().postData());
+   assert.deepEqual(lastSpec.metrics[0],{name:'last_review_avg',kind:'event_attribute_statistic',
+     attribute:'amount',unit:'EUR',statistic:'average',missing_policy:'complete',
+     from_activity:'Start',to_activity:'End',stage_occurrence:'last_completed'});
+   const lastStage=await lastStageResponse.json();
+   assert.deepEqual(lastStage.rows,[[9]],'only the last completed A stage is valid; unfinished A and invalid B do not contribute');
+   assert.equal(lastStage.metrics[0].cases_with_value,1);
+   assert.equal(lastStage.metrics[0].cases_without_value,1);
+   await page.locator('#owgMetricSave').click();
+   await page.getByRole('button',{name:'Add saved metric last_review_avg',exact:true}).waitFor();
+   await page.locator('#owgAnalysisName').fill('Last completed review amounts');
+   await page.locator('#owgAnalysisSave').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Analysis saved.'}).waitFor();
+   const [savedStatResponse]=await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')),
+     page.getByRole('button',{name:'Run saved analysis Last completed review amounts',exact:true}).click()]);
+   assert.deepEqual((await savedStatResponse.json()).rows,[[9]]);
+   const [numericCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCsv').click()]);
+   assert.match(await fs.readFile(await numericCsv.path(),'utf8'),/avg_metric:last_review_avg\r\n9/);
+
+   // Available policy keeps observed values but discloses invalid ones; totals are not inferred completeness.
+   await page.locator('#owgMetricName').fill('first_review_total');
+   await page.locator('#owgMetricStatistic').selectOption('total');
+   await page.locator('#owgMetricMissingPolicy').selectOption('available');
+   await page.locator('#owgMetricStageOccurrence').selectOption('first');
+   await page.locator('#owgMetricAdd').click();
+   await page.locator('#owgAnalysisMeasure1').selectOption('sum:metric:first_review_total');
+   const [firstStageResponse]=await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')),page.locator('#owgAnalysisRun').click()]);
+   assert.equal(firstStageResponse.status(),200);
+   const firstStage=await firstStageResponse.json();
+   assert.deepEqual(firstStage.rows,[[11]],'A first-stage 2+4 and B observed 5; invalid B Work omitted');
+   assert.equal(firstStage.metrics[1].cases_with_value,2);
+   assert.ok(firstStage.metrics[1].event_rows_with_missing_invalid_or_nonfinite_attribute>=1);
+   // R9: four backend-supported pairwise operations are now authored without JSON.
+   // A: first-stage total 6 EUR, last completed stage mean 9 EUR.
+   // B: first-stage total 5 EUR but last completed mean is unknown (invalid Work).
+   await page.locator('#owgMetricKind').selectOption('arithmetic');
+   assert.deepEqual(await page.locator('#owgMetricOperation option').evaluateAll(nodes=>nodes.map(n=>n.value)),
+     ['add','subtract','multiply','divide','minimum','maximum','average','absolute_difference']);
+   await page.locator('#owgMetricLeftMetric').selectOption('first_review_total');
+   await page.locator('#owgMetricRightMetric').selectOption('last_review_avg');
+   for(const [operation,expected,description] of [
+     ['minimum',6,'Smaller of'],['maximum',9,'Larger of'],
+     ['average',7.5,'Average of'],['absolute_difference',3,'Absolute difference between']]){
+     const metricName='pair_'+operation;
+     await page.locator('#owgMetricName').fill(metricName);
+     await page.locator('#owgMetricOperation').selectOption(operation);
+     await page.locator('#owgMetricAdd').click();
+     await page.locator('#owgMetricList').filter({hasText:metricName+': '+description+' first_review_total and last_review_avg'}).waitFor();
+     await page.locator('#owgAnalysisMeasure1').selectOption('avg:metric:'+metricName);
+     const [pairResponse]=await Promise.all([
+       page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
+       page.locator('#owgAnalysisRun').click()]);
+     assert.equal(pairResponse.status(),200,operation+' should be accepted by authenticated analysis');
+     const spec=JSON.parse(pairResponse.request().postData());
+     assert.deepEqual(spec.metrics[2],{name:metricName,kind:'arithmetic',expression_version:'1',
+       operation,left:{kind:'metric',name:'first_review_total'},right:{kind:'metric',name:'last_review_avg'}});
+     const result=await pairResponse.json();
+     assert.deepEqual(result.rows,[[expected]],operation+' must not turn missing B into zero');
+     assert.equal(result.metrics[2].cases_with_value,1);
+     assert.equal(result.metrics[2].cases_with_missing_operand,1);
+     assert.equal(result.metrics[2].unit,'EUR');
+     await page.locator('#owgAnalysisResults').filter({hasText:metricName+': 1 cases have a value'}).waitFor();
+     if(operation==='absolute_difference'){
+       await page.locator('#owgMetricSave').click();
+       await page.getByRole('button',{name:'Add saved metric '+metricName,exact:true}).waitFor();
+       const [pairCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCsv').click()]);
+       assert.match(await fs.readFile(await pairCsv.path(),'utf8'),/avg_metric:pair_absolute_difference\r\n3/);
+       await page.locator('#owgAnalysisName').fill('Pairwise recorded EUR difference');
+       await page.locator('#owgAnalysisSave').click();
+       await page.locator('#owgAnalysisStatus').filter({hasText:'Analysis saved.'}).waitFor();
+       const [savedPair]=await Promise.all([
+         page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')),
+         page.getByRole('button',{name:'Run saved analysis Pairwise recorded EUR difference',exact:true}).click()]);
+       assert.deepEqual((await savedPair.json()).rows,[[3]]);
+     }
+     await page.getByRole('button',{name:'Remove metric '+metricName,exact:true}).click();
+   }
+   // New same-unit operations must fail closed; EUR and seconds are never converted.
+   await page.locator('#owgMetricName').fill('bad_pair_units');
+   await page.locator('#owgMetricOperation').selectOption('minimum');
+   await page.locator('#owgMetricRightKind').selectOption('constant');
+   await page.locator('#owgMetricRightValue').fill('1');
+   await page.locator('#owgMetricRightUnit').fill('seconds');
+   await page.locator('#owgMetricAdd').click();
+   await page.locator('#owgAnalysisMeasure1').selectOption('avg:metric:bad_pair_units');
+   await page.locator('#owgAnalysisRun').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'identical units'}).waitFor();
+   await page.getByRole('button',{name:'Remove metric bad_pair_units',exact:true}).click();
+   const unknownPairOperation=await page.evaluate(()=>{
+     try{window.__owgEventLogModel.caseMetric({kind:'arithmetic',name:'bad_op',
+       operation:'sql',leftKind:'constant',leftValue:'1',leftUnit:'EUR',
+       rightKind:'constant',rightValue:'2',rightUnit:'EUR'});return 'accepted';}
+     catch(error){return error.message;}
+   });
+   assert.match(unknownPairOperation,/Choose the arithmetic operation/);
+   await page.locator('#owgMetricKind').selectOption('arithmetic');
+   assert.equal(await page.locator('#owgMetricStatistic').isVisible(),false);
+   await page.locator('#owgMetricKind').selectOption('event_attribute_statistic');
+   // R9: one user action builds a signed, same-unit first/last completed stage
+   // comparison from the selected numeric attribute and missing-value policy.
+   await page.locator('#owgMetricName').fill('review');
+   await page.locator('#owgMetricStatistic').selectOption('average');
+   await page.locator('#owgMetricMissingPolicy').selectOption('complete');
+   await page.locator('#owgMetricStageFrom').selectOption('Start');
+   await page.locator('#owgMetricStageTo').selectOption('End');
+   assert.equal(await page.locator('#owgMetricCompareStages').isVisible(),true);
+   await page.locator('#owgMetricCompareStages').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'three free metric slots'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList').locator('button[aria-label^="Remove metric "]').count(),2,
+     'capacity refusal must not insert any comparison metrics');
+   await page.getByRole('button',{name:'Remove metric first_review_total',exact:true}).click();
+   await page.getByRole('button',{name:'Remove metric last_review_avg',exact:true}).click();
+   await page.locator('#owgMetricStageTo').selectOption('');
+   await page.locator('#owgMetricCompareStages').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Choose both stage start and end'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList').locator('button[aria-label^="Remove metric "]').count(),0);
+   await page.locator('#owgMetricStageTo').selectOption('End');
+   await page.locator('#owgMetricName').fill('a'.repeat(35));
+   await page.locator('#owgMetricCompareStages').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'at most 34 characters'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList').locator('button[aria-label^="Remove metric "]').count(),0);
+   await page.locator('#owgMetricName').fill('review_first');
+   await page.locator('#owgMetricAdd').click();
+   await page.locator('#owgMetricName').fill('review');
+   await page.locator('#owgMetricCompareStages').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'comparison metric name already exists'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList').locator('button[aria-label^="Remove metric "]').count(),1,
+     'name collision must leave existing metric untouched');
+   await page.getByRole('button',{name:'Remove metric review_first',exact:true}).click();
+   await page.locator('#owgAnalysisLevel').selectOption('events');
+   await page.locator('#owgMetricCompareStages').click();
+   assert.equal(await page.locator('#owgAnalysisLevel').inputValue(),'cases',
+     'the comparison must return to case-level analysis even if the user selected Events');
+   await page.locator('#owgAnalysisStatus').filter({hasText:'signed last minus first'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList').locator('button[aria-label^="Remove metric "]').count(),3);
+   assert.equal(await page.locator('#owgAnalysisMeasure1').inputValue(),'avg:metric:review_delta');
+   assert.match(await page.locator('#owgMetricList').textContent(),/review_delta: review_last − review_first/);
+   const [stageDeltaResponse]=await Promise.all([
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
+     page.locator('#owgAnalysisRun').click()]);
+   assert.equal(stageDeltaResponse.status(),200);
+   const deltaSpec=JSON.parse(stageDeltaResponse.request().postData());
+   assert.equal(deltaSpec.metrics.length,3);
+   assert.deepEqual(deltaSpec.metrics.slice(0,2).map(m=>[m.name,m.statistic,m.stage_occurrence,m.missing_policy,m.unit]),
+     [['review_first','average','first','complete','EUR'],['review_last','average','last_completed','complete','EUR']]);
+   assert.deepEqual(deltaSpec.metrics[2],{name:'review_delta',kind:'arithmetic',expression_version:'1',
+     operation:'subtract',left:{kind:'metric',name:'review_last'},right:{kind:'metric',name:'review_first'}});
+   const deltaResult=await stageDeltaResponse.json();
+   assert.deepEqual(deltaResult.rows,[[6]],'A: last mean 9 minus first mean 3; B has an invalid in-stage value, so complete policy keeps it unknown');
+   assert.equal(deltaResult.metrics[2].cases_with_value,1);
+   assert.equal(deltaResult.metrics[2].cases_with_missing_operand,1);
+   assert.equal(deltaResult.metrics[2].unit,'EUR');
+   await page.locator('#owgAnalysisName').fill('First to last review change');
+   await page.locator('#owgAnalysisSave').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Analysis saved.'}).waitFor();
+   const [replayedDelta]=await Promise.all([
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')),
+     page.getByRole('button',{name:'Run saved analysis First to last review change',exact:true}).click()]);
+   assert.deepEqual((await replayedDelta.json()).rows,[[6]]);
+   const [deltaCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCsv').click()]);
+   assert.match(await fs.readFile(await deltaCsv.path(),'utf8'),/avg_metric:review_delta\r\n6/);
+   // R9: one action also produces a dimensionless fractional change:
+   // (last completed stage - first stage) / first stage. 2 means +200%, not 2%.
+   await page.locator('#owgMetricCompareRelative').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'four free metric slots'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList').locator('button[aria-label^="Remove metric "]').count(),3,
+     'relative comparison capacity refusal must leave existing metrics unchanged');
+   for(const n of ['review_delta','review_last','review_first'])
+     await page.getByRole('button',{name:'Remove metric '+n,exact:true}).click();
+   await page.locator('#owgMetricName').fill('a'.repeat(32));
+   await page.locator('#owgMetricCompareRelative').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'at most 31 characters'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList').locator('button[aria-label^="Remove metric "]').count(),0);
+   await page.locator('#owgMetricName').fill('review_relative');
+   await page.locator('#owgMetricAdd').click();
+   await page.locator('#owgMetricName').fill('review');
+   await page.locator('#owgMetricCompareRelative').click();
+   // Four comparison metrics fill all four slots, so any existing metric is
+   // refused for capacity before a name collision can be reached.
+   await page.locator('#owgAnalysisStatus').filter({hasText:'four free metric slots'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList').locator('button[aria-label^="Remove metric "]').count(),1);
+   await page.getByRole('button',{name:'Remove metric review_relative',exact:true}).click();
+   await page.locator('#owgMetricStageTo').selectOption('');
+   await page.locator('#owgMetricCompareRelative').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Choose both stage start and end'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList').locator('button[aria-label^="Remove metric "]').count(),0);
+   await page.locator('#owgMetricStageTo').selectOption('End');
+   await page.locator('#owgAnalysisLevel').selectOption('events');
+   await page.locator('#owgMetricCompareRelative').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'fractional change metrics'}).waitFor();
+   assert.equal(await page.locator('#owgAnalysisLevel').inputValue(),'cases');
+   assert.equal(await page.locator('#owgMetricList').locator('button[aria-label^="Remove metric "]').count(),4);
+   assert.equal(await page.locator('#owgAnalysisMeasure1').inputValue(),'avg:metric:review_relative');
+   assert.match(await page.locator('#owgMetricList').textContent(),/review_relative: review_delta ÷ review_first/);
+   const [relativeResponse]=await Promise.all([
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
+     page.locator('#owgAnalysisRun').click()]);
+   assert.equal(relativeResponse.status(),200);
+   const relativeSpec=JSON.parse(relativeResponse.request().postData());
+   assert.deepEqual(relativeSpec.metrics.map(m=>m.name),
+     ['review_first','review_last','review_delta','review_relative']);
+   assert.deepEqual(relativeSpec.metrics[3],{name:'review_relative',kind:'arithmetic',expression_version:'1',
+     operation:'divide',left:{kind:'metric',name:'review_delta'},right:{kind:'metric',name:'review_first'}});
+   const relativeResult=await relativeResponse.json();
+   assert.deepEqual(relativeResult.rows,[[2]],'A: (9-3)/3 = 2, while B has no valid last-stage value');
+   assert.equal(relativeResult.metrics[3].cases_with_value,1);
+   assert.equal(relativeResult.metrics[3].cases_with_missing_operand,1);
+   assert.equal(relativeResult.metrics[3].unit,'ratio');
+   await page.locator('#owgAnalysisName').fill('First to last review fractional change');
+   await page.locator('#owgAnalysisSave').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Analysis saved.'}).waitFor();
+   const [replayedRelative]=await Promise.all([
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')),
+     page.getByRole('button',{name:'Run saved analysis First to last review fractional change',exact:true}).click()]);
+   assert.deepEqual((await replayedRelative.json()).rows,[[2]]);
+   const [relativeCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCsv').click()]);
+   assert.match(await fs.readFile(await relativeCsv.path(),'utf8'),/avg_metric:review_relative\r\n2/);
+   // The same production divide operator must withhold a zero denominator
+   // rather than emit infinity or falsely report a zero-percent change.
+   for(const n of ['review_relative','review_delta','review_last','review_first'])
+     await page.getByRole('button',{name:'Remove metric '+n,exact:true}).click();
+   await page.locator('#owgMetricKind').selectOption('arithmetic');
+   await page.locator('#owgMetricName').fill('zero_denominator');
+   await page.locator('#owgMetricOperation').selectOption('divide');
+   await page.locator('#owgMetricLeftKind').selectOption('constant');
+   await page.locator('#owgMetricLeftValue').fill('2');
+   await page.locator('#owgMetricLeftUnit').fill('EUR');
+   await page.locator('#owgMetricRightKind').selectOption('constant');
+   await page.locator('#owgMetricRightValue').fill('0');
+   await page.locator('#owgMetricRightUnit').fill('EUR');
+   await page.locator('#owgMetricAdd').click();
+   await page.locator('#owgAnalysisMeasure1').selectOption('avg:metric:zero_denominator');
+   const [zeroResponse]=await Promise.all([
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
+     page.locator('#owgAnalysisRun').click()]);
+   assert.equal(zeroResponse.status(),200);
+   const zeroResult=await zeroResponse.json();
+   assert.equal(zeroResult.metrics[0].unit,'ratio');
+   assert.equal(zeroResult.metrics[0].cases_with_value,0);
+   assert.equal(zeroResult.metrics[0].cases_with_zero_divisor,2);
+   assert.ok(!JSON.stringify(zeroResult.rows).includes('Infinity'));
+   assert.ok(!JSON.stringify(zeroResult.rows).includes('NaN'));
+   // R9: a keyboard-operable single action compares exact activity-specific
+   // recorded totals, using the same authenticated typed case-analysis API.
+   // A: Start 2+8+100=110, Work 4+10=14, signed B minus A = -96 EUR.
+   // B: Start 5, Work invalid => unknown, not a false zero or -5 EUR.
+   await page.getByRole('button',{name:'Remove metric zero_denominator',exact:true}).click();
+   await page.locator('#owgMetricKind').selectOption('event_attribute_statistic');
+   await page.locator('#owgMetricName').fill('step');
+   await page.locator('#owgMetricStatistic').selectOption('total');
+   await page.locator('#owgMetricMissingPolicy').selectOption('available');
+   await page.locator('#owgMetricStageFrom').selectOption('');
+   await page.locator('#owgMetricStageTo').selectOption('');
+   await page.locator('#owgMetricStatActivity').selectOption('');
+   assert.equal(await page.locator('#owgMetricCompareActivities').isVisible(),true);
+   await page.locator('#owgMetricCompareActivityA').selectOption('Start');
+   await page.locator('#owgMetricCompareActivityB').selectOption('Start');
+   await page.locator('#owgMetricCompareActivities').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Choose two different activities'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList button[aria-label^="Remove metric "]').count(),0);
+   await page.locator('#owgMetricCompareActivityB').selectOption('');
+   await page.locator('#owgMetricCompareActivities').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Choose two different activities'}).waitFor();
+   await page.locator('#owgMetricCompareActivityB').selectOption('Work');
+   await page.locator('#owgMetricStageFrom').selectOption('Start');
+   await page.locator('#owgMetricStageTo').selectOption('End');
+   await page.locator('#owgMetricCompareActivities').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Clear stage start and end'}).waitFor();
+   await page.locator('#owgMetricStageFrom').selectOption('');
+   await page.locator('#owgMetricStageTo').selectOption('');
+   await page.locator('#owgMetricStatActivity').selectOption('End');
+   await page.locator('#owgMetricCompareActivities').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Clear Only this activity'}).waitFor();
+   await page.locator('#owgMetricStatActivity').selectOption('');
+   await page.locator('#owgMetricName').fill('a'.repeat(35));
+   await page.locator('#owgMetricCompareActivities').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'at most 34 characters'}).waitFor();
+   await page.locator('#owgMetricName').fill('step_a');
+   await page.locator('#owgMetricAdd').click();
+   await page.locator('#owgMetricName').fill('step');
+   await page.locator('#owgMetricCompareActivities').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'activity comparison metric name already exists'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList button[aria-label^="Remove metric "]').count(),1,'collision is atomic');
+   await page.getByRole('button',{name:'Remove metric step_a',exact:true}).click();
+   for(const name of ['capacity_one','capacity_two']){
+     await page.locator('#owgMetricName').fill(name);
+     await page.locator('#owgMetricAdd').click();
+   }
+   await page.locator('#owgMetricName').fill('step');
+   await page.locator('#owgMetricCompareActivities').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'three free metric slots'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList button[aria-label^="Remove metric "]').count(),2,'capacity refusal is atomic');
+   for(const name of ['capacity_one','capacity_two'])
+     await page.getByRole('button',{name:'Remove metric '+name,exact:true}).click();
+   const activityPure=await page.evaluate(()=>window.__owgEventLogModel.activityComparisonMetrics(
+     window.__owgEventLogModel.caseMetric({kind:'event_attribute_statistic',name:'step',attribute:'amount',
+       unit:'EUR',statistic:'total',missingPolicy:'available'}),'Start','Work'));
+   assert.deepEqual(activityPure.map(m=>m.name),['step_a','step_b','step_delta']);
+   assert.equal(activityPure[0].activity,'Start');
+   assert.equal(activityPure[1].activity,'Work');
+   assert.deepEqual(activityPure[2],{name:'step_delta',kind:'arithmetic',expression_version:'1',
+     operation:'subtract',left:{kind:'metric',name:'step_b'},right:{kind:'metric',name:'step_a'}});
+   await page.locator('#owgAnalysisLevel').selectOption('events');
+   await page.locator('#owgMetricCompareActivities').focus();
+   await page.keyboard.press('Enter');
+   await page.locator('#owgAnalysisStatus').filter({hasText:'signed B minus A metrics'}).waitFor();
+   assert.equal(await page.locator('#owgAnalysisLevel').inputValue(),'cases');
+   assert.equal(await page.locator('#owgMetricList button[aria-label^="Remove metric "]').count(),3);
+   assert.equal(await page.locator('#owgAnalysisMeasure1').inputValue(),'avg:metric:step_delta');
+   const [activityComparisonResponse]=await Promise.all([
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
+     page.locator('#owgAnalysisRun').click()]);
+   assert.equal(activityComparisonResponse.status(),200);
+   const activitySpec=JSON.parse(activityComparisonResponse.request().postData());
+   assert.deepEqual(activitySpec.metrics,activityPure);
+   const activityResult=await activityComparisonResponse.json();
+   assert.deepEqual(activityResult.rows,[[-96]],'only A has both finite activity totals');
+   assert.equal(activityResult.metrics[2].cases_with_value,1);
+   assert.equal(activityResult.metrics[2].cases_with_missing_operand,1);
+   assert.equal(activityResult.metrics[2].unit,'EUR');
+   assert.equal(activityResult.metrics[1].cases_with_no_finite_attribute,1);
+   await page.locator('#owgAnalysisName').fill('Recorded Start versus Work totals');
+   await page.locator('#owgAnalysisSave').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Analysis saved.'}).waitFor();
+   const [activitySaved]=await Promise.all([
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')),
+     page.getByRole('button',{name:'Run saved analysis Recorded Start versus Work totals',exact:true}).click()]);
+   assert.deepEqual((await activitySaved.json()).rows,[[-96]]);
+   const [activityCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCsv').click()]);
+   assert.match(await fs.readFile(await activityCsv.path(),'utf8'),/avg_metric:step_delta\r\n-96/);
+   // R9: one keyboard action composes the selected activity's contribution
+   // to the whole case from ordinary version-1 typed metrics. A has Work 14
+   // out of all observed 124 EUR; B has no finite Work value, so no fraction.
+   for(const n of ['step_delta','step_b','step_a'])
+     await page.getByRole('button',{name:'Remove metric '+n,exact:true}).click();
+   await page.locator('#owgMetricKind').selectOption('event_attribute_statistic');
+   await page.locator('#owgMetricName').fill('work');
+   await page.locator('#owgMetricStatistic').selectOption('average');
+   await page.locator('#owgMetricStatActivity').selectOption('Work');
+   assert.equal(await page.locator('#owgMetricCompareActivityShare').isVisible(),true);
+   await page.locator('#owgMetricCompareActivityShare').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Choose Total'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList button[aria-label^="Remove metric "]').count(),0);
+   await page.locator('#owgMetricStatistic').selectOption('total');
+   await page.locator('#owgMetricStatActivity').selectOption('');
+   await page.locator('#owgMetricCompareActivityShare').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Choose Only this activity'}).waitFor();
+   await page.locator('#owgMetricStatActivity').selectOption('Work');
+   await page.locator('#owgMetricStageFrom').selectOption('Start');
+   await page.locator('#owgMetricStageTo').selectOption('End');
+   await page.locator('#owgMetricCompareActivityShare').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Clear stage start and end'}).waitFor();
+   await page.locator('#owgMetricStageFrom').selectOption('');
+   await page.locator('#owgMetricStageTo').selectOption('');
+   await page.locator('#owgMetricName').fill('x'.repeat(32));
+   await page.locator('#owgMetricCompareActivityShare').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'at most 31 characters'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList button[aria-label^="Remove metric "]').count(),0);
+   await page.locator('#owgMetricName').fill('work_selected');
+   await page.locator('#owgMetricAdd').click();
+   await page.locator('#owgMetricName').fill('work');
+   await page.locator('#owgMetricCompareActivityShare').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'activity fraction metric name already exists'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList button[aria-label^="Remove metric "]').count(),1,'collision cannot partially add a fraction');
+   await page.getByRole('button',{name:'Remove metric work_selected',exact:true}).click();
+   for(const n of ['fraction_cap_one','fraction_cap_two']){
+     await page.locator('#owgMetricName').fill(n);
+     await page.locator('#owgMetricAdd').click();
+   }
+   await page.locator('#owgMetricName').fill('work');
+   await page.locator('#owgMetricCompareActivityShare').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'three free metric slots'}).waitFor();
+   assert.equal(await page.locator('#owgMetricList button[aria-label^="Remove metric "]').count(),2,'capacity refusal cannot partially add');
+   for(const n of ['fraction_cap_one','fraction_cap_two'])
+     await page.getByRole('button',{name:'Remove metric '+n,exact:true}).click();
+   const sharePure=await page.evaluate(()=>window.__owgEventLogModel.activityShareMetrics(
+     window.__owgEventLogModel.caseMetric({kind:'event_attribute_statistic',name:'work',
+       attribute:'amount',unit:'EUR',statistic:'total',missingPolicy:'available',statActivity:'Work'})));
+   assert.deepEqual(sharePure.map(m=>m.name),['work_selected','work_all','work_fraction']);
+   assert.equal(sharePure[0].activity,'Work');
+   assert.equal(Object.hasOwn(sharePure[1],'activity'),false);
+   assert.deepEqual(sharePure[2],{name:'work_fraction',kind:'arithmetic',expression_version:'1',
+     operation:'divide',left:{kind:'metric',name:'work_selected'},right:{kind:'metric',name:'work_all'}});
+   await page.locator('#owgAnalysisLevel').selectOption('events');
+   await page.locator('#owgMetricCompareActivityShare').focus();
+   await page.keyboard.press('Enter');
+   await page.locator('#owgAnalysisStatus').filter({hasText:'whole-case total and their fraction'}).waitFor();
+   assert.equal(await page.locator('#owgAnalysisLevel').inputValue(),'cases');
+   assert.equal(await page.locator('#owgMetricList button[aria-label^="Remove metric "]').count(),3);
+   assert.equal(await page.locator('#owgAnalysisMeasure1').inputValue(),'avg:metric:work_fraction');
+   const [shareResponse]=await Promise.all([
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
+     page.locator('#owgAnalysisRun').click()]);
+   assert.equal(shareResponse.status(),200);
+   const shareSpec=JSON.parse(shareResponse.request().postData());
+   assert.deepEqual(shareSpec.metrics,sharePure);
+   const shareResult=await shareResponse.json();
+   assert.equal(shareResult.rows.length,1);
+   assert.ok(Math.abs(shareResult.rows[0][0]-14/124)<1e-6,'Work contributes 14 of 124 observed EUR in A');
+   assert.equal(shareResult.metrics[2].unit,'ratio');
+   assert.equal(shareResult.metrics[2].cases_with_value,1);
+   assert.equal(shareResult.metrics[2].cases_with_missing_operand,1,'invalid B Work must stay unknown');
+   assert.equal(shareResult.metrics[0].cases_with_no_finite_attribute,1);
+   await page.locator('#owgAnalysisName').fill('Observed Work contribution');
+   await page.locator('#owgAnalysisSave').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Analysis saved.'}).waitFor();
+   const [savedShare]=await Promise.all([
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')),
+     page.getByRole('button',{name:'Run saved analysis Observed Work contribution',exact:true}).click()]);
+   assert.ok(Math.abs((await savedShare.json()).rows[0][0]-14/124)<1e-6);
+   const [shareCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCsv').click()]);
+   assert.match(await fs.readFile(await shareCsv.path(),'utf8'),/avg_metric:work_fraction\r\n0\.1129/);
+   // Saved analyses are editable, not just runnable. Loading is explicit and
+   // restores the full ordered typed metric graph, dimensions, filters and measure.
+   const originalDraft=await page.evaluate(spec=>window.__owgEventLogModel.analysisDraft(spec,spec.case_type||''),shareSpec);
+   assert.deepEqual(originalDraft.metrics,sharePure);
+   assert.equal(originalDraft.measure1,'avg:metric:work_fraction');
+   const refusedDraft=await page.evaluate(spec=>{
+     const invalid={...spec,metrics:spec.metrics.map(m=>({...m}))};
+     invalid.metrics[2].left={kind:'metric',name:'not_an_earlier_metric'};
+     try{window.__owgEventLogModel.analysisDraft(invalid,invalid.case_type||'');return 'accepted';}
+     catch(error){return error.message;}
+   },shareSpec);
+   assert.match(refusedDraft,/out-of-order metric dependency/);
+   const refusedFilter=await page.evaluate(spec=>{
+     try{window.__owgEventLogModel.analysisDraft({...spec,where:{source_only:true}},spec.case_type||'');return 'accepted';}
+     catch(error){return error.message;}
+   },shareSpec);
+   assert.match(refusedFilter,/filters not supported/);
+   for(const n of ['work_fraction','work_all','work_selected'])
+     await page.getByRole('button',{name:'Remove metric '+n,exact:true}).click();
+   await page.locator('#owgAnalysisLevel').selectOption('events');
+   await page.locator('#owgAnalysisDim1').selectOption('activity');
+   await page.getByRole('button',{name:'Load saved analysis Observed Work contribution into builder',exact:true}).focus();
+   await page.keyboard.press('Enter');
+   await page.locator('#owgAnalysisStatus').filter({hasText:'Edit and run it, then save under a new name'}).waitFor();
+   assert.equal(await page.locator('#owgAnalysisLevel').inputValue(),'cases');
+   assert.equal(await page.locator('#owgAnalysisMeasure1').inputValue(),'avg:metric:work_fraction');
+   assert.equal(await page.getByRole('button',{name:'Edit metric work_selected',exact:true}).count(),1);
+   assert.equal(await page.locator('#owgAnalysisSave').isDisabled(),true,'loading cannot save a stale result');
+   assert.equal(await page.locator('#owgAnalysisJson').isDisabled(),true,'loading clears stale exports');
+   // A rename is a graph refactor: exact arithmetic references and selected
+   // measures follow it, while the saved original remains unchanged.
+   const pureRefactor=await page.evaluate(ms=>{
+     const model=window.__owgEventLogModel;
+     const result=model.refactorMetricGraph(ms,'work_selected',{...ms[0],name:'renamed_selected'},['avg:metric:work_selected','sum:metric:work_fraction']);
+     let refused='';
+     try{model.refactorMetricGraph(ms,'work_selected',{...ms[0],name:'work_all'},['avg:metric:work_selected']);}
+     catch(error){refused=error.message;}
+     return {result,refused,original:ms};
+   },sharePure);
+   assert.equal(pureRefactor.result.metrics[2].left.name,'renamed_selected');
+   assert.deepEqual(pureRefactor.result.measures,['avg:metric:renamed_selected','sum:metric:work_fraction']);
+   assert.match(pureRefactor.refused,/already has that name/);
+   assert.deepEqual(pureRefactor.original,sharePure,'a refused or successful pure refactor never mutates its source');
+   await page.getByRole('button',{name:'Edit metric work_selected',exact:true}).click();
+   assert.equal(await page.locator('#owgMetricMissingPolicy').inputValue(),'available');
+   await page.locator('#owgMetricName').fill('work_all');
+   await page.locator('#owgMetricUpdate').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'already has that name'}).waitFor();
+   assert.match(await page.locator('#owgMetricList').textContent(),/work_selected/);
+   await page.locator('#owgMetricName').fill('renamed_selected');
+   await page.locator('#owgMetricMissingPolicy').selectOption('complete');
+   await page.locator('#owgMetricUpdate').click();
+   await page.locator('#owgAnalysisStatus').filter({hasText:'dependent arithmetic and selected measures'}).waitFor();
+   assert.equal(await page.getByRole('button',{name:'Edit metric renamed_selected',exact:true}).count(),1);
+   assert.match(await page.locator('#owgMetricList').textContent(),/renamed_selected/);
+   await page.getByRole('button',{name:'Edit metric work_fraction',exact:true}).click();
+   await page.locator('#owgMetricName').fill('renamed_fraction');
+   await page.locator('#owgMetricUpdate').click();
+   assert.equal(await page.locator('#owgAnalysisMeasure1').inputValue(),'avg:metric:renamed_fraction',
+     'the selected measure follows the renamed arithmetic result');
+   assert.equal(await page.locator('#owgMetricUpdate').isDisabled(),true);
+   assert.equal(await page.locator('#owgAnalysisSave').isDisabled(),true,'editing requires a fresh run before saving');
+   assert.equal(await page.locator('#owgAnalysisJson').isDisabled(),true,'editing cannot export an older result');
+   const [loadedResponse]=await Promise.all([
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
+     page.locator('#owgAnalysisRun').click()]);
+   assert.equal(loadedResponse.status(),200);
+   const editedSpec=JSON.parse(loadedResponse.request().postData());
+   assert.equal(editedSpec.measures[0].of,'metric:renamed_fraction');
+   assert.deepEqual(editedSpec.metrics,[{...sharePure[0],name:'renamed_selected',missing_policy:'complete'},
+     sharePure[1],{...sharePure[2],name:'renamed_fraction',left:{kind:'metric',name:'renamed_selected'}}]);
+   assert.deepEqual((await loadedResponse.json()).rows,shareResult.rows);
+   await page.locator('#owgAnalysisName').fill('Revised Work contribution');
+   await page.locator('#owgAnalysisSave').click();
+   await page.getByRole('button',{name:'Run saved analysis Revised Work contribution',exact:true}).waitFor();
+   await page.getByRole('button',{name:'Run saved analysis Observed Work contribution',exact:true}).waitFor();
+   const [replayedRevision]=await Promise.all([
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
+     page.getByRole('button',{name:'Run saved analysis Revised Work contribution',exact:true}).click()]);
+   assert.equal(replayedRevision.status(),200);
+   const replayedSpec=JSON.parse(replayedRevision.request().postData());
+   // Stored specs echo optional fields as null and the stage selector default.
+   const echoedDefaultsRemoved=metrics=>metrics.map(m=>Object.fromEntries(Object.entries(m).filter(([k,v])=>
+     v!==null&&!(k==='stage_occurrence'&&v==='first'&&!m.from_activity&&!m.to_activity))));
+   assert.deepEqual(echoedDefaultsRemoved(replayedSpec.metrics),echoedDefaultsRemoved(editedSpec.metrics),
+     'saved revision keeps rewritten dependencies');
+   assert.deepEqual(replayedSpec.measures,editedSpec.measures,'saved revision keeps rewritten measure');
+   const [replayedOriginal]=await Promise.all([
+     page.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/analysis')&&r.request().method()==='POST'),
+     page.getByRole('button',{name:'Run saved analysis Observed Work contribution',exact:true}).click()]);
+   assert.deepEqual(echoedDefaultsRemoved(JSON.parse(replayedOriginal.request().postData()).metrics),sharePure,'original saved analysis is unchanged');
+   const numericAxe=await page.evaluate(()=>axe.run(document.querySelector('#owgEventLogAnalysis'),{
+     runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']},resultTypes:['violations']}));
+   assert.deepEqual(numericAxe.violations,[]);
    page.once('dialog',dialog=>dialog.accept());await page.locator('#owgEventLogDelete').click();
    await page.locator('#owgEventLogStatus').filter({hasText:'Event log deleted.'}).waitFor();
    assert.deepEqual(errors,[]);

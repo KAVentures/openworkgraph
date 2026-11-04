@@ -83,6 +83,8 @@
 
   function table(headers,rows){
     const wrap=el('div',null,'table-wrap');const t=el('table');const head=el('thead');const hr=el('tr');
+    // A scrollable table must be reachable by keyboard (WCAG 2.1.1).
+    wrap.tabIndex=0;wrap.setAttribute('role','region');wrap.setAttribute('aria-label','Table: '+headers.join(', ').slice(0,120));
     headers.forEach(h=>hr.appendChild(el('th',h)));head.appendChild(hr);
     const body=el('tbody');rows.forEach(r=>{const tr=el('tr');r.forEach(v=>{const cell=el('td');cell.style.whiteSpace='pre-wrap';if(v instanceof window.Node)cell.appendChild(v);else cell.textContent=v===null||v===undefined?'':String(v);tr.appendChild(cell);});body.appendChild(tr);});
     t.append(head,body);wrap.appendChild(t);return wrap;
@@ -593,7 +595,7 @@
   }
 
   function toCSV(rows){
-    const cell=v=>{const t=v===null||v===undefined?'':String(v);const safe=/^[=+\-@\t\r]/.test(t)?"'"+t:t;return /[",\n\r]/.test(safe)?'"'+safe.replace(/"/g,'""')+'"':safe;};
+    const cell=v=>{const t=v===null||v===undefined?'':String(v);const safe=typeof v!=='number'&&/^[=+\-@\t\r]/.test(t)?"'"+t:t;return /[",\n\r]/.test(safe)?'"'+safe.replace(/"/g,'""')+'"':safe;};
     return rows.map(r=>r.map(cell).join(',')).join('\r\n')+'\r\n';
   }
   function download(name,text,type){
@@ -1559,7 +1561,7 @@
         Object.entries(cal.activities||{}).forEach(([name,p])=>addRow(name,p));
         // Switching the basis refills the measured minutes; activities added by hand keep what was typed.
         timeBasis.onchange=()=>rows.forEach(r=>{if(r.measured)r.minutes.value=String(measuredMinutes(r.measured,timeBasis.value));});
-        const wrap=el('div',null,'table-wrap');const t=el('table');const head=el('thead');const hr=el('tr');['Activity','Minutes per case','Resources'].forEach(h=>hr.appendChild(el('th',h)));head.appendChild(hr);
+        const wrap=el('div',null,'table-wrap');wrap.tabIndex=0;wrap.setAttribute('role','region');wrap.setAttribute('aria-label','Table: activity minutes and resources');const t=el('table');const head=el('thead');const hr=el('tr');['Activity','Minutes per case','Resources'].forEach(h=>hr.appendChild(el('th',h)));head.appendChild(hr);
         t.append(head,body);wrap.appendChild(t);
         const newName=input('owgEventLogSimNewName','text','New activity');newName.maxLength=200;
         const add=button('Add activity','secondary');add.id='owgEventLogSimAdd';
@@ -2152,6 +2154,92 @@
     return spec;
   }
 
+  // Restore only analysis specs the visible builder can faithfully represent.
+  // Validate the complete draft before changing any form controls or metric state.
+  function analysisDraft(spec,selectedCaseType=''){
+    if(!spec||typeof spec!=='object'||Array.isArray(spec))throw new Error('Saved analysis has no usable definition.');
+    // Stored specs echo every optional field as null; null means "not set".
+    const unset=o=>o&&typeof o==='object'&&!Array.isArray(o)?Object.fromEntries(Object.entries(o).filter(([,v])=>v!==null)):o;
+    const unsetMetric=m=>{const out=unset(m);
+      // The default stage selector means nothing without a stage, as the builder writes it.
+      if(out&&typeof out==='object'&&!out.from_activity&&!out.to_activity&&out.stage_occurrence==='first')delete out.stage_occurrence;
+      return out;};
+    spec={...spec,where:unset(spec.where),metrics:Array.isArray(spec.metrics)?spec.metrics.map(unsetMetric):spec.metrics};
+    const allowed=new Set(['level','dimensions','measures','limit','metrics','where','case_type']);
+    // A stored spec echoes server defaults; only a non-default value is an unsupported option.
+    const defaults={cohort:'{}',activity_in:'[]',order:'"first_measure_desc"',time_zone:'null',time_of_week:'null'};
+    if(Object.keys(spec).some(k=>!allowed.has(k)&&!(Object.hasOwn(defaults,k)&&JSON.stringify(spec[k]??null)===defaults[k])))
+      throw new Error('This saved analysis uses options not supported by the builder; use Run instead.');
+    if(!['cases','events'].includes(spec.level)||spec.limit!==100)throw new Error('This saved analysis cannot be edited in this builder; use Run instead.');
+    if((spec.case_type||'')!==selectedCaseType)throw new Error('Select the saved analysis case notion before loading it.');
+    if(!Array.isArray(spec.dimensions)||spec.dimensions.length>2)throw new Error('Saved analysis dimensions cannot be edited here.');
+    const dimOptions=new Set(ANALYSIS_DIMENSIONS[spec.level].map(x=>x[0]));
+    const dims=spec.dimensions.map(d=>{
+      if(typeof d!=='string')throw new Error('Saved analysis has an invalid dimension.');
+      if(d.startsWith('attribute:')){
+        const attribute=d.slice(10);
+        if(!attribute.trim())throw new Error('Saved analysis has an empty attribute dimension.');
+        return {kind:'attribute',attribute};
+      }
+      if(!d||!dimOptions.has(d))throw new Error('Saved analysis uses an unsupported dimension.');
+      return {kind:d,attribute:''};
+    });
+    const where=spec.where||{};
+    if(!where||typeof where!=='object'||Array.isArray(where)||Object.keys(where).some(k=>!['duration_over_seconds','ends_with'].includes(k)))
+      throw new Error('Saved analysis uses filters not supported by the builder.');
+    if(spec.level!=='cases'&&Object.keys(where).length)throw new Error('Event analysis has unsupported case filters.');
+    let hours='';
+    if(Object.hasOwn(where,'duration_over_seconds')){
+      const seconds=where.duration_over_seconds;
+      if(!Number.isSafeInteger(seconds)||seconds<0)throw new Error('Saved analysis has an invalid duration filter.');
+      hours=String(seconds/3600);
+    }
+    if(where.ends_with!==undefined&&typeof where.ends_with!=='string')throw new Error('Saved analysis has an invalid ending activity.');
+    const metrics=spec.metrics||[];
+    if(!Array.isArray(metrics)||metrics.length>4||(spec.level==='events'&&metrics.length))
+      throw new Error('Saved analysis has metrics the builder cannot represent.');
+    const prior=new Set();
+    for(const m of metrics){
+      if(!m||typeof m!=='object'||Array.isArray(m)||!METRIC_KINDS.some(k=>k[0]===m.kind))
+        throw new Error('Saved analysis has an unsupported metric.');
+      if(typeof m.name!=='string'||!/^[a-z][a-z0-9_]{0,39}$/.test(m.name)||prior.has(m.name))
+        throw new Error('Saved analysis has invalid or duplicate metric names.');
+      if(m.kind==='arithmetic'){
+        if(m.expression_version!=='1'||!['add','subtract','multiply','divide','minimum','maximum','average','absolute_difference'].includes(m.operation))
+          throw new Error('Saved analysis has an unsupported arithmetic expression.');
+        for(const operand of [m.left,m.right]){
+          if(!operand||!['metric','constant'].includes(operand.kind))throw new Error('Saved analysis has an invalid arithmetic operand.');
+          if(operand.kind==='metric'&&!prior.has(operand.name))throw new Error('Saved analysis has an out-of-order metric dependency.');
+          if(operand.kind==='constant'&&(!Number.isFinite(operand.value)||typeof operand.unit!=='string'||!/^[A-Za-z%$€£¥/._ -]{1,20}$/.test(operand.unit)))
+            throw new Error('Saved analysis has an invalid typed constant.');
+        }
+      }else{
+        // Reuse the form's validation rules for supported non-arithmetic metrics.
+        caseMetric({name:m.name,kind:m.kind,from:m.from_activity,to:m.to_activity,
+          fromOccurrence:m.from_occurrence,toOccurrence:m.to_occurrence,activity:m.activity,
+          attribute:m.attribute,unit:m.unit,statistic:m.statistic,missingPolicy:m.missing_policy,
+          statActivity:m.activity,stageFrom:m.from_activity,stageTo:m.to_activity,
+          stageOccurrence:m.stage_occurrence});
+      }
+      prior.add(m.name);
+    }
+    if(!Array.isArray(spec.measures)||spec.measures.length<1||spec.measures.length>2)
+      throw new Error('Saved analysis has an unsupported measure selection.');
+    const standard=new Set(ANALYSIS_MEASURES[spec.level].map(x=>x[0]));
+    const measures=spec.measures.map(m=>{
+      if(!m||typeof m!=='object'||typeof m.fn!=='string')throw new Error('Saved analysis has an invalid measure.');
+      const value=m.of===undefined?m.fn:m.fn+':'+m.of;
+      if(!standard.has(value)&&!(spec.level==='cases'&&['median','avg','sum','max'].includes(m.fn)&&
+          typeof m.of==='string'&&m.of.startsWith('metric:')&&prior.has(m.of.slice(7))))
+        throw new Error('Saved analysis uses a measure not available in the builder.');
+      return value;
+    });
+    return {level:spec.level,dim1:dims[0]?.kind||'',attr1:dims[0]?.attribute||'',
+      dim2:dims[1]?.kind||'',attr2:dims[1]?.attribute||'',measure1:measures[0],
+      measure2:measures[1]||'',hours,endsWith:where.ends_with||'',
+      metrics:metrics.map(m=>JSON.parse(JSON.stringify(m)))};
+  }
+
   // One typed case metric from form values; throws a readable error.
   function caseMetric(values){
     const name=String(values.name||'').trim();
@@ -2173,8 +2261,23 @@
         if(!/^[a-z][a-z0-9_]{0,39}$/.test(ref)||ref===name)throw new Error('Choose an earlier metric for the '+side+' operand.');
         return {kind:'metric',name:ref};
       };
-      if(!['add','subtract','multiply','divide'].includes(values.operation))throw new Error('Choose the arithmetic operation.');
+      if(!['add','subtract','multiply','divide','minimum','maximum','average','absolute_difference'].includes(values.operation))throw new Error('Choose the arithmetic operation.');
       return {name,kind:'arithmetic',expression_version:'1',operation:values.operation,left:operand('left'),right:operand('right')};
+    }
+    if(values.kind==='event_attribute_statistic'){
+      const attribute=String(values.attribute||'').trim(),unit=String(values.unit||'').trim();
+      const statistic=String(values.statistic||''),missingPolicy=String(values.missingPolicy||'');
+      const stageFrom=String(values.stageFrom||''),stageTo=String(values.stageTo||'');
+      if(!attribute)throw new Error('Enter the numeric event attribute name.');
+      if(!/^[A-Za-z%$€£¥/._ -]{1,20}$/.test(unit))throw new Error('Enter the unit of the values, for example EUR or kg.');
+      if(!['average','minimum','maximum','median','p90','total','population_stddev'].includes(statistic))throw new Error('Choose a supported within-case statistic.');
+      if(!['available','complete'].includes(missingPolicy))throw new Error('Choose how to handle missing numeric values.');
+      if(!!stageFrom!==!!stageTo)throw new Error('Choose both stage start and end, or leave both empty.');
+      if(!['first','last_completed'].includes(values.stageOccurrence||'first'))throw new Error('Choose the first or last completed stage.');
+      const metric={name,kind:'event_attribute_statistic',attribute,unit,statistic,missing_policy:missingPolicy};
+      if(values.statActivity)metric.activity=String(values.statActivity);
+      if(stageFrom){metric.from_activity=stageFrom;metric.to_activity=stageTo;metric.stage_occurrence=values.stageOccurrence||'first';}
+      return metric;
     }
     if(values.kind==='event_attribute_sum'||values.kind==='case_attribute_number'){
       const attribute=String(values.attribute||'').trim(),unit=String(values.unit||'').trim();
@@ -2184,19 +2287,174 @@
     }
     throw new Error('Choose what the metric measures.');
   }
-  const METRIC_KINDS=[['time_between','Time from one activity to another'],['activity_count','How often an activity occurs'],['event_attribute_sum','Sum of a numeric event attribute'],['case_attribute_number','A numeric case attribute'],['arithmetic','Arithmetic on earlier metrics']];
+  // Build a reproducible first/last comparison from the same observed stage and
+  // missingness policy. The signed delta is last minus first, never an absolute change.
+  function stageComparisonMetrics(baseMetric, relative=false){
+    if(baseMetric.kind!=='event_attribute_statistic'||!baseMetric.from_activity||!baseMetric.to_activity)
+      throw new Error('Choose a numeric event statistic with both stage start and end.');
+    if(baseMetric.name.length>(relative?31:34))
+      throw new Error('Use a base metric name of at most '+(relative?31:34)+' characters for the stage comparison.');
+    const first={...baseMetric,name:baseMetric.name+'_first',stage_occurrence:'first'};
+    const last={...baseMetric,name:baseMetric.name+'_last',stage_occurrence:'last_completed'};
+    const delta={name:baseMetric.name+'_delta',kind:'arithmetic',expression_version:'1',
+      operation:'subtract',left:{kind:'metric',name:last.name},right:{kind:'metric',name:first.name}};
+    if(relative){
+      const fraction={name:baseMetric.name+'_relative',kind:'arithmetic',expression_version:'1',
+        operation:'divide',left:{kind:'metric',name:delta.name},right:{kind:'metric',name:first.name}};
+      return [first,last,delta,fraction];
+    }
+    return [first,last,delta];
+  }
+  // Compose an exact-activity A/B comparison from existing typed case metrics.
+  // This does not infer missing business activity or convert declared units.
+  function activityComparisonMetrics(baseMetric,activityA,activityB){
+    if(baseMetric.kind!=='event_attribute_statistic')
+      throw new Error('Choose a numeric event statistic to compare activities.');
+    if(baseMetric.from_activity||baseMetric.to_activity)
+      throw new Error('Clear stage start and end before comparing two activities.');
+    if(baseMetric.activity)
+      throw new Error('Clear Only this activity before choosing two comparison activities.');
+    if(!activityA||!activityB||activityA===activityB)
+      throw new Error('Choose two different activities for the comparison.');
+    if(baseMetric.name.length>34)
+      throw new Error('Use a base metric name of at most 34 characters for the activity comparison.');
+    const first={...baseMetric,name:baseMetric.name+'_a',activity:activityA};
+    const second={...baseMetric,name:baseMetric.name+'_b',activity:activityB};
+    const delta={name:baseMetric.name+'_delta',kind:'arithmetic',expression_version:'1',
+      operation:'subtract',left:{kind:'metric',name:second.name},right:{kind:'metric',name:first.name}};
+    return [first,second,delta];
+  }
+  // A selected activity's recorded contribution to the whole-case numeric total.
+  // A fraction is not necessarily bounded by 0..1 when recorded values have signs.
+  function activityShareMetrics(baseMetric){
+    if(baseMetric.kind!=='event_attribute_statistic'||baseMetric.statistic!=='total')
+      throw new Error('Choose Total as the within-case numeric statistic for an activity fraction.');
+    if(!baseMetric.activity)
+      throw new Error('Choose Only this activity to calculate its fraction of the whole case.');
+    if(baseMetric.from_activity||baseMetric.to_activity)
+      throw new Error('Clear stage start and end for a whole-case activity fraction.');
+    if(baseMetric.name.length>31)
+      throw new Error('Use a base metric name of at most 31 characters for an activity fraction.');
+    const selected={...baseMetric,name:baseMetric.name+'_selected'};
+    const whole={...baseMetric,name:baseMetric.name+'_all'};
+    delete whole.activity;
+    const fraction={name:baseMetric.name+'_fraction',kind:'arithmetic',expression_version:'1',
+      operation:'divide',left:{kind:'metric',name:selected.name},right:{kind:'metric',name:whole.name}};
+    return [selected,whole,fraction];
+  }
+  // Refactor a typed metric graph as one draft operation. References are exact
+  // metric identifiers, not text substitutions, so constants and source
+  // attribute names cannot be rewritten accidentally.
+  function refactorMetricGraph(definitions,oldName,replacement,selectedMeasures){
+    const index=definitions.findIndex(m=>m.name===oldName);
+    if(index<0)throw new Error('Select a metric to edit first.');
+    if(definitions.some((m,i)=>i!==index&&m.name===replacement.name))
+      throw new Error('Another metric already has that name.');
+    const rewritten=definitions.map((m,i)=>{
+      const copy=JSON.parse(JSON.stringify(i===index?replacement:m));
+      if(i>index&&copy.kind==='arithmetic'){
+        for(const side of ['left','right']){
+          if(copy[side].kind==='metric'&&copy[side].name===oldName)
+            copy[side].name=replacement.name;
+        }
+      }
+      return copy;
+    });
+    const earlier=new Set();
+    for(const metric of rewritten){
+      if(earlier.has(metric.name))throw new Error('Metric names must be unique.');
+      if(metric.kind==='arithmetic')for(const operand of [metric.left,metric.right]){
+        if(operand.kind==='metric'&&!earlier.has(operand.name))
+          throw new Error('Arithmetic operands must reference an earlier metric.');
+      }
+      earlier.add(metric.name);
+    }
+    const measures=selectedMeasures.map(value=>{
+      if(typeof value!=='string')return value;
+      for(const fn of ['median','avg','sum','max']){
+        if(value===fn+':metric:'+oldName)return fn+':metric:'+replacement.name;
+      }
+      return value;
+    });
+    return {metrics:rewritten,measures};
+  }
+  // Load saved typed metrics as a dependency-ordered, all-or-nothing draft.
+  // Saved templates belong to the current log; never substitute a different
+  // same-name definition or turn a missing operand into an observed zero.
+  function savedMetricBundle(target,savedEntries,currentMetrics){
+    const validName=name=>typeof name==='string'&&/^[a-z][a-z0-9_]{0,39}$/.test(name);
+    const normalized=value=>{
+      if(Array.isArray(value))return value.map(normalized);
+      if(value&&typeof value==='object')
+        return Object.fromEntries(Object.keys(value).sort().map(key=>[key,normalized(value[key])]));
+      return value;
+    };
+    const identical=(a,b)=>JSON.stringify(normalized(a))===JSON.stringify(normalized(b));
+    if(!target||!validName(target.name))throw new Error('Invalid saved metric name.');
+    const saved=new Map(),ambiguous=new Set();
+    for(const entry of savedEntries){
+      const metric=entry.metric||entry;
+      if(!metric||!validName(metric.name))continue;
+      if(saved.has(metric.name)&&!identical(saved.get(metric.name),metric))ambiguous.add(metric.name);
+      else saved.set(metric.name,metric);
+    }
+    const current=new Map(currentMetrics.map(metric=>[metric.name,metric]));
+    if(current.has(target.name))throw new Error('This analysis already has a metric named '+target.name+'.');
+    const added=[],done=new Set(),visiting=new Set();
+    const visit=name=>{
+      if(!validName(name))throw new Error('A saved metric has an invalid dependency name.');
+      if(ambiguous.has(name))throw new Error('Saved metric '+name+' has conflicting templates; resolve them before adding.');
+      const metric=saved.get(name);
+      if(current.has(name)){
+        if(metric&&!identical(metric,current.get(name)))
+          throw new Error('Metric '+name+' already exists with a different definition.');
+        return;
+      }
+      if(!metric)throw new Error('Missing saved dependency '+name+'. Save it for reuse or add it to this analysis first.');
+      if(done.has(name))return;
+      if(visiting.has(name))throw new Error('Saved metric dependency cycle at '+name+'.');
+      if(!METRIC_KINDS.some(([kind])=>kind===metric.kind))
+        throw new Error('Saved metric '+name+' has an unsupported type.');
+      visiting.add(name);
+      if(metric.kind==='arithmetic'){
+        if(metric.expression_version!=='1'||!['add','subtract','multiply','divide','minimum','maximum','average','absolute_difference'].includes(metric.operation))
+          throw new Error('Saved metric '+name+' uses unsupported arithmetic.');
+        for(const operand of [metric.left,metric.right]){
+          if(operand?.kind==='metric')visit(operand.name);
+          else if(operand?.kind!=='constant'||!Number.isFinite(operand.value)||
+            typeof operand.unit!=='string'||!/^[A-Za-z%$€£¥/._ -]{1,20}$/.test(operand.unit))
+            throw new Error('Saved metric '+name+' has an invalid typed operand.');
+        }
+      }
+      visiting.delete(name);done.add(name);
+      added.push(JSON.parse(JSON.stringify(metric)));
+      if(currentMetrics.length+added.length>4)
+        throw new Error('Saved metric and dependencies exceed four case metrics; remove metrics first.');
+    };
+    visit(target.name);
+    return added;
+  }
+  const METRIC_KINDS=[['time_between','Time from one activity to another'],['activity_count','How often an activity occurs'],['event_attribute_statistic','Numeric event values within each case or stage'],['event_attribute_sum','Sum of a numeric event attribute'],['case_attribute_number','A numeric case attribute'],['arithmetic','Arithmetic on earlier metrics']];
   function metricText(m){
     if(m.kind==='time_between')return m.name+': time from the '+m.from_occurrence+' '+m.from_activity+' to the '+m.to_occurrence+' '+m.to_activity;
     if(m.kind==='activity_count')return m.name+': number of '+m.activity+' events';
+    if(m.kind==='event_attribute_statistic'){
+      const label={average:'average',minimum:'minimum',maximum:'maximum',median:'median',p90:'90th percentile',total:'total',population_stddev:'population standard deviation'}[m.statistic]||m.statistic;
+      return m.name+': '+label+' of event attribute '+m.attribute+(m.activity?' at '+m.activity:'')+
+        (m.from_activity?' from '+m.from_activity+' to '+m.to_activity+' ('+(m.stage_occurrence||'first')+' completed stage)':'')+
+        ' ('+m.unit+', '+m.missing_policy+' numeric values)';
+    }
     if(m.kind==='arithmetic'){
       const text=o=>o.kind==='metric'?o.name:String(o.value)+' '+o.unit;
+      const pair={minimum:'Smaller of',maximum:'Larger of',average:'Average of',absolute_difference:'Absolute difference between'}[m.operation];
+      if(pair)return m.name+': '+pair+' '+text(m.left)+' and '+text(m.right);
       return m.name+': '+text(m.left)+' '+({add:'+',subtract:'−',multiply:'×',divide:'÷'}[m.operation])+' '+text(m.right);
     }
     return m.name+': '+(m.kind==='event_attribute_sum'?'sum of event attribute ':'case attribute ')+m.attribute+' ('+m.unit+')';
   }
 
   function analysisSection(activityNames){
-    const metrics=[];
+    const metrics=[];let editingMetric=null;
     const box=section('Build an analysis');box.id='owgEventLogAnalysis';
     box.appendChild(el('div','Group cases or events by up to two dimensions and choose what to measure. The choices are fixed, so no query text is ever run directly.','muted'));
     const level=select('owgAnalysisLevel',[['cases','Cases'],['events','Events']]);
@@ -2230,7 +2488,15 @@
     const occurrences=[['first','first'],['last','last']];
     const mFromOcc=select('owgMetricFromOccurrence',occurrences),mToOcc=select('owgMetricToOccurrence',occurrences);
     const mAttribute=input('owgMetricAttribute','text','amount'),mUnit=input('owgMetricUnit','text','EUR');mUnit.maxLength=20;
-    const mOperation=select('owgMetricOperation',[['add','Add'],['subtract','Subtract'],['multiply','Multiply'],['divide','Divide']]);
+    const mStatistic=select('owgMetricStatistic',[['average','Average'],['minimum','Minimum'],['maximum','Maximum'],['median','Median'],['p90','90th percentile'],['total','Total'],['population_stddev','Population standard deviation']]);
+    const mMissing=select('owgMetricMissingPolicy',[['available','Use available finite values'],['complete','Require every matching event to have a finite value']]);
+    const mStatActivity=select('owgMetricStatActivity',[['','(all activities)'],...names]);
+    const mStageFrom=select('owgMetricStageFrom',[['','(whole case)'],...names]);
+    const mStageTo=select('owgMetricStageTo',[['','(whole case)'],...names]);
+    const mStageOccurrence=select('owgMetricStageOccurrence',[['first','First observed completed stage'],['last_completed','Last completed stage (ignore unfinished trailing stage)']]);
+    const mCompareActivityA=select('owgMetricCompareActivityA',[['','(choose activity A)'],...names]);
+    const mCompareActivityB=select('owgMetricCompareActivityB',[['','(choose activity B)'],...names]);
+    const mOperation=select('owgMetricOperation',[['add','Add'],['subtract','Subtract'],['multiply','Multiply'],['divide','Divide'],['minimum','Smaller of two values'],['maximum','Larger of two values'],['average','Average of two values'],['absolute_difference','Absolute difference (nonnegative)']]);
     const operands={};
     for(const side of ['left','right']){
       const title=side==='left'?'Left':'Right';
@@ -2239,24 +2505,38 @@
       operands[side].value.step='any';operands[side].unit.maxLength=20;
     }
     const mAdd=button('Add metric to this analysis','secondary');mAdd.id='owgMetricAdd';
+    const mUpdate=button('Update selected metric','secondary');mUpdate.id='owgMetricUpdate';mUpdate.disabled=true;
     const mSave=button('Save metric for reuse','secondary');mSave.id='owgMetricSave';
+    const mCompare=button('Compare first and last completed stages (3 metrics)','secondary');mCompare.id='owgMetricCompareStages';
+    const mCompareRelative=button('Compare fractional first-to-last change (4 metrics)','secondary');mCompareRelative.id='owgMetricCompareRelative';
+    const mCompareActivities=button('Compare two activities (3 metrics)','secondary');mCompareActivities.id='owgMetricCompareActivities';
+    const mCompareShare=button('Compare selected activity with whole-case total (3 metrics)','secondary');mCompareShare.id='owgMetricCompareActivityShare';
     const mf={from:field('From activity',mFrom),fromOcc:field('Occurrence of the from activity',mFromOcc),to:field('To activity',mTo),toOcc:field('Occurrence of the to activity',mToOcc),
-      activity:field('Activity to count',mActivity),attribute:field('Attribute',mAttribute),unit:field('Unit of the values',mUnit),operation:field('Operation',mOperation)};
+      activity:field('Activity to count',mActivity),attribute:field('Attribute',mAttribute),unit:field('Unit of the values',mUnit),
+      statistic:field('Statistic within each case',mStatistic),missing:field('Missing numeric values',mMissing),
+      statActivity:field('Only this activity (optional)',mStatActivity),stageFrom:field('Stage start (optional)',mStageFrom),
+      stageTo:field('Stage end (optional)',mStageTo),stageOccurrence:field('Which completed stage',mStageOccurrence),
+      compareActivityA:field('Comparison activity A',mCompareActivityA),compareActivityB:field('Comparison activity B',mCompareActivityB),
+      operation:field('Operation',mOperation)};
     for(const side of ['left','right'])for(const key of ['kind','metric','value','unit'])mf[side+key]=field((side==='left'?'Left':'Right')+' '+({kind:'operand',metric:'metric',value:'constant',unit:'constant unit'}[key]),operands[side][key]);
     const mSync=()=>{const k=mKind.value;show(mf.from,k==='time_between');show(mf.fromOcc,k==='time_between');show(mf.to,k==='time_between');show(mf.toOcc,k==='time_between');
-      show(mf.activity,k==='activity_count');show(mf.attribute,k.endsWith('_number')||k.endsWith('_sum'));show(mf.unit,k.endsWith('_number')||k.endsWith('_sum'));
+      const numeric=k==='event_attribute_statistic';
+      show(mf.activity,k==='activity_count');show(mf.attribute,numeric||k.endsWith('_number')||k.endsWith('_sum'));show(mf.unit,numeric||k.endsWith('_number')||k.endsWith('_sum'));
+      show(mf.statistic,numeric);show(mf.missing,numeric);show(mf.statActivity,numeric);show(mCompare,numeric);show(mCompareRelative,numeric);show(mCompareActivities,numeric);show(mCompareShare,numeric);
+      show(mf.compareActivityA,numeric);show(mf.compareActivityB,numeric);
+      show(mf.stageFrom,numeric);show(mf.stageTo,numeric);show(mf.stageOccurrence,numeric&&(!!mStageFrom.value||!!mStageTo.value));
       show(mf.operation,k==='arithmetic');
       for(const side of ['left','right'])for(const key of ['kind','metric','value','unit'])show(mf[side+key],k==='arithmetic'&&(key==='kind'||(key==='metric'?operands[side].kind.value==='metric':operands[side].kind.value==='constant')));
     };
     operands.left.kind.onchange=operands.right.kind.onchange=mSync;
-    mKind.onchange=mSync;mSync();
+    mKind.onchange=mStageFrom.onchange=mStageTo.onchange=mSync;mSync();
     const metricRow=el('div',null,'row');metricRow.style.alignItems='end';
-    metricRow.append(field('Case metric',mKind),field('Metric name',mName),...Object.values(mf),mAdd,mSave);
+    metricRow.append(field('Case metric',mKind),field('Metric name',mName),...Object.values(mf),mAdd,mUpdate,mCompare,mCompareRelative,mCompareActivities,mCompareShare,mSave);
     const metricList=el('div');metricList.id='owgMetricList';
     const library=el('div');library.id='owgMetricLibrary';
     const metricBox=document.createElement('fieldset');metricBox.style.cssText='border:1px solid var(--line,#ccc);border-radius:6px;padding:8px;margin-top:8px';
-    const legend=el('legend','Case metrics (optional)');metricBox.append(legend,el('div','Define up to four values per case, then choose a measure. Times are in seconds; declared units are never converted. Arithmetic uses earlier metrics or typed constants; ratio means dimensionless. Add/subtract need identical units; division by zero is missing. Saved arithmetic templates refer to names: add their dependencies first. Save an analysis to retain all definitions together.','muted'),metricRow,metricList,library);
-    const readMetric=()=>caseMetric({kind:mKind.value,name:mName.value,from:mFrom.value,to:mTo.value,fromOccurrence:mFromOcc.value,toOccurrence:mToOcc.value,activity:mActivity.value,attribute:mAttribute.value,unit:mUnit.value,operation:mOperation.value,
+    const legend=el('legend','Case metrics (optional)');metricBox.append(legend,el('div','Define up to four values per case, then choose a measure. Numeric event statistics use only observed finite values; choose available or require all matching rows, optionally one activity and a first or last completed stage. Compare first and last completed stages adds three metrics atomically; fractional first-to-last change adds four, including (last minus first) divided by first, and selects a dimensionless ratio (2 means +200%, not 2%). A zero first-stage value leaves relative change unknown. Compare two distinct activities adds A, B, and signed B minus A as three ordinary metrics; absent or invalid matching values remain unknown. Compare a selected activity with the whole case using Total and Only this activity: the selected total divided by all recorded totals is a ratio, not a guaranteed 0–100% share. Missing selected values or zero whole-case totals remain unknown. Clear stage boundaries and the single-activity filter before comparing. Unfinished stages are not completed. Times are in seconds; declared units are never converted. Arithmetic uses earlier metrics or typed constants; ratio means dimensionless. Add/subtract need identical units; division by zero is missing. Saved arithmetic templates can add their saved dependencies together, but conflicting or missing definitions are refused atomically. Editing a metric name updates its dependent arithmetic and selected measures in the draft; rerun before saving or exporting. Save an analysis to retain all definitions together.','muted'),metricRow,metricList,library);
+    const readMetric=()=>caseMetric({kind:mKind.value,name:mName.value,from:mFrom.value,to:mTo.value,fromOccurrence:mFromOcc.value,toOccurrence:mToOcc.value,activity:mActivity.value,attribute:mAttribute.value,unit:mUnit.value,statistic:mStatistic.value,missingPolicy:mMissing.value,statActivity:mStatActivity.value,stageFrom:mStageFrom.value,stageTo:mStageTo.value,stageOccurrence:mStageOccurrence.value,operation:mOperation.value,
       ...Object.fromEntries(Object.entries(operands).flatMap(([side,controls])=>Object.entries(controls).map(([key,node])=>[side+key[0].toUpperCase()+key.slice(1),node.value])))});
     function useMetric(metric){
       if(metrics.some(m=>m.name===metric.name))throw new Error('This analysis already has a metric named '+metric.name+'.');
@@ -2265,15 +2545,42 @@
       metrics.push(metric);renderMetrics();
     }
     function renderMetrics(){
-      metricList.replaceChildren(...metrics.map((m,i)=>{const item=el('div',metricText(m)+' ');const rm=button('Remove','secondary');rm.setAttribute('aria-label','Remove metric '+m.name);rm.onclick=()=>{
+      metricList.replaceChildren(...metrics.map((m,i)=>{const item=el('div',metricText(m)+' ');
+        const edit=button('Edit','secondary');edit.setAttribute('aria-label','Edit metric '+m.name);
+        edit.onclick=()=>{try{populateMetric(m);editingMetric=m.name;mUpdate.disabled=false;message.textContent='Editing '+m.name+'. Update the selected metric to apply changes; the saved analysis remains unchanged.';}catch(error){message.textContent=error.message;}};
+        const rm=button('Remove','secondary');rm.setAttribute('aria-label','Remove metric '+m.name);rm.onclick=()=>{
         const dependent=metrics.find(x=>x.kind==='arithmetic'&&[x.left,x.right].some(o=>o.kind==='metric'&&o.name===m.name));
         if(dependent){message.textContent='Remove dependent metric '+dependent.name+' first.';return;}
-        metrics.splice(i,1);renderMetrics();};item.appendChild(rm);return item;}));
+        metrics.splice(i,1);if(editingMetric===m.name){editingMetric=null;mUpdate.disabled=true;}renderMetrics();};item.append(edit,rm);return item;}));
       for(const controls of Object.values(operands)){
         const keep=controls.metric.value;setOptions(controls.metric,metrics.length?metrics.map(m=>[m.name,m.name]):[['','(add an earlier metric)']]);
         if(metrics.some(m=>m.name===keep))controls.metric.value=keep;
       }
       sync();
+    }
+    function populateMetric(m){
+      const choose=(control,value)=>{const v=String(value||'');if(v&&![...control.options].some(o=>o.value===v))throw new Error('This metric references an activity no longer listed in the log; it can still be run.');control.value=v;};
+      mKind.value=m.kind;mName.value=m.name;
+      if(m.kind==='time_between'){
+        choose(mFrom,m.from_activity);choose(mTo,m.to_activity);
+        mFromOcc.value=m.from_occurrence||'first';mToOcc.value=m.to_occurrence||'first';
+      }else if(m.kind==='activity_count')choose(mActivity,m.activity);
+      else if(m.kind==='event_attribute_statistic'||m.kind==='event_attribute_sum'||m.kind==='case_attribute_number'){
+        mAttribute.value=m.attribute||'';mUnit.value=m.unit||'';
+        if(m.kind==='event_attribute_statistic'){
+          mStatistic.value=m.statistic;mMissing.value=m.missing_policy||'available';
+          choose(mStatActivity,m.activity);choose(mStageFrom,m.from_activity);choose(mStageTo,m.to_activity);
+          mStageOccurrence.value=m.stage_occurrence||'first';
+        }
+      }else if(m.kind==='arithmetic'){
+        mOperation.value=m.operation;
+        for(const side of ['left','right']){
+          const operand=m[side],controls=operands[side];controls.kind.value=operand.kind;
+          if(operand.kind==='metric')controls.metric.value=operand.name;
+          else{controls.value.value=String(operand.value);controls.unit.value=operand.unit;}
+        }
+      }
+      mSync();
     }
     const saveRow=el('div',null,'row');saveRow.style.alignItems='end';saveRow.append(field('Name',name),save);
     const message=el('div',null,'muted');message.id='owgAnalysisStatus';message.setAttribute('role','status');
@@ -2323,12 +2630,85 @@
       el('p','Local jobs have a two-minute deadline including queue time. They use the log when execution starts; results are static. Results expire after ten minutes or restart. Leaving this view stops polling; work may continue until its deadline. Nothing is uploaded.','muted'),
       row,metricBox,message,out,exports.node,prepareShare,prepareCases,sharing,saveRow,savedList);
     mAdd.onclick=()=>{try{useMetric(readMetric());message.textContent='Metric added; choose it under Measure.';}catch(error){message.textContent=error.message;}};
+    mUpdate.onclick=()=>{
+      try{
+        const index=metrics.findIndex(m=>m.name===editingMetric);
+        if(index<0)throw new Error('Select a metric to edit first.');
+        const next=readMetric(),old=editingMetric;
+        // Resolve every dependent and selected measure before mutating the UI.
+        // A refused refactor leaves the complete draft and its exports intact.
+        const draft=refactorMetricGraph(metrics,old,next,[measure1.value,measure2.value]);
+        metrics.splice(0,metrics.length,...draft.metrics);
+        editingMetric=null;mUpdate.disabled=true;renderMetrics();
+        measure1.value=draft.measures[0];measure2.value=draft.measures[1];
+        // A previous result and its export/share grants belong to the old definition.
+        resetSharing();last=null;lastSpec=null;out.replaceChildren();exports.enable(false);
+        save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;
+        message.textContent='Metric updated in this draft; dependent arithmetic and selected measures follow any rename. Run analysis to recalculate before saving or exporting.';
+      }catch(error){message.textContent=error.message;}
+    };
+    function addStageComparison(relative){
+      try{
+        const proposed=stageComparisonMetrics(readMetric(),relative);
+        if(metrics.length+proposed.length>4)throw new Error('A stage comparison needs '+(relative?'four':'three')+' free metric slots (four maximum). Remove other metrics first.');
+        const existing=new Set(metrics.map(m=>m.name));
+        if(proposed.some(m=>existing.has(m.name)))throw new Error('A comparison metric name already exists. Choose a different base name.');
+        // Validate the entire batch before mutation; no half-added comparisons.
+        metrics.push(...proposed);renderMetrics();
+        // Case metrics cannot be measured at the event level.
+        level.value='cases';sync();
+        measure1.value='avg:metric:'+proposed[proposed.length-1].name;measure2.value='';
+        message.textContent=relative
+          ?'Added first, last completed, signed change, and fractional change metrics. Ratio 2 means +200%; zero first-stage values and missing stages remain unknown.'
+          :'Added first, last completed, and signed last minus first metrics. Run analysis; missing stages remain unknown.';
+      }catch(error){message.textContent=error.message;}
+    }
+    mCompare.onclick=()=>addStageComparison(false);
+    mCompareRelative.onclick=()=>addStageComparison(true);
+    mCompareActivities.onclick=()=>{
+      try{
+        const proposed=activityComparisonMetrics(readMetric(),mCompareActivityA.value,mCompareActivityB.value);
+        if(metrics.length+proposed.length>4)
+          throw new Error('An activity comparison needs three free metric slots (four maximum). Remove other metrics first.');
+        const existing=new Set(metrics.map(m=>m.name));
+        if(proposed.some(m=>existing.has(m.name)))
+          throw new Error('An activity comparison metric name already exists. Choose a different base name.');
+        // Validate the entire batch before mutation, including dependency order.
+        metrics.push(...proposed);renderMetrics();
+        level.value='cases';sync();
+        measure1.value='avg:metric:'+proposed[2].name;measure2.value='';
+        message.textContent='Added activity A, activity B, and signed B minus A metrics. Missing activity values remain unknown, never zero.';
+      }catch(error){message.textContent=error.message;}
+    };
+    mCompareShare.onclick=()=>{
+      try{
+        const proposed=activityShareMetrics(readMetric());
+        if(metrics.length+proposed.length>4)
+          throw new Error('An activity fraction needs three free metric slots (four maximum). Remove other metrics first.');
+        const existing=new Set(metrics.map(m=>m.name));
+        if(proposed.some(m=>existing.has(m.name)))
+          throw new Error('An activity fraction metric name already exists. Choose a different base name.');
+        // The numerator, denominator and typed division are one atomic addition.
+        metrics.push(...proposed);renderMetrics();
+        level.value='cases';sync();
+        measure1.value='avg:metric:'+proposed[2].name;measure2.value='';
+        message.textContent='Added selected activity total, whole-case total and their fraction. Missing values and zero denominators remain unknown; signed totals may produce ratios outside 0–1.';
+      }catch(error){message.textContent=error.message;}
+    };
     mSave.onclick=async()=>{try{await api(base()+'/metrics',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({metric:readMetric()})});message.textContent='Metric saved for reuse.';await refreshLibrary();}catch(error){message.textContent=error.message;}};
     async function refreshLibrary(){
       const r=await getJSON(base()+'/metrics');if(generation!==state.generation)return;
       library.replaceChildren(r.metrics.length?table(['Saved metric','',''],r.metrics.map(entry=>{
         const m=entry.metric;const add=button('Add','secondary');add.setAttribute('aria-label','Add saved metric '+m.name);
-        add.onclick=()=>{try{useMetric(m);message.textContent='Metric added; choose it under Measure.';}catch(error){message.textContent=error.message;}};
+        add.onclick=()=>{try{
+          if(running)throw new Error('Wait for the current analysis to finish or cancel it before changing this draft.');
+          const additions=savedMetricBundle(m,r.metrics,metrics);
+          metrics.push(...additions);renderMetrics();
+          resetSharing();last=null;lastSpec=null;out.replaceChildren();exports.enable(false);
+          save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;
+          message.textContent='Added '+additions.length+' saved metric'+(additions.length===1?'':'s')+
+            ' in dependency order. Choose a measure and rerun before saving or exporting.';
+        }catch(error){message.textContent=error.message;}};
         const del=button('Delete','secondary');del.setAttribute('aria-label','Delete saved metric '+m.name);
         del.onclick=async()=>{try{await api(base()+'/metrics/'+encodeURIComponent(entry.metric_id)+'/delete',{method:'POST'});message.textContent='Saved metric deleted.';await refreshLibrary();}catch(error){message.textContent=error.message;}};
         return [metricText(m),add,del];})):el('div','No saved metrics yet.','muted'));
@@ -2394,12 +2774,30 @@
     }
     async function refresh(){
       const r=await getJSON(base()+'/analyses');if(generation!==state.generation)return;
-      savedList.replaceChildren(r.analyses.length?table(['Saved analysis','',''],r.analyses.map(a=>{
+      savedList.replaceChildren(r.analyses.length?table(['Saved analysis','','',''],r.analyses.map(a=>{
         const open=button('Run','secondary');open.setAttribute('aria-label','Run saved analysis '+a.name);
         open.onclick=()=>execute({...a.spec}).catch(error=>{message.textContent=error.message;});
+        const load=button('Load into builder','secondary');load.setAttribute('aria-label','Load saved analysis '+a.name+' into builder');
+        load.onclick=()=>{
+          try{
+            if(running)throw new Error('Wait for the current analysis to finish or cancel it before loading a draft.');
+            const draft=analysisDraft(a.spec,state.caseType);
+            // All checks have passed; replace the draft in one synchronous operation.
+            level.value=draft.level;
+            metrics.splice(0,metrics.length,...draft.metrics);
+            editingMetric=null;mUpdate.disabled=true;renderMetrics();
+            dim1.value=draft.dim1;dim2.value=draft.dim2;
+            attr1.value=draft.attr1;attr2.value=draft.attr2;
+            hours.value=draft.hours;endsWith.value=draft.endsWith;
+            sync();measure1.value=draft.measure1;measure2.value=draft.measure2;
+            resetSharing();last=null;lastSpec=null;out.replaceChildren();exports.enable(false);
+            save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;name.value='';
+            message.textContent='Loaded '+a.name+' into the builder. Edit and run it, then save under a new name; the original is unchanged.';
+          }catch(error){message.textContent=error.message;}
+        };
         const del=button('Delete','secondary');del.setAttribute('aria-label','Delete saved analysis '+a.name);
         del.onclick=async()=>{try{await api(base()+'/analyses/'+encodeURIComponent(a.analysis_id)+'/delete',{method:'POST'});message.textContent='Analysis deleted.';await refresh();}catch(error){message.textContent=error.message;}};
-        return [a.name,open,del];})):el('div','No saved analyses yet.','muted'));
+        return [a.name,open,load,del];})):el('div','No saved analyses yet.','muted'));
     }
     run.onclick=async()=>{
       try{message.textContent='';await execute(analysisSpec({level:level.value,dim1:dim1.value,attr1:attr1.value,dim2:dim2.value,attr2:attr2.value,measure1:measure1.value,measure2:measure2.value,hours:hours.value,endsWith:endsWith.value.trim(),metrics:[...metrics]}));}
@@ -2843,6 +3241,6 @@
         (p.previous_window_coverage_after===null?'.':' and '+pct(p.previous_window_coverage_after)+' of the window before.'):null};
   }
 
-  window.__owgEventLogModel={simBatch,simPriorities,objectModelArcs,objectModelText,visitRows,simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths,packMapping,packGuess,packReportRows,monitoringRows,impactSpec,impactRows};
+  window.__owgEventLogModel={simBatch,simPriorities,objectModelArcs,objectModelText,visitRows,simUncertainty,uncertaintyRows,objectRule,attributeChangeSummary,measuredMinutes,validationText,flatteningSummary,simArrivals,simPool,simCalendar,caseMetric,refactorMetricGraph,savedMetricBundle,stageComparisonMetrics,activityComparisonMetrics,activityShareMetrics,metricText,reasonText,followSpec,followText,tokenAt,dotLayout,treeOutline,predictionSpec,complianceRule,analysisSpec,analysisDraft,signalRule,newCaseChange,detectFormat,csvHeader,parsePaths,duration,cohortSpec,toCSV,parseWeightedPaths,formatWeightedPaths,packMapping,packGuess,packReportRows,monitoringRows,impactSpec,impactRows};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();

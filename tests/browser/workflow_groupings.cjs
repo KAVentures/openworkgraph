@@ -66,6 +66,11 @@ const path=require('node:path');
    await page.getByRole('button',{name:'Inspect group revision history',exact:true}).click();
    await page.locator('#owgGroupHistory').filter({hasText:'Revision 1 · Invoice review'}).waitFor();
    assert.match(await page.locator('#owgExplorerDetail h3').textContent(),/Reviewed group · Accounts review/);
+   // Reviewed classifications and their history are not AI handoff approvals.
+   // Safe handoff requires a separate explicit explorer review, not an implicit
+   // copy action from the group editor.
+   assert.match(await page.locator('#owgGroupHistory').textContent(),/Revision 4 · Accounts review/);
+   assert.equal(await page.locator('#owgWorkflowGroups').getByRole('button',{name:/^Copy /}).count(),0);
    await page.evaluate(()=>{window.copyText=text=>{window.groupingHandoffForTest=text;};});
    // Agent handoff now goes through an explicit review panel before anything is copied.
    await page.getByRole('button',{name:'Review safe agent handoff',exact:true}).click();

@@ -285,3 +285,349 @@ must also pass on the exact PR head before merge. Synthetic tests are not
 customer acceptance. No claim is made that input amounts share a currency,
 that missing values are missing at random, that a recorded value reflects a
 source-of-truth balance, or that a statistical association is causal.
+
+
+## Dashboard: build scoped numeric statistics without writing JSON
+
+Open **Large event logs**, import or select an authorized local log, and choose
+**Analyse → Build an analysis → Cases**. In **Case metrics (optional)** choose
+**Numeric event values within each case or stage**. Give the metric a unique
+lower-case name, enter the exact imported numeric event-attribute key (for
+example `amount`) and its **declared** unit (for example `EUR`), and select
+one of: average, minimum, maximum, median, 90th percentile, total, or
+population standard deviation. These describe finite numeric values **within
+each observed case**; an outer measure (for example **Average** or **Total**)
+then aggregates the per-case results. No currencies are converted.
+
+Choose **Use available finite values** to omit invalid/missing values and
+disclose their counts, or **Require every matching event to have a finite
+value** to withhold incomplete cases. Optionally restrict the calculation to
+one exact activity. To analyse a completed stage instead of the whole case,
+select **both** a start and end activity and choose either **First observed
+completed stage** or **Last completed stage**. The start is included and the
+end is excluded; a trailing unfinished stage is never treated as complete.
+Partial stage selections are rejected in the form before any request.
+
+Click **Add metric to this analysis**, select a measure such as **Average
+<metric>** or **Total <metric>**, and run. The dashboard sends the typed
+`event_attribute_statistic` definition to the **existing authenticated
+analysis API**; it does not generate or execute arbitrary SQL. **Save metric
+for reuse** stores the exact selectors in the log's metric library; **Save
+analysis** stores the definitions and selected measures together. Existing
+JSON/CSV exports retain the resulting numeric values and disclosed coverage.
+Re-running a saved analysis reads the current retained log; it does **not**
+pin a source snapshot. Deleting the local log removes its saved definitions.
+
+**Worked example:** an observed case contains `Start(2), Work(4), End,
+Start(8), Work(10), End, Start(100)`. With `attribute=amount`,
+`statistic=average`, and stage `Start→End`, **first** produces 3 and
+**last completed** produces 9; the unfinished final start contributes to
+neither. Another case with `Start(5), Work(invalid), End` contributes 5
+under **available**, but is unknown under **complete**. Unknown is never
+silently counted as a zero. These examples are observed log arithmetic,
+not source-of-truth payment reconciliation or evidence of complete events.
+
+The committed Chromium browser acceptance exercises the form, invalid
+stage refusal, real local CSV import with an explicitly retained numeric
+attribute, session-authenticated analysis requests, last-completed versus
+first-stage results, saved metrics/analyses, CSV export and WCAG checks.
+Native CI and real consenting customer acceptance remain separate gates.
+
+## Dashboard: compare two typed case metrics without hand-written expressions
+
+The same **Build an analysis → Case metrics** form now exposes all eight
+already-supported version-1 pairwise arithmetic operations. Besides add,
+subtract, multiply and divide, choose **Smaller of two values** (`minimum`),
+**Larger of two values** (`maximum`), **Average of two values** (`average`),
+or **Absolute difference (nonnegative)** (`absolute_difference`).
+Each operand can reference an earlier named metric or a finite typed constant.
+The resulting metric is itself reusable by the same saved-metric library,
+saved analyses, grouped measures, and JSON/CSV export paths.
+
+For example, add `first_review_total` and `last_review_avg` as two
+`event_attribute_statistic` metrics with unit `EUR`, then add
+`review_difference` of kind **Arithmetic on earlier metrics**, operation
+**Absolute difference**, left `first_review_total`, right
+`last_review_avg`. For one case with observed values 6 and 9 EUR, the
+difference is 3 EUR; **Average of two values** would be 7.5 EUR.
+For a case with one missing operand, both results are **unknown**, never
+zero or the surviving operand. The per-metric coverage reports missing
+operands, and division separately reports zero divisors.
+
+All four new form choices require **identical declared units** (no currency
+or physical-unit conversion). The server refuses mismatches before reading
+data. Multiply/divide retain their existing unit composition; every operation
+uses the existing bounded, parameterized, versioned expression planner, not
+user-supplied SQL. This is a comparison of *recorded case values*, not a
+reconciled financial difference or evidence of source completeness.
+
+The Chromium regression uses the actual authenticated analysis endpoint,
+selects all four operations in the form, verifies typed versioned requests,
+observed numeric outputs, missing-case withholding, declared units, a saved
+analysis replay, CSV export, invalid-operation refusal, and a mismatched-unit
+refusal. The tests are committed; they are **not claimed as native-passed**
+until the exact-head GitHub Actions checks execute.
+
+
+## One-action first-to-last completed stage change (dashboard)
+
+In **Build an analysis → Cases**, select **Numeric event values within each case
+or stage**. Enter a short base metric name (up to 34 characters), an exact
+retained event attribute, its declared unit, the statistic, missing-value
+policy, optional activity restriction, and **both** stage start and end.
+Choose **Compare first and last completed stages (3 metrics)** instead of
+adding one metric at a time.
+
+OWG switches the analysis level to **Cases** (stage comparisons are not event-level measures) and atomically adds `<base>_first`, `<base>_last`, and `<base>_delta`:
+the first two evaluate the *same statistic* over the first and last completed
+start→end stage respectively; the third uses the version-1 typed arithmetic
+operation `subtract` with **last minus first**. A negative result therefore
+means the recorded value decreased. The dashboard automatically selects
+**Average <base>_delta** as the outer measure across cases. Change the outer
+measure if you need the total or another supported aggregation. A case with
+only one completed stage has a zero change **only if** both stage values
+exist; a case with no completed stage, or with missing/invalid values under
+the chosen policy, remains unknown and is omitted from numeric aggregates
+with coverage disclosed. Trailing unfinished stages are not mistaken for
+completed stages.
+
+The action requires three free slots out of the existing four-metric limit.
+It refuses incomplete stage boundaries, duplicate derived names, and
+overlong base names **before adding anything**. The three ordinary typed
+metrics remain visible and individually removable (remove the dependent
+delta first). The comparison uses the existing session-authenticated analysis
+endpoint, saved analysis definitions, coverage diagnostics, and JSON/CSV
+exports. It does not query providers, convert currencies, prove the original
+source is complete, or write business data.
+
+For example, an observed first approval stage with finite EUR values 2 and 4
+has average 3; a last completed stage with value 9 has average 9. The
+signed change is **+6 EUR** for that case. A second case with no valid
+last-stage value contributes **unknown**, not zero. Averages of the change
+are averages across cases with two observed stage values, not a guaranteed
+business improvement.
+
+The committed real-browser acceptance covers the button through the
+authenticated API, signed result, incomplete/missing cases, capacity,
+name collision, incomplete stage refusal, saved replay, CSV export, and WCAG
+audit. Passing native CI and real consenting-user validation are separate
+release gates.
+
+## One-action fractional change between completed stages (dashboard)
+
+The same **Numeric event values within each case or stage** form also offers
+**Compare fractional first-to-last change (4 metrics)**. Supply the exact
+numeric attribute, its declared unit, the statistic, missingness policy,
+optional activity, and both stage boundaries. The action adds four ordinary
+version-1 typed case metrics atomically: `<base>_first` (first completed
+stage), `<base>_last` (last completed stage), `<base>_delta` (last minus
+first), and `<base>_relative` (delta divided by first). It switches to
+**Cases** and selects **Average <base>_relative**. The base name must be
+at most 31 characters and all four metric slots must be free.
+
+**Interpretation:** when the first-stage average recorded amount is 3 EUR
+and the last completed stage average is 9 EUR, the signed change is +6 EUR
+and the fractional change is **+2 ratio**, equivalent to **+200%**.
+The stored and exported number is **2**, not 200: no hidden percentage
+scaling occurs. Negative values indicate a decrease. A zero first-stage
+denominator is **unknown**, never infinity or a 0% change. A case missing
+either completed stage or any required numeric values remains unknown,
+not zero. The API's existing per-metric coverage exposes missing operands
+and zero divisors. The outer average includes only cases with an observed
+fractional value, not all imported cases. For cases with negative starting
+values, a fractional ratio is mathematically defined but may be unsuitable
+as a business improvement metric; inspect the underlying stage values.
+
+The action reuses the same authenticated analysis API, saved analysis
+definitions, JSON/CSV exports, declared-unit checks and bounded planner.
+The division of matching declared units produces a dimensionless `ratio`;
+it is not a currency conversion or evidence of source completeness.
+Incomplete stage boundaries, too-long or duplicate derived names and
+insufficient metric capacity refuse **without partially inserting metrics**.
+The four generated metrics can be inspected or removed in dependency order:
+relative, delta, last, first. This is descriptive arithmetic on observed
+events, not verified financial return or causal improvement.
+
+The committed Chromium acceptance exercises the new action against a real
+local CSV import and authenticated analysis, including dimensionless output,
+missing-case coverage, capacity/name/stage refusal, saved replay, CSV,
+zero-denominator withholding through the same authenticated divide operator,
+and accessibility. Native exact-head CI and consenting-user pilot acceptance
+remain separate release requirements.
+
+
+## One-action comparison of two recorded activities (dashboard)
+
+In **Build an analysis → Case metrics**, choose **Numeric event values within
+each case or stage**, enter an exact retained numeric event attribute, its
+declared unit, a within-case statistic and the missing-value policy. Clear
+**Only this activity** and both stage boundaries, then choose two distinct
+activities under **Comparison activity A** and **Comparison activity B**.
+Activate **Compare two activities (3 metrics)** with a mouse or keyboard.
+
+OWG atomically constructs three ordinary version-1 case metrics:
+`<base>_a` evaluates the chosen statistic on activity A events within each
+case, `<base>_b` evaluates it on activity B, and `<base>_delta` computes
+**B minus A**, retaining the same declared unit. It selects **Cases** and
+**Average <base>_delta** automatically. Analysts may then select another
+existing outer aggregation, inspect the three metric definitions, save the
+analysis, replay it or export JSON/CSV through the existing session-authenticated
+API. No new API, grant, SQL expression, provider read or business action is
+introduced.
+
+For example, one observed case has `Start` amounts 2, 8 and 100 EUR and
+`Work` amounts 4 and 10 EUR. Choosing within-case **Total** gives
+A = 110 EUR, B = 14 EUR and **B − A = −96 EUR**. Another case with a
+finite `Start` value but only an invalid `Work` amount has an **unknown**
+delta, not a fabricated zero or negative Start total. The final average
+includes only cases with finite values on both sides; metric coverage
+discloses missing/invalid values and missing operands. Activity strings
+are exact, case-sensitive selectors, not substring matches.
+
+This is descriptive arithmetic on *observed* event values, not net revenue,
+reconciled accounting, a causal comparison or proof that either activity
+was completely captured. The two sides share the selected statistic,
+declared unit and missing-value policy; no currency conversion is performed.
+An observed zero is a valid value; an absent activity or one with no
+finite values remains unknown. A complete-value policy means every *matching
+observed event* must have a finite numeric value, not that the source export
+is complete. The four-metric limit remains in force.
+
+The action refuses same/missing activity choices, active stage boundaries,
+an active single-activity filter, duplicate derived names, a base name over
+34 characters and insufficient free metric slots **before adding any metrics**.
+The three generated metrics are individually removable in dependency order:
+delta, B, A. The committed real Chromium acceptance imports an actual numeric
+CSV, exercises keyboard activation and the authenticated API, checks signed
+output, unknown-case coverage, atomic refusals, saved replay, CSV and WCAG.
+Native exact-head CI and independent consenting-user acceptance are still
+separate release gates.
+
+
+## One-action selected activity contribution to the whole-case total (dashboard)
+
+In **Build an analysis → Case metrics**, select **Numeric event values within
+each case or stage**, enter the exact retained numeric event attribute and its
+declared unit, and choose **Total** as the within-case statistic. Under
+**Only this activity**, select one exact activity. Leave both stage boundaries
+empty. Choose **Use available finite values** or **Require every matching event
+to have a finite value** deliberately, then activate **Compare selected activity
+with whole-case total (3 metrics)** using mouse or keyboard.
+
+The action atomically adds three ordinary version-1 case metrics:
+
+- `<base>_selected`: the selected activity's finite numeric total per case;
+- `<base>_all`: the whole case's total for the *same* attribute, declared
+  unit and missing-value policy, without an activity filter;
+- `<base>_fraction`: typed `divide(selected, all)`, in dimensionless
+  **ratio** units.
+
+The analysis switches to **Cases** and selects **Average
+`<base>_fraction`** across cases with a known fraction. The three definitions
+are ordinary metrics supported by the existing authenticated REST analysis
+contract, saved analysis replay, coverage reporting and JSON/CSV exports.
+There is no new provider access, permission, data transformation, source write
+or automatic action.
+
+For example, case A records 110 EUR on `Start` and 14 EUR on `Work`.
+With `Work` selected, the numerator is 14 EUR and the whole-case observed
+total is 124 EUR, so the ratio is **14/124 ≈ 0.1129**. Case B has a finite
+`Start` amount but an invalid `Work` value: its selected total is unknown,
+so its fraction is unknown, **not zero**. A zero whole-case denominator is
+also unknown, not infinity or a zero share. The strict complete-value policy
+may withhold a case when any matching whole-case event has an invalid or
+missing numeric value.
+
+**Interpretation limits:** The ratio is *not* automatically a verified
+percentage, revenue share or completeness estimate. Negative or mixed-sign
+recorded amounts can yield ratios outside 0–1. The `available` policy uses
+only finite retained values and may omit invalid/missing observations; the
+`complete` policy refuses incomplete matching sets. Inspect the API's
+per-metric missing-value coverage before interpreting the outer average.
+Declared units are not converted, and selected activities must have been
+observed in the imported log.
+
+The action refuses non-`total` statistics, missing activity selection,
+stage bounds, base names longer than 31 characters, name collisions and fewer
+than three free metric slots, **without partially adding metrics**. Its
+committed real-Chromium acceptance covers actual numeric CSV import,
+keyboard activation, authenticated analysis, ratio and missing-case coverage,
+atomic refusals, saved replay, CSV export and the existing WCAG audit.
+Source-level JavaScript checks are distinct from native Chromium and pytest;
+the latter and independent consenting-user acceptance remain release gates.
+
+## Reopen and revise a saved analysis in the dashboard
+
+**Build an analysis → Saved analysis → Load into builder** now reconstructs an
+existing saved analysis as an **editable local draft**. Each metric has an
+**Edit** control that populates the original typed form, followed by **Update
+selected metric**. **Renaming a metric automatically updates exact-name
+references in downstream typed arithmetic operands and the selected metric
+measures** (for example `avg:metric:old_name` becomes
+`avg:metric:new_name`). The edit is atomic: duplicate names or introducing
+an arithmetic reference to a missing, same or later metric are refused without
+changing any definition. Source attribute names, typed constants and unrelated
+metric identifiers are never text-replaced. A changed metric's declared unit
+is not automatically converted, so an incompatible expression may still be
+rejected by the existing typed analysis API. An update changes only the
+in-memory draft; rerun
+before exporting or saving the new version. This restores its
+case/event level, both grouping dimensions (including named attributes), case
+duration/end-activity filters, ordered typed case metrics and metric
+dependencies, and the selected measures. You can then change the draft, run it
+through the existing authenticated analysis endpoint and **save it under a new
+name**. Loading does not modify or delete the original saved definition, does
+not contact an external provider and never authorizes a business action.
+
+Loading deliberately clears the previous result, exports and sharing preview:
+those belonged to the *previous* query, not the newly loaded draft. Run the
+loaded draft to obtain fresh results and enable saving/exporting again.
+Existing **Run** and **Delete** buttons retain their original behavior.
+Keyboard users can focus **Load into builder** and press Enter. To rename a
+metric used by another metric, focus **Edit metric**, change **Metric name**,
+then activate **Update selected metric**. Inspect the rewritten arithmetic
+and selected measure before rerunning. A successful edit disables stale
+JSON/CSV exports and reviewed sharing snapshots until the new analysis
+finishes. Save under a new name; the previous saved analysis is unchanged.
+
+The builder refuses a saved definition **without changing the current draft**
+if it cannot represent all of its settings: unsupported dimensions, filters or
+measure functions; a different OCEL case notion; more than four metrics;
+invalid/duplicate metric names; an arithmetic dependency on a missing or later
+metric; or an unsupported typed arithmetic expression. Such definitions can
+still be run with the existing **Run** action; they are not silently reduced
+to an incomplete edit form. This edit operation does not pin the log's source
+contents: imported logs can change between the original save and the rerun,
+so the new result must be interpreted as a new observation, not a historical
+snapshot or a source-verified business outcome.
+
+
+
+## Reuse a saved arithmetic metric with its dependencies
+
+In **Build an analysis → Saved metrics**, select **Add** beside a saved
+arithmetic metric. The builder reads the existing authenticated metric library
+for **this event log** and adds the selected metric **and any earlier saved
+metric dependencies** in dependency order, in one action. For example, a saved
+`half_wait = to_approval / 2` automatically restores the saved
+`to_approval` metric before `half_wait`. Choose **Median half_wait** under
+Measure, **Run analysis**, then optionally save the resulting full analysis
+under a new name. The original templates and saved analyses are not modified.
+
+An already-present dependency is reused only if its entire typed definition
+matches the saved definition (field order does not matter). The builder refuses
+a missing saved dependency, ambiguous same-name templates with different
+contents, a cycle, unsupported typed arithmetic or an import that would exceed
+four metrics. These checks happen **before changing any metric**. Remove the
+conflicting metric, save the missing dependency or remove enough existing
+metrics, then retry. The UI does not silently replace conflicting definitions
+or fill unknown operands with zero. Templates are log-scoped and no arbitrary
+expression, SQL, provider read or new permission is introduced.
+
+A successful import clears previous analysis results, CSV/JSON exports,
+prepared sharing previews and the ability to save a stale analysis. A fresh
+authenticated analysis run is required before exporting or saving the changed
+draft. Imports are refused while an analysis is running. The new Chromium
+acceptance exercises the saved-library click, authenticated run, CSV export,
+saved analysis replay and the refusal cases. Native CI and real consenting-user
+acceptance are separate gates; no production release is implied by the fixture.
