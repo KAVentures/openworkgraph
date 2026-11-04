@@ -119,7 +119,7 @@ flow references. OWG reimport remaps node/flow/rule IDs, retains predicates,
 source basis and dates, and **clears all rule/table confirmation**. Duplicate,
 malformed or unresolved recognized declarations are refused. Reimport also
 preserves a preexisting manual documentation-review guard without duplicating it.
-This documentation is **not DMN XML, FEEL, or an executable BPMN expression**.
+This documentation is **not DMN XML, FEEL, or an executable BPMN expression**; see DMN interchange below for a separate, exact DMN subset.
 Other tools may not preserve OWG documentation; review their output before use.
 
 ## Generated implementation and current-source planning
@@ -348,3 +348,36 @@ Routes (dashboard session only; the local API token is refused):
 | `GET /v1/process-catalog/rule-library/drift` | Drift across saved designs |
 
 The library never evaluates, confirms or runs a rule.
+
+## DMN interchange (exact subset)
+
+**Export saved DMN** (`GET /v1/process-catalog/export?format=dmn`) writes every decision
+table of a saved revision as a DMN 1.4 decision table:
+
+- one input column per fact path (`/vendor/status` becomes `vendor.status`);
+- one output column holding the label of the next step;
+- the UNIQUE or FIRST hit policy;
+- each rule's text as the DMN rule description, with effective dates and source basis
+  in the decision's description.
+
+**Import a DMN decision table** (`POST /v1/process-catalog/import-dmn` with
+`workflow_id`, `revision`, `decision_activity_id`, `effective_from` and optional
+`effective_until` / `decision_name`) reads one DMN decision table into a decision of a
+saved design. It returns a proposed model: the decision's branches point to new
+unconfirmed rules, and the table cites the DMN file's SHA-256 as its source basis. The
+dashboard opens the proposal as unsaved edits of that revision. Nothing is saved
+automatically.
+
+Only what maps exactly is accepted, in both directions:
+
+- **Input entries:** FEEL simple unary tests: `-`, a literal (number, quoted string,
+  `true`, `false`), `<`, `<=`, `>`, `>=` with a number, `not(x)`, lists `"a","b"`,
+  `not("a","b")`, `null` and `not(null)`.
+- **Inputs:** expressions must be simple paths.
+- **Outputs and rules:** one output, naming each next step in exactly one rule.
+
+Refused: ranges, functions, dates and other FEEL; rules matching every case; COLLECT,
+ANY, PRIORITY and other hit policies; several outputs; rows whose OWG predicate
+matches ANY of several conditions or tests one fact twice; and fact paths that are not
+simple identifiers. The DMN file is untrusted data. DOCTYPE and entities are rejected,
+size is bounded, and nothing is evaluated or executed.
