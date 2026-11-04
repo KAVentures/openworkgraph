@@ -133,6 +133,20 @@
       <button type="button" class="secondary" data-owg-journey="handoff">5. Inspect agent connections</button>
     </div>
     <p class="muted" id="owgJourneyStatus" role="status" aria-live="polite">Choose a stage. Availability depends on your locally installed tools and permissions.</p>
+    <fieldset id="owgJourneyReview" style="margin-top:14px;border:1px solid var(--line);border-radius:10px;padding:12px">
+      <legend>Personal review progress (this page only)</legend>
+      <p class="muted">These are your own acknowledgments, not verified evidence, saved decisions, consent, or execution authorization. Reloading clears them. Open each workspace and inspect it before checking the corresponding item.</p>
+      <div style="display:grid;gap:8px">
+        <label><input type="checkbox" data-owg-review="privacy"> I inspected privacy settings and understand which capture permissions are active.</label>
+        <label><input type="checkbox" data-owg-review="discovery"> I inspected the available evidence and its coverage limitations.</label>
+        <label><input type="checkbox" data-owg-review="map"> I inspected the saved process map and its source/revision information.</label>
+        <label><input type="checkbox" data-owg-review="review"> I inspected the opportunity and its human review state.</label>
+      </div>
+      <button type="button" class="secondary" id="owgJourneyReviewHandoff" disabled style="margin-top:12px">Open handoff settings after review</button>
+      <button type="button" class="ghost" id="owgJourneyReviewReset" style="margin-top:12px">Clear review progress</button>
+      <p class="muted" id="owgJourneyReviewStatus" role="status" aria-live="polite">No steps reviewed. Handoff settings remain independently accessible; this checklist never grants authority.</p>
+    </fieldset>
+
   </section>
   <main>
     <section class="tabpanel" role="tabpanel" id="panel-overview" aria-labelledby="tab-overview" data-panel="overview">
@@ -360,6 +374,43 @@ document.addEventListener('DOMContentLoaded', () => {
     review:{tab:'evidence',target:'owgPipelineCard',label:'Human opportunity review'},
     handoff:{tab:'connect',target:'panel-connect',label:'Agent connection settings'}
   };
+  const review=guide.querySelector('#owgJourneyReview');
+  const reviewStatus=guide.querySelector('#owgJourneyReviewStatus');
+  const reviewHandoff=guide.querySelector('#owgJourneyReviewHandoff');
+  const reviewReset=guide.querySelector('#owgJourneyReviewReset');
+  const reviewOrder=['privacy','discovery','map','review'];
+  const checked=new Set();
+  const visited=new Set();
+  const renderReview=()=>{
+    for(const [index,key] of reviewOrder.entries()){
+      const input=review.querySelector('[data-owg-review="'+key+'"]');
+      input.disabled=!visited.has(key)||(index>0&&!checked.has(reviewOrder[index-1]));
+      input.checked=checked.has(key);
+    }
+    reviewHandoff.disabled=!reviewOrder.every(key=>checked.has(key));
+    reviewStatus.textContent=checked.size+' of 4 workspaces acknowledged in order. These are self-reported checks only; no consent, approval or agent authority was granted.';
+  };
+  review.querySelectorAll('[data-owg-review]').forEach(input=>input.addEventListener('change',()=>{
+    const key=input.dataset.owgReview;
+    const index=reviewOrder.indexOf(key);
+    if(index<0)return;
+    if(input.checked&&visited.has(key)&&(index===0||checked.has(reviewOrder[index-1])))checked.add(key);
+    else checked.delete(key);
+    // Changing an upstream acknowledgment invalidates every dependent step.
+    if(!checked.has(key))reviewOrder.slice(index+1).forEach(next=>checked.delete(next));
+    renderReview();
+  }));
+  reviewReset.addEventListener('click',()=>{
+    checked.clear();visited.clear();renderReview();
+    reviewReset.focus();
+  });
+  reviewHandoff.addEventListener('click',()=>{
+    if(!reviewOrder.every(key=>checked.has(key)))return;
+    const control=guide.querySelector('[data-owg-journey="handoff"]');
+    control?.click();
+    reviewStatus.textContent='Opened handoff settings after self-reported review. This does not authorize execution. Confirm current revisions, consent and owner authorization in the actual handoff workflow.';
+  });
+  renderReview();
   guide.querySelectorAll('[data-owg-journey]').forEach(control=>{
     control.addEventListener('click',()=>{
       const stage=stages[control.dataset.owgJourney];
@@ -379,6 +430,14 @@ document.addEventListener('DOMContentLoaded', () => {
       focusTarget.setAttribute('tabindex','-1');
       focusTarget.focus({preventScroll:true});
       target.scrollIntoView?.({block:'start',behavior:'instant'});
+      if(reviewOrder.includes(control.dataset.owgJourney)){
+        const key=control.dataset.owgJourney;
+        const index=reviewOrder.indexOf(key);
+        visited.add(key);
+        checked.delete(key);
+        reviewOrder.slice(index+1).forEach(next=>checked.delete(next));
+        renderReview();
+      }
       status.textContent='Opened '+stage.label+'. Inspect and explicitly confirm any separate actions yourself. No consent, approval or execution was granted.';
     });
   });
