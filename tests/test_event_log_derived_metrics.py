@@ -1,7 +1,7 @@
 """Focused refusal, arithmetic and lineage tests for derived metrics."""
 import unittest
 
-from server.event_log_derived_metrics import MetricDefinitionError, evaluate, validate
+from server.event_log_derived_metrics import MetricDefinitionError, evaluate, summarize_rows, validate
 
 
 def metric(expr):
@@ -41,6 +41,36 @@ class DerivedMetricTests(unittest.TestCase):
             validate(metric(expr), set())
         with self.assertRaises(MetricDefinitionError):
             validate({"version": 2, "expression": {"literal": 1}}, set())
+
+    def test_bounded_authorized_cohort_summary(self):
+        expr = metric({"divide": [{"field": "cost"}, {"field": "units"}]})
+        summary = summarize_rows(expr, [
+            {"cost": 10, "units": 2},
+            {"cost": 12, "units": 3},
+            {"cost": 9, "units": 0},
+        ], {"cost", "units"})
+        self.assertEqual(summary["rows"], 3)
+        self.assertEqual(summary["non_null"], 2)
+        self.assertEqual(summary["null"], 1)
+        self.assertEqual(summary["sum"], "9")
+        self.assertEqual(summary["mean"], "4.5")
+        self.assertEqual(summary["min"], "4")
+        self.assertEqual(summary["max"], "5")
+        self.assertEqual(len(summary["definition_sha256"]), 64)
+        self.assertNotIn("cost", summary)
+
+    def test_cohort_refusals_and_empty(self):
+        expr = metric({"field": "approved"})
+        empty = summarize_rows(expr, [], {"approved"})
+        self.assertIsNone(empty["mean"])
+        self.assertEqual(empty["null"], 0)
+        for rows in [[{}] * 1001, [{"approved": 1}, "bad"], "not-a-list"]:
+            with self.subTest(rows_type=type(rows).__name__), self.assertRaises(MetricDefinitionError):
+                summarize_rows(expr, rows, {"approved"})
+        with self.assertRaises(MetricDefinitionError):
+            summarize_rows(expr, [{"secret": 3}], {"secret"}) if False else summarize_rows(
+                metric({"field": "secret"}), [{"secret": 3}], {"approved"}
+            )
 
     def test_mutation_requires_revalidation(self):
         expr = metric({"field": "public"})
