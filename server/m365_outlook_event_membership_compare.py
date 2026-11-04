@@ -94,7 +94,7 @@ def compare(*, tenant, mailbox, folder, grant_file: Path, review_file: Path,
     }
     _grant(grant_file, tenant, mailbox, folder)
     try:
-        _exclusive_private(output, _canonical(report) + b"\\n")
+        _exclusive_private(output, _canonical(report) + b"\n")
     except FileExistsError:
         raise ReceiptError("Comparison report already exists") from None
     return {k: report[k] for k in (
