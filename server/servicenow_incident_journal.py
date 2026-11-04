@@ -5,6 +5,7 @@ authorization service. Uses the existing bounded selected-record HTTPS reader.
 """
 from __future__ import annotations
 
+from .connector_oauth import connector_token as _connector_token
 import argparse
 import csv
 import hashlib
@@ -260,7 +261,7 @@ def main(argv: list[str] | None = None, *, opener=None) -> int:
         if not args.export_only:
             staged = read_selected_once(
                 scope, grant_file=args.grant_file,
-                token=os.environ.get("OWG_SERVICENOW_TOKEN"),
+                token=_connector_token("OWG_SERVICENOW_TOKEN"),
                 since=args.since, opener=opener,
             )
             csv_text, report = project_csv(scope, staged, timezone_name=args.timezone)

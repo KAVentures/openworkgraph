@@ -436,3 +436,5 @@ from .jira_retained_routes import router as retained_jira_router
 router.include_router(retained_jira_router)
 from .open_work_handoff_routes import router as open_work_handoff_router
 router.include_router(open_work_handoff_router)
+from .connector_oauth_routes import router as connector_oauth_router
+router.include_router(connector_oauth_router)
