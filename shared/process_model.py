@@ -169,7 +169,9 @@ class ProcessModel(StructuralModel):
             if activity.kind in {'decision', 'inclusive_split'}:
                 branches = [e for e in self.transitions if e.source == activity.id]
                 if len(branches) < 2 or any(not e.rule_id for e in branches):
-                    raise ValueError('Decision and inclusive branches require at least two explicitly referenced rules')
+                    raise ValueError('Decision branches require at least two explicitly referenced rules'
+                                     if activity.kind == 'decision' else
+                                     'Inclusive branches require at least two explicitly referenced rules')
             elif activity.kind != 'parallel_split' and len(outgoing[activity.id]) > 1:
                 raise ValueError('Branching activities must be marked as decisions')
             if activity.kind == 'routing' and (activity.id in self.terminal_activity_ids or len(outgoing[activity.id]) != 1):
