@@ -43,6 +43,27 @@ async def put_screen_capture(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def get_local_backups() -> dict[str, Any]:
+    from . import local_backup
+    return local_backup.list_backups()
+
+
+async def post_local_backup(request: Request) -> dict[str, Any]:
+    from . import local_backup
+    try:
+        payload = await request.json() if await request.body() else {}
+        if not isinstance(payload, dict):
+            raise local_backup.BackupError("expected an object")
+        passphrase = payload.get("passphrase")
+        if passphrase is not None and not isinstance(passphrase, str):
+            raise local_backup.BackupError("passphrase must be text")
+        if payload.get("verify"):
+            return local_backup.verify_in_folder(payload.get("verify"), passphrase)
+        return local_backup.create_in_folder(passphrase)
+    except local_backup.BackupError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 def basic_mode_script() -> Response:
     path = ROOT / "dashboard" / "basic_mode.js"
     return Response(path.read_text(encoding="utf-8"), media_type="application/javascript")
@@ -76,6 +97,8 @@ if not getattr(app.state, "owg_basic_mode_installed", False):
     app.add_api_route("/v1/capture-exclusions", put_capture_exclusions, methods=["PUT"])
     app.add_api_route("/v1/screen-capture", get_screen_capture, methods=["GET"])
     app.add_api_route("/v1/screen-capture", put_screen_capture, methods=["PUT"])
+    app.add_api_route("/v1/local-backups", get_local_backups, methods=["GET"])
+    app.add_api_route("/v1/local-backups", post_local_backup, methods=["POST"])
     app.add_api_route("/basic-mode.js", basic_mode_script, methods=["GET"])
     app.add_api_route("/v1/update-status", update_status, methods=["GET"])
     from .analysis_handoff import analysis_preview

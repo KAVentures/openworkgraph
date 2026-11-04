@@ -142,3 +142,24 @@ Gateway deletion never sends a deletion command back to endpoints. An endpoint m
 ## Compliance note
 
 These controls are technical building blocks for retention and erasure workflows. They are not, by themselves, a claim of GDPR or other regulatory compliance. Organizations remain responsible for defining lawful retention periods, backup handling, access controls, employee notice/consultation where applicable, and any required records of processing or deletion.
+
+## Local backup and restore
+
+**Privacy → Back up recorded activity** (or `POST /v1/local-backups`, or
+`python -m server.local_backup create <archive.zip>`) writes one archive with a
+consistent copy of every local store: SQLite through its online backup API,
+DuckDB through `COPY FROM DATABASE` under the workspace lock, other files byte
+for byte. A manifest records the OWG version and a SHA-256 for every file;
+`verify` checks all of them.
+
+- Without a passphrase, this computer's keys and tokens (the auth folder) are left
+  out. With a passphrase of 12+ characters they are included and the whole file
+  is encrypted (scrypt key, AES-256-GCM).
+- Backups go to `owg-backups/` next to the data folder (`OWG_BACKUP_DIR` overrides)
+  and never inside the data folder. Nothing is uploaded.
+- Restore is offline: quit OpenWorkGraph, then run
+  `python -m server.local_backup restore <archive> [--replace] [--passphrase-env VAR]`.
+  It verifies the archive, refuses a backup from a newer OWG version, refuses
+  while the recorder holds its lock, and moves existing data to
+  `<data>.pre-restore-<time>` instead of deleting it. A backup without keys keeps
+  this computer's current keys.
