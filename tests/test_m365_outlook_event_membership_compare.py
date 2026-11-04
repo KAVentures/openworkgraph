@@ -53,7 +53,10 @@ def test_private_comparison_has_no_retry_authority(tmp_path):
     assert report["unmatched_source_events"] == ["outlookevent:two"]
     assert report["export_scope_authenticated"] is False
     assert report["owg_write_requests"] == 0
-    assert kwargs["output"].stat().st_mode & 0o777 == 0o600
+    # Windows st_mode reflects ACL emulation, not POSIX owner-only bits.
+    # Production uses exclusive creation; enforce 0600 where POSIX modes apply.
+    if os.name == "posix":
+        assert kwargs["output"].stat().st_mode & 0o777 == 0o600
 
 
 def test_refuses_missing_consent(tmp_path):
