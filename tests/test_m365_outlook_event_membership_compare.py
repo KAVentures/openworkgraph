@@ -28,7 +28,7 @@ def setup(tmp_path):
         "event_membership_verified": False,
         "safe_to_retry": False, "checkpoint_advanced": False,
     }))
-    export.write_text("case_id,source_event_id\\ncase1,outlookevent:one\\n")
+    export.write_text("case_id,source_event_id\ncase1,outlookevent:one\n")
     for p in (review, export):
         os.chmod(p, 0o600)
     kwargs = dict(tenant="tenant", mailbox="mailbox", folder="folder",
@@ -76,7 +76,7 @@ def test_refuses_wrong_scope(tmp_path):
 def test_duplicate_export_not_accepted_as_proof(tmp_path):
     kwargs = setup(tmp_path)
     kwargs["export_file"].write_text(
-        "case_id,source_event_id\\ncase1,outlookevent:one\\ncase2,outlookevent:one\\n")
+        "case_id,source_event_id\ncase1,outlookevent:one\ncase2,outlookevent:one\n")
     os.chmod(kwargs["export_file"], 0o600)
     result = run(kwargs)
     assert result["duplicate_export_ids"] is True
