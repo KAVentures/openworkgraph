@@ -83,6 +83,8 @@
 
   function table(headers,rows){
     const wrap=el('div',null,'table-wrap');const t=el('table');const head=el('thead');const hr=el('tr');
+    // A scrollable table must be reachable by keyboard (WCAG 2.1.1).
+    wrap.tabIndex=0;wrap.setAttribute('role','region');wrap.setAttribute('aria-label','Table: '+headers.join(', ').slice(0,120));
     headers.forEach(h=>hr.appendChild(el('th',h)));head.appendChild(hr);
     const body=el('tbody');rows.forEach(r=>{const tr=el('tr');r.forEach(v=>{const cell=el('td');cell.style.whiteSpace='pre-wrap';if(v instanceof window.Node)cell.appendChild(v);else cell.textContent=v===null||v===undefined?'':String(v);tr.appendChild(cell);});body.appendChild(tr);});
     t.append(head,body);wrap.appendChild(t);return wrap;
@@ -593,7 +595,7 @@
   }
 
   function toCSV(rows){
-    const cell=v=>{const t=v===null||v===undefined?'':String(v);const safe=/^[=+\-@\t\r]/.test(t)?"'"+t:t;return /[",\n\r]/.test(safe)?'"'+safe.replace(/"/g,'""')+'"':safe;};
+    const cell=v=>{const t=v===null||v===undefined?'':String(v);const safe=typeof v!=='number'&&/^[=+\-@\t\r]/.test(t)?"'"+t:t;return /[",\n\r]/.test(safe)?'"'+safe.replace(/"/g,'""')+'"':safe;};
     return rows.map(r=>r.map(cell).join(',')).join('\r\n')+'\r\n';
   }
   function download(name,text,type){
@@ -1559,7 +1561,7 @@
         Object.entries(cal.activities||{}).forEach(([name,p])=>addRow(name,p));
         // Switching the basis refills the measured minutes; activities added by hand keep what was typed.
         timeBasis.onchange=()=>rows.forEach(r=>{if(r.measured)r.minutes.value=String(measuredMinutes(r.measured,timeBasis.value));});
-        const wrap=el('div',null,'table-wrap');const t=el('table');const head=el('thead');const hr=el('tr');['Activity','Minutes per case','Resources'].forEach(h=>hr.appendChild(el('th',h)));head.appendChild(hr);
+        const wrap=el('div',null,'table-wrap');wrap.tabIndex=0;wrap.setAttribute('role','region');wrap.setAttribute('aria-label','Table: activity minutes and resources');const t=el('table');const head=el('thead');const hr=el('tr');['Activity','Minutes per case','Resources'].forEach(h=>hr.appendChild(el('th',h)));head.appendChild(hr);
         t.append(head,body);wrap.appendChild(t);
         const newName=input('owgEventLogSimNewName','text','New activity');newName.maxLength=200;
         const add=button('Add activity','secondary');add.id='owgEventLogSimAdd';
@@ -2156,8 +2158,18 @@
   // Validate the complete draft before changing any form controls or metric state.
   function analysisDraft(spec,selectedCaseType=''){
     if(!spec||typeof spec!=='object'||Array.isArray(spec))throw new Error('Saved analysis has no usable definition.');
+    // Stored specs echo every optional field as null; null means "not set".
+    const unset=o=>o&&typeof o==='object'&&!Array.isArray(o)?Object.fromEntries(Object.entries(o).filter(([,v])=>v!==null)):o;
+    const unsetMetric=m=>{const out=unset(m);
+      // The default stage selector means nothing without a stage, as the builder writes it.
+      if(out&&typeof out==='object'&&!out.from_activity&&!out.to_activity&&out.stage_occurrence==='first')delete out.stage_occurrence;
+      return out;};
+    spec={...spec,where:unset(spec.where),metrics:Array.isArray(spec.metrics)?spec.metrics.map(unsetMetric):spec.metrics};
     const allowed=new Set(['level','dimensions','measures','limit','metrics','where','case_type']);
-    if(Object.keys(spec).some(k=>!allowed.has(k)))throw new Error('This saved analysis uses options not supported by the builder; use Run instead.');
+    // A stored spec echoes server defaults; only a non-default value is an unsupported option.
+    const defaults={cohort:'{}',activity_in:'[]',order:'"first_measure_desc"',time_zone:'null',time_of_week:'null'};
+    if(Object.keys(spec).some(k=>!allowed.has(k)&&!(Object.hasOwn(defaults,k)&&JSON.stringify(spec[k]??null)===defaults[k])))
+      throw new Error('This saved analysis uses options not supported by the builder; use Run instead.');
     if(!['cases','events'].includes(spec.level)||spec.limit!==100)throw new Error('This saved analysis cannot be edited in this builder; use Run instead.');
     if((spec.case_type||'')!==selectedCaseType)throw new Error('Select the saved analysis case notion before loading it.');
     if(!Array.isArray(spec.dimensions)||spec.dimensions.length>2)throw new Error('Saved analysis dimensions cannot be edited here.');
