@@ -148,6 +148,142 @@ def _inline_subprocesses(container, inlined, depth=0):
         inlined.append((sub_id,(sub.get('name') or '').strip(),members))
 
 
+_BOUNDARY_KINDS = {'errorEventDefinition': 'error', 'timerEventDefinition': 'timer',
+                   'escalationEventDefinition': 'escalation'}
+_LOOP_TAGS = {'standardLoopCharacteristics', 'multiInstanceLoopCharacteristics'}
+
+
+def _el(tag, **attrs):
+    return ET.Element('{'+BPMN+'}'+tag, {k: v for k, v in attrs.items() if v is not None})
+
+
+def _flow(identifier, source, target, condition=None):
+    flow = _el('sequenceFlow', id=identifier, sourceRef=source, targetRef=target)
+    if condition:
+        expression = _el('conditionExpression')
+        expression.text = condition[:2000]
+        flow.append(expression)
+    return flow
+
+
+def _text(element):
+    return ' '.join(' '.join(element.itertext()).split())[:200]
+
+
+def _lower_tasks(process, lowered):
+    """Rewrite call activities, task loops and interrupting boundary events into tasks,
+    exclusive gateways and rule-guarded flows, which have the same control flow.
+
+    Parallel multi-instance tasks, non-interrupting boundary events and other trigger
+    kinds keep different semantics and are refused, never approximated.
+    """
+    children = list(process)
+    flows = [c for c in children if _name(c) == 'sequenceFlow']
+    used = {e.get('id') for e in process.iter() if e.get('id')}
+
+    def fresh(base):
+        candidate = base[:180] + '__owg'
+        index = 1
+        while candidate in used:
+            index += 1
+            candidate = base[:180] + '__owg' + str(index)
+        used.add(candidate)
+        return candidate
+
+    def outgoing_of(node_id):
+        return [f for f in flows if f.get('sourceRef') == node_id]
+
+    for node in children:
+        if _name(node) != 'callActivity':
+            continue
+        extra = [c for c in node if _name(c) not in {'incoming', 'outgoing', 'documentation'}]
+        if extra or set(node.attrib) - {'id', 'name', 'calledElement'}:
+            raise BPMNImportError('Call activities with data mappings, loops or extensions are unsupported')
+        task = _el('task', id=node.get('id'), name=node.get('name'))
+        for child in node:
+            task.append(child)
+        called = (node.get('calledElement') or '').strip()
+        note = _el('documentation')
+        note.text = 'Calls process ' + (called[:120] or '(unnamed)') + '; the called process is not expanded here.'
+        task.append(note)
+        process.insert(list(process).index(node), task)
+        process.remove(node)
+        lowered.append({'kind': 'call_activity', 'source_id': node.get('id', '')})
+
+    for node in list(process):
+        if _name(node) not in TASKS:
+            continue
+        loops = [c for c in node if _name(c) in _LOOP_TAGS]
+        if not loops:
+            continue
+        if len(loops) > 1:
+            raise BPMNImportError('A task can declare at most one loop')
+        loop = loops[0]
+        if _name(loop) == 'multiInstanceLoopCharacteristics' and loop.get('isSequential', 'false').lower() != 'true':
+            raise BPMNImportError('Parallel multi-instance tasks run copies at the same time and cannot be imported as a loop')
+        if loop.get('testBefore', 'false').lower() == 'true':
+            raise BPMNImportError('Loops that test before the first run are unsupported')
+        out = outgoing_of(node.get('id'))
+        if len(out) != 1 or len(out[0]):
+            raise BPMNImportError('A looping task needs exactly one plain outgoing transition')
+        detail = ' / '.join(t for t in (_text(c) for c in loop) if t)
+        node.remove(loop)
+        label = node.get('name') or node.get('id')
+        what = 'instance' if _name(loop) == 'multiInstanceLoopCharacteristics' else 'iteration'
+        gateway = fresh(node.get('id') + '_loop')
+        process.append(_el('exclusiveGateway', id=gateway, name='Repeat ' + label[:50]))
+        target = out[0].get('targetRef')
+        out[0].set('sourceRef', gateway)
+        out[0].append(_el('conditionExpression'))
+        out[0][-1].text = 'No further ' + what + ' of ' + label
+        process.append(_flow(fresh(node.get('id') + '_to_loop'), node.get('id'), gateway))
+        process.append(_flow(fresh(node.get('id') + '_again'), gateway, node.get('id'),
+                             'Another ' + what + ' of ' + label + ' is needed' + (' (' + detail + ')' if detail else '')))
+        flows = [c for c in process if _name(c) == 'sequenceFlow']
+        lowered.append({'kind': 'sequential_multi_instance' if what == 'instance' else 'standard_loop',
+                        'source_id': node.get('id', '')})
+
+    boundaries = [c for c in list(process) if _name(c) == 'boundaryEvent']
+    by_task: dict[str, list] = {}
+    for event in boundaries:
+        by_task.setdefault(event.get('attachedToRef', ''), []).append(event)
+    tasks = {c.get('id'): c for c in process if _name(c) in TASKS}
+    for task_id, events in by_task.items():
+        if task_id not in tasks:
+            raise BPMNImportError('Boundary events must be attached to a task in the same process')
+        out = outgoing_of(task_id)
+        if len(out) != 1 or len(out[0]):
+            raise BPMNImportError('A task with boundary events needs exactly one plain outgoing transition')
+        label = tasks[task_id].get('name') or task_id
+        gateway = fresh(task_id + '_outcome')
+        process.append(_el('exclusiveGateway', id=gateway, name='Outcome of ' + label[:50]))
+        out[0].set('sourceRef', gateway)
+        out[0].append(_el('conditionExpression'))
+        out[0][-1].text = label + ' completed normally'
+        process.append(_flow(fresh(task_id + '_to_outcome'), task_id, gateway))
+        for event in events:
+            if event.get('cancelActivity', 'true').lower() == 'false':
+                raise BPMNImportError('Non-interrupting boundary events run alongside the task and are unsupported')
+            definitions = [c for c in event if _name(c) not in {'incoming', 'outgoing', 'documentation'}]
+            if len(definitions) != 1 or _name(definitions[0]) not in _BOUNDARY_KINDS:
+                raise BPMNImportError('Only interrupting error, timer and escalation boundary events are supported')
+            kind = _BOUNDARY_KINDS[_name(definitions[0])]
+            event_out = outgoing_of(event.get('id'))
+            if len(event_out) != 1 or len(event_out[0]) or any(f.get('targetRef') == event.get('id') for f in flows):
+                raise BPMNImportError('A boundary event needs exactly one plain outgoing transition and no incoming one')
+            detail = _text(definitions[0]) or definitions[0].get('errorRef') or definitions[0].get('escalationRef') or ''
+            name = (event.get('name') or '').strip()
+            condition = {'error': 'Error', 'timer': 'Timer', 'escalation': 'Escalation'}[kind] + \
+                (' ' + name if name else '') + (' (' + detail + ')' if detail else '') + \
+                (' elapsed during ' if kind == 'timer' else ' raised by ') + label
+            event_out[0].set('sourceRef', gateway)
+            event_out[0].append(_el('conditionExpression'))
+            event_out[0][-1].text = condition
+            process.remove(event)
+            lowered.append({'kind': 'interrupting_' + kind + '_boundary', 'source_id': event.get('id', '')})
+        flows = [c for c in process if _name(c) == 'sequenceFlow']
+
+
 def import_bpmn(raw: bytes):
     if not isinstance(raw,bytes) or not raw or len(raw)>MAX_BYTES:
         raise BPMNImportError('BPMN must be a nonempty UTF-8 file of at most 128 KiB')
@@ -190,6 +326,8 @@ def import_bpmn(raw: bytes):
     process=copy.deepcopy(processes[0])
     inlined=[]
     _inline_subprocesses(process,inlined)
+    lowered=[]
+    _lower_tasks(process,lowered)
     nodes,flows,notes=[],[],[]
     manual_by_source, responsibility_by_source=[],{}
     table_by_source={}
@@ -380,6 +518,10 @@ def import_bpmn(raw: bytes):
         warnings.append('inclusive_branches_run_when_their_unconfirmed_rules_apply')
     if tables:warnings.append('decision_tables_retained_as_unconfirmed_declarations_not_dmn_execution')
     if inlined:warnings.append('embedded_subprocesses_inlined_grouping_not_saved_in_model')
+    warnings.extend(sorted({{'call_activity':'call_activities_imported_as_single_steps_called_process_not_expanded',
+        'standard_loop':'task_loops_imported_as_exclusive_repeat_choices',
+        'sequential_multi_instance':'sequential_multi_instance_imported_as_exclusive_repeat_choices'}.get(
+        item['kind'],'interrupting_boundary_events_imported_as_exclusive_outcome_choices') for item in lowered}))
     if label_corrections:warnings.append('unsupported_or_missing_labels_use_placeholders')
     if notes:warnings.append('documentation_requires_separate_manual_review_and_is_not_saved_with_the_model')
     if manual_conditions:warnings.append('unevaluated_manual_review_guards_retained_in_the_model')
@@ -389,6 +531,7 @@ def import_bpmn(raw: bytes):
     return {'format':'openworkgraph.bpmn-draft-import.v1','process_model':model.model_dump(),
         'source_sha256':sha256(raw).hexdigest(),'source_node_ids':mapping,
         'documentation_notes':notes,'placeholder_label_count':len(label_corrections),
+        'lowered_constructs':[{'kind':item['kind']} for item in lowered][:40],
         'inlined_subprocesses':[{'label':label if _LABEL.fullmatch(label) else '',
             'activity_ids':[mapping[member] for member in members if member in mapping]}
             for _,label,members in inlined],

@@ -15,6 +15,27 @@ are not source-log activities and need no business-tool mapping in generated
 projects. Import supports exclusive loops when the graph has an unambiguous
 entry and a route to a terminal.
 
+### Boundary events, task loops and call activities
+
+These are rewritten into tasks, exclusive gateways and rule-guarded transitions with the
+same control flow. The preview lists them in `lowered_constructs` and adds a warning per
+kind. Every generated rule starts unconfirmed.
+
+- **Interrupting error, timer and escalation boundary events:** the task is followed by an
+  exclusive "Outcome of <task>" choice. One branch is "<task> completed normally"; the
+  others read, for example, "Error Declined (CardDeclined) raised by Charge card" or
+  "Timer (PT2H) elapsed during Charge card". The task needs exactly one plain outgoing
+  transition.
+- **Standard loops and sequential multi-instance tasks:** the task is followed by an
+  exclusive "Repeat <task>" choice that runs it again ("Another iteration/instance of …
+  is needed", including any loop condition or cardinality text) or continues.
+- **Call activities:** imported as one step. The called process is named in a review note
+  and is not expanded.
+
+Refused, because a rewrite would change their meaning: non-interrupting boundary events,
+message, signal and other boundary triggers, parallel multi-instance tasks, loops that
+test before the first run, and call activities with data mappings or extensions.
+
 ### Embedded subprocesses
 
 A plain embedded `subProcess` is inlined into the parent graph, which is exact for
