@@ -375,9 +375,10 @@ def _measure_pattern(conn, zone: str) -> dict[str, Any]:
 
 def calibrate(log_id: str, case_type: str | None = None, max_paths: int = 10,
               pattern_zones: tuple[str, ...] = (), until: datetime | None = None,
-              routing: str = "paths") -> dict[str, Any]:
+              routing: str = "paths", routing_context: Any = None) -> dict[str, Any]:
     """Measure arrival rate, routing, activity times and resources from the log.
 
+    ``routing_context`` (transitions only) also measures history- or case-attribute-specific routing.
     ``pattern_zones`` also measures the local hour-of-week arrival pattern of the selected cases.
     ``until`` learns only from cases whose every event is at or before that time (a held-out validation).
     ``routing="transitions"`` selects every eligible case, not only the most frequent paths, and measures
@@ -385,6 +386,9 @@ def calibrate(log_id: str, case_type: str | None = None, max_paths: int = 10,
     max_paths = max(1, min(int(max_paths), MAX_PATHS))
     if routing not in routing_model.ROUTINGS:
         raise EventLogWorkspaceError("routing must be paths or transitions")
+    context = routing_model.parse_context(routing_context)
+    if context and routing != "transitions":
+        raise EventLogWorkspaceError("routing_context applies only with routing transitions")
 
     def run(conn):
         if until is not None:
@@ -435,7 +439,9 @@ def calibrate(log_id: str, case_type: str | None = None, max_paths: int = 10,
             "excluded_case_reasons": {"path_length_limit": too_long,
                 "activity_limit": cases - too_long - eligible, "variant_limit": eligible - selected},
             "routing": routing,
-            **({"transitions": routing_model.measure(conn)} if routing == "transitions" else {}),
+            **({"transitions": {**routing_model.measure(conn),
+                                **({"context": routing_model.measure_context(conn, log_id, context)} if context else {})}}
+               if routing == "transitions" else {}),
             "limits": {"path_events": MAX_PATH_LENGTH, "activities": MAX_ACTIVITIES, "paths": max_paths},
             "arrival_rate_basis": "selected_complete_cases",
             "activities": {a: {"minutes": round((g or 0) / 60, 3), "mean_minutes": round((m or 0) / 60, 3),
@@ -459,7 +465,7 @@ def parse_scenario(spec: Any, base: dict[str, Any]) -> dict[str, Any]:
         raise EventLogWorkspaceError(f"scenario must use format {FORMAT}")
     unknown = set(spec) - {"format", "label", "arrivals_per_hour", "paths", "activities", "distribution", "cases", "seed",
                            "calendar", "scenario_calendar", "pools", "arrival_pattern", "scenario_arrival_pattern",
-                           "activity_time_basis", "routing", "transitions", "priorities"}
+                           "activity_time_basis", "routing", "transitions", "priorities", "routing_context"}
     if unknown:
         raise EventLogWorkspaceError("unknown scenario fields: " + ", ".join(sorted(unknown))[:200])
     arrivals = spec.get("arrivals_per_hour", base["arrivals_per_hour"])
@@ -910,7 +916,8 @@ def what_if(log_id: str, scenario: Any, case_type: str | None = None) -> dict[st
     route_kind = scenario.get("routing", "paths") if isinstance(scenario, dict) else "paths"
     if route_kind not in routing_model.ROUTINGS:
         raise EventLogWorkspaceError("routing must be paths or transitions")
-    base = calibrate(log_id, case_type, pattern_zones=zones, routing=route_kind)
+    base = calibrate(log_id, case_type, pattern_zones=zones, routing=route_kind,
+                     routing_context=scenario.get("routing_context") if isinstance(scenario, dict) else None)
     if not base["paths"]:
         raise EventLogWorkspaceError("no complete case paths fit the simulation limits; inspect calibration coverage")
     baseline_spec = {"cases": scenario.get("cases", 2000) if isinstance(scenario, dict) else 2000,
@@ -973,7 +980,7 @@ def what_if(log_id: str, scenario: Any, case_type: str | None = None) -> dict[st
         "median_cycle_time_change_seconds": (s - b) if b is not None and s is not None else None,
         "arrivals_and_routing_share_random_numbers": True,
         **({"uncertainty": spread} if spread else {}),
-        "assumptions": _with_priorities(scenario_model, _time_basis(_assumptions(baseline_model, scenario_model), scenario_model) + (POOL_ASSUMPTIONS if scenario_model["pools"] else []) + (ARRIVAL_PATTERN_ASSUMPTIONS if _uses_pattern(scenario) else []) + (["No arrival rate could be measured; the user's explicit rate is assumed for both baseline and scenario."] if assumed_arrivals else []) + (uncertainty.ASSUMPTIONS if spread else []) + (routing_model.ASSUMPTIONS if route_kind == "transitions" else []) ),
+        "assumptions": _with_priorities(scenario_model, _time_basis(_assumptions(baseline_model, scenario_model), scenario_model) + (POOL_ASSUMPTIONS if scenario_model["pools"] else []) + (ARRIVAL_PATTERN_ASSUMPTIONS if _uses_pattern(scenario) else []) + (["No arrival rate could be measured; the user's explicit rate is assumed for both baseline and scenario."] if assumed_arrivals else []) + (uncertainty.ASSUMPTIONS if spread else []) + (([routing_model.CONTEXT_ASSUMPTIONS[base["transitions"]["context"]["kind"]]] + routing_model.ASSUMPTIONS[1:]) if (base.get("transitions") or {}).get("context") else routing_model.ASSUMPTIONS if route_kind == "transitions" else []) ),
         "simulated_not_observed": True,
         "forecast_or_guarantee": False,
         "execution_authorized": False,
