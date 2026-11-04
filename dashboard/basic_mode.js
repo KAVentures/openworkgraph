@@ -243,6 +243,18 @@
         <div class="muted" style="margin-top:10px"><button type="button" class="linkish" id="pvRestoreDefaults">Restore the default list</button> <span id="pvNeverStatus"></span></div>
       </div>
 
+      <div class="card" id="pvSemantic">
+        <h2>AI help with grouping work</h2>
+        <div class="muted">Optional. OWG links work by exact records, tabs, copy-paste and shared words. A model you choose can also say which of those already-linked pieces belong to the same task by meaning. It receives app names and short screen labels only (no URLs, record IDs or clipboard contents), and its answers are shown as suggestions, never merged automatically. Use any OpenAI-compatible endpoint, including one running on this computer.</div>
+        <div class="pv-delete">
+          <input type="url" id="pvSemanticUrl" placeholder="https://api.example.com/v1 or http://127.0.0.1:11434/v1" aria-label="Model endpoint URL" spellcheck="false">
+          <input type="text" id="pvSemanticModel" placeholder="Model name" aria-label="Model name" spellcheck="false">
+          <input type="text" id="pvSemanticKeyEnv" placeholder="Key variable name, e.g. OPENAI_API_KEY" aria-label="Environment variable holding the key" spellcheck="false">
+          <button type="button" class="secondary" id="pvSemanticSave">Turn on</button>
+          <button type="button" class="secondary" id="pvSemanticOff">Turn off</button>
+        </div>
+        <div class="muted" id="pvSemanticStatus" role="status" aria-live="polite"></div>
+      </div>
       <div class="card" id="pvDelete">
         <h2>Delete recorded activity</h2>
         <div class="muted">Removes activity from this computer. It cannot be undone. Anything shared with an organization is not recalled. If cloud work-text sharing was enabled, corresponding uploaded copies are removed on the next successful synchronization; while this computer is offline, they may remain available for up to seven days.</div>
@@ -686,6 +698,21 @@
         toast(privacy.screen.ocr_enabled ? 'Text in captures will be recognized on this computer.' : 'Screen text recognition off.');
       } catch (error) { toast(error.message || 'Could not change screen text recognition.'); }
       renderPrivacy();
+    };
+    const semanticStatus = panel.querySelector('#pvSemanticStatus');
+    const showSemantic = state => { if (semanticStatus && state) semanticStatus.textContent = state.enabled ? 'On: ' + state.model + ' at ' + state.base_url : 'Off.'; };
+    api('/v1/semantic-linker').then(showSemantic).catch(() => null);
+    panel.querySelector('#pvSemanticSave').onclick = async () => {
+      if (!confirm('Send app names and short screen labels of linked work to this model endpoint when grouping suggestions are requested?')) return;
+      const value = id => panel.querySelector(id).value.trim();
+      try {
+        showSemantic(await api('/v1/semantic-linker', send('PUT', {enabled: true, acknowledge: 'semantic-linker-v1',
+          base_url: value('#pvSemanticUrl'), model: value('#pvSemanticModel'), api_key_env: value('#pvSemanticKeyEnv')})));
+      } catch (error) { if (semanticStatus) semanticStatus.textContent = error.message || 'Could not save.'; }
+    };
+    panel.querySelector('#pvSemanticOff').onclick = async () => {
+      try { showSemantic(await api('/v1/semantic-linker', send('PUT', {enabled: false}))); }
+      catch (error) { if (semanticStatus) semanticStatus.textContent = error.message || 'Could not save.'; }
     };
     panel.querySelector('#pvWorkTextSwitch').onclick = async () => {
       const enabled = !!privacy.workText?.capture_enabled;

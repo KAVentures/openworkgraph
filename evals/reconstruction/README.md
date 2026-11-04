@@ -399,6 +399,27 @@ holdout was then scored once: gated F1 0.524 -> 0.700 with contamination 0.0. Th
 below 0.90; the remaining cases need domain meaning (an account or price sheet belongs to a
 renewal) that shared words do not carry, so they still need the model-graded run (A2).
 `tests/test_label_topic_links.py` holds these floors.
+
+### Optional semantic linker (model-graded, A2)
+
+`server/semantic_linker.py` keeps OWG's structural and label-topic items as they
+are and asks a model, through any OpenAI-compatible endpoint, which items belong
+to the same workflow. Its input is the item numbers, app names and short screen
+labels only. Suggestions that would join two different records of the same kind
+are refused, and an unusable answer leaves OWG's grouping unchanged.
+
+With perfect grouping decisions this hybrid reaches gated development F1 1.0 with
+contamination 0.0 (`tests/test_semantic_linker.py`). The items are therefore pure
+enough, and accuracy depends on the model's decisions. A real model has not been
+run yet. To measure one:
+
+    OPENAI_API_KEY=... python -m evals.reconstruction.owg_native --split development \
+      --grouping linked_items_with_semantic_linker --semantic-base-url https://api.openai.com/v1 \
+      --semantic-model <model> --semantic-cache evals/reconstruction/results/semantic-<model>.json
+
+A local server works too (`--semantic-base-url http://127.0.0.1:11434/v1`). Re-score
+for free with `--semantic-replay-only --semantic-cache ...`. Score the holdout
+once, after any prompt changes are frozen.
 `tests/test_work_item_links.py` holds these floors.
 
 ## Ablations
