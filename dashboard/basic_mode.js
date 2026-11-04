@@ -243,6 +243,18 @@
         <div class="muted" style="margin-top:10px"><button type="button" class="linkish" id="pvRestoreDefaults">Restore the default list</button> <span id="pvNeverStatus"></span></div>
       </div>
 
+      <div class="card" id="pvSchedules">
+        <h2>Scheduled jobs</h2>
+        <div class="muted">Off unless you add one. A schedule repeats a job you could run by hand: refresh a retained Jira profile (its own read consent and account checks still apply) or re-check an event log's saved signals. At least every 15 minutes; failures back off and pause after five in a row. Pausing recording also pauses scheduled source reads. Nothing is sent anywhere.</div>
+        <div class="pv-delete">
+          <select id="pvScheduleKind" aria-label="Job"><option value="retained_jira_profile">Retained Jira profile</option><option value="event_log_signals">Event log signals</option></select>
+          <input type="text" id="pvScheduleTarget" placeholder="Profile or event log ID" aria-label="Profile or event log ID" spellcheck="false">
+          <input type="number" id="pvScheduleInterval" min="15" value="60" aria-label="Interval in minutes">
+          <button type="button" class="secondary" id="pvScheduleAdd">Add schedule</button>
+        </div>
+        <div class="muted" id="pvScheduleStatus" role="status" aria-live="polite"></div>
+        <div id="pvScheduleList" aria-label="Scheduled jobs"></div>
+      </div>
       <div class="card" id="pvSemantic">
         <h2>AI help with grouping work</h2>
         <div class="muted">Optional. OWG links work by exact records, tabs, copy-paste and shared words. A model you choose can also say which of those already-linked pieces belong to the same task by meaning. It receives app names and short screen labels only (no URLs, record IDs or clipboard contents), and its answers are shown as suggestions, never merged automatically. Use any OpenAI-compatible endpoint, including one running on this computer.</div>
@@ -766,6 +778,40 @@
       } catch (error) { toast(error.message || 'Could not change screen text recognition.'); }
       renderPrivacy();
     };
+    const scheduleList = panel.querySelector('#pvScheduleList');
+    const scheduleStatus = panel.querySelector('#pvScheduleStatus');
+    const refreshSchedules = async () => {
+      const state = await api('/v1/schedules').catch(() => null);
+      if (!scheduleList || !state) return;
+      scheduleList.replaceChildren();
+      for (const item of state.schedules || []) {
+        const line = document.createElement('div');
+        line.className = 'pv-row pv-sub';
+        const text = document.createElement('span');
+        text.textContent = (item.kind === 'retained_jira_profile' ? 'Jira profile ' : 'Signals for ') + item.target_id +
+          ' · every ' + item.interval_minutes + ' min · ' + (item.enabled ? 'next ' + String(item.next_run_at || '').slice(0, 16).replace('T', ' ')
+          : (item.paused_reason ? 'paused after repeated failures' : 'paused')) + (item.last_result ? ' · last: ' + item.last_result : '');
+        const toggle = document.createElement('button');
+        toggle.type = 'button'; toggle.className = 'secondary'; toggle.textContent = item.enabled ? 'Pause' : 'Resume';
+        toggle.onclick = async () => { await api('/v1/schedules/update', send('POST', {schedule_id: item.schedule_id, enabled: !item.enabled})).catch(() => null); refreshSchedules(); };
+        const remove = document.createElement('button');
+        remove.type = 'button'; remove.className = 'secondary'; remove.textContent = 'Remove';
+        remove.onclick = async () => { await api('/v1/schedules/delete', send('POST', {schedule_id: item.schedule_id})).catch(() => null); refreshSchedules(); };
+        line.append(text, toggle, remove);
+        scheduleList.append(line);
+      }
+    };
+    panel.querySelector('#pvScheduleAdd').onclick = async () => {
+      const kind = panel.querySelector('#pvScheduleKind').value;
+      if (!confirm('Run this job automatically on a schedule? You can pause or remove it at any time.')) return;
+      try {
+        await api('/v1/schedules', send('POST', {kind, target_id: panel.querySelector('#pvScheduleTarget').value.trim(),
+          interval_minutes: Number(panel.querySelector('#pvScheduleInterval').value), confirm_scheduled_runs: true}));
+        if (scheduleStatus) scheduleStatus.textContent = 'Schedule added.';
+      } catch (error) { if (scheduleStatus) scheduleStatus.textContent = error.message || 'Could not add the schedule.'; }
+      refreshSchedules();
+    };
+    refreshSchedules();
     const semanticStatus = panel.querySelector('#pvSemanticStatus');
     const showSemantic = state => { if (semanticStatus && state) semanticStatus.textContent = state.enabled ? 'On: ' + state.model + ' at ' + state.base_url : 'Off.'; };
     api('/v1/semantic-linker').then(showSemantic).catch(() => null);

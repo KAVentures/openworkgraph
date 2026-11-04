@@ -70,6 +70,8 @@ def main() -> None:
         org_join_routes.start_managed_setup_in_background()
         if not agent_capture_runtime._demo():
             outcome_tracker.start()  # does nothing until the person turns outcome tracking on
+            from server import local_scheduler
+            local_scheduler.start()  # does nothing until the owner creates a schedule
 
     extend_lifespan(secure_app, startup=_start_background_runtime)
 
@@ -80,6 +82,8 @@ def main() -> None:
     extend_lifespan(secure_app, shutdown=agent_session_sensor.stop)
     extend_lifespan(secure_app, shutdown=agent_working_detail.stop)
     extend_lifespan(secure_app, shutdown=outcome_tracker.stop)
+    from server import local_scheduler as _local_scheduler
+    extend_lifespan(secure_app, shutdown=_local_scheduler.stop)
 
     # uvicorn re-raises SIGTERM/SIGINT after its graceful shutdown, which ends
     # the process before a finally/atexit block can run. The lifespan hooks above
