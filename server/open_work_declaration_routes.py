@@ -2448,3 +2448,42 @@ async def verify_local_declared_portfolio_payment_goals(request: Request, respon
     await _recheck_source(scope)
     response.headers["Cache-Control"] = "no-store"
     return result
+
+
+@router.post("/v1/open-work/declarations/human-outcomes/case-run-bindings")
+async def list_local_case_run_bindings(request: Request, response: Response):
+    """Authenticated, explicit inventory of this session's current case bindings.
+
+    Inventory does not revalidate imported run snapshots. The operator must
+    use the existing exact-run comparison before interpreting any association.
+    """
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_historical_review", "max_cases",
+    })
+    if payload["confirm_historical_review"] is not True:
+        raise HTTPException(403, "explicit historical review required")
+    from .open_work_run_case_binding import list_case_bindings
+    triage, admitted, signature, secret = await _load_review_triage(scope, payload)
+    await _recheck_source(scope)
+    actor = hashlib.sha256(request.headers["authorization"].encode("utf-8")).hexdigest()
+    try:
+        inventory = await asyncio.to_thread(
+            list_case_bindings, scope=scope, actor=actor, secret=secret,
+            case_ref=payload["work_item_ref"], revision=payload["expected_revision"],
+        )
+        repeated, refreshed, refreshed_signature, _ = await _load_review_triage(scope, payload)
+        if (triage != repeated or refreshed_signature != signature or
+                refreshed["work_item_ref"] != admitted["work_item_ref"]):
+            raise CaseDeclarationError("stale case review changed during inventory")
+        await asyncio.to_thread(
+            _operation_ledger_guard, scope, payload["work_item_ref"],
+            payload["expected_revision"], payload["expected_edit_token"], signature,
+        )
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return inventory
