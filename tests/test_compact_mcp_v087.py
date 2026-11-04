@@ -85,7 +85,8 @@ def test_compact_stdio_adds_only_normative_governance_tools_when_enabled(tmp_pat
 
 def test_open_work_tools_are_opt_in_and_default_catalog_is_unchanged(tmp_path):
     names = asyncio.run(_listed_tools(tmp_path, governance=False, open_work=True))
-    assert names == DEFAULT_TOOLS | {"get_case_context", "verify_case_operation"}
+    assert names == DEFAULT_TOOLS | {"get_case_context", "verify_case_operation",
+                                     "list_offered_work", "claim_offered_work", "report_offered_work"}
 
 
 def test_compact_agent_tool_uses_optional_execution_id_for_detail(monkeypatch):
