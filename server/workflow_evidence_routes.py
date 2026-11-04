@@ -879,6 +879,37 @@ async def import_process_bpmn_draft(request: Request) -> Response:
     return JSONResponse(result,headers={'Cache-Control':'no-store'})
 
 
+@app.post('/v1/process-catalog/import-dmn')
+async def import_process_dmn_preview(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID),
+                                     revision: int = Query(ge=1),
+                                     decision_activity_id: str = Query(pattern=r'^[A-Za-z][A-Za-z0-9_-]{0,63}$'),
+                                     effective_from: str = Query(min_length=10, max_length=10),
+                                     effective_until: str | None = Query(default=None, min_length=10, max_length=10),
+                                     decision_name: str | None = Query(default=None, max_length=200)) -> Response:
+    """Preview a DMN decision table as unconfirmed rules for one decision; nothing is saved."""
+    from .local_source_routes import _require_dashboard
+    from shared.process_dmn import DMNError, MAX_BYTES, import_dmn
+    from starlette.concurrency import run_in_threadpool
+    _require_dashboard(request)
+    content_type=request.headers.get('content-type','').split(';',1)[0].strip().lower()
+    if content_type not in {'application/xml','text/xml','application/dmn+xml'}:
+        raise HTTPException(415,'DMN import requires XML content')
+    payload=bytearray()
+    async for chunk in request.stream():
+        if len(payload)+len(chunk)>MAX_BYTES:
+            raise HTTPException(413,'DMN exceeds the 256 KiB limit')
+        payload.extend(chunk)
+    record=_catalog_record(workflow_id,revision)
+    try:
+        result=await run_in_threadpool(import_dmn,bytes(payload),record['process_model'],decision_activity_id,
+                                       effective_from=effective_from,effective_until=effective_until,
+                                       decision_name=decision_name)
+    except DMNError as exc:
+        raise HTTPException(422,str(exc)) from None
+    result['based_on']={'workflow_id':workflow_id,'revision':revision,'content_sha256':record['content_sha256']}
+    return JSONResponse(result,headers={'Cache-Control':'no-store'})
+
+
 @app.get('/process-decision-editor.js')
 def process_decision_editor_script() -> Response:
     return FileResponse(ROOT / 'gateway' / 'process_decision_editor.js',media_type='application/javascript')
@@ -970,12 +1001,18 @@ def get_process_catalog_history(workflow_id: str = Query(pattern=_PROCESS_ID), b
 
 
 @app.get('/v1/process-catalog/export')
-def export_process_catalog(workflow_id: str = Query(pattern=_PROCESS_ID), revision: int = Query(ge=1), format: str = Query(default='json', pattern='^(json|bpmn|pdd)$')) -> Response:
+def export_process_catalog(workflow_id: str = Query(pattern=_PROCESS_ID), revision: int = Query(ge=1), format: str = Query(default='json', pattern='^(json|bpmn|pdd|dmn)$')) -> Response:
     packet = _catalog_export(workflow_id, revision)
     headers = {'Cache-Control': 'no-store', 'Content-Disposition':
-               f'attachment; filename="openworkgraph-process-r{revision}.{ {"json": "json", "bpmn": "bpmn", "pdd": "txt"}[format]}"'}
+               f'attachment; filename="openworkgraph-process-r{revision}.{ {"json": "json", "bpmn": "bpmn", "pdd": "txt", "dmn": "dmn"}[format]}"'}
     if format == 'json':
         return JSONResponse(packet, headers=headers)
+    if format == 'dmn':
+        from shared.process_dmn import DMNError, export_dmn
+        try:
+            return Response(export_dmn(packet), media_type='application/xml', headers=headers)
+        except DMNError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from None
     return Response(process_bpmn(packet) if format == 'bpmn' else process_document(packet),
                     media_type='application/xml' if format == 'bpmn' else 'text/plain', headers=headers)
 
