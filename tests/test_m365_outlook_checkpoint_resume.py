@@ -32,7 +32,7 @@ class CheckpointResumeTests(unittest.TestCase):
             "tenant_scope": self.tenant, "mailbox_scope": self.mailbox,
             "folder_id": self.folder,
         })
-        self.csv.write_bytes(b"case_id,activity,timestamp,source_event_id\\n")
+        self.csv.write_bytes(b"case_id,activity,timestamp,source_event_id\n")
         self.csv.chmod(0o600)
         csv_sha = hashlib.sha256(self.csv.read_bytes()).hexdigest()
         self.write(self.prior, {
@@ -53,7 +53,7 @@ class CheckpointResumeTests(unittest.TestCase):
         })
 
     def write(self, path, data):
-        path.write_text(json.dumps(data, sort_keys=True) + "\\n")
+        path.write_text(json.dumps(data, sort_keys=True) + "\n")
         path.chmod(0o600)
 
     def run_resume(self, **overrides):
