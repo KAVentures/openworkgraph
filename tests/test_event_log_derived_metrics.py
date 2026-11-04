@@ -72,6 +72,17 @@ class DerivedMetricTests(unittest.TestCase):
                 metric({"field": "secret"}), [{"secret": 3}], {"approved"}
             )
 
+    def test_extreme_exponents_and_aggregate_overflow_refused(self):
+        for literal in ("1e999999", "1e-999999", "1e19"):
+            with self.subTest(literal=literal), self.assertRaises(MetricDefinitionError):
+                evaluate(metric({"literal": literal}), {}, set())
+        huge_product = metric({"multiply": [
+            {"literal": "1e18"}, {"literal": "1e18"}
+        ]})
+        self.assertIsNone(evaluate(huge_product, {}, set()))
+        with self.assertRaises(MetricDefinitionError):
+            summarize_rows(metric({"field": "x"}), [{"x": "1e18"}] * 11, {"x"})
+
     def test_mutation_requires_revalidation(self):
         expr = metric({"field": "public"})
         self.assertEqual(evaluate(expr, {"public": 1}, {"public"}), "1")
