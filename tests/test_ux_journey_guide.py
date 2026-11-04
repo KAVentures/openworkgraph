@@ -16,7 +16,7 @@ class JourneyGuideTests(unittest.TestCase):
         self.assertIn('id="owgJourneyStatus"', source)
         marker = "/* Navigation only. Never infer consent"
         self.assertEqual(source.count(marker), 1)
-        script = source.split("<script>\n" + marker, 1)[1].split("</script>", 1)[0]
+        script = marker + source.split("<script>\n" + marker, 1)[1].split("</script>", 1)[0]
         harness = r"""
 const vm=require('node:vm'),assert=require('node:assert/strict');
 const listeners={}, elements={}, controls=[], events=[], state={active:'overview'};
