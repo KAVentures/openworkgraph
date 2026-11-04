@@ -189,6 +189,17 @@ const path=require('node:path');
    await guide.getByRole('heading',{name:'Resume this evidence-to-implementation journey'}).waitFor();
    assert(await guide.locator('#owgPipelineJourneyExport').isDisabled());
    assert(await guide.locator('#owgPipelineJourneyOpenProcess').isEnabled());
+   // Source-stage navigation is a real, keyboard-operable local UI action, not a grant.
+   const sourceWorkspace=guide.locator('#owgPipelineJourneyOpenSourceWorkspace');
+   await sourceWorkspace.focus();
+   await page.keyboard.press('Enter');
+   assert.equal(await page.evaluate(()=>document.activeElement?.id),'owgEventLogCard');
+   await guide.locator('#owgPipelineJourneyGuideStatus')
+     .filter({hasText:'No source read, approval or execution was authorized.'}).waitFor();
+   assert.match(await guide.locator('#owgPipelineJourneyGuideStatus').textContent(),
+     /absent, changed or unverified|current at the last journey check/);
+   assert.equal(guidedWrites,0);
+
    page.once('dialog',dialog=>dialog.accept());
    await guide.locator('#owgPipelineJourneyOpenProcess').click();
    await guide.locator('#owgPipelineJourneyGuideStatus').filter({hasText:'Requested exact linked revision 1'}).waitFor();

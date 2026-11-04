@@ -1170,6 +1170,26 @@
             }catch(e){if(generation===detailGeneration)guideStatus.textContent='Could not reopen pinned revision: '+e.message;}
             finally{if(generation===detailGeneration)processAction.disabled=false;}
           };
+          // Source inspection is a separate opt-in step, never a source verification.
+          const sourceWorkspaceAction=button('Inspect local source workspace','secondary');
+          sourceWorkspaceAction.id='owgPipelineJourneyOpenSourceWorkspace';
+          sourceWorkspaceAction.onclick=()=>{
+            if(generation!==detailGeneration)return;
+            const panel=document.getElementById('panel-evidence');
+            const workspace=document.getElementById('owgEventLogCard');
+            if(!panel||!workspace||!workspace.isConnected){
+              guideStatus.textContent='Local event-log workspace is unavailable. No source was inspected or verified.';
+              return;
+            }
+            const status=origins.length&&origins.every(origin=>origin.status==='current')?
+              'Linked source fingerprints were current at the last journey check; inspect the actual dataset and cohort separately.':
+              'Linked source is absent, changed or unverified. Inspect the dataset and cohort; do not treat this as a fresh source check.';
+            workspace.scrollIntoView?.({block:'start'});
+            workspace.setAttribute('tabindex','-1');
+            workspace.focus();
+            guideStatus.textContent='Opened local event-log workspace. '+status+' No source read, approval or execution was authorized.';
+          };
+          guide.appendChild(sourceWorkspaceAction);
           guide.appendChild(processAction);
           if(process.status!=='current')guide.appendChild(el('p',
             'Process basis is '+String(process.status).replaceAll('_',' ')+'. Historical references are not silently replaced; review changes before any new project.','muted'));
