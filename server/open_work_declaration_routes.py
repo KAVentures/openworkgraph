@@ -2487,3 +2487,99 @@ async def list_local_case_run_bindings(request: Request, response: Response):
     await _recheck_source(scope)
     response.headers["Cache-Control"] = "no-store"
     return inventory
+
+
+@router.post("/v1/open-work/declarations/human-outcomes/verify-bound-run-source")
+async def verify_local_bound_run_source(request: Request, response: Response):
+    """Compare a current operator-bound imported run with fresh provider evidence.
+
+    A source-confirmed invoice operation is NOT an agent-caused action or a
+    customer outcome. This is a read-only, explicitly requested comparison.
+    """
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_historical_review", "confirm_run_comparison",
+        "confirm_source_verification", "max_cases", "deployment_id",
+        "run_id", "record_link",
+    })
+    if (payload["confirm_historical_review"] is not True
+            or payload["confirm_run_comparison"] is not True
+            or payload["confirm_source_verification"] is not True):
+        raise HTTPException(403, "explicit run, history and source review required")
+    if type(payload["max_cases"]) is not int or not 1 <= payload["max_cases"] <= 4:
+        raise HTTPException(422, "max_cases must be between 1 and 4")
+    from .open_work_run_case_binding import get_binding
+
+    # Admit the entire declared graph, both retained histories, signed record
+    # link, imported run and actor-owned binding BEFORE provider network IO.
+    historical, admitted, signature, secret = await _load_review_triage(scope, payload)
+    try:
+        resource_ref = validate_case_record_link(
+            payload["record_link"], admitted, signature, scope=scope, secret=secret)
+        run = await asyncio.to_thread(
+            read_imported_run, deployment_id=payload["deployment_id"],
+            run_id=payload["run_id"], scope=scope, secret=secret)
+        actor = hashlib.sha256(request.headers["authorization"].encode("utf-8")).hexdigest()
+        binding = await asyncio.to_thread(
+            get_binding, scope=scope, actor=actor, secret=secret,
+            case_ref=payload["work_item_ref"], run_ref=run["run_ref"],
+            fingerprint=run["run_snapshot_fingerprint"],
+            revision=payload["expected_revision"])
+        if binding is None:
+            raise CaseDeclarationError("explicit current run/case binding review required")
+        await asyncio.to_thread(
+            _operation_ledger_guard, scope, payload["work_item_ref"],
+            payload["expected_revision"], payload["expected_edit_token"], signature)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    # Provider failure yields unknown, never an inferred failure or success.
+    try:
+        receipt = await asyncio.to_thread(
+            source_operation_receipt, resource_ref, "stripe_invoice_paid")
+    except (ValueError, OSError, TypeError, CaseDeclarationError, sqlite3.DatabaseError):
+        receipt = None
+    await _recheck_source(scope)
+    refreshed_history, refreshed, refreshed_signature, _ = await _load_review_triage(scope, payload)
+    try:
+        if (refreshed_history != historical or refreshed_signature != signature
+                or refreshed["work_item_ref"] != admitted["work_item_ref"]):
+            raise CaseDeclarationError("historical case review changed during source verification")
+        validate_case_record_link(
+            payload["record_link"], refreshed, refreshed_signature,
+            scope=scope, secret=secret)
+        second_run = await asyncio.to_thread(
+            read_imported_run, deployment_id=payload["deployment_id"],
+            run_id=payload["run_id"], scope=scope, secret=secret)
+        second_binding = await asyncio.to_thread(
+            get_binding, scope=scope, actor=actor, secret=secret,
+            case_ref=payload["work_item_ref"], run_ref=second_run["run_ref"],
+            fingerprint=second_run["run_snapshot_fingerprint"],
+            revision=payload["expected_revision"])
+        if second_run != run or second_binding != binding:
+            raise CaseDeclarationError("run binding changed during source verification")
+        verified = project_case_operation_verification(refreshed, resource_ref, receipt)
+        triage = compose_fresh_outcome_triage(refreshed_history, verified)
+        await asyncio.to_thread(
+            _operation_ledger_guard, scope, payload["work_item_ref"],
+            payload["expected_revision"], payload["expected_edit_token"], signature)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "format": "openworkgraph.local-bound-run-source-verification.v1",
+        "work_item_ref": payload["work_item_ref"],
+        "run_ref": run["run_ref"],
+        "association": "operator_confirmed",
+        "imported_run": run,
+        "fresh_source_triage": triage,
+        "provider_operation_verified": bool(verified.get("provider_operation_verified", False)),
+        "run_case_identity_independently_verified": False,
+        "agent_caused_operation_verified": False,
+        "customer_outcome_verified": False,
+        "agent_execution_authorized": False,
+        "source_write_performed": False,
+    }
