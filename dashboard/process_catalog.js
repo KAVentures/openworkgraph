@@ -780,13 +780,13 @@
     };
     const refresh=async(selectId)=>{
       const value=await request('/v1/process-catalog/rule-library');
-      sets.replaceChildren(el('option','New rule set'));sets.firstChild.value='';
+      const fresh=el('option','New rule set');fresh.value='';sets.replaceChildren(fresh);
       value.rule_sets.forEach(s=>{const o=el('option',s.name+' (revision '+s.revision+', '+s.rule_count+' rules)');o.value=s.rule_set_id;sets.appendChild(o);});
       if(selectId)sets.value=selectId;
       await loadSet();
     };
     sets.addEventListener('change',()=>loadSet().catch(error=>status(error.message)));
-    sets.appendChild(el('option','New rule set'));sets.firstChild.value='';
+    const blank=el('option','New rule set');blank.value='';sets.appendChild(blank);
     const saveSet=()=>locked(async()=>{
       const rules=(record.process_model?.business_rules||[]).map(r=>{const v={id:r.id,text:r.text};if(r.predicate)v.predicate=r.predicate;return v;});
       if(!rules.length)throw new Error('This saved design has no rules to keep.');
