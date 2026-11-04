@@ -97,8 +97,8 @@ def test_revoked_binding_before_append_denies_persistence(monkeypatch, tmp_path)
                             lambda *a, **kw: {"events": []})
         actor = hashlib.sha256(Request.headers["authorization"].encode()).hexdigest()
         def revoke_on_provider(*args):
-            binding.revoke_run(scope=SCOPE, actor=actor, secret="secret-at-least-16",
-                               case_ref=CASE, run_ref=RUN, fingerprint=FP, revision=1)
+            binding.revoke_binding(scope=SCOPE, actor=actor, secret="secret-at-least-16",
+                                   case_ref=CASE, run_ref=RUN)
             return None
         monkeypatch.setattr(routes, "source_operation_receipt", revoke_on_provider)
         append = Mock()
