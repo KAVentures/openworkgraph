@@ -185,3 +185,34 @@ def test_connector_clis_use_the_shared_token_helper():
                  "scripts/scim_entra_lifecycle_reconcile.py"):
         text = (root / name).read_text(encoding="utf-8")
         assert "_connector_token(\"OWG_" in text and "os.environ.get(\"OWG_SERVICENOW_TOKEN\")" not in text
+
+
+def test_jira_profiles_bind_to_the_sign_in_not_the_rotating_token(provider, monkeypatch):
+    from server import jira_retained_profiles as profiles
+    from server import jira_retained_source as source
+    monkeypatch.setattr(profiles, "ensure_api_token", lambda: "local-key")
+    started = oauth.begin("atlassian", client_id="atlassian-client")
+    query = parse_qs(urlsplit(started["authorization_url"]).query)
+    provider.challenge = query["code_challenge"][0]
+    conn = oauth.complete(query["state"][0], "GOOD")
+    env = {"OWG_JIRA_SOURCE_READ_ENABLED": "true", "OWG_JIRA_RETAINED_INGESTION_ENABLED": "true",
+           "OWG_JIRA_HOST": "acme.atlassian.net", "OWG_JIRA_CLOUD_ID": "11111111-2222-3333-4444-555555555555",
+           "OWG_JIRA_OAUTH_CONNECTION": conn["connection_id"]}
+    first = source.configuration(env)
+    assert first[2] == "AT1" and first[2].credential_identity == "oauth_connection:" + conn["connection_id"]
+    oauth._access.clear()
+    renewed = source.configuration(env)
+    assert renewed[2] == "AT-RT2"
+    assert profiles._binding(first) == profiles._binding(renewed)
+    legacy = ("acme.atlassian.net", env["OWG_JIRA_CLOUD_ID"], "PASTED")
+    assert profiles._binding(legacy) != profiles._binding(first)
+
+
+def test_jira_renewal_failure_fails_closed(provider):
+    from server import jira_retained_source as source
+    from server.jira_retained_source import JiraIngestionError
+    env = {"OWG_JIRA_SOURCE_READ_ENABLED": "true", "OWG_JIRA_RETAINED_INGESTION_ENABLED": "true",
+           "OWG_JIRA_HOST": "acme.atlassian.net", "OWG_JIRA_CLOUD_ID": "11111111-2222-3333-4444-555555555555",
+           "OWG_JIRA_OAUTH_CONNECTION": "conn_0000000000000000"}
+    with pytest.raises(JiraIngestionError, match="reconnect_required"):
+        source.configuration(env)

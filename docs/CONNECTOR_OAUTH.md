@@ -37,3 +37,24 @@ How it works:
 What this does not establish: customer admin approval, tenant-wide consent
 policy, or live acceptance against your provider. Run each connector's own
 acceptance steps in a sandbox tenant first.
+
+## Retained Jira ingestion with rotating tokens (#436)
+
+Set `OWG_JIRA_OAUTH_CONNECTION=<connection_id>` (an Atlassian sign-in) instead of
+`OWG_JIRA_OAUTH_ACCESS_TOKEN`. Retained profiles and source receipts then get a
+fresh access token from the sign-in, renewing it with the rotating refresh token
+when it expires.
+
+- A profile binds to the sign-in (`credential_reference: oauth_connection:<id>`),
+  not to the short-lived token, so routine renewal keeps its dataset, namespace
+  and checkpoint. Every read still checks the site grant and the same account,
+  exactly as before.
+- Switching a profile from a pasted token to a sign-in, or to another sign-in,
+  is a credential change and goes through the existing same-account rebind.
+- A refresh token that has expired, was already used or was revoked fails closed
+  with `jira_oauth_renewal_failed_reconnect_required`. Nothing retries with
+  another token or adopts a different account.
+- The replacement refresh token is saved, under the cross-process lock, before
+  the new access token is used. If the provider issues a new token but the
+  response is lost, the old refresh token may be rejected next time; reconnect
+  then.

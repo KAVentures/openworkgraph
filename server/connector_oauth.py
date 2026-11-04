@@ -387,6 +387,25 @@ _ENV_PROVIDER = {"OWG_SALESFORCE_READ_TOKEN": "salesforce", "OWG_SERVICENOW_TOKE
                  "OWG_JIRA_TOKEN": "atlassian", "OWG_ZENDESK_TOKEN": "zendesk"}
 
 
+class OAuthBearer(str):
+    """An access token that remembers which stored sign-in issued it.
+
+    Profiles bind to ``credential_identity`` (the sign-in), not to the token, so a
+    routine renewal of the same sign-in does not look like a different credential.
+    """
+    credential_identity: str
+
+
+def bearer_for(connection_id: str, provider: str) -> OAuthBearer:
+    with _LOCK:
+        conn = _load()["connections"].get(str(connection_id))
+    if conn is None or conn["provider"] != provider:
+        raise OAuthError("the selected sign-in is not a connection for this provider")
+    bearer = OAuthBearer(access_token(connection_id))
+    bearer.credential_identity = "oauth_connection:" + connection_id
+    return bearer
+
+
 def connector_token(env_name: str, getenv: Callable[[str], str | None] = os.environ.get) -> str | None:
     """Bearer token for a connector CLI.
 
