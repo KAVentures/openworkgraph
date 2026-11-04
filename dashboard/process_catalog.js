@@ -655,7 +655,7 @@
     })));
     }
     host.appendChild(actions);
-    if(record.revision){renderRuleChecks(host);renderSourceRuleChecks(host);renderShadowReview(host);renderClarification(host);renderDMNImport(host);}
+    if(record.revision){renderRuleChecks(host);renderSourceRuleChecks(host);renderShadowReview(host);renderClarification(host);renderDMNImport(host);renderRuleLibrary(host);}
     const historyHost=el('div');historyHost.id='owgCatalogHistory';host.appendChild(historyHost);
   }
   function renderRuleChecks(host){
@@ -760,6 +760,63 @@
     consent.addEventListener('change',()=>{clearSourceRuleChecks();run.disabled=!consent.checked||!/^owg:r:[0-9a-f]{32}$/.test(ref.value);});
     section.append(typeLabel,refLabel,load,choicesLabel,notice,consentLabel,run,
       button('Clear current-source rule check',()=>{invalidate();ref.value='';choices.value='';}),output);host.appendChild(section);
+  }
+  function renderRuleLibrary(host){
+    const section=el('section');section.id='owgCatalogRuleLibrary';
+    section.append(el('h4','Reusable rule library'),el('p','Keep reviewed rules in named, versioned rule sets and reuse them across designs. Linking copies the library rule into this design as an unconfirmed rule; it is not saved until you review and save. Drift lists saved designs whose linked rules are behind the library or were edited locally. OWG never evaluates or runs these rules.'));
+    const sets=el('select');sets.setAttribute('aria-label','Rule set');
+    const name=el('input');name.type='text';name.placeholder='Rule set name';name.setAttribute('aria-label','Rule set name');
+    const source=el('input');source.type='text';source.placeholder='Source (e.g. Purchasing policy v3)';source.setAttribute('aria-label','Rule set source');
+    const designRule=el('select');designRule.setAttribute('aria-label','Design rule to link');
+    (record.process_model?.business_rules||[]).forEach(r=>{const o=el('option',r.id+': '+r.text.slice(0,60));o.value=r.id;designRule.appendChild(o);});
+    const libraryRule=el('select');libraryRule.setAttribute('aria-label','Library rule');
+    const output=el('div');output.id='owgCatalogRuleLibraryResult';output.setAttribute('role','status');
+    let latest=null;
+    const loadSet=async()=>{
+      libraryRule.replaceChildren();latest=null;
+      if(!sets.value)return;
+      latest=await request('/v1/process-catalog/rule-library/set?'+new URLSearchParams({rule_set_id:sets.value}));
+      latest.rules.forEach(r=>{const o=el('option',r.id+': '+r.text.slice(0,60));o.value=r.id;libraryRule.appendChild(o);});
+    };
+    const refresh=async(selectId)=>{
+      const value=await request('/v1/process-catalog/rule-library');
+      const fresh=el('option','New rule set');fresh.value='';sets.replaceChildren(fresh);
+      value.rule_sets.forEach(s=>{const o=el('option',s.name+' (revision '+s.revision+', '+s.rule_count+' rules)');o.value=s.rule_set_id;sets.appendChild(o);});
+      if(selectId)sets.value=selectId;
+      await loadSet();
+    };
+    sets.addEventListener('change',()=>loadSet().catch(error=>status(error.message)));
+    const blank=el('option','New rule set');blank.value='';sets.appendChild(blank);
+    const saveSet=()=>locked(async()=>{
+      const rules=(record.process_model?.business_rules||[]).map(r=>{const v={id:r.id,text:r.text};if(r.predicate)v.predicate=r.predicate;return v;});
+      if(!rules.length)throw new Error('This saved design has no rules to keep.');
+      const body={name:name.value.trim()||latest?.name||record.title||'Rule set',source_label:source.value.trim(),rules};
+      if(sets.value){body.rule_set_id=sets.value;body.expected_revision=latest?.revision||0;}
+      const saved=await request('/v1/process-catalog/rule-library',body);
+      await refresh(saved.rule_set_id);
+      status('Saved revision '+saved.revision+' of rule set '+saved.name+'. Earlier revisions stay readable.');
+    });
+    const linkRule=()=>locked(async()=>{
+      const selected=record;
+      if(!sets.value||!libraryRule.value||!designRule.value)throw new Error('Choose a design rule, a rule set and a library rule.');
+      const value=await request('/v1/process-catalog/rule-library/link?'+new URLSearchParams({workflow_id:selected.workflow_id,revision:String(selected.revision)}),
+        {rule_id:designRule.value,rule_set_id:sets.value,library_rule_id:libraryRule.value});
+      if(record!==selected)return;
+      if(model&&!window.confirm('Replace the editor contents with this linked-rule proposal?'))return;
+      model=copy(value.proposed_process_model);reviewed=false;renderEditor();
+      status('Linked rule '+designRule.value+' to the library as unsaved edits of revision '+selected.revision+'. Review and confirm the rule, then save a new revision.');
+    });
+    const showDrift=()=>locked(async()=>{
+      const value=await request('/v1/process-catalog/rule-library/drift');
+      const words={rule_set_missing:'rule set no longer in the library',edited_in_design:'edited in the design',removed_from_library:'removed from the latest library revision',library_rule_changed:'library has a newer version'};
+      output.replaceChildren(el('p',value.findings.length+' drifted linked rules across '+value.designs_checked+' saved designs'));
+      const list=el('ul');
+      value.findings.forEach(f=>list.appendChild(el('li',f.workflow_id+' r'+f.revision+' · rule '+f.rule_id+' · linked to revision '+f.linked_revision+(f.latest_revision?' (latest '+f.latest_revision+')':'')+' · '+(words[f.status]||f.status))));
+      output.appendChild(list);
+    });
+    section.append(button('Load rule sets',()=>locked(()=>refresh())),sets,name,source,button('Save design rules to library',saveSet),designRule,libraryRule,
+      button('Link rule from library',linkRule),button('Show rule drift',showDrift),output);
+    host.appendChild(section);
   }
   function renderDMNImport(host){
     const decisions=(record.process_model?.activities||[]).filter(a=>a.kind==='decision');

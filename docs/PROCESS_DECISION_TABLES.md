@@ -339,6 +339,43 @@ In the catalog editor, each decision table has **Add required decision** (choose
 other table and a fact path). Changing or removing a dependency clears table
 confirmations, and removing a table removes the dependencies on it.
 
+## Reusable rule library
+
+Reviewed rules can be kept in a local, versioned rule library and reused across designs
+(`server/process_rule_library.py`). A rule set has a name, an optional source label (for
+example "Purchasing policy v3") and 1–40 rules, each with text and an optional structured
+predicate. Every save creates a new revision and earlier revisions stay readable; a save
+names the revision it was based on, so a stale editor cannot overwrite a newer one. The
+library is stored as `process_rule_library.json` in the local data directory (mode 0600).
+
+On a saved design, the catalog's **Reusable rule library** section can save the design's
+rules as a new rule set or as a new revision of an existing one, link one design rule to a
+library rule, and list drift. Linking copies the library rule's text and predicate into the
+design, marks the rule unconfirmed and records a `library_ref` (rule set, revision, rule and
+a SHA-256 of the text and predicate). The result opens as unsaved edits; nothing is saved
+until the owner reviews the rule, confirms it and saves a new revision. Rules without a
+`library_ref` serialize exactly as before, so existing digests do not change.
+
+The drift report checks the latest revision of each saved design and lists linked rules
+whose:
+
+- rule set is no longer in the library (`rule_set_missing`);
+- text or predicate was edited in the design (`edited_in_design`);
+- rule is absent from the latest library revision (`removed_from_library`);
+- library rule has newer content (`library_rule_changed`).
+
+Routes (dashboard session only; the local API token is refused):
+
+| Route | Purpose |
+|---|---|
+| `GET /v1/process-catalog/rule-library` | List rule sets |
+| `GET /v1/process-catalog/rule-library/set?rule_set_id=&revision=` | Read one revision |
+| `POST /v1/process-catalog/rule-library` | Save a new set or revision |
+| `POST /v1/process-catalog/rule-library/link?workflow_id=&revision=` | Proposed model with one linked rule |
+| `GET /v1/process-catalog/rule-library/drift` | Drift across saved designs |
+
+The library never evaluates, confirms or runs a rule.
+
 ## DMN interchange (exact subset)
 
 **Export saved DMN** (`GET /v1/process-catalog/export?format=dmn`) writes every decision
