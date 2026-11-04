@@ -121,3 +121,45 @@ def evaluate(
         raise MetricDefinitionError("row must be a mapping")
     value = _evaluate(definition["expression"], row)
     return str(value) if value is not None else None
+
+
+MAX_BATCH_ROWS = 1000
+
+
+def summarize_rows(
+    definition: Mapping[str, Any],
+    rows: list[Mapping[str, Any]],
+    allowed_fields: set[str],
+) -> dict[str, Any]:
+    """Summarize a bounded authorized numeric cohort without returning raw rows.
+
+    Caller supplies only consented, tenant-scoped, retention-valid rows. The
+    definition fingerprint is lineage metadata, not an access-control token.
+    """
+    digest = validate(definition, allowed_fields)
+    if not isinstance(rows, list) or len(rows) > MAX_BATCH_ROWS:
+        raise MetricDefinitionError("row budget exceeded")
+    total = Decimal(0)
+    minimum: Decimal | None = None
+    maximum: Decimal | None = None
+    non_null = 0
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise MetricDefinitionError("row must be a mapping")
+        value = _evaluate(definition["expression"], row)
+        if value is None:
+            continue
+        non_null += 1
+        total += value
+        minimum = value if minimum is None else min(minimum, value)
+        maximum = value if maximum is None else max(maximum, value)
+    return {
+        "definition_sha256": digest,
+        "rows": len(rows),
+        "non_null": non_null,
+        "null": len(rows) - non_null,
+        "sum": str(total) if non_null else None,
+        "mean": str(total / non_null) if non_null else None,
+        "min": str(minimum) if minimum is not None else None,
+        "max": str(maximum) if maximum is not None else None,
+    }
