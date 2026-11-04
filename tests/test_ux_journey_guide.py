@@ -85,6 +85,7 @@ assert.equal(state.active,active);
 assert.equal(events.length,before);
 assert.match(element('owgJourneyStatus').textContent,/not available/);
 assert.equal(controls.length,5);
+element('owgCatalogEditor');
 assert.equal(element('owgJourneyReviewHandoff').disabled,true);
 controls[0].click();
 assert.equal(reviewInputs.privacy.disabled,false);
