@@ -434,5 +434,5 @@ async def delete_local_review_intention(request: Request, work_item_ref: str):
 # Separate retained business-log capability; existing receipt routes unchanged.
 from .jira_retained_routes import router as retained_jira_router
 router.include_router(retained_jira_router)
-from .open_work_dispatch_routes import router as open_work_dispatch_router
-router.include_router(open_work_dispatch_router)
+from .open_work_handoff_routes import router as open_work_handoff_router
+router.include_router(open_work_handoff_router)
