@@ -786,9 +786,10 @@ def event_log_root_cause(request: Request, log_id: str, outcome: str = Query(max
 def event_log_simulation_calibration(request: Request, log_id: str,
                                      case_type: str | None = Query(default=None, max_length=200),
                                      max_paths: int = Query(default=10, ge=1, le=simulation.MAX_PATHS),
-                                     routing: str = Query(default="paths", max_length=20)):
+                                     routing: str = Query(default="paths", max_length=20),
+                                     routing_context: str | None = Query(default=None, max_length=80)):
     _require_dashboard(request)
-    return _respond(simulation.calibrate, log_id, case_type, max_paths, routing=routing)
+    return _respond(simulation.calibrate, log_id, case_type, max_paths, routing=routing, routing_context=routing_context)
 
 
 @router.post("/v1/event-logs/{log_id}/simulate")

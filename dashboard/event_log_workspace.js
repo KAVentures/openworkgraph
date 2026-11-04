@@ -1581,8 +1581,14 @@
         const run=button('Run simulation','secondary');run.id='owgEventLogSimRun';
         const routeKind=select('owgEventLogSimRouting',ROUTINGS);
         const pathsField=field('Routing: weighted lines or JSON for exact labels and weights',paths);
-        routeKind.onchange=()=>show(pathsField,routeKind.value==='paths');
-        form.replaceChildren(top,calRow,arrivalRow,field('How cases move between activities',routeKind),pathsField,wrap,addRowNode,poolRow,
+        // Step-by-step routing can also depend on the previous activity or on a case attribute (#370 R14).
+        const routeContext=select('owgEventLogSimRoutingContext',[['current','The current activity only'],['history','The previous and current activity'],['attribute','A case attribute']]);
+        const routeAttribute=input('owgEventLogSimRoutingAttribute','text','e.g. priority');routeAttribute.maxLength=64;
+        const contextField=field('The next step depends on',routeContext),attributeField=field('Case attribute',routeAttribute);
+        const showContext=()=>{const steps=routeKind.value==='transitions';show(contextField,steps);show(attributeField,steps&&routeContext.value==='attribute');};
+        routeContext.onchange=showContext;
+        routeKind.onchange=()=>{show(pathsField,routeKind.value==='paths');showContext();};showContext();
+        form.replaceChildren(top,calRow,arrivalRow,field('How cases move between activities',routeKind),contextField,attributeField,pathsField,wrap,addRowNode,poolRow,
           el('div','Measured times are median gaps before each activity and include waiting. '+coverage,'muted'),run);
         run.onclick=async()=>{
           try{
@@ -1590,7 +1596,9 @@
             for(const r of rows){const m=Number(r.minutes.value),n=Number(r.people.value);if(!(m>=0)||!(n>=1)||!Number.isInteger(n))throw new Error('Check the minutes and resources for '+r.name+'.');activities[r.name]={minutes:m,resources:n};}
             const scenario={format:'openworkgraph.simulation-scenario.v1',label:label.value.trim(),paths:parseWeightedPaths(paths.value),activities,distribution:dist.value,cases:Math.round(Number(cases.value)||2000),activity_time_basis:timeBasis.value};
             if(arrivals.value!=='')scenario.arrivals_per_hour=Number(arrivals.value);
-            if(routeKind.value==='transitions'){scenario.routing='transitions';delete scenario.paths;}
+            if(routeKind.value==='transitions'){scenario.routing='transitions';delete scenario.paths;
+              if(routeContext.value==='history')scenario.routing_context='history';
+              else if(routeContext.value==='attribute'){const name=routeAttribute.value.trim();if(!name)throw new Error('Enter the case attribute that routing depends on.');scenario.routing_context='attribute:'+name;}}
             const pool=simPool({name:poolName.value,resources:poolSize.value,activities:[...poolActivities.selectedOptions].map(o=>o.value)});
             if(pool)scenario.pools=pool;
             const batched=simBatch({activity:batchActivity.value,size:batchSize.value,maxWaitHours:batchWait.value});
