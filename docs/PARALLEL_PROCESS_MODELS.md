@@ -106,3 +106,26 @@ exhaustion and unknown totals. API and shared-store checks preserve review,
 tenant isolation, descriptive exports and explicit runtime contracts. Browser acceptance
 covers import/review/save, keyboard/mobile use, actual accepted interleaving
 versus a missing branch, exact-revision analysis and unchanged canonical data.
+
+## Inclusive (OR) gateways
+
+An `inclusive_split` runs **one or more** of its 2–8 branches, and its paired
+`inclusive_join` waits for exactly the branches that started. The block has the
+same shape as a parallel block: disjoint branch chains, or complete nested blocks,
+meeting at one join of the same kind.
+
+- Every branch leaving an inclusive split carries a rule saying when it runs. Rules
+  stay unconfirmed until a person confirms them. A BPMN `default` flow becomes
+  "Otherwise (default branch when no other condition applies)".
+- The join fires once at least one branch has arrived and no token remains inside
+  the block, including inside nested blocks. A branch therefore cannot finish after
+  the join, and no branch runs twice.
+- Conformance alignment and token replay accept any non-empty subset of branches,
+  in any interleaving. Token replay chooses the branches whose activities appear
+  later in the trace, so a case that skips a branch is not counted as missing it.
+- Generated agent projects check a proposed plan with the same token-firing contract
+  as parallel blocks. The rules of the branches the plan chose are reported as
+  unconfirmed and unevaluated, and the check grants no execution permission.
+- BPMN import maps `inclusiveGateway` to these kinds, and export writes it back.
+  Conditions on an inclusive join, a default on a join, or a gateway that is both
+  split and join are rejected.

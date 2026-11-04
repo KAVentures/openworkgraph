@@ -40,7 +40,7 @@ def compare(log_id: str, record: dict[str, Any], spec: SavedGraphQuery,
     except ValidationError:
         raise workspace.EventLogWorkspaceError('Saved process graph cannot be compared; review its structure') from None
     cohort = cohorts.parse_cohort(spec.cohort)
-    parallel = any(node.kind == 'parallel_split' for node in model.activities)
+    parallel = any(node.kind in {'parallel_split', 'inclusive_split'} for node in model.activities)
     shortest=minimum_route_activities(model)
 
     def run(conn):
