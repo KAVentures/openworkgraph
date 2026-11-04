@@ -369,7 +369,19 @@ combinations, the frequent paths are also the short ones and the simulation runs
   or whether the case ends.
 - **How cases move:** each simulated case walks those shares one step at a time, so loops repeat as
   often as the log suggests and combinations never seen as a whole can still occur.
-- **Limitation:** routing is first-order, so the next step depends only on the current activity.
+- **Limitation:** by default routing is first-order, so the next step depends only on the current
+  activity. `"routing_context"` relaxes that (see below).
+- **Routing context:** `"routing_context": "history"` makes the next step depend on the previous and
+  the current activity, so rework that usually happens once is not repeated as a memoryless walk would
+  repeat it. `"routing_context": "attribute:priority"` gives each simulated case a value of the case
+  attribute `priority`, drawn from its observed mix (the 12 most common values, then `(other)` and
+  `(none)`), and routes it with the shares observed for that value. The value comes from the case
+  object's attribute (OCEL) or else from the case's earliest event that carries it (CSV attribute
+  columns). A context row is used only when at least 20 calibrated cases passed through it; otherwise
+  the walk uses the first-order row. Editing an activity's row in `"transitions"` drops its context
+  rows, so the edit applies to every case. The calibration (`…/simulation/calibration?routing=transitions&routing_context=history`)
+  returns `transitions.context`, and results describe the context rows used. Shares are associations
+  in the log, not effects of the attribute. In the dashboard: **The next step depends on**.
 - **Calibration:** `GET …/simulation/calibration?routing=transitions` returns `transitions`, with
   start counts and, per activity, the counts and shares of the next activity (`to: null` ends the
   case). Arrivals and activity times then also come from every eligible case.

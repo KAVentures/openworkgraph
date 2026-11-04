@@ -14,6 +14,7 @@ from shared.lifespan import extend_lifespan
 from .db import connect
 from . import run_memory
 from .open_work_reviews import clear_review_intentions
+from .open_work_dispatch import clear as clear_dispatch_offers
 from .history_retention import cleanup_expired_history, delete_history_session, initialize_history_retention, list_history
 from .main import ROOT
 from .privacy_pipeline import redact_for_display
@@ -90,6 +91,7 @@ def set_history_policy(request: RetentionChoice) -> dict[str, Any]:
             # A user who chooses "This session only" must not unknowingly
             # keep saved Open Work review intentions for another seven days.
             clear_review_intentions()
+            clear_dispatch_offers()
     except (TypeError,ValueError) as exc: raise HTTPException(status_code=400,detail=str(exc)) from exc
     return {"status":"saved","human_retention":value.get("human_retention"),"agent_retention":value.get("agent_retention"),"onboarding_complete":bool(value.get("onboarding_complete")),"cleanup":cleanup}
 

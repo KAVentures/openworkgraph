@@ -399,6 +399,40 @@ holdout was then scored once: gated F1 0.524 -> 0.700 with contamination 0.0. Th
 below 0.90; the remaining cases need domain meaning (an account or price sheet belongs to a
 renewal) that shared words do not carry, so they still need the model-graded run (A2).
 `tests/test_label_topic_links.py` holds these floors.
+
+### Optional semantic linker (model-graded, A2)
+
+`server/semantic_linker.py` keeps OWG's structural and label-topic items as they
+are and asks a model, through any OpenAI-compatible endpoint, which items belong
+to the same workflow. Its input is the item numbers, app names and short screen
+labels only. Suggestions that would join two different records of the same kind
+are refused, and an unusable answer leaves OWG's grouping unchanged.
+
+With perfect grouping decisions this hybrid reaches gated development F1 1.0 with
+contamination 0.0 (`tests/test_semantic_linker.py`). The items are therefore pure
+enough, and accuracy depends on the model's decisions.
+
+First real run: Qwen2.5-7B-Instruct (Q4_K_M) on a local llama.cpp server, temperature 0.
+The prompt was tuned on the development split only, then the holdout was scored once
+(identifiable-membership family macro):
+
+| Setting | Dev F1 | Dev contamination | Holdout F1 | Holdout contamination |
+|---|---:|---:|---:|---:|
+| Label topics only (no model) | 0.882 | 0.000 | 0.700 | 0.000 |
+| + 7B linker, single answer | 0.889 | 0.095 | 0.700 | 0.125 |
+| + 7B linker, `--semantic-consensus` | 0.834 | 0.048 | 0.575 | 0.125 |
+
+A 7B model makes confident wrong merges, so it does not beat label topics on the holdout
+and breaks the contamination gate. The linker therefore stays off by default. Whether a
+frontier model reaches the 0.90 / 0.05 gate is still unmeasured. To measure one:
+
+    OPENAI_API_KEY=... python -m evals.reconstruction.owg_native --split development \
+      --grouping linked_items_with_semantic_linker --semantic-base-url https://api.openai.com/v1 \
+      --semantic-model <model> --semantic-cache evals/reconstruction/results/semantic-<model>.json
+
+A local server works too (`--semantic-base-url http://127.0.0.1:11434/v1`). Re-score
+for free with `--semantic-replay-only --semantic-cache ...`. Score the holdout
+once, after any prompt changes are frozen.
 `tests/test_work_item_links.py` holds these floors.
 
 ## Ablations

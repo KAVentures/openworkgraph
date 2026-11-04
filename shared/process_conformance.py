@@ -18,7 +18,7 @@ def compare_path(path: tuple[str, ...], model: ProcessModel) -> dict[str, Any]:
     """
     if len(path) > 5000:
         raise ValueError('Conformance path exceeds the 5,000 event limit')
-    if any(node.kind in {'parallel_split','parallel_join'} for node in model.activities):
+    if any(node.kind in {'parallel_split','parallel_join','inclusive_split','inclusive_join'} for node in model.activities):
         from .process_parallel import compare_parallel_path
         return compare_parallel_path(path,model)
     nodes = {activity.id: activity for activity in model.activities}
@@ -90,7 +90,7 @@ def compare_path(path: tuple[str, ...], model: ProcessModel) -> dict[str, Any]:
 
 def compare_paths(paths,model):
     """Cache full paths; bound total parallel search work across one analysis."""
-    if not any(node.kind in {'parallel_split','parallel_join'} for node in model.activities):
+    if not any(node.kind in {'parallel_split','parallel_join','inclusive_split','inclusive_join'} for node in model.activities):
         return {path:compare_path(path,model) for path in paths}
     from . import process_parallel
     remaining=process_parallel.MAX_BATCH_ALIGNMENT_STATES

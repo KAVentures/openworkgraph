@@ -30,7 +30,7 @@ DIAGRAM_NAMESPACES = {
     'http://www.omg.org/spec/DD/20100524/DI',
 }
 TASKS = {'task','userTask','manualTask','serviceTask','sendTask','receiveTask','businessRuleTask'}
-FLOW_NODES = TASKS | {'startEvent','endEvent','exclusiveGateway','parallelGateway'}
+FLOW_NODES = TASKS | {'startEvent','endEvent','exclusiveGateway','parallelGateway','inclusiveGateway'}
 _LABEL = re.compile(r'^[A-Za-z][A-Za-z0-9 _-]{0,63}$')
 _MANUAL = re.compile(r'^UNEVALUATED manual review \((decision_point|exception_condition)\): '
     r'([A-Za-z][A-Za-z0-9 _-]{0,63}); response: '
@@ -279,7 +279,15 @@ def import_bpmn(raw: bytes):
             else:raise BPMNImportError('Parallel gateways must be distinct explicit splits or joins')
             if 'default' in node.attrib or node.get('gatewayDirection','Unspecified') not in {'Unspecified',direction}:
                 raise BPMNImportError('Parallel gateway direction/default contradicts its unconditional topology')
-        if tag not in {'exclusiveGateway','parallelGateway'} and outgoing[identifier]>1:
+        if tag=='inclusiveGateway':
+            if incoming[identifier]<=1 and outgoing[identifier]>=2:kind='inclusive_split';direction='Diverging'
+            elif incoming[identifier]>=2 and outgoing[identifier]==1:kind='inclusive_join';direction='Converging'
+            else:raise BPMNImportError('Inclusive gateways must be distinct explicit splits or joins')
+            if node.get('gatewayDirection','Unspecified') not in {'Unspecified',direction}:
+                raise BPMNImportError('Inclusive gateway direction contradicts its topology')
+            if 'default' in node.attrib and kind!='inclusive_split':
+                raise BPMNImportError('Only an inclusive split can declare a default branch')
+        if tag not in {'exclusiveGateway','parallelGateway','inclusiveGateway'} and outgoing[identifier]>1:
             raise BPMNImportError('Implicit task branching is unsupported; use an explicit exclusive gateway')
         if tag=='startEvent' and not outgoing[identifier]:
             raise BPMNImportError('Start events require an outgoing transition')
@@ -291,13 +299,15 @@ def import_bpmn(raw: bytes):
     for flow in flows:raw_out[flow.get('sourceRef')].append(flow.get('targetRef'))
     parallel_sources=set()
     for identifier,kind in source_kinds.items():
-        if kind!='parallel_split':continue
-        pending=[identifier];seen=set()
+        if kind not in {'parallel_split','inclusive_split'}:continue
+        join_kind=kind.replace('_split','_join')
+        # An inclusive split's own branches carry rules; flows inside its branches do not.
+        pending=list(raw_out[identifier]) if kind=='inclusive_split' else [identifier];seen=set()
         while pending:
             cursor=pending.pop()
             if cursor in seen:continue
             seen.add(cursor)
-            if source_kinds[cursor]=='parallel_join':continue
+            if source_kinds[cursor]==join_kind:continue
             parallel_sources.add(cursor);pending.extend(raw_out[cursor])
     transitions,rules=[],[]
     for index,flow in enumerate(flows,1):
@@ -317,11 +327,14 @@ def import_bpmn(raw: bytes):
         branch=outgoing[source]>1
         condition=next((value for value in expressions+docs+[flow.get('name','').strip()] if value),'')
         edge={'source':mapping[source],'target':mapping[target]}
-        if source in parallel_sources or source_kinds[source]=='parallel_join':
+        if source in parallel_sources or source_kinds[source] in {'parallel_join','inclusive_join'}:
             if expressions or predicate is not None:
                 raise BPMNImportError('Parallel gateway flows cannot have conditional expressions or predicates')
             if condition:notes.append({'source_node_id':source,'text':condition[:2000],'text_truncated':len(condition)>2000})
         elif branch or condition or predicate is not None:
+            default_of_source=next((n.get('default') for n in nodes if n.get('id')==source),None)
+            if not condition and default_of_source==flow.get('id') and source_kinds[source]=='inclusive_split':
+                condition='Otherwise (default branch when no other condition applies)'
             rule_text=condition or 'Clarify the business condition for imported branch '+str(index)
             if len(rule_text)>2000:
                 raise BPMNImportError('Imported branch descriptions must be at most 2,000 characters')
@@ -363,6 +376,8 @@ def import_bpmn(raw: bytes):
               'rules_require_human_confirmation','task_implementations_and_permissions_not_imported']
     if any(kind in {'parallel_split','parallel_join'} for kind in source_kinds.values()):
         warnings.append('parallel_semantics_preserved_sdk_uses_serial_token_valid_schedule')
+    if any(kind in {'inclusive_split','inclusive_join'} for kind in source_kinds.values()):
+        warnings.append('inclusive_branches_run_when_their_unconfirmed_rules_apply')
     if tables:warnings.append('decision_tables_retained_as_unconfirmed_declarations_not_dmn_execution')
     if inlined:warnings.append('embedded_subprocesses_inlined_grouping_not_saved_in_model')
     if label_corrections:warnings.append('unsupported_or_missing_labels_use_placeholders')

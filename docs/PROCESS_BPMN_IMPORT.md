@@ -33,7 +33,7 @@ multi-instance subprocesses, boundary events, triggered start events, several
 start/end events, empty subprocesses and conditional or labelled entry/exit
 transitions are rejected.
 
-Conditional parallel regions, inclusive gateways, other subprocess semantics, event
+Paired inclusive gateways are supported (see [inclusive gateways](PARALLEL_PROCESS_MODELS.md#inclusive-or-gateways)). Conditional parallel regions, unpaired inclusive gateways, other subprocess semantics, event
 triggers, message collaborations, external imports, executable extensions, scripts
 and loop characteristics are rejected. Their semantics are not flattened into an
 incorrect serial graph.

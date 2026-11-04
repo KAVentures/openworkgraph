@@ -448,6 +448,59 @@ def score_label_topic_items(cases: list[dict[str, Any]]) -> dict[str, Any]:
     return aggregate(cases, [predict_label_topic_items(case) for case in cases])
 
 
+def predict_semantic_items(case: dict[str, Any], complete, *, consensus: bool = False) -> dict[str, Any]:
+    """Label-topic items plus accepted semantic-linker suggestions (needs a model)."""
+    from server.label_topic_links import label_topic_members
+    from server.semantic_linker import SemanticLinkerError, suggest
+
+    events = _visible_linked_source_events(case)
+    members = [list(ids) for ids in label_topic_members(events)["members"]]
+    try:
+        suggestions = suggest(events, complete, consensus=consensus)["suggestions"]
+    except SemanticLinkerError:
+        suggestions = []  # an unusable model answer leaves OWG's own grouping unchanged
+    owner = {event_id: index for index, ids in enumerate(members) for event_id in ids}
+    for suggestion in suggestions:
+        indexes = sorted({owner[e] for e in suggestion["event_ids"] if e in owner})
+        for index in indexes[1:]:
+            members[indexes[0]].extend(members[index])
+            members[index] = []
+    position = {event["event_id"]: i for i, event in enumerate(events)}
+    groups = [sorted(ids, key=lambda e: position.get(e, 0)) for ids in members if len(ids) >= 2]
+    assigned = {event_id for ids in groups for event_id in ids}
+    all_ids = _presented_event_ids(case["presented_evidence"])
+    return {
+        "case_id": case["case_id"],
+        "workflows": [{"prediction_id": f"semantic_item_{i}", "event_ids": ids, "ordered_event_ids": ids,
+                       "automation_relevant_event_ids": ids, "ui_mechanic_event_ids": []}
+                      for i, ids in enumerate(groups, start=1)],
+        "unassigned_event_ids": [event_id for event_id in all_ids if event_id not in assigned],
+        "insufficient_evidence": False,
+    }
+
+
+def cached_completion(complete, cache_path: Path | None):
+    """Replay identical prompts from a cache so a paid run can be re-scored for free."""
+    import hashlib
+
+    cache = json.loads(cache_path.read_text(encoding="utf-8")) if cache_path and cache_path.exists() else {}
+
+    def run(system: str, user: str) -> str:
+        key = hashlib.sha256((system + "\x1f" + user).encode("utf-8")).hexdigest()
+        if key not in cache:
+            if complete is None:
+                raise KeyError("prompt not in replay cache")
+            cache[key] = complete(system, user)
+            if cache_path:
+                cache_path.write_text(json.dumps(cache, indent=1, sort_keys=True), encoding="utf-8")
+        return cache[key]
+    return run
+
+
+def score_semantic_items(cases: list[dict[str, Any]], complete, *, consensus: bool = False) -> dict[str, Any]:
+    return aggregate(cases, [predict_semantic_items(case, complete, consensus=consensus) for case in cases])
+
+
 def score_linked_items(cases: list[dict[str, Any]], *, accept_candidates: bool = False) -> dict[str, Any]:
     return aggregate(cases, [predict_linked_items(case, accept_candidates=accept_candidates) for case in cases])
 
@@ -461,8 +514,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cases", help="optional exported JSONL corpus")
     parser.add_argument("--split", choices=("all", "development", "holdout"), default="all")
     parser.add_argument("--grouping", choices=("record_lanes", "linked_items", "linked_items_accepting_candidates",
-                                 "linked_items_with_label_topics"),
+                                 "linked_items_with_label_topics", "linked_items_with_semantic_linker"),
                         default="record_lanes")
+    parser.add_argument("--semantic-base-url", help="OpenAI-compatible endpoint for the semantic linker")
+    parser.add_argument("--semantic-model", help="exact model ID for the semantic linker")
+    parser.add_argument("--semantic-key-env", default="OPENAI_API_KEY",
+                        help="environment variable holding the endpoint key (never pass the key itself)")
+    parser.add_argument("--semantic-cache", type=Path,
+                        help="JSON replay cache; with --semantic-replay-only no model is called")
+    parser.add_argument("--semantic-replay-only", action="store_true")
+    parser.add_argument("--semantic-consensus", action="store_true",
+                        help="ask twice in different item orders and keep only agreed links")
     args = parser.parse_args(argv)
     cases = load_cases(Path(args.cases)) if args.cases else load_cases()
     if args.split != "all":
@@ -472,6 +534,16 @@ def main(argv: list[str] | None = None) -> int:
         report = score_record_lanes(cases)
     elif args.grouping == "linked_items_with_label_topics":
         report = score_label_topic_items(cases)
+    elif args.grouping == "linked_items_with_semantic_linker":
+        import os
+        from server.semantic_linker import http_completion
+        live = None
+        if not args.semantic_replay_only:
+            if not args.semantic_base_url or not args.semantic_model:
+                parser.error("--semantic-base-url and --semantic-model are required (or use --semantic-replay-only)")
+            live = http_completion(args.semantic_base_url, args.semantic_model, os.environ.get(args.semantic_key_env))
+        report = score_semantic_items(cases, cached_completion(live, args.semantic_cache),
+                                      consensus=args.semantic_consensus)
     else:
         report = score_linked_items(cases, accept_candidates=args.grouping != "linked_items")
     print(json.dumps(report, indent=2, sort_keys=True))
