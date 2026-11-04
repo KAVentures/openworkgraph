@@ -30,6 +30,29 @@ for(const id of ['owgJourneyStatus','tab-settings','tab-evidence','tab-connect',
  'panel-settings','panel-evidence','panel-connect','owgEventLogCard',
  'owgCatalogEditor','owgPipelineCard'])element(id);
 const guide=element('owgJourneyGuide');
+const reviewInputs={};
+for(const stage of ['privacy','discovery','map','review']){
+  const handlers={};
+  reviewInputs[stage]={dataset:{owgReview:stage},checked:false,disabled:true,
+    addEventListener(k,fn){handlers[k]=fn},change(value){this.checked=value;handlers.change()}};
+}
+const review=element('owgJourneyReview');
+review.querySelector=selector=>{
+  const match=selector.match(/data-owg-review="([^"]+)"/);
+  return match?reviewInputs[match[1]]:null;
+};
+review.querySelectorAll=()=>Object.values(reviewInputs);
+for(const id of ['owgJourneyReviewStatus','owgJourneyReviewHandoff','owgJourneyReviewReset']){
+  const el=element(id),handlers={};
+  el.addEventListener=(k,fn)=>{handlers[k]=fn};
+  el.click=()=>handlers.click();
+}
+guide.querySelector=selector=>{
+  if(selector==='#owgJourneyReview')return review;
+  if(selector.startsWith('#'))return elements[selector.slice(1)]||null;
+  const match=selector.match(/data-owg-journey="([^"]+)"/);
+  return match?controls.find(c=>c.dataset.owgJourney===match[1]):null;
+};
 guide.querySelectorAll=()=>controls;
 for(const stage of ['privacy','discovery','map','review','handoff']){
   const handlers={};
@@ -62,6 +85,21 @@ assert.equal(state.active,active);
 assert.equal(events.length,before);
 assert.match(element('owgJourneyStatus').textContent,/not available/);
 assert.equal(controls.length,5);
+assert.equal(element('owgJourneyReviewHandoff').disabled,true);
+controls[0].click();
+assert.equal(reviewInputs.privacy.disabled,false);
+reviewInputs.privacy.change(true);
+controls[1].click();
+assert.equal(reviewInputs.discovery.disabled,false);
+reviewInputs.discovery.change(true);
+controls[2].click();
+reviewInputs.map.change(true);
+controls[3].click();
+reviewInputs.review.change(true);
+assert.equal(element('owgJourneyReviewHandoff').disabled,false);
+controls[0].click();
+assert.equal(element('owgJourneyReviewHandoff').disabled,true);
+assert.equal(reviewInputs.review.checked,false);
 """
         result = subprocess.run(
             ["node", "-e", harness, script], capture_output=True, text=True,
