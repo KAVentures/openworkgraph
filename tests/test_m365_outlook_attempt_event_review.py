@@ -21,6 +21,7 @@ def _setup(monkeypatch, tmp_path):
         b"outlookcase:one,Created,2026-11-01T00:00:00Z,outlookevent:one\n")
     csv_path.write_bytes(body)
     candidate.write_bytes(b"candidate")
+    candidate.chmod(0o600)  # Production candidate artifacts are owner-private.
     scope = "a" * 64
     attempt = {"format": review.ATTEMPT_FORMAT, "status": "attempt_started",
                "log_id": "log_" + "a" * 16,
