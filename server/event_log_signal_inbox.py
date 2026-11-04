@@ -84,6 +84,14 @@ def _state(log_id, rule_id, name, last_at, state, acknowledged=None, *, basis=No
     }
 
 
+def _scheduled(log_id: str) -> bool:
+    try:
+        from .local_scheduler import scheduled
+        return scheduled("event_log_signals", log_id)
+    except Exception:
+        return False
+
+
 def list_inbox(log_id: str) -> dict:
     with workspace._LOCK:
         conn = workspace._connect()
@@ -116,7 +124,7 @@ def list_inbox(log_id: str) -> dict:
     return {
         "items": items,
         "unreviewed": sum(x["requires_review"] for x in items),
-        "delivery_enabled": False, "scheduled_checks_enabled": False,
+        "delivery_enabled": False, "scheduled_checks_enabled": _scheduled(log_id),
         "actions_authorized": False,
         "interpretation": ("Acknowledgement records only a local human review of a specific "
                            "evaluated signal state; it neither verifies an outcome nor "
