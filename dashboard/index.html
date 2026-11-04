@@ -122,6 +122,18 @@
     <button role="tab" id="tab-organization" aria-controls="panel-organization" aria-selected="false" data-tab="organization">Organization</button>
   </nav>
 
+  <section id="owgJourneyGuide" class="card" aria-labelledby="owgJourneyTitle">
+    <h2 id="owgJourneyTitle">Explore work → review → prepare handoff</h2>
+    <p class="muted">A guided route through existing local tools. Each step only opens a workspace. No consent is granted, evidence is approved, provider is contacted, or agent is executed by this guide.</p>
+    <div role="group" aria-label="Guided work journey" style="display:flex;gap:8px;flex-wrap:wrap">
+      <button type="button" class="secondary" data-owg-journey="privacy">1. Review opt-in settings</button>
+      <button type="button" class="secondary" data-owg-journey="discovery">2. Inspect discovery evidence</button>
+      <button type="button" class="secondary" data-owg-journey="map">3. Review process map</button>
+      <button type="button" class="secondary" data-owg-journey="review">4. Review opportunity</button>
+      <button type="button" class="secondary" data-owg-journey="handoff">5. Inspect agent connections</button>
+    </div>
+    <p class="muted" id="owgJourneyStatus" role="status" aria-live="polite">Choose a stage. Availability depends on your locally installed tools and permissions.</p>
+  </section>
   <main>
     <section class="tabpanel" role="tabpanel" id="panel-overview" aria-labelledby="tab-overview" data-panel="overview">
       <div class="metrics">
@@ -335,5 +347,42 @@ document.addEventListener('DOMContentLoaded',()=>{initTabs();const tabBar=docume
 <script src="/communications-mining.js"></script>
 <script src="/process-pdd.js"></script>
 <script src="/automation-pipeline.js"></script>
+<script>
+/* Navigation only. Never infer consent, approval, verified outcomes or agent authority. */
+document.addEventListener('DOMContentLoaded', () => {
+  const guide=document.getElementById('owgJourneyGuide');
+  const status=document.getElementById('owgJourneyStatus');
+  if(!guide||!status)return;
+  const stages={
+    privacy:{tab:'settings',target:'panel-settings',label:'Privacy settings'},
+    discovery:{tab:'evidence',target:'owgEventLogCard',label:'Local event-log discovery'},
+    map:{tab:'evidence',target:'owgCatalogEditor',label:'Saved process map and editor'},
+    review:{tab:'evidence',target:'owgPipelineCard',label:'Human opportunity review'},
+    handoff:{tab:'connect',target:'panel-connect',label:'Agent connection settings'}
+  };
+  guide.querySelectorAll('[data-owg-journey]').forEach(control=>{
+    control.addEventListener('click',()=>{
+      const stage=stages[control.dataset.owgJourney];
+      if(!stage)return;
+      const target=document.getElementById(stage.target);
+      const tab=document.getElementById('tab-'+stage.tab);
+      if(!target||!tab||typeof window.activateTab!=='function'){
+        status.textContent=stage.label+' is not available in this installation. Nothing was changed.';
+        return;
+      }
+      window.activateTab(stage.tab);
+      if(document.getElementById('panel-'+stage.tab)?.hidden){
+        status.textContent=stage.label+' could not be opened. Nothing was changed.';
+        return;
+      }
+      const focusTarget=stage.target.startsWith('panel-')?tab:target;
+      focusTarget.setAttribute('tabindex','-1');
+      focusTarget.focus({preventScroll:true});
+      target.scrollIntoView?.({block:'start',behavior:'instant'});
+      status.textContent='Opened '+stage.label+'. Inspect and explicitly confirm any separate actions yourself. No consent, approval or execution was granted.';
+    });
+  });
+});
+</script>
 </body>
 </html>
