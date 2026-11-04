@@ -5,6 +5,7 @@ An absent Case row is unresolved (including permission and retention ambiguity).
 """
 from __future__ import annotations
 
+from .connector_oauth import connector_token as _connector_token
 import argparse
 from datetime import datetime, timezone
 import json
@@ -690,7 +691,7 @@ def main(argv=None):
             raise LifecycleReviewError("Explicit source read and review consents required")
         result = review(instance=args.instance, confirm_host=args.confirm_host,
                         namespace=args.namespace, cases=args.cases,
-                        token=os.environ.get("OWG_SALESFORCE_READ_TOKEN"),
+                        token=_connector_token("OWG_SALESFORCE_READ_TOKEN"),
                         output=args.output, allow_loopback_http=args.allow_loopback_http,
                         max_pages=args.max_pages,
                         previous_review=args.previous_review,

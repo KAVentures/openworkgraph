@@ -989,6 +989,8 @@ async def forget_process_catalog(request: Request) -> Response:
     if not isinstance(workflow_id, str) or not re.fullmatch(_PROCESS_ID, workflow_id):
         raise HTTPException(status_code=422, detail='invalid process ID')
     _catalog_record(workflow_id)
+    from . import process_clarification_store
+    process_clarification_store.forget(workflow_id)
     return JSONResponse(_knowledge.forget('local', workflow_id), headers={'Cache-Control': 'no-store'})
 
 
@@ -1019,6 +1021,59 @@ async def put_semantic_linker(request: Request) -> Response:
     _require_dashboard(request)
     try:return JSONResponse(configure(await _process_json(request, maximum=2048)), headers={'Cache-Control': 'no-store'})
     except SemanticLinkerError as exc:raise HTTPException(409, str(exc)) from None
+
+
+@app.post('/v1/process-catalog/clarify')
+async def clarify_process_design(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID),
+                                 revision: int = Query(ge=1)) -> Response:
+    """Cited questions and contradictions for one exact revision; documents are not stored."""
+    from shared.process_clarification import ClarificationRequest, clarify
+    from .local_source_routes import _require_dashboard
+    from . import process_clarification_store as ledger
+    _require_dashboard(request)
+    try:body = ClarificationRequest.model_validate(await _process_json(request, maximum=400 * 1024))
+    except (ValidationError, ValueError):raise HTTPException(422, 'invalid clarification documents') from None
+    record = _catalog_record(workflow_id, revision)
+    result = clarify(record, body, ledger.decisions(workflow_id, revision, record['content_sha256']))
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+
+@app.post('/v1/process-catalog/clarify/decide')
+async def decide_process_clarification(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID),
+                                       revision: int = Query(ge=1)) -> Response:
+    """Record one human decision; a confirm returns a proposed model change, never applied here."""
+    from shared.process_clarification import ClarificationRequest, Decision, clarify, proposed_change
+    from .local_source_routes import _require_dashboard
+    from . import process_clarification_store as ledger
+    _require_dashboard(request)
+    value = await _process_json(request, maximum=400 * 1024)
+    try:
+        decision = Decision.model_validate(value.get('decision'))
+        docs = ClarificationRequest.model_validate({'documents': value.get('documents', [])})
+    except (ValidationError, ValueError, AttributeError):raise HTTPException(422, 'invalid clarification decision') from None
+    record = _catalog_record(workflow_id, revision)
+    questions = {q['question_id']: q for q in clarify(record, docs)['questions']}
+    question = questions.get(decision.question_id)
+    if question is None:
+        raise HTTPException(409, 'question not found for this revision and these documents')
+    by_id = {c['statement_id']: c for c in question['citations']}
+    for conflict in question['contradictions']:
+        by_id.update({c['statement_id']: c for c in conflict['statements']})
+    if any(sid not in by_id for sid in decision.cited_statement_ids):
+        raise HTTPException(422, 'cite only statements shown with this question')
+    entry = ledger.record(workflow_id, revision, record['content_sha256'], question, decision.model_dump(),
+                          [by_id[sid] for sid in decision.cited_statement_ids])
+    return JSONResponse({'decision': entry, 'proposed_change': proposed_change(record, question, decision)},
+                        headers={'Cache-Control': 'no-store'})
+
+
+@app.get('/v1/process-catalog/clarify/decisions')
+def list_process_clarification_decisions(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID)) -> Response:
+    from .local_source_routes import _require_dashboard
+    from . import process_clarification_store as ledger
+    _require_dashboard(request)
+    return JSONResponse({'workflow_id': workflow_id, 'decisions': ledger.history(workflow_id)},
+                        headers={'Cache-Control': 'no-store'})
 
 
 @app.get('/v1/process-catalog/opportunities')

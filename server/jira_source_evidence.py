@@ -182,6 +182,13 @@ def jira_issue_receipt(
     host = str(env.get("OWG_JIRA_HOST") or "").strip().lower()
     cloud_id = str(env.get("OWG_JIRA_CLOUD_ID") or "").strip().lower()
     token = str(env.get("OWG_JIRA_OAUTH_ACCESS_TOKEN") or "").strip()
+    connection = str(env.get("OWG_JIRA_OAUTH_CONNECTION") or "").strip()
+    if connection:
+        from .connector_oauth import OAuthError, bearer_for
+        try:
+            token = bearer_for(connection, "atlassian")
+        except OAuthError:
+            return _unknown("jira_oauth_renewal_failed_reconnect_required")
     if not _TENANT.fullmatch(host) or not _CLOUD_ID.fullmatch(cloud_id) or not token:
         return _unknown("jira_oauth_source_configuration_missing")
     if any(ch in token for ch in "\r\n") or len(token) > 4096:

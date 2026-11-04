@@ -39,7 +39,8 @@ BROWSER_ROUTES = {
     ("POST", "/v1/work-text/ingest"),
 }
 BROWSER_PATHS = {path for _, path in BROWSER_ROUTES}
-PUBLIC_PATHS = {"/health"}
+# The OAuth callback is a browser redirect; its single-use PKCE state is its authentication.
+PUBLIC_PATHS = {"/health", "/v1/connector-oauth/callback"}
 EXTENSION_PREFIXES = ("chrome-extension://", "moz-extension://", "safari-web-extension://")
 BLOCKED_DEV_PATHS = {"/openapi.json", "/redoc"}
 ALLOWED_LOCAL_HOSTS = {"127.0.0.1", "localhost", "testserver", "::1"}
