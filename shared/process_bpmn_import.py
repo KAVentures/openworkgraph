@@ -284,6 +284,80 @@ def _lower_tasks(process, lowered):
         flows = [c for c in process if _name(c) == 'sequenceFlow']
 
 
+_RESPONSIBILITY_NOTE = ('User-declared responsibility: {}. '
+                        'Descriptive only; not verified identity or review/execution authority.')
+_DEFINITION_TAGS = {'message', 'error', 'escalation'}
+
+
+def _note(node, text):
+    documentation = _el('documentation')
+    documentation.text = text
+    node.append(documentation)
+
+
+def _apply_collaboration(collaboration, process, definitions, applied):
+    """One internal process plus black-box pools: message flows become task notes."""
+    participants = [c for c in collaboration if _name(c) == 'participant']
+    others = [c for c in collaboration if _name(c) not in {'participant', 'messageFlow', 'documentation'}]
+    if others:
+        raise BPMNImportError('Collaborations may contain only participants, message flows and documentation')
+    owners = [p for p in participants if p.get('processRef')]
+    if len(owners) != 1 or owners[0].get('processRef') != process.get('id'):
+        raise BPMNImportError('A collaboration needs exactly one pool with the imported process; other pools must be black boxes')
+    if any(len([c for c in p if _name(c) != 'documentation']) for p in participants):
+        raise BPMNImportError('Pool multiplicity and participant extensions are unsupported')
+    pools = {p.get('id'): (p.get('name') or 'another party').strip()[:80] for p in participants}
+    nodes = {n.get('id'): n for n in process if n.get('id')}
+    names = {d.get('id'): (d.get('name') or '').strip()[:80] for d in definitions}
+    for flow in (c for c in collaboration if _name(c) == 'messageFlow'):
+        source, target = flow.get('sourceRef'), flow.get('targetRef')
+        what = (flow.get('name') or names.get(flow.get('messageRef'), '') or 'a message').strip()[:80]
+        if source in nodes and target in pools and target != owners[0].get('id'):
+            _note(nodes[source], f'Sends {what} to {pools[target]} (message flow; no control-flow effect).')
+        elif target in nodes and source in pools and source != owners[0].get('id'):
+            _note(nodes[target], f'Receives {what} from {pools[source]} (message flow; no control-flow effect).')
+        elif {source, target} <= set(pools):
+            continue  # pool-to-pool messages describe the outside world only
+        else:
+            raise BPMNImportError('Message flows must connect the imported process with another pool')
+        applied.append({'kind': 'message_flow'})
+
+
+def _apply_lanes(process, applied):
+    """Lane names become the existing descriptive responsibility labels."""
+    lane_sets = [c for c in process if _name(c) == 'laneSet']
+    if len(lane_sets) > 1:
+        raise BPMNImportError('A process can declare at most one lane set')
+    if not lane_sets:
+        return
+    nodes = {n.get('id'): n for n in process if n.get('id')}
+
+    def walk(lane_set, depth):
+        if depth > 3:
+            raise BPMNImportError('Lanes may be nested at most three levels deep')
+        for lane in lane_set:
+            if _name(lane) != 'lane':
+                raise BPMNImportError('Lane sets may contain only lanes')
+            label = ' '.join((lane.get('name') or '').split())[:120]
+            for child in lane:
+                kind = _name(child)
+                if kind == 'flowNodeRef':
+                    node = nodes.get((child.text or '').strip())
+                    if node is None:
+                        raise BPMNImportError('Lanes must reference nodes of the imported process')
+                    already = any(_name(d) == 'documentation' and (d.text or '').startswith('User-declared responsibility:')
+                                  for d in node)
+                    if label and not already and _name(node) in TASKS | {'exclusiveGateway', 'inclusiveGateway'}:
+                        _note(node, _RESPONSIBILITY_NOTE.format(label))
+                        applied.append({'kind': 'lane'})
+                elif kind == 'childLaneSet':
+                    walk(child, depth + 1)
+                elif kind != 'documentation':
+                    raise BPMNImportError('Lanes may contain only node references and nested lanes')
+    walk(lane_sets[0], 1)
+    process.remove(lane_sets[0])
+
+
 def import_bpmn(raw: bytes):
     if not isinstance(raw,bytes) or not raw or len(raw)>MAX_BYTES:
         raise BPMNImportError('BPMN must be a nonempty UTF-8 file of at most 128 KiB')
@@ -310,8 +384,14 @@ def import_bpmn(raw: bytes):
         raise BPMNImportError('BPMN IDs must be unique, nonempty and at most 200 characters')
     processes=[]
     ignored_diagram_count=0
+    collaborations,definitions=[],[]
     for child in root:
         if child.tag=='{'+BPMN+'}process':processes.append(child)
+        elif child.tag=='{'+BPMN+'}collaboration':collaborations.append(child)
+        elif child.tag in {'{'+BPMN+'}'+tag for tag in _DEFINITION_TAGS}:
+            if any(_name(c) not in {'documentation','errorCode'} for c in child.iter() if c is not child):
+                raise BPMNImportError('Message, error and escalation definitions may not carry payload schemas or extensions')
+            definitions.append(child)
         elif child.tag=='{'+BPMN+'}documentation':pass
         elif child.tag=='{http://www.omg.org/spec/BPMN/20100524/DI}BPMNDiagram':
             for node in child.iter():
@@ -324,6 +404,11 @@ def import_bpmn(raw: bytes):
     if len(processes)!=1:
         raise BPMNImportError('Import exactly one BPMN process at a time')
     process=copy.deepcopy(processes[0])
+    if len(collaborations)>1:
+        raise BPMNImportError('Import at most one collaboration')
+    applied=[]
+    if collaborations:_apply_collaboration(collaborations[0],process,definitions,applied)
+    _apply_lanes(process,applied)
     inlined=[]
     _inline_subprocesses(process,inlined)
     lowered=[]
@@ -518,6 +603,8 @@ def import_bpmn(raw: bytes):
         warnings.append('inclusive_branches_run_when_their_unconfirmed_rules_apply')
     if tables:warnings.append('decision_tables_retained_as_unconfirmed_declarations_not_dmn_execution')
     if inlined:warnings.append('embedded_subprocesses_inlined_grouping_not_saved_in_model')
+    if any(item['kind']=='message_flow' for item in applied):warnings.append('message_flows_recorded_as_task_notes_without_control_flow')
+    if any(item['kind']=='lane' for item in applied):warnings.append('lane_names_imported_as_descriptive_responsibility_labels')
     warnings.extend(sorted({{'call_activity':'call_activities_imported_as_single_steps_called_process_not_expanded',
         'standard_loop':'task_loops_imported_as_exclusive_repeat_choices',
         'sequential_multi_instance':'sequential_multi_instance_imported_as_exclusive_repeat_choices'}.get(
@@ -532,6 +619,8 @@ def import_bpmn(raw: bytes):
         'source_sha256':sha256(raw).hexdigest(),'source_node_ids':mapping,
         'documentation_notes':notes,'placeholder_label_count':len(label_corrections),
         'lowered_constructs':[{'kind':item['kind']} for item in lowered][:40],
+        'message_flow_count':sum(item['kind']=='message_flow' for item in applied),
+        'lane_responsibility_count':sum(item['kind']=='lane' for item in applied),
         'inlined_subprocesses':[{'label':label if _LABEL.fullmatch(label) else '',
             'activity_ids':[mapping[member] for member in members if member in mapping]}
             for _,label,members in inlined],
