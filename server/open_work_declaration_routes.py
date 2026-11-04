@@ -2503,7 +2503,10 @@ async def verify_local_bound_run_source(request: Request, response: Response):
         "confirm_historical_review", "confirm_run_comparison",
         "confirm_source_verification", "max_cases", "deployment_id",
         "run_id", "record_link",
-    })
+    }, optional={"persist_provider_check"})
+    persist = payload.get("persist_provider_check", False)
+    if type(persist) is not bool:
+        raise HTTPException(422, "persist_provider_check must be boolean")
     if (payload["confirm_historical_review"] is not True
             or payload["confirm_run_comparison"] is not True
             or payload["confirm_source_verification"] is not True):
@@ -2534,6 +2537,18 @@ async def verify_local_bound_run_source(request: Request, response: Response):
             payload["expected_revision"], payload["expected_edit_token"], signature)
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
         raise _safe_error(exc) from None
+    # A durable check is an explicit second action, never the default behavior.
+    # Snapshot the private HMAC ledger BEFORE network IO for optimistic CAS.
+    prior_evidence = None
+    if persist:
+        try:
+            prior_evidence = await asyncio.to_thread(
+                read_operation_evidence, admitted, signature, scope=scope,
+                secret=secret, guard=lambda: _operation_ledger_guard(
+                    scope, payload["work_item_ref"], payload["expected_revision"],
+                    payload["expected_edit_token"], signature))
+        except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+            raise _safe_error(exc) from None
     await _recheck_source(scope)
     # Provider failure yields unknown, never an inferred failure or success.
     try:
@@ -2568,9 +2583,41 @@ async def verify_local_bound_run_source(request: Request, response: Response):
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
         raise _safe_error(exc) from None
     await _recheck_source(scope)
+    persisted_history = None
+    if persist:
+        # The case ledger records provider state, not independent run identity.
+        # Recheck the run binding and case immediately before the guarded CAS.
+        try:
+            await asyncio.to_thread(
+                _operation_ledger_guard, scope, payload["work_item_ref"],
+                payload["expected_revision"], payload["expected_edit_token"], signature)
+            latest_run = await asyncio.to_thread(
+                read_imported_run, deployment_id=payload["deployment_id"],
+                run_id=payload["run_id"], scope=scope, secret=secret)
+            latest_binding = await asyncio.to_thread(
+                get_binding, scope=scope, actor=actor, secret=secret,
+                case_ref=payload["work_item_ref"], run_ref=latest_run["run_ref"],
+                fingerprint=latest_run["run_snapshot_fingerprint"],
+                revision=payload["expected_revision"])
+            if latest_run != run or latest_binding != binding:
+                raise CaseDeclarationError("run binding changed before evidence append")
+            persisted_history = await asyncio.to_thread(
+                append_operation_evidence, refreshed, refreshed_signature,
+                scope=scope, secret=secret, resource_ref=resource_ref,
+                verification=verified,
+                guard=lambda: _operation_ledger_guard(
+                    scope, payload["work_item_ref"], payload["expected_revision"],
+                    payload["expected_edit_token"], signature),
+                expected_history=prior_evidence["events"])
+        except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
+            raise _safe_error(exc) from None
+        await _recheck_source(scope)
     response.headers["Cache-Control"] = "no-store"
     return {
         "format": "openworkgraph.local-bound-run-source-verification.v1",
+        "provider_check_persisted": persisted_history is not None,
+        "case_provider_evidence_history": persisted_history,
+        "provider_evidence_run_identity_independently_verified": False,
         "work_item_ref": payload["work_item_ref"],
         "run_ref": run["run_ref"],
         "association": "operator_confirmed",
