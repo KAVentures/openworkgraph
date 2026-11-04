@@ -5,6 +5,7 @@ no provisioning, discovery of users, automatic retries or permission changes.
 """
 from __future__ import annotations
 
+from server.connector_oauth import connector_token as _connector_token
 import argparse
 import json
 import os
@@ -250,7 +251,7 @@ def main(argv=None, *, graph_opener=None, owg_opener=None, stdin=None):
         receipt = reconcile_groups(
             args.graph_origin, args.owg_base_url, args.confirm_owg_host,
             args.confirm_provider, args.confirm_tenant,
-            os.environ.get("OWG_ENTRA_READ_TOKEN"),
+            _connector_token("OWG_ENTRA_READ_TOKEN"),
             os.environ.get("OWG_SCIM_PROBE_TOKEN"),
             stream.read(MAX_MANIFEST_BYTES + 1),
             allow_loopback_http=args.allow_loopback_http,
