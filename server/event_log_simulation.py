@@ -508,8 +508,8 @@ def parse_scenario(spec: Any, base: dict[str, Any]) -> dict[str, Any]:
     for name in names:
         known = base["activities"].get(name, {})
         given = overrides.get(name, {})
-        if not isinstance(given, dict) or set(given) - {"minutes", "resources", "batch"}:
-            raise EventLogWorkspaceError("each activity takes minutes, resources and optionally a batch")
+        if not isinstance(given, dict) or set(given) - {"minutes", "resources", "batch", "queue_timeout_minutes"}:
+            raise EventLogWorkspaceError("each activity takes minutes, resources and optionally a batch or queue timeout")
         minutes = given.get("minutes", known.get(measured_key, known.get("minutes")))
         if minutes is None:
             raise EventLogWorkspaceError("enter minutes for activities not seen in the log")
@@ -517,8 +517,12 @@ def parse_scenario(spec: Any, base: dict[str, Any]) -> dict[str, Any]:
         resources = _number(resources, 1, MAX_RESOURCES, "resources")
         if resources != int(resources):
             raise EventLogWorkspaceError("resources must be a whole number")
+        if "queue_timeout_minutes" in given and "batch" in given:
+            raise EventLogWorkspaceError("a batched activity cannot also abandon individual queued cases")
         params[name] = {"minutes": _number(minutes, 0, 525600, "minutes"), "resources": int(resources),
-                        **({"batch": _batch(given["batch"], name)} if "batch" in given else {})}
+                        **({"batch": _batch(given["batch"], name)} if "batch" in given else {}),
+                        **({"queue_timeout_minutes": _number(given["queue_timeout_minutes"], 0, 525600,
+                            "queue_timeout_minutes")} if "queue_timeout_minutes" in given else {})}
     if len(params) > MAX_ACTIVITIES:
         raise EventLogWorkspaceError(f"at most {MAX_ACTIVITIES} distinct activities")
     distribution = spec.get("distribution", base.get("distribution", "exponential"))
@@ -620,6 +624,10 @@ def simulate(model: dict[str, Any], samples: list[float] | None = None) -> dict[
     class_waits: dict[int, list[float]] = {}
     busy = {a: 0.0 for a in params}
     waits = {a: [] for a in params}
+    # Waiting non-batch steps are tracked independently of the priority heaps. Timed-out
+    # entries remain as harmless heap tombstones until a resource becomes available.
+    queued_active: set[tuple[int, int]] = set()
+    abandoned: dict[int, str] = {}
     events: list[tuple[float, int, int, int]] = []  # (time, order, case, step) for arrivals at a step
     seq = 0
     start, finish, route, step_arrival = {}, {}, {}, {}
@@ -710,8 +718,17 @@ def simulate(model: dict[str, Any], samples: list[float] | None = None) -> dict[
                         finish[member] = now
                 start_batches(now, activity)
                 continue
-            if queues[team[activity]]:
-                _, _, _, (waiting_case, waiting_step) = heapq.heappop(queues[team[activity]])
+            # A queued case may have left while a resource was busy. Skip its
+            # heap tombstone; it must not later be served or counted as finished.
+            next_waiter = None
+            while queues[team[activity]]:
+                _, _, _, candidate = heapq.heappop(queues[team[activity]])
+                if candidate in queued_active:
+                    queued_active.remove(candidate)
+                    next_waiter = candidate
+                    break
+            if next_waiter is not None:
+                waiting_case, waiting_step = next_waiter
                 begin(now, waiting_case, waiting_step, route[waiting_case][waiting_step])
             else:
                 free[team[activity]] += 1
@@ -721,6 +738,15 @@ def simulate(model: dict[str, Any], samples: list[float] | None = None) -> dict[
                 finish[case] = now
             continue
         now, order, case, step = heapq.heappop(events)
+        if step < 0:
+            # Negative step encodes an optional queue deadline for step -step-1.
+            # At equal times the completion branch above runs first, allowing a
+            # waiting case to take the freed resource at its deadline.
+            waiting_key = (case, -step - 1)
+            if waiting_key in queued_active:
+                queued_active.remove(waiting_key)
+                abandoned[case] = route[case][waiting_key[1]]
+            continue
         activity = route[case][step]
         step_arrival[(case, step)] = now
         if activity in batched:
@@ -736,9 +762,14 @@ def simulate(model: dict[str, Any], samples: list[float] | None = None) -> dict[
         else:
             rank = classes[klass[case]]["rank"] if classes else 0
             heapq.heappush(queues[team[activity]], (rank, now, order, (case, step)))
+            queued_active.add((case, step))
+            timeout = params[activity].get("queue_timeout_minutes")
+            if timeout is not None:
+                heapq.heappush(events, (now + timeout * 60, seq, case, -(step + 1)))
+                seq += 1
     warm = int(model["cases"] * WARM_UP_SHARE)
     # A batch that never fills (no maximum wait) holds its cases; they are counted, never measured as finished.
-    stuck = sum(1 for c in range(model["cases"]) if c not in finish)
+    stuck = sum(1 for c in range(model["cases"]) if c not in finish and c not in abandoned)
     measured = [c for c in range(warm, model["cases"]) if c in finish]
     cycle = sorted(finish[c] - start[c] for c in measured)
     if samples is not None:
@@ -791,9 +822,24 @@ def simulate(model: dict[str, Any], samples: list[float] | None = None) -> dict[
                           "utilization": round(utilization_of[t], 4), "offered_load": round(offered_of[t], 4),
                           "mean_wait_seconds": round(sum(ordered) / len(ordered), 3) if ordered else 0,
                           "p90_wait_seconds": _percentile(ordered, 0.9) or 0, "overloaded": offered_of[t] >= 1})
+    abandonment_rows = []
+    if any("queue_timeout_minutes" in p for p in params.values()):
+        after = {a: 0 for a in params if "queue_timeout_minutes" in params[a]}
+        for case, activity in abandoned.items():
+            if case >= warm:
+                after[activity] += 1
+        abandonment_rows = [{"activity": a, "cases_abandoned": n,
+                             "queue_timeout_minutes": params[a]["queue_timeout_minutes"]}
+                            for a, n in sorted(after.items())]
     return {
         "cases_simulated": model["cases"],
         "cases_measured": len(cycle),
+        **({"cases_abandoned": len(abandoned),
+            "cases_abandoned_after_warmup": sum(x["cases_abandoned"] for x in abandonment_rows),
+            "abandonment_rate_after_warmup": round(
+                sum(x["cases_abandoned"] for x in abandonment_rows) / max(1, model["cases"] - warm), 6),
+            "abandonment_by_activity": abandonment_rows,
+            "abandonment_is_simulated_not_observed": True} if abandonment_rows else {}),
         "cycle_time_seconds": {"p50": _percentile(cycle, 0.5), "p90": _percentile(cycle, 0.9),
                                "mean": sum(cycle) / len(cycle) if cycle else None},
         "completed_per_day": round(len(cycle) / (window / 86400), 3) if window > 0 else None,
@@ -876,15 +922,29 @@ BATCH_ASSUMPTIONS = [
 
 
 def _with_priorities(scenario: dict[str, Any], lines: list[str]) -> list[str]:
-    """Priority classes and batches the scenario models replace the general "not modeled" wording."""
+    """State which optional queue/priority features the scenario actually models."""
     batching = any("batch" in p for p in scenario["activities"].values())
-    if not scenario.get("priorities") and not batching:
+    abandonment = any("queue_timeout_minutes" in p for p in scenario["activities"].values())
+    priorities = bool(scenario.get("priorities"))
+    if not priorities and not batching and not abandonment:
         return lines
-    missing = [x for x, used in (("batching", batching), ("priorities", bool(scenario.get("priorities")))) if not used]
-    text = ", " + ", ".join(missing) + " or abandonment" if missing else " or abandonment"
+    missing = [x for x, used in (("batching", batching), ("priorities", priorities),
+                                 ("abandonment", abandonment)) if not used]
+    if len(missing) > 1:
+        text = ", " + ", ".join(missing[:-1]) + " or " + missing[-1]
+    elif missing:
+        text = " or " + missing[0]
+    else:
+        text = ""
     lines = [line.replace(", batching, priorities or abandonment", text) for line in lines]
-    return lines + (priority_classes.ASSUMPTIONS if scenario.get("priorities") else []) + \
-        (BATCH_ASSUMPTIONS if batching else [])
+    if abandonment:
+        lines = [line.replace("no calendars, breaks are modeled", "neither calendars nor breaks are modeled")
+                 for line in lines]
+    return lines + (priority_classes.ASSUMPTIONS if priorities else []) + \
+        (BATCH_ASSUMPTIONS if batching else []) + \
+        (["Cases waiting for an explicitly configured queue_timeout_minutes may leave that activity before service. "
+          "They do not complete the remaining route; abandonment rates are simulated assumptions, not observed "
+          "outcomes or causal forecasts. At equal deadline and service-completion times, service wins."] if abandonment else [])
 
 
 def _assumptions(baseline: dict[str, Any], scenario: dict[str, Any]) -> list[str]:
