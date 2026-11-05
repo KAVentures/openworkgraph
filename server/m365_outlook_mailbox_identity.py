@@ -20,7 +20,7 @@ from .m365_outlook_verified_append_receipt import _exclusive_private
 FORMAT = "openworkgraph.m365-mailbox-identity.v1"
 URL = "https://graph.microsoft.com/v1.0/me?%24select=id,userPrincipalName,mail"
 MAX_BYTES = 8192
-ADDRESS = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_\x60{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9.-]{0,253}[A-Za-z0-9])?\\Z", re.ASCII)
+ADDRESS = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_\x60{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9.-]{0,253}[A-Za-z0-9])?\Z", re.ASCII)
 
 
 class IdentityError(ValueError):
