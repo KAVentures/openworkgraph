@@ -756,6 +756,14 @@ const path=require('node:path');
    assert.doesNotMatch(complianceText,/\bann\b|\bbob\b/);
    await page.getByRole('button',{name:'Save as signal: every Receive is eventually followed by Approve'}).click();
    await page.locator('#owgComplianceStatus').filter({hasText:'Saved as a signal.'}).waitFor();
+   // Suggested rules: candidates the log already follows, added to the rule list for checking.
+   const pendingBefore=await page.locator('#owgComplianceRules tbody tr').count();
+   await page.locator('#owgComplianceConfidence').fill('90');
+   await page.locator('#owgComplianceSuggest').click();
+   await page.locator('#owgComplianceSuggestions table').waitFor();
+   assert.match(await page.locator('#owgComplianceSuggestions').textContent(),/suggestions from \d+ cases.*not policy/);
+   await page.locator('#owgComplianceSuggestions tbody tr').first().getByRole('button').click();
+   assert.equal(await page.locator('#owgComplianceRules tbody tr').count(),pendingBefore+1);
 
    await page.evaluate(()=>{window.scrollTo(0,0);});
    await page.addScriptTag({content:axeSource});
