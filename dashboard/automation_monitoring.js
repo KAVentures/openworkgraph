@@ -54,15 +54,18 @@
     const manage=el('div');manage.id='owgMonitorManage';
     const mrow=el('div',null,'row');mrow.style.cssText='align-items:end;margin-top:12px';
     mrow.append(field('Deployment',pick),field('Recent days',recent),field('Baseline days',baseline),view);
-    const arow=el('div',null,'row');arow.style.alignItems='end';arow.append(field('Attach reviewed design (workflow.spec.json)',design),toLog,remove);
-    manage.append(mrow,arow);show(manage,false);
+    const channelButton=button('Signed report channel','secondary');channelButton.id='owgMonitorChannel';
+    const incidentButton=button('Show incidents','secondary');incidentButton.id='owgMonitorIncidents';
+    const arow=el('div',null,'row');arow.style.alignItems='end';arow.append(field('Attach reviewed design (workflow.spec.json)',design),toLog,channelButton,incidentButton,remove);
+    const channelHost=el('div');channelHost.id='owgMonitorChannelPanel';const incidentHost=el('div');incidentHost.id='owgMonitorIncidentPanel';
+    manage.append(mrow,arow,channelHost,incidentHost);show(manage,false);
     const results=el('div');results.id='owgMonitorResults';
     card.append(row,consentLabel,importButton,status,manage,results);
     const anchor=document.getElementById('owgPddCard')||document.getElementById('owgCommsCard')||document.getElementById('owgEventLogCard');
     if(anchor)anchor.insertAdjacentElement('afterend',card);else panel.appendChild(card);
 
     let deployments=[],renderVersion=0,loadVersion=0;
-    const clearResults=()=>{renderVersion++;results.replaceChildren();};
+    const clearResults=()=>{renderVersion++;results.replaceChildren();channelHost.replaceChildren();incidentHost.replaceChildren();};
     const refresh=()=>{importButton.disabled=!(file.files&&file.files[0]&&consent.checked);};
     file.onchange=refresh;consent.onchange=refresh;
     async function load(select){
@@ -101,6 +104,54 @@
       catch(error){if(pick.value===selected)status.textContent=error.message;}
     };
     view.onclick=()=>render().catch(error=>{status.textContent=error.message;});
+    const secretBox=(secret)=>{const box=input('owgMonitorChannelSecret','text');box.readOnly=true;box.value=secret;box.style.width='100%';
+      return [field('Channel secret (shown only now; store it in your automation\'s secret store)',box)];};
+    async function renderChannel(shown){
+      const selected=pick.value;if(!selected)return;
+      const data=await api('/v1/automation-monitoring/channels?deployment_id='+encodeURIComponent(selected));
+      if(pick.value!==selected)return;
+      const live=data.channels.find(c=>!c.revoked_at);
+      const parts=[el('h3','Signed report channel'),el('div','Your automation can POST run reports here itself, with the local API token and an HMAC-SHA256 signature over the timestamp, a sequence number and the body (see shared/automation_report_signing.py). OWG refuses bad signatures and stale timestamps, ignores exact resends, refuses reused sequence numbers and reports skipped ones as lost. A report for a different workflow spec is refused as version drift. Reports are still what the automation says happened.','muted')];
+      if(!live){
+        const create=button('Create report channel','secondary');create.id='owgMonitorChannelCreate';
+        create.onclick=async()=>{try{const made=await api('/v1/automation-monitoring/deployments/'+encodeURIComponent(selected)+'/channel',{method:'POST'});await renderChannel(made.secret);}catch(error){status.textContent=error.message;}};
+        parts.push(create);
+      }else{
+        parts.push(el('div','Endpoint: POST /v1/automation-monitoring/channels/'+live.channel_id+'/reports · body format openworkgraph.signed-run-report.v1 · clock skew up to '+data.max_clock_skew_seconds+' s.','muted'));
+        if(shown)parts.push(...secretBox(shown));
+        parts.push(table(['Accepted','Refused','Highest sequence','Missing'],[[String(live.accepted_reports),String(live.refused_reports),String(live.highest_sequence),live.missing_count?live.missing_sequences.join(', ')+(live.missing_count>live.missing_sequences.length?' …':''):'none']]));
+        if(live.versions.length)parts.push(el('h4','Versions seen'),table(['Version','Workflow spec','First seen','Last seen','Reports','Runs'],live.versions.map(v=>[v.version_label||'(none)',v.workflow_spec_sha256?v.workflow_spec_sha256.slice(0,12)+'…':'(none)',v.first_seen,v.last_seen,String(v.reports),String(v.runs)])));
+        const rotate=button('Rotate secret','secondary');rotate.id='owgMonitorChannelRotate';
+        rotate.onclick=async()=>{if(!window.confirm('Replace the channel secret? The old one stops working immediately.'))return;try{const r=await api('/v1/automation-monitoring/channels/'+encodeURIComponent(live.channel_id)+'/rotate',{method:'POST'});await renderChannel(r.secret);}catch(error){status.textContent=error.message;}};
+        const revoke=button('Revoke channel','secondary');revoke.id='owgMonitorChannelRevoke';
+        revoke.onclick=async()=>{if(!window.confirm('Revoke this channel? The automation can no longer send reports with it.'))return;try{await api('/v1/automation-monitoring/channels/'+encodeURIComponent(live.channel_id)+'/revoke',{method:'POST'});await renderChannel();}catch(error){status.textContent=error.message;}};
+        parts.push(el('div',null,'row'),rotate,revoke);
+      }
+      channelHost.replaceChildren(...parts);
+    }
+    const KIND={run_failures:'Failed runs',run_handoffs:'Runs handed to a person',signature_rejected:'Rejected signatures',replay_conflict:'Reused sequence numbers',lost_reports:'Lost reports',version_drift:'Version drift'};
+    async function renderIncidents(){
+      const selected=pick.value;if(!selected)return;
+      const data=await api('/v1/automation-monitoring/incidents?deployment_id='+encodeURIComponent(selected));
+      if(pick.value!==selected)return;
+      const list=el('div');
+      data.incidents.forEach(i=>{
+        const box=el('fieldset');box.appendChild(el('legend',(KIND[i.kind]||i.kind)+' · '+i.status));
+        box.appendChild(el('div',i.fingerprint.replace(/^step:/,'Step: ')+' · '+i.occurrences+' occurrences · first '+i.first_seen+' · last '+i.last_seen+(i.reopened_count?' · reopened '+i.reopened_count+'×':'')+(i.sample_refs.length?' · runs '+i.sample_refs.join(', '):''),'muted'));
+        i.notes.forEach(n=>box.appendChild(el('div',n.at+' · '+n.status+' · '+n.note)));
+        const note=input('owgMonitorIncidentNote_'+i.incident_id,'text','Note (optional)');note.maxLength=500;note.setAttribute('aria-label','Note for incident '+i.incident_id);box.appendChild(note);
+        for(const [to,label] of [['acknowledged','Acknowledge'],['resolved','Resolve'],['open','Reopen']]){
+          if(to===i.status)continue;
+          const b=button(label,'secondary');b.setAttribute('aria-label',label+' incident '+i.incident_id);
+          b.onclick=async()=>{try{await api('/v1/automation-monitoring/incidents/'+encodeURIComponent(i.incident_id)+'/triage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:to,note:note.value,expected_last_seen:i.last_seen})});await renderIncidents();}catch(error){status.textContent=error.message;}};
+          box.appendChild(b);
+        }
+        list.appendChild(box);
+      });
+      incidentHost.replaceChildren(el('h3','Incidents'),el('div',data.counts.open+' open · '+data.counts.acknowledged+' acknowledged · '+data.counts.resolved+' resolved. Triage records your decision only; nothing is re-run or replayed.','muted'),data.incidents.length?list:el('div','No incidents for this deployment.','muted'));
+    }
+    channelButton.onclick=()=>renderChannel().catch(error=>{status.textContent=error.message;});
+    incidentButton.onclick=()=>renderIncidents().catch(error=>{status.textContent=error.message;});
     pick.onchange=clearResults;recent.oninput=clearResults;baseline.oninput=clearResults;
     toLog.onclick=async()=>{
       if(!window.confirm('Store this deployment\'s reported steps as an event log on this computer?'))return;

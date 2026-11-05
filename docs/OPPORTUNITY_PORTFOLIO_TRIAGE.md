@@ -16,3 +16,6 @@ clears all view controls. **Download state CSV** retains the existing export:
 it includes the entire selected state, irrespective of search or priority.
 The label and count message disclose this distinction. Modeled impact remains
 an estimate from entered assumptions, not a claim of realized savings.
+
+[Compare opportunities](OPPORTUNITY_COMPARISON.md) side by side using their
+saved assessment inputs and modeled results.

@@ -12,6 +12,7 @@ import math
 from pathlib import Path
 from typing import Any
 
+from .work_item_links import link_observations
 from .reconstruction_review_queue import prioritized_review_queue
 from .reconstruction_reviewed_links import MAX_BYTES, MAX_EVENTS
 
@@ -69,24 +70,36 @@ def semantic_assignment(
         if key not in allowed:
             raise ValueError("pair absent, conflicting or not eligible for review")
         weighted[key] = float(score)
-    eligible = {key: score for key, score in weighted.items() if score >= MIN_SCORE}
-    # A close competitor for either endpoint is evidence of ambiguity, even
-    # when global matching would choose one of the edges.
-    by_endpoint: dict[str, list[float]] = {}
-    for (a, b), score in weighted.items():
-        by_endpoint.setdefault(a, []).append(score)
-        by_endpoint.setdefault(b, []).append(score)
+    # Deterministic source components, not individual endpoints, are the units
+    # of exclusivity. A component can have several eligible candidate endpoints.
+    linked = link_observations(events)
+    membership = {eid: root for root, ids in linked["members"].items() for eid in ids}
+    component_edges: dict[tuple[str, str], tuple[float, tuple[str, str]]] = {}
+    component_scores: dict[str, dict[str, float]] = {}
+    for pair, score in weighted.items():
+        a, b = pair
+        ra, rb = membership.get(a, a), membership.get(b, b)
+        if ra == rb:
+            continue
+        component_pair = tuple(sorted((ra, rb)))
+        previous = component_edges.get(component_pair)
+        if previous is None or score > previous[0] or (score == previous[0] and pair < previous[1]):
+            component_edges[component_pair] = (score, pair)
+    for (a, b), (score, _) in component_edges.items():
+        component_scores.setdefault(a, {})[b] = score
+        component_scores.setdefault(b, {})[a] = score
     ambiguous = {
-        node for node, values in by_endpoint.items()
-        if len(values) > 1 and sorted(values, reverse=True)[0] - sorted(values, reverse=True)[1] < MIN_MARGIN
+        node for node, competitors in component_scores.items()
+        if len(competitors) > 1 and
+        (lambda values: values[0] - values[1] < MIN_MARGIN)(sorted(competitors.values(), reverse=True))
     }
-    eligible = {key: score for key, score in eligible.items()
-                if key[0] not in ambiguous and key[1] not in ambiguous}
+    eligible = {key: value for key, value in component_edges.items()
+                if value[0] >= MIN_SCORE and key[0] not in ambiguous and key[1] not in ambiguous}
     nodes = sorted({node for key in eligible for node in key})
     if len(nodes) > MAX_COMPONENTS:
-        raise ValueError("too many eligible endpoints for bounded global assignment")
+        raise ValueError("too many eligible source components for bounded global assignment")
     index = {node: i for i, node in enumerate(nodes)}
-    edges = {(index[a], index[b]): score for (a, b), score in eligible.items()}
+    edges = {(index[a], index[b]): value[0] for (a, b), value in eligible.items()}
 
     @lru_cache(None)
     def solve(mask: int) -> tuple[float, tuple[tuple[int, int], ...]]:
@@ -111,7 +124,8 @@ def semantic_assignment(
 
     optimum, chosen = solve((1 << len(nodes)) - 1)
     proposals = [
-        {"event_id": nodes[a], "toward_event_id": nodes[b],
+        {"event_id": eligible[(nodes[a], nodes[b])][1][0],
+         "toward_event_id": eligible[(nodes[a], nodes[b])][1][1],
          "semantic_score": edges[(a, b)], "requires_human_review": True}
         for a, b in chosen
     ]
