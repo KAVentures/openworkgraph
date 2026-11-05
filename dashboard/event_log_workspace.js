@@ -349,7 +349,7 @@
     variantBox.appendChild(table(['Path','Cases','Share','Median time','Evidence'],(variants.variants||[]).map(v=>{const open=button('Inspect cases','secondary');open.onclick=()=>inspection.path(v.path);return [v.path.join(' → '),Number(v.cases).toLocaleString(),pct(v.share),duration(v.median_duration_seconds),open];})));
     variantBox.appendChild(el('div',Number(variants.distinct_variants).toLocaleString()+' distinct variants.','muted'));
     results.appendChild(variantBox);
-    results.appendChild(variantCoverageSection());
+    results.appendChild(variantCoverageSection(names));
     results.appendChild(objectMapSection());
     if(summary.log&&summary.log.object_relationships)results.appendChild(objectRelationshipSection());
     results.appendChild(processMapSection());
@@ -569,15 +569,18 @@
     box.appendChild(row);
     return {node:box,read:()=>cohortSpec({label:label.value,from:from.value,before:before.value,resource:resource.value,activity:activity.value,attribute:attribute.value})};
   }
-  function variantCoverageSection(){
+  function variantCoverageSection(activityNames){
     const box=section('Variant coverage');
     const run=button('Analyse variant coverage','secondary');run.id='owgVariantCoverageRun';
-    const out=el('div');box.append(el('p','See how many observed paths cover most cases, before deciding which variations to investigate.'),run,out);
+    const budget=select('owgVariantCoverageLimit',[['20','20 variants'],['50','50 variants'],['100','100 variants'],['200','200 variants']]);
+    const inspection=caseInspector(activityNames,{prefix:'owgVariantCoverageCases'});
+    for(const control of inspection.node.querySelectorAll('button'))control.setAttribute('aria-label','Variant coverage: '+control.textContent);
+    const out=el('div');box.append(el('p','See how many observed paths cover most cases, before deciding which variations to investigate.'),field('Maximum displayed variants',budget),run,out,inspection.node);
     run.onclick=async()=>{
       run.disabled=true;
       const generation=state.generation;
       try{
-        const r=await getJSON(logPath('variant-coverage'));
+        const r=await getJSON(logPath('variant-coverage',{limit:budget.value}));
         if(generation!==state.generation)return;
         const exports=exportButtons('owgVariantCoverage',()=>r,()=>[
           ['rank','path','cases','case_share','cumulative_cases','cumulative_share','path_truncated'],
@@ -585,7 +588,13 @@
         exports.enable(true);
         out.replaceChildren(
           table(['Target case coverage','Variants needed'],r.coverage_targets.map(t=>[t.target_percent+'%',t.variants_needed??'—'])),
-          table(['Rank','Observed path','Cases','Cumulative coverage'],r.displayed_variants.map(v=>[v.rank,v.path.join(' → ')+(v.path_truncated?' … ('+v.path_activity_count+' activities)':''),v.cases,pct(v.cumulative_share)])),
+          table(['Rank','Observed path','Cases','Cumulative coverage','Evidence'],r.displayed_variants.map(v=>{
+            const inspect=button('Inspect variant '+v.rank+' cases','secondary');
+            inspect.disabled=v.path_truncated;
+            if(v.path_truncated)inspect.title='The displayed path is shortened; selecting it would incorrectly match a prefix. Browse cases by activity instead.';
+            else inspect.onclick=()=>inspection.path(v.path);
+            return [v.rank,v.path.join(' → ')+(v.path_truncated?' … ('+v.path_activity_count+' activities; exact-path inspection unavailable)':''),v.cases,pct(v.cumulative_share),inspect];
+          })),
           el('p',r.cases+' cases across '+r.distinct_variants+' variants. '+r.omitted_variants+' variants containing '+r.omitted_cases+' cases are outside the displayed rows. Targets use every variant, including omitted rows.','muted'),
           el('p',r.interpretation,'muted'),exports.node);
       }catch(error){if(generation===state.generation)out.replaceChildren(el('p',error.message,'muted'));}
