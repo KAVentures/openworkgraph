@@ -896,6 +896,31 @@ with zipfile.ZipFile(sys.argv[1]) as z:
    const reportsAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgPipelineCard'),{
      runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
    assert.deepEqual(reportsAudit.violations.map(v=>v.id),[]);
+   // Per-run attribution: the run's own report declared the exact spec, so it can be
+   // bound to a source check. That binds a reported run; it verifies nothing about it.
+   assert.equal(linkedReports.links[0].runs_reporting_specification_count,1);
+   assert.equal(linkedReports.links[0].unhashed_run_count,0);
+   await page.locator('#owgPipelineReportLinks li').filter({hasText:'1 runs reported this exact specification, 0 without a hash'}).waitFor();
+   await page.locator('#owgPipelineSourceChecks').click();
+   await page.waitForFunction(()=>document.querySelectorAll('#owgPipelineSourceRun option').length===2);
+   let runReady=false;
+   for(let attempt=0;attempt<5&&!runReady;attempt++){
+     await page.waitForFunction(()=>{const c=document.querySelector('#owgPipelineSourceConsent');return c&&!c.disabled;});
+     await page.locator('#owgPipelineSourceRun').selectOption('0');
+     await page.locator('#owgPipelineSourceRecord').fill(sourceA);
+     await page.locator('#owgPipelineSourceConsent').check();
+     runReady=await page.waitForFunction(()=>!document.querySelector('#owgPipelineSourceExport').disabled&&
+       document.querySelector('#owgPipelineSourceRun').value==='0',null,{timeout:3000}).then(()=>true,()=>false);
+   }
+   assert(runReady,'a selected attributed run, record and consent enable the export');
+   const [runDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#owgPipelineSourceExport').click()]);
+   const runDoc=JSON.parse(await fs.readFile(await runDownload.path(),'utf8'));
+   assert.equal(runDoc.run_reference.run_id,'reported_run');
+   assert.equal(runDoc.run_reference.run_reported_spec_sha256,manifest.spec_sha256);
+   assert.equal(runDoc.association_basis,'user_selected_project_run_expectation_and_exact_observed_record');
+   assert.equal(runDoc.reported_run_case_identity_verified,false);
+   assert(!JSON.stringify(runDoc).includes('CLIENT_ASSERTION_NOT_INDEPENDENT'));
+   await page.locator('#owgPipelineSourceCheckForm').getByRole('status').filter({hasText:'Source-check document downloaded.'}).waitFor();
    await page.evaluate(async id=>fetch('/v1/automation-monitoring/deployments/'+id+'/delete',{method:'POST'}),reported.deployment.deployment_id);
    await page.locator('#owgPipelineReviewReports').click();
    await page.locator('#owgPipelineReportLinks li').filter({hasText:'Reported deployment unavailable'}).waitFor();

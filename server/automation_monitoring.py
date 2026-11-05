@@ -82,6 +82,9 @@ def _connect():
     # Older reports did not retain their declared spec hash; leave those unknown.
     conn.execute('ALTER TABLE deployments ADD COLUMN IF NOT EXISTS reported_spec_sha256 VARCHAR')
     conn.execute('ALTER TABLE deployments ADD COLUMN IF NOT EXISTS design_graph VARCHAR')
+    # Per-run attribution: the spec hash the run's own report declared. Runs
+    # imported before this column existed, or from unhashed reports, stay NULL.
+    conn.execute('ALTER TABLE runs ADD COLUMN IF NOT EXISTS reported_spec_sha256 VARCHAR')
     try:
         os.chmod(path, 0o600)
     except OSError:
@@ -231,7 +234,7 @@ def _check(conn, deployment_id: str) -> dict[str, Any]:
             "reported_spec_sha256": row[7], "design_graph": json.loads(row[8]) if row[8] else None}
 
 
-def _bulk_load(conn, deployment_id: str, runs: list[dict[str, Any]]) -> int:
+def _bulk_load(conn, deployment_id: str, runs: list[dict[str, Any]], spec_hash: str | None = None) -> int:
     """Stage rows in private CSV files and load them in one statement each (row inserts are slow)."""
     import csv
     import tempfile
@@ -245,14 +248,17 @@ def _bulk_load(conn, deployment_id: str, runs: list[dict[str, Any]]) -> int:
             for r in runs:
                 runs_out.writerow([r["run_id"], r["started_at"].isoformat(sep=" "),
                                    r["finished_at"].isoformat(sep=" ") if r["finished_at"] else "", r["status"],
-                                   "" if r["verified"] is None else str(r["verified"]).lower(), r["source"]])
+                                   "" if r["verified"] is None else str(r["verified"]).lower(), r["source"],
+                                   spec_hash or ""])
                 for seq, (step_id, activity, status, at) in enumerate(r["steps"]):
                     steps_out.writerow([r["run_id"], seq, step_id, activity, status, at.isoformat(sep=" ")])
                     steps += 1
         options = "header=false, quote='\"', escape='\"', delim=',', all_varchar=true"
-        conn.execute(f"""INSERT INTO runs SELECT ?, column0, column1::TIMESTAMP, nullif(column2, '')::TIMESTAMP, column3,
-              nullif(column4, '')::BOOLEAN, coalesce(column5, '') FROM read_csv(?, {options},
-              names=['column0','column1','column2','column3','column4','column5'])""", [deployment_id, str(run_path)])
+        conn.execute(f"""INSERT INTO runs (deployment_id, run_id, started_at, finished_at, status,
+              outcome_reported_verified, outcome_source, reported_spec_sha256)
+              SELECT ?, column0, column1::TIMESTAMP, nullif(column2, '')::TIMESTAMP, column3,
+              nullif(column4, '')::BOOLEAN, coalesce(column5, ''), nullif(column6, '') FROM read_csv(?, {options},
+              names=['column0','column1','column2','column3','column4','column5','column6'])""", [deployment_id, str(run_path)])
         if steps:
             conn.execute(f"""INSERT INTO steps SELECT ?, column0, column1::INTEGER, column2, column3, column4,
                   column5::TIMESTAMP FROM read_csv(?, {options},
@@ -288,7 +294,7 @@ def import_report(document: Any, deployment_id: str | None = None) -> dict[str, 
                 ids = [r["run_id"] for r in report["runs"]]
                 conn.execute("DELETE FROM steps WHERE deployment_id = ? AND list_contains(?, run_id)", [deployment_id, ids])
                 conn.execute("DELETE FROM runs WHERE deployment_id = ? AND list_contains(?, run_id)", [deployment_id, ids])
-                step_count = _bulk_load(conn, deployment_id, report["runs"])
+                step_count = _bulk_load(conn, deployment_id, report["runs"], report["spec_hash"])
                 conn.execute("COMMIT")
             except Exception:
                 conn.execute("ROLLBACK")
@@ -332,14 +338,54 @@ def deployment_references() -> list[dict[str, Any]]:
         conn = _connect()
         try:
             rows = conn.execute("""SELECT d.deployment_id,d.name,d.runtime,d.design_sha256,
-                d.reported_spec_sha256,count(r.run_id) FROM deployments d
+                d.reported_spec_sha256,count(r.run_id),
+                count(r.run_id) FILTER (WHERE r.reported_spec_sha256 IS NOT NULL
+                                        AND r.reported_spec_sha256=d.reported_spec_sha256),
+                count(r.run_id) FILTER (WHERE r.reported_spec_sha256 IS NULL) FROM deployments d
                 LEFT JOIN runs r ON r.deployment_id=d.deployment_id
                 GROUP BY d.deployment_id,d.name,d.runtime,d.design_sha256,d.reported_spec_sha256
                 ORDER BY d.deployment_id LIMIT ?""", [MAX_DEPLOYMENTS]).fetchall()
             return [dict(zip(('deployment_id','name','runtime','design_sha256',
-                              'reported_spec_sha256','reported_run_count'), row)) for row in rows]
+                              'reported_spec_sha256','reported_run_count',
+                              'runs_reporting_specification_count','unhashed_run_count'), row)) for row in rows]
         finally:
             conn.close()
+
+
+def attributed_runs(deployment_ids: list[str], spec_sha256: str, limit: int = 50) -> list[dict[str, Any]]:
+    """Most recent runs whose own report declared exactly this spec hash.
+
+    This is a reported per-run specification claim; it never verifies execution,
+    case identity or outcomes. Steps and outcome sources are not returned.
+    """
+    if not deployment_ids:
+        return []
+    with _LOCK:
+        conn = _connect()
+        try:
+            rows = conn.execute("""SELECT deployment_id, run_id, status, started_at, finished_at FROM runs
+                WHERE list_contains(?, deployment_id) AND reported_spec_sha256 = ?
+                ORDER BY started_at DESC, deployment_id, run_id LIMIT ?""",
+                                [list(deployment_ids), spec_sha256, max(1, min(int(limit), 200))]).fetchall()
+        finally:
+            conn.close()
+    return [{'deployment_id': d, 'run_id': r, 'run_status': st, 'run_started_at': _iso(a), 'run_finished_at': _iso(b),
+             'run_reported_spec_sha256': spec_sha256} for d, r, st, a, b in rows]
+
+
+def attributed_run(deployment_id: str, run_id: str, spec_sha256: str) -> dict[str, Any] | None:
+    """One run, only if its own report declared exactly this spec hash."""
+    with _LOCK:
+        conn = _connect()
+        try:
+            row = conn.execute("""SELECT status, started_at, finished_at FROM runs WHERE deployment_id = ?
+                AND run_id = ? AND reported_spec_sha256 = ?""", [deployment_id, run_id, spec_sha256]).fetchone()
+        finally:
+            conn.close()
+    if row is None:
+        return None
+    return {'deployment_id': deployment_id, 'run_id': run_id, 'run_status': row[0],
+            'run_started_at': _iso(row[1]), 'run_finished_at': _iso(row[2]), 'run_reported_spec_sha256': spec_sha256}
 
 
 def delete_deployment(deployment_id: str) -> dict[str, Any]:

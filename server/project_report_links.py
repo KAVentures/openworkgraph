@@ -9,6 +9,7 @@ from . import automation_monitoring as monitoring
 
 MAX_LINKS_PER_PROJECT = 10
 CLAIMS = {'reported_by_automation_not_verified_by_owg': True,
+          'per_run_specification_basis': 'each_run_report_declared_hash',
           'per_run_attribution_verified': False, 'independent_execution_verified': False,
           'business_outcomes_verified': False, 'execution_authorized': False}
 
@@ -24,6 +25,14 @@ def _sources():
         return {r['deployment_id']:r for r in monitoring.deployment_references()}, True
     except Exception:
         return {}, False
+
+
+def run_counts(source):
+    """Runs whose own report declared the deployment's spec hash, and unhashed runs."""
+    if source is None:
+        return {'runs_reporting_specification_count': None, 'unhashed_run_count': None}
+    return {'runs_reporting_specification_count': source.get('runs_reporting_specification_count'),
+            'unhashed_run_count': source.get('unhashed_run_count')}
 
 
 def _status(spec_sha256, source, available):
@@ -87,7 +96,7 @@ def links(idea_id: str) -> dict[str, Any]:
                             'ORDER BY l.linked_at DESC,p.project_id,l.deployment_id',[idea_id]).fetchall()
     sources, available = _sources()
     return {'links':[{'project_id':p,'deployment_id':d,'linked_at':at,
-                      'status':_status(spec,sources.get(d),available),**CLAIMS}
+                      'status':_status(spec,sources.get(d),available),**run_counts(sources.get(d)),**CLAIMS}
                      for p,spec,d,at in rows],
             'projects':[dict(zip(('project_id','idea_revision','created_at','spec_sha256'),r)) for r in artifacts],
             'deployments':list(sources.values()),'monitoring_metadata_available':available,

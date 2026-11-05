@@ -1335,7 +1335,7 @@
             artifact.appendChild(list);
             const linked=el('ul');
             const labels={matching_reported_specification:'Matching reported specification',unavailable:'Reported deployment unavailable',specification_mismatch:'Reported specification changed',unbound_specification:'Reported specification unbound',check_failed:'Reported specification could not be checked'};
-            p.reported_specifications.forEach(r=>linked.appendChild(el('li',r.deployment_id+' · '+(labels[r.status]||'Unknown report status')+(r.reported_run_count===null?'':' · '+r.reported_run_count+' reported runs')+'. Artifact execution and individual run/case attribution are unverified.')));
+            p.reported_specifications.forEach(r=>linked.appendChild(el('li',r.deployment_id+' · '+(labels[r.status]||'Unknown report status')+(r.reported_run_count===null?'':' · '+r.reported_run_count+' reported runs')+(Number.isSafeInteger(r.runs_reporting_specification_count)?' · '+r.runs_reporting_specification_count+' runs reported this exact specification, '+r.unhashed_run_count+' without a hash':'')+'. Artifact execution and individual run/case attribution are unverified.')));
             artifact.append(el('h5','Reported specifications'),p.reported_specifications.length?linked:el('p','No reported specifications linked.'));
             const checks=p.source_check_exports;
             artifact.append(el('h5','Source-check exports'),el('p',checks.count?checks.count+' recorded · latest '+checks.last_export_at+' · document SHA-256 '+checks.last_document_sha256+'. Receipt and result are not retained; no outcome can be inferred from this record.':'No source-check exports recorded.'));
@@ -1812,7 +1812,7 @@
             specification_mismatch:'Specification changed or does not match',unavailable:'Reported deployment unavailable',check_failed:'Report source could not be checked'};
           data.links.forEach(r=>{
             const source=data.deployments.find(d=>d.deployment_id===r.deployment_id);
-            const item=el('li',(source?source.name:r.deployment_id)+' · '+(labels[r.status]||'Unknown status'));
+            const item=el('li',(source?source.name:r.deployment_id)+' · '+(labels[r.status]||'Unknown status')+(Number.isSafeInteger(r.runs_reporting_specification_count)?' · '+r.runs_reporting_specification_count+' runs reported this exact specification, '+r.unhashed_run_count+' without a hash':''));
             const remove=button('Remove report link','secondary');remove.setAttribute('aria-label','Remove report link '+r.deployment_id);
             remove.onclick=async()=>{
               try{await post('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/project-reports/unlink',{
@@ -1839,6 +1839,7 @@
             if(preferredSourceProjectId&&saved.projects.some(p=>p.project_id===preferredSourceProjectId))
               selected.value=preferredSourceProjectId;
             const expectation=select('owgPipelineSourceExpectation',[]);
+            const runChoice=select('owgPipelineSourceRun',[]);let runs=[];
             const sourceRef=input('owgPipelineSourceRecord','text','owg:r:…');sourceRef.maxLength=38;sourceRef.autocomplete='off';sourceRef.spellcheck=false;
             const confirmed=input('owgPipelineSourceConsent','checkbox');const consentText=el('label');consentText.append(confirmed,document.createTextNode(' Read this exact observed record and download the minimized source-check document. Existing provider opt-ins still apply.'));
             const run=button('Read source and download check','secondary');run.id='owgPipelineSourceExport';run.disabled=true;
@@ -1846,17 +1847,19 @@
             let entries=[],formVersion=0,optionsVersion=0,pending=false;
             const ready=()=>{run.disabled=pending||!entries.length||!confirmed.checked||!/^owg:r:[0-9a-f]{32}$/.test(sourceRef.value.trim());confirmed.disabled=pending||!entries.length;};
             const invalidate=()=>{formVersion++;confirmed.checked=false;ready();};
-            sourceRef.oninput=invalidate;expectation.onchange=invalidate;confirmed.onchange=ready;
+            sourceRef.oninput=invalidate;expectation.onchange=invalidate;runChoice.onchange=invalidate;confirmed.onchange=ready;
             const base=()=>'/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/projects/'+encodeURIComponent(selected.value);
             const loadOptions=async()=>{
-              const version=++optionsVersion;invalidate();entries=[];expectation.replaceChildren();ready();
+              const version=++optionsVersion;invalidate();entries=[];runs=[];expectation.replaceChildren();
+              const none=el('option','No specific run');none.value='';runChoice.replaceChildren(none);ready();
               if(!selected.value){note.textContent='Export a linked project before checking source state.';return;}
               const path=base();
               const results=await Promise.allSettled([api(path+'/source-check-options').then(r=>r.json()),api(path+'/source-check-exports').then(r=>r.json())]);
               if(generation!==detailGeneration||view!==sourceView||version!==optionsVersion)return;
               const options=results[0],records=results[1];
               if(options.status==='fulfilled'&&options.value.current_idea_revision===idea.revision){
-                entries=options.value.expectations;
+                entries=options.value.expectations;runs=options.value.attributable_runs||[];
+                runs.forEach((r,i)=>{const opt=el('option',r.run_id+' · '+r.run_status+' · started '+r.run_started_at);opt.value=String(i);runChoice.appendChild(opt);});
                 entries.forEach((e,i)=>{const opt=el('option',e.activity_label+' · '+e.operation.replaceAll('_',' '));opt.value=String(i);expectation.appendChild(opt);});
                 note.textContent=entries.length?'Select the exact observed record. Source state does not prove agent causality, run/case identity or customer outcomes.':'This saved process has no confirmed source-state expectation. Review one in a new saved revision before creating its idea/project.';
               }else note.textContent=options.status==='rejected'?options.reason.message:'The idea changed; reopen it before checking a source.';
@@ -1872,6 +1875,8 @@
               const entry=entries[Number(expectation.value)],path=base(),version=formVersion;
               const payload={expected_revision:idea.revision,terminal_activity_id:entry.terminal_activity_id,expected_operation:entry.operation,
                 resource_ref:sourceRef.value.trim(),source_read_and_export_confirmed:confirmed.checked};
+              const chosen=runChoice.value===''?null:runs[Number(runChoice.value)];
+              if(chosen)payload.run_reference={deployment_id:chosen.deployment_id,run_id:chosen.run_id};
               confirmed.checked=false;pending=true;ready();
               try{
                 const response=await api(path+'/source-check-export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
@@ -1883,7 +1888,7 @@
               finally{pending=false;ready();}
             };
             checkHost.replaceChildren(el('h4','Selected source-state check'),el('div','This performs an explicitly authorized read through existing source adapters. The receipt is downloaded only; OWG retains a checksum, not the receipt or a verified-state value.','muted'),
-              field('Exported project for source check',selected),field('Confirmed source-state expectation',expectation),field('Observed record reference (owg:r:…)',sourceRef),consentText,run,note,history);
+              field('Exported project for source check',selected),field('Confirmed source-state expectation',expectation),field('Reported run (only runs that reported this project\'s exact specification, from linked reports)',runChoice),field('Observed record reference (owg:r:…)',sourceRef),consentText,run,note,history);
             await loadOptions();
           }catch(e){if(generation===detailGeneration&&view===sourceView)status.textContent=e.message;}
         };

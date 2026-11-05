@@ -14,6 +14,8 @@ from pydantic import Field, StrictBool, StrictInt
 
 from shared.process_model import ProcessModel
 from . import automation_pipeline as pipeline
+from . import automation_monitoring as monitoring
+from . import project_report_links as reports
 from .open_work_outcomes import source_operation_receipt
 
 MAX_EXPORTS_PER_PROJECT = 50
@@ -32,8 +34,14 @@ class ConsentRequired(pipeline.PipelineError):
     pass
 
 
+class RunReference(pipeline._Strict):
+    deployment_id: str = Field(pattern=r'^dep_[0-9a-f]{16}$')
+    run_id: str = Field(pattern=r'^[\x20-\x7e]{1,128}$')
+
+
 class CheckRequest(pipeline._Strict):
     expected_revision: StrictInt = Field(ge=1, le=2**63-1)
+    run_reference: RunReference | None = None
     terminal_activity_id: str = Field(pattern=r'^[A-Za-z][A-Za-z0-9_-]{0,63}$')
     expected_operation: Operation
     resource_ref: str = Field(pattern=r'^owg:r:[0-9a-f]{32}$')
@@ -67,15 +75,46 @@ def _expectation(model, request):
         raise pipeline.PipelineError('select a confirmed source-state expectation from this exact saved process')
 
 
+def _linked_deployments(conn, project_id, spec):
+    """Deployments explicitly linked to this project whose reports still match its spec."""
+    linked = [row[0] for row in conn.execute('SELECT deployment_id FROM project_report_links WHERE project_id=? '
+                                             'ORDER BY deployment_id', [project_id]).fetchall()]
+    if not linked:
+        return []
+    sources, available = reports._sources()
+    return [d for d in linked if reports._status(spec, sources.get(d), available) == 'matching_reported_specification']
+
+
+def _run(conn, project_id, spec, reference):
+    """The selected run, only from a matching linked deployment and with its own exact spec hash."""
+    if reference is None:
+        return None
+    if reference.deployment_id not in _linked_deployments(conn, project_id, spec):
+        raise pipeline.PipelineError('select a run from a linked deployment whose reports match this project')
+    try:
+        run = monitoring.attributed_run(reference.deployment_id, reference.run_id, spec)
+    except Exception:
+        run = None
+    if run is None:
+        raise pipeline.PipelineError('that run did not report this project\'s exact specification, or is unavailable')
+    return dict(run, attribution='run_report_declared_exact_project_specification')
+
+
 def options(idea_id: str, project_id: str) -> dict[str, Any]:
     with pipeline._LOCK,closing(pipeline._connect()) as conn:
         idea,reference,spec=_context(conn,idea_id,project_id)
+        deployments=_linked_deployments(conn,project_id,spec)
     model=_model(reference)
+    try:
+        runs=monitoring.attributed_runs(deployments,spec)
+    except Exception:
+        runs=[]
     labels={a.id:a.label for a in model.activities}
     return {'process_reference':reference,'spec_sha256':spec,'current_idea_revision':idea['revision'],
             'expectations':[{'terminal_activity_id':e.terminal_activity_id,'operation':e.operation,
                              'activity_label':labels[e.terminal_activity_id]}
                             for e in model.outcome_expectations if e.user_confirmed],
+            'attributable_runs':runs,'attributable_runs_limit':50,
             'source_read_performed':False,**FALSE_CLAIMS}
 
 
@@ -91,6 +130,7 @@ def export_check(idea_id: str, project_id: str, payload: Any) -> tuple[bytes,dic
         idea,reference,spec=_context(conn,idea_id,project_id,request.expected_revision)
         if conn.execute('SELECT count(*) FROM project_source_exports WHERE project_id=?',[project_id]).fetchone()[0]>=MAX_EXPORTS_PER_PROJECT:
             raise pipeline.PipelineError(f'at most {MAX_EXPORTS_PER_PROJECT} source-check exports per project')
+        run=_run(conn,project_id,spec,request.run_reference)
     _expectation(_model(reference),request)
     # Never hold the idea database/write lock across a provider read. The adapter
     # independently enforces retained observation, opt-ins, identity and freshness.
@@ -107,7 +147,9 @@ def export_check(idea_id: str, project_id: str, payload: Any) -> tuple[bytes,dic
         document={'format':'openworkgraph.project-source-check-export.v1','project_id':project_id,
                   'idea_id':idea_id,'idea_revision_at_check':idea['revision'],'process_reference':reference,
                   'spec_sha256':spec,'terminal_activity_id':request.terminal_activity_id,'checked_at':now,
-                  'association_basis':'user_selected_project_expectation_and_exact_observed_record',
+                  'association_basis':('user_selected_project_run_expectation_and_exact_observed_record' if run
+                                       else 'user_selected_project_expectation_and_exact_observed_record'),
+                  **({'run_reference':run} if run else {}),
                   'receipt':receipt,'receipt_body_persisted':False,**FALSE_CLAIMS}
         content=(json.dumps(document,sort_keys=True,indent=2,ensure_ascii=False,allow_nan=False)+'\n').encode('utf-8')
     except Exception:
@@ -121,6 +163,8 @@ def export_check(idea_id: str, project_id: str, payload: Any) -> tuple[bytes,dic
         _,current_ref,current_spec=_context(conn,idea_id,project_id,request.expected_revision)
         if current_ref!=reference or current_spec!=spec:
             raise pipeline.PipelineError('project reference changed during the source check')
+        if run is not None and _run(conn,project_id,spec,request.run_reference)!=run:
+            raise pipeline.PipelineError('the selected run changed during the source check')
         existing=conn.execute('SELECT 1 FROM project_source_exports WHERE export_id=?',[export_id]).fetchone()
         if not existing:
             if conn.execute('SELECT count(*) FROM project_source_exports WHERE project_id=?',[project_id]).fetchone()[0]>=MAX_EXPORTS_PER_PROJECT:
