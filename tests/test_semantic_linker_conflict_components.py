@@ -40,7 +40,7 @@ def test_disjoint_compatible_pairs_survive_and_conflicts_never_join():
              "resource_kind": "account", "resource_ref": "A" if n in (1, 2) else "B"}}}
              for n in (1, 2, 4, 5)}
     by_id["3"] = {}
-    pairs = {frozenset((a, b)) for a in (1, 2, 3) for b in (a + 1, 4)}
+    pairs = {frozenset((a, b)) for a in (1, 2, 3) for b in range(a + 1, 4)}
     pairs.add(frozenset((4, 5)))
     selected, refused = linker._compatible_groups(pairs, groups, by_id)
     assert selected == [[1, 2, 3], [4, 5]] and refused == 0
