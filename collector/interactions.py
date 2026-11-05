@@ -21,6 +21,82 @@ class RawInteraction:
     # Filled by the collector callback at interaction time before worker queuing.
     # Contains only already privacy-filtered app/window state, never typed content.
     context: dict[str, Any] | None = None
+    # Sampled pointer positions for kind "pointer_trajectory": [ms since first, x, y].
+    points: list[list[float]] | None = None
+
+
+class DragDetector:
+    """Turn a mouse press and release into a drag when it moved far and long enough (#634).
+
+    Pure and clock-injected so it is testable without an OS hook. A plain click is
+    never reported as a drag; the click itself is still reported by the sensor.
+    """
+
+    def __init__(self, *, min_distance: float = 16.0, min_seconds: float = 0.15) -> None:
+        self.min_distance = float(min_distance)
+        self.min_seconds = float(min_seconds)
+        self._start: tuple[float, float, float, str] | None = None
+
+    def press(self, x: float, y: float, button: str, now: float) -> None:
+        self._start = (float(x), float(y), float(now), button)
+
+    def release(self, x: float, y: float, now: float) -> RawInteraction | None:
+        start, self._start = self._start, None
+        if start is None:
+            return None
+        sx, sy, at, button = start
+        dx, dy = float(x) - sx, float(y) - sy
+        if (dx * dx + dy * dy) ** 0.5 < self.min_distance or now - at < self.min_seconds:
+            return None
+        return RawInteraction(kind="drag", x=sx, y=sy, dx=dx, dy=dy, button=button, occurred_mono=at)
+
+
+class PointerSampler:
+    """Throttle pointer moves to ``hz`` samples a second and batch them (#634, Full fidelity)."""
+
+    def __init__(self, *, hz: int = 4, max_points: int = 200, max_seconds: float = 10.0) -> None:
+        self.hz = max(1, min(int(hz), 20))
+        self.max_points = max_points
+        self.max_seconds = max_seconds
+        self._points: list[list[float]] = []
+        self._first = 0.0
+        self._last = -1.0
+
+    def move(self, x: float, y: float, now: float) -> RawInteraction | None:
+        if self._last >= 0 and now - self._last < 1.0 / self.hz:
+            return None
+        if not self._points:
+            self._first = now
+        self._last = now
+        self._points.append([int(round((now - self._first) * 1000)), int(round(x)), int(round(y))])
+        if len(self._points) >= self.max_points or now - self._first >= self.max_seconds:
+            return self.flush()
+        return None
+
+    def flush(self) -> RawInteraction | None:
+        points, self._points = self._points, []
+        self._last = -1.0
+        if not points:
+            return None
+        return RawInteraction(kind="pointer_trajectory", x=float(points[0][1]), y=float(points[0][2]),
+                              occurred_mono=self._first, points=points)
+
+
+def capture_depth_signals(data_dir) -> dict[str, Any]:
+    """The locally chosen capture depth (written by the dashboard); Standard when unreadable."""
+    import json
+    from pathlib import Path
+    try:
+        data = json.loads((Path(data_dir) / "capture_depth.json").read_text(encoding="utf-8"))
+        signals = data.get("signals") if isinstance(data, dict) else {}
+        params = data.get("parameters") if isinstance(data, dict) else {}
+        acknowledged = data.get("full_acknowledged_version") == "capture-depth-full-v1"
+    except (OSError, ValueError):
+        return {"drag_drop": False, "pointer_trajectory": False, "trajectory_hz": 4}
+    hz = params.get("trajectory_hz") if isinstance(params, dict) else None
+    return {"drag_drop": isinstance(signals, dict) and signals.get("drag_drop") is True,
+            "pointer_trajectory": isinstance(signals, dict) and signals.get("pointer_trajectory") is True and acknowledged,
+            "trajectory_hz": hz if isinstance(hz, int) and 1 <= hz <= 20 else 4}
 
 
 @dataclass
@@ -284,10 +360,15 @@ class InteractionSensor:
         capture_clicks: bool = True,
         capture_scrolls: bool = True,
         scroll_min_interval_seconds: float = 1.25,
+        depth: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         self.callback = callback
         self.capture_clicks = capture_clicks
         self.capture_scrolls = capture_scrolls
+        # Capture depth (#634) is read live, so changing it needs no restart.
+        self.depth = depth or (lambda: {"drag_drop": False, "pointer_trajectory": False, "trajectory_hz": 4})
+        self._drag = DragDetector()
+        self._sampler = PointerSampler()
         self.scroll_min_interval_seconds = max(0.0, float(scroll_min_interval_seconds))
         self._mouse_listener = None
         self._last_scroll_at = 0.0
@@ -299,6 +380,15 @@ class InteractionSensor:
             return False
 
         def on_click(x, y, button, pressed):
+            now = time.monotonic()
+            settings = self.depth()
+            if settings.get("drag_drop"):
+                if pressed:
+                    self._drag.press(x, y, getattr(button, "name", str(button)), now)
+                else:
+                    drag = self._drag.release(x, y, now)
+                    if drag is not None:
+                        self.callback(drag)
             if not pressed or not self.capture_clicks:
                 return
             self.callback(
@@ -329,7 +419,17 @@ class InteractionSensor:
                 )
             )
 
-        self._mouse_listener = mouse.Listener(on_click=on_click, on_scroll=on_scroll)
+        def on_move(x, y):
+            settings = self.depth()
+            if not settings.get("pointer_trajectory"):
+                self._sampler.flush()  # discard: the signal was turned off
+                return
+            self._sampler.hz = settings.get("trajectory_hz", 4)
+            batch = self._sampler.move(x, y, time.monotonic())
+            if batch is not None:
+                self.callback(batch)
+
+        self._mouse_listener = mouse.Listener(on_click=on_click, on_scroll=on_scroll, on_move=on_move)
         self._mouse_listener.daemon = True
         self._mouse_listener.start()
         return True

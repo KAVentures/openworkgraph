@@ -282,7 +282,7 @@
       </div>
       <div class="card" id="pvCaptureDepth">
         <h2>Interaction detail</h2>
-        <div class="muted">How much interaction detail the browser extension records on this computer. Standard keeps today's signals. Enhanced adds how long you rest the pointer on buttons and links, drag and drop between controls, and friction candidates such as repeated clicks. Full fidelity also samples pointer movement. Typed text, clipboard contents, dragged data and secure fields are never recorded. Sharing, AI access, exports, screenshots and work text keep their own separate settings.</div>
+        <div class="muted">How much interaction detail the browser extension and desktop recorder keep on this computer. Standard keeps today's signals. Enhanced adds how long you rest the pointer on buttons and links, drag and drop between controls, and friction candidates such as repeated clicks. Full fidelity also samples pointer movement. Typed text, clipboard contents, dragged data and secure fields are never recorded. Sharing, AI access, exports, screenshots and work text keep their own separate settings.</div>
         <div class="pv-delete" role="radiogroup" aria-label="Interaction detail profile">
           <label><input type="radio" name="pvDepth" value="standard"> Standard</label>
           <label><input type="radio" name="pvDepth" value="enhanced"> Enhanced</label>

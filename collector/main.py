@@ -23,6 +23,7 @@ from .interactions import (
     RawInteraction,
     RawClipboardAction,
     clipboard_change_token,
+    capture_depth_signals,
 )
 from .privacy import should_exclude, title_for_mode
 from .identity import load_or_create_identity
@@ -496,16 +497,28 @@ def _interaction_event(*, raw: RawInteraction, cfg: dict, session_id: str) -> di
         metadata["dx"] = raw.dx
     if raw.dy is not None:
         metadata["dy"] = raw.dy
+    high_fidelity = raw.kind in {"drag", "pointer_trajectory"}
+    if raw.kind == "pointer_trajectory":
+        # Screen pixels relative to the primary display origin; may be negative on extra monitors.
+        metadata.update(points=[list(p) for p in (raw.points or [])][:200], coordinates="screen_pixels")
+    if raw.kind == "drag":
+        metadata.update(end_x=round(raw.x + (raw.dx or 0.0), 1), end_y=round(raw.y + (raw.dy or 0.0), 1),
+                        completion="complete", payload_kinds=[])
 
-    if not state["excluded"] and cfg.get("capture_ui_labels", True):
+    if not state["excluded"] and cfg.get("capture_ui_labels", True) and raw.kind != "pointer_trajectory":
         target = element_at_position(raw.x, raw.y)
         if target:
             metadata["target"] = target
             metadata["target_observation_phase"] = "post_interaction_best_effort"
+        if raw.kind == "drag":
+            destination = element_at_position(metadata["end_x"], metadata["end_y"])
+            if destination:
+                metadata["destination_target"] = destination
 
     event_id = str(uuid.uuid4())
     shot = None
-    if (cfg.get("interaction_screenshots_enabled") or screen_capture.full_mode(cfg)) and not state["excluded"]:
+    if (cfg.get("interaction_screenshots_enabled") or screen_capture.full_mode(cfg)) and not state["excluded"] \
+            and not high_fidelity:
         shot = _capture(event_id, cfg)
 
     return {
@@ -751,11 +764,21 @@ def _run_locked(config_path: Path) -> None:
     keyboard_sensor = None
     keyboard_started = False
     if cfg.get("screen_interactions_enabled", True):
+        depth_cache = {"at": 0.0, "value": capture_depth_signals(LOCAL_DIR)}
+
+        def current_depth() -> dict:
+            # Re-read the dashboard's capture-depth choice at most every two seconds.
+            now = time.monotonic()
+            if now - depth_cache["at"] > 2.0:
+                depth_cache.update(at=now, value=capture_depth_signals(LOCAL_DIR))
+            return depth_cache["value"]
+
         sensor = InteractionSensor(
             enqueue_interaction,
             capture_clicks=cfg.get("capture_clicks", True),
             capture_scrolls=cfg.get("capture_scrolls", True),
             scroll_min_interval_seconds=cfg.get("scroll_min_interval_seconds", 1.25),
+            depth=current_depth,
         )
         sensor_started = sensor.start()
 

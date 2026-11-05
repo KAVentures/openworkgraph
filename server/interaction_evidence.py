@@ -23,7 +23,7 @@ from typing import Any
 from . import capture_depth
 
 HIGH_FIDELITY_TYPES = ("browser_control_hover_dwell", "browser_drag_start", "browser_drag_drop", "browser_drag_end",
-                       "browser_pointer_trajectory")
+                       "browser_pointer_trajectory", "screen_drag", "screen_pointer_trajectory")
 MAX_EVENTS = 20000
 CLAIMS = {"observed_patterns_only": True, "intent_or_attention_inferred": False, "per_person_scoring": False,
           "candidates_require_review": True}
@@ -152,8 +152,8 @@ def coverage_manifest(hours: int = 168) -> dict[str, Any]:
                 "friction_candidates": "on" if signals["friction_candidates"] else "off",
                 "desktop_clicks_and_scrolls": "on" if core.COLLECTOR_STATUS else "desktop_collector_not_seen",
                 "desktop_hover_dwell": "unsupported",
-                "desktop_drag_drop": "unsupported",
-                "desktop_pointer_trajectory": "unsupported",
+                "desktop_drag_drop": ("on" if core.COLLECTOR_STATUS else "on_but_desktop_collector_not_seen") if signals["drag_drop"] else "off",
+                "desktop_pointer_trajectory": ("on" if core.COLLECTOR_STATUS else "on_but_desktop_collector_not_seen") if signals["pointer_trajectory"] else "off",
                 "screenshots": screen_mode,
                 "work_text": "on" if work_text else ("off" if work_text is False else "unknown"),
             },

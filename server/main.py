@@ -338,10 +338,11 @@ def ingest(batch: EventBatch) -> dict[str, int]:
 
     config = _runtime_config()
     from shared.core.browser_title_privacy import cap_event_title_surfaces
-    events = [
+    from .capture_depth import filter_desktop_events
+    events = filter_desktop_events([
         cap_event_title_surfaces(apply_to_desktop_event(e.model_dump(), config))
         for e in batch.events
-    ]
+    ])
     learn_persistent_identities(events)
     return {"inserted": insert_events(events)}
 

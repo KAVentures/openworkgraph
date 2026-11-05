@@ -58,6 +58,28 @@ per-person scoring.
 Hover dwell and pointer movement are context only. Workflow reconstruction does not
 treat them as steps, or as merge evidence by themselves.
 
+## Desktop
+
+The desktop recorder reads the same capture-depth choice, at most every two
+seconds, so a change needs no restart.
+
+- **Drag and drop** (`screen_drag`): a mouse press and release at least 16 pixels and
+  150 ms apart. It records the start and end points and, when UI labels are on, the
+  accessibility targets under both. The ordinary click is still recorded. Dragged
+  data and file names are never read.
+- **Pointer movement** (`screen_pointer_trajectory`, Full fidelity only):
+  - samples are taken at the chosen rate, in screen pixels relative to the primary
+    display (negative on monitors left of or above it);
+  - batches hold at most 200 points or 10 seconds;
+  - no screenshot is taken for these events;
+  - shared views see a summary, as in the browser.
+- **Desktop hover dwell** is not captured. It needs the accessibility element under a
+  resting pointer, which is not yet reliable across apps, so the manifest lists it as
+  `unsupported`.
+
+The server's `/v1/events` ingest drops desktop drags and pointer samples the current
+capture depth does not allow, malformed samples, and events from excluded apps.
+
 ## Enforcement
 
 The local server enforces capture depth at ingest, so a stale or modified extension
@@ -78,8 +100,9 @@ behaviour.
 
 ## Not yet done
 
-- Desktop hover, drag and drop and pointer movement on macOS and Windows: the
-  manifest lists them as `unsupported`.
+- Desktop hover dwell (listed as `unsupported`). Desktop drag and pointer movement are
+  covered by unit tests with a simulated mouse listener only; they have not yet been
+  regression-tested on real macOS or Windows machines.
 - Iframes from other origins are covered only where the content script already runs.
 - The issue's ablation evaluation, on held-out interleaved workflows, has not been run.
   No reconstruction accuracy gain is claimed until it has.

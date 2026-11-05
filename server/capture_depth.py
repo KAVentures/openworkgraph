@@ -200,9 +200,34 @@ def bound_metadata(action: str, metadata: dict[str, Any]) -> dict[str, Any] | No
     return metadata
 
 
+DESKTOP_SIGNAL_TYPES = {"screen_drag": "drag_drop", "screen_pointer_trajectory": "pointer_trajectory"}
+
+
+def filter_desktop_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop desktop drags and pointer samples the current capture depth does not allow, or that are malformed."""
+    signals = load()["signals"]
+    kept = []
+    for event in events:
+        signal = DESKTOP_SIGNAL_TYPES.get(str(event.get("event_type") or ""))
+        if signal is None:
+            kept.append(event)
+            continue
+        meta = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+        if not signals[signal] or meta.get("excluded"):
+            continue
+        if signal == "pointer_trajectory":
+            points = meta.get("points")
+            if (not isinstance(points, list) or not 0 < len(points) <= MAX_TRAJECTORY_POINTS
+                    or not all(isinstance(p, list) and len(p) == 3 and all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                                                                            and abs(v) <= 10 ** 6 for v in p) for p in points)):
+                continue
+        kept.append(event)
+    return kept
+
+
 def _frame(metadata: dict[str, Any]) -> dict[str, Any]:
     return {k: metadata[k] for k in ("top_frame", "frame_kind", "tab_id", "window_id") if k in metadata}
 
 
-__all__ = ["CaptureDepthError", "FULL_ACK_VERSION", "PROFILES", "SIGNALS", "action_allowed", "action_allowed_on_excluded", "bound_metadata",
+__all__ = ["CaptureDepthError", "FULL_ACK_VERSION", "PROFILES", "SIGNALS", "action_allowed", "action_allowed_on_excluded", "bound_metadata", "filter_desktop_events",
            "for_extension", "load", "public", "save"]
