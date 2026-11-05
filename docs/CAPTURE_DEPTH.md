@@ -48,6 +48,9 @@ from input, textarea, select and secure targets of these events at ingest.
 - Samples at the chosen rate, as fractions of the viewport (0–1, three decimals) with
   relative milliseconds and a coarse viewport size.
 - Sent in batches of at most 200 points or 10 seconds.
+- No samples are taken while the pointer is over a password, one-time-code, card or
+  other secure field, or inside a secure widget. The current batch ends at the field,
+  and sampling resumes when the pointer leaves it.
 - The raw points stay in local storage. Every shared view shows a point count and
   duration instead (`raw_points_shared: false`): the workflow trace, the events API,
   MCP, and JSON, XLSX and CSV-zip exports with or without `redact_names`. The exporter

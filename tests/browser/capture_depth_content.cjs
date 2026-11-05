@@ -84,6 +84,17 @@ const path=require('node:path');
    assert(points.every(([t,x,y])=>t>=0&&x>=0&&x<=1&&y>=0&&y<=1));
    assert.equal(traj[0].metadata.sample_hz,10);
    assert.equal((await msgs('control_hover_dwell')).length,0);
+   // No samples are taken over a secure field; the batch before it is ended there.
+   const box=await page.locator('#pw').boundingBox();
+   const pwFraction=[ (box.x+box.width/2)/1000, (box.y+box.height/2)/700 ];
+   await page.mouse.move(900,650);
+   for(let i=0;i<6;i++){await page.mouse.move(800-i*10,600);await page.waitForTimeout(120);}
+   for(let i=0;i<6;i++){await page.mouse.move(box.x+5+i*15,box.y+box.height/2);await page.waitForTimeout(120);}
+   await page.evaluate(()=>window.dispatchEvent(new Event('pagehide')));
+   const secureBatches=(await msgs('pointer_trajectory')).slice(1);
+   const near=([t,x,y])=>Math.abs(y-pwFraction[1])<0.02&&x>=box.x/1000-0.005&&x<=(box.x+box.width)/1000+0.005;
+   assert(secureBatches.length>=1,'the batch before the secure field was flushed');
+   assert(!secureBatches.flatMap(b=>b.metadata.points).some(near),'no pointer samples over the password field');
    // Standard: nothing new is emitted at all, and a settings change takes effect live.
    await load({hover_dwell:false,drag_drop:false,pointer_trajectory:false});
    await page.hover('#menu');await page.waitForTimeout(800);await page.mouse.move(900,650);await page.dragAndDrop('#card','#bin');

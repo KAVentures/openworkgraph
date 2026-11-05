@@ -198,8 +198,18 @@ function owgFlushTrajectory() {
     viewport_bucket: `${Math.round(w / 100) * 100}x${Math.round(h / 100) * 100}`});
 }
 
+function owgOverSensitiveControl(event) {
+  // The control under the pointer or any ancestor (e.g. a labelled secure widget).
+  return pathElements(event).some(el => isSensitiveControl(el));
+}
+
 addEventListener("pointermove", (e) => {
   if (!owgDepth.signals.pointer_trajectory || e.pointerType === "touch") return;
+  if (owgOverSensitiveControl(e)) {
+    // Never sample over a secure field: end the current batch here and skip until the pointer leaves.
+    owgFlushTrajectory();
+    return;
+  }
   const now = performance.now();
   if (now - owgTrajectory.lastSample < 1000 / owgDepth.parameters.trajectory_hz) return;
   if (!owgTrajectory.start) owgTrajectory.start = now;
