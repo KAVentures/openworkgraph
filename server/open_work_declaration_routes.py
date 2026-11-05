@@ -186,6 +186,8 @@ async def _recheck_source(scope: str) -> None:
         # Revoke every actor's durable run/case associations for the old scope.
         # Failure is fail-closed: do not return an apparently valid response.
         await asyncio.to_thread(clear_binding_scope, scope)
+        from .open_work_run_receipts import clear_scope as clear_run_receipt_scope
+        await asyncio.to_thread(clear_run_receipt_scope, scope)
         raise HTTPException(409, "local source connection changed")
 
 
