@@ -15,7 +15,7 @@ from .m365_outlook_verified_append_receipt import _exclusive_private
 
 FORMAT = "openworkgraph.m365-tenant-preflight.v1"
 URL = "https://graph.microsoft.com/v1.0/organization?%24select=id"
-GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\\Z")
+GUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z")
 MAX_BYTES = 8192
 
 
@@ -70,7 +70,7 @@ def preflight(*, tenant, mailbox, folder, expected_tenant_id, grant_file: Path,
             media = response.headers.get("Content-Type", "")
             if (response.status != 200 or response.geturl() != URL
                     or type(media) is not str or
-                    not re.fullmatch(r"application/json(?:\\s*;[^;\\r\\n]+)*", media, re.I)):
+                    not re.fullmatch(r"application/json(?:\s*;[^;\r\n]+)*", media, re.I)):
                 raise TenantError("Unexpected Graph tenant transport")
             raw = response.read(MAX_BYTES + 1)
     except (OSError, error.URLError, ValueError) as exc:
