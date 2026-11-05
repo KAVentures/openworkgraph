@@ -292,6 +292,11 @@
     $('qualifierMode').addEventListener('change', () => {revealQualifier();clearResult('Selection changed. Rerun analysis.');});
     $('sourceType').addEventListener('change', () => {clearResult();loadActivities('source');});
     $('targetType').addEventListener('change', () => {clearResult();loadActivities('target');});
+    // A prior response must never be presented under newly edited parameters.
+    for (const id of ['sourceType', 'targetType', 'sourceActivity', 'targetActivity',
+                      'qualifierValue', 'sampleLimit']) {
+      $(id).addEventListener('input', () => clearResult('Selection changed. Rerun analysis.'));
+    }
     $('queryForm').addEventListener('submit', submit);
     $('resetReport').addEventListener('click', () => clearResult('Results cleared. Your saved log remains unchanged.'));
     if (!session()) {
