@@ -70,8 +70,8 @@ class OperatorCycleTests(unittest.TestCase):
 
     def test_handoff_uses_production_verified_readback_without_graph_or_append(self):
         response = {"status": "next_round_handoff_prepared", "idempotent_replay": False}
-        with patch.object(cycle, "prepare_handoff", return_value=response) as delegate, \\
-             patch.object(cycle, "run_verified_next_round") as graph, \\
+        with patch.object(cycle, "prepare_handoff", return_value=response) as delegate, \
+             patch.object(cycle, "run_verified_next_round") as graph, \
              patch.object(cycle, "append_and_record") as writer:
             result = cycle.handoff(consent_local_read=True,
                                    confirm_removals_reviewed=True,
