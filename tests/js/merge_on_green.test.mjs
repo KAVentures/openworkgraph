@@ -27,7 +27,7 @@ function jobs() {
 function options(overrides={}) {
   return {pr: pr(), owner: 'KAVentures', repo: 'openworkgraph',
     workflowRuns: workflows(), testJobs: jobs(), reviewThreads: [],
-    hasMoreReviewThreads: false, reviews: [], ...overrides};
+    hasMoreReviewThreads: false, reviews: [], upToDateWithMain: true, ...overrides};
 }
 function verdict(overrides={}) {return mod.decision(options(overrides));}
 
@@ -85,6 +85,11 @@ test('review requests, outstanding threads and change requests block', () => {
   ]}), null);
 });
 
+test('green CI before a main-branch merge is not good enough', () => {
+  assert.match(verdict({upToDateWithMain: false}), /not-tested-against-current-main/);
+  assert.match(verdict({upToDateWithMain: undefined}), /not-tested-against-current-main/);
+});
+
 test('unresolved mergeability is always a refusal, even with green CI', () => {
   assert.match(verdict({pr: pr({mergeable:false})}), /mergeable/);
   assert.match(verdict({pr: pr({mergeable_state:'unstable'})}), /mergeable/);
@@ -111,9 +116,13 @@ test('coordinator passes exact head to GitHub merge only after refreshed gates',
   const listRuns = async () => {}, listJobs = async () => {}, listReviews = async () => {};
   const github = {
     rest: {
-      repos: {listPullRequestsAssociatedWithCommit: async () => ({
-        data: [{number:700, state:'open', head:{sha}}],
-      })},
+      repos: {
+        listPullRequestsAssociatedWithCommit: async () => ({
+          data: [{number:700, state:'open', head:{sha}}],
+        }),
+        getBranch: async () => ({data:{commit:{sha:'main-head'}}}),
+        compareCommits: async () => ({data:{status:'ahead'}}),
+      },
       pulls: {
         get: async () => ({data:approved}),
         listReviews,
