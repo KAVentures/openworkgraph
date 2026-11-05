@@ -10,7 +10,9 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
+from . import automation_incidents as incidents
 from . import automation_monitoring as monitoring
+from . import automation_report_channels as channels
 from . import event_log_workspace as workspace
 from .local_auth import dashboard_session_valid
 
@@ -68,7 +70,14 @@ async def import_report(request: Request, deployment_id: str | None = Query(defa
     _require_dashboard(request)
     _require_storage_consent(request)
     document = await _json(request, monitoring.MAX_REPORT_BYTES)
-    return await _respond(monitoring.import_report, document, deployment_id or None)
+    return await _respond(_import_and_triage, document, deployment_id or None)
+
+
+def _import_and_triage(document: Any, deployment_id: str | None) -> dict[str, Any]:
+    result = monitoring.import_report(document, deployment_id)
+    result["incidents_updated"] = incidents.record_runs(result["deployment"]["deployment_id"],
+                                                        monitoring.parse_report(document)["runs"])
+    return result
 
 
 @router.put("/v1/automation-monitoring/deployments/{deployment_id}/design")
@@ -88,7 +97,14 @@ async def monitor_deployment(request: Request, deployment_id: str, recent_days: 
 @router.post("/v1/automation-monitoring/deployments/{deployment_id}/delete")
 async def delete_deployment(request: Request, deployment_id: str):
     _require_dashboard(request)
-    return await _respond(monitoring.delete_deployment, deployment_id)
+    return await _respond(_delete_with_channels, deployment_id)
+
+
+def _delete_with_channels(deployment_id: str) -> dict[str, Any]:
+    result = monitoring.delete_deployment(deployment_id)
+    result["report_channels_deleted"] = channels.forget_deployment(deployment_id)
+    result["incidents_deleted"] = incidents.forget_deployment(deployment_id)
+    return result
 
 
 def _to_event_log(deployment_id: str) -> dict[str, Any]:
@@ -104,3 +120,69 @@ async def deployment_event_log(request: Request, deployment_id: str):
     _require_dashboard(request)
     _require_storage_consent(request)
     return await _respond(_to_event_log, deployment_id)
+
+
+# ------------------------------------------------------------ signed report channels and incidents
+
+def _channel_call(operation: Callable[..., Any], *args: Any) -> JSONResponse:
+    try:
+        return JSONResponse(operation(*args), headers={"Cache-Control": "no-store"})
+    except channels.ChannelError as exc:
+        raise HTTPException(exc.status, str(exc)) from None
+    except incidents.IncidentError as exc:
+        raise HTTPException(409, str(exc)) from None
+
+
+@router.post("/v1/automation-monitoring/deployments/{deployment_id}/channel")
+async def create_report_channel(request: Request, deployment_id: str):
+    _require_dashboard(request)
+    return await run_in_threadpool(_channel_call, channels.create, deployment_id)
+
+
+@router.get("/v1/automation-monitoring/channels")
+async def list_report_channels(request: Request, deployment_id: str | None = Query(default=None, max_length=40)):
+    _require_dashboard(request)
+    return await run_in_threadpool(_channel_call, channels.listing, deployment_id)
+
+
+@router.post("/v1/automation-monitoring/channels/{channel_id}/rotate")
+async def rotate_report_channel(request: Request, channel_id: str):
+    _require_dashboard(request)
+    return await run_in_threadpool(_channel_call, channels.rotate, channel_id)
+
+
+@router.post("/v1/automation-monitoring/channels/{channel_id}/revoke")
+async def revoke_report_channel(request: Request, channel_id: str):
+    _require_dashboard(request)
+    return await run_in_threadpool(_channel_call, channels.revoke, channel_id)
+
+
+@router.post("/v1/automation-monitoring/channels/{channel_id}/reports")
+async def receive_signed_report(request: Request, channel_id: str):
+    """For the automation itself: local API token plus the channel signature; no dashboard session."""
+    if not str(request.headers.get("content-type") or "").startswith("application/json"):
+        raise HTTPException(415, "request must be JSON")
+    body = bytearray()
+    async for chunk in request.stream():
+        body += chunk
+        if len(body) > monitoring.MAX_REPORT_BYTES:
+            raise HTTPException(413, "report is larger than the supported limit")
+    return await run_in_threadpool(_channel_call, channels.ingest, channel_id,
+                                   request.headers.get("x-owg-report-timestamp", ""),
+                                   request.headers.get("x-owg-report-sequence", ""),
+                                   request.headers.get("x-owg-report-signature", ""), bytes(body))
+
+
+@router.get("/v1/automation-monitoring/incidents")
+async def list_automation_incidents(request: Request,
+                                    status: str | None = Query(default=None, pattern="^(open|acknowledged|resolved)$"),
+                                    deployment_id: str | None = Query(default=None, max_length=40)):
+    _require_dashboard(request)
+    return await run_in_threadpool(_channel_call, incidents.listing, status, deployment_id)
+
+
+@router.post("/v1/automation-monitoring/incidents/{incident_id}/triage")
+async def triage_automation_incident(request: Request, incident_id: str):
+    _require_dashboard(request)
+    payload = await _json(request, 4096)
+    return await run_in_threadpool(_channel_call, incidents.triage, incident_id, payload)

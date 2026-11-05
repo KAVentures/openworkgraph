@@ -157,6 +157,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/analysis_jobs.cjs
       - name: Verify imported automation run reports show reported rates, drift and design comparison
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/automation_monitoring.cjs
+      - name: Verify signed run-report channels and incident triage in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/automation_report_channels.cjs
       - name: Verify consented communications mining keeps only aggregates
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/communications_mining.cjs
       - name: Verify communications review examples and learned intents in Chromium
