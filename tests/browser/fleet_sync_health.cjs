@@ -22,7 +22,7 @@ const {spawn}=require('node:child_process'),{tmpdir}=require('node:os'),path=req
    await new Promise(resolve=>setTimeout(resolve,200));
   }assert(ready,'Owned Gateway not ready: '+logs);
   await api('POST','/v1/admin/auth/bootstrap',{bootstrap_token:token,email:'owner@acme.se',display_name:'Owned admin'});
-  const employee=await api('POST','/v1/admin/employees/acme',{email:'operator@acme.se',display_name:'Owned operator',teams:['support']});
+  const employee=await api('POST','/v1/admin/employees/acme',{email:'operator@acme.se',display_name:'=SUM(1,2)',teams:['support']});
   const invitation=await api('POST','/v1/admin/employees/acme/'+employee.employee_id+'/invites',{
    organization_name:'Owned Company',gateway_url:'https://gw.acme.test',max_devices:5});
   const reports={
@@ -51,11 +51,20 @@ const {spawn}=require('node:child_process'),{tmpdir}=require('node:os'),path=req
   await page.locator('#fleetFilter').selectOption('problems');
   assert.equal(await page.locator('#fleetRows tr').count(),2);
   assert.match(await page.locator('#fleetSummary').textContent(),/^2 of 4/);
+  const [fleetCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#fleetDownload').click()]);
+  const fleetCsvText=await fs.readFile(await fleetCsv.path(),'utf8');
+  assert.equal(fleetCsv.suggestedFilename(),'owg-fleet-inventory.csv');
+  assert.equal(fleetCsvText.trim().split('\r\n').length,3,'only the two shown computers export');
+  assert.match(fleetCsvText,/"problems","2","4"/);
+  assert.ok(fleetCsvText.includes('"\'=SUM(1,2)"'),'formula prefix neutralized before CSV quoting');
+  assert.match(fleetCsvText,/"owned-backlog"/);assert.match(fleetCsvText,/"700","0"/);
+  assert.doesNotMatch(fleetCsvText,/"owned-current"/);
   await page.locator('#fleetSearch').fill('owned-errors');
   assert.equal(await page.locator('#fleetRows tr').count(),1);
   assert.match(await page.locator('#fleetRows').textContent(),/Sync errors reported/);
   await page.locator('#fleetSearch').fill('no such device');
   assert.match(await page.locator('#fleetRows').textContent(),/No computers match/);
+  assert.equal(await page.locator('#fleetDownload').isDisabled(),true);
   await page.locator('#fleetSearch').fill('support');
   await page.locator('#fleetFilter').selectOption('unknown');
   assert.match(await page.locator('#fleetSummary').textContent(),/^4 of 4/);
@@ -81,6 +90,10 @@ const {spawn}=require('node:child_process'),{tmpdir}=require('node:os'),path=req
   await page.locator('#fleetFilter').selectOption('all');
   assert.equal(await page.locator('#fleetRows .pill').filter({hasText:/^Sync reported current$/}).count(),0);
   assert.equal(await page.locator('#fleetRows .pill').filter({hasText:/^Sync errors reported$/}).count(),0);
+  const [expiredCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#fleetDownload').click()]);
+  const expiredCsvText=await fs.readFile(await expiredCsv.path(),'utf8');
+  assert.doesNotMatch(expiredCsvText,/"700"|"sync_error_reported"|"in_sync_reported"/,'expired claims and their counts do not export as fresh after rollback');
+
   // A new authenticated fetch can establish fresh claims again.
   const freshAgain=page.waitForResponse(r=>r.url().endsWith('/v1/admin/people/acme'));
   await page.locator('#fleetRefresh').click();await freshAgain;
@@ -88,6 +101,23 @@ const {spawn}=require('node:child_process'),{tmpdir}=require('node:os'),path=req
   await page.waitForFunction(()=>document.querySelector('#fleetSummary').textContent.startsWith('2 of 4'));
   const after=await api('GET','/v1/admin/people/acme');
   assert(after.employees[0].devices.every(d=>d.events===0));
+  // A response started by an old session cannot restore its roster after logout.
+  let releaseRoster, requestStarted;
+  const rosterGate=new Promise(resolve=>{releaseRoster=resolve});
+  const rosterStarted=new Promise(resolve=>{requestStarted=resolve});
+  await page.route('**/v1/admin/people/acme',async route=>{
+   requestStarted();await rosterGate;
+   await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(after)});
+  });
+  await page.locator('#fleetRefresh').click();await rosterStarted;
+  await page.locator('#signOut').click();await page.locator('#login').waitFor({state:'visible'});
+  assert.equal(await page.locator('#fleetDownload').isDisabled(),true);
+  assert.equal(await page.locator('#fleetRows tr').count(),0);
+  const lateResponse=page.waitForResponse(r=>r.url().endsWith('/v1/admin/people/acme'));
+  releaseRoster();await lateResponse;
+  await new Promise(resolve=>setTimeout(resolve,100));
+  assert.equal(await page.locator('#fleetDownload').isDisabled(),true);
+  assert.equal(await page.locator('#fleetRows tr').count(),0,'old roster must not return after sign out');
   assert.deepEqual(errors,[]);
   console.log('Fleet sync health browser acceptance passed: device sync reports → production roster → admin badges, counts, overview total and independent expiry, no evidence sent.');
  }finally{
