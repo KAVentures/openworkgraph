@@ -12,7 +12,7 @@ Once the feature's implementation and tests are ready:
 1. Mark its PR **Ready for review** (do not use drafts for auto-merge).
 2. Add this literal HTML comment to its PR description, substituting the **full 40-character current PR head commit SHA**:
    `<!-- OWG-MERGE-ON-GREEN:0123456789abcdef0123456789abcdef01234567 -->`
-3. If the branch changes, the comment is **invalid** until the owner updates it to the new SHA. Editing the PR description or marking it ready triggers a recheck. Completing one of the six required workflows also triggers a recheck.
+3. If the branch changes, the comment is **invalid** until the owner updates it to the new SHA. Editing the PR description or marking it ready triggers a recheck. Completing one of the six required workflows also triggers a recheck. An **hourly GitHub Actions fallback** rechecks only explicitly opted-in open PRs in case GitHub had not yet refreshed mergeability when the final workflow finished; this does not consume a ChatGPT automation slot.
 
 This marker applies **only to that PR and that exact head**. No other worker PR is opted in by default. Existing author-operated merge paths remain available.
 
