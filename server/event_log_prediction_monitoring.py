@@ -64,6 +64,47 @@ def _mean_ci(values: list[float]) -> tuple[float, list[float]]:
     return mean, [max(0.0, mean - half), min(1.0, mean + half)]
 
 
+MIN_MATERIAL_BRIER_EXCESS = 0.02  # paired, absolute squared-probability-loss difference
+
+
+def _paired_outcome_quality(conn) -> dict[str, Any] | None:
+    """Compare the risk model to the *same* base-rate labels, treating each case as one unit.
+
+    A single completed case can contribute several correlated prefixes. Taking
+    an ordinary standard error across all prefixes creates false certainty.
+    Average the paired squared-loss difference within each case first, then
+    form a descriptive normal interval across cases. No update is applied.
+    """
+    values = [float(row[0]) for row in conn.execute("""
+        SELECT avg(power(rate - CAST(outcome AS DOUBLE), 2) -
+                   power(base_rate - CAST(outcome AS DOUBLE), 2)) AS paired_excess
+        FROM pt_est
+        WHERE basis IS NOT NULL AND rate IS NOT NULL
+          AND base_rate IS NOT NULL AND outcome IS NOT NULL
+        GROUP BY case_id ORDER BY case_id
+    """).fetchall() if row[0] is not None]
+    count = len(values)
+    if count < MIN_CASES_PER_WINDOW:
+        return None
+    excess = sum(values) / count
+    sd = math.sqrt(sum((v - excess) ** 2 for v in values) / (count - 1)) if count > 1 else 0.0
+    margin = 1.959964 * sd / math.sqrt(count)
+    interval = [max(-1.0, excess - margin), min(1.0, excess + margin)]
+    # A warning requires *both* a nonzero lower 95% bound and a material
+    # absolute excess. Negative excess means the model is better than baseline.
+    warn = excess >= MIN_MATERIAL_BRIER_EXCESS and interval[0] > 0
+    return {
+        "case_averaged_brier_excess": round(excess, 6),
+        "case_averaged_brier_excess_ci95": [round(x, 6) for x in interval],
+        "paired_cases": count,
+        "material_excess_threshold": MIN_MATERIAL_BRIER_EXCESS,
+        "worse_than_base_rate": warn,
+        "positive_excess_means": "the model incurs more squared probability error than the historical base rate",
+        "unit_of_uncertainty": "completed_case_not_correlated_prefix",
+        "review_only": True,
+    }
+
+
 def _score(conn, low, high, has_outcome: bool) -> dict[str, Any]:
     """Train on cases that ended at or before ``low``; score prefixes of cases that ended in (low, high]."""
     predictions._train(conn, "ended <= ?", [low])
@@ -89,7 +130,10 @@ def _score(conn, low, high, has_outcome: bool) -> dict[str, Any]:
                               else "ranges_too_wide" if ci[0] > NOMINAL_COVERAGE and coverage >= NOMINAL_COVERAGE + COVERAGE_FLOOR
                               else None))
     if has_outcome:
-        out.update(brier_score=brier, base_rate_brier_score=base_brier)
+        out.update(brier_score=brier, base_rate_brier_score=base_brier,
+                   brier_skill_vs_base_rate=(round(1 - brier / base_brier, 6)
+                                             if brier is not None and base_brier else None),
+                   outcome_quality=_paired_outcome_quality(conn))
     return out
 
 
@@ -148,6 +192,15 @@ def monitor(log_id: str, spec: Any) -> dict[str, Any]:
             latest = scored[-1]
             if latest["coverage_flag"]:
                 flags.append({"flag": latest["coverage_flag"], "window": latest["window"]})
+            if has_outcome and latest.get("outcome_quality") and latest["outcome_quality"]["worse_than_base_rate"]:
+                flags.append({
+                    "flag": "outcome risk model performs worse than historical base rate",
+                    "window": latest["window"],
+                    "case_averaged_brier_excess": latest["outcome_quality"]["case_averaged_brier_excess"],
+                    "case_averaged_brier_excess_ci95": latest["outcome_quality"]["case_averaged_brier_excess_ci95"],
+                    "comparison": "paired_loss_by_case",
+                    "review_only": True,
+                })
             first = scored[0]
             if len(scored) > 1 and latest["mean_absolute_error_seconds"] > ERROR_RISE * first["mean_absolute_error_seconds"]:
                 flags.append({"flag": "error_rising", "window": latest["window"],
@@ -172,7 +225,10 @@ def monitor(log_id: str, spec: Any) -> dict[str, Any]:
             "method": {"split": "completed cases by end time into consecutive windows",
                        "training": "cases that ended before each window", "nominal_coverage": NOMINAL_COVERAGE,
                        "coverage_interval": "normal interval over cases, each case's share of covered prefixes",
-                       "error_rise_threshold": ERROR_RISE},
+                       "error_rise_threshold": ERROR_RISE,
+                       "outcome_quality_method": "paired Brier excess averaged within case then across cases",
+                       "outcome_quality_minimum_material_excess": MIN_MATERIAL_BRIER_EXCESS,
+                       "outcome_quality_warning_window": "latest_scored_only"},
             "interpretation": ("How past predictions would have performed on later cases in this log. A flag or "
                                "proposal is a prompt to review, not an automatic change, and does not establish "
                                "that future predictions hold."),
