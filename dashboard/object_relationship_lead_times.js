@@ -176,13 +176,13 @@
 
   async function loadActivities(which) {
     const gen = ++activityGeneration[which];
-    const type = $(which + 'Type').value.trim();
+    const type = $(which + 'Type').value; // exact literal OCEL labels can contain edge whitespace
     const captured = activeLog;
-    if (!captured || !type) return;
+    if (!captured || !type.trim()) return;
     try {
       const body = await api('/v1/event-logs/' + encodeURIComponent(captured) +
         '/activities?case_type=' + encodeURIComponent(type));
-      if (gen !== activityGeneration[which] || captured !== activeLog || $(which + 'Type').value.trim() !== type)
+      if (gen !== activityGeneration[which] || captured !== activeLog || $(which + 'Type').value !== type)
         return;
       const names = (body.activities || []).map(row => String(row.activity || '')).filter(Boolean);
       dataOptions(which + 'ActivityList', names);
@@ -258,10 +258,10 @@
       return;
     }
     const spec = {
-      source_type: $('sourceType').value.trim(),
-      target_type: $('targetType').value.trim(),
-      source_activity: $('sourceActivity').value.trim(),
-      target_activity: $('targetActivity').value.trim(),
+      source_type: $('sourceType').value,
+      target_type: $('targetType').value,
+      source_activity: $('sourceActivity').value,
+      target_activity: $('targetActivity').value,
       sample_limit: limit,
     };
     if (['empty', 'literal'].includes($('qualifierMode').value)) {
