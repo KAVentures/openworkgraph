@@ -167,3 +167,16 @@ def test_desktop_pointer_samples_are_never_taken_over_secure_fields(monkeypatch)
     assert points and all(p[1] < 500 for p in points), "no samples over the secure field"
     assert any(r.kind == "pointer_trajectory" for r in seen), "the batch before the field was flushed"
     assert len(asked) <= 15, "the accessibility check runs only when a sample would be taken"
+
+
+def test_desktop_trajectory_points_are_stored_apart_from_the_event():
+    from server.db import _split_pointer_trajectory
+    event = {"event_id": "e1", "event_type": "screen_pointer_trajectory",
+             "metadata": {"points": [[0, 10, 20], [250, 30, 40]], "coordinates": "screen_pixels"}}
+    stored, points = _split_pointer_trajectory(event)
+    assert points == [[0, 10, 20], [250, 30, 40]]
+    assert "points" not in stored["metadata"] and stored["metadata"]["point_count"] == 2
+    assert stored["metadata"]["duration_ms"] == 250 and stored["metadata"]["raw_points_stored_locally"] is True
+    assert event["metadata"]["points"], "the caller's event is not modified"
+    click = {"event_type": "screen_click", "metadata": {"points": [1]}}
+    assert _split_pointer_trajectory(click) == (click, None)

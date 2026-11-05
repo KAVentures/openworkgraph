@@ -92,7 +92,8 @@ seconds, so a change needs no restart.
     the pointer has moved more than 8 pixels. If the check fails, the field is treated
     as secure;
   - no screenshot is taken for these events;
-  - shared views see a summary, as in the browser.
+  - the points are stored apart from the event, as in the browser, so shared views
+    and exports see only a count and duration.
 - **Desktop hover dwell** (`screen_hover_dwell`, Enhanced):
   - A rest is the pointer staying within 3 pixels for the chosen threshold. It ends when
     the pointer moves away (`pointer_left`) or a button is pressed (`activated`).
@@ -120,8 +121,7 @@ cannot store a disabled signal. It also:
 `GET /v1/capture-coverage` lists each capture modality as `on`, `off`, `unsupported`
 or not seen, with counts of high-fidelity events over the last seven days. It covers
 browser structural events, hover dwell, drag and drop, pointer movement, desktop
-clicks, desktop hover, drag and pointer (unsupported for now), screenshots and work
-text. Reconstruction and agents can use it to tell a missing signal from an absent
+clicks, desktop hover, drag and pointer, screenshots and work text. Reconstruction and agents can use it to tell a missing signal from an absent
 behaviour.
 
 ## Not yet done
