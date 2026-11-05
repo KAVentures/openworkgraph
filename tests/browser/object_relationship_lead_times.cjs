@@ -80,9 +80,9 @@ const path=require('node:path');
     assert.equal((await analysis.json()).forward_pairs,1);
     assert.equal((await analysis.json()).reversed_pairs,1);
     await page.locator('#resultSection:not([hidden])').waitFor();
-    assert.match(await page.locator('#metrics').textContent(),/Distinct related pairs2/);
-    assert.match(await page.locator('#metrics').textContent(),/Reversed ordering1/);
-    assert.match(await page.locator('#metrics').textContent(),/Median forward elapsed time2\.00 h/);
+    assert.match(await page.locator('#metrics').textContent(),/2Distinct related pairs/);
+    assert.match(await page.locator('#metrics').textContent(),/1Reversed ordering/);
+    assert.match(await page.locator('#metrics').textContent(),/2\.00 hMedian forward elapsed time/);
     assert.equal(await page.locator('#sampleRows tr').count(),2);
     assert.ok(!(await page.locator('#resultSection').isHidden()));
 
@@ -94,7 +94,7 @@ const path=require('node:path');
     await page.locator('#qualifierMode').selectOption('empty');
     await page.locator('#runQuery').click();
     await page.waitForFunction(()=>document.querySelector('#status')?.textContent?.includes('complete'));
-    assert.match(await page.locator('#metrics').textContent(),/Distinct related pairs0/);
+    assert.match(await page.locator('#metrics').textContent(),/0Distinct related pairs/);
 
     // The document never requires cloud destinations or scripts from other origins.
     await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
