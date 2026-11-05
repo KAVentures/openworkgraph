@@ -293,7 +293,7 @@ def _is_distinct_user_action_after_completion(e: dict[str, Any], pending_fingerp
     action = _semantic_action(e).lower()
     if action in {"page_view", "tab_activated", "navigation", "dom_ready", "pageshow", "heartbeat"}:
         return False
-    if action in {"scroll", "mouse_move", "pointer_trajectory", "control_hover_dwell"}:
+    if action in {"scroll", "mouse_move", "pointer_trajectory", "control_hover_dwell", "hover_dwell"}:
         # High-fidelity context (#634) is never a workflow step by itself.
         return False
     fp = _semantic_fingerprint(e)
@@ -434,7 +434,7 @@ def _task_action_token(e: dict[str, Any]) -> str:
     if action in {
         "page_view", "tab_activated", "navigation", "navigation_started",
         "navigation_requested", "navigation_committed", "dom_ready", "pageshow",
-        "heartbeat", "scroll", "mouse_move", "pointer_trajectory", "control_hover_dwell",
+        "heartbeat", "scroll", "mouse_move", "pointer_trajectory", "control_hover_dwell", "hover_dwell",
     }:
         return ""
     # A generic click with no safe label is too weak to define a repeated task.

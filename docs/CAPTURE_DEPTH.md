@@ -73,12 +73,18 @@ seconds, so a change needs no restart.
   - batches hold at most 200 points or 10 seconds;
   - no screenshot is taken for these events;
   - shared views see a summary, as in the browser.
-- **Desktop hover dwell** is not captured. It needs the accessibility element under a
-  resting pointer, which is not yet reliable across apps, so the manifest lists it as
-  `unsupported`.
+- **Desktop hover dwell** (`screen_hover_dwell`, Enhanced):
+  - A rest is the pointer staying within 3 pixels for the chosen threshold. It ends when
+    the pointer moves away (`pointer_left`) or a button is pressed (`activated`).
+  - It counts only when the accessibility element under the pointer is a non-secure
+    interactive control: button, link, menu item, tab, checkbox, radio, combo box,
+    slider, switch or option.
+  - Rests over text, empty space, secure fields or apps without accessibility targets
+    are dropped. With UI labels turned off, no desktop hover is recorded.
 
-The server's `/v1/events` ingest drops desktop drags and pointer samples the current
-capture depth does not allow, malformed samples, and events from excluded apps.
+The server's `/v1/events` ingest drops desktop hovers, drags and pointer samples the
+current capture depth does not allow. It also drops malformed samples, hovers without a
+non-secure target, and events from excluded apps.
 
 ## Enforcement
 
@@ -100,9 +106,10 @@ behaviour.
 
 ## Not yet done
 
-- Desktop hover dwell (listed as `unsupported`). Desktop drag and pointer movement are
-  covered by unit tests with a simulated mouse listener only; they have not yet been
-  regression-tested on real macOS or Windows machines.
+- Desktop hover, drag and pointer movement are covered by unit tests with a simulated
+  mouse listener and simulated accessibility targets only. They have not yet been
+  regression-tested on real macOS or Windows machines, including permissions,
+  multi-monitor layouts and lock states.
 - Iframes from other origins are covered only where the content script already runs.
 - The issue's ablation evaluation, on held-out interleaved workflows, has not been run.
   No reconstruction accuracy gain is claimed until it has.

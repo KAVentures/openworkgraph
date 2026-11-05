@@ -51,6 +51,7 @@ _PASSIVE_ACTIONS = {
     "control_hover_dwell",
     "pointer_trajectory",
     "screen_pointer_trajectory",
+    "hover_dwell",
 }
 
 

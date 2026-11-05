@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import re
 import platform
 import threading
 import time
@@ -23,6 +24,60 @@ class RawInteraction:
     context: dict[str, Any] | None = None
     # Sampled pointer positions for kind "pointer_trajectory": [ms since first, x, y].
     points: list[list[float]] | None = None
+    # For kind "hover_dwell": how long the pointer rested and how the rest ended.
+    duration_ms: int | None = None
+    ended_by: str | None = None
+
+
+class HoverTracker:
+    """Report a pointer that rested in one place for at least ``threshold_ms`` (#634).
+
+    Movement within ``tolerance`` pixels counts as resting. The rest is reported when
+    the pointer moves away (``pointer_left``) or a button is pressed (``activated``);
+    whether it rested on an interactive control is decided later from the UI target.
+    """
+
+    def __init__(self, *, threshold_ms: int = 750, tolerance: float = 3.0) -> None:
+        self.threshold_ms = int(threshold_ms)
+        self.tolerance = float(tolerance)
+        self._rest: tuple[float, float, float] | None = None  # x, y, since
+        self._reported = False
+
+    def _finish(self, now: float, ended_by: str) -> RawInteraction | None:
+        rest, self._rest = self._rest, None
+        if rest is None or self._reported:
+            self._reported = False
+            return None
+        x, y, since = rest
+        duration = int(round((now - since) * 1000 / 50.0)) * 50
+        if duration < self.threshold_ms:
+            return None
+        return RawInteraction(kind="hover_dwell", x=x, y=y, occurred_mono=since,
+                              duration_ms=min(duration, 600000), ended_by=ended_by)
+
+    def move(self, x: float, y: float, now: float) -> RawInteraction | None:
+        if self._rest is not None:
+            rx, ry, _ = self._rest
+            if ((x - rx) ** 2 + (y - ry) ** 2) ** 0.5 <= self.tolerance:
+                return None
+        finished = self._finish(now, "pointer_left")
+        self._rest = (float(x), float(y), float(now))
+        self._reported = False
+        return finished
+
+    def activate(self, now: float) -> RawInteraction | None:
+        finished = self._finish(now, "activated")
+        return finished
+
+
+_INTERACTIVE_ROLE = re.compile(r"button|link|menu|tab|check|radio|combo|popup|slider|switch|option|hyperlink", re.I)
+
+
+def interactive_target(target: dict[str, Any] | None) -> bool:
+    """A hover counts only on a non-secure interactive control."""
+    if not isinstance(target, dict) or target.get("secure"):
+        return False
+    return bool(_INTERACTIVE_ROLE.search(str(target.get("role") or "")))
 
 
 class DragDetector:
@@ -92,9 +147,13 @@ def capture_depth_signals(data_dir) -> dict[str, Any]:
         params = data.get("parameters") if isinstance(data, dict) else {}
         acknowledged = data.get("full_acknowledged_version") == "capture-depth-full-v1"
     except (OSError, ValueError):
-        return {"drag_drop": False, "pointer_trajectory": False, "trajectory_hz": 4}
+        return {"drag_drop": False, "pointer_trajectory": False, "trajectory_hz": 4, "hover_dwell": False,
+                "hover_dwell_ms": 750}
     hz = params.get("trajectory_hz") if isinstance(params, dict) else None
-    return {"drag_drop": isinstance(signals, dict) and signals.get("drag_drop") is True,
+    dwell = params.get("hover_dwell_ms") if isinstance(params, dict) else None
+    return {"hover_dwell": isinstance(signals, dict) and signals.get("hover_dwell") is True,
+            "hover_dwell_ms": dwell if isinstance(dwell, int) and 300 <= dwell <= 5000 else 750,
+            "drag_drop": isinstance(signals, dict) and signals.get("drag_drop") is True,
             "pointer_trajectory": isinstance(signals, dict) and signals.get("pointer_trajectory") is True and acknowledged,
             "trajectory_hz": hz if isinstance(hz, int) and 1 <= hz <= 20 else 4}
 
@@ -369,6 +428,7 @@ class InteractionSensor:
         self.depth = depth or (lambda: {"drag_drop": False, "pointer_trajectory": False, "trajectory_hz": 4})
         self._drag = DragDetector()
         self._sampler = PointerSampler()
+        self._hover = HoverTracker()
         self.scroll_min_interval_seconds = max(0.0, float(scroll_min_interval_seconds))
         self._mouse_listener = None
         self._last_scroll_at = 0.0
@@ -382,6 +442,10 @@ class InteractionSensor:
         def on_click(x, y, button, pressed):
             now = time.monotonic()
             settings = self.depth()
+            if pressed and settings.get("hover_dwell"):
+                dwell = self._hover.activate(now)
+                if dwell is not None:
+                    self.callback(dwell)
             if settings.get("drag_drop"):
                 if pressed:
                     self._drag.press(x, y, getattr(button, "name", str(button)), now)
@@ -421,6 +485,11 @@ class InteractionSensor:
 
         def on_move(x, y):
             settings = self.depth()
+            if settings.get("hover_dwell"):
+                self._hover.threshold_ms = settings.get("hover_dwell_ms", 750)
+                dwell = self._hover.move(x, y, time.monotonic())
+                if dwell is not None:
+                    self.callback(dwell)
             if not settings.get("pointer_trajectory"):
                 self._sampler.flush()  # discard: the signal was turned off
                 return

@@ -200,7 +200,8 @@ def bound_metadata(action: str, metadata: dict[str, Any]) -> dict[str, Any] | No
     return metadata
 
 
-DESKTOP_SIGNAL_TYPES = {"screen_drag": "drag_drop", "screen_pointer_trajectory": "pointer_trajectory"}
+DESKTOP_SIGNAL_TYPES = {"screen_drag": "drag_drop", "screen_pointer_trajectory": "pointer_trajectory",
+                        "screen_hover_dwell": "hover_dwell"}
 
 
 def filter_desktop_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -215,6 +216,11 @@ def filter_desktop_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         meta = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
         if not signals[signal] or meta.get("excluded"):
             continue
+        if signal == "hover_dwell":
+            duration = meta.get("duration_ms")
+            if not isinstance(duration, int) or isinstance(duration, bool) or not 0 < duration <= 600000 \
+                    or not isinstance(meta.get("target"), dict) or meta["target"].get("secure"):
+                continue
         if signal == "pointer_trajectory":
             points = meta.get("points")
             if (not isinstance(points, list) or not 0 < len(points) <= MAX_TRAJECTORY_POINTS

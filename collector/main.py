@@ -24,6 +24,7 @@ from .interactions import (
     RawClipboardAction,
     clipboard_change_token,
     capture_depth_signals,
+    interactive_target,
 )
 from .privacy import should_exclude, title_for_mode
 from .identity import load_or_create_identity
@@ -497,7 +498,9 @@ def _interaction_event(*, raw: RawInteraction, cfg: dict, session_id: str) -> di
         metadata["dx"] = raw.dx
     if raw.dy is not None:
         metadata["dy"] = raw.dy
-    high_fidelity = raw.kind in {"drag", "pointer_trajectory"}
+    high_fidelity = raw.kind in {"drag", "pointer_trajectory", "hover_dwell"}
+    if raw.kind == "hover_dwell":
+        metadata.update(duration_ms=raw.duration_ms, ended_by=raw.ended_by or "unknown")
     if raw.kind == "pointer_trajectory":
         # Screen pixels relative to the primary display origin; may be negative on extra monitors.
         metadata.update(points=[list(p) for p in (raw.points or [])][:200], coordinates="screen_pixels")
@@ -638,6 +641,9 @@ def _interaction_worker(
                 )
             else:
                 event = _interaction_event(raw=raw, cfg=cfg, session_id=session_id)
+                if raw.kind == "hover_dwell" and not interactive_target((event.get("metadata") or {}).get("target")):
+                    # Only a rest on an identifiable, non-secure control is a hover dwell.
+                    continue
             persist_event(event, outbox)
         except Exception:
             capture_health["interaction_worker_errors"] = capture_health.get("interaction_worker_errors", 0) + 1

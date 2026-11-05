@@ -3,7 +3,8 @@ import json
 
 import pytest
 
-from collector.interactions import DragDetector, InteractionSensor, PointerSampler, capture_depth_signals
+from collector.interactions import (DragDetector, HoverTracker, InteractionSensor, PointerSampler,
+                                    capture_depth_signals, interactive_target)
 
 
 def test_drag_needs_distance_and_time_and_clicks_are_not_drags():
@@ -29,10 +30,12 @@ def test_pointer_sampler_throttles_and_batches():
 
 
 def test_capture_depth_file_is_read_and_unacknowledged_trajectories_stay_off(tmp_path):
-    assert capture_depth_signals(tmp_path) == {"drag_drop": False, "pointer_trajectory": False, "trajectory_hz": 4}
+    assert capture_depth_signals(tmp_path) == {"drag_drop": False, "pointer_trajectory": False, "trajectory_hz": 4,
+                                               "hover_dwell": False, "hover_dwell_ms": 750}
     (tmp_path / "capture_depth.json").write_text(json.dumps({"signals": {"drag_drop": True, "pointer_trajectory": True},
                                                              "parameters": {"trajectory_hz": 9}}))
-    assert capture_depth_signals(tmp_path) == {"drag_drop": True, "pointer_trajectory": False, "trajectory_hz": 9}
+    assert capture_depth_signals(tmp_path) == {"drag_drop": True, "pointer_trajectory": False, "trajectory_hz": 9,
+                                               "hover_dwell": False, "hover_dwell_ms": 750}
     (tmp_path / "capture_depth.json").write_text(json.dumps({"signals": {"pointer_trajectory": True},
                                                              "full_acknowledged_version": "capture-depth-full-v1"}))
     assert capture_depth_signals(tmp_path)["pointer_trajectory"] is True
@@ -99,3 +102,34 @@ def test_desktop_trajectories_are_summarized_and_never_steps():
     assert "points" not in summarize_pointer_trajectories(event)["metadata"]
     assert _task_action_token(event) == ""
     assert _is_distinct_user_action_after_completion(event, "", 0.0, 10.0) is False
+
+
+def test_hover_tracker_reports_rests_that_end_by_moving_or_pressing():
+    h = HoverTracker(threshold_ms=750)
+    assert h.move(100, 100, 0.0) is None
+    assert h.move(101, 101, 0.5) is None              # jitter within tolerance keeps resting
+    dwell = h.move(400, 300, 1.0)
+    assert dwell.kind == "hover_dwell" and dwell.duration_ms == 1000 and dwell.ended_by == "pointer_left"
+    assert (dwell.x, dwell.y) == (100.0, 100.0)
+    assert h.move(410, 300, 1.2) is None              # 200 ms is a quick pass
+    h.move(500, 500, 2.0)
+    pressed = h.activate(3.0)
+    assert pressed.ended_by == "activated" and pressed.duration_ms == 1000
+    assert h.activate(3.1) is None
+
+
+@pytest.mark.parametrize("target,expected", [({"role": "AXButton", "label": "Save"}, True), ({"role": "Hyperlink"}, True),
+                                             ({"role": "MenuItem"}, True), ({"role": "AXStaticText"}, False),
+                                             ({"role": "AXTextField", "secure": True}, False), ({}, False), (None, False)])
+def test_only_interactive_non_secure_targets_count(target, expected):
+    assert interactive_target(target) is expected
+
+
+def test_server_drops_desktop_hovers_without_a_safe_target(depth):
+    depth.save({"profile": "enhanced"})
+    good = {"event_type": "screen_hover_dwell", "metadata": {"duration_ms": 900, "target": {"role": "AXButton"}}}
+    secure = {"event_type": "screen_hover_dwell", "metadata": {"duration_ms": 900, "target": {"role": "x", "secure": True}}}
+    untargeted = {"event_type": "screen_hover_dwell", "metadata": {"duration_ms": 900}}
+    assert depth.filter_desktop_events([good, secure, untargeted]) == [good]
+    depth.save({"profile": "standard"})
+    assert depth.filter_desktop_events([good]) == []
