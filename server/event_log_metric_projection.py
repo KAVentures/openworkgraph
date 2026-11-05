@@ -7,6 +7,7 @@ No source identifiers, free text, or raw rows are returned to the consumer.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from decimal import Decimal, localcontext
 from typing import Any
 
 from . import event_log_derived_metrics as metrics
@@ -50,6 +51,28 @@ def summarize_projected(
                 or not isinstance(value, (int, float, str))
             ):
                 raise metrics.MetricDefinitionError("non-numeric projected value")
+            # Check every approved value, including unvisited coalesce branches.
+            if value is not None:
+                metrics._number(value)
             row[field] = value
         projected.append(row)
-    return metrics.summarize_rows(definition, projected, numeric_fields)
+    # Exact bounded accumulation avoids source-order-dependent rounding and
+    # intermediate overflow from otherwise cancelling valid cohort values.
+    values = [metrics._evaluate(definition["expression"], row) for row in projected]
+    present = [value for value in values if value is not None]
+    with localcontext() as context:
+        context.prec = 100
+        total = sum(present, Decimal(0))
+    if total and abs(total.adjusted()) > metrics.MAX_DECIMAL_MAGNITUDE:
+        raise metrics.MetricDefinitionError("aggregate magnitude exceeds safe bound")
+    count = len(present)
+    return {
+        "definition_sha256": metrics.validate(definition, numeric_fields),
+        "rows": len(projected),
+        "non_null": count,
+        "null": len(projected) - count,
+        "sum": str(total) if count else None,
+        "mean": str(total / count) if count else None,
+        "min": str(min(present)) if count else None,
+        "max": str(max(present)) if count else None,
+    }
