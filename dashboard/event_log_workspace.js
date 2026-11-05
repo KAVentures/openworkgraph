@@ -136,12 +136,40 @@
     const manage=el('div',null,'row');manage.id='owgEventLogManage';manage.style.cssText='align-items:end;margin-top:12px';show(manage,false);
     manage.append(field('Stored log',pick),field('Case notion',caseType),analyze,field('Export as',exportFormat),exportButton,remove);
     const results=el('div');results.id='owgEventLogResults';
-    card.append(manage,results,jiraSourceSection());
+    let salesforceStagedFile=null;
+    const unstageSalesforce=()=>{
+      if(salesforceStagedFile&&file.files?.[0]===salesforceStagedFile){
+        file.value='';consent.checked=false;refreshImport();
+        status('Earlier Salesforce selection cleared from the import form.');
+      }
+      salesforceStagedFile=null;
+    };
+    card.append(manage,results,salesforceSourceSection((csv,namespace,isCurrent)=>{
+      if(!isCurrent())return;
+      // Invalidate any in-flight column read for the previous import file.
+      columnReadSequence++;readingColumns=false;
+      const transfer=new DataTransfer();transfer.items.add(new File([csv],'selected-salesforce-cases.csv',{type:'text/csv'}));
+      file.files=transfer.files;salesforceStagedFile=file.files[0];
+      name.value='Selected Salesforce cases';format.value='csv';delimiter.value=',';
+      // The projection has a fixed, reviewed four-column schema; use it directly
+      // so a delayed column read cannot overwrite another chosen file's mapping.
+      const options=['case_id','activity','timestamp','source_event_id'].map(x=>[x,x]);
+      for(const column of [cols.case,cols.activity,cols.time])setOptions(column,options);
+      setOptions(cols.resource,[['','(none)'],...options]);setOptions(extras,options);
+      setOptions(eventId,[['','Choose a column'],...options]);
+      for(const column of [sourceColumn,caseColumn,jsonColumn])setOptions(column,[['','(none)'],...options]);
+      cols.case.value='case_id';cols.activity.value='activity';cols.time.value='timestamp';cols.resource.value='';
+      useIdentity.checked=true;eventId.value='source_event_id';sourceNamespace.value=namespace;
+      sourceColumn.value='';caseNamespace.value='';caseColumn.value='';jsonColumn.value='';
+      keep.checked=false;consent.checked=false;refreshImport();
+      status('Salesforce events staged. Review the mapping and separately confirm local storage.');
+      file.focus();
+    },unstageSalesforce),jiraSourceSection());
 
     const browse=document.getElementById('owgProcessCSV');
     if(browse)browse.insertAdjacentElement('afterend',card);else panel.appendChild(card);
 
-    let readingColumns=false;
+    let readingColumns=false,columnReadSequence=0;
     const refreshImport=()=>{const csv=format.value==='csv',active=csv&&useIdentity.checked;
       const valid=!active||(eventId.value&&!!sourceNamespace.value!==!!sourceColumn.value&&!(caseNamespace.value&&caseColumn.value)&&!keep.checked);
       const ready=!readingColumns&&file.files&&file.files[0]&&consent.checked&&valid;importButton.disabled=!(ready&&name.value.trim());appendButton.disabled=!(ready&&state.logId);show(mapping,csv);show(identity,csv);show(identityFields,active);};
@@ -157,9 +185,11 @@
       if(useIdentity.checked)for(const [key,value] of Object.entries({event_id_column:eventId.value,source_namespace:sourceNamespace.value,source_namespace_column:sourceColumn.value,case_namespace:caseNamespace.value,case_namespace_column:caseColumn.value,attributes_json_column:jsonColumn.value}))if(value)q.set(key,value);
     }
     async function readColumns(){
+      const sequence=++columnReadSequence;
       const chosen=file.files&&file.files[0];if(!chosen||format.value!=='csv')return;
       const sep=delimiter.value==='t'?'\t':delimiter.value;
       const columns=csvHeader(await chosen.slice(0,65536).text(),sep);
+      if(sequence!==columnReadSequence||file.files?.[0]!==chosen||format.value!=='csv'||(delimiter.value==='t'?'\t':delimiter.value)!==sep)return;
       const options=columns.map(c=>[c,c]);
       setOptions(cols.case,options);setOptions(cols.activity,options);setOptions(cols.time,options);setOptions(cols.resource,[['','(none)'],...options]);
       cols.case.value=guess(columns,['case','order','ticket','id'])||columns[0]||'';
@@ -175,7 +205,7 @@
       jsonColumn.value=columns.includes('attributes')?'attributes':'';
       refreshImport();
     }
-    file.onchange=async()=>{const chosen=file.files&&file.files[0];if(chosen){format.value=detectFormat(chosen.name);if(!name.value)name.value=chosen.name.replace(/\.[^.]+$/,'').slice(0,120);if(chosen.name.toLowerCase().endsWith('.tsv'))delimiter.value='t';}consent.checked=false;readingColumns=true;status('Reading file columns…');refreshImport();try{await readColumns();status('File mapping ready. Review the selected columns before storing.');}catch(_){status('Could not read the column names.');}finally{readingColumns=false;refreshImport();}};
+    file.onchange=async()=>{const chosen=file.files&&file.files[0];if(chosen){format.value=detectFormat(chosen.name);if(!name.value)name.value=chosen.name.replace(/\.[^.]+$/,'').slice(0,120);if(chosen.name.toLowerCase().endsWith('.tsv'))delimiter.value='t';}consent.checked=false;readingColumns=true;status('Reading file columns…');refreshImport();try{await readColumns();if(file.files?.[0]===chosen)status('File mapping ready. Review the selected columns before storing.');}catch(_){if(file.files?.[0]===chosen)status('Could not read the column names.');}finally{if(file.files?.[0]===chosen){readingColumns=false;refreshImport();}}};
     format.onchange=()=>{refreshImport();readColumns().catch(()=>{});};
     delimiter.onchange=()=>readColumns().catch(()=>{});
     consent.onchange=refreshImport;name.oninput=refreshImport;
@@ -226,6 +256,53 @@
     };
     refreshImport();
     refreshLogs('').catch(()=>{});
+  }
+
+  function salesforceSourceSection(stage,unstage){
+    const box=section('Salesforce CaseHistory export');box.id='owgSalesforceSource';
+    box.append(el('p','Prepare creation and status events from an authorized CSV export on this computer. Preparing does not store a log or contact Salesforce. Selected IDs and status labels are processed locally; history completeness is unknown.','muted'));
+    const file=input('owgSalesforceFile','file');file.accept='.csv';
+    const account=input('owgSalesforceAccount','text','Stable account namespace');account.maxLength=128;
+    const cases=el('textarea');cases.id='owgSalesforceCases';cases.rows=3;cases.maxLength=700;cases.placeholder='One exact CaseId per line (up to 32)';
+    const consent=input('owgSalesforceConsent','checkbox');
+    const prepare=button('Prepare selected cases','secondary');prepare.id='owgSalesforcePrepare';prepare.disabled=true;
+    const out=el('div');out.id='owgSalesforceReview';out.setAttribute('role','status');out.setAttribute('aria-live','polite');
+    let generation=0;
+    const invalidate=()=>{generation++;out.replaceChildren();consent.checked=false;unstage();refresh();};
+    function refresh(){prepare.disabled=!(file.files?.[0]&&account.value.trim()&&cases.value.trim()&&consent.checked);}
+    file.onchange=invalidate;account.oninput=invalidate;cases.oninput=invalidate;
+    consent.onchange=()=>{if(!consent.checked){generation++;out.replaceChildren();unstage();}refresh();};
+    prepare.onclick=async()=>{
+      const selected=file.files?.[0];if(!selected||!consent.checked)return;
+      const current=++generation;prepare.disabled=true;
+      try{
+        if(selected.size>16*1024*1024)throw new Error('Choose an export no larger than 16 MiB.');
+        let text;try{text=new TextDecoder('utf-8',{fatal:true}).decode(await selected.arrayBuffer());}
+        catch(_){throw new Error('The export must be valid UTF-8.');}
+        const spec={account:account.value.trim(),cases:cases.value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean),csv:text,confirm_processing:true};
+        if(current!==generation)return;
+        const result=await (await api('/v1/event-logs/prepare-salesforce',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        if(current!==generation)return;
+        const r=result.report;
+        const reviewed=input('owgSalesforceReviewed','checkbox');
+        const use=button('Use reviewed events in import form','secondary');use.id='owgSalesforceStage';use.disabled=true;
+        reviewed.onchange=()=>{use.disabled=!reviewed.checked;};
+        use.onclick=async()=>{
+          if(current!==generation||!reviewed.checked)return;
+          use.disabled=true;
+          try{await stage(result.csv,result.namespace,()=>current===generation);}
+          catch(error){if(current===generation)out.appendChild(el('p',error.message,'muted'));}
+        };
+        out.replaceChildren(table(['Export review','Count'],[['Input rows',r.input_rows],['Selected cases',r.selected_cases],['Represented cases',r.represented_cases],['Projected events',r.events],['Unselected rows',r.unselected_rows],['Excluded fields',r.excluded_fields],['Duplicate rows',r.duplicate_rows],['Additional events at tied timestamps',r.tied_timestamp_events]]),
+          el('p','Showing '+result.preview.length+' of '+r.events+' projected events. Case keys are derived from your declared account and are not anonymization. Tied timestamps use deterministic ID order, not confirmed business order.','muted'),
+          table(['Derived case key','Activity','Timestamp'],result.preview.map(x=>[x.case_id,x.activity,x.timestamp])),
+          el('p','Only creation and status labels are included. Missing history is unknown. The source namespace is based on your account declaration; use the same declaration for later manual exports. Live connector-managed logs use a different scope. No events have been stored.','muted'),
+          field('I reviewed this projection and want to stage it for import',reviewed),use);
+      }catch(error){if(current===generation)out.replaceChildren(el('p',error.message,'muted'));}
+      finally{if(current===generation)refresh();}
+    };
+    box.append(field('CaseHistory CSV export',file),field('Account namespace',account),field('Selected case IDs',cases),field('Process this selected export locally',consent),prepare,out);
+    return box;
   }
 
   function jiraSourceSection(){

@@ -15,7 +15,7 @@ from pathlib import Path
 import sys
 from urllib import error, parse, request
 
-from scripts.salesforce_case_history import _key
+from shared.salesforce_case_history import _key
 from .servicenow_owg_append import (
     _LOG, _opener, _session, verify_local_target, AppendError,
 )
