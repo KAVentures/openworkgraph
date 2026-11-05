@@ -16,12 +16,16 @@ dt{font-weight:700;margin-top:.7rem}dd{overflow-wrap:anywhere;margin:0}li{margin
 <label for="candidate">Candidate packet (optional JSON)</label><input id="candidate" type="file" accept=".json,application/json">
 <p><button id="review" type="button">Review evidence</button></p><output id="status" role="status" aria-live="polite">Choose a packet to begin.</output></section>
 <section id="results" aria-labelledby="results-title" hidden><h2 id="results-title">Review results</h2><div id="details"></div></section>
+<section id="decision-panel" aria-labelledby="decision-title" hidden><h2 id="decision-title">Reviewer decision ledger</h2><p>Record a disposition for each recorded blocker. This is a local review note, never an approval or permission grant.</p><div id="decision-fields"></div><p><button id="export-decisions" type="button" disabled>Export review-only receipt</button></p><output id="decision-status" role="status" aria-live="polite"></output></section>
 </main>
 <script>
 'use strict';
 const byId=id=>document.getElementById(id);
 let reviewGeneration=0;
-for(const id of ['baseline','candidate'])byId(id).addEventListener('change',()=>{reviewGeneration++;byId('results').hidden=true;byId('details').replaceChildren();byId('status').textContent='Selection changed. Review packets again.';});
+let activeReview=null;
+function resetDecisions(){activeReview=null;byId('decision-panel').hidden=true;byId('decision-fields').replaceChildren();byId('export-decisions').disabled=true;byId('decision-status').textContent='';}
+
+for(const id of ['baseline','candidate'])byId(id).addEventListener('change',()=>{reviewGeneration++;resetDecisions();byId('results').hidden=true;byId('details').replaceChildren();byId('status').textContent='Selection changed. Review packets again.';});
 const MAX_BYTES=256*1024;
 const hex=v=>typeof v==='string'&&/^[0-9a-f]{64}$/.test(v);
 function validate(p){
@@ -86,18 +90,70 @@ function compare(parent,a,b){
  fields.forEach(([name,x,y])=>text(ul,'li',name+': '+(x===y?'unchanged':'CHANGED')+' ('+String(x)+' → '+String(y)+')'));
  text(parent,'p','Comparison is between exported snapshots only. Current server evidence, consent, tenant, retention and owner approval remain unverified.');
 }
+
+async function packetDigest(file){
+ if(!globalThis.crypto?.subtle)throw Error('Secure SHA-256 digest unavailable; decision export refused.');
+ const bytes=await file.arrayBuffer();
+ if(bytes.byteLength>MAX_BYTES)throw Error('Packet exceeds 256 KiB limit.');
+ const digest=await crypto.subtle.digest('SHA-256',bytes);
+ return Array.from(new Uint8Array(digest),v=>v.toString(16).padStart(2,'0')).join('');
+}
+function buildDecisions(packet,digest,generation){
+ resetDecisions();
+ const panel=byId('decision-panel'),fields=byId('decision-fields');
+ const blockers=[...new Set(packet.readiness.blockers)];
+ if(!blockers.length)blockers.push('independent_authorization_not_verified');
+ for(const [i,blocker] of blockers.entries()){
+  const wrap=document.createElement('div'),label=document.createElement('label'),sel=document.createElement('select');
+  label.htmlFor='disposition-'+i;label.textContent=blocker.replaceAll('_',' ');
+  sel.id=label.htmlFor;
+  for(const [value,title] of [['','Choose disposition'],['needs_evidence','Needs current evidence'],['escalate','Escalate to owner'],['not_applicable','Not applicable — explain separately']]){
+   const opt=document.createElement('option');opt.value=value;opt.textContent=title;sel.append(opt);
+  }
+  sel.addEventListener('change',()=>{byId('export-decisions').disabled=[...fields.querySelectorAll('select')].some(x=>!x.value)});
+  wrap.append(label,sel);fields.append(wrap);
+ }
+ activeReview={packet,digest,generation,blockers};
+ panel.hidden=false;
+ byId('decision-status').textContent='Select a disposition for every blocker before exporting.';
+}
+byId('export-decisions').addEventListener('click',()=>{
+ const current=activeReview;
+ if(!current||current.generation!==reviewGeneration)return;
+ const controls=[...byId('decision-fields').querySelectorAll('select')];
+ if(controls.length!==current.blockers.length||controls.some(x=>!x.value))return;
+ const receipt={
+  format:'openworkgraph.handoff-review-decision.v1',scope:'human_review_only',
+  execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false,
+  baseline_packet_sha256:current.digest,
+  idea_id:current.packet.idea.idea_id,idea_revision:current.packet.idea.revision,
+  project_id:current.packet.project.project_id,
+  project_spec_sha256:current.packet.project.spec_sha256,
+  decisions:current.blockers.map((blocker,i)=>({blocker,disposition:controls[i].value})),
+  consent_verified:false,owner_approval_verified:false,server_freshness_verified:false
+ };
+ const blob=new Blob([JSON.stringify(receipt,null,2)+'\n'],{type:'application/json'});
+ const url=URL.createObjectURL(blob),link=document.createElement('a');
+ link.href=url;link.download='owg-review-decisions.json';document.body.append(link);link.click();link.remove();
+ URL.revokeObjectURL(url);
+ byId('decision-status').textContent='Review-only receipt exported. No authority was granted.';
+});
+
 byId('review').addEventListener('click',async()=>{
  const generation=++reviewGeneration;
+ resetDecisions();
  const baselineFile=byId('baseline').files[0],candidateFile=byId('candidate').files[0];
  const status=byId('status'),results=byId('results'),details=byId('details');
  results.hidden=true;details.replaceChildren();status.textContent='Validating local packets…';
  try{
  const a=await read(baselineFile);
  const b=candidateFile?await read(candidateFile):null;
+ const digest=await packetDigest(candidateFile||baselineFile);
  if(generation!==reviewGeneration)return;
  if(b&&(a.idea.idea_id!==b.idea.idea_id||a.project.project_id!==b.project.project_id))throw Error('Packets belong to different ideas or projects. Comparison refused.');
  summary(details,a,'Baseline');if(b){summary(details,b,'Candidate');compare(details,a,b)}
  text(details,'p','Review only — execution authorized: NO; source read authorized: NO; business outcomes verified: NO.');
+ buildDecisions(b||a,digest,generation);
  results.hidden=false;status.textContent='Local evidence review ready. No authorization was granted.';
  }catch(err){if(generation===reviewGeneration){details.replaceChildren();results.hidden=true;status.textContent='Review refused: '+err.message}}
 });
