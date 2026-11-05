@@ -62,6 +62,55 @@ class OperatorCycleTests(unittest.TestCase):
                               consent_local_export=True,
                               confirm_removals_reviewed=True)
 
+    def test_handoff_requires_independent_removal_review_before_readback(self):
+        with patch.object(cycle, "prepare_handoff") as delegate:
+            with self.assertRaises(ReceiptError):
+                cycle.handoff(consent_local_read=True, tenant="t")
+            delegate.assert_not_called()
+
+    def test_handoff_uses_production_verified_readback_without_graph_or_append(self):
+        response = {"status": "next_round_handoff_prepared", "idempotent_replay": False}
+        with patch.object(cycle, "prepare_handoff", return_value=response) as delegate, \
+             patch.object(cycle, "run_verified_next_round") as graph, \
+             patch.object(cycle, "append_and_record") as writer:
+            result = cycle.handoff(consent_local_read=True,
+                                   confirm_removals_reviewed=True,
+                                   tenant="t", successor_label="round-2")
+            self.assertEqual(result["status"], "next_round_handoff_prepared")
+            self.assertFalse(result["checkpoint_advanced"])
+            self.assertEqual(result["provider_requests"], 0)
+            self.assertFalse(result["automatic_retry"])
+            self.assertEqual(delegate.call_args.kwargs["successor_label"], "round-2")
+            graph.assert_not_called()
+            writer.assert_not_called()
+
+    def test_handoff_refuses_incomplete_delegate_status(self):
+        with patch.object(cycle, "prepare_handoff", return_value={"status": "unknown"}):
+            with self.assertRaises(ReceiptError):
+                cycle.handoff(consent_local_read=True,
+                              confirm_removals_reviewed=True)
+
+    def test_handoff_cli_requires_explicit_confirmation_and_auth_session(self):
+        with patch.object(cycle, "prepare_handoff", return_value={
+            "status": "next_round_handoff_prepared", "idempotent_replay": True,
+        }) as delegate, patch.dict("os.environ", {"OWG_DASHBOARD_SESSION": "session"}):
+            import contextlib
+            import io
+            argv = ["handoff", "--tenant", "t", "--mailbox", "m",
+                    "--folder", "f", "--log-id", "log", "--confirm-log-id", "log",
+                    "--grant-file", "grant", "--candidate", "candidate",
+                    "--csv-path", "events.csv", "--receipt-file", "receipt",
+                    "--journal-dir", "journal", "--handoff-dir", "handoff",
+                    "--successor-label", "round-2", "--consent-local-read",
+                    "--confirm-removals-reviewed"]
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(cycle.main(argv), 0)
+            self.assertEqual(__import__("json").loads(out.getvalue())["phase"], "handoff")
+            self.assertEqual(delegate.call_args.kwargs["session"], "session")
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(cycle.main(argv[:-1]), 2)
+            self.assertEqual(delegate.call_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
