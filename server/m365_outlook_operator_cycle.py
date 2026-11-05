@@ -13,6 +13,7 @@ from pathlib import Path
 from .m365_outlook_verified_next_round import run_verified_next_round
 from .m365_outlook_verified_append_receipt import append_and_record
 from .m365_outlook_resume_handoff import prepare_handoff
+from .m365_outlook_candidate_review import review as review_candidate
 from .m365_outlook_owg_receipt import ReceiptError, UncertainReceipt
 from .m365_outlook_delta import DeltaError
 
@@ -35,6 +36,18 @@ def extract(*, consent_local_read=False, consent_delta_read=False,
             "event_snapshots": result["event_snapshots"],
             "removal_markers_for_review": result["removal_markers_for_review"],
             "checkpoint_advanced": False, "owg_append_performed": False}
+
+
+def review(*, consent_local_read=False, **kwargs):
+    """Inspect a scoped private delta candidate without contacting Graph or OWG."""
+    if consent_local_read is not True:
+        raise ReceiptError("Separate local review consent required")
+    result = review_candidate(consent_local_read=True, **kwargs)
+    if result.get("status") != "review_ready":
+        raise ReceiptError("Candidate failed offline review")
+    return {"format": FORMAT, "phase": "review", **result,
+            "checkpoint_advanced": False, "provider_requests": 0,
+            "owg_writes": 0}
 
 
 def append(*, consent_local_read=False, consent_local_append=False,
@@ -75,12 +88,16 @@ def handoff(*, consent_local_read=False, confirm_removals_reviewed=False, **kwar
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="phase", required=True)
-    for phase in ("extract", "append", "handoff"):
+    for phase in ("extract", "review", "append", "handoff"):
         p = sub.add_parser(phase)
-        for flag in ("tenant", "mailbox", "folder", "log-id", "confirm-log-id"):
+        for flag in ("tenant", "mailbox", "folder"):
             p.add_argument("--" + flag, required=True)
+        if phase != "review":
+            for flag in ("log-id", "confirm-log-id"):
+                p.add_argument("--" + flag, required=True)
         p.add_argument("--grant-file", type=Path, required=True)
-        p.add_argument("--port", type=int, default=8765)
+        if phase != "review":
+            p.add_argument("--port", type=int, default=8765)
         p.add_argument("--consent-local-read", action="store_true")
         if phase == "extract":
             for flag in ("previous-candidate", "previous-csv", "receipt-file",
@@ -90,6 +107,8 @@ def main(argv=None):
             for flag in ("confirm-removals-reviewed", "consent-delta-read",
                          "consent-local-export"):
                 p.add_argument("--" + flag, action="store_true")
+        elif phase == "review":
+            p.add_argument("--candidate", type=Path, required=True)
         elif phase == "append":
             for flag in ("candidate", "csv-path", "receipt-file"):
                 p.add_argument("--" + flag, type=Path, required=True)
@@ -103,13 +122,14 @@ def main(argv=None):
             p.add_argument("--confirm-removals-reviewed", action="store_true")
     args = vars(parser.parse_args(argv))
     phase = args.pop("phase")
-    args["log_id"] = args.pop("log_id")
-    args["confirm_log_id"] = args.pop("confirm_log_id")
-    args["session"] = os.environ.get("OWG_DASHBOARD_SESSION")
+    if phase != "review":
+        args["session"] = os.environ.get("OWG_DASHBOARD_SESSION")
     try:
         if phase == "extract":
             args["token"] = os.environ.get("OWG_M365_GRAPH_TOKEN", "")
             result = extract(**args)
+        elif phase == "review":
+            result = review(**args)
         elif phase == "append":
             result = append(**args)
         else:

@@ -1,6 +1,6 @@
 # Microsoft Graph operator sync cycle (R3)
 
-This is an **opt-in, three-command** local workflow that composes the existing production Graph delta reader and authenticated OWG append/receipt writer. It is not a background scheduler, token manager, provider checkpoint commit, or proof of real-tenant acceptance.
+This is an **opt-in, four-command** local workflow that composes the existing production Graph delta reader and authenticated OWG append/receipt writer. It is not a background scheduler, token manager, provider checkpoint commit, or proof of real-tenant acceptance.
 
 ## 1. Extract for human review
 
@@ -8,13 +8,26 @@ Run `python -m server.m365_outlook_operator_cycle extract --help`. Supply the sc
 
 This calls the **existing verified next-round Graph exporter**, which rechecks prior handoff, consent, receipt and authenticated OWG inventory, performs bounded provider reads and creates fresh review artifacts. It **does not append**. Inspect the resulting CSV, source identifiers, timestamps, candidate scope, digest, and removal markers. Review and resolve removals separately; removal markers are not silently imported.
 
-## 2. Append only after review
+## 2. Verify candidate offline before append
+
+Run `python -m server.m365_outlook_operator_cycle review --help` with
+`--tenant --mailbox --folder --grant-file --candidate --consent-local-read`.
+This is a **separate invocation** with its own explicit read consent. It
+reuses the production offline candidate validator to recheck the active
+scope grant, private candidate and CSV, SHA-256, event identities, bounded
+row counts and removal markers. It prints minimized review counts and
+never contacts Microsoft Graph or OWG, writes events or advances a checkpoint.
+A refusal is not permission to append. The operator must still examine
+the candidate, CSV and removal implications; successful structural review
+does not certify clinical/business correctness or grant append authority.
+
+## 3. Append only after review
 
 Run `python -m server.m365_outlook_operator_cycle append --help`. Supply the same scoped identity and grant, exact log ID and confirmation, the newly reviewed candidate/CSV and a **new** private `receipt-*.json` path in their directory. Explicitly pass `--consent-local-read --consent-local-append --confirm-candidate-reviewed`. The current local OWG session is required.
 
 The command delegates to the existing durable append implementation. It writes a create-only `.attempt` marker **before** any POST, checks authenticated destination inventory, and writes the receipt only after verified readback. Reusing an attempt or receipt path is refused. A failed or uncertain POST **must never be blindly retried**: inspect OWG history and reconcile separately. A successful receipt is count-level verification, **not event-level membership attestation**.
 
-## 3. Verify and persist the successor handoff
+## 4. Verify and persist the successor handoff
 
 After the append receipt has been durably persisted, invoke
 `python -m server.m365_outlook_operator_cycle handoff --help` separately.
@@ -35,11 +48,11 @@ count-level verification, not event-level proof or automatic sync authority.
 
 ## Exit codes and guarantees
 
-- `0`: phase succeeded; extraction still requires human review before append.
+- `0`: phase succeeded; extraction and offline validation still require human review before append.
 - `2`: refused, no success claimed.
 - `3`: uncertain append; no automatic retry.
 
-Outputs are minimized JSON status without token, session, raw message or email content. All three phases preserve explicit provider scope, active grant checks, tenant isolation, private artifacts and revocation behavior from their production delegates. No provider checkpoint is advanced and no autonomous cycle runs. The caller must not infer verified business outcomes or source-level event membership.
+Outputs are minimized JSON status without token, session, raw message or email content. All four phases preserve explicit provider scope, active grant checks, tenant isolation, private artifacts and revocation behavior from their production delegates. No provider checkpoint is advanced and no autonomous cycle runs. The caller must not infer verified business outcomes or source-level event membership.
 
 ## Validation and remaining acceptance
 
