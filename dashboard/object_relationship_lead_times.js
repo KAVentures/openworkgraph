@@ -73,6 +73,7 @@
   function status(message) { $('status').textContent = String(message); }
   function clearResult(message = '') {
     queryGeneration++;
+    $('runQuery').disabled = false; // invalidating an in-flight query must restore the submit control.
     $('resultSection').hidden = true;
     $('metrics').replaceChildren();
     $('sampleRows').replaceChildren();
