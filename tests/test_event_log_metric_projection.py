@@ -63,3 +63,42 @@ def test_divide_by_zero_produces_null_not_exception():
     )
     assert result["null"] == 1
     assert result["sum"] == "3"
+
+
+@pytest.mark.parametrize("bad", ["not-a-number", "NaN", "Infinity", "1e100", "9" * 25])
+def test_unvisited_allowlisted_numeric_fields_fail_closed(bad):
+    with pytest.raises(metrics.MetricDefinitionError):
+        summarize_projected(DEFINITION, [{"duration": 3, "limit": bad}], {"duration", "limit"})
+    definition = {
+        "version": 1,
+        "expression": {"coalesce": [{"field": "duration"}, {"field": "limit"}]},
+    }
+    with pytest.raises(metrics.MetricDefinitionError):
+        summarize_projected(definition, [{"duration": 3, "limit": bad}], {"duration", "limit"})
+
+
+def test_cancelling_cohort_is_order_invariant():
+    from itertools import permutations
+
+    values = ["1e18", "1e-18", "-1e18"]
+    sums = {
+        summarize_projected(
+            {"version": 1, "expression": {"field": "x"}},
+            [{"x": value} for value in ordering],
+            {"x"},
+        )["sum"]
+        for ordering in permutations(values)
+    }
+    assert sums == {"1E-18"}
+
+
+def test_large_cancelling_cohort_does_not_depend_on_fetch_order():
+    definition = {"version": 1, "expression": {"field": "x"}}
+    grouped = ["1e18"] * 10 + ["-1e18"] * 10
+    alternating = ["1e18", "-1e18"] * 10
+    results = [
+        summarize_projected(definition, [{"x": value} for value in sequence], {"x"})
+        for sequence in (grouped, alternating)
+    ]
+    assert all(result["sum"] in {"0E+18", "0"} for result in results)
+    assert results[0]["sum"] == results[1]["sum"]
