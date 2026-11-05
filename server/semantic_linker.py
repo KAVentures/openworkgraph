@@ -256,6 +256,45 @@ def _components(pairs: set[frozenset[int]]) -> list[list[int]]:
     return sorted(sorted(g) for g in groups.values() if len(g) >= 2)
 
 
+def _compatible_groups(pairs: set[frozenset[int]], groups: list[list[str]],
+                       by_id: dict[str, dict[str, Any]]) -> tuple[list[list[int]], int]:
+    """Keep only complete pair-supported, record-compatible suggestions.
+
+    A model's transitive chain is not proof that its endpoints belong together.
+    Deterministic, disjoint cliques avoid both bridge contamination and the old
+    all-or-nothing veto when one conflicting item spoils a larger proposal.
+    """
+    remaining = set(n for pair in pairs for n in pair)
+    accepted: list[list[int]] = []
+    refused = 0
+    kinds = {n: _record_kinds(by_id, groups[n - 1]) for n in remaining}
+
+    def compatible(candidate: list[int], number: int) -> bool:
+        if any(frozenset((number, other)) not in pairs for other in candidate):
+            return False
+        combined: dict[tuple[str, str], set[str]] = {}
+        for member in [*candidate, number]:
+            for key, refs in kinds[member].items():
+                combined.setdefault(key, set()).update(refs)
+        return all(len(refs) <= 1 for refs in combined.values())
+
+    # A conflicted item is never silently merged. Deterministic lowest-ID
+    # ordering makes suggestions reproducible for the same model responses.
+    while remaining:
+        seed = min(remaining)
+        remaining.remove(seed)
+        candidate = [seed]
+        for number in sorted(remaining):
+            if compatible(candidate, number):
+                candidate.append(number)
+        remaining.difference_update(candidate)
+        if len(candidate) >= 2:
+            accepted.append(candidate)
+        else:
+            refused += 1
+    return accepted, refused
+
+
 def suggest(events: list[dict[str, Any]], complete: Completion, *, consensus: bool = False) -> dict[str, Any]:
     """``consensus`` asks twice (items in reverse order the second time) and keeps only agreed pairs."""
     items, groups = build_items(events)
@@ -265,15 +304,11 @@ def suggest(events: list[dict[str, Any]], complete: Completion, *, consensus: bo
     pairs = _ask(items, complete, reverse=False)
     if consensus and pairs:
         pairs &= _ask(items, complete, reverse=True)
-    chosen = _components(pairs)
     by_id = {e["event_id"]: e for e in events if isinstance(e, dict) and isinstance(e.get("event_id"), str)}
-    suggestions, vetoed = [], 0
+    chosen, vetoed = _compatible_groups(pairs, groups, by_id)
+    suggestions = []
     for numbers in chosen:
         members = [event_id for n in numbers for event_id in groups[n - 1]]
-        kinds = _record_kinds(by_id, members)
-        if any(len(refs) > 1 for refs in kinds.values()):
-            vetoed += 1  # never join two different records of the same kind
-            continue
         suggestions.append({"items": numbers, "event_ids": members[:200],
                             "association_status": "semantic_suggestion", "requires_review": True})
     return {"format": FORMAT, "suggestions": suggestions, "items_considered": len(items), "vetoed": vetoed,
