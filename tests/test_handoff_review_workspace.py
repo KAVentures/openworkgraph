@@ -26,6 +26,22 @@ class HandoffReviewWorkspaceTests(unittest.TestCase):
         self.assertIn('for="baseline"', HTML)
         self.assertIn('for="candidate"', HTML)
 
+    def test_cross_project_and_evidence_drift_refused_or_visible(self):
+        self.assertIn('a.idea.idea_id!==b.idea.idea_id', HTML)
+        self.assertIn('a.project.project_id!==b.project.project_id', HTML)
+        self.assertIn("['Dataset origins'", HTML)
+        self.assertIn("['Reported specifications'", HTML)
+        self.assertIn("['Source-check exports'", HTML)
+        self.assertIn('dataset_origins_truncated', HTML)
+        self.assertIn('reported_specifications_truncated', HTML)
+
+    def test_superseded_async_reads_cannot_mix_results(self):
+        self.assertIn('let reviewGeneration=0', HTML)
+        self.assertIn("addEventListener('change'", HTML)
+        self.assertIn('const generation=++reviewGeneration', HTML)
+        self.assertIn('if(generation!==reviewGeneration)return', HTML)
+        self.assertIn('if(generation===reviewGeneration)', HTML)
+
     def test_review_and_comparison_are_functional(self):
         self.assertIn("JSON.parse(await file.text())", HTML)
         self.assertIn("function validate(p)", HTML)
