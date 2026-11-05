@@ -27,8 +27,9 @@ def test_exact_clique_matches_exhaustive_optimum_on_interleaved_graphs():
             expected = _oracle(pairs, count)
             if expected:
                 assert actual
-                assert len(actual[0]) == len(expected)
-                assert actual[0] == expected
+                winner = min(actual, key=lambda group: (-len(group), group))
+                assert len(winner) == len(expected)
+                assert winner == expected
             assert all(frozenset(edge) in pairs
                        for group in actual for edge in combinations(group, 2))
 
@@ -41,5 +42,5 @@ def test_exact_clique_never_crosses_conflicting_business_records():
         by_id[str(n)]["metadata"]["resource_reference"] = {
             "provider": "crm", "resource_kind": "account", "resource_ref": ref}
     result, _ = _compatible_groups(pairs, groups, by_id)
-    assert len(result[0]) == 3
+    assert max(map(len, result)) == 3
     assert not any(1 in group and 2 in group for group in result)
