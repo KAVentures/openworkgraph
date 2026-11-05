@@ -120,7 +120,8 @@ def test_sample_budget_and_provenance_cannot_oversell_partial_rows():
     assert res["samples"][0]["status"] == "reversed"
     assert res["sample_truncated"] is True
     assert len(leads.analyze(log, _spec(sample_limit=0))["samples"]) == 0
-    assert res["relationship_revision"] >= 1
+    # An initial import is revision 0; only subsequent append batches advance it.
+    assert res["relationship_revision"] == 0
     assert res["first_occurrence_only"] is True
     assert res["zero_lag_is_not_proof_of_handoff"] is True
     assert res["supplied_relationship_validity_period_known"] is False
