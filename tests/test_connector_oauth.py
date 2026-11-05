@@ -145,6 +145,21 @@ def test_client_ids_scopes_and_ports_are_validated(provider):
     assert query["audience"] == ["api.atlassian.com"] and "offline_access" in query["scope"][0]
 
 
+def test_default_atlassian_sign_in_requests_scopes_required_by_retained_jira(provider, monkeypatch):
+    from server.jira_retained_source import Extractor, JiraIngestionError
+
+    started = oauth.begin("atlassian", client_id="atlassian-client")
+    scope = set(parse_qs(urlsplit(started["authorization_url"]).query)["scope"][0].split())
+    assert scope == {"read:jira-work", "read:jira-user", "offline_access"}
+    extractor = Extractor(("acme.atlassian.net", "11111111-2222-3333-4444-555555555555", "synthetic"), lambda: None)
+    grants = [{"id": extractor.cloud, "url": "https://" + extractor.host, "scopes": sorted(scope)}]
+    monkeypatch.setattr(extractor, "raw", lambda path: grants)
+    extractor.grant()
+    grants[0]["scopes"].remove("read:jira-user")
+    with pytest.raises(JiraIngestionError, match="jira_site_or_read_scopes_not_granted"):
+        extractor.grant()
+
+
 def test_connector_token_prefers_matching_connection_and_refuses_other_providers(provider):
     _, _, conn = _connect(provider)
     env = {"OWG_SALESFORCE_READ_OAUTH_CONNECTION": conn["connection_id"], "OWG_SALESFORCE_READ_TOKEN": "LEGACY"}

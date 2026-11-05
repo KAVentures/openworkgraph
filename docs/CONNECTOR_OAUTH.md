@@ -40,6 +40,15 @@ acceptance steps in a sandbox tenant first.
 
 ## Retained Jira ingestion with rotating tokens (#436)
 
+Retained Jira profiles verify the signed-in account and require both
+`read:jira-work` and `read:jira-user`, plus `offline_access` for refresh. New
+Atlassian sign-ins request these scopes by default. Existing sign-ins keep the
+scopes previously granted: if they lack `read:jira-user`, create a new sign-in,
+approve the scopes at Atlassian, select its connection ID, and use the retained
+profile's **Verify renewed credential** action. OWG preserves the existing
+profile only after the current site and account match its prior binding. This
+change does not add scopes to an existing grant or authorize reads by itself.
+
 Set `OWG_JIRA_OAUTH_CONNECTION=<connection_id>` (an Atlassian sign-in) instead of
 `OWG_JIRA_OAUTH_ACCESS_TOKEN`. Retained profiles and source receipts then get a
 fresh access token from the sign-in, renewing it with the rotating refresh token
