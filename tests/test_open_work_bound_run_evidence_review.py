@@ -24,7 +24,9 @@ def _prepare(monkeypatch, tmp_path):
 def test_read_only_join_returns_case_wide_history_not_run_outcome(monkeypatch, tmp_path):
     async def exercise():
         _, source, _ = _prepare(monkeypatch, tmp_path)
-        ledger = Mock(return_value={"events": [{"sequence": 1, "kind": "check"}]})
+        ledger = Mock(return_value={"work_item_ref": CASE, "events": [{"sequence": 1, "kind": "check"}], "provider_check_count": 1, "disputed_check_count": 0, "last_observed_provider_state": "paid"})
+        human = Mock(return_value={"work_item_ref": CASE, "events": [], "event_count": 0, "latest_human_assessed_status": "unknown"})
+        monkeypatch.setattr(routes, "read_human_outcomes", human)
         monkeypatch.setattr(routes, "read_operation_evidence", ledger)
         response = SimpleNamespace(headers={})
         result = await routes.review_local_bound_run_evidence_history(Request(), response)
@@ -38,6 +40,8 @@ def test_read_only_join_returns_case_wide_history_not_run_outcome(monkeypatch, t
         assert response.headers["Cache-Control"] == "no-store"
         source.assert_not_called()
         assert ledger.call_count == 1
+        assert human.call_count == 1
+        assert result["case_historical_reconciliation"]["customer_outcome_verified"] is False
         ledger.call_args.kwargs["guard"]()
     asyncio.run(exercise())
 
@@ -63,8 +67,9 @@ def test_revocation_during_history_read_refuses_response(monkeypatch, tmp_path):
         def read(*args, **kwargs):
             binding.revoke_binding(scope=SCOPE, actor=actor, secret="secret-at-least-16",
                                    case_ref=CASE, run_ref=RUN)
-            return {"events": []}
+            return {"work_item_ref": CASE, "events": [], "provider_check_count": 0, "disputed_check_count": 0, "last_observed_provider_state": "unknown"}
         monkeypatch.setattr(routes, "read_operation_evidence", read)
+        monkeypatch.setattr(routes, "read_human_outcomes", Mock(return_value={"work_item_ref": CASE, "events": [], "event_count": 0, "latest_human_assessed_status": "unknown"}))
         with pytest.raises(HTTPException) as exc:
             await routes.review_local_bound_run_evidence_history(
                 Request(), SimpleNamespace(headers={}))
