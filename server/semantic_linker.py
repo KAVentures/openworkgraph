@@ -278,21 +278,30 @@ def _compatible_groups(pairs: set[frozenset[int]], groups: list[list[str]],
                 combined.setdefault(key, set()).update(refs)
         return all(len(refs) <= 1 for refs in combined.values())
 
-    # A conflicted item is never silently merged. Deterministic lowest-ID
-    # ordering makes suggestions reproducible for the same model responses.
+    # A lowest-ID bridge can consume a member of a larger supported group.
+    # Consider each remaining seed and greedily extend by supported degree,
+    # then choose the largest safe clique. Bounded at MAX_ITEMS (60), with no
+    # exponential subset enumeration or dependence on set iteration order.
     while remaining:
-        seed = min(remaining)
-        remaining.remove(seed)
-        candidate = [seed]
-        for number in sorted(remaining):
-            if compatible(candidate, number):
-                candidate.append(number)
-        remaining.difference_update(candidate)
-        if len(candidate) >= 2:
-            accepted.append(candidate)
+        choices: list[list[int]] = []
+        for seed in sorted(remaining):
+            candidate = [seed]
+            others = sorted(
+                remaining - {seed},
+                key=lambda n: (-sum(frozenset((n, m)) in pairs
+                                    for m in remaining if m != n), n),
+            )
+            for number in others:
+                if compatible(candidate, number):
+                    candidate.append(number)
+            choices.append(sorted(candidate))
+        winner = min(choices, key=lambda group: (-len(group), group))
+        remaining.difference_update(winner)
+        if len(winner) >= 2:
+            accepted.append(winner)
         else:
             refused += 1
-    return accepted, refused
+    return sorted(accepted), refused
 
 
 def suggest(events: list[dict[str, Any]], complete: Completion, *, consensus: bool = False) -> dict[str, Any]:
