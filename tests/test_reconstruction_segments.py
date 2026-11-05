@@ -553,3 +553,43 @@ def test_record_unknown_bridge_is_reviewable_but_never_a_new_case_assignment():
     # No independently witnessed B anchor means no retroactive bridge.
     without_b = item(linked_work_items([first, loose]), A)
     assert without_b["activity_segment_count"] == 1
+
+
+def test_witnessed_interleaving_counts_and_resumption_are_visible_without_relinking():
+    result = linked_work_items([
+        event(1, A), event(2, B), event(3, C), event(4, A),
+        event(5, B), event(6, A),
+    ])
+    a = item(result, A)
+    assert a["event_ids"] == ["e0001", "e0004", "e0006"]
+    segments = a["activity_segments"]
+    assert [s["observed_foreign_record_events_before"] for s in segments] == [0, 2, 1]
+    assert [s["resumed_record_context"] for s in segments] == [False, True, True]
+    assert [s["boundary_before"] for s in segments] == [
+        [], ["interleaved_other_record"], ["interleaved_other_record"],
+    ]
+    assert all("tenant-a" not in json.dumps(s) for s in segments)
+
+
+def test_resumption_count_refuses_cross_scope_and_clock_only_gaps():
+    first, last = event(1, A), event(4, A)
+    last["observed_at"] = "2026-10-27T10:00:00+00:00"
+    result = linked_work_items([
+        first, event(2, B, org="tenant-b"),
+        event(3, C, actor="actor-b"), last,
+    ])
+    a = item(result, A)
+    assert a["activity_segment_count"] == 1
+    assert a["activity_segments"][0]["observed_foreign_record_events_before"] == 0
+    assert a["activity_segments"][0]["resumed_record_context"] is False
+
+
+def test_cross_session_is_not_mislabeled_as_record_resumption():
+    result = linked_work_items([
+        event(1, A, session="s1"), event(2, B, session="s1"),
+        event(3, A, session="s2"),
+    ])
+    a = item(result, A)
+    assert a["activity_segments"][1]["boundary_before"] == ["capture_scope_change"]
+    assert a["activity_segments"][1]["observed_foreign_record_events_before"] == 0
+    assert a["activity_segments"][1]["resumed_record_context"] is False
