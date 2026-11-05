@@ -18,7 +18,7 @@ approved numeric-field schema, never arbitrary user-provided attribute names.
 The helper refuses malformed allowlists, nonmapping rows, unsupported nested
 or boolean values and cohorts exceeding 1,000 rows. Missing numeric values
 remain null; division by zero remains null. Numeric strings are permitted for
-CSV-imported numeric fields, subject to the evaluator's decimal bounds.
+CSV-imported numeric fields, subject to the evaluator's decimal bounds. Every allowlisted non-null value is checked, including values not visited by a short-circuited expression. Aggregate sums use bounded high-precision accumulation so row permutations and cancellation do not change results; only the final sum is subject to the magnitude bound. The underlying general-purpose derived-metric helper has a separate order-dependent accumulator and must not be substituted for this projection path.
 
 ## Verification and limitations
 
