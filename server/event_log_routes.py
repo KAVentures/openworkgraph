@@ -50,6 +50,7 @@ from . import analysis_snapshot_export
 from . import event_log_signals as signals
 from . import event_log_signal_inbox as signal_inbox
 from . import event_log_simulation as simulation
+from . import event_log_trace_clusters as trace_clusters
 from . import event_log_waiting as waiting
 from . import event_log_workspace as workspace
 from .db import DATA_DIR
@@ -728,6 +729,13 @@ async def event_log_benchmark(request: Request, log_id: str,
     if not isinstance(spec, dict):
         raise HTTPException(422, "benchmark must be a JSON object")
     return _respond(cohorts.benchmark, log_id, spec.get("cohorts"), case_type, spec.get("sla_seconds"))
+
+
+@router.post("/v1/event-logs/{log_id}/trace-clusters")
+async def event_log_trace_clusters(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "trace clustering")
+    return _respond(trace_clusters.clusters, log_id, spec)
 
 
 @router.post("/v1/event-logs/{log_id}/conformance")
