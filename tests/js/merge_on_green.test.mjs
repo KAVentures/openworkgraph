@@ -104,3 +104,43 @@ test('run ignores unsuccessful workflow signals before contacting any PR API', a
   }, core:{info: () => {}}});
   assert.equal(touched, false);
 });
+
+test('coordinator passes exact head to GitHub merge only after refreshed gates', async () => {
+  const approved = pr();
+  const merges = [], notices = [];
+  const listRuns = async () => {}, listJobs = async () => {}, listReviews = async () => {};
+  const github = {
+    rest: {
+      repos: {listPullRequestsAssociatedWithCommit: async () => ({
+        data: [{number:700, state:'open', head:{sha}}],
+      })},
+      pulls: {
+        get: async () => ({data:approved}),
+        listReviews,
+        merge: async arg => {merges.push(arg);return {data:{sha:'merged-sha'}};},
+      },
+      actions: {listWorkflowRunsForRepo:listRuns, listJobsForWorkflowRun:listJobs},
+    },
+    paginate: async fn => fn === listRuns ? workflows() :
+      fn === listJobs ? jobs() : fn === listReviews ? [] : Promise.reject(Error('unexpected endpoint')),
+    graphql: async () => ({repository:{pullRequest:{reviewThreads:{
+      pageInfo:{hasNextPage:false}, nodes:[],
+    }}}}),
+  };
+  const context = {repo:{owner:'KAVentures',repo:'openworkgraph'},
+    payload:{workflow_run:{
+      event:'pull_request', conclusion:'success', head_sha:sha,
+      head_repository:{full_name:'KAVentures/openworkgraph'},
+    }}};
+  await mod.run({github,context,core:{info:line=>notices.push(line)}});
+  assert.equal(merges.length,1);
+  assert.equal(merges[0].sha,sha);
+  assert.equal(merges[0].merge_method,'squash');
+  assert.equal(merges[0].pull_number,700);
+  assert.ok(notices.some(line=>line.includes('Safely merged')));
+
+  // A newer commit revokes approval without any need to reconfigure the bot.
+  approved.head.sha='b'.repeat(40);
+  await mod.run({github,context,core:{info:line=>notices.push(line)}});
+  assert.equal(merges.length,1);
+});
