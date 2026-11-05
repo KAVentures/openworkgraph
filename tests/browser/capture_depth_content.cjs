@@ -9,13 +9,17 @@ const path=require('node:path');
  const depth=await fs.readFile(path.join(root,'capture_depth.js'),'utf8');
  const html=`<!doctype html><html><body style="margin:0">
   <nav role="menubar"><div role="menuitem" id="menu" style="display:inline-block;width:120px;height:40px">Export</div></nav>
-  <button id="save" style="width:120px;height:40px">Save</button>
+  <button id="save" title="Save changes" style="width:120px;height:40px">Save</button>
+  <button id="row" style="width:120px;height:40px">private message row</button>
   <button id="off" disabled style="width:120px;height:40px">Disabled</button>
   <input id="pw" type="password" style="width:120px;height:40px">
   <div id="far" style="width:300px;height:200px">empty area</div>
   <div id="card" draggable="true" role="button" aria-label="Invoice card" style="width:100px;height:40px">Invoice</div>
   <div id="draft" draggable="true" contenteditable="true" role="button" style="width:100px;height:40px">private draft words</div>
   <div id="plain" draggable="true" role="button" style="width:100px;height:40px">Quarterly salary review</div>
+  <div id="ref" draggable="true" role="button" aria-labelledby="note" style="width:100px;height:40px">Drag</div>
+  <div id="note" contenteditable="true">private note words</div>
+  <label for="field">Notes <span contenteditable="true">private label words</span></label><div id="field" draggable="true" role="button" style="width:100px;height:40px">F</div>
   <div id="bin" role="region" aria-label="Archive bin" style="width:200px;height:80px">Archive</div>
   <script>document.getElementById('bin').addEventListener('dragover',e=>e.preventDefault());
           document.getElementById('bin').addEventListener('drop',e=>e.preventDefault());</script></body></html>`;
@@ -43,11 +47,13 @@ const path=require('node:path');
    assert.equal(hovers.length,2,JSON.stringify(hovers));
    assert.equal(hovers[0].target.role,'menuitem');assert.equal(hovers[0].metadata.ended_by,'pointer_left');
    assert(hovers[0].metadata.duration_ms>=600&&hovers[0].metadata.duration_ms%50===0);
-   assert.equal(hovers[1].target.label,'Save');assert.equal(hovers[1].metadata.ended_by,'activated');
+   assert.equal(hovers[1].target.label,'Save changes');assert.equal(hovers[1].metadata.ended_by,'activated');
    assert(!JSON.stringify(hovers).includes('password'),'secure fields are never hover targets');
    await page.hover('#plain');await page.waitForTimeout(800);await page.mouse.move(900,650);
    const contentHover=(await msgs('control_hover_dwell')).at(-1);
    assert.equal(contentHover.target.label,'','a role=button container never contributes its text on hover');
+   await page.hover('#row');await page.waitForTimeout(800);await page.mouse.move(900,650);
+   assert.equal((await msgs('control_hover_dwell')).at(-1).target.label,'','native button text can be user content, so it is not a label');
    // A completed drag records source and destination controls and payload kinds, never data.
    await page.dragAndDrop('#card','#bin');
    const drops=await msgs('drag_drop');assert.equal(drops.length,1);
@@ -65,14 +71,16 @@ const path=require('node:path');
      document.getElementById('bin').dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:dt}));});
    const external=(await msgs('drag_drop')).at(-1);assert.equal(external.metadata.drag_id,'external');assert.deepEqual(external.metadata.payload_kinds,['files']);
    // Editable or text-labelled draggables never contribute their text as a label (structural labels only).
-   await page.evaluate(()=>{for(const id of ['draft','plain']){const dt=new DataTransfer();dt.setData('text/plain','x');
+   await page.evaluate(()=>{for(const id of ['draft','plain','ref','field']){const dt=new DataTransfer();dt.setData('text/plain','x');
      const el=document.getElementById(id);el.dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer:dt}));
      el.dispatchEvent(new DragEvent('dragend',{bubbles:true,dataTransfer:dt}));}});
-   const starts=(await msgs('drag_start')).slice(-2);
+   const starts=(await msgs('drag_start')).slice(-4);
    assert.equal(starts[0].target.label,'');assert.equal(starts[0].target.editable,true);
    assert.equal(starts[1].target.label,'');
+   assert.equal(starts[2].target.label,'','aria-labelledby text is never read');
+   assert.equal(starts[3].target.label,'','a <label for> holding editable content is not used');
    const all=JSON.stringify(await msgs());
-   for(const leaked of ['SECRET PAYLOAD','salary.xlsx','contents','private draft words','Quarterly salary review'])assert(!all.includes(leaked),leaked+' must not be recorded');
+   for(const leaked of ['SECRET PAYLOAD','salary.xlsx','contents','private draft words','Quarterly salary review','private note words','private label words','private message row'])assert(!all.includes(leaked),leaked+' must not be recorded');
    assert.equal((await msgs('pointer_trajectory')).length,0,'trajectories are off in Enhanced');
    // Full fidelity: sampled, viewport-normalised pointer movement.
    await load({hover_dwell:false,drag_drop:false,pointer_trajectory:true});

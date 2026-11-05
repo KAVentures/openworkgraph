@@ -171,17 +171,24 @@ from server.secure_app import app
 from server import local_auth, capture_depth, main
 from server.db import init_db
 from server.main import BrowserEvent
+import server.history_routes  # registers /v1/history/export-json
 bearer = {"Authorization": "Bearer " + local_auth.ensure_api_token()}
 with TestClient(app) as client:
     init_db()
     capture_depth.save({"profile": "full", "acknowledgement_version": capture_depth.FULL_ACK_VERSION})
     now = datetime.now(timezone.utc).isoformat()
     page = {"origin": "https://work.example", "hostname": "work.example", "pathname": "/x", "title": "X"}
+    points = [[0, 0.137, 0.519], [250, 0.862, 0.746]]
     assert main.browser_event(BrowserEvent(observed_at=now, action="pointer_trajectory", page=page,
-        metadata={"points": [[0, 0.1234, 0.9876], [250, 0.4321, 0.6789]]}))["inserted"] == 1
+        metadata={"points": points}))["inserted"] == 1
     assert main.browser_event(BrowserEvent(observed_at=now, action="drag_start", page=page,
         target={"tag": "textarea", "label": "PRIVATE DRAFT WORDS"},
         metadata={"payload_kinds": ["text"], "source_target": {"label": "OTHER DRAFT", "editable": True}}))["inserted"] == 1
+    # The exact stored values (bound_metadata keeps three decimals) are what must never leave.
+    forbidden = [str(v).encode() for p in points for v in p[1:]] + [b"PRIVATE DRAFT WORDS", b"OTHER DRAFT"]
+    def check(body, where):
+        for leaked in forbidden:
+            assert leaked not in body, (where, leaked)
     for fmt in ("json", "xlsx", "csvzip"):
         for redact in ("true", "false"):
             r = client.get(f"/v1/export/{fmt}?include_raw=true&redact_names={redact}", headers=bearer)
@@ -190,11 +197,35 @@ with TestClient(app) as client:
             if fmt in ("xlsx", "csvzip"):
                 with zipfile.ZipFile(io.BytesIO(body)) as z:
                     body = b"".join(z.read(n) for n in z.namelist())
-            for leaked in (b"0.9876", b"0.6789", b"PRIVATE DRAFT WORDS", b"OTHER DRAFT"):
-                assert leaked not in body, (fmt, redact, leaked)
-    stored = [r for r in __import__("server.db", fromlist=["rows"]).rows("SELECT * FROM events")
-              if r["event_type"] == "browser_pointer_trajectory"]
-    assert stored[0]["metadata"]["points"], "raw points stay in local storage"
+            else:
+                rows = json.loads(body)["raw_local_evidence"]
+                traj = [e for e in rows if e["event_type"] == "browser_pointer_trajectory"]
+                assert traj and "points" not in traj[0]["metadata"] and traj[0]["metadata"]["point_count"] == 2
+            check(body, (fmt, redact))
+    for redact in ("true", "false"):
+        r = client.get(f"/v1/history/export-json?include_raw=true&redact_names={redact}", headers=bearer)
+        assert r.status_code == 200, r.text[:200]
+        check(r.content, ("history", redact))
+    from fastapi import HTTPException
+    from server.workflow_evidence_routes import export_workflow_evidence
+    for mode in ("stored", "redacted"):
+        try:
+            check(export_workflow_evidence(since="2000-01-01T00:00:00Z", representation=mode, archive=False).body, mode)
+        except HTTPException:
+            pass
+    r = client.get("/v1/events?limit=50", headers=bearer)
+    if r.status_code == 200:
+        check(r.content, "events api")
+    from server.db import connect, pointer_trajectory_points
+    with connect() as conn:
+        for table in ("events", "normalized_events", "context_events"):
+            for (blob,) in conn.execute(f"SELECT metadata_json FROM {table}").fetchall():
+                check((blob or "").encode(), table)
+        event_id = conn.execute("SELECT event_id FROM events WHERE event_type = 'browser_pointer_trajectory'").fetchone()[0]
+    assert pointer_trajectory_points(event_id) == points, "raw points stay on this device, apart from events"
+    with connect() as conn:
+        conn.execute("DELETE FROM events WHERE event_id = ?", (event_id,))
+    assert pointer_trajectory_points(event_id) is None, "deleting the event deletes its points"
 '''
     env = os.environ.copy()
     env.update({"WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"), "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth"),

@@ -29,13 +29,13 @@ Changing capture depth never changes them.
   or touch input.
 - The same control is not recorded twice within two seconds.
 
-**Target labels.** Hover and drag events use structural labels only: `aria-label`,
-`title`, `aria-labelledby`, a `<label for>` and `placeholder`. Hover also uses the short
-text of a native `<button>`, `<summary>` or `<option>`, which is interface chrome. An
-element's own text is never used for `role="button"` containers, links or draggables,
-because it can be the user's content (a draft, a message row). An editable element, or
-anything inside one, gets no label and is marked `editable`. The server strips labels
-from input, textarea, select and secure targets of these events at ingest.
+**Target labels.** Hover and drag events use author-set structural labels only:
+`aria-label`, `title`, `placeholder`, and a `<label for>` that holds no editable content.
+No element text is ever used, including native buttons and text referenced by
+`aria-labelledby`, because a button, row or draggable can hold the user's own content
+(a message, a task, a draft). An editable element, or anything inside one, gets no label
+and is marked `editable`. The server strips labels from input, textarea, select and
+secure targets of these events at ingest.
 
 **Drag and drop** (`browser_drag_start`, `browser_drag_drop`, `browser_drag_end`)
 - Records the source and destination controls and the declared payload *kinds*
@@ -51,11 +51,14 @@ from input, textarea, select and secure targets of these events at ingest.
 - No samples are taken while the pointer is over a password, one-time-code, card or
   other secure field, or inside a secure widget. The current batch ends at the field,
   and sampling resumes when the pointer leaves it.
-- The raw points stay in local storage. Every shared view shows a point count and
-  duration instead (`raw_points_shared: false`): the workflow trace, the events API,
-  MCP, and JSON, XLSX and CSV-zip exports with or without `redact_names`. The exporter
-  summarizes trajectories in the canonical rows it builds, and both display redaction
-  paths do too.
+- The raw points are kept on this device in their own table
+  (`pointer_trajectory_points`), apart from the event rows, and are deleted with their
+  event. The stored event carries only a point count and duration
+  (`raw_points_stored_locally: true`, `raw_points_shared: false`). So no read path
+  returns raw coordinates: not the workflow trace, the events API, MCP (Redacted or
+  Full), workflow-evidence bundles in either representation, the history export, or
+  JSON, XLSX and CSV-zip exports with or without `redact_names`. Those output boundaries
+  also summarize any trajectory that still carries points.
 
 **Friction candidates** (`GET /v1/capture-coverage/friction`) are patterns in observed
 events, for a person to review:
