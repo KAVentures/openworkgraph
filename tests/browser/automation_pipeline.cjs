@@ -58,6 +58,50 @@ const path=require('node:path');
    await page.locator('#owgPipelineSort').selectOption('impact');
    assert.equal(await page.getByRole('button',{name:'Open idea Copy approved prices into renewals'}).count(),1);
 
+   const comparisonIds=await page.evaluate(async()=>{
+     const ids=[];
+     for(let n=1;n<=4;n++){
+       const response=await fetch('/v1/automation-pipeline',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:'Comparison '+n})});
+       if(!response.ok)throw new Error('Comparison fixture failed');ids.push((await response.json()).idea_id);
+     }
+     return ids;
+   });
+   await page.locator('#owgPipelineReset').click();
+   await page.locator('#owgPipelineViewCount').filter({hasText:'5 shown of 5'}).waitFor();
+   const firstCompare=page.getByRole('checkbox',{name:'Compare idea Copy approved prices into renewals',exact:true});
+   await firstCompare.focus();await page.keyboard.press('Space');
+   assert.equal(await firstCompare.isChecked(),true);
+   assert.equal(await firstCompare.evaluate(el=>document.activeElement===el),true,'keyboard focus stays on the selected idea after rerender');
+   for(let n=1;n<=3;n++)await page.getByRole('checkbox',{name:'Compare idea Comparison '+n,exact:true}).check();
+   assert.equal(await page.getByRole('checkbox',{name:'Compare idea Comparison 4',exact:true}).isDisabled(),true);
+   const comparison=page.locator('#owgPipelineComparisonTable');
+   assert.match(await comparison.textContent(),/Modeled hours \/ month25Not assessed/);
+   assert.match(await comparison.textContent(),/Compliance review declared neededNoNot assessed/);
+   await page.evaluate(async id=>{
+     const response=await fetch('/v1/automation-pipeline/'+id+'/transition',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to:'assessing',expected_revision:1})});
+     if(!response.ok)throw new Error('Comparison revision fixture failed');
+   },comparisonIds[0]);
+   await page.locator('#owgPipelineRefresh').click();
+   await page.locator('#owgPipelineStatus').filter({hasText:'Opportunities refreshed.'}).waitFor();
+   const states=await comparison.locator('tbody tr').filter({has:page.getByRole('rowheader',{name:'State',exact:true})}).locator('td').allTextContents();
+   assert.equal(states[1],'Assessing','refresh updates the selected saved state');
+   const revisions=await comparison.locator('tbody tr').filter({has:page.getByRole('rowheader',{name:'Saved revision',exact:true})}).locator('td').allTextContents();
+   assert.equal(revisions[1],'2','refresh updates the selected saved revision');
+   await page.locator('#owgPipelineSearch').fill('renewals');
+   assert.equal(await comparison.locator('thead th').count(),5,'hidden selected ideas remain in explicit comparison');
+   await page.addScriptTag({content:axeSource});
+   const comparisonAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgPipelineComparison'),{
+     runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
+   assert.deepEqual(comparisonAudit.violations.map(v=>v.id),[]);
+   const previousViewport=page.viewportSize();await page.setViewportSize({width:390,height:844});
+   assert.equal(await page.evaluate(()=>document.body.scrollWidth>window.innerWidth),false,'no phone-width page overflow with comparison visible');
+   await page.setViewportSize(previousViewport);
+   await page.locator('#owgPipelineCompareClear').click();
+   assert.equal(await page.locator('#owgPipelineComparisonTable').count(),0);
+   for(const id of comparisonIds)await page.evaluate(async id=>{const response=await fetch('/v1/automation-pipeline/'+encodeURIComponent(id)+'/delete',{method:'POST'});if(!response.ok)throw new Error('Comparison cleanup failed');},id);
+   await page.locator('#owgPipelineReset').click();
+   await page.locator('#owgPipelineViewCount').filter({hasText:'1 shown of 1'}).waitFor();
+
    // A second tab edits the same idea; the stale page must be refused, not overwrite it.
    const ideaId=(await (await page.evaluate(async()=>{const r=await fetch('/v1/automation-pipeline');return r.json();})).ideas[0]).idea_id;
    await page.evaluate(async id=>{const r=await fetch('/v1/automation-pipeline/'+id);const idea=await r.json();
@@ -138,7 +182,6 @@ const path=require('node:path');
    await page.locator('#owgPipelineList').getByText('No ideas in this view.').waitFor();
    await page.locator('#owgPipelineFilter').selectOption('');
 
-   await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgPipelineCard'),{
      runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes[0].target.join(' ')),[],'pipeline card WCAG violations');

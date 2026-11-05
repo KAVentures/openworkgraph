@@ -29,3 +29,13 @@ test('sorts keep zero assessments before unknown and leave input unchanged',()=>
  assert.deepEqual(ids({}),['b','a','c']);
  assert.equal(JSON.stringify(ideas),before);
 });
+
+test('comparison preserves zero, unknown and declared assessment basis without totals',()=>{
+ const rows=sandbox.window.__owgPipelineModel.comparisonRows([
+  {...ideas[0],revision:2,assessment:{cases_per_month:0,minutes_per_case:0,eligible_share:0,compliance_review_needed:false,ease:{rules_based:1}}},ideas[2]]);
+ const row=name=>Array.from(rows.find(r=>r[0]===name));
+ assert.deepEqual(row('Modeled hours / month'),['Modeled hours / month',0,'Not assessed']);
+ assert.deepEqual(row('Eligible share % (entered)'),['Eligible share % (entered)',0,'Not assessed']);
+ assert.deepEqual(row('Compliance review declared needed'),['Compliance review declared needed','No','Not assessed']);
+ assert.equal(rows.some(r=>/total/i.test(r[0])),false);
+});
