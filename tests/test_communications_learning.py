@@ -165,7 +165,8 @@ import json
 from fastapi.testclient import TestClient
 from server.secure_app import app
 from server import local_auth
-EXAMPLES = json.loads(DATA)
+import os
+EXAMPLES = json.loads(open(os.environ["OWG_TEST_EXAMPLES"], encoding="utf-8").read())
 rows = ["ticket,text"] + [f"T{i},{e['text']}" for i, e in enumerate(EXAMPLES[:40])]
 body = "\n".join(rows).encode()
 query = "/v1/communications/analyze?format=csv&text_columns=text&thread_column=ticket"
@@ -220,6 +221,9 @@ with TestClient(app) as client:
     env.update({"WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"), "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth"),
                 "WORKFLOW_OBSERVER_CONFIG": str(tmp_path / "config.json")})
     data = [e for e in corpus(420) if "," not in e["text"]]
-    script = f"DATA = {json.dumps(json.dumps(data))}\n" + code
-    result = subprocess.run([sys.executable, "-c", script], cwd=ROOT, env=env, capture_output=True, text=True, timeout=180)
+    # The examples go in a file: Windows caps a command line at 32,767 characters.
+    examples = tmp_path / "examples.json"
+    examples.write_text(json.dumps(data), encoding="utf-8")
+    env["OWG_TEST_EXAMPLES"] = str(examples)
+    result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True, timeout=180)
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
