@@ -282,6 +282,42 @@ def _compatible_groups(pairs: set[frozenset[int]], groups: list[list[str]],
     # Consider each remaining seed and greedily extend by supported degree,
     # then choose the largest safe clique. Bounded at MAX_ITEMS (60), with no
     # exponential subset enumeration or dependence on set iteration order.
+    def exact_clique(nodes: set[int]) -> list[int] | None:
+        """Find the largest compatible clique for small candidate sets.
+
+        An explicit exploration budget prevents adversarial dense suggestions
+        from creating unbounded work. None means use the existing greedy path.
+        """
+        if len(nodes) > 14:
+            return None
+        ordered = sorted(nodes)
+        best: list[int] = []
+        visits = 0
+
+        def explore(chosen: list[int], candidates: list[int]) -> None:
+            nonlocal best, visits
+            visits += 1
+            if visits > 12000:
+                raise OverflowError
+            if len(chosen) + len(candidates) < len(best):
+                return
+            if len(chosen) > len(best) or (len(chosen) == len(best) and
+                                           chosen and (not best or chosen < best)):
+                best = chosen[:]
+            for i, number in enumerate(candidates):
+                if len(chosen) + len(candidates) - i < len(best):
+                    break
+                if compatible(chosen, number):
+                    tail = [other for other in candidates[i + 1:]
+                            if frozenset((number, other)) in pairs]
+                    explore([*chosen, number], tail)
+
+        try:
+            explore([], ordered)
+        except OverflowError:
+            return None
+        return best
+
     while remaining:
         choices: list[list[int]] = []
         for seed in sorted(remaining):
@@ -295,7 +331,8 @@ def _compatible_groups(pairs: set[frozenset[int]], groups: list[list[str]],
                 if compatible(candidate, number):
                     candidate.append(number)
             choices.append(sorted(candidate))
-        winner = min(choices, key=lambda group: (-len(group), group))
+        greedy_winner = min(choices, key=lambda group: (-len(group), group))
+        winner = exact_clique(remaining) or greedy_winner
         remaining.difference_update(winner)
         if len(winner) >= 2:
             accepted.append(winner)
