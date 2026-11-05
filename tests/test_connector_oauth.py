@@ -216,3 +216,258 @@ def test_jira_renewal_failure_fails_closed(provider):
            "OWG_JIRA_OAUTH_CONNECTION": "conn_0000000000000000"}
     with pytest.raises(JiraIngestionError, match="reconnect_required"):
         source.configuration(env)
+
+
+def test_cached_token_is_not_returned_after_another_process_disconnects(provider, tmp_path):
+    _, _, conn = _connect(provider)
+    connection_id = conn['connection_id']
+    assert oauth.access_token(connection_id) == 'AT1'
+    script = r'''
+import sys
+from pathlib import Path
+import httpx
+from server import connector_oauth as oauth
+oauth.auth_dir = lambda: Path(sys.argv[1])
+oauth._read_or_create_secret = lambda name: 'local-installation-secret'
+oauth._transport = httpx.MockTransport(lambda request: httpx.Response(200))
+oauth.disconnect(sys.argv[2])
+'''
+    result = subprocess.run([sys.executable, '-c', script, str(tmp_path), connection_id],
+                            cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    with pytest.raises(oauth.OAuthError, match='unknown connection'):
+        oauth.access_token(connection_id)
+    assert connection_id not in oauth._access
+
+
+def test_disconnect_waits_for_other_process_refresh_and_does_not_restore_connection(provider, tmp_path):
+    import time
+    _, _, conn = _connect(provider)
+    connection_id = conn['connection_id']
+    script = r'''
+import sys, time
+from pathlib import Path
+import httpx
+from server import connector_oauth as oauth
+root, connection, action = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+oauth.auth_dir = lambda: root
+oauth._read_or_create_secret = lambda name: 'local-installation-secret'
+def handler(request):
+    if action == 'refresh':
+        (root / 'refresh-started').touch()
+        deadline = time.monotonic() + 20
+        while not (root / 'release-refresh').exists():
+            if time.monotonic() > deadline: raise RuntimeError('refresh release timeout')
+            time.sleep(.01)
+        return httpx.Response(200, json={'access_token':'A2','refresh_token':'R2','expires_in':3600})
+    return httpx.Response(200)
+oauth._transport = httpx.MockTransport(handler)
+if action == 'refresh': oauth.access_token(connection)
+else:
+    (root / 'disconnect-started').touch()
+    oauth.disconnect(connection)
+'''
+    root = Path(__file__).resolve().parents[1]
+    args = [sys.executable, '-c', script, str(tmp_path), connection_id]
+    refresh = subprocess.Popen(args + ['refresh'], cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    disconnect = None
+    try:
+        deadline = time.monotonic() + 15
+        while not (tmp_path / 'refresh-started').exists():
+            assert refresh.poll() is None and time.monotonic() < deadline, 'refresh did not start'
+            time.sleep(.01)
+        disconnect = subprocess.Popen(args + ['disconnect'], cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        while not (tmp_path / 'disconnect-started').exists():
+            assert disconnect.poll() is None and time.monotonic() < deadline, 'disconnect did not start'
+            time.sleep(.01)
+        # Give an unlocked disconnect an opportunity to race the held refresh.
+        time.sleep(.3)
+        (tmp_path / 'release-refresh').touch()
+        _, refresh_err = refresh.communicate(timeout=20)
+        _, disconnect_err = disconnect.communicate(timeout=20)
+        assert refresh.returncode == 0, refresh_err
+        assert disconnect.returncode == 0, disconnect_err
+        assert oauth.status()['connections'] == []
+        with pytest.raises(oauth.OAuthError, match='unknown connection'):
+            oauth.access_token(connection_id)
+    finally:
+        (tmp_path / 'release-refresh').touch()
+        for process in (refresh, disconnect):
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.communicate(timeout=5)
+
+
+def test_new_sign_in_is_not_lost_while_another_process_refreshes(provider, tmp_path):
+    import concurrent.futures
+    import time
+    _, _, first = _connect(provider)
+    script = r'''
+import sys, time
+from pathlib import Path
+import httpx
+from server import connector_oauth as oauth
+root = Path(sys.argv[1])
+oauth.auth_dir = lambda: root
+oauth._read_or_create_secret = lambda name: 'local-installation-secret'
+def handler(request):
+    (root / 'refresh-started').touch()
+    deadline = time.monotonic() + 20
+    while not (root / 'release-refresh').exists():
+        if time.monotonic() > deadline: raise RuntimeError('refresh release timeout')
+        time.sleep(.01)
+    return httpx.Response(200, json={'access_token':'A2','refresh_token':'R2','expires_in':3600})
+oauth._transport = httpx.MockTransport(handler)
+oauth.access_token(sys.argv[2])
+'''
+    root = Path(__file__).resolve().parents[1]
+    refresh = subprocess.Popen([sys.executable, '-c', script, str(tmp_path), first['connection_id']],
+                               cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        deadline = time.monotonic() + 15
+        while not (tmp_path / 'refresh-started').exists():
+            assert refresh.poll() is None and time.monotonic() < deadline, 'refresh did not start'
+            time.sleep(.01)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(_connect, provider)
+            # Confirm the second authorization-code exchange has completed before
+            # the first refresh can save its snapshot of the connection store.
+            while sum(form.get('grant_type') == 'authorization_code' for _, _, form in provider.calls) < 2:
+                assert not future.done() and time.monotonic() < deadline, 'second exchange did not start'
+                time.sleep(.01)
+            time.sleep(.2)
+            (tmp_path / 'release-refresh').touch()
+            _, error = refresh.communicate(timeout=20)
+            assert refresh.returncode == 0, error
+            _, _, second = future.result(timeout=20)
+        ids = {row['connection_id'] for row in oauth.status()['connections']}
+        assert ids == {first['connection_id'], second['connection_id']}
+    finally:
+        (tmp_path / 'release-refresh').touch()
+        if refresh.poll() is None:
+            refresh.kill()
+            refresh.communicate(timeout=5)
+
+
+def test_uncertain_refresh_is_not_retried_or_served_from_cache(provider):
+    _, _, conn = _connect(provider, 'atlassian', None)
+    cid = conn['connection_id']
+    oauth._access.clear()
+    calls = []
+    def lost_response(request):
+        calls.append(request.url.path)
+        raise httpx.ReadTimeout('synthetic timeout after send')
+    oauth._transport = httpx.MockTransport(lost_response)
+    with pytest.raises(oauth.OAuthError, match='reconnect'):
+        oauth.access_token(cid)
+    assert len(calls) == 1
+    assert oauth.status()['connections'][0]['reauthorization_required'] is True
+    # A stale access token from another worker must not bypass the intent.
+    oauth._access[cid] = ('cached-test-token', float('inf'))
+    with pytest.raises(oauth.OAuthError, match='reconnect'):
+        oauth.access_token(cid)
+    assert len(calls) == 1 and cid not in oauth._access
+    assert 'cached-test-token' not in str(oauth.status())
+
+
+def test_refresh_result_save_failure_quarantines_old_token(provider, monkeypatch):
+    _, _, conn = _connect(provider, 'atlassian', None)
+    cid = conn['connection_id']
+    oauth._access.clear()
+    save = oauth._save
+    def fail_result(data):
+        if data['connections'][cid].get('last_refreshed_at'):
+            raise OSError('synthetic save failure')
+        save(data)
+    monkeypatch.setattr(oauth, '_save', fail_result)
+    with pytest.raises(oauth.OAuthError, match='could not be saved'):
+        oauth.access_token(cid)
+    assert oauth._load()['connections'][cid]['refresh_state'] == 'in_flight'
+    attempts = sum(form.get('grant_type') == 'refresh_token' for _, _, form in provider.calls)
+    with pytest.raises(oauth.OAuthError, match='reconnect'):
+        oauth.access_token(cid)
+    assert sum(form.get('grant_type') == 'refresh_token' for _, _, form in provider.calls) == attempts
+
+
+def test_uncertain_zendesk_disconnect_does_not_exchange_the_old_refresh_token(provider):
+    _, _, conn = _connect(provider, 'zendesk', 'acme.zendesk.com')
+    cid = conn['connection_id']
+    with oauth._LOCK, oauth._FileLock():
+        data = oauth._load()
+        data['connections'][cid]['refresh_state'] = 'in_flight'
+        oauth._save(data)
+    before = len(provider.calls)
+    result = oauth.disconnect(cid)
+    assert result['provider_revocation'] == 'manual_revocation_required_refresh_uncertain'
+    assert len(provider.calls) == before
+    assert oauth.status()['connections'] == []
+
+
+@pytest.mark.parametrize('replacement', [None, '', 7])
+def test_malformed_refresh_replacement_is_quarantined(provider, replacement):
+    _, _, conn = _connect(provider, 'atlassian', None)
+    cid = conn['connection_id']
+    oauth._access.clear()
+    calls = []
+    def malformed(request):
+        calls.append(request.url.path)
+        return httpx.Response(200, json={'access_token':'next', 'refresh_token':replacement, 'expires_in':3600})
+    oauth._transport = httpx.MockTransport(malformed)
+    with pytest.raises(oauth.OAuthError, match='invalid replacement'):
+        oauth.access_token(cid)
+    assert oauth.status()['connections'][0]['reauthorization_required']
+    with pytest.raises(oauth.OAuthError, match='reconnect'):
+        oauth.access_token(cid)
+    assert len(calls) == 1
+
+
+def test_ambiguous_token_response_does_not_clear_refresh_intent(provider):
+    _, _, conn = _connect(provider, 'atlassian', None)
+    cid = conn['connection_id']
+    oauth._access.clear()
+    calls = []
+    def duplicate(request):
+        calls.append(request.url.path)
+        return httpx.Response(200, content=b'{"access_token":"next","refresh_token":"a","refresh_token":"b"}')
+    oauth._transport = httpx.MockTransport(duplicate)
+    with pytest.raises(oauth.OAuthError, match='reconnect'):
+        oauth.access_token(cid)
+    with pytest.raises(oauth.OAuthError, match='reconnect'):
+        oauth.access_token(cid)
+    assert len(calls) == 1 and oauth.status()['connections'][0]['reauthorization_required']
+
+
+def test_refresh_without_replacement_can_keep_nonrotating_provider_token(provider):
+    _, _, conn = _connect(provider, 'servicenow', 'acme.service-now.com')
+    cid = conn['connection_id']
+    oauth._access.clear()
+    oauth._transport = httpx.MockTransport(lambda request: httpx.Response(200, json={'access_token':'next','expires_in':3600}))
+    assert oauth.access_token(cid) == 'next'
+    saved = oauth._load()['connections'][cid]
+    assert saved['refresh_state'] == 'ready' and saved['refresh_token'] == 'RT1'
+    assert not oauth.status()['connections'][0]['reauthorization_required']
+
+
+def test_process_exit_during_refresh_blocks_retry_even_with_another_cached_token(provider, tmp_path):
+    _, _, conn = _connect(provider, 'atlassian', None)
+    cid = conn['connection_id']
+    script = r'''
+import os, sys
+from pathlib import Path
+import httpx
+from server import connector_oauth as oauth
+oauth.auth_dir = lambda: Path(sys.argv[1])
+oauth._read_or_create_secret = lambda name: 'local-installation-secret'
+def terminate_after_request(request):
+    os._exit(0)
+oauth._transport = httpx.MockTransport(terminate_after_request)
+oauth.access_token(sys.argv[2])
+'''
+    result = subprocess.run([sys.executable, '-c', script, str(tmp_path), cid],
+                            cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    # The parent still has the token issued before the child exited.
+    assert cid in oauth._access
+    with pytest.raises(oauth.OAuthError, match='reconnect'):
+        oauth.access_token(cid)
+    assert oauth.status()['connections'][0]['reauthorization_required']

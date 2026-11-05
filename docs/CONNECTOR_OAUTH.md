@@ -26,11 +26,21 @@ How it works:
   (`.connector_oauth.bin`), keyed by this installation's local secret. Access
   tokens are kept in memory only. No API, export or AI tool returns a token.
 - Rotating refresh tokens (Atlassian, Microsoft, Salesforce when configured) are
-  saved before the new access token is used, under a cross-process lock.
-- **Disconnect** calls the provider's revocation endpoint where one exists
-  (Salesforce, ServiceNow, Zendesk), then forgets the sign-in. Microsoft and
-  Atlassian have no token-revocation endpoint for this flow; remove the app's
-  consent in their admin settings.
+  saved before the new access token is used. Refresh, completed sign-ins and
+  local disconnect serialize their shared-store updates across OWG processes.
+  Each token lookup checks that the connection still exists before returning an
+  in-memory token. A disconnect cannot recall a token already handed to an
+  in-flight request; provider-side revocation remains a separate operation.
+- OWG records that a refresh is in progress before contacting the provider. If
+  a response, process or local save is interrupted, the sign-in is marked
+  **Reconnect required** and OWG does not retry that refresh token automatically.
+  A network failure can therefore require reconnection even if the request never
+  reached the provider. For a sign-in in this state, disconnect forgets it
+  locally and asks you to remove the app's consent at the provider manually.
+- **Disconnect** forgets the sign-in locally, then calls the provider's
+  revocation endpoint where one exists (Salesforce, ServiceNow, Zendesk).
+  Microsoft and Atlassian have no token-revocation endpoint for this flow;
+  remove the app's consent in their admin settings.
 - Connecting reads nothing by itself: each connector still requires its own
   explicit consent, selection and bounds before any read.
 
@@ -56,5 +66,6 @@ when it expires.
   another token or adopts a different account.
 - The replacement refresh token is saved, under the cross-process lock, before
   the new access token is used. If the provider issues a new token but the
-  response is lost, the old refresh token may be rejected next time; reconnect
-  then.
+  response or the local save is lost, reconnect rather than retrying the old
+  token. There is no atomic transaction across the provider and this computer,
+  and ordinary file durability and backup rollback remain limitations.
