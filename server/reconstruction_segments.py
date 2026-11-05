@@ -157,6 +157,8 @@ def observed_activity_segments(
     segments: list[dict[str, Any]] = []
     current: list[dict[str, Any]] = []
     boundary: list[str] = []
+    interruption_count = 0
+    resumed_record_context = False
     previous_position: int | None = None
     previous_row: dict[str, Any] | None = None
     # Exact-record anchors may be separated by clean, already-linked but
@@ -174,6 +176,10 @@ def observed_activity_segments(
             segments.append({
                 "segment_index": len(segments) + 1,
                 "boundary_before": list(boundary),
+                # Counts only witnessed foreign-record observations in the same
+                # exact capture scope, not inferred time away or hidden IDs.
+                "observed_foreign_record_events_before": interruption_count,
+                "resumed_record_context": resumed_record_context,
                 "first_observed_at": current[0]["observed_at"],
                 "last_observed_at": current[-1]["observed_at"],
                 "observed_event_count": len(current),
@@ -184,6 +190,8 @@ def observed_activity_segments(
     total_segments = 0
     for position, row in members:
         reasons: list[str] = []
+        next_interruption_count = 0
+        next_resumed_record_context = False
         if previous_row is not None and previous_position is not None:
             if row["scope"] != previous_row["scope"]:
                 reasons.append("capture_scope_change")
@@ -191,6 +199,17 @@ def observed_activity_segments(
                 positions = foreign_positions.get(row["scope"], [])
                 at = bisect_right(positions, previous_position)
                 if at < len(positions) and positions[at] < position:
+                    # Only independent, non-tainted foreign record observations
+                    # in this exact scope are counted. A return to the same
+                    # literal record is a witnessed context resumption, never
+                    # a claim that the underlying business task was resumed.
+                    next_interruption_count = bisect_right(positions, position - 1) - at
+                    next_resumed_record_context = bool(
+                        row["ref"] and row["ref"] == previous_row["ref"]
+                        and not row["reference_tainted"]
+                        and not previous_row["reference_tainted"]
+                        and previous_row["observed_at"] < row["observed_at"]
+                    )
                     reasons.append("interleaved_other_record")
                 elif (all(row["scope"]) and row["ref"] and previous_row["ref"]
                         and row["ref"] != previous_row["ref"]
@@ -280,6 +299,8 @@ def observed_activity_segments(
                 emit()
             current = []
             boundary = reasons
+            interruption_count = next_interruption_count
+            resumed_record_context = next_resumed_record_context
             total_segments += 1
         current.append(row)
         # Never carry a record-context witness across a separately observed
