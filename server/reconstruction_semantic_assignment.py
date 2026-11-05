@@ -78,8 +78,8 @@ def semantic_assignment(
     component_scores: dict[str, dict[str, float]] = {}
     for pair, score in weighted.items():
         a, b = pair
-        ra, rb = membership.get(a), membership.get(b)
-        if ra is None or rb is None or ra == rb:
+        ra, rb = membership.get(a, a), membership.get(b, b)
+        if ra == rb:
             continue
         component_pair = tuple(sorted((ra, rb)))
         previous = component_edges.get(component_pair)
