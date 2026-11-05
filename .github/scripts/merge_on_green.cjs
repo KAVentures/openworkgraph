@@ -98,6 +98,14 @@ async function run({github, context, core}) {
   } else if (context.eventName === 'pull_request_target') {
     const item = context.payload.pull_request;
     if (item) ids = [item.number];
+  } else if (context.eventName === 'schedule') {
+    // An eventual-consistency fallback: GitHub may not have refreshed
+    // mergeability when the final CI workflow completion event arrives.
+    // Scan only open PRs, then opt in and exact-head-gate each one again.
+    const open = await github.paginate(github.rest.pulls.list, {
+      owner, repo, state: 'open', base: 'main', per_page: 100,
+    });
+    ids = open.filter(item => !item.draft && exactOptIn(item)).map(item => item.number);
   }
   for (const number of [...new Set(ids)]) {
     const response = await github.rest.pulls.get({owner, repo, pull_number: number});
