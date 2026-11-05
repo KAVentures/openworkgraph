@@ -72,6 +72,13 @@ class _OneSecondArrivals:
     def next_arrival(self, now, rate, draw):
         return now + 1.0
 
+    def local(self, now):
+        from datetime import datetime, timedelta, timezone
+        return datetime(2025, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=now)
+
+    def describe(self):
+        return {"test_clock": "one_second_between_arrivals"}
+
 
 def test_completion_wins_when_queue_deadline_is_exactly_equal():
     model = _model(timeout=1 / 60)
