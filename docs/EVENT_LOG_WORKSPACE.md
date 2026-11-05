@@ -867,6 +867,34 @@ Six rules over one million events take about 7 seconds locally
 imported log against rules you entered. They are not verified policy, audit evidence or legal
 compliance, and a violation may reflect missing events.
 
+### Suggesting rules from a log
+
+`POST /v1/event-logs/{log_id}/compliance/discover` (dashboard session only) proposes the rules
+most cases of this log already follow, as ProM's Declare Miner does. It covers the `existence`
+(in every case, or at most once), `response`, `precedence` and `not_coexistence` templates.
+
+```json
+{"min_confidence": 0.95, "min_support": 0.1, "max_activities": 25, "max_candidates": 50,
+ "templates": ["existence", "response", "precedence", "not_coexistence"], "cohort": {}}
+```
+
+Only the `max_activities` most frequent activities are paired; the response says when others
+were left out. Each candidate gives:
+
+- the rule in the checker's own format;
+- its *support*: the share of cases the rule applies to;
+- its *confidence*: the share of those cases that follow it, with a Wilson 95% interval;
+- its violating cases.
+
+Candidates are ranked by the lower confidence bound, then by support. Their counts match exactly
+what `compliance` reports for the same rule, and a test checks this. The response also carries
+`rule_set`, the top 20 candidates ready to post to `compliance` or save one by one as signals.
+In the dashboard, "Suggest rules from this log" lists the candidates, and "Add" puts one into
+the rule list to check.
+
+Suggestions are regularities of the imported log, not policy: a rule that 98% of cases follow
+may be a habit, a system constraint or a gap in the data. Review each before relying on it.
+
 ### Object rules across object types
 
 An additional [supplied-relationship shape rule](SUPPLIED_OBJECT_CONSTRAINTS.md)

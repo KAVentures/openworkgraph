@@ -441,6 +441,19 @@ async def event_log_compliance(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/compliance/discover")
+async def event_log_rule_discovery(request: Request, log_id: str):
+    """Candidate Declare-style rules most cases already follow; nothing is saved or enforced."""
+    from . import event_log_rule_discovery as discovery
+    _require_dashboard(request)
+    spec = await _json_body(request, "rule discovery settings")
+    try:
+        result = await run_in_threadpool(discovery.discover, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/{log_id}/object-constraints")
 async def event_log_object_constraints(request: Request, log_id: str):
     _require_dashboard(request)

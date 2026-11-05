@@ -85,7 +85,13 @@ def semantic_assignment(
         previous = component_edges.get(component_pair)
         if previous is None or score > previous[0] or (score == previous[0] and pair < previous[1]):
             component_edges[component_pair] = (score, pair)
+    # Scores below the proposal floor are not credible competing assignments.
+    # Counting them in the margin test would let a low-confidence distractor
+    # veto an independently strong link, reducing recall without reducing
+    # contamination from plausible competing matches.
     for (a, b), (score, _) in component_edges.items():
+        if score < MIN_SCORE:
+            continue
         component_scores.setdefault(a, {})[b] = score
         component_scores.setdefault(b, {})[a] = score
     ambiguous = {
