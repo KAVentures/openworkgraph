@@ -87,7 +87,7 @@ def triage(*, tenant, mailbox, folder, grant_file, candidate, csv_path,
                 or j.get("event_level_proof") is not False
                 or h.get("event_level_proof") is not False
                 or h.get("resume_journal_sha256") != hashlib.sha256(
-                    _canonical(j) + b"\\n").hexdigest()):
+                    _canonical(j) + b"\n").hexdigest()):
             raise ReceiptError("Handoff chain mismatch")
     except (ValueError, TypeError, OSError, KeyError, UnicodeError, RecursionError):
         return {**result, "status": "manual_reconciliation_required",
