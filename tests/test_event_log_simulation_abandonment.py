@@ -143,7 +143,7 @@ def test_existing_authenticated_simulation_backend_exposes_scenario_only_abandon
     log_id = _log()
     last = sim.calibrate(log_id)["paths"][0]["activities"][-1]
     result = sim.what_if(log_id, {
-        "cases": 1200, "seed": 7, "distribution": "fixed",
+        "cases": 1200, "seed": 7, "distribution": "fixed", "arrivals_per_hour": 1000,
         "activities": {last: {"minutes": 90, "resources": 1, "queue_timeout_minutes": 0.01}},
     })
     assert "cases_abandoned" not in result["baseline"]
