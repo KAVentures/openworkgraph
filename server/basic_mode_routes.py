@@ -64,6 +64,42 @@ async def post_local_backup(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def _require_dashboard_session(request: Request) -> None:
+    from .local_auth import dashboard_session_valid
+    auth = str(request.headers.get("authorization") or "")
+    if not auth.lower().startswith("owg-session ") or not dashboard_session_valid(auth[len("owg-session "):].strip()):
+        raise HTTPException(status_code=403, detail="Local dashboard session required to change capture depth")
+
+
+def get_capture_depth() -> dict[str, Any]:
+    from . import capture_depth
+    return capture_depth.public()
+
+
+async def put_capture_depth(request: Request) -> dict[str, Any]:
+    from . import capture_depth
+    _require_dashboard_session(request)
+    try:
+        payload = await request.json()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="capture depth must be JSON") from None
+    try:
+        return capture_depth.save(payload)
+    except capture_depth.CaptureDepthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+
+def get_capture_coverage(hours: int = 168) -> dict[str, Any]:
+    from .interaction_evidence import coverage_manifest
+    return coverage_manifest(max(1, min(int(hours), 24 * 90)))
+
+
+def get_friction_candidates(request: Request, hours: int = 24) -> dict[str, Any]:
+    from .interaction_evidence import friction_report
+    _require_dashboard_session(request)
+    return friction_report(max(1, min(int(hours), 24 * 31)))
+
+
 def basic_mode_script() -> Response:
     path = ROOT / "dashboard" / "basic_mode.js"
     return Response(path.read_text(encoding="utf-8"), media_type="application/javascript")
@@ -99,6 +135,10 @@ if not getattr(app.state, "owg_basic_mode_installed", False):
     app.add_api_route("/v1/screen-capture", put_screen_capture, methods=["PUT"])
     app.add_api_route("/v1/local-backups", get_local_backups, methods=["GET"])
     app.add_api_route("/v1/local-backups", post_local_backup, methods=["POST"])
+    app.add_api_route("/v1/capture-depth", get_capture_depth, methods=["GET"])
+    app.add_api_route("/v1/capture-depth", put_capture_depth, methods=["PUT"])
+    app.add_api_route("/v1/capture-coverage", get_capture_coverage, methods=["GET"])
+    app.add_api_route("/v1/capture-coverage/friction", get_friction_candidates, methods=["GET"])
     app.add_api_route("/basic-mode.js", basic_mode_script, methods=["GET"])
     app.add_api_route("/v1/update-status", update_status, methods=["GET"])
     from .analysis_handoff import analysis_preview

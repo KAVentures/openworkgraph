@@ -389,10 +389,18 @@ def _browser_context(event: BrowserEvent) -> dict[str, str]:
 
 @app.post("/v1/browser-events")
 def browser_event(event: BrowserEvent) -> dict[str, int | str]:
+    # Capture depth (#634) is enforced here, not only in the extension: a disabled
+    # high-fidelity signal is never stored, and its metadata keeps a bounded shape.
+    from . import capture_depth
+    if not capture_depth.action_allowed(event.action):
+        return {"inserted": 0, "skipped": "capture_depth_signal_off"}
+    bounded = capture_depth.bound_metadata(event.action, dict(event.metadata or {}))
+    if bounded is None:
+        return {"inserted": 0, "skipped": "invalid_high_fidelity_event"}
     ctx = _browser_context(event)
     page = event.page.model_dump(exclude_none=True)
     target = event.target.model_dump(exclude_none=True)
-    metadata = dict(event.metadata or {})
+    metadata = bounded
     metadata.update({
         "source": "browser_extension",
         "browser_sensor_id": ctx["sensor_id"],
@@ -428,6 +436,9 @@ def browser_event(event: BrowserEvent) -> dict[str, int | str]:
         "metadata": metadata,
     }
     safe_event = harden_browser_event(raw_event, _runtime_config())
+    if (safe_event.get("metadata") or {}).get("excluded") and not capture_depth.action_allowed_on_excluded(event.action):
+        # Excluded pages keep structural evidence only; high-fidelity signals are not stored at all.
+        return {"inserted": 0, "skipped": "excluded_page"}
     # Browser ingestion learns identities before insert_events; apply the same
     # title limit here so untrusted page text cannot stall that earlier pass.
     from shared.core.browser_title_privacy import cap_event_title_surfaces

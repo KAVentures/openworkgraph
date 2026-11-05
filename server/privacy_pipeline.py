@@ -155,9 +155,33 @@ def redact_for_display_now(value: Any) -> Any:
     return _redactor(suppress_private_browsing(value))
 
 
+def summarize_pointer_trajectories(value: Any) -> Any:
+    """Replace raw pointer coordinates with a count and duration in shared or displayed evidence (#634).
+
+    Sampled trajectories are recorded only at Full fidelity and stay in local
+    storage; agents, MCP and exports see a summary unless a future, separately
+    authorized export asks for the raw points.
+    """
+    if isinstance(value, dict):
+        out = {k: summarize_pointer_trajectories(v) for k, v in value.items()}
+        meta = out.get("metadata")
+        if isinstance(meta, dict) and isinstance(meta.get("points"), list) and (
+                out.get("event_type") == "browser_pointer_trajectory" or meta.get("action") == "pointer_trajectory"):
+            points = meta["points"]
+            last = points[-1] if points and isinstance(points[-1], list) and points[-1] else [0]
+            summary = {k: v for k, v in meta.items() if k != "points"}
+            summary.update(point_count=len(points), duration_ms=last[0] if isinstance(last[0], (int, float)) else None,
+                           raw_points_shared=False)
+            out["metadata"] = summary
+        return out
+    if isinstance(value, list):
+        return [summarize_pointer_trajectories(v) for v in value]
+    return value
+
+
 def redact_for_display(value: Any) -> Any:
     from shared.core.private_browsing import suppress_private_browsing
-    value = suppress_private_browsing(value)
+    value = summarize_pointer_trajectories(suppress_private_browsing(value))
     # AI-context requests (MCP) are redacted once, for the whole response, by
     # server.ai_context according to the effective detail level. Redacting here
     # too would make "Full" impossible and double-process every string.

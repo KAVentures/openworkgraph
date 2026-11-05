@@ -35,6 +35,7 @@
       ],
       "js": [
         "content.js",
+        "capture_depth.js",
         "content_enrichment.js",
         "browser_signals.js",
         "agent_surface_adapters.js",
