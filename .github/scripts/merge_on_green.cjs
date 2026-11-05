@@ -52,12 +52,14 @@ function latestReviewStates(reviews) {
   return state;
 }
 
-function decision({pr, owner, repo, workflowRuns, testJobs, reviewThreads, hasMoreReviewThreads, reviews}) {
+function decision({pr, owner, repo, workflowRuns, testJobs, reviewThreads, hasMoreReviewThreads,
+                   reviews, upToDateWithMain}) {
   if (!pr || pr.state !== 'open' || pr.number === 1) return 'closed-or-excluded';
   if (pr.base?.ref !== 'main' || pr.base?.repo?.full_name !== owner + '/' + repo ||
       pr.head?.repo?.full_name !== owner + '/' + repo) return 'cross-repository-or-base';
   if (pr.draft || !exactOptIn(pr)) return 'draft-or-not-explicitly-opted-in';
   if (pr.mergeable !== true || pr.mergeable_state !== 'clean') return 'not-cleanly-mergeable';
+  if (upToDateWithMain !== true) return 'not-tested-against-current-main';
   if ((pr.requested_reviewers || []).length || (pr.requested_teams || []).length)
     return 'review-still-requested';
   if (hasMoreReviewThreads || (reviewThreads || []).some(t => !t.isResolved))
@@ -135,6 +137,13 @@ async function run({github, context, core}) {
       core.info('PR #' + number + ': unavailable review threads; refuse.');
       continue;
     }
+    // Require this head to *contain* the current main commit, rather than
+    // accepting green checks tested before another PR changed main.
+    const mainSha = (await github.rest.repos.getBranch({owner, repo, branch: 'main'})).data.commit.sha;
+    const comparison = await github.rest.repos.compareCommits({
+      owner, repo, base: mainSha, head: pr.head.sha,
+    });
+    const upToDateWithMain = ['ahead', 'identical'].includes(comparison.data.status);
     // Re-fetch immediately before evaluating and attempting merge; the exact
     // SHA is also enforced atomically by GitHub's merge API.
     const current = (await github.rest.pulls.get({owner, repo, pull_number: number})).data;
@@ -142,10 +151,16 @@ async function run({github, context, core}) {
       pr: current, owner, repo, workflowRuns: runs, testJobs: jobs,
       reviewThreads: reviewThreads.nodes,
       hasMoreReviewThreads: reviewThreads.pageInfo.hasNextPage,
-      reviews: rv,
+      reviews: rv, upToDateWithMain,
     });
     if (reason) {
       core.info('PR #' + number + ': no merge (' + reason + ')');
+      continue;
+    }
+    // If main changed while checks and reviews were read, refuse this
+    // iteration. GitHub itself atomically enforces the PR head SHA.
+    if ((await github.rest.repos.getBranch({owner, repo, branch: 'main'})).data.commit.sha !== mainSha) {
+      core.info('PR #' + number + ': main moved during validation; retry later.');
       continue;
     }
     const result = await github.rest.pulls.merge({
