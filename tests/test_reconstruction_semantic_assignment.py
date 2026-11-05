@@ -4,6 +4,14 @@ import pytest
 from server import reconstruction_semantic_assignment as assignment
 
 
+@pytest.fixture(autouse=True)
+def singleton_components(monkeypatch):
+    # Isolated score-manifest tests supply synthetic queue rows, not source events.
+    monkeypatch.setattr(assignment, "link_observations", lambda events: {
+        "members": {name: [name] for name in ("a", "b", "c", "d")}
+    })
+
+
 def queue_for(*pairs):
     return {
         "version": 1, "evidence_sha256": "a" * 64, "truncated": False,

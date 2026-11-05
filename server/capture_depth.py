@@ -160,6 +160,19 @@ def action_allowed_on_excluded(action: str) -> bool:
     return not any(action in actions for actions in SIGNAL_ACTIONS.values())
 
 
+_EDITABLE_TAGS = {"input", "textarea", "select"}
+
+
+def bound_target(action: str, target: dict[str, Any]) -> dict[str, Any]:
+    """High-fidelity events keep structural target fields only, and no label or name for editable fields."""
+    if not any(action in actions for actions in SIGNAL_ACTIONS.values()):
+        return target
+    out = {k: str(target[k])[:160] for k in ("tag", "role", "type", "label") if target.get(k)}
+    if str(out.get("tag", "")).lower() in _EDITABLE_TAGS or out.get("type") == "secure":
+        out.pop("label", None)
+    return out
+
+
 def bound_metadata(action: str, metadata: dict[str, Any]) -> dict[str, Any] | None:
     """Keep only the expected, bounded shape for the new high-fidelity actions; ``None`` drops the event."""
     if action == "pointer_trajectory":
@@ -194,8 +207,10 @@ def bound_metadata(action: str, metadata: dict[str, Any]) -> dict[str, Any] | No
         out = {"payload_kinds": kinds, "completion": completion, "drag_id": str(metadata.get("drag_id") or "")[:32],
                **_frame(metadata)}
         if isinstance(metadata.get("source_target"), dict):
-            out["source_target"] = {k: str(v)[:160] for k, v in metadata["source_target"].items()
-                                    if k in ("tag", "role", "type", "label") and v}
+            source = metadata["source_target"]
+            out["source_target"] = {k: str(v)[:160] for k, v in source.items() if k in ("tag", "role", "type", "label") and v}
+            if source.get("editable") or str(source.get("tag", "")).lower() in _EDITABLE_TAGS or source.get("type") == "secure":
+                out["source_target"].pop("label", None)
         return out
     return metadata
 
@@ -235,5 +250,5 @@ def _frame(metadata: dict[str, Any]) -> dict[str, Any]:
     return {k: metadata[k] for k in ("top_frame", "frame_kind", "tab_id", "window_id") if k in metadata}
 
 
-__all__ = ["CaptureDepthError", "FULL_ACK_VERSION", "PROFILES", "SIGNALS", "action_allowed", "action_allowed_on_excluded", "bound_metadata", "filter_desktop_events",
+__all__ = ["CaptureDepthError", "FULL_ACK_VERSION", "PROFILES", "SIGNALS", "action_allowed", "action_allowed_on_excluded", "bound_metadata", "bound_target", "filter_desktop_events",
            "for_extension", "load", "public", "save"]

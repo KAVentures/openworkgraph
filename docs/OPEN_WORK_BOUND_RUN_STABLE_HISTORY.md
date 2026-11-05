@@ -1,0 +1,7 @@
+# Stable bound-run historical review (experimental)
+
+Issue #247. Existing session-authenticated POST `/v1/open-work/declarations/human-outcomes/bound-run-evidence-history` accepts optional `"confirm_stable_snapshot": true` alongside the unchanged required fields. It performs a second, guarded, independently authenticated read of **both** retained provider-operation and human-assessment histories. If either changes between reads, the route refuses the response (HTTP 409). The same declaration revision, source scope, retained run binding, signed record link and actor checks remain required.
+
+With the option enabled, `double_read_ledger_stability_checked` is true; `atomic_cross_ledger_snapshot` remains **false**. Without it, the previous one-pass API remains backward-compatible and the stability flag is false. This opt-in guards common concurrent append/correction races but does not provide an atomic transaction across separate SQLite ledgers, eliminate ABA races, or prove an imported run caused a provider operation. These histories are **case-wide**, not run-specific receipts. No customer outcome, agent action authority, or source write is inferred.
+
+This is local dashboard-only and read-only; it does not introduce source polling, new grants or cloud sharing. Tests exercise stable reads, provider/human concurrent edits, and strict option validation. Real provider acceptance and full cross-ledger atomicity remain separate milestones.

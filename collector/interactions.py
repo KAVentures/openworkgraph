@@ -117,8 +117,11 @@ class PointerSampler:
         self._first = 0.0
         self._last = -1.0
 
+    def would_sample(self, now: float) -> bool:
+        return not (self._last >= 0 and now - self._last < 1.0 / self.hz)
+
     def move(self, x: float, y: float, now: float) -> RawInteraction | None:
-        if self._last >= 0 and now - self._last < 1.0 / self.hz:
+        if not self.would_sample(now):
             return None
         if not self._points:
             self._first = now
@@ -420,6 +423,7 @@ class InteractionSensor:
         capture_scrolls: bool = True,
         scroll_min_interval_seconds: float = 1.25,
         depth: Callable[[], dict[str, Any]] | None = None,
+        sensitive_at: Callable[[float, float], bool] | None = None,
     ) -> None:
         self.callback = callback
         self.capture_clicks = capture_clicks
@@ -429,6 +433,9 @@ class InteractionSensor:
         self._drag = DragDetector()
         self._sampler = PointerSampler()
         self._hover = HoverTracker()
+        # Whether the pointer is over a secure field; asked only when a sample would be taken.
+        self.sensitive_at = sensitive_at or (lambda x, y: False)
+        self._sensitive_cache: tuple[float | None, float | None, bool] = (None, None, False)
         self.scroll_min_interval_seconds = max(0.0, float(scroll_min_interval_seconds))
         self._mouse_listener = None
         self._last_scroll_at = 0.0
@@ -494,7 +501,24 @@ class InteractionSensor:
                 self._sampler.flush()  # discard: the signal was turned off
                 return
             self._sampler.hz = settings.get("trajectory_hz", 4)
-            batch = self._sampler.move(x, y, time.monotonic())
+            now = time.monotonic()
+            if not self._sampler.would_sample(now):
+                return
+            cx, cy, sensitive = self._sensitive_cache
+            # Re-check whenever the pointer moved; a cached answer is reused only near where it was asked.
+            if cx is None or abs(x - cx) > 8 or abs(y - cy) > 8:
+                try:
+                    sensitive = bool(self.sensitive_at(x, y))
+                except Exception:
+                    sensitive = True  # unknown is treated as secure: never sample on doubt
+                self._sensitive_cache = (x, y, sensitive)
+            if sensitive:
+                # Never sample over a secure field: end the batch here and skip until the pointer leaves.
+                batch = self._sampler.flush()
+                if batch is not None:
+                    self.callback(batch)
+                return
+            batch = self._sampler.move(x, y, now)
             if batch is not None:
                 self.callback(batch)
 

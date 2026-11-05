@@ -400,7 +400,7 @@ def browser_event(event: BrowserEvent) -> dict[str, int | str]:
         return {"inserted": 0, "skipped": "invalid_high_fidelity_event"}
     ctx = _browser_context(event)
     page = event.page.model_dump(exclude_none=True)
-    target = event.target.model_dump(exclude_none=True)
+    target = capture_depth.bound_target(event.action, event.target.model_dump(exclude_none=True))
     metadata = bounded
     metadata.update({
         "source": "browser_extension",

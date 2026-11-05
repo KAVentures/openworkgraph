@@ -2646,7 +2646,10 @@ async def review_local_bound_run_evidence_history(request: Request, response: Re
         "work_item_ref", "expected_revision", "expected_edit_token",
         "confirm_historical_review", "confirm_run_comparison",
         "max_cases", "deployment_id", "run_id", "record_link",
-    })
+    }, optional={"confirm_stable_snapshot"})
+    stable = payload.get("confirm_stable_snapshot", False)
+    if type(stable) is not bool:
+        raise HTTPException(422, "confirm_stable_snapshot must be boolean")
     if (payload["confirm_historical_review"] is not True
             or payload["confirm_run_comparison"] is not True):
         raise HTTPException(403, "explicit run and historical review required")
@@ -2688,6 +2691,23 @@ async def review_local_bound_run_evidence_history(request: Request, response: Re
                 payload["expected_edit_token"], signature))
         from .open_work_bound_run_reconciliation import reconcile_bound_run_case_history
         reconciliation = reconcile_bound_run_case_history(history, human_history)
+        if stable:
+            # Second independently guarded HMAC reads detect concurrent ledger edits.
+            # This is not a cross-database atomic snapshot: an ABA sequence can
+            # still occur, and provider evidence remains case-wide.
+            await _recheck_source(scope)
+            provider_again = await asyncio.to_thread(
+                read_operation_evidence, admitted, signature, scope=scope,
+                secret=secret, guard=lambda: _operation_ledger_guard(
+                    scope, payload["work_item_ref"], payload["expected_revision"],
+                    payload["expected_edit_token"], signature))
+            human_again = await asyncio.to_thread(
+                read_human_outcomes, admitted, signature, scope=scope,
+                secret=secret, guard=lambda: _operation_ledger_guard(
+                    scope, payload["work_item_ref"], payload["expected_revision"],
+                    payload["expected_edit_token"], signature))
+            if provider_again != history or human_again != human_history:
+                raise CaseDeclarationError("stale retained evidence changed during history read")
         repeated, refreshed, refreshed_signature, _ = await _load_review_triage(scope, payload)
         second_run = await asyncio.to_thread(
             read_imported_run, deployment_id=payload["deployment_id"],
@@ -2721,6 +2741,8 @@ async def review_local_bound_run_evidence_history(request: Request, response: Re
         "case_provider_evidence_history": history,
         "case_human_outcome_history": human_history,
         "case_historical_reconciliation": reconciliation,
+        "double_read_ledger_stability_checked": stable,
+        "atomic_cross_ledger_snapshot": False,
         "evidence_scope": "case_wide_not_run_attributed",
         "source_read_performed": False,
         "source_write_performed": False,

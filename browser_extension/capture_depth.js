@@ -52,6 +52,60 @@ function owgInteractiveElement(event) {
   return null;
 }
 
+// Hover and drag targets use structural labels only (aria-label, title, aria-labelledby, <label for>,
+// placeholder), never element text: a draggable or editable element's text can be the content itself.
+function owgEditable(el) {
+  for (let node = el; node instanceof Element; node = node.parentElement) {
+    const tag = String(node.tagName || "").toLowerCase();
+    if (node.isContentEditable === true || node.getAttribute?.("contenteditable") === "true" ||
+        ["input", "textarea", "select"].includes(tag)) return true;
+  }
+  return false;
+}
+
+function owgStructuralLabel(el) {
+  if (!(el instanceof Element) || isSensitiveControl(el)) return "";
+  const attr = (name) => cleanText(el.getAttribute?.(name));
+  if (attr("aria-label")) return attr("aria-label");
+  if (attr("title")) return attr("title");
+  const labelledBy = el.getAttribute?.("aria-labelledby");
+  if (labelledBy) {
+    const text = labelledBy.split(/\s+/).map(id => document.getElementById(id)?.textContent || "").join(" ");
+    if (cleanText(text)) return cleanText(text);
+  }
+  if (el.id) {
+    try { const lab = document.querySelector(`label[for="${CSS.escape(el.id)}"]`); if (lab && cleanText(lab.textContent)) return cleanText(lab.textContent); } catch (_) {}
+  }
+  return attr("placeholder");
+}
+
+// Native button/summary/option text is interface chrome, so hover may use it; role="button" containers,
+// links and draggables can wrap user content, so they never contribute text.
+function owgNativeControlText(el) {
+  const tag = String(el?.tagName || "").toUpperCase();
+  if (!["BUTTON", "SUMMARY", "OPTION"].includes(tag) || owgEditable(el) || el.getAttribute?.("draggable") === "true") return "";
+  if (el.querySelector?.("[contenteditable='true'],input,textarea,select")) return "";
+  const text = cleanText(el.textContent);
+  return text.length <= 60 && text.split(/\s+/).length <= 8 ? text : "";
+}
+
+function owgSafeTarget(start, allowNativeControlText = false) {
+  const el = start instanceof Element ? start : (pathElements(start)[0] || null);
+  if (!(el instanceof Element)) return {};
+  for (let node = el; node instanceof Element; node = node.parentElement) {
+    const tag = String(node.tagName || "").toLowerCase();
+    const role = cleanText(node.getAttribute?.("role"), 80);
+    const interactive = OWG_HOVER_TAGS.has(tag) || OWG_HOVER_ROLES.has(role.toLowerCase()) || node.getAttribute?.("draggable") === "true";
+    const label = owgEditable(node) ? "" : (owgStructuralLabel(node) || (allowNativeControlText ? owgNativeControlText(node) : ""));
+    if (interactive || label) {
+      const editable = owgEditable(node);
+      return {tag, role, type: isSensitiveControl(node) ? "secure" : cleanText(node.getAttribute?.("type"), 80),
+        label: editable ? "" : label, ...(editable ? {editable: true} : {})};
+    }
+  }
+  return {};
+}
+
 // --- hover dwell -------------------------------------------------------------
 let owgHover = null; // {el, key, target, start}
 const owgRecentHover = new Map();
@@ -77,7 +131,7 @@ addEventListener("pointerover", (e) => {
   if (!el || (owgHover && owgHover.el === el)) return;
   if (owgHover) owgEndHover("pointer_left");
   if (isSensitiveControl(el) || el.disabled === true || el.getAttribute?.("aria-disabled") === "true") return;
-  const target = semanticTarget(el);
+  const target = owgSafeTarget(el, true);
   owgHover = {el, key: targetKey(target), target, start: performance.now()};
 }, true);
 addEventListener("pointerout", (e) => {
@@ -108,13 +162,13 @@ function owgPayloadKinds(dataTransfer) {
 
 addEventListener("dragstart", (e) => {
   if (!owgDepth.signals.drag_drop) return;
-  const source = semanticTarget(e);
+  const source = owgSafeTarget(e.target);
   owgDrag = {id: Math.random().toString(36).slice(2, 12), source, dropped: false};
   if (owgDepthAllowed()) send("drag_start", source, {drag_id: owgDrag.id, payload_kinds: owgPayloadKinds(e.dataTransfer), completion: "unknown"});
 }, true);
 addEventListener("drop", (e) => {
   if (!owgDepth.signals.drag_drop) return;
-  const destination = semanticTarget(e);
+  const destination = owgSafeTarget(e.target);
   const kinds = owgPayloadKinds(e.dataTransfer);
   // A drop with no drag in this page came from elsewhere (another window or the desktop).
   const id = owgDrag ? owgDrag.id : "external";
@@ -144,8 +198,18 @@ function owgFlushTrajectory() {
     viewport_bucket: `${Math.round(w / 100) * 100}x${Math.round(h / 100) * 100}`});
 }
 
+function owgOverSensitiveControl(event) {
+  // The control under the pointer or any ancestor (e.g. a labelled secure widget).
+  return pathElements(event).some(el => isSensitiveControl(el));
+}
+
 addEventListener("pointermove", (e) => {
   if (!owgDepth.signals.pointer_trajectory || e.pointerType === "touch") return;
+  if (owgOverSensitiveControl(e)) {
+    // Never sample over a secure field: end the current batch here and skip until the pointer leaves.
+    owgFlushTrajectory();
+    return;
+  }
   const now = performance.now();
   if (now - owgTrajectory.lastSample < 1000 / owgDepth.parameters.trajectory_hz) return;
   if (!owgTrajectory.start) owgTrajectory.start = now;

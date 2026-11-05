@@ -785,6 +785,7 @@ def _run_locked(config_path: Path) -> None:
             capture_scrolls=cfg.get("capture_scrolls", True),
             scroll_min_interval_seconds=cfg.get("scroll_min_interval_seconds", 1.25),
             depth=current_depth,
+            sensitive_at=lambda x, y: bool((element_at_position(x, y) or {}).get("secure")),
         )
         sensor_started = sensor.start()
 

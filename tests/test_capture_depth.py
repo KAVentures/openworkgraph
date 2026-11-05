@@ -160,3 +160,44 @@ def test_shared_and_agent_views_get_trajectory_summaries_not_raw_points():
     assert summary["raw_points_shared"] is False and summary["sample_hz"] == 4
     assert out["events"][1]["metadata"]["points"] == [1]
     assert event["metadata"]["points"], "the stored local event is not modified"
+
+
+def test_real_exports_never_contain_raw_trajectory_points_or_editable_drag_labels(tmp_path):
+    code = r'''
+import io, json, zipfile
+from datetime import datetime, timezone
+from fastapi.testclient import TestClient
+from server.secure_app import app
+from server import local_auth, capture_depth, main
+from server.db import init_db
+from server.main import BrowserEvent
+bearer = {"Authorization": "Bearer " + local_auth.ensure_api_token()}
+with TestClient(app) as client:
+    init_db()
+    capture_depth.save({"profile": "full", "acknowledgement_version": capture_depth.FULL_ACK_VERSION})
+    now = datetime.now(timezone.utc).isoformat()
+    page = {"origin": "https://work.example", "hostname": "work.example", "pathname": "/x", "title": "X"}
+    assert main.browser_event(BrowserEvent(observed_at=now, action="pointer_trajectory", page=page,
+        metadata={"points": [[0, 0.1234, 0.9876], [250, 0.4321, 0.6789]]}))["inserted"] == 1
+    assert main.browser_event(BrowserEvent(observed_at=now, action="drag_start", page=page,
+        target={"tag": "textarea", "label": "PRIVATE DRAFT WORDS"},
+        metadata={"payload_kinds": ["text"], "source_target": {"label": "OTHER DRAFT", "editable": True}}))["inserted"] == 1
+    for fmt in ("json", "xlsx", "csvzip"):
+        for redact in ("true", "false"):
+            r = client.get(f"/v1/export/{fmt}?include_raw=true&redact_names={redact}", headers=bearer)
+            assert r.status_code == 200, (fmt, redact, r.text[:200])
+            body = r.content
+            if fmt in ("xlsx", "csvzip"):
+                with zipfile.ZipFile(io.BytesIO(body)) as z:
+                    body = b"".join(z.read(n) for n in z.namelist())
+            for leaked in (b"0.9876", b"0.6789", b"PRIVATE DRAFT WORDS", b"OTHER DRAFT"):
+                assert leaked not in body, (fmt, redact, leaked)
+    stored = [r for r in __import__("server.db", fromlist=["rows"]).rows("SELECT * FROM events")
+              if r["event_type"] == "browser_pointer_trajectory"]
+    assert stored[0]["metadata"]["points"], "raw points stay in local storage"
+'''
+    env = os.environ.copy()
+    env.update({"WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"), "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth"),
+                "WORKFLOW_OBSERVER_CONFIG": str(tmp_path / "config.json")})
+    result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True, timeout=180)
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"

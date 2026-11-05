@@ -133,3 +133,37 @@ def test_server_drops_desktop_hovers_without_a_safe_target(depth):
     assert depth.filter_desktop_events([good, secure, untargeted]) == [good]
     depth.save({"profile": "standard"})
     assert depth.filter_desktop_events([good]) == []
+
+
+def test_desktop_pointer_samples_are_never_taken_over_secure_fields(monkeypatch):
+    import sys, types
+    seen = []
+    depth = {"pointer_trajectory": True, "trajectory_hz": 20}
+    asked = []
+    sensor = InteractionSensor(seen.append, depth=lambda: depth,
+                               sensitive_at=lambda x, y: asked.append((x, y)) or x >= 500)
+
+    class FakeListener:
+        def __init__(self, **handlers):
+            self.handlers = handlers
+            self.daemon = True
+        def start(self):
+            pass
+    fake = types.SimpleNamespace(Listener=FakeListener)
+    monkeypatch.setitem(sys.modules, "pynput", types.SimpleNamespace(mouse=fake))
+    monkeypatch.setitem(sys.modules, "pynput.mouse", fake)
+    clock = iter([i * 0.1 for i in range(10000)])
+    monkeypatch.setattr("collector.interactions.time.monotonic", lambda: next(clock))
+    assert sensor.start()
+    move = sensor._mouse_listener.handlers["on_move"]
+    for x in (100, 120, 140, 160, 180, 200):
+        move(x, 50)
+    for x in (510, 520, 530, 540, 550, 560, 570):  # a secure field
+        move(x, 50)
+    for x in (300, 320):
+        move(x, 50)
+    sensor._sampler.flush()
+    points = [p for r in seen if r.kind == "pointer_trajectory" for p in r.points]
+    assert points and all(p[1] < 500 for p in points), "no samples over the secure field"
+    assert any(r.kind == "pointer_trajectory" for r in seen), "the batch before the field was flushed"
+    assert len(asked) <= 15, "the accessibility check runs only when a sample would be taken"
