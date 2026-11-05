@@ -10,7 +10,7 @@ const path=require('node:path');
  const html=`<!doctype html><html><body style="margin:0">
   <nav role="menubar"><div role="menuitem" id="menu" style="display:inline-block;width:120px;height:40px">Export</div></nav>
   <button id="save" title="Save changes" style="width:120px;height:40px">Save</button>
-  <button id="row" style="width:120px;height:40px">private message row</button>
+  <button id="row" style="height:40px;white-space:nowrap">private message row</button>
   <button id="off" disabled style="width:120px;height:40px">Disabled</button>
   <input id="pw" type="password" style="width:120px;height:40px">
   <div id="far" style="width:300px;height:200px">empty area</div>
@@ -49,11 +49,15 @@ const path=require('node:path');
    assert(hovers[0].metadata.duration_ms>=600&&hovers[0].metadata.duration_ms%50===0);
    assert.equal(hovers[1].target.label,'Save changes');assert.equal(hovers[1].metadata.ended_by,'activated');
    assert(!JSON.stringify(hovers).includes('password'),'secure fields are never hover targets');
-   await page.hover('#plain');await page.waitForTimeout(800);await page.mouse.move(900,650);
-   const contentHover=(await msgs('control_hover_dwell')).at(-1);
+   // Wait for the next hover message rather than reading straight away; report what arrived if none does.
+   const nextHover=async(selector)=>{const before=(await msgs('control_hover_dwell')).length;
+     await page.hover(selector);await page.waitForTimeout(800);await page.mouse.move(900,650);
+     try{await page.waitForFunction(n=>window.__msgs.filter(m=>m.action==='control_hover_dwell').length>n,before,{timeout:5000});}
+     catch(_){throw new Error('no hover recorded for '+selector+': '+JSON.stringify(await msgs('control_hover_dwell')));}
+     return (await msgs('control_hover_dwell')).at(-1);};
+   const contentHover=await nextHover('#plain');
    assert.equal(contentHover.target.label,'','a role=button container never contributes its text on hover');
-   await page.hover('#row');await page.waitForTimeout(800);await page.mouse.move(900,650);
-   assert.equal((await msgs('control_hover_dwell')).at(-1).target.label,'','native button text can be user content, so it is not a label');
+   assert.equal((await nextHover('#row')).target.label,'','native button text can be user content, so it is not a label');
    // A completed drag records source and destination controls and payload kinds, never data.
    await page.dragAndDrop('#card','#bin');
    const drops=await msgs('drag_drop');assert.equal(drops.length,1);
