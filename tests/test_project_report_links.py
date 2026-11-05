@@ -54,7 +54,8 @@ def test_match_is_an_explicit_reported_association_not_outcome_verification(prep
     assert len(listing['links'])==1 and listing['links'][0]['status']=='matching_reported_specification'
     assert pipeline.get(idea['idea_id'])==before
     reference=am.deployment_references()[0]
-    assert set(reference)=={'deployment_id','name','runtime','design_sha256','reported_spec_sha256','reported_run_count'}
+    assert set(reference)=={'deployment_id','name','runtime','design_sha256','reported_spec_sha256','reported_run_count',
+                            'runs_reporting_specification_count','unhashed_run_count'}
     assert reference['reported_run_count']==2
     assert 'CLIENT_ASSERTION' not in json.dumps(listing)
 
