@@ -34,6 +34,22 @@ plus `windows` (2–12, default 6). For example:
   flags use the latest window.
 - **Reliability:** for an outcome, the latest window's predicted risk by fifths, against the share that
   happened.
+- **Outcome-risk quality versus a historical base rate (when an outcome is selected):**
+  - `brier_skill_vs_base_rate` reports 1 − (model Brier score / base-rate Brier score); negative
+    means the model's probability predictions are worse than simply predicting the training
+    base rate. Both estimates use the same later held-out prefix labels.
+  - `outcome_quality.case_averaged_brier_excess` is the paired model-minus-base-rate
+    squared probability loss. Because many prefixes come from one case, OWG **first averages
+    within each completed case**, then constructs a descriptive 95% normal interval across
+    cases. Positive excess means worse outcome predictions.
+  - The latest **scored** window raises a review-only
+    `outcome risk model performs worse than historical base rate` warning only if the
+    case-averaged excess is at least 0.02 and its 95% interval is entirely above zero.
+    Ten independently scored cases are required. No probability model is recalibrated
+    or automatically deployed.
+  - This is an empirical alert, not a guarantee of calibrated probabilities or an
+    adjusted familywise significance test. It may still miss low-prevalence, subgroup-specific
+    or recently emerging prediction failures; source outcomes must be independently validated.
 - **Recalibration proposal:** the factor by which to scale each range's distance from its median so that 80%
   of the latest window would have been covered. Above 1 widens, below 1 narrows. It is checked on the window
   before. `proposed_not_applied: true`.
