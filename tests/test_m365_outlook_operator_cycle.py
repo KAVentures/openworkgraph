@@ -1,4 +1,4 @@
-"""Integration-boundary checks for the operator's two distinct sync phases."""
+"""Integration-boundary checks for separately authorized operator phases."""
 import unittest
 from unittest.mock import patch
 
@@ -28,6 +28,59 @@ class OperatorCycleTests(unittest.TestCase):
             reader.assert_called_once()
             self.assertEqual(reader.call_args.kwargs["tenant"], "t")
             writer.assert_not_called()
+
+    def test_review_refuses_before_artifact_access_without_consent(self):
+        with patch.object(cycle, "review_candidate") as delegate:
+            with self.assertRaises(ReceiptError):
+                cycle.review(tenant="t", mailbox="m", folder="f",
+                             grant_file="grant", candidate="candidate")
+            delegate.assert_not_called()
+
+    def test_review_delegates_to_production_validator_without_graph_or_append(self):
+        response = {"status": "review_ready", "event_snapshots": 2,
+                    "removal_markers_for_review": 1}
+        with patch.object(cycle, "review_candidate", return_value=response) as delegate, \
+             patch.object(cycle, "run_verified_next_round") as graph, \
+             patch.object(cycle, "append_and_record") as writer:
+            result = cycle.review(tenant="t", mailbox="m", folder="f",
+                                  grant_file="grant", candidate="candidate",
+                                  consent_local_read=True)
+            self.assertEqual(result["phase"], "review")
+            self.assertEqual(result["event_snapshots"], 2)
+            self.assertEqual(result["removal_markers_for_review"], 1)
+            self.assertEqual(result["provider_requests"], 0)
+            self.assertEqual(result["owg_writes"], 0)
+            self.assertFalse(result["checkpoint_advanced"])
+            self.assertEqual(delegate.call_args.kwargs["tenant"], "t")
+            graph.assert_not_called()
+            writer.assert_not_called()
+
+    def test_review_cli_uses_only_scope_and_private_artifacts(self):
+        import contextlib
+        import io
+        import json
+        argv = ["review", "--tenant", "t", "--mailbox", "m",
+                "--folder", "f", "--grant-file", "grant",
+                "--candidate", "candidate", "--consent-local-read"]
+        with patch.object(cycle, "review_candidate", return_value={
+            "status": "review_ready", "event_snapshots": 1,
+            "removal_markers_for_review": 0,
+        }) as delegate:
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(cycle.main(argv), 0)
+            self.assertEqual(json.loads(output.getvalue())["phase"], "review")
+            self.assertEqual(delegate.call_args.kwargs["candidate"],
+                             __import__("pathlib").Path("candidate"))
+            self.assertNotIn("session", delegate.call_args.kwargs)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(cycle.main(argv[:-1]), 2)
+            self.assertEqual(delegate.call_count, 1)
+
+    def test_review_unexpected_delegate_status_refuses(self):
+        with patch.object(cycle, "review_candidate",
+                          return_value={"status": "incomplete"}):
+            with self.assertRaises(ReceiptError):
+                cycle.review(consent_local_read=True)
 
     def test_append_refuses_without_independent_review(self):
         with patch.object(cycle, "append_and_record") as writer:
