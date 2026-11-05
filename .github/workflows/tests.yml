@@ -165,6 +165,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/capture_depth_content.cjs
       - name: Verify the interaction-detail Privacy controls in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/capture_depth_privacy.cjs
+      - name: Verify the SAP order-to-cash source controls in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/sap_o2c.cjs
       - name: Verify communications review examples and learned intents in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/communications_review.cjs
       - name: Verify PDD packages burn screenshot masks into pixels and store nothing
