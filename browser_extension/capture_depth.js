@@ -121,8 +121,10 @@ function owgEndHover(endedBy) {
 addEventListener("pointerover", (e) => {
   if (!owgDepth.signals.hover_dwell || e.pointerType === "touch") return;
   const el = owgInteractiveElement(e);
+  // Some Chromium versions skip pointerout when the pointer moves to plain page space, so
+  // arriving anywhere outside the current control also ends its hover.
+  if (owgHover && owgHover.el !== el && !(e.target instanceof Node && owgHover.el.contains(e.target))) owgEndHover("pointer_left");
   if (!el || (owgHover && owgHover.el === el)) return;
-  if (owgHover) owgEndHover("pointer_left");
   if (isSensitiveControl(el) || el.disabled === true || el.getAttribute?.("aria-disabled") === "true") return;
   const target = owgSafeTarget(el);
   owgHover = {el, key: targetKey(target), target, start: performance.now()};
