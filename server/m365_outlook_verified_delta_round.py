@@ -12,6 +12,7 @@ from pathlib import Path
 from .m365_outlook_delta import _grant, _delta_private_parent, export_delta
 from .m365_outlook_folder_preflight import preflight as folder_preflight
 from .m365_outlook_mailbox_identity import preflight as mailbox_preflight
+from .m365_outlook_tenant_preflight import preflight as tenant_preflight
 
 FORMAT = "openworkgraph.m365-verified-delta-round.v1"
 
@@ -26,7 +27,8 @@ def verified_delta_round(
     candidate_output: Path, token, consent_graph_read=False,
     consent_private_reports=False, consent_delta_export=False,
     previous_candidate: Path | None = None, confirm_previous_import=False,
-    opener=None,
+    opener=None, expected_tenant_id=None, tenant_report: Path | None = None,
+    consent_tenant_lookup=False,
 ):
     """Read /me and exact folder before a bounded delta round, with no OWG writes.
 
@@ -41,8 +43,14 @@ def verified_delta_round(
     folder_report = Path(folder_report)
     csv_output = Path(csv_output)
     candidate_output = Path(candidate_output)
+    if (expected_tenant_id is None) != (tenant_report is None):
+        raise VerifiedDeltaError("Tenant ID and private report must be provided together")
+    if expected_tenant_id is not None and consent_tenant_lookup is not True:
+        raise VerifiedDeltaError("Separate tenant lookup consent required")
     outputs = (identity_report, folder_report, csv_output, candidate_output)
-    if (len({str(p.absolute()) for p in outputs + (grant_file,)}) != 5
+    if tenant_report is not None:
+        outputs += (Path(tenant_report),)
+    if (len({str(p.absolute()) for p in outputs + (grant_file,)}) != len(outputs) + 1
             or len({p.parent.absolute() for p in outputs}) != 1
             or any(p.exists() or p.is_symlink() for p in outputs)):
         raise VerifiedDeltaError("Unsafe or existing output paths")
@@ -50,6 +58,18 @@ def verified_delta_round(
     _grant(grant_file, tenant, mailbox, folder)
     # Use the same transport for every provider read; each component rejects redirects,
     # unsafe responses and grant revocation independently.
+    tenant_verified = False
+    if expected_tenant_id is not None:
+        tenant_result = tenant_preflight(
+            tenant=tenant, mailbox=mailbox, folder=folder,
+            expected_tenant_id=expected_tenant_id, grant_file=grant_file,
+            output=Path(tenant_report), token=token,
+            consent_graph_read=True, consent_private_report=True,
+            consent_tenant_lookup=True, opener=opener)
+        if tenant_result.get("tenant_id_verified") is not True:
+            raise VerifiedDeltaError("Graph tenant identity not verified")
+        tenant_verified = True
+        _grant(grant_file, tenant, mailbox, folder)
     mailbox_result = mailbox_preflight(
         tenant=tenant, mailbox=mailbox, folder=folder,
         expected_address=expected_address, grant_file=grant_file,
@@ -81,7 +101,7 @@ def verified_delta_round(
         "removal_markers_for_review": delta["removal_markers_for_review"],
         "provider_get_requests_delta": delta["provider_get_requests"],
         "automatic_owg_append": False, "checkpoint_advanced": False,
-        "tenant_id_verified": False, "safe_to_retry": False,
+        "tenant_id_verified": tenant_verified, "safe_to_retry": False,
     }
 
 
@@ -92,6 +112,9 @@ def main(argv=None):
     for name in ("grant-file", "identity-report", "folder-report",
                  "csv-output", "candidate-output"):
         p.add_argument("--" + name, required=True, type=Path)
+    p.add_argument("--expected-tenant-id")
+    p.add_argument("--tenant-report", type=Path)
+    p.add_argument("--consent-tenant-lookup", action="store_true")
     p.add_argument("--previous-candidate", type=Path)
     p.add_argument("--confirm-previous-import", action="store_true")
     p.add_argument("--consent-graph-read", action="store_true")
@@ -109,7 +132,10 @@ def main(argv=None):
             consent_graph_read=a.consent_graph_read,
             consent_private_reports=a.consent_private_reports,
             consent_delta_export=a.consent_delta_export,
-            token=os.environ.get("OWG_M365_GRAPH_TOKEN"))
+            token=os.environ.get("OWG_M365_GRAPH_TOKEN"),
+            expected_tenant_id=a.expected_tenant_id,
+            tenant_report=a.tenant_report,
+            consent_tenant_lookup=a.consent_tenant_lookup)
         print(json.dumps(result, sort_keys=True))
         return 0
     except (ValueError, TypeError, OSError, KeyError):
