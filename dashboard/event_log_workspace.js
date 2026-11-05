@@ -2856,8 +2856,28 @@
     const pending=el('div');pending.id='owgComplianceRules';
     const message=el('div',null,'muted');message.id='owgComplianceStatus';message.setAttribute('role','status');
     const out=el('div');out.id='owgComplianceResults';
-    box.append(row,pending,run,message,out);
+    const confidence=input('owgComplianceConfidence','number');confidence.min='50';confidence.max='100';confidence.step='1';confidence.value='95';
+    const support=input('owgComplianceSupport','number');support.min='0';support.max='100';support.step='1';support.value='10';
+    const suggest=button('Suggest rules from this log','secondary');suggest.id='owgComplianceSuggest';
+    const suggestions=el('div');suggestions.id='owgComplianceSuggestions';
+    const suggestRow=el('div',null,'row');suggestRow.style.alignItems='end';
+    suggestRow.append(field('Followed by at least (% of cases)',confidence),field('Applies to at least (% of cases)',support),suggest);
+    box.append(row,suggestRow,suggestions,pending,run,message,out);
     const rules=[];const generation=state.generation;
+    suggest.onclick=async()=>{
+      try{
+        const body={min_confidence:Number(confidence.value)/100,min_support:Number(support.value)/100};if(state.caseType)body.case_type=state.caseType;
+        const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/compliance/discover',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+        if(generation!==state.generation)return;
+        const same=(x,y)=>JSON.stringify(x)===JSON.stringify(y);
+        const rows=r.candidates.map(c=>{
+          const take=button('Add','secondary');take.setAttribute('aria-label','Add suggested rule: '+c.description);
+          take.onclick=()=>{if(rules.length>=20){message.textContent='Check at most 20 rules at once.';return;}if(!rules.some(x=>same(x,c.rule)))rules.push(c.rule);drawPending();};
+          return [c.description,pct(c.confidence)+' ['+pct(c.confidence_ci95[0])+', '+pct(c.confidence_ci95[1])+']',pct(c.support),Number(c.violating_cases).toLocaleString(),take];});
+        suggestions.replaceChildren(el('div',r.candidates.length+' suggestions from '+Number(r.cases).toLocaleString()+' cases'+(r.activities_truncated?' (the '+r.activities_considered+' most frequent of '+r.activities_in_log+' activities)':'')+'. '+r.interpretation,'muted'),
+          r.candidates.length?table(['Suggested rule','Followed by (95% CI)','Applies to','Violating cases',''],rows):el('div','No rule meets these thresholds. Lower them to see more.','muted'));
+      }catch(error){suggestions.replaceChildren(el('div',error.message,'muted'));}
+    };
     const label=r=>({response:'every '+r.a+' is eventually followed by '+r.b,precedence:'every '+r.b+' needs an earlier '+r.a,response_within:'every '+r.a+' is followed by '+r.b+' within '+duration(r.seconds),segregation_of_duties:r.a+' and '+r.b+' are done by different people',not_coexistence:r.a+' and '+r.b+' never happen together',existence:r.a+' happens '+(r.max===undefined?'at least '+r.min:r.min===r.max?'exactly '+r.min:r.min+'–'+r.max)+' times'}[r.template]);
     function drawPending(){
       pending.replaceChildren(rules.length?table(['Rule',''],rules.map((r,i)=>{const del=button('Remove','secondary');del.setAttribute('aria-label','Remove rule '+label(r));del.onclick=()=>{rules.splice(i,1);drawPending();};return [label(r),del];})):el('div','No rules added yet.','muted'));
