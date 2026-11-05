@@ -232,3 +232,71 @@ with TestClient(app) as client:
                 "WORKFLOW_OBSERVER_CONFIG": str(tmp_path / "config.json")})
     result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True, timeout=180)
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+
+def test_retention_delete_now_and_local_heatmap(tmp_path):
+    code = r'''
+from datetime import datetime, timedelta, timezone
+from fastapi.testclient import TestClient
+from server.secure_app import app
+from server import local_auth, capture_depth, main
+from server.db import init_db, connect, pointer_trajectory_points
+from server.main import BrowserEvent
+import server.basic_mode_routes  # registers the capture-depth routes
+owner = {"Authorization": "OWG-Session " + local_auth.create_dashboard_session()}
+bearer = {"Authorization": "Bearer " + local_auth.ensure_api_token()}
+with TestClient(app) as client:
+    init_db()
+    capture_depth.save({"profile": "full", "acknowledgement_version": capture_depth.FULL_ACK_VERSION,
+                        "parameters": {"retention_days": 7}})
+    assert capture_depth.load()["parameters"]["retention_days"] == 7
+    try:
+        capture_depth.save({"parameters": {"retention_days": 0}}); raise SystemExit("0 days accepted")
+    except capture_depth.CaptureDepthError:
+        pass
+    now = datetime.now(timezone.utc)
+    page = {"origin": "https://work.example", "hostname": "work.example", "pathname": "/inbox", "title": "Inbox"}
+    other = {"origin": "https://work.example", "hostname": "work.example", "pathname": "/other", "title": "Other"}
+    def send(action, when, metadata=None, target=None, p=page):
+        return main.browser_event(BrowserEvent(observed_at=when.isoformat(), action=action, page=p,
+                                               target=target or {}, metadata=metadata or {}))["inserted"]
+    old = now - timedelta(days=10)
+    assert send("pointer_trajectory", old, {"points": [[0, 0.01, 0.01]]}) == 1
+    assert send("control_hover_dwell", old, {"duration_ms": 900}, {"tag": "button", "role": "button"}) == 1
+    assert send("click", old, {}, {"tag": "button", "label": "Send"}) == 1
+    assert send("pointer_trajectory", now, {"points": [[0, 0.52, 0.27], [250, 0.53, 0.27], [500, 0.97, 0.97]]}) == 1
+    assert send("pointer_trajectory", now, {"points": [[0, 0.1, 0.1]]}, p=other) == 1
+    # The first ingest already applied the limit (to the old trajectory); later ones wait an hour.
+    assert capture_depth.apply_retention() is None
+    purged = capture_depth.apply_retention(force=True)
+    assert purged["deleted_events"] == 1 and purged["structural_evidence_kept"]
+    with connect() as conn:
+        types = sorted(r[0] for r in conn.execute("SELECT event_type FROM events").fetchall())
+        assert types.count("browser_click") == 1 and types.count("browser_pointer_trajectory") == 2, types
+        assert conn.execute("SELECT count(*) FROM pointer_trajectory_points").fetchone()[0] == 2
+        assert conn.execute("SELECT count(*) FROM normalized_events WHERE event_type = 'browser_control_hover_dwell'").fetchone()[0] == 0
+    # Heatmap: dashboard only, cell counts only.
+    assert client.get("/v1/capture-coverage/heatmap", headers=bearer).status_code == 403
+    pages = client.get("/v1/capture-coverage/heatmap", headers=owner).json()
+    assert pages["pages"][0] == {"page": "work.example/inbox", "samples": 3} and "grid" not in pages
+    h = client.get("/v1/capture-coverage/heatmap?hostname=work.example&pathname=/inbox", headers=owner).json()
+    assert h["samples"] == 3 and h["batches"] == 1 and h["raw_points_returned"] is False
+    assert h["grid"][5][10] == 2 and h["grid"][19][19] == 1 and sum(map(sum, h["grid"])) == 3
+    assert "0.52" not in str(h) and "0.97" not in str(h)
+    # Delete now: dashboard only, needs confirmation, keeps structural evidence.
+    path = "/v1/capture-depth/delete"
+    assert client.post(path, json={"confirm": True}, headers=bearer).status_code == 403
+    assert client.post(path, json={}, headers=owner).status_code == 400
+    assert client.post(path, json={"confirm": True, "older_than_days": -1}, headers=owner).status_code == 400
+    gone = client.post(path, json={"confirm": True}, headers=owner).json()
+    assert gone["deleted_events"] == 2
+    with connect() as conn:
+        assert [r[0] for r in conn.execute("SELECT event_type FROM events").fetchall()] == ["browser_click"]
+        assert conn.execute("SELECT count(*) FROM pointer_trajectory_points").fetchone()[0] == 0
+    assert client.get("/v1/capture-coverage/heatmap", headers=owner).json()["pages"] == []
+'''
+    env = os.environ.copy()
+    env.update({"WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"), "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth"),
+                "WORKFLOW_OBSERVER_CONFIG": str(tmp_path / "config.json")})
+    result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
