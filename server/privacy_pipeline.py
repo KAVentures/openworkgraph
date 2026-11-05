@@ -166,7 +166,7 @@ def summarize_pointer_trajectories(value: Any) -> Any:
         out = {k: summarize_pointer_trajectories(v) for k, v in value.items()}
         meta = out.get("metadata")
         if isinstance(meta, dict) and isinstance(meta.get("points"), list) and (
-                out.get("event_type") == "browser_pointer_trajectory" or meta.get("action") == "pointer_trajectory"):
+                str(out.get("event_type") or "").endswith("pointer_trajectory") or meta.get("action") == "pointer_trajectory"):
             points = meta["points"]
             last = points[-1] if points and isinstance(points[-1], list) and points[-1] else [0]
             summary = {k: v for k, v in meta.items() if k != "points"}

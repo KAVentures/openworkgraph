@@ -52,8 +52,9 @@ function owgInteractiveElement(event) {
   return null;
 }
 
-// Hover and drag targets use structural labels only (aria-label, title, aria-labelledby, <label for>,
-// placeholder), never element text: a draggable or editable element's text can be the content itself.
+// Hover and drag targets use author-set structural labels only: aria-label, title, a <label for> that holds
+// no editable content, and placeholder. Element text is never read, nor text referenced by aria-labelledby:
+// a button, row or draggable can hold the user's own content (a message, a task, a draft).
 function owgEditable(el) {
   for (let node = el; node instanceof Element; node = node.parentElement) {
     const tag = String(node.tagName || "").toLowerCase();
@@ -63,44 +64,36 @@ function owgEditable(el) {
   return false;
 }
 
+function owgHoldsEditable(el) {
+  return owgEditable(el) || !!el.querySelector?.("[contenteditable],input,textarea,select");
+}
+
 function owgStructuralLabel(el) {
   if (!(el instanceof Element) || isSensitiveControl(el)) return "";
   const attr = (name) => cleanText(el.getAttribute?.(name));
   if (attr("aria-label")) return attr("aria-label");
   if (attr("title")) return attr("title");
-  const labelledBy = el.getAttribute?.("aria-labelledby");
-  if (labelledBy) {
-    const text = labelledBy.split(/\s+/).map(id => document.getElementById(id)?.textContent || "").join(" ");
-    if (cleanText(text)) return cleanText(text);
-  }
   if (el.id) {
-    try { const lab = document.querySelector(`label[for="${CSS.escape(el.id)}"]`); if (lab && cleanText(lab.textContent)) return cleanText(lab.textContent); } catch (_) {}
+    try {
+      const lab = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+      if (lab && !owgHoldsEditable(lab) && cleanText(lab.textContent)) return cleanText(lab.textContent);
+    } catch (_) {}
   }
   return attr("placeholder");
 }
 
-// Native button/summary/option text is interface chrome, so hover may use it; role="button" containers,
-// links and draggables can wrap user content, so they never contribute text.
-function owgNativeControlText(el) {
-  const tag = String(el?.tagName || "").toUpperCase();
-  if (!["BUTTON", "SUMMARY", "OPTION"].includes(tag) || owgEditable(el) || el.getAttribute?.("draggable") === "true") return "";
-  if (el.querySelector?.("[contenteditable='true'],input,textarea,select")) return "";
-  const text = cleanText(el.textContent);
-  return text.length <= 60 && text.split(/\s+/).length <= 8 ? text : "";
-}
-
-function owgSafeTarget(start, allowNativeControlText = false) {
+function owgSafeTarget(start) {
   const el = start instanceof Element ? start : (pathElements(start)[0] || null);
   if (!(el instanceof Element)) return {};
   for (let node = el; node instanceof Element; node = node.parentElement) {
     const tag = String(node.tagName || "").toLowerCase();
     const role = cleanText(node.getAttribute?.("role"), 80);
     const interactive = OWG_HOVER_TAGS.has(tag) || OWG_HOVER_ROLES.has(role.toLowerCase()) || node.getAttribute?.("draggable") === "true";
-    const label = owgEditable(node) ? "" : (owgStructuralLabel(node) || (allowNativeControlText ? owgNativeControlText(node) : ""));
+    const editable = owgEditable(node);
+    const label = editable ? "" : owgStructuralLabel(node);
     if (interactive || label) {
-      const editable = owgEditable(node);
       return {tag, role, type: isSensitiveControl(node) ? "secure" : cleanText(node.getAttribute?.("type"), 80),
-        label: editable ? "" : label, ...(editable ? {editable: true} : {})};
+        label, ...(editable ? {editable: true} : {})};
     }
   }
   return {};
@@ -131,7 +124,7 @@ addEventListener("pointerover", (e) => {
   if (!el || (owgHover && owgHover.el === el)) return;
   if (owgHover) owgEndHover("pointer_left");
   if (isSensitiveControl(el) || el.disabled === true || el.getAttribute?.("aria-disabled") === "true") return;
-  const target = owgSafeTarget(el, true);
+  const target = owgSafeTarget(el);
   owgHover = {el, key: targetKey(target), target, start: performance.now()};
 }, true);
 addEventListener("pointerout", (e) => {
