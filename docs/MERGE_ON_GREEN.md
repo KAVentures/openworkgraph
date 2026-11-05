@@ -22,7 +22,7 @@ The coordinator requires **all** of the following at the time of its *fresh* Git
 
 - Same-repository head and base; base must be `main`, state open, not draft. Rollback PR #1 is permanently excluded.
 - Current PR body has the exact-SHA marker (not an older SHA).
-- Cleanly mergeable PR (`mergeable: true`, `mergeable_state: clean`), with no pending requested reviewers or teams, no outstanding change request and **all** review threads resolved. If thread pagination exceeds the supported 100, refuse.
+- Cleanly mergeable PR (`mergeable: true`, `mergeable_state: clean`) whose exact head **already includes the latest `main` commit** (fresh compare API), with no pending requested reviewers or teams, no outstanding change request and **all** review threads resolved. If thread pagination exceeds the supported 100, refuse. This blocks old green CI after another PR merges; the author must update and retest their *own* branch. Main is rechecked immediately before merge, and a changed base aborts this attempt.
 - The latest run of each **six required** named workflow groups for that exact head is completed and successful: `tests`, `scale-acceptance`, `explorer-accessibility`, `starter-runtimes`, `packaged-launch-smoke`, `tester-release`.
 - Within the exact-head `tests` workflow, **all seven native/required jobs** succeeded, including pytest on Ubuntu, macOS and Windows, process collaboration, browser JS, Gateway and ChatGPT plugin. Skipped, missing, queued or failed jobs block merge.
 - On final merge, GitHub again checks the expected exact head SHA and the repository's own branch-protection rules. No retries that bypass or suppress checks.
