@@ -4,6 +4,37 @@ OpenWorkGraph can now measure **observed elapsed time between selected activitie
 
 This is a task/process-mining competitor-parity feature, not a claim that the relationship is causally correct or that imported events are complete. It is particularly useful when flattening an order, item, delivery, and invoice process onto one case would lose cross-object information.
 
+## Local interactive explorer
+
+The full-app entry point is **Evidence → Process mining → Explore OCEL object relationship lead times**.
+It opens `/object-relationship-lead-times` in the same dashboard tab, preserving the existing
+local dashboard session. The standalone page discovers only already retained local OCEL logs,
+shows the supplied directed object-relationship groups and their counts, and lets a human choose
+the source/target object types, exact activity names, optional qualifier filter and number
+of detailed examples. It retrieves activity suggestions from the two separately chosen
+object-case notions and submits directly to the existing session-only analysis API.
+
+The result shows exact forward/reversed/missing pair counts, repeated activity counts, forward
+p50/p90, bounded object-ID examples, and stored graph revision/digest. It expressly refuses
+to call these elapsed times verified handoffs or causal delays. Results are never persisted
+in a browser cache or sent to a cloud service. Selection changes invalidate old results;
+an in-flight response cannot overwrite a newer selection.
+
+The HTML page and JS themselves contain no customer data and may load without a session.
+**Any attempt to read or analyze imported records still requires an active OWG dashboard
+session; bearer-only AI tokens cannot access this API.** The page uses a restrictive
+Content Security Policy (`script-src 'self'`, `connect-src 'self'`, no cross-origin
+resources), text-only DOM writes and no tracking code. It shows a launcher-reopen instruction
+if no current session is available. Opening a separate new tab rather than the same tab
+may not have the dashboard's sessionStorage grant.
+
+The real Chromium accessibility journey is
+`NODE_PATH=<playwright-and-axe-dependencies> node tests/browser/object_relationship_lead_times.cjs`
+and is part of the `explorer-accessibility` GitHub workflow. It tests an actual local
+OCEL import, complete in-browser selection and analysis, aggregate-only results,
+empty qualifier handling, anonymous session refusal, WCAG 2.1 AA and 390-pixel layout.
+It has no provider calls, source writes or synthetic claims of customer acceptance.
+
 ## Local authenticated API
 
 `POST /v1/event-logs/{log_id}/object-relationships/lead-times`
