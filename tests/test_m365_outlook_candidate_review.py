@@ -27,7 +27,7 @@ def _fixtures(tmp_path):
     row = ["outlookcase:" + "a"*64, "Observed read status: read",
            "2026-11-05T10:00:00Z", "outlookevent:" + "b"*64]
     out = io.StringIO(newline="")
-    writer = csv.writer(out, lineterminator="\\n")
+    writer = csv.writer(out, lineterminator="\n")
     writer.writerow(["case_id", "activity", "timestamp", "source_event_id"])
     writer.writerow(row)
     csv_path.write_bytes(out.getvalue().encode())
