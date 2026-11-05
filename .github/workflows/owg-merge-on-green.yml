@@ -15,6 +15,8 @@ on:
     types: [completed]
   pull_request_target:
     types: [ready_for_review, edited]
+  schedule:
+    - cron: '17 * * * *'
 
 permissions:
   contents: write
