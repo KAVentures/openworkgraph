@@ -750,6 +750,9 @@ from .open_work_declaration_routes import router as _open_work_declaration_route
 app.include_router(_open_work_declaration_router)
 from .event_log_routes import router as _event_log_router  # noqa: E402
 app.include_router(_event_log_router)
+# R24 cross-object lead time analysis uses the same dashboard-only event-log guard.
+from .event_log_object_lead_time_routes import router as _object_lead_time_router  # noqa: E402
+app.include_router(_object_lead_time_router)
 from .automation_monitoring_routes import router as _automation_monitoring_router  # noqa: E402
 app.include_router(_automation_monitoring_router)
 from .communications_routes import router as _communications_router  # noqa: E402
