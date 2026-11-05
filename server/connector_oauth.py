@@ -83,7 +83,7 @@ PROVIDERS: dict[str, Provider] = {
     "atlassian": Provider(
         "atlassian", "Atlassian (Jira)", "https://auth.atlassian.com/authorize",
         "https://auth.atlassian.com/oauth/token", None, "fixed",
-        ("read:jira-work", "offline_access"),
+        ("read:jira-work", "read:jira-user", "offline_access"),
         extra_authorize=(("audience", "api.atlassian.com"), ("prompt", "consent"))),
     "zendesk": Provider(
         "zendesk", "Zendesk", "https://{host}/oauth/authorizations/new", "https://{host}/oauth/tokens",
