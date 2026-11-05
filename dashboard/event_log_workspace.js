@@ -4,7 +4,7 @@
   const MODEL_FORMAT='openworkgraph.reference-model.v1';
   const state={logs:[],logId:'',caseType:'',generation:0,refresh:0,follows:[],objectTypes:[]};
   // Views that honour the workspace case filter; every other section uses all cases.
-  const FILTERED=new Set(['summary','variants','variant-coverage','activities','kpis','process-map','playback','dotted-chart','waiting-time','drift','model-discovery','organization']);
+  const FILTERED=new Set(['summary','variants','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','waiting-time','drift','model-discovery','organization']);
 
   const el=(tag,text,cls)=>{
     const node=document.createElement(tag);
@@ -358,6 +358,7 @@
     activityBox.appendChild(table(['Activity','Events','Cases','Cases repeating activity','Evidence'],(activities.activities||[]).map(a=>{const open=button('Inspect cases','secondary');open.setAttribute('aria-label','Inspect cases containing '+a.activity);open.onclick=()=>inspection.activity(a.activity);return [a.activity,a.events,a.cases,a.repeated_in_cases,open];})));
     results.append(activityBox,inspection.node);
     results.appendChild(kpiSection(names));
+    results.appendChild(durationDistributionSection());
     results.appendChild(benchmarkSection(names));
     results.appendChild(impactSection(names));
     results.appendChild(savedGraphSection(names,inspection));
@@ -1180,6 +1181,57 @@
         out.replaceChildren(table(['Cases','Throughput p50','p90','p95','Rework rate','SLA breach rate','Automation rate'],[[Number(k.cases).toLocaleString(),duration(t.p50),duration(t.p90),duration(t.p95),pct(k.rework_rate),k.sla?pct(k.sla.breach_rate):'—',k.automation?pct(k.automation.automation_rate):'—']]),
           el('div','Rework means a case repeats an activity. Automation rate counts events by the resources you listed.','muted'));
       }catch(error){last=null;exports.enable(false);out.replaceChildren(el('div',error.message,'muted'));}
+    };
+    return box;
+  }
+
+  // Exact, non-overlapping bands of observed first-to-last event duration.
+  function durationDistributionSection(){
+    const box=section('Case duration distribution');
+    const bounds=input('owgDurationBounds','text','1, 4, 24, 72');bounds.value='1, 4, 24, 72';bounds.maxLength=110;
+    const unit=select('owgDurationUnit',[['1','seconds'],['60','minutes'],['3600','hours'],['86400','days']]);unit.value='3600';
+    const run=button('Analyse duration distribution','secondary');run.id='owgDurationRun';
+    const controls=el('div',null,'row');controls.style.alignItems='end';
+    controls.append(field('Thresholds, smallest to largest',bounds),field('Threshold unit',unit),run);
+    const out=el('div');out.id='owgDurationResults';out.setAttribute('role','status');
+    box.append(el('p','Count cases by time between their first and last recorded events. Enter up to 10 whole-number thresholds. This is observed elapsed time, not work time or proof of completion.','muted'),controls,out);
+    let version=0;
+    function invalidate(){version++;out.replaceChildren(el('div','Thresholds changed. Analyse again to refresh these results.','muted'));}
+    bounds.oninput=invalidate;unit.onchange=invalidate;
+    function textFor(seconds){
+      if(seconds%86400===0)return (seconds/86400)+' '+(seconds===86400?'day':'days');
+      if(seconds%3600===0)return (seconds/3600)+' '+(seconds===3600?'hour':'hours');
+      if(seconds%60===0)return (seconds/60)+' '+(seconds===60?'minute':'minutes');
+      return seconds+' '+(seconds===1?'second':'seconds');
+    }
+    function label(b){
+      if(b.upper_seconds===null)return textFor(b.lower_seconds)+' or more';
+      if(b.lower_seconds===0)return 'Less than '+textFor(b.upper_seconds);
+      return textFor(b.lower_seconds)+' to less than '+textFor(b.upper_seconds);
+    }
+    run.onclick=async()=>{
+      const generation=state.generation,ticket=++version;run.disabled=true;
+      out.replaceChildren(el('div','Analysing duration distribution…','muted'));
+      try{
+        const parts=bounds.value.split(',').map(x=>x.trim()),multiplier=Number(unit.value);
+        if(!parts.length||parts.length>10||parts.some(x=>!/^[0-9]{1,10}$/.test(x)))throw new Error('Enter 1–10 whole-number thresholds separated by commas.');
+        const cutoffs=parts.map(x=>Number(x)*multiplier);
+        if(cutoffs.some((x,i)=>!Number.isSafeInteger(x)||x<1||x>3155760000||(i>0&&x<=cutoffs[i-1])))throw new Error('Thresholds must be positive, strictly increasing, and at most 100 years.');
+        const r=await getJSON(logPath('duration-distribution',{cutoffs_seconds:cutoffs.join(',')}));
+        if(generation!==state.generation||ticket!==version||!box.isConnected)return;
+        const exports=exportButtons('owgDurationDistribution',()=>r,()=>[
+          ['lower_seconds_inclusive','upper_seconds_exclusive','cases','share'],
+          ...r.bands.map(b=>[b.lower_seconds,b.upper_seconds,b.cases,b.share])]);exports.enable(true);
+        const rows=r.bands.map(b=>{
+          const share=el('div',b.share===null?'—':pct(b.share));
+          if(b.share!==null){const bar=document.createElement('progress');bar.max=1;bar.value=b.share;bar.style.cssText='display:block;width:100%;max-width:200px';bar.setAttribute('aria-label',label(b)+': '+pct(b.share)+' of selected cases');share.appendChild(bar);}
+          return [label(b),Number(b.cases).toLocaleString(),share];
+        });
+        const scope=r.cases_before_filter==null?'':(' Filter applied: '+Number(r.cases).toLocaleString()+' of '+Number(r.cases_before_filter).toLocaleString()+' cases.');
+        out.replaceChildren(el('p',Number(r.cases).toLocaleString()+' selected cases with retained events; '+Number(r.single_event_cases).toLocaleString()+' contain only one retained event.'+scope,'muted'),
+          table(['Observed duration','Cases','Share of selected cases'],rows),el('p',r.interpretation,'muted'),exports.node);
+      }catch(error){if(generation===state.generation&&ticket===version&&box.isConnected)out.replaceChildren(el('div',error.message,'muted'));}
+      finally{if(box.isConnected)run.disabled=false;}
     };
     return box;
   }
