@@ -159,6 +159,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/automation_monitoring.cjs
       - name: Verify consented communications mining keeps only aggregates
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/communications_mining.cjs
+      - name: Verify the SAP order-to-cash source controls in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/sap_o2c.cjs
       - name: Verify PDD packages burn screenshot masks into pixels and store nothing
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_pdd.cjs
       - name: Verify the local automation pipeline records decisions without authorizing execution
