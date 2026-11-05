@@ -150,9 +150,9 @@ def reset_persistent_identities() -> bool:
 
 
 def redact_for_display_now(value: Any) -> Any:
-    """Apply the presentation pipeline unconditionally."""
+    """Apply the presentation pipeline unconditionally (also used by contextual export redaction)."""
     from shared.core.private_browsing import suppress_private_browsing
-    return _redactor(suppress_private_browsing(value))
+    return _redactor(summarize_pointer_trajectories(suppress_private_browsing(value)))
 
 
 def summarize_pointer_trajectories(value: Any) -> Any:

@@ -29,6 +29,14 @@ Changing capture depth never changes them.
   or touch input.
 - The same control is not recorded twice within two seconds.
 
+**Target labels.** Hover and drag events use structural labels only: `aria-label`,
+`title`, `aria-labelledby`, a `<label for>` and `placeholder`. Hover also uses the short
+text of a native `<button>`, `<summary>` or `<option>`, which is interface chrome. An
+element's own text is never used for `role="button"` containers, links or draggables,
+because it can be the user's content (a draft, a message row). An editable element, or
+anything inside one, gets no label and is marked `editable`. The server strips labels
+from input, textarea, select and secure targets of these events at ingest.
+
 **Drag and drop** (`browser_drag_start`, `browser_drag_drop`, `browser_drag_end`)
 - Records the source and destination controls and the declared payload *kinds*
   (`files`, `text`, `html`, `uri`, `other`).
@@ -40,9 +48,11 @@ Changing capture depth never changes them.
 - Samples at the chosen rate, as fractions of the viewport (0–1, three decimals) with
   relative milliseconds and a coarse viewport size.
 - Sent in batches of at most 200 points or 10 seconds.
-- The raw points stay in local storage. The workflow trace, the events API, MCP and
-  other shared views show a point count and duration instead (`raw_points_shared:
-  false`).
+- The raw points stay in local storage. Every shared view shows a point count and
+  duration instead (`raw_points_shared: false`): the workflow trace, the events API,
+  MCP, and JSON, XLSX and CSV-zip exports with or without `redact_names`. The exporter
+  summarizes trajectories in the canonical rows it builds, and both display redaction
+  paths do too.
 
 **Friction candidates** (`GET /v1/capture-coverage/friction`) are patterns in observed
 events, for a person to review:

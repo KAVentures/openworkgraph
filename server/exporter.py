@@ -159,6 +159,9 @@ def build_export_payload(*, scope: str = "current", include_raw: bool = False, s
     since, until = window["since"], window["until"]
     operational_events = _query_table("normalized_events", since=since, until=until)
     canonical = _query_table("events", since=since, until=until) if scope == "range" or include_raw else []
+    # Raw pointer coordinates (#634) never leave in an export, whichever redaction path or format follows.
+    from .privacy_pipeline import summarize_pointer_trajectories
+    canonical = summarize_pointer_trajectories(canonical)
     if scope == "range":
         raw_analysis = analysis_rows(canonical, until)
         op_analysis = analysis_rows(operational_events, until)
