@@ -114,7 +114,7 @@ status reported separately. Exporting never changes the idea's revision/state.
 This proves which bytes were generated for a selected local decision. It does
 not prove deployment, customer execution, testing, causal benefit or business
 outcomes. Checks are point-in-time, not a transaction across both source stores.
-The project-to-run-to-independent-receipt connection remains open in #370 M0/R5.
+Run reports, per-run specification attribution and run-bound source checks are described below.
 
 Dashboard-session-only APIs:
 `POST /v1/automation-pipeline/{id}/agent-project` with `expected_revision` returns
@@ -149,6 +149,16 @@ become independently verified execution, business outcomes, deployment or saving
 Those claims remain false in every link response. Independent source receipts
 and real customer acceptance remain open in #370.
 
+### Per-run specification attribution
+
+Each imported run keeps the specification hash its own report declared. A
+deployment can therefore hold runs that reported the project's exact specification
+alongside legacy or unhashed runs, and link and journey responses count them
+separately (`runs_reporting_specification_count`, `unhashed_run_count`). Runs
+imported before this was recorded stay unhashed; nothing is inferred from names,
+times or activity sequences. `per_run_attribution_verified` stays false: this is
+what each report declared, not verified execution of those bytes.
+
 Dashboard-session-only, no-store routes:
 `GET /v1/automation-pipeline/{id}/project-reports`,
 `POST` to the same path to link, and `POST …/project-reports/unlink` to remove.
@@ -165,6 +175,16 @@ Existing provider opt-ins, authorized source access, retained observation,
 identity completeness and receipt freshness remain enforced by the existing
 `source_operation_receipt` adapter. Confirmation does not enable any source
 setting or recording. Unknown/refused source data remains unknown.
+
+Optionally choose one **reported run**. Only runs from report links of this
+project whose deployment still matches its specification, and whose own report
+declared that exact specification hash, are offered (the 50 most recent). The
+server checks this again before and after the source read. The document then
+carries a `run_reference` (deployment, run ID, reported status and times, and the
+run's declared hash) with `association_basis`
+`user_selected_project_run_expectation_and_exact_observed_record`. Run steps and
+reported outcomes are not included. The run–record relationship is still chosen by
+you, and `reported_run_case_identity_verified` stays false.
 
 The JSON download binds that source check to the selected idea/project/process
 and specification hash. Its receipt verifies at most a provider-defined
@@ -190,7 +210,9 @@ successful file delivery, current provider truth or proof of execution.
 All APIs require the local dashboard session and use no-store responses:
 `GET …/{idea}/projects/{project}/source-check-options` and `source-check-exports`,
 and `POST …/source-check-export` with `expected_revision`, `terminal_activity_id`,
-`expected_operation`, `resource_ref` and `source_read_and_export_confirmed:true`.
+`expected_operation`, `resource_ref`, `source_read_and_export_confirmed:true` and,
+optionally, `run_reference: {deployment_id, run_id}`. The options response lists
+`attributable_runs`.
 The POST returns the JSON document with `X-OWG-Source-Export-ID` and
 `X-OWG-Document-SHA256`. These digests are local provenance, not public signatures.
 
