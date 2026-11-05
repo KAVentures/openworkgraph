@@ -2681,6 +2681,13 @@ async def review_local_bound_run_evidence_history(request: Request, response: Re
             secret=secret, guard=lambda: _operation_ledger_guard(
                 scope, payload["work_item_ref"], payload["expected_revision"],
                 payload["expected_edit_token"], signature))
+        human_history = await asyncio.to_thread(
+            read_human_outcomes, admitted, signature, scope=scope,
+            secret=secret, guard=lambda: _operation_ledger_guard(
+                scope, payload["work_item_ref"], payload["expected_revision"],
+                payload["expected_edit_token"], signature))
+        from .open_work_bound_run_reconciliation import reconcile_bound_run_case_history
+        reconciliation = reconcile_bound_run_case_history(history, human_history)
         repeated, refreshed, refreshed_signature, _ = await _load_review_triage(scope, payload)
         second_run = await asyncio.to_thread(
             read_imported_run, deployment_id=payload["deployment_id"],
@@ -2712,6 +2719,8 @@ async def review_local_bound_run_evidence_history(request: Request, response: Re
         "run_ref": run["run_ref"],
         "association": "operator_confirmed",
         "case_provider_evidence_history": history,
+        "case_human_outcome_history": human_history,
+        "case_historical_reconciliation": reconciliation,
         "evidence_scope": "case_wide_not_run_attributed",
         "source_read_performed": False,
         "source_write_performed": False,
