@@ -28,7 +28,8 @@ const path=require('node:path');
     assert.ok(ready,'Local browser server did not start: '+logs);
     browser=await chromium.launch({...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE?
       {executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE}:{}),headless:true,args:['--no-sandbox']});
-    const page=await browser.newPage(), errors=[],offOrigin=[];
+    const context=await browser.newContext({bypassCSP:true}); // Axe injection only; CSP itself is tested in HTTP acceptance.
+    const page=await context.newPage(), errors=[],offOrigin=[];
     page.on('pageerror',error=>errors.push(error.message));
     page.on('request',request=>{if(new URL(request.url()).origin!==base)offOrigin.push(request.url());});
     const session=(await fs.readFile(path.join(scratch,'session.txt'),'utf8')).trim();
@@ -88,7 +89,6 @@ const path=require('node:path');
     // Aggregate-only mode and literal empty-qualifier matching are independent.
     await page.locator('#sampleLimit').fill('0');
     await page.locator('#runQuery').click();
-    await page.locator('#sampleStatus').getByText?.call; // no-op does not alter page
     await page.waitForFunction(()=>document.querySelector('#sampleStatus')?.textContent?.includes('No pair examples'));
     assert.equal(await page.locator('#sampleRows tr').count(),0);
     await page.locator('#qualifierMode').selectOption('empty');
@@ -108,7 +108,7 @@ const path=require('node:path');
     assert.deepEqual(errors,[]);
     assert.deepEqual(offOrigin,[]);
 
-    const anonymous=await browser.newPage();
+    const anonymous=await context.newPage();
     await anonymous.goto(base+'/object-relationship-lead-times');
     assert.match(await anonymous.locator('#status').textContent(),/Open this page from the same browser tab/);
     assert.equal(await anonymous.locator('#resultSection').isHidden(),true);
