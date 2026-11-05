@@ -106,3 +106,55 @@ def test_cli_refuses_without_provider_consent(capsys):
                        "--candidate-output", "/tmp/candidate.json"])
     assert code == 2
     assert '"status": "refused"' in capsys.readouterr().out
+
+
+def test_handoff_requires_separate_current_read_and_removal_review():
+    for missing in ("consent_local_read", "confirm_removals_reviewed"):
+        flags = dict(consent_local_read=True, confirm_removals_reviewed=True)
+        flags[missing] = False
+        with patch.object(cycle, "prepare_handoff") as handoff:
+            with pytest.raises(ReceiptError):
+                cycle.handoff_reviewed(**flags)
+            handoff.assert_not_called()
+
+
+def test_handoff_calls_live_readback_and_durable_production_handoff():
+    result = dict(status="next_round_handoff_prepared",
+                  checkpoint_advanced=False, provider_requests=0,
+                  operator_must_start_next_extraction=True, idempotent_replay=False)
+    with patch.object(cycle, "prepare_handoff", return_value=result) as handoff:
+        actual = cycle.handoff_reviewed(
+            consent_local_read=True, confirm_removals_reviewed=True,
+            log_id="log", successor_label="round-2")
+    assert actual["status"] == "next_round_handoff_prepared"
+    assert actual["operator_must_start_next_extraction"] is True
+    handoff.assert_called_once()
+    assert handoff.call_args.kwargs["log_id"] == "log"
+
+
+@pytest.mark.parametrize("change", [
+    {"status": "not_prepared"}, {"checkpoint_advanced": True},
+    {"provider_requests": 1}, {"operator_must_start_next_extraction": False},
+])
+def test_handoff_refuses_unsafe_production_result(change):
+    result = dict(status="next_round_handoff_prepared",
+                  checkpoint_advanced=False, provider_requests=0,
+                  operator_must_start_next_extraction=True)
+    result.update(change)
+    with patch.object(cycle, "prepare_handoff", return_value=result):
+        with pytest.raises(ReceiptError):
+            cycle.handoff_reviewed(consent_local_read=True,
+                                   confirm_removals_reviewed=True)
+
+
+def test_handoff_cli_refuses_without_removal_review(capsys):
+    args = ["handoff", "--tenant", "t", "--mailbox", "m", "--folder", "f",
+            "--grant-file", "/tmp/grant", "--candidate", "/tmp/candidate",
+            "--csv-path", "/tmp/events.csv", "--receipt-file", "/tmp/receipt",
+            "--journal-dir", "/tmp/journal", "--handoff-dir", "/tmp/handoff",
+            "--successor-label", "round2", "--log-id", "log",
+            "--confirm-log-id", "log", "--consent-local-read"]
+    with patch.object(cycle, "prepare_handoff") as handoff:
+        assert cycle.main(args) == 2
+        handoff.assert_not_called()
+    assert '"status": "refused"' in capsys.readouterr().out

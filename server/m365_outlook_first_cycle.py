@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .m365_outlook_verified_delta_round import verified_delta_round
 from .m365_outlook_verified_append_receipt import append_and_record
+from .m365_outlook_resume_handoff import prepare_handoff
 from .m365_outlook_owg_receipt import ReceiptError, UncertainReceipt
 from .m365_outlook_delta import DeltaError
 
@@ -61,10 +62,31 @@ def append_reviewed(*, consent_local_read=False, consent_local_append=False,
     }
 
 
+def handoff_reviewed(*, consent_local_read=False,
+                     confirm_removals_reviewed=False, **kwargs):
+    """Recheck the confirmed append against live OWG, then durably hand off."""
+    if consent_local_read is not True or confirm_removals_reviewed is not True:
+        raise ReceiptError("Current local read consent and removal review required")
+    result = prepare_handoff(
+        consent_local_read=True, confirm_removals_reviewed=True, **kwargs)
+    if (result.get("status") != "next_round_handoff_prepared"
+            or result.get("checkpoint_advanced") is not False
+            or result.get("provider_requests") != 0
+            or result.get("operator_must_start_next_extraction") is not True):
+        raise ReceiptError("Handoff not safely persisted")
+    return {
+        "format": FORMAT, "phase": "handoff",
+        "status": "next_round_handoff_prepared",
+        "checkpoint_advanced": False, "provider_requests": 0,
+        "operator_must_start_next_extraction": True,
+        "idempotent_replay": result.get("idempotent_replay") is True,
+    }
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="phase", required=True)
-    for phase in ("extract", "append"):
+    for phase in ("extract", "append", "handoff"):
         p = sub.add_parser(phase)
         for key in ("tenant", "mailbox", "folder"):
             p.add_argument("--" + key, required=True)
@@ -81,12 +103,18 @@ def main(argv=None):
         else:
             for key in ("candidate", "csv-path", "receipt-file"):
                 p.add_argument("--" + key, type=Path, required=True)
+            if phase == "handoff":
+                for key in ("journal-dir", "handoff-dir"):
+                    p.add_argument("--" + key, type=Path, required=True)
+                p.add_argument("--successor-label", required=True)
+                p.add_argument("--confirm-removals-reviewed", action="store_true")
             for key in ("log-id", "confirm-log-id"):
                 p.add_argument("--" + key, required=True)
             p.add_argument("--port", type=int, default=8765)
-            for flag in ("consent-local-read", "consent-local-append",
-                         "confirm-candidate-reviewed"):
-                p.add_argument("--" + flag, action="store_true")
+            p.add_argument("--consent-local-read", action="store_true")
+            if phase == "append":
+                for flag in ("consent-local-append", "confirm-candidate-reviewed"):
+                    p.add_argument("--" + flag, action="store_true")
     args = vars(parser.parse_args(argv))
     phase = args.pop("phase")
     try:
@@ -95,7 +123,10 @@ def main(argv=None):
             result = extract_first(**args)
         else:
             args["session"] = os.environ.get("OWG_DASHBOARD_SESSION")
-            result = append_reviewed(**args)
+            if phase == "append":
+                result = append_reviewed(**args)
+            else:
+                result = handoff_reviewed(**args)
         print(json.dumps(result, sort_keys=True))
         return 0
     except UncertainReceipt:
