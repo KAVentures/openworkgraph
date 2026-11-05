@@ -118,6 +118,7 @@ const {spawn}=require('node:child_process'),{tmpdir}=require('node:os'),path=req
   await new Promise(resolve=>setTimeout(resolve,100));
   assert.equal(await page.locator('#fleetDownload').isDisabled(),true);
   assert.equal(await page.locator('#fleetRows tr').count(),0,'old roster must not return after sign out');
+  for(const id of ['ppl','unl','pinv'])assert.equal(await page.locator('#'+id+' tr').count(),0,'roster tables must be cleared at sign out');
   assert.deepEqual(errors,[]);
   console.log('Fleet sync health browser acceptance passed: device sync reports → production roster → admin badges, counts, overview total and independent expiry, no evidence sent.');
  }finally{

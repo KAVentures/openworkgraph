@@ -21,5 +21,6 @@ employee identities and device identifiers: review before sharing. Downloads are
 browser-local and send nothing to another service. Existing administrator read
 authority applies, including viewer access; no new grants or controls are added.
 A download uses only a roster fetched for the current signed-in session and
-organization. Signing out clears the local fleet snapshot, and late responses
-from an earlier session or superseded refresh cannot restore it.
+organization. Signing out clears the fleet snapshot and the employee, unlinked
+device and invitation tables; late responses from an earlier session or
+superseded refresh cannot restore them.
