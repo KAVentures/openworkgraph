@@ -63,8 +63,11 @@ const path=require('node:path');
     assert.equal(seed.code,200,seed.body);
 
     await nav.click();
-    await page.locator('#logSelect option[value^="log_"]').waitFor();
-    await page.locator('#relationshipSelect option[value="1"]').waitFor();
+    // Select options exist in DOM but are not independently "visible" in Chromium.
+    await page.waitForFunction(() => [...document.querySelector('#logSelect')?.options || []]
+      .some(option => option.value.startsWith('log_')));
+    await page.waitForFunction(() => [...document.querySelector('#relationshipSelect')?.options || []]
+      .some(option => option.value === '1'));
     await page.waitForFunction(()=>document.querySelector('#sourceActivity')?.value==='Approve'&&
       document.querySelector('#targetActivity')?.value==='Ship');
     assert.equal(await page.locator('#sourceType').inputValue(),'order');
