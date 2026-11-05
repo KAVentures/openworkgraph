@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OWG · Handoff evidence review</title>
+<style>
+:root{font:16px system-ui,sans-serif;color-scheme:light dark}body{max-width:900px;margin:2rem auto;padding:0 1rem;line-height:1.5}
+section{border:1px solid #8888;border-radius:.6rem;padding:1rem;margin:1rem 0}button,input{font:inherit}button{padding:.5rem 1rem}
+button:focus-visible,input:focus-visible{outline:3px solid #568aff;outline-offset:3px}
+dt{font-weight:700;margin-top:.7rem}dd{overflow-wrap:anywhere;margin:0}li{margin:.3rem 0}
+.warning{border-left:5px solid #b8751b;padding:.7rem}output{display:block;white-space:pre-wrap}
+</style></head><body>
+<main><h1>Handoff evidence review</h1>
+<p>This local, read-only workspace compares exported OWG human-review packets. It does not contact a server, verify current consent, or grant an agent access.</p>
+<p class="warning" role="note"><strong>No execution authority.</strong> Neither an approved idea nor a matching report authorizes source reads, tool calls, or business writes. Refresh authoritative evidence in OWG before any separate handoff.</p>
+<section aria-labelledby="load-title"><h2 id="load-title">Load review packets</h2>
+<label for="baseline">Baseline packet (JSON)</label><input id="baseline" type="file" accept=".json,application/json">
+<label for="candidate">Candidate packet (optional JSON)</label><input id="candidate" type="file" accept=".json,application/json">
+<p><button id="review" type="button">Review evidence</button></p><output id="status" role="status" aria-live="polite">Choose a packet to begin.</output></section>
+<section id="results" aria-labelledby="results-title" hidden><h2 id="results-title">Review results</h2><div id="details"></div></section>
+</main>
+<script>
+'use strict';
+const byId=id=>document.getElementById(id);
+const MAX_BYTES=256*1024;
+const hex=v=>typeof v==='string'&&/^[0-9a-f]{64}$/.test(v);
+function validate(p){
+ if(!p||typeof p!=='object'||Array.isArray(p)||p.format!=='openworkgraph.evidence-handoff-review.v1'||
+ p.scope!=='human_review_only'||p.execution_authorized!==false||p.source_read_authorized!==false||
+ p.readiness?.verified_execution!==false||p.readiness?.verified_business_outcomes!==false||
+ p.readiness?.human_review_required!==true||!Array.isArray(p.readiness.blockers)||
+ p.readiness.blockers.length>128||p.readiness.blockers.some(b=>typeof b!=='string'||!/^[a-z0-9_]{1,100}$/.test(b))||
+ !p.idea||!p.process||!p.project||!Array.isArray(p.dataset_origins)||
+ !Array.isArray(p.reported_specifications)||p.dataset_origins.length>64||p.reported_specifications.length>64)
+ throw Error('Invalid or non-review-only OWG packet. No authority can be inferred.');
+ if(!hex(p.project.spec_sha256)||!hex(p.project.archive_sha256)||
+ (p.process.content_sha256!=null&&!hex(p.process.content_sha256))||
+ !Number.isSafeInteger(p.idea.revision)||p.idea.revision<1||
+ !Number.isSafeInteger(p.project.idea_revision)||p.project.idea_revision<1||
+ typeof p.project.idea_revision_is_current!=='boolean'||
+ typeof p.process.status!=='string'||typeof p.idea.state!=='string')
+ throw Error('Incomplete revision or evidence digest metadata.');
+ return p;
+}
+async function read(file){
+ if(!file)throw Error('Select a baseline packet.');
+ if(file.size>MAX_BYTES)throw Error('Packet exceeds 256 KiB limit.');
+ return validate(JSON.parse(await file.text()));
+}
+function text(parent,tag,value){const n=document.createElement(tag);n.textContent=String(value);parent.append(n);return n}
+function line(parent,key,value){const dt=text(parent,'dt',key);const dd=text(parent,'dd',value==null?'Unknown':value);return [dt,dd]}
+function summary(parent,p,label){
+ text(parent,'h3',label);const dl=document.createElement('dl');parent.append(dl);
+ line(dl,'Idea ID',p.idea.idea_id);line(dl,'Idea revision',p.idea.revision);
+ line(dl,'Idea state',p.idea.state);line(dl,'Process ID',p.process.workflow_id);
+ line(dl,'Process revision',p.process.revision);line(dl,'Process status',p.process.status);
+ line(dl,'Process SHA-256',p.process.content_sha256);line(dl,'Project ID',p.project.project_id);
+ line(dl,'Project idea revision',p.project.idea_revision);
+ line(dl,'Current idea revision?',p.project.idea_revision_is_current?'Yes':'No');
+ line(dl,'Specification SHA-256',p.project.spec_sha256);
+ line(dl,'Archive SHA-256',p.project.archive_sha256);
+ line(dl,'Dataset origin count',p.dataset_origins.length);
+ line(dl,'Reported specification count',p.reported_specifications.length);
+ const blockers=p.readiness.blockers;
+ text(parent,'h4','Human review blockers ('+blockers.length+')');
+ const ul=document.createElement('ul');parent.append(ul);
+ if(!blockers.length)text(ul,'li','No recorded blockers; this still does not establish permission or execution.');
+ blockers.forEach(b=>text(ul,'li',b.replaceAll('_',' ')));
+}
+function compare(parent,a,b){
+ text(parent,'h3','Revision comparison');
+ const fields=[['Idea revision',a.idea.revision,b.idea.revision],
+ ['Process revision',a.process.revision,b.process.revision],
+ ['Process SHA-256',a.process.content_sha256,b.process.content_sha256],
+ ['Specification SHA-256',a.project.spec_sha256,b.project.spec_sha256],
+ ['Archive SHA-256',a.project.archive_sha256,b.project.archive_sha256],
+ ['Blockers',a.readiness.blockers.join(', '),b.readiness.blockers.join(', ')]];
+ const ul=document.createElement('ul');parent.append(ul);
+ fields.forEach(([name,x,y])=>text(ul,'li',name+': '+(x===y?'unchanged':'CHANGED')+' ('+String(x)+' → '+String(y)+')'));
+ text(parent,'p','Comparison is between exported snapshots only. Current server evidence, consent, tenant, retention and owner approval remain unverified.');
+}
+byId('review').addEventListener('click',async()=>{
+ const status=byId('status'),results=byId('results'),details=byId('details');
+ results.hidden=true;details.replaceChildren();status.textContent='Validating local packets…';
+ try{
+ const a=await read(byId('baseline').files[0]);
+ const f=byId('candidate').files[0];const b=f?await read(f):null;
+ summary(details,a,'Baseline');if(b){summary(details,b,'Candidate');compare(details,a,b)}
+ text(details,'p','Review only — execution authorized: NO; source read authorized: NO; business outcomes verified: NO.');
+ results.hidden=false;status.textContent='Local evidence review ready. No authorization was granted.';
+ }catch(err){status.textContent='Review refused: '+err.message}
+});
+</script></body></html>
