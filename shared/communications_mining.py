@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 import csv
+import heapq
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email import policy
@@ -248,8 +249,23 @@ def _themes(texts: list[list[str]]) -> list[dict[str, Any]]:
     return [{"terms": theme, "messages": n} for theme, n in counts.most_common(200) if n >= MIN_THEME_MESSAGES][:20]
 
 
-def analyze(messages: Iterable[Message], taxonomy: Any = None) -> dict[str, Any]:
+def analyze(messages: Iterable[Message], taxonomy: Any = None, *, learned: Any = None,
+            review_sample: int = 0) -> dict[str, Any]:
+    """Aggregate an export.
+
+    ``learned`` is an optional ``predict(text) -> {intent: probability}`` from a
+    reviewed local model; each message then gets per-intent present/uncertain/absent
+    decisions instead of the keyword match. ``review_sample`` keeps up to that many
+    redacted inbound texts (the least certain first) in ``_review_candidates`` for the
+    caller to store as review examples; they are never part of the returned report.
+    """
     intents = parse_taxonomy(taxonomy or DEFAULT_TAXONOMY)
+    if learned is not None:
+        from .communications_learning import decide, primary_label
+    learned_present: Counter[str] = Counter()
+    learned_uncertain: Counter[str] = Counter()
+    candidates: list[tuple[float, str, str]] = []
+    learned_names: set[str] = set()
     intent_counts: Counter[str] = Counter()
     entity_counts: Counter[str] = Counter()
     entity_messages: Counter[str] = Counter()
@@ -269,7 +285,29 @@ def analyze(messages: Iterable[Message], taxonomy: Any = None) -> dict[str, Any]
             raise CommunicationsError(f"at most {MAX_MESSAGES} messages per analysis")
         text = redact_sensitive_identifiers(message.text) if _MAY_HOLD_IDENTIFIER.search(message.text) else message.text
         # Replies are counted, not classified: the intent belongs to the inbound contact.
-        label, scores = ("outbound reply", {}) if message.direction == "outbound" else classify(text, intents)
+        if message.direction == "outbound":
+            label, scores, doubt = "outbound reply", {}, None
+        elif learned is not None:
+            probabilities = learned(text)
+            decisions = decide(probabilities)
+            learned_names.update(decisions)
+            label, scores = primary_label(decisions), {}
+            for name, decision in decisions.items():
+                if decision == "present":
+                    learned_present[name] += 1
+                elif decision == "uncertain":
+                    learned_uncertain[name] += 1
+            doubt = max((0.5 - abs(p - 0.5) for p in probabilities.values()), default=0.5)
+        else:
+            label, scores = classify(text, intents)
+            doubt = {"ambiguous": 0.5, "unclassified": 0.4}.get(label, 0.1)
+        if review_sample and doubt is not None and text.strip():
+            # Least certain first; a stable text hash breaks ties without randomness.
+            key = (doubt, hashlib.sha256(text.encode("utf-8")).hexdigest(), text)
+            if len(candidates) < review_sample:
+                heapq.heappush(candidates, key)
+            elif key > candidates[0]:
+                heapq.heapreplace(candidates, key)
         intent_counts[label] += 1
         if label == "ambiguous":
             for name in scores:
@@ -345,11 +383,20 @@ def analyze(messages: Iterable[Message], taxonomy: Any = None) -> dict[str, Any]
                     "first_response_seconds": {"median": median(responses), "count": len(responses)} if responses else None},
         "unclassified_themes": _themes(unclassified_words),
         "_events": events,
-        "method": "keyword taxonomy after identifier redaction; ties are ambiguous",
+        "_review_candidates": [text for _, _, text in sorted(candidates, reverse=True)],
+        "method": ("learned multi-label intent model from reviewed examples, after identifier redaction"
+                   if learned is not None else "keyword taxonomy after identifier redaction; ties are ambiguous"),
         "raw_text_retained": False,
         "entity_values_returned": False,
-        "intents_are_keyword_matches_not_verified_reasons": True,
+        "intents_are_keyword_matches_not_verified_reasons": learned is None,
         "outbound_messages_not_classified": True,
+        **({"learned_intents": [{"intent": name, "present_messages": learned_present[name],
+                                 "uncertain_messages": learned_uncertain[name],
+                                 "present_share": round(learned_present[name] / classified, 6) if classified else None}
+                                for name in sorted(learned_names,
+                                                   key=lambda n: (-learned_present[n], n))],
+            "intents_are_model_estimates_not_verified_reasons": True,
+            "messages_can_have_several_or_no_intents": True} if learned is not None else {}),
     }
 
 
