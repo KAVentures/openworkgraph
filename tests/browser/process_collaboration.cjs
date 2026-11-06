@@ -166,6 +166,38 @@ const pathModule = require("node:path");
     await deniedHandoffPage.locator("#handoffStatus").filter({hasText:/REFUSED:|Session cleared/}).waitFor();
     assert.equal(uploadedHandoff, false);
 
+    // An in-flight authorized detail read must never re-validate a packet after
+    // the reviewer clears or replaces the local selection. Hold the actual
+    // Gateway request until the local generation has changed.
+    const racePage = await login("alice");
+    await racePage.getByRole("button", {name:"Shared support process · r1",exact:true}).click();
+    await racePage.locator("#selectedTitle").filter({hasText:"revision 1"}).waitFor();
+    await racePage.locator("#handoffPacket").setInputFiles({
+      name:"race-review.json",mimeType:"application/json",
+      buffer:Buffer.from(JSON.stringify(handoffPacket())),
+    });
+    let releaseHandoffRead;
+    const heldHandoffRead = new Promise(resolve => {releaseHandoffRead=resolve;});
+    await racePage.route(detailUrl, async route => {
+      await heldHandoffRead;
+      await route.continue();
+    }, {times:1});
+    const pendingHandoffRead = racePage.waitForRequest(request =>
+      request.method()==="GET" && new URL(request.url()).pathname==="/v1/human/processes/"+handoffProcess.workflow_id);
+    await racePage.locator("#handoffCheck").click();
+    await pendingHandoffRead;
+    await racePage.locator("#handoffClear").click();
+    assert.equal(await racePage.locator("#handoffPacket").inputValue(),"");
+    const completedHandoffRead = racePage.waitForResponse(response =>
+      new URL(response.url()).pathname==="/v1/human/processes/"+handoffProcess.workflow_id);
+    releaseHandoffRead();
+    await completedHandoffRead;
+    await racePage.evaluate(() => new Promise(resolve =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.equal(await racePage.locator("#handoffStatus").textContent(),"No packet checked.");
+    await racePage.unroute(detailUrl);
+    assert.equal(uploadedHandoff,false);
+
     assert.equal(
       await alice
         .getByRole("button", { name: "Record design review", exact: true })
