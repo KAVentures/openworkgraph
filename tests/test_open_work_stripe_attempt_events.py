@@ -2,6 +2,7 @@ import io
 import json
 import pytest
 from server.open_work_stripe_attempt_events import read_stripe_attempt_events
+from server.open_work_provider_attempt_verification import verify_provider_attempt
 
 class Reply:
     status = 200
@@ -34,6 +35,14 @@ def test_exact_authenticated_event_from_read_only_source():
     p = read(transport())
     assert p["authenticated"] is True and p["complete"] is True
     assert p["events"][0]["event_id"] == "evt_1"
+    assert p["events"][0]["status"] == "observed"
+    receipt = verify_provider_attempt(
+        account="acct_1", object_id="in_1", operation="invoice.updated",
+        correlation_id="attempt_1", expected_event_id="evt_1",
+        read_events=lambda: p)
+    assert receipt["status"] == "verified_provider_event"
+    assert receipt["provider_operation"] == "unknown"
+    assert receipt["customer_outcome"] == "unknown"
 
 def test_unrelated_event_never_matches():
     assert read(transport(key="other"))["events"] == []
