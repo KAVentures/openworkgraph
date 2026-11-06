@@ -72,7 +72,8 @@ def test_verified_membership_is_read_only():
 
 
 def test_missing_membership_requires_manual_reconciliation():
-    result, _ = _run(_csv([]))
+    ns = "m365_" + "a"*32
+    result, _ = _run(_csv([[ns, "unrelated", ns, "othercase", "read", "2026-01-01", "", "{}"]]))
     assert result["status"] == "manual_reconciliation_required"
     assert result["missing_events"] == 1
 
