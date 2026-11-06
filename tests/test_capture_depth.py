@@ -219,9 +219,15 @@ with TestClient(app) as client:
         target={"tag": "textarea", "label": "PRIVATE DRAFT WORDS"},
         metadata={"payload_kinds": ["text"], "source_target": {"label": "OTHER DRAFT", "editable": True}}))["inserted"] == 1
     # The exact stored values (bound_metadata keeps three decimals) are what must never leave.
-    forbidden = [str(v).encode() for p in points for v in p[1:]] + [b"PRIVATE DRAFT WORDS", b"OTHER DRAFT"]
+    # The exact stored coordinate pairs (bound_metadata keeps three decimals), however they are serialized,
+    # and a points key: single values like 0.746 can occur by chance elsewhere (a timestamp's fraction).
+    import re
+    pairs = [re.compile(rb"%s[^0-9]{1,12}%s" % (re.escape(str(p[1]).encode()), re.escape(str(p[2]).encode())))
+             for p in points]
     def check(body, where):
-        for leaked in forbidden:
+        for pattern in pairs:
+            assert not pattern.search(body), (where, pattern.pattern)
+        for leaked in (b'"points"', b"&quot;points&quot;", b"PRIVATE DRAFT WORDS", b"OTHER DRAFT"):
             assert leaked not in body, (where, leaked)
     for fmt in ("json", "xlsx", "csvzip"):
         for redact in ("true", "false"):
