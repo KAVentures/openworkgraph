@@ -152,11 +152,18 @@ const pathModule = require("node:path");
     await setHandoffPacket(handoffPacket({revision: handoffProcess.revision + 1}));
     await alice.locator("#handoffCheck").click();
     await alice.locator("#handoffStatus").filter({hasText: "REFUSED:"}).waitFor();
-    await setHandoffPacket(handoffPacket());
+    // Denial can revoke the session: isolate it from the rest of the lifecycle.
+    const deniedHandoffPage = await login("alice");
+    await deniedHandoffPage.getByRole("button", {name:"Shared support process · r1", exact:true}).click();
+    await deniedHandoffPage.locator("#selectedTitle").filter({hasText:"revision 1"}).waitFor();
+    await deniedHandoffPage.locator("#handoffPacket").setInputFiles({
+      name:"denied-review.json", mimeType:"application/json",
+      buffer:Buffer.from(JSON.stringify(handoffPacket())),
+    });
     const detailUrl = "**/v1/human/processes/" + handoffProcess.workflow_id;
-    await alice.route(detailUrl, async route => route.fulfill({status:403, contentType:"application/json", body:'{"detail":"denied"}'}), {times:1});
-    await alice.locator("#handoffCheck").click();
-    await alice.locator("#handoffStatus").filter({hasText: "REFUSED:"}).waitFor();
+    await deniedHandoffPage.route(detailUrl, async route => route.fulfill({status:403, contentType:"application/json", body:'{"detail":"denied"}'}), {times:1});
+    await deniedHandoffPage.locator("#handoffCheck").click();
+    await deniedHandoffPage.locator("#handoffStatus").filter({hasText:"REFUSED:"}).waitFor();
     assert.equal(uploadedHandoff, false);
 
     assert.equal(
