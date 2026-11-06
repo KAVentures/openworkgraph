@@ -1,5 +1,22 @@
 """Resource-local assignment evidence must not conflate interleaved cases."""
-from tests.test_work_resumption import _database, _day, _ref, REF
+import json
+import sqlite3
+
+REF = {name: "owg:r:" + name * 32 for name in "abcdef"}
+
+def _database(rows):
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    db.execute("CREATE TABLE events(id INTEGER PRIMARY KEY, event_id TEXT, observed_at TEXT, metadata_json TEXT)")
+    for index, (at, meta) in enumerate(rows, start=1):
+        db.execute("INSERT INTO events VALUES (?, ?, ?, ?)", (index, f"e{index}", at, json.dumps(meta)))
+    return db
+
+def _day(day, hhmm):
+    return f"2026-10-{day:02d}T{hhmm}:00Z"
+
+def _ref(name):
+    return {"resource_reference": {"resource_ref": REF[name], "provider": "github", "resource_kind": "pull_request"}}
 from server.work_resumption import resumption_candidates
 
 
