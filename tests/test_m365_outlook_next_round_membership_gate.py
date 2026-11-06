@@ -7,12 +7,15 @@ from server.m365_outlook_owg_receipt import ReceiptError
 def test_missing_membership_refuses_before_provider_get(tmp_path):
     prior = tmp_path / "prior.json"
     prior.write_text('{"csv_sha256":"' + 'a'*64 + '"}')
+    prior.chmod(0o600)
     handoff = tmp_path / "handoff"
-    handoff.mkdir()
+    handoff.mkdir(mode=0o700)
     import hashlib
     from server.m365_outlook_resume_journal import _canonical
     key = hashlib.sha256(_canonical({"candidate_sha256":'a'*64,"log_id":"log_0123456789abcdef"})).hexdigest()
-    (handoff / ("handoff-" + key + ".json")).write_text("{}")
+    handoff_record = handoff / ("handoff-" + key + ".json")
+    handoff_record.write_text("{}")
+    handoff_record.chmod(0o600)
     kwargs = dict(tenant="tenant", mailbox="mailbox", folder="folder",
         log_id="log_0123456789abcdef", confirm_log_id="log_0123456789abcdef",
         grant_file=tmp_path/"grant", previous_candidate=prior,
