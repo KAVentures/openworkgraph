@@ -60,7 +60,7 @@ def test_wrong_event_and_account_fail_closed():
 def test_invalid_identity_prevents_network():
     def forbidden(*args, **kwargs):
         raise AssertionError("network attempted")
-    assert _verify(object_id="../bad", transport=forbidden)["reason"] == "invalid_identity"
+    assert _verify(object_id="bad space", transport=forbidden)["reason"] == "invalid_identity"
 
 
 def test_provider_outage_is_unknown_without_exception_or_leak():
