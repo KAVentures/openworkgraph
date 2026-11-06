@@ -43,3 +43,17 @@ sessions (and at least 3), such as an always-open inbox or dashboard.
 - `proves_same_work` is always false, `task_label` is always null and no
   unfinished state is inferred. An empty list does not prove the work is new;
   scans that hit their bounds say so in `coverage.scan_truncated` and `notice`.
+
+## Pointer identity and interleaved cases
+
+A matching opaque token is not sufficient to link two sessions. The reconstruction
+engine matches the tuple **(provider, resource kind, opaque reference)**, so
+a GitHub pull request and Jira issue with colliding tokens cannot be treated
+as resumed work. Different object kinds within one provider remain distinct
+even if they have the same opaque reference. File pointers have a separate
+local-file namespace. Multiple identities with one opaque token are counted
+separately for overlap and routine-context analysis; the legacy
+`current_session.resource_refs` list remains a deduplicated display list
+for compatibility. This prevents cross-system collisions from inflating
+confidence or contaminating an interleaved workflow, without exposing any
+additional source text or weakening the saved-history grant.
