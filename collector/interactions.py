@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import re
 import platform
 import threading
 import time
@@ -21,6 +22,148 @@ class RawInteraction:
     # Filled by the collector callback at interaction time before worker queuing.
     # Contains only already privacy-filtered app/window state, never typed content.
     context: dict[str, Any] | None = None
+    # Sampled pointer positions for kind "pointer_trajectory": [ms since first, x, y].
+    points: list[list[float]] | None = None
+    # For kind "hover_dwell": how long the pointer rested and how the rest ended.
+    duration_ms: int | None = None
+    ended_by: str | None = None
+
+
+class HoverTracker:
+    """Report a pointer that rested in one place for at least ``threshold_ms`` (#634).
+
+    Movement within ``tolerance`` pixels counts as resting. The rest is reported when
+    the pointer moves away (``pointer_left``) or a button is pressed (``activated``);
+    whether it rested on an interactive control is decided later from the UI target.
+    """
+
+    def __init__(self, *, threshold_ms: int = 750, tolerance: float = 3.0) -> None:
+        self.threshold_ms = int(threshold_ms)
+        self.tolerance = float(tolerance)
+        self._rest: tuple[float, float, float] | None = None  # x, y, since
+        self._reported = False
+
+    def _finish(self, now: float, ended_by: str) -> RawInteraction | None:
+        rest, self._rest = self._rest, None
+        if rest is None or self._reported:
+            self._reported = False
+            return None
+        x, y, since = rest
+        duration = int(round((now - since) * 1000 / 50.0)) * 50
+        if duration < self.threshold_ms:
+            return None
+        return RawInteraction(kind="hover_dwell", x=x, y=y, occurred_mono=since,
+                              duration_ms=min(duration, 600000), ended_by=ended_by)
+
+    def move(self, x: float, y: float, now: float) -> RawInteraction | None:
+        if self._rest is not None:
+            rx, ry, _ = self._rest
+            if ((x - rx) ** 2 + (y - ry) ** 2) ** 0.5 <= self.tolerance:
+                return None
+        finished = self._finish(now, "pointer_left")
+        self._rest = (float(x), float(y), float(now))
+        self._reported = False
+        return finished
+
+    def activate(self, now: float) -> RawInteraction | None:
+        finished = self._finish(now, "activated")
+        return finished
+
+
+_INTERACTIVE_ROLE = re.compile(r"button|link|menu|tab|check|radio|combo|popup|slider|switch|option|hyperlink", re.I)
+
+
+def interactive_target(target: dict[str, Any] | None) -> bool:
+    """A hover counts only on a non-secure interactive control."""
+    if not isinstance(target, dict) or target.get("secure"):
+        return False
+    return bool(_INTERACTIVE_ROLE.search(str(target.get("role") or "")))
+
+
+class DragDetector:
+    """Turn a mouse press and release into a drag when it moved far and long enough (#634).
+
+    Pure and clock-injected so it is testable without an OS hook. A plain click is
+    never reported as a drag; the click itself is still reported by the sensor.
+    """
+
+    def __init__(self, *, min_distance: float = 16.0, min_seconds: float = 0.15) -> None:
+        self.min_distance = float(min_distance)
+        self.min_seconds = float(min_seconds)
+        self._start: tuple[float, float, float, str] | None = None
+
+    def press(self, x: float, y: float, button: str, now: float) -> None:
+        self._start = (float(x), float(y), float(now), button)
+
+    def release(self, x: float, y: float, now: float) -> RawInteraction | None:
+        start, self._start = self._start, None
+        if start is None:
+            return None
+        sx, sy, at, button = start
+        dx, dy = float(x) - sx, float(y) - sy
+        if (dx * dx + dy * dy) ** 0.5 < self.min_distance or now - at < self.min_seconds:
+            return None
+        return RawInteraction(kind="drag", x=sx, y=sy, dx=dx, dy=dy, button=button, occurred_mono=at)
+
+
+class PointerSampler:
+    """Throttle pointer moves to ``hz`` samples a second and batch them (#634, Full fidelity)."""
+
+    def __init__(self, *, hz: int = 4, max_points: int = 200, max_seconds: float = 10.0) -> None:
+        self.hz = max(1, min(int(hz), 20))
+        self.max_points = max_points
+        self.max_seconds = max_seconds
+        self._points: list[list[float]] = []
+        self._first = 0.0
+        self._last = -1.0
+
+    def would_sample(self, now: float) -> bool:
+        return not (self._last >= 0 and now - self._last < 1.0 / self.hz)
+
+    def move(self, x: float, y: float, now: float) -> RawInteraction | None:
+        if not self.would_sample(now):
+            return None
+        if not self._points:
+            self._first = now
+        self._last = now
+        self._points.append([int(round((now - self._first) * 1000)), int(round(x)), int(round(y))])
+        if len(self._points) >= self.max_points or now - self._first >= self.max_seconds:
+            return self.flush()
+        return None
+
+    def flush(self) -> RawInteraction | None:
+        points, self._points = self._points, []
+        self._last = -1.0
+        if not points:
+            return None
+        return RawInteraction(kind="pointer_trajectory", x=float(points[0][1]), y=float(points[0][2]),
+                              occurred_mono=self._first, points=points)
+
+
+def capture_depth_signals(data_dir) -> dict[str, Any]:
+    """The locally chosen capture depth (written by the dashboard); Standard when unreadable."""
+    import json
+    from pathlib import Path
+    try:
+        data = json.loads((Path(data_dir) / "capture_depth.json").read_text(encoding="utf-8"))
+        signals = data.get("signals") if isinstance(data, dict) else {}
+        params = data.get("parameters") if isinstance(data, dict) else {}
+        acknowledged = data.get("full_acknowledged_version") == "capture-depth-full-v2"
+        from datetime import datetime, timezone
+        expires = datetime.fromisoformat(str(data.get("expires_at")))
+        if expires.tzinfo is None or expires <= datetime.now(timezone.utc):
+            raise ValueError("extra detail has no current period")
+    except (OSError, ValueError, TypeError, AttributeError):
+        # Unreadable, missing or expired: Standard. Extra detail is always time-limited.
+        return {"drag_drop": False, "pointer_trajectory": False, "trajectory_hz": 4, "hover_dwell": False,
+                "hover_dwell_ms": 750}
+    hz = params.get("trajectory_hz") if isinstance(params, dict) else None
+    dwell = params.get("hover_dwell_ms") if isinstance(params, dict) else None
+    return {"hover_dwell": isinstance(signals, dict) and signals.get("hover_dwell") is True,
+            "hover_dwell_ms": dwell if isinstance(dwell, int) and 300 <= dwell <= 5000 else 750,
+            "drag_drop": isinstance(signals, dict) and signals.get("drag_drop") is True,
+            "pointer_trajectory": isinstance(signals, dict) and signals.get("pointer_trajectory") is True and acknowledged,
+            "trajectory_hz": hz if isinstance(hz, int) and 1 <= hz <= 20 else 4}
 
 
 @dataclass
@@ -284,10 +427,20 @@ class InteractionSensor:
         capture_clicks: bool = True,
         capture_scrolls: bool = True,
         scroll_min_interval_seconds: float = 1.25,
+        depth: Callable[[], dict[str, Any]] | None = None,
+        sensitive_at: Callable[[float, float], bool] | None = None,
     ) -> None:
         self.callback = callback
         self.capture_clicks = capture_clicks
         self.capture_scrolls = capture_scrolls
+        # Capture depth (#634) is read live, so changing it needs no restart.
+        self.depth = depth or (lambda: {"drag_drop": False, "pointer_trajectory": False, "trajectory_hz": 4})
+        self._drag = DragDetector()
+        self._sampler = PointerSampler()
+        self._hover = HoverTracker()
+        # Whether the pointer is over a secure field; asked only when a sample would be taken.
+        self.sensitive_at = sensitive_at or (lambda x, y: False)
+        self._sensitive_cache: tuple[float | None, float | None, bool] = (None, None, False)
         self.scroll_min_interval_seconds = max(0.0, float(scroll_min_interval_seconds))
         self._mouse_listener = None
         self._last_scroll_at = 0.0
@@ -299,6 +452,19 @@ class InteractionSensor:
             return False
 
         def on_click(x, y, button, pressed):
+            now = time.monotonic()
+            settings = self.depth()
+            if pressed and settings.get("hover_dwell"):
+                dwell = self._hover.activate(now)
+                if dwell is not None:
+                    self.callback(dwell)
+            if settings.get("drag_drop"):
+                if pressed:
+                    self._drag.press(x, y, getattr(button, "name", str(button)), now)
+                else:
+                    drag = self._drag.release(x, y, now)
+                    if drag is not None:
+                        self.callback(drag)
             if not pressed or not self.capture_clicks:
                 return
             self.callback(
@@ -329,7 +495,39 @@ class InteractionSensor:
                 )
             )
 
-        self._mouse_listener = mouse.Listener(on_click=on_click, on_scroll=on_scroll)
+        def on_move(x, y):
+            settings = self.depth()
+            if settings.get("hover_dwell"):
+                self._hover.threshold_ms = settings.get("hover_dwell_ms", 750)
+                dwell = self._hover.move(x, y, time.monotonic())
+                if dwell is not None:
+                    self.callback(dwell)
+            if not settings.get("pointer_trajectory"):
+                self._sampler.flush()  # discard: the signal was turned off
+                return
+            self._sampler.hz = settings.get("trajectory_hz", 4)
+            now = time.monotonic()
+            if not self._sampler.would_sample(now):
+                return
+            cx, cy, sensitive = self._sensitive_cache
+            # Re-check whenever the pointer moved; a cached answer is reused only near where it was asked.
+            if cx is None or abs(x - cx) > 8 or abs(y - cy) > 8:
+                try:
+                    sensitive = bool(self.sensitive_at(x, y))
+                except Exception:
+                    sensitive = True  # unknown is treated as secure: never sample on doubt
+                self._sensitive_cache = (x, y, sensitive)
+            if sensitive:
+                # Never sample over a secure field: end the batch here and skip until the pointer leaves.
+                batch = self._sampler.flush()
+                if batch is not None:
+                    self.callback(batch)
+                return
+            batch = self._sampler.move(x, y, now)
+            if batch is not None:
+                self.callback(batch)
+
+        self._mouse_listener = mouse.Listener(on_click=on_click, on_scroll=on_scroll, on_move=on_move)
         self._mouse_listener.daemon = True
         self._mouse_listener.start()
         return True
