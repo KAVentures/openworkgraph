@@ -18,6 +18,7 @@ from .m365_outlook_delta import (
 from .m365_outlook_owg_receipt import ReceiptError
 from .m365_outlook_resume_handoff import prepare_handoff
 from .m365_outlook_resume_journal import _canonical
+from .m365_outlook_event_membership import reconcile as reconcile_membership
 
 FORMAT = "openworkgraph.m365-verified-next-round.v1"
 
@@ -30,6 +31,7 @@ def run_verified_next_round(*, tenant, mailbox, folder, log_id, confirm_log_id,
                             token: str, port=8765, session=None,
                             consent_local_read=False, confirm_removals_reviewed=False,
                             consent_delta_read=False, consent_local_export=False,
+                            require_event_membership=False, membership_opener=None,
                             opener=None):
     """Check existing handoff and live OWG state before bounded provider reads."""
     if not all((consent_local_read is True, confirm_removals_reviewed is True,
@@ -68,6 +70,20 @@ def run_verified_next_round(*, tenant, mailbox, folder, log_id, confirm_log_id,
     )
     if decision.get("idempotent_replay") is not True:
         raise ReceiptError("Previously persisted handoff required")
+    # Optional strict evidence gate: an authenticated, fresh local readback
+    # must prove every candidate source key and case mapping before Graph GET.
+    # No local reconciliation outcome authorizes a replay or checkpoint commit.
+    if require_event_membership is True:
+        membership = reconcile_membership(
+            tenant=tenant, mailbox=mailbox, folder=folder,
+            grant_file=Path(grant_file), candidate=previous_candidate,
+            csv_path=Path(previous_csv), log_id=log_id,
+            confirm_log_id=confirm_log_id, port=port, session=session,
+            consent_local_read=True, opener=membership_opener)
+        if membership.get('status') != 'all_candidate_events_present':
+            raise ReceiptError('Previous candidate membership incomplete; manual reconciliation required')
+    elif require_event_membership is not False:
+        raise ReceiptError('Invalid membership gate selection')
     # Existing export_delta checks current grant before every Graph request,
     # validates complete bounded delta pages and creates artifacts exclusively.
     result = export_delta(
@@ -80,6 +96,7 @@ def run_verified_next_round(*, tenant, mailbox, folder, log_id, confirm_log_id,
     return {
         "format": FORMAT, "status": "next_round_review_ready",
         "verified_prior_handoff": True,
+        "event_membership_gate_passed": require_event_membership is True,
         "provider_get_requests": result["provider_get_requests"],
         "event_snapshots": result["event_snapshots"],
         "removal_markers_for_review": result["removal_markers_for_review"],
@@ -100,6 +117,7 @@ def main(argv=None):
     for key in ("consent-local-read", "confirm-removals-reviewed",
                 "consent-delta-read", "consent-local-export"):
         parser.add_argument("--" + key, action="store_true")
+    parser.add_argument("--require-event-membership", action="store_true")
     args = parser.parse_args(argv)
     try:
         result = run_verified_next_round(
@@ -115,6 +133,7 @@ def main(argv=None):
             confirm_removals_reviewed=args.confirm_removals_reviewed,
             consent_delta_read=args.consent_delta_read,
             consent_local_export=args.consent_local_export,
+            require_event_membership=args.require_event_membership,
         )
         print(json.dumps(result, sort_keys=True))
         return 0
