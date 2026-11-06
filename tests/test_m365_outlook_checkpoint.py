@@ -27,7 +27,7 @@ def setup(tmp_path):
     handoff = private_dir(tmp_path / "handoff")
     candidate = candidate_dir / "round.json"
     csv_path = candidate_dir / "round.csv"
-    csv_path.write_text("case_id,activity,timestamp,source_event_id\\n")
+    csv_path.write_text("case_id,activity,timestamp,source_event_id\n")
     os.chmod(csv_path, 0o600)
     import hashlib
     digest = hashlib.sha256(csv_path.read_bytes()).hexdigest()
