@@ -38,7 +38,8 @@ const path=require('node:path');
      await page.evaluate(([s])=>{window.__msgs=[];
        const roots=new WeakMap();const host=document.querySelector('#closed-shadow');const shadow=host.attachShadow({mode:'closed'});
        shadow.innerHTML='<input type="password" style="width:100px;height:40px">';roots.set(host,shadow);
-       window.chrome={dom:{openOrClosedShadowRoot(el){return roots.get(el)||el.shadowRoot;}},runtime:{sendMessage(m){window.__msgs.push(m);return Promise.resolve();}},
+       window.__owgShadowRoots=roots;window.__owgInspectCount=0;
+       window.chrome={dom:{openOrClosedShadowRoot(el){window.__owgInspectCount++;return roots.get(el)||el.shadowRoot;}},runtime:{sendMessage(m){window.__msgs.push(m);return Promise.resolve();}},
        storage:{local:{get:async()=>({openworkgraph_capture_depth_v1:s}),set:async()=>{}},onChanged:{addListener(fn){window.__changed=fn;}}}};},[settings(signals)]);
      await page.addScriptTag({content});await page.addScriptTag({content:depth});
      await page.waitForTimeout(50);
@@ -143,6 +144,47 @@ const path=require('node:path');
    await page.evaluate(()=>window.dispatchEvent(new Event('pagehide')));
    const overClosed=([t,x,y])=>x>=closed.x/1000&&x<=(closed.x+closed.width)/1000&&y>=closed.y/700&&y<=(closed.y+closed.height)/700;
    assert(!(await msgs('pointer_trajectory')).flatMap(b=>b.metadata.points).some(overClosed),'closed-shadow password is not sampled');
+   // Browser hit testing omits pointer-events:none elements. Protect both a
+   // normal password and a closed-shadow password hidden behind overlays.
+   await page.evaluate(()=>{
+     const wrap=(id,left)=>{const host=document.createElement('div');host.id=id;
+       host.style.cssText=`position:fixed;left:${left}px;top:500px;width:100px;height:40px;pointer-events:none`;
+       document.body.append(host);const overlay=document.createElement('div');overlay.style.cssText=`position:fixed;left:${left}px;top:500px;width:100px;height:40px`;
+       document.body.append(overlay);return host;};
+     const plain=wrap('no-pointer-password',210);plain.innerHTML='<input type="password" style="width:100px;height:40px;pointer-events:none">';
+     const host=wrap('no-pointer-shadow',400);const shadow=host.attachShadow({mode:'closed'});
+     shadow.innerHTML='<input type="password" style="width:100px;height:40px;pointer-events:none">';window.__owgShadowRoots.set(host,shadow);
+     const frame=document.createElement('iframe');frame.id='opaque-frame';frame.style.cssText='position:fixed;left:560px;top:500px;width:100px;height:40px;pointer-events:none';
+     document.body.append(frame);
+   });
+   const startGeometry=(await msgs('pointer_trajectory')).length;
+   for(const left of [210,400,560])for(let i=0;i<4;i++){
+     await page.mouse.move(left+10+i*15,520);await page.waitForTimeout(120);
+   }
+   await page.evaluate(()=>window.dispatchEvent(new Event('pagehide')));
+   const geometry=(await msgs('pointer_trajectory')).slice(startGeometry).flatMap(b=>b.metadata.points);
+   for(const left of [210,400,560])assert(!geometry.some(([,x,y])=>x>=left/1000&&x<=(left+100)/1000&&y>=500/700&&y<=540/700),
+     'no samples over pointer-events:none secure fields, closed roots or embedded frames');
+   // Suppressing a secure point must retain the sample throttle. A burst must
+   // not cause one full geometry scan per pointer event.
+   await page.waitForTimeout(150);
+   const inspection=await page.evaluate(()=>{
+     window.__owgInspectCount=0;
+     for(let i=0;i<30;i++)window.dispatchEvent(new PointerEvent('pointermove',{bubbles:true,pointerType:'mouse',clientX:230,clientY:520}));
+     return {calls:window.__owgInspectCount,elements:document.querySelectorAll('*').length};
+   });
+   assert(inspection.calls>0&&inspection.calls<=inspection.elements+5,'suppressed pointer bursts remain rate-limited');
+   // If the bounded inspection cannot cover the document, fail closed rather
+   // than silently treating an unseen password as safe.
+   await page.evaluate(()=>{const extra=document.createElement('div');extra.id='too-many-elements';
+     const fragment=document.createDocumentFragment();for(let i=0;i<10001;i++)fragment.append(document.createElement('span'));
+     extra.append(fragment);document.body.append(extra);});
+   await page.waitForTimeout(150);
+   const beforeLimit=(await msgs('pointer_trajectory')).length;
+   for(let i=0;i<4;i++){await page.mouse.move(700+i*15,620);await page.waitForTimeout(120);}
+   await page.evaluate(()=>window.dispatchEvent(new Event('pagehide')));
+   assert.equal((await msgs('pointer_trajectory')).length,beforeLimit,'complex-page scan limits suppress details');
+   await page.evaluate(()=>document.querySelector('#too-many-elements').remove());
    const beforeUnavailable=(await msgs('pointer_trajectory')).length;
    await page.evaluate(()=>{delete window.chrome.dom;});
    for(let i=0;i<4;i++){await page.mouse.move(400+i*15,320);await page.waitForTimeout(120);}

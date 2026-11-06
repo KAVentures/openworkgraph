@@ -77,7 +77,15 @@ function owgInSecureContext(el) {
   return false;
 }
 
-// Secure if any element on the event path, or anything stacked under the pointer (a field hidden by an overlay), is.
+// Bound the work of the conservative geometry check on complex pages. If we
+// cannot complete the check, high-detail capture is suppressed, never guessed.
+const OWG_SECURE_SCAN_MAX_ELEMENTS = 10000;
+const OWG_SECURE_SCAN_MAX_SHADOW_ROOTS = 64;
+const OWG_SECURE_SCAN_MAX_MS = 25;
+
+// Secure if any element on the event path or geometrically under the pointer
+// is a secure field/widget. elementsFromPoint alone is insufficient: it omits
+// elements with pointer-events:none, including covered password fields.
 function owgSecureAt(event) {
   if (pathElements(event).some(el => isSensitiveControl(el))) return true;
   try {
@@ -86,20 +94,36 @@ function owgSecureAt(event) {
     // a hit is safe, so suppress high-detail signals rather than guess.
     const inspect = owgDepthExt?.dom?.openOrClosedShadowRoot;
     if (typeof inspect !== "function" || !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) return true;
-    const queue = [...document.elementsFromPoint(event.clientX, event.clientY)], seen = new Set();
-    if (!queue.length) return true;
+    const started = performance.now(), queue = [{root: document, secure: false}];
+    const secureAncestors = new WeakSet();
+    let count = 0, roots = 0;
+    // A rounded viewport-fraction sample must not move across a field boundary.
+    const padX = Math.max(1, innerWidth * 0.0005), padY = Math.max(1, innerHeight * 0.0005);
+    const coversPoint = el => {
+      const rects = el.getClientRects();
+      if (rects.length > 512) throw new Error("too many rectangles");
+      return Array.from(rects).some(rect => rect.width > 0 && rect.height > 0 &&
+        event.clientX >= rect.left - padX && event.clientX <= rect.right + padX &&
+        event.clientY >= rect.top - padY && event.clientY <= rect.bottom + padY);
+    };
     while (queue.length) {
-      const el = queue.pop();
-      if (!(el instanceof Element) || seen.has(el)) continue;
-      seen.add(el);
-      if (seen.size > 512 || owgInSecureContext(el)) return true;
-      if (!(el instanceof HTMLElement)) continue;
-      const root = owgDepthExt.dom.openOrClosedShadowRoot(el);
-      if (root) {
-        if (typeof root.elementsFromPoint !== "function") return true;
-        queue.push(...root.elementsFromPoint(event.clientX, event.clientY));
+      const {root, secure: inheritedSecure} = queue.pop();
+      if (typeof root.querySelectorAll !== "function") return true;
+      for (const el of root.querySelectorAll("*")) {
+        if (++count > OWG_SECURE_SCAN_MAX_ELEMENTS || performance.now() - started > OWG_SECURE_SCAN_MAX_MS) return true;
+        const secure = inheritedSecure || (el.parentElement && secureAncestors.has(el.parentElement)) || isSensitiveControl(el);
+        if (secure) secureAncestors.add(el);
+        const opaqueFrame = ["iframe", "frame", "object", "embed"].includes(String(el.tagName || "").toLowerCase());
+        if ((secure || opaqueFrame) && coversPoint(el)) return true;
+        if (!(el instanceof HTMLElement)) continue;
+        const shadow = inspect.call(owgDepthExt.dom, el);
+        if (shadow) {
+          if (++roots > OWG_SECURE_SCAN_MAX_SHADOW_ROOTS) return true;
+          queue.push({root: shadow, secure: !!secure});
+        }
       }
     }
+    if (performance.now() - started > OWG_SECURE_SCAN_MAX_MS) return true;
     return false;
   } catch (_) { return true; }
 }
@@ -223,6 +247,9 @@ addEventListener("pointermove", (e) => {
   if (owgSecureAt(e)) {
     // Never sample over a secure field, even one under an overlay: end the batch here and skip until it is left.
     owgFlushTrajectory();
+    // Keep the sampler's throttle even while suppressing, otherwise every
+    // high-frequency move would repeat the entire conservative DOM scan.
+    owgTrajectory.lastSample = now;
     return;
   }
   if (!owgTrajectory.start) owgTrajectory.start = now;

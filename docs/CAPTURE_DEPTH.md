@@ -61,9 +61,13 @@ dropped from these events.
   other secure field, inside a secure widget, or over a secure field hidden under another
   element (the check covers everything stacked under the pointer, not only the element
   that receives the event). Open and closed shadow roots at the pointer are inspected
-  using the browser extension's `dom.openOrClosedShadowRoot` API. If that API or a
-  needed hit-test is unavailable, browser hover, drag and pointer detail is suppressed;
-  ordinary structural capture is unchanged. The current batch ends at the field,
+  using the browser extension's `dom.openOrClosedShadowRoot` API. A bounded geometry
+  scan also covers `pointer-events:none` fields; embedded frame regions are treated
+  conservatively because their contents may not be inspectable from the parent page.
+  If that API or a needed scan is unavailable, or a page exceeds the scan's element,
+  shadow-root or time limits, browser hover, drag and pointer detail is suppressed;
+  ordinary structural capture is unchanged. Complex pages can therefore produce
+  fewer detailed events, and repeated scans add bounded per-event work. The current batch ends at the field,
   and sampling resumes when the pointer leaves it.
 - The raw points are kept on this device in their own table
   (`pointer_trajectory_points`), apart from the event rows, and are deleted with their
