@@ -179,7 +179,7 @@ const pathModule = require("node:path");
       status:401,contentType:"application/json",body:'{"detail":"expired"}',
     }), {times:1});
     await expiredHandoffPage.locator("#handoffCheck").click();
-    await expiredHandoffPage.locator("#handoffStatus").filter({hasText:/REFUSED:|Session cleared/}).waitFor();
+    await expiredHandoffPage.locator("#handoffStatus").filter({hasText:/REFUSED:|Session cleared/}).waitFor({state:"attached"});
     assert.doesNotMatch(await expiredHandoffPage.locator("#handoffStatus").textContent(),/^MATCH:/);
 
     // A fresh authenticated read may return a newer server revision even when
