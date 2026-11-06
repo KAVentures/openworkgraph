@@ -294,3 +294,45 @@ def test_resumption_tracks_preserve_grant_and_identity_boundaries():
     assert resumption_candidates(db, lease=ALL)["candidates"] == []
     assert resumption_candidates(db, lease={"mode": "off"},
                                  run_started_at=_day(14, "00:00"))["candidates"] == []
+
+
+def test_interleaved_resumption_timelines_are_resource_scoped_and_chronological():
+    db = _database([
+        (_day(10, "09:00"), _ref("a")),
+        (_day(10, "09:05"), _ref("b")),
+        (_day(11, "09:00"), _ref("b")),
+        (_day(11, "09:05"), _ref("a")),
+        (_day(12, "09:00"), _ref("a")),
+        (_day(12, "09:05"), _ref("b")),
+    ])
+    result = resumption_candidates(db, lease=ALL)
+    timelines = {item["pointer"]["resource_ref"]: item for item in result["identity_timelines"]}
+    assert set(timelines) == {REF["a"], REF["b"]}
+    assert [episode["evidence_event_ids"] for episode in timelines[REF["a"]]["episodes"]] == [
+        ["e1"], ["e4"], ["e5"]]
+    assert [episode["evidence_event_ids"] for episode in timelines[REF["b"]]["episodes"]] == [
+        ["e2"], ["e3"], ["e6"]]
+    assert all(t["proves_same_task"] is False for t in timelines.values())
+    assert all(e["gap_from_previous_seconds"] is None for t in timelines.values()
+               for e in t["episodes"][:1])
+    assert all(e["gap_from_previous_seconds"] > 0 for t in timelines.values()
+               for e in t["episodes"][1:])
+    assert result["candidates"]  # backward-compatible review candidates remain
+
+
+def test_resumption_timeline_respects_history_grant_and_does_not_link_time_alone():
+    db = _database([
+        (_day(10, "09:00"), _ref("a")),
+        (_day(11, "09:00"), _ref("b")),
+        (_day(12, "09:00"), _ref("a")),
+    ])
+    assert resumption_candidates(db, lease={"mode": "off"},
+                                  run_started_at=_day(12, "00:00"))["identity_timelines"] == []
+    selected = resumption_candidates(db, lease={
+        "mode": "selected_range", "since": _day(11, "00:00"),
+        "until": _day(12, "23:59")})
+    assert selected["identity_timelines"] == []
+    full = resumption_candidates(db, lease=ALL)
+    assert [x["pointer"]["resource_ref"] for x in full["identity_timelines"]] == [REF["a"]]
+    assert [e["evidence_event_ids"] for e in full["identity_timelines"][0]["episodes"]] == [
+        ["e1"], ["e3"]]

@@ -82,3 +82,10 @@ or permission. The pointer scan remains bounded and subject to the current AI
 saved-history lease. A truncated scan means tracks may omit earlier evidence;
 it is never evidence that no other work occurred. The older response fields
 remain available for compatible clients.
+
+
+## Resource-specific continuity timelines (review-only)
+
+The existing `/v1/work-resumption` response now includes `identity_timelines` alongside unchanged `candidates`. For each of up to 12 current-session opaque provider-scoped resources observed in at least two idle-gap sessions, the server returns up to 20 chronological `episodes`: observed first/last instants, a bounded set of event IDs, the containing idle-gap session start, and the elapsed seconds since the previous observed episode. `episodes_truncated` explicitly flags older omitted episodes. Each resource has its own trail, so unrelated cases interleaved within the same session never inherit one another's event IDs. A routine resource is marked `routine_context`; all trails say `proves_same_task: false`. Elapsed time is descriptive and never generates an association or changes confidence.
+
+The same AI saved-history grant and server-side row budgets apply. Access-off and absent pointers yield empty timelines. The new response is advisory navigation, not verified case identity, completion state, authorization, or automatic grouping. The API does not read URLs, titles, work text or clipboard contents. For a user-facing review, inspect individual episode evidence before confirming a workflow. Synthetic SQLite regressions cover interleaved resource trails and grant boundaries; independent held-out F1, contamination and consenting-user acceptance remain unproven.
