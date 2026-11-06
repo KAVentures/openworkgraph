@@ -73,7 +73,7 @@ def read_stripe_attempt_events(*, token: str, expected_account: str,
                 raise ValueError("conflicting provider event")
             matched.append({"event_id": event["id"], "correlation_id": correlation_id,
                             "operation": event_type, "object_id": object_id,
-                            "status": "succeeded"})
+                            "status": "observed"})
     if len(matched) > 1:
         raise ValueError("ambiguous provider operation")
     clock = now or datetime.now(timezone.utc)
