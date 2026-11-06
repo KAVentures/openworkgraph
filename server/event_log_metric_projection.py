@@ -66,13 +66,18 @@ def summarize_projected(
     if total and abs(total.adjusted()) > metrics.MAX_DECIMAL_MAGNITUDE:
         raise metrics.MetricDefinitionError("aggregate magnitude exceeds safe bound")
     count = len(present)
+    # Keep the mean in the same bounded precision context as accumulation;
+    # the ambient Decimal context otherwise rounds repeating ratios at 28 digits.
+    with localcontext() as context:
+        context.prec = 100
+        mean = str(total / count) if count else None
     return {
         "definition_sha256": metrics.validate(definition, numeric_fields),
         "rows": len(projected),
         "non_null": count,
         "null": len(projected) - count,
         "sum": str(total) if count else None,
-        "mean": str(total / count) if count else None,
+        "mean": mean,
         "min": str(min(present)) if count else None,
         "max": str(max(present)) if count else None,
     }
