@@ -162,7 +162,7 @@ with TestClient(app) as client:
     assert client.put("/v1/capture-depth", headers=owner, json={"profile": "enhanced"}).json()["profile"] == "enhanced"
     assert client.put("/v1/capture-depth", headers=owner, json={"profile": "full"}).status_code == 400
     manifest = client.get("/v1/capture-coverage", headers=owner).json()
-    assert manifest["capture_profile"] == "enhanced" and manifest["modalities"]["desktop_hover_dwell"] == "unsupported"
+    assert manifest["capture_profile"] == "enhanced" and manifest["modalities"]["desktop_hover_dwell"] == "on_but_desktop_collector_not_seen"
     assert manifest["modalities"]["browser_hover_dwell"] in ("on", "on_but_browser_extension_not_seen")
     assert manifest["missing_is_not_absence"] is True
     assert client.get("/v1/capture-coverage/friction", headers=bearer).status_code == 403
