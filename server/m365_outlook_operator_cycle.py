@@ -23,7 +23,8 @@ FORMAT = "openworkgraph.m365-operator-cycle.v1"
 
 
 def extract(*, consent_local_read=False, consent_delta_read=False,
-            consent_local_export=False, confirm_removals_reviewed=False, **kwargs):
+            consent_local_export=False, confirm_removals_reviewed=False,
+            require_event_membership=False, **kwargs):
     """Perform only the next bounded Graph GET and write review artifacts."""
     if not all((consent_local_read is True, consent_delta_read is True,
                 consent_local_export is True,
@@ -31,7 +32,8 @@ def extract(*, consent_local_read=False, consent_delta_read=False,
         raise ReceiptError("Explicit extraction and previous-removal review consent required")
     result = run_verified_next_round(
         consent_local_read=True, consent_delta_read=True,
-        consent_local_export=True, confirm_removals_reviewed=True, **kwargs)
+        consent_local_export=True, confirm_removals_reviewed=True,
+        require_event_membership=require_event_membership, **kwargs)
     if result.get("status") != "next_round_review_ready":
         raise ReceiptError("Extraction not ready for human review")
     return {"format": FORMAT, "phase": "extract", "status": "review_required",
@@ -131,6 +133,8 @@ def main(argv=None):
                          "journal-dir", "handoff-dir", "output", "candidate"):
                 p.add_argument("--" + flag, type=Path, required=True)
             p.add_argument("--successor-label", required=True)
+            p.add_argument("--require-event-membership", action="store_true",
+                           help="Require fresh authenticated source-event membership before Graph GET")
             for flag in ("confirm-removals-reviewed", "consent-delta-read",
                          "consent-local-export"):
                 p.add_argument("--" + flag, action="store_true")
