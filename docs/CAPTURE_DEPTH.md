@@ -209,7 +209,7 @@ covered by these tests.
 | Route | Purpose |
 |---|---|
 | `GET /v1/capture-depth` | Current profile, signals, parameters |
-| `PUT /v1/capture-depth` | Change them; dashboard session only. Takes `profile`, `signals`, `parameters` and, for pointer movement, `acknowledgement_version` |
+| `PUT /v1/capture-depth` | Change them; dashboard session only. Takes `profile`, `signals`, `parameters`, `duration_days` (1–90, default 7) and, for pointer movement, `acknowledgement_version` |
 | `GET /v1/capture-coverage` | Coverage manifest |
 | `GET /v1/capture-coverage/friction?hours=` | Friction candidates; dashboard session only |
 | `GET /v1/capture-coverage/heatmap?hostname=&pathname=&hours=` | Pages with pointer samples or one page's grid of counts; dashboard session only |
