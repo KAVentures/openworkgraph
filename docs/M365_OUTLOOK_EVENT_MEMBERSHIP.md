@@ -1,0 +1,11 @@
+# Microsoft 365 event-level membership readback
+
+The opt-in operator command `python -m server.m365_outlook_event_membership --help` independently reads the authenticated local OWG saved-log **source-key export** and compares it with a previously reviewed private Microsoft Graph candidate. This is a bounded **read-only** local reconciliation step, not a provider sync or append.
+
+Pass `--tenant --mailbox --folder --grant-file --candidate --csv-path --log-id --confirm-log-id --consent-local-read`. Set `OWG_DASHBOARD_SESSION` to the current local dashboard session. The grant must remain active, the destination must match exactly, and the source event namespace must match the provider scope. The command uses only literal loopback `127.0.0.1` and the existing session authentication. It does not need or contact Microsoft Graph.
+
+The command reads `GET /v1/event-logs/{log_id}/export?format=sourcecsv&case_type=source_case` with a hard 16 MiB response cap, checks the source namespace, unique event IDs, source-case mapping and current inventory count, and rechecks the grant. A truncated, oversized, invalid, unauthorized or inconsistent export is refused. No raw email/message data or event identifiers are printed.
+
+Exit `0` means all candidate source event IDs and declared case keys were found in the authenticated OWG export. Exit `3` means candidate events were missing and manual reconciliation is required. Exit `2` means refusal or an unverifiable readback. **None of these statuses authorizes retry, provider checkpoint advancement, deletion, or live business action.** A source key in OWG proves only locally saved membership, not Microsoft Graph delivery, completeness, correctness of payload, or real tenant acceptance.
+
+This feature is separate from the existing `recover` count-level receipt triage; it does not change that command or its conservative handling of uncertain POST outcomes. It is an explicit additional operator investigation step. The full export is capped rather than paginated, so large saved logs refuse until a separately reviewed authenticated bounded-key query is available. Test with `python -m pytest tests/test_m365_outlook_event_membership.py`; complete native CI and an authorized real Microsoft 365 sandbox run remain required before production claims.
