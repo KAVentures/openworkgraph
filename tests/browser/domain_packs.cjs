@@ -34,8 +34,8 @@ const path=require('node:path');
   const packs=page.locator('#owgDomainPacks');await packs.waitFor();
   await page.locator('#owgDomainPackSetup').click();
   await page.locator('#owgDomainPackStatus').filter({hasText:'Not installed on this log.'}).waitFor();
-  // Both packs are offered; switching shows the other pack's roles and switching back restores this one.
-  assert.deepEqual(await page.locator('#owgDomainPackChoice option').allTextContents(),['Order to cash','Procure to pay','IT service management']);
+  // The catalog offers the packs; switching shows their roles and restores this one.
+  assert.deepEqual(await page.locator('#owgDomainPackChoice option').allTextContents(),['Order to cash','Procure to pay','Sales lead qualification','IT service management']);
   await page.locator('#owgDomainPackChoice').selectOption('procure_to_pay');
   await page.locator('#owgDomainPackRole-purchase_order').waitFor();
   assert.equal(await page.locator('#owgDomainPackRole-order').count(),0);
@@ -73,6 +73,27 @@ const path=require('node:path');
   await page.locator('#owgDomainPackUninstall').click();
   await page.locator('#owgDomainPackStatus').filter({hasText:'Uninstalled 1.0.0; 4 pack case metrics were removed.'}).waitFor();
   assert.equal(await page.locator('#owgDomainPackRun').isDisabled(),true);
+  // The sales pack is usable through the same mapped CSV workflow.
+  const salesCsv='lead,activity,time\nL1,Lead created,2026-01-01T00:00:00Z\nL1,Reviewed,2026-01-01T00:30:00Z\nL1,Qualified,2026-01-01T01:00:00Z\nL1,Opportunity created,2026-01-01T03:00:00Z\nL2,Lead created,2026-01-01T00:00:00Z\nL2,Qualified,2026-01-04T00:00:00Z\nL2,Opportunity created,2026-01-06T00:00:00Z\n';
+  await page.locator('#owgEventLogFile').setInputFiles({name:'sales.csv',mimeType:'text/csv',buffer:Buffer.from(salesCsv)});
+  await page.locator('#owgEventLogStatus').filter({hasText:'File mapping ready.'}).waitFor();
+  await page.locator('#owgEventLogCase').selectOption('lead');
+  await page.locator('#owgEventLogActivity').selectOption('activity');
+  await page.locator('#owgEventLogTime').selectOption('time');
+  await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
+  await page.locator('#owgEventLogStatus').filter({hasText:'Imported'}).waitFor();
+  await page.locator('#owgEventLogAnalyze').click();
+  await page.locator('#owgDomainPackSetup').click();
+  await page.locator('#owgDomainPackChoice').selectOption('sales_lead_management');
+  await page.locator('#owgDomainPackRole-lead').selectOption('case');
+  for(const [role,name] of Object.entries({create_lead:'Lead created',qualify_lead:'Qualified',create_opportunity:'Opportunity created',review_lead:'Reviewed'}))
+    await page.locator('#owgDomainPackRole-'+role).selectOption(name);
+  await page.locator('#owgDomainPackInstall').click();
+  await page.locator('#owgDomainPackStatus').filter({hasText:'Installed 1.0.0.'}).waitFor();
+  await page.locator('#owgDomainPackRun').click();
+  await page.locator('#owgDomainPackReport').getByText('sales_lead_time_to_qualify',{exact:true}).waitFor();
+  assert.match(await page.locator('#owgDomainPacks').textContent(),/Open, rejected, disqualified/);
+  assert.match(await page.locator('#owgDomainPackReport').textContent(),/not validated against any particular source system/);
   assert.deepEqual(errors,[]);
   console.log('Domain pack browser passed: order-to-cash roles mapped to a log\'s own names, install, report with planted deviations, parameter change and reinstall, WCAG and 390 px width, uninstall, and switching between the order-to-cash and procure-to-pay packs.');
  }finally{

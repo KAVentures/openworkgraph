@@ -1,9 +1,10 @@
 # Domain packs
 
 A domain pack bundles the definitions a process team would otherwise rebuild for every log of a well-known
-process. Three packs ship, each at version 1.0.0: **order to cash** (`order_to_cash`), **procure to pay**
-(`procure_to_pay`) and **IT service management** (`service_management`). Packs are local definitions: they add no source access, uploads or model calls. Both can be
-installed on the same log; each owns its own metrics.
+process. Four packs ship, each at version 1.0.0: **order to cash** (`order_to_cash`), **procure to pay**
+(`procure_to_pay`), **IT service management** (`service_management`) and
+**sales lead qualification** (`sales_lead_management`). Packs are local definitions: they add no source access,
+uploads or model calls. Multiple packs can be installed on the same log; each owns its own metrics.
 
 ## What a pack contains
 
@@ -110,6 +111,15 @@ installed on the same log; each owns its own metrics.
 | `GET /v1/event-logs/{log_id}/domain-packs/{pack_id}/report` | Run every resolved definition on the log. |
 
 All routes need a dashboard session, return `no-store` and refuse repeated JSON keys.
+
+## Sales lead qualification
+
+Map a selected lead case to creation, qualification and opportunity-creation activities;
+review and reopen are optional. The pack reports elapsed-time and activity-count metrics,
+configurable timing and sequence checks, and a per-case check for more than one observed
+opportunity-creation event. Repeated events do not establish distinct CRM opportunities;
+open or disqualified leads can appear as missing responses. The simple reference path
+allows one optional review and does not model reopening. See [sales lead qualification](SALES_LEAD_DOMAIN_PACK.md).
 
 ## Install, upgrade and uninstall
 
