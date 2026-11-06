@@ -19,7 +19,7 @@ import stat
 import sys
 from urllib import error, parse, request
 
-from scripts.salesforce_case_history import ID, ExportError, project
+from shared.salesforce_case_history import ID, ExportError, project
 
 FORMAT = "openworkgraph.salesforce-live-case-history.v1"
 MAX_CASES = 8

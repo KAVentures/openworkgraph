@@ -104,6 +104,44 @@ def _case_filter(started_from: str = Query(default="", max_length=64),
     return cohort
 
 
+@router.post("/v1/event-logs/prepare-salesforce")
+async def prepare_salesforce_export(request: Request):
+    """Prepare a selected offline export without retaining it as an event log."""
+    _require_dashboard(request)
+    from csv import DictReader
+    from hashlib import sha256
+    from io import StringIO
+    from itertools import islice
+    from shared.salesforce_case_history import MAX_BYTES, project
+
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+        raise HTTPException(415, "JSON export preparation required")
+    raw = bytearray()
+    async for chunk in request.stream():
+        # JSON escapes may double the size; reserve room for selection metadata.
+        if len(raw) + len(chunk) > MAX_BYTES * 2 + 16384:
+            raise HTTPException(413, "Export preparation request too large")
+        raw.extend(chunk)
+    try:
+        data = json.loads(raw)
+        if (type(data) is not dict or set(data) != {"account", "cases", "csv", "confirm_processing"}
+                or data["confirm_processing"] is not True or type(data["csv"]) is not str):
+            raise ValueError()
+        csv_text, report = await run_in_threadpool(project, data["csv"].encode("utf-8"),
+                                                  account=data["account"], cases=data["cases"])
+        # Use the same declared namespace for later manual exports of this account.
+        # It is a declaration, not verified Salesforce organization identity.
+        namespace = "sfexp_" + sha256(data["account"].encode("utf-8")).hexdigest()[:32]
+        preview = list(islice(DictReader(StringIO(csv_text, newline="")), 20))
+        return JSONResponse({"csv": csv_text, "report": report, "namespace": namespace,
+                             "preview": preview, "preview_omitted": report["events"] - len(preview),
+                             "persisted": False}, headers={"Cache-Control": "no-store"})
+    except (ValueError, UnicodeError, RecursionError):
+        raise HTTPException(422, "Check the selected CaseHistory export, case IDs and account namespace") from None
+    finally:
+        raw.clear()
+
+
 @router.get("/event-log-workspace.js")
 def event_log_workspace_script() -> FileResponse:
     """Static dashboard client; it only calls the authenticated routes below."""
