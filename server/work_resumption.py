@@ -275,10 +275,19 @@ def resumption_candidates(
                                if pair[0] in specific and pair[1] in specific]
         if correlated_specific:
             assignment_status = "corroborated_candidate"
+            # A pair observed together in both sessions is stronger than a
+            # union of unrelated resource pointers. It is still not a task.
+            status, confidence = _assess(specific, overlap)
         elif specific:
             assignment_status = "unresolved_independent_resources"
+            # Independent A/B resources can make session-wide Jaccard 1.0.
+            # Do not rank that as a likely resumed *case* without observed
+            # resource-local corroboration. A single stable resource remains
+            # a possible continuation, never a proven task.
+            status, confidence = "possible", (0.5 if len(specific) == 1 else 0.55)
         else:
             assignment_status = "ambiguous_routine_context"
+            status, confidence = "ambiguous", 0.3
         start, end = sessions[index]
         gap_seconds = max(0.0, (current_start - end) * 86400)
         candidates.append({

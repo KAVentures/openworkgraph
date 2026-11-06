@@ -47,7 +47,7 @@ def test_resumed_work_from_a_previous_day_is_found_by_shared_pointers():
     [candidate] = result["candidates"]
     assert candidate["earlier_session"]["started_at"].startswith("2026-10-12T09:00")
     assert [p["resource_ref"] for p in candidate["shared_pointers"]] == [REF["a"], REF["b"]]
-    assert candidate["association_status"] == "likely_resumed" and candidate["confidence"] == 0.8
+    # Shared session pointers alone do not corroborate a single resumed case.\n    assert candidate["association_status"] == "possible" and candidate["confidence"] == 0.55\n    assert candidate["case_assignment_status"] == "unresolved_independent_resources"
     assert candidate["crosses_calendar_day"] is True and candidate["proves_same_work"] is False
     assert candidate["task_label"] is None
     assert candidate["gap_seconds"] == 2 * 86400 - 20 * 60 + 3600
