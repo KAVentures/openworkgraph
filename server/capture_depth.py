@@ -31,14 +31,21 @@ PROFILES: dict[str, dict[str, bool]] = {
     "enhanced": {"hover_dwell": True, "drag_drop": True, "friction_candidates": True, "pointer_trajectory": False},
     "full": {"hover_dwell": True, "drag_drop": True, "friction_candidates": True, "pointer_trajectory": True},
 }
-DEFAULT_PARAMETERS = {"hover_dwell_ms": 750, "trajectory_hz": 4, "max_events_per_minute": 60}
-PARAMETER_BOUNDS = {"hover_dwell_ms": (300, 5000), "trajectory_hz": (1, 20), "max_events_per_minute": (10, 600)}
+DEFAULT_PARAMETERS = {"hover_dwell_ms": 750, "trajectory_hz": 4, "max_events_per_minute": 60, "retention_days": 30}
+PARAMETER_BOUNDS = {"hover_dwell_ms": (300, 5000), "trajectory_hz": (1, 20), "max_events_per_minute": (10, 600),
+                    "retention_days": (1, 365)}
 # Which stored browser actions each signal produces. Actions not listed are existing structural signals.
 SIGNAL_ACTIONS = {"hover_dwell": {"control_hover_dwell"},
                   "drag_drop": {"drag_start", "drag_drop", "drag_end"},
                   "pointer_trajectory": {"pointer_trajectory"}}
 MAX_TRAJECTORY_POINTS = 200
+# Stored event types of the high-fidelity signals, browser and desktop.
+HIGH_FIDELITY_EVENT_TYPES = ("browser_control_hover_dwell", "browser_drag_start", "browser_drag_drop", "browser_drag_end",
+                             "browser_pointer_trajectory", "screen_hover_dwell", "screen_drag", "screen_pointer_trajectory")
+HEATMAP_GRID = 20
+PURGE_INTERVAL_SECONDS = 3600
 _LOCK = threading.RLock()
+_LAST_PURGE: dict[str, float | None] = {"at": None}
 
 
 class CaptureDepthError(ValueError):
@@ -142,6 +149,96 @@ def public() -> dict[str, Any]:
                                "dragged_text_or_html", "secure_field_hover", "page_contents"]}
 
 
+def delete_high_fidelity(*, older_than_days: int | None = None) -> dict[str, Any]:
+    """Delete stored high-fidelity interaction events (and their local pointer points).
+
+    ``older_than_days=None`` deletes all of them. Structural evidence (clicks, focus,
+    navigation) is never touched.
+    """
+    from datetime import timedelta
+    from .db import connect
+    placeholders = ",".join("?" for _ in HIGH_FIDELITY_EVENT_TYPES)
+    where, params = f"event_type IN ({placeholders})", list(HIGH_FIDELITY_EVENT_TYPES)
+    if older_than_days is not None:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).isoformat()
+        where += " AND julianday(observed_at) < julianday(?)"
+        params.append(cutoff)
+    deleted = {}
+    with _LOCK, connect() as conn:
+        ids = [r[0] for r in conn.execute(f"SELECT event_id FROM events WHERE {where}", params).fetchall()]
+        for table in ("context_events", "normalized_events", "events"):
+            removed = 0
+            for offset in range(0, len(ids), 500):
+                chunk = ids[offset:offset + 500]
+                removed += conn.execute(f"DELETE FROM {table} WHERE event_id IN ({','.join('?' for _ in chunk)})",
+                                        chunk).rowcount or 0
+            deleted[table] = removed
+        orphaned = conn.execute("DELETE FROM pointer_trajectory_points WHERE event_id NOT IN "
+                                "(SELECT event_id FROM events)").rowcount or 0
+    return {"deleted_events": deleted["events"], "deleted_derived_rows": deleted["context_events"] + deleted["normalized_events"],
+            "orphaned_point_sets_removed": orphaned, "older_than_days": older_than_days,
+            "structural_evidence_kept": True}
+
+
+def apply_retention(force: bool = False) -> dict[str, Any] | None:
+    """Apply the high-fidelity retention limit, at most once an hour unless forced."""
+    import time
+    now = time.monotonic()
+    last = _LAST_PURGE["at"]
+    if not force and last is not None and now - last < PURGE_INTERVAL_SECONDS:
+        return None
+    _LAST_PURGE["at"] = now
+    try:
+        return delete_high_fidelity(older_than_days=load()["parameters"]["retention_days"])
+    except Exception:
+        return None
+
+
+def pointer_heatmap(*, hostname: str | None = None, pathname: str | None = None, hours: int = 168) -> dict[str, Any]:
+    """A local review aid: where sampled pointer movement fell on a page, as a coarse grid of counts.
+
+    Only counts per cell leave this function, never the points. Pages are listed when no
+    page is chosen. This is not an attention, effort or performance measure.
+    """
+    from datetime import timedelta
+    from .db import connect
+    since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    with connect() as conn:
+        rows = conn.execute("""SELECT e.metadata_json, p.points_json FROM events e
+            JOIN pointer_trajectory_points p ON p.event_id = e.event_id
+            WHERE e.event_type = 'browser_pointer_trajectory' AND julianday(e.observed_at) >= julianday(?)
+            ORDER BY e.observed_at DESC LIMIT 5000""", (since,)).fetchall()
+    pages: dict[str, int] = {}
+    grid = [[0] * HEATMAP_GRID for _ in range(HEATMAP_GRID)]
+    samples = batches = 0
+    for meta_json, points_json in rows:
+        try:
+            meta, points = json.loads(meta_json or "{}"), json.loads(points_json or "[]")
+        except ValueError:
+            continue
+        page = meta.get("page") if isinstance(meta.get("page"), dict) else {}
+        host, path = str(page.get("hostname") or ""), str(page.get("pathname") or "")
+        pages[host + path] = pages.get(host + path, 0) + len(points)
+        if hostname is None or host != hostname or (pathname is not None and path != pathname):
+            continue
+        batches += 1
+        for point in points:
+            if isinstance(point, list) and len(point) == 3:
+                x = min(HEATMAP_GRID - 1, max(0, int(float(point[1]) * HEATMAP_GRID)))
+                y = min(HEATMAP_GRID - 1, max(0, int(float(point[2]) * HEATMAP_GRID)))
+                grid[y][x] += 1
+                samples += 1
+    out: dict[str, Any] = {"hours": hours, "pages": [{"page": k, "samples": v} for k, v in
+                                                     sorted(pages.items(), key=lambda p: (-p[1], p[0]))[:50]],
+                           "local_review_only": True, "raw_points_returned": False,
+                           "interpretation": ("Where sampled pointer movement fell on this page. It is not a measure of "
+                                              "attention, effort or performance.")}
+    if hostname is not None:
+        out.update(page={"hostname": hostname, "pathname": pathname}, grid=grid, grid_size=HEATMAP_GRID,
+                   samples=samples, batches=batches, coordinates="viewport_fraction_cells")
+    return out
+
+
 def for_extension() -> dict[str, Any]:
     """The subset the paired extension needs to decide what to emit."""
     state = load()
@@ -219,5 +316,6 @@ def _frame(metadata: dict[str, Any]) -> dict[str, Any]:
     return {k: metadata[k] for k in ("top_frame", "frame_kind", "tab_id", "window_id") if k in metadata}
 
 
-__all__ = ["CaptureDepthError", "FULL_ACK_VERSION", "PROFILES", "SIGNALS", "action_allowed", "action_allowed_on_excluded", "bound_metadata", "bound_target",
-           "for_extension", "load", "public", "save"]
+__all__ = ["CaptureDepthError", "FULL_ACK_VERSION", "HIGH_FIDELITY_EVENT_TYPES", "PROFILES", "SIGNALS", "action_allowed",
+           "action_allowed_on_excluded", "apply_retention", "bound_metadata", "bound_target", "delete_high_fidelity",
+           "for_extension", "load", "pointer_heatmap", "public", "save"]

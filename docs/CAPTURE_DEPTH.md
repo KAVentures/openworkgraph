@@ -12,6 +12,7 @@ choice. Set it under **Privacy → Interaction detail**.
 You can also switch each signal on or off on its own, set how long the pointer must
 rest before a hover counts (300–5,000 ms, default 750), and set pointer samples per
 second (1–20, default 4). The extension also caps all of these events at 60 a minute.
+How long this detail is kept is set separately (below).
 
 Capture depth only decides what is **recorded locally**. Retention, sharing with your
 organization and sharing with an AI or cloud service keep their own separate
@@ -92,6 +93,21 @@ clicks, desktop hover, drag and pointer (unsupported for now), screenshots and w
 text. Reconstruction and agents can use it to tell a missing signal from an absent
 behaviour.
 
+## Keeping and deleting interaction detail
+
+- **Retention.** Hover, drag and pointer events are kept for *Keep interaction detail*
+  days (1–365, default 30). Older ones are deleted, along with their derived rows and
+  stored pointer points, when new events arrive (at most once an hour). Clicks, pages
+  and other structural activity follow the ordinary history retention instead.
+- **Delete now.** *Delete interaction detail now* removes every recorded hover, drag and
+  pointer event from this computer and keeps all other activity
+  (`POST /v1/capture-depth/delete` with `{"confirm": true}`, optionally
+  `"older_than_days": N`).
+- **Pointer heatmap.** *Show pointer heatmap* is a local review aid. It lists the pages
+  with sampled pointer movement from the last 7 days, then shows where the samples fell
+  on the chosen page as a 20 × 20 grid of counts. Only the counts reach the dashboard,
+  never the points. It is not a measure of attention, effort or performance.
+
 ## Not yet done
 
 - Desktop hover, drag and drop and pointer movement on macOS and Windows: the
@@ -108,3 +124,5 @@ behaviour.
 | `PUT /v1/capture-depth` | Change them; dashboard session only. Takes `profile`, `signals`, `parameters` and, for pointer movement, `acknowledgement_version` |
 | `GET /v1/capture-coverage` | Coverage manifest |
 | `GET /v1/capture-coverage/friction?hours=` | Friction candidates; dashboard session only |
+| `GET /v1/capture-coverage/heatmap?hostname=&pathname=&hours=` | Pages with pointer samples or one page's grid of counts; dashboard session only |
+| `POST /v1/capture-depth/delete` | Delete recorded high-fidelity events now; dashboard session only, needs `confirm: true` |
