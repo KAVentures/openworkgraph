@@ -102,3 +102,14 @@ def test_large_cancelling_cohort_does_not_depend_on_fetch_order():
     ]
     assert all(result["sum"] in {"0E+18", "0"} for result in results)
     assert results[0]["sum"] == results[1]["sum"]
+
+
+def test_mean_uses_bounded_precision_independent_of_ambient_decimal_context():
+    from decimal import localcontext
+
+    definition = {"version": 1, "expression": {"field": "x"}}
+    rows = [{"x": 1}, {"x": 0}, {"x": 0}]
+    with localcontext() as context:
+        context.prec = 6
+        result = summarize_projected(definition, rows, {"x"})
+    assert result["mean"] == "0." + "3" * 100
