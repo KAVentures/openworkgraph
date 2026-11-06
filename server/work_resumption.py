@@ -57,7 +57,14 @@ def _pointer(sanitized: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
-def _assess(specific: list[str], overlap: float) -> tuple[str, float]:
+def _identity(pointer: dict[str, Any]) -> tuple[str, str, str]:
+    """Scope opaque pointer matching by provider and resource kind."""
+    return (str(pointer.get("provider") or "").lower(),
+            str(pointer.get("resource_kind") or "").lower(),
+            str(pointer["resource_ref"]))
+
+
+def _assess(specific: list[tuple[str, str, str]], overlap: float) -> tuple[str, float]:
     """Status and confidence from pointer evidence only (never from time)."""
     if len(specific) >= 2 and overlap >= 0.34:
         return "likely_resumed", 0.8
@@ -141,7 +148,7 @@ def resumption_candidates(
         pointers = _pointer(sanitized_pointers(data.get("metadata_json")))
         bucket = by_session[index]
         for pointer in pointers:
-            bucket["refs"].setdefault(pointer["resource_ref"], pointer)
+            bucket["refs"].setdefault(_identity(pointer), pointer)
         if pointers and len(bucket["events"]) < 6:
             bucket["events"].append(str(data.get("event_id") or "")[:120])
 
@@ -160,7 +167,7 @@ def resumption_candidates(
         "started_at": _iso(current_start),
         "last_observed_at": _iso(current_end),
         "pointer_count": len(current["refs"]),
-        "resource_refs": sorted(current["refs"])[:24],
+        "resource_refs": sorted({identity[2] for identity in current["refs"]})[:24],
     }
     if not current["refs"]:
         result["notice"] = ("The latest session has no observed stable pointer, so resumption "
