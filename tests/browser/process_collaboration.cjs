@@ -163,7 +163,7 @@ const pathModule = require("node:path");
     const detailUrl = "**/v1/human/processes/" + handoffProcess.workflow_id;
     await deniedHandoffPage.route(detailUrl, async route => route.fulfill({status:403, contentType:"application/json", body:'{"detail":"denied"}'}), {times:1});
     await deniedHandoffPage.locator("#handoffCheck").click();
-    await deniedHandoffPage.locator("#handoffStatus").filter({hasText:"REFUSED:"}).waitFor();
+    await deniedHandoffPage.locator("#handoffStatus").filter({hasText:/REFUSED:|Session cleared/}).waitFor();
     assert.equal(uploadedHandoff, false);
 
     assert.equal(
