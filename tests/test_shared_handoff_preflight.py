@@ -16,7 +16,7 @@ def test_handoff_preflight_is_inside_authenticated_selected_process():
 
 def test_handoff_preflight_reads_fresh_authorized_process_without_upload():
     html = PAGE.read_text(encoding="utf-8")
-    block = html.split('let handoffGeneration=0;', 1)[1].split('      })();', 1)[0]
+    block = html.split('function resetHandoff(message=', 1)[1].split('      })();', 1)[0]
     assert 'await call("/v1/human/processes/"+encodeURIComponent(p.workflow_id))' in block
     assert 'fetch(' not in block
     assert 'file.text()' in block
