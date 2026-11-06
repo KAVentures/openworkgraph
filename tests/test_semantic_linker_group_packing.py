@@ -12,7 +12,8 @@ def test_partition_covers_more_items_than_largest_clique():
     groups = [[str(n)] for n in range(1, 6)]
     by_id = {str(n): {} for n in range(1, 6)}
     accepted, vetoed = _compatible_groups(pairs, groups, by_id)
-    assert accepted == [[1, 4], [2, 5]]
+    # Both partitions cover four nodes and two edges; lexical tie-break wins.
+    assert accepted == [[1, 3], [2, 5]]
     assert vetoed == 1
 
 
