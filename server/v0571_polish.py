@@ -39,6 +39,8 @@ _PASSIVE_STEP_ACTIONS = {
     "scroll",
     "mouse move",
     "mouse_move",
+    "control_hover_dwell",
+    "pointer_trajectory",
 }
 _CAPTURE_PATHS = {
     "/v1/capture/status",

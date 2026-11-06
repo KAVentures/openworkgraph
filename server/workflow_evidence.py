@@ -662,6 +662,9 @@ def _surface_timing(per_run_events: dict[str, list[dict[str, Any]]]) -> list[dic
 
 
 def _canonical_event_projection(event: dict[str, Any]) -> dict[str, Any]:
+    # Trajectory coordinates are stored apart from events (#634); summarize any legacy copy too.
+    from .privacy_pipeline import summarize_pointer_trajectories
+    event = summarize_pointer_trajectories(event)
     return {
         key: event.get(key)
         for key in (

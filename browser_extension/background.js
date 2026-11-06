@@ -112,9 +112,11 @@ async function getJson(path) {
 async function refreshWorkContext() {
   const fresh = await getJson("/v1/browser-context");
   if (!fresh) {
-    try { await ext.storage.local.set({openworkgraph_work_text_capture_v1: false}); } catch (_) {}
+    try { await ext.storage.local.set({openworkgraph_work_text_capture_v1: false, openworkgraph_capture_depth_v1: null}); } catch (_) {}
     return null;
   }
+  // Capture depth (#634): only what the local server currently allows; missing means Standard.
+  try { await ext.storage.local.set({openworkgraph_capture_depth_v1: fresh.capture_depth && typeof fresh.capture_depth === "object" ? fresh.capture_depth : null}); } catch (_) {}
   // Never persist rich text in browser storage; only the server's live opt-in flag.
   try {
     await ext.storage.local.set({
