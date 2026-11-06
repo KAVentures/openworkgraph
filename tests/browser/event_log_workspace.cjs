@@ -66,6 +66,12 @@ const path=require('node:path');
    const [coverageJson]=await Promise.all([page.waitForEvent('download'),page.locator('#owgVariantCoverageJson').click()]);
    const coveragePacket=JSON.parse(await fs.readFile(await coverageJson.path(),'utf8'));
    assert.deepEqual(coveragePacket.coverage_targets,coverageResult.coverage_targets);
+   await page.getByRole('button',{name:'Inspect variant 1 cases',exact:true}).click();
+   await page.locator('#owgVariantCoverageCasesStatus').filter({hasText:coverageResult.displayed_variants[0].cases+' matching cases'}).waitFor();
+   await page.locator('#owgVariantCoverageLimit').selectOption('50');
+   const [expandedCoverage]=await Promise.all([page.waitForResponse(r=>r.url().includes('/variant-coverage')&&r.url().includes('limit=50')),page.locator('#owgVariantCoverageRun').click()]);
+   assert.equal((await expandedCoverage.json()).cases,60);
+
 
    assert.match(await page.locator('#owgEventLogResults').textContent(),/Receive → Check → Approve → Close/);
    await page.locator('#owgQuality summary').click();
@@ -154,6 +160,12 @@ const path=require('node:path');
    assert.equal(await page.locator('#owgCaseFilterFrom2').inputValue(),'Fix','rules stay editable after applying');
    assert.match(await page.locator('#owgEventLogResults').textContent(),/Receive → Check → Fix → Check → Close/);
    await page.locator('#owgPlaybackStatus').filter({hasText:'Playing 2 of 2 cases'}).waitFor();
+   // Variant coverage evidence preserves the same whole-case filter, not just its displayed path.
+   const [filteredCoverage]=await Promise.all([page.waitForResponse(r=>r.url().includes('/variant-coverage')),page.locator('#owgVariantCoverageRun').click()]);
+   assert.equal((await filteredCoverage.json()).cases,2);
+   await page.getByRole('button',{name:'Inspect variant 1 cases',exact:true}).click();
+   await page.locator('#owgVariantCoverageCasesStatus').filter({hasText:'2 matching cases (case filter applied)'}).waitFor();
+   assert.deepEqual((await page.locator('#owgVariantCoverageCasesList button').allTextContents()).sort(),['C0','C30']);
    // The case evidence drill-down selects the same filtered cases.
    await page.locator('#owgEventLogCasesBrowse').click();
    await page.locator('#owgEventLogCasesStatus').filter({hasText:'2 matching cases (case filter applied)'}).waitFor();

@@ -27,7 +27,10 @@ const path=require('node:path');
   await out.getByRole('button',{name:'Disable profile',exact:true}).click();
   await out.getByRole('button',{name:'Enable profile',exact:true}).waitFor();
   await page.locator('#owgEventLogAnalyze').click();
-  await page.locator('#owgEventLogResults').getByText('Status: Ready',{exact:true}).first().waitFor();
+  // Case-inspector controls may have a hidden option with the same label.
+  const activities=page.locator('#owgEventLogResults').getByRole('table').filter({
+    has:page.getByRole('columnheader',{name:'Cases repeating activity',exact:true})});
+  await activities.getByRole('cell',{name:'Status: Ready',exact:true}).waitFor();
   // Auxiliary map/quality panels finish asynchronously. Preserve the actual
   // analysis nodes and unsaved input, rather than comparing their loading text.
   await page.locator('#owgAnalysisName').fill('Keep this unsaved analysis');
