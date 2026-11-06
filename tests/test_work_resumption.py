@@ -225,3 +225,37 @@ assert result["orientation"]["earlier_session_resumption_candidates_available"] 
 def test_current_work_context_carries_resumption_candidates_and_fails_soft():
     child = subprocess.run([sys.executable, "-c", COMPACT], cwd=ROOT, text=True, capture_output=True, timeout=60)
     assert child.returncode == 0, child.stderr
+
+
+def test_same_opaque_reference_from_different_providers_is_not_resumption():
+    # Provider-scoped references can collide; equality of the token alone is insufficient.
+    other = {"resource_reference": {"resource_ref": REF["a"],
+             "provider": "jira", "resource_kind": "issue"}}
+    db = _database([(_day(12, "09:00"), _ref("a")),
+                    (_day(14, "10:00"), other)])
+    result = resumption_candidates(db, lease=ALL)
+    assert result["candidates"] == []
+    assert result["current_session"]["pointer_count"] == 1
+
+
+def test_same_token_distinct_kinds_remain_separate_within_session():
+    issue = {"resource_reference": {"resource_ref": REF["a"],
+             "provider": "github", "resource_kind": "issue"}}
+    db = _database([(_day(12, "09:00"), _ref("a")),
+                    (_day(12, "09:01"), issue),
+                    (_day(14, "10:00"), _ref("a")),
+                    (_day(14, "10:01"), issue)])
+    result = resumption_candidates(db, lease=ALL)
+    assert result["current_session"]["pointer_count"] == 2
+    assert result["candidates"][0]["shared_pointer_count"] == 2
+    assert {p["resource_kind"] for p in result["candidates"][0]["shared_pointers"]} == {"issue", "pull_request"}
+
+
+def test_file_and_provider_resource_with_same_token_cannot_cross_match():
+    # Even if a provider emits the same token, file references have separate identity.
+    token = FILE
+    resource = {"resource_reference": {"resource_ref": token,
+                "provider": "github", "resource_kind": "file"}}
+    db = _database([(_day(12, "09:00"), {"file_reference": {"file_ref": token}}),
+                    (_day(14, "10:00"), resource)])
+    assert resumption_candidates(db, lease=ALL)["candidates"] == []
