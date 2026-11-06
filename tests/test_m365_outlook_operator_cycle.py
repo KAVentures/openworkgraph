@@ -115,6 +115,35 @@ class OperatorCycleTests(unittest.TestCase):
                               consent_local_export=True,
                               confirm_removals_reviewed=True)
 
+    def test_recover_requires_separate_consents_before_readback(self):
+        with patch.object(cycle, "recovery_triage") as delegate:
+            with self.assertRaises(ReceiptError):
+                cycle.recover(consent_local_read=True)
+            delegate.assert_not_called()
+
+    def test_recover_cli_verified_and_uncertain_have_distinct_exit_codes(self):
+        import contextlib
+        import io
+        import json
+        argv = ["recover", "--tenant", "t", "--mailbox", "m", "--folder", "f",
+                "--log-id", "log", "--confirm-log-id", "log",
+                "--grant-file", "grant", "--candidate", "candidate",
+                "--csv-path", "events.csv", "--receipt-file", "receipt",
+                "--consent-local-read", "--confirm-removals-reviewed"]
+        with patch.dict("os.environ", {"OWG_DASHBOARD_SESSION": "session"}), \\
+             patch.object(cycle, "recovery_triage", return_value={
+                 "status": "receipt_verified", "next_action": "operator_may_separately_prepare_handoff"
+             }) as delegate, contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(cycle.main(argv), 0)
+            self.assertEqual(json.loads(out.getvalue())["phase"], "recover")
+            self.assertEqual(delegate.call_args.kwargs["session"], "session")
+        with patch.object(cycle, "recovery_triage", return_value={
+            "status": "manual_reconciliation_required",
+            "next_action": "inspect_authenticated_owg_append_history_and_provider_grant"
+        }), contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(cycle.main(argv), 3)
+            self.assertFalse(json.loads(out.getvalue())["automatic_retry_allowed"])
+
     def test_handoff_requires_independent_removal_review_before_readback(self):
         with patch.object(cycle, "prepare_handoff") as delegate:
             with self.assertRaises(ReceiptError):
