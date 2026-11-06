@@ -89,10 +89,10 @@ def verify_provider_attempt(
                           ("operation", operation), ("object_id", object_id)):
         if not hmac.compare_digest(event[key], expected):
             return {**unknown, "reason": "identity_conflict"}
-    if event.get("status") not in ("succeeded", "failed"):
+    if event.get("status") not in ("observed", "succeeded", "failed"):
         return {**unknown, "reason": "unconfirmed_provider_status"}
-    return {"status": "verified_provider_operation",
-            "provider_operation": event["status"],
+    return {"status": "verified_provider_event" if event["status"] == "observed" else "verified_provider_operation",
+            "provider_operation": "unknown" if event["status"] == "observed" else event["status"],
             "customer_outcome": "unknown",
             "event_id": expected_event_id,
             "checked_at": checked.isoformat()}
