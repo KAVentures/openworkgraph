@@ -42,7 +42,20 @@ def main(argv=None) -> int:
     parser.add_argument("--idempotency-key", required=True)
     parser.add_argument("--event-id", required=True)
     parser.add_argument("--confirm-provider-read", action="store_true")
+    parser.add_argument("--journal-path", help="Explicit local SQLite journal path; no default persistence")
+    parser.add_argument("--tenant", help="Explicit tenant scope for journal")
+    parser.add_argument("--actor", help="Explicit actor scope for journal")
+    parser.add_argument("--attempt", help="Exact attempt identity for journal")
+    parser.add_argument("--purge-journal-scope", action="store_true", help="Delete scoped journal on revocation")
     args = parser.parse_args(argv)
+    if args.purge_journal_scope:
+        if not all((args.journal_path, args.tenant, args.actor)):
+            parser.error("purge requires journal-path, tenant and actor")
+        from .open_work_attempt_receipts import purge_scope
+        print(json.dumps({"purged": purge_scope(args.journal_path, tenant=args.tenant, actor=args.actor)}))
+        return 0
+    if any((args.journal_path, args.tenant, args.actor, args.attempt)) and not all((args.journal_path, args.tenant, args.actor, args.attempt)):
+        parser.error("journal requires journal-path, tenant, actor and attempt")
     unknown = {"status": "unknown", "provider_operation": "unknown",
                "customer_outcome": "unknown"}
     if not args.confirm_provider_read:
@@ -52,6 +65,10 @@ def main(argv=None) -> int:
             account=args.account, object_id=args.object_id,
             operation=args.event_type, correlation_id=args.idempotency_key,
             event_id=args.event_id, token=os.environ.get("OWG_STRIPE_ATTEMPT_READ_KEY", ""))
+    if args.journal_path and args.confirm_provider_read:
+        from .open_work_attempt_receipts import append_receipt
+        append_receipt(args.journal_path, tenant=args.tenant, actor=args.actor,
+                       attempt=args.attempt, verdict=result)
     # No provider payloads, credential values, or customer data are printed.
     print(json.dumps(result, sort_keys=True))
     return 0 if result["status"] == "verified_provider_event" else 3
