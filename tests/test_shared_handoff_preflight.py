@@ -35,3 +35,11 @@ def test_handoff_preflight_invalidates_on_session_and_selection_changes():
     assert 'function render(data) {\n          resetHandoff(' in html
     assert 'handoffPacket").addEventListener("change",()=>resetHandoff(' in html
     assert 'Consent, owner approval, source access, retention and execution authorization remain unverified.' in html
+
+
+def test_handoff_state_initialized_before_oidc_callback_restores_session():
+    html = PAGE.read_text(encoding="utf-8")
+    # The callback invokes run(connectIdentity), which synchronously calls clear().
+    # resetHandoff must not touch a lexical binding in its temporal dead zone.
+    assert html.index("let handoffGeneration=0;") < html.index("function clear(releaseBusy=false)")
+    assert html.index("function clear(releaseBusy=false)") < html.index('run(() => connectIdentity(incomingSession, "OWG-Process-Session"))')
