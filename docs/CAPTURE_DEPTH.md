@@ -156,7 +156,7 @@ behaviour.
 
 ## Keeping and deleting interaction detail
 
-- **Retention.** Hover, drag and pointer events are kept for *Keep interaction detail*
+- **Retention.** Hover, drag and pointer events, from the browser and the desktop, are kept for *Keep interaction detail*
   days (1–365, default 30). Older ones are deleted, along with their derived rows and
   stored pointer points, when new events arrive (at most once an hour). Clicks, pages
   and other structural activity follow the ordinary history retention instead.
@@ -165,7 +165,7 @@ behaviour.
   (`POST /v1/capture-depth/delete` with `{"confirm": true}`, optionally
   `"older_than_days": N`).
 - **Pointer heatmap.** *Show pointer heatmap* is a local review aid. It lists the pages
-  with sampled pointer movement from the last 7 days, then shows where the samples fell
+  with sampled browser pointer movement from the last 7 days, then shows where the samples fell
   on the chosen page as a 20 × 20 grid of counts. Only the counts reach the dashboard,
   never the points. It is not a measure of attention, effort or performance.
 
