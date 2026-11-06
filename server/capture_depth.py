@@ -21,6 +21,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import json
 import os
+import re
 import tempfile
 import threading
 from typing import Any
@@ -49,6 +50,12 @@ DEFAULT_DURATION_DAYS = 7
 MAX_DURATION_DAYS = 90
 # Metadata keys that only high-fidelity events may carry; they are dropped from every other action.
 RESERVED_METADATA_KEYS = ("points", "trajectory", "pointer_points", "sample_hz", "viewport_bucket", "coordinates")
+# Page/automation accessibility attributes are untrusted text, including role,
+# type and even custom tag names. Only known structural values may be retained.
+_TARGET_TAGS = frozenset("a button div input label li option select span summary textarea other".split())
+_TARGET_ROLES = frozenset("button link tab menuitem menu menubar option checkbox radio switch combobox treeitem region list listitem row cell gridcell textbox searchbox slider".split())
+_TARGET_TYPES = frozenset("button checkbox color date datetime-local email file hidden image month number radio range reset search submit tel text time url week secure".split())
+_DESKTOP_ROLES = frozenset({"AXButton", "AXLink", "AXCheckBox", "AXRadioButton", "AXMenu", "AXMenuItem", "AXPopUpButton", "AXTab", "AXTextField", "AXTextArea", "AXList", "AXRow", "AXCell", "AXOutline", "AXSlider", "AXComboBox", "AXImage", "AXGroup", "AXStaticText", "Button", "Hyperlink", "Menu", "MenuItem", "CheckBox", "RadioButton", "Tab", "TabItem", "Edit", "List", "ListItem", "DataItem", "TreeItem", "ComboBox", "Slider", "Text", "Pane", "Group", "button", "link", "list item", "list", "menu item", "menu", "tab", "check box", "radio button", "text", "edit", "slider", "combo box"})
 # Stored event types of the high-fidelity signals, browser and desktop.
 HIGH_FIDELITY_EVENT_TYPES = ("browser_control_hover_dwell", "browser_drag_start", "browser_drag_drop", "browser_drag_end",
                              "browser_pointer_trajectory", "screen_hover_dwell", "screen_drag", "screen_pointer_trajectory")
@@ -294,12 +301,22 @@ def action_allowed_on_excluded(action: str) -> bool:
     return not any(action in actions for actions in SIGNAL_ACTIONS.values())
 
 
+def _structural_target(target: dict[str, Any], *, desktop: bool = False) -> dict[str, str]:
+    out = {}
+    for key, allowed in (("tag", _TARGET_TAGS), ("role", _TARGET_ROLES | (_DESKTOP_ROLES if desktop else frozenset())),
+                         ("type", _TARGET_TYPES), ("localized_role", _DESKTOP_ROLES if desktop else frozenset())):
+        value = target.get(key)
+        if isinstance(value, str) and value in allowed:
+            out[key] = value
+    return out
+
+
 def bound_target(action: str, target: dict[str, Any]) -> dict[str, Any]:
     """High-fidelity events keep structural target fields only (tag, role, type), never a label or name."""
     if not any(action in actions for actions in SIGNAL_ACTIONS.values()):
         return target
     # No label at all: aria-label, title, placeholder and label text can all be set from what the user typed.
-    return {k: str(target[k])[:160] for k in ("tag", "role", "type") if target.get(k)}
+    return _structural_target(target)
 
 
 def bound_metadata(action: str, metadata: dict[str, Any]) -> dict[str, Any] | None:
@@ -317,8 +334,9 @@ def bound_metadata(action: str, metadata: dict[str, Any]) -> dict[str, Any] | No
             if not (0 <= t <= 120000 and 0 <= x <= 1 and 0 <= y <= 1):
                 return None
             clean.append([int(t), round(float(x), 3), round(float(y), 3)])
-        return {"points": clean, "sample_hz": metadata.get("sample_hz") if isinstance(metadata.get("sample_hz"), int) else None,
-                "viewport_bucket": str(metadata.get("viewport_bucket") or "")[:16],
+        viewport = metadata.get("viewport_bucket")
+        return {"points": clean, "sample_hz": metadata.get("sample_hz") if type(metadata.get("sample_hz")) is int else None,
+                "viewport_bucket": viewport if isinstance(viewport, str) and re.fullmatch(r"[0-9]{1,5}x[0-9]{1,5}", viewport) else "",
                 "coordinates": "viewport_fraction", **_frame(metadata)}
     if action == "control_hover_dwell":
         duration = metadata.get("duration_ms")
@@ -333,11 +351,13 @@ def bound_metadata(action: str, metadata: dict[str, Any]) -> dict[str, Any] | No
             if isinstance(kinds, list) else []
         completion = metadata.get("completion") if metadata.get("completion") in ("complete", "incomplete", "unknown") \
             else "unknown"
-        out = {"payload_kinds": kinds, "completion": completion, "drag_id": str(metadata.get("drag_id") or "")[:32],
+        drag_id = metadata.get("drag_id")
+        out = {"payload_kinds": kinds, "completion": completion,
+               "drag_id": drag_id if isinstance(drag_id, str) and re.fullmatch(r"(?:[a-z0-9]{1,12}|external)", drag_id) else "",
                **_frame(metadata)}
         if isinstance(metadata.get("source_target"), dict):
             source = metadata["source_target"]
-            out["source_target"] = {k: str(v)[:160] for k, v in source.items() if k in ("tag", "role", "type") and v}
+            out["source_target"] = _structural_target(source)
         return out
     # Ordinary actions keep their metadata, minus the keys only high-fidelity events may carry.
     return {k: v for k, v in metadata.items() if k not in RESERVED_METADATA_KEYS}
@@ -368,8 +388,7 @@ def filter_desktop_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             # Like browser hover and drag: structural fields only, never an accessibility name or label.
             for key in ("target", "source_target", "destination_target"):
                 if isinstance(meta.get(key), dict):
-                    meta = {**meta, key: {k: str(v)[:80] for k, v in meta[key].items()
-                                          if k in ("role", "localized_role", "tag", "type") and v not in (None, "")}}
+                    meta = {**meta, key: _structural_target(meta[key], desktop=True)}
             event = {**event, "metadata": meta}
         if signal == "pointer_trajectory":
             points = meta.get("points")
@@ -382,7 +401,15 @@ def filter_desktop_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _frame(metadata: dict[str, Any]) -> dict[str, Any]:
-    return {k: metadata[k] for k in ("top_frame", "frame_kind", "tab_id", "window_id") if k in metadata}
+    out = {}
+    if type(metadata.get("top_frame")) is bool:
+        out["top_frame"] = metadata["top_frame"]
+    if metadata.get("frame_kind") in ("top", "subframe"):
+        out["frame_kind"] = metadata["frame_kind"]
+    for key in ("tab_id", "window_id"):
+        if type(metadata.get(key)) is int and 0 <= metadata[key] <= 2**53 - 1:
+            out[key] = metadata[key]
+    return out
 
 
 __all__ = ["CaptureDepthError", "FULL_ACK_VERSION", "HIGH_FIDELITY_EVENT_TYPES", "PROFILES", "SIGNALS", "action_allowed",

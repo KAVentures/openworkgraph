@@ -60,7 +60,10 @@ dropped from these events.
 - No samples are taken while the pointer is over a password, one-time-code, card or
   other secure field, inside a secure widget, or over a secure field hidden under another
   element (the check covers everything stacked under the pointer, not only the element
-  that receives the event). The current batch ends at the field,
+  that receives the event). Open and closed shadow roots at the pointer are inspected
+  using the browser extension's `dom.openOrClosedShadowRoot` API. If that API or a
+  needed hit-test is unavailable, browser hover, drag and pointer detail is suppressed;
+  ordinary structural capture is unchanged. The current batch ends at the field,
   and sampling resumes when the pointer leaves it.
 - The raw points are kept on this device in their own table
   (`pointer_trajectory_points`), apart from the event rows, and are deleted with their
@@ -132,7 +135,8 @@ disabled signal. It also:
 
 - refuses high-fidelity events with malformed or oversized metadata;
 - stores no high-fidelity events on pages you have excluded;
-- keeps only tag, role and type for the targets of hover and drag events;
+- keeps only allowlisted tag, role and type values for the targets of hover and drag
+  events; unknown values are dropped because even these attributes can contain text;
 - drops the keys reserved for high-fidelity data (`points`, `trajectory`,
   `pointer_points`, `sample_hz`, `viewport_bucket`, `coordinates`) from every other
   browser event, so coordinates cannot ride along in an ordinary click;

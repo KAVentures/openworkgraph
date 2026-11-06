@@ -46,6 +46,10 @@ function owgDepthAllowed() {
 
 const OWG_HOVER_TAGS = new Set(["button", "a", "input", "select", "textarea", "summary", "option"]);
 const OWG_HOVER_ROLES = new Set(["button", "link", "tab", "menuitem", "menu", "menubar", "option", "checkbox", "radio", "switch", "combobox", "treeitem"]);
+// Attributes are page-controlled: even role, tag and type can contain typed text.
+const OWG_TARGET_TAGS = new Set(["a", "button", "div", "input", "label", "li", "option", "select", "span", "summary", "textarea"]);
+const OWG_TARGET_ROLES = new Set([...OWG_HOVER_ROLES, "region", "list", "listitem", "row", "cell", "gridcell", "textbox", "searchbox", "slider"]);
+const OWG_TARGET_TYPES = new Set(["button", "checkbox", "color", "date", "datetime-local", "email", "file", "hidden", "image", "month", "number", "radio", "range", "reset", "search", "submit", "tel", "text", "time", "url", "week"]);
 
 function owgInteractiveElement(event) {
   for (const el of pathElements(event)) {
@@ -77,10 +81,27 @@ function owgInSecureContext(el) {
 function owgSecureAt(event) {
   if (pathElements(event).some(el => isSensitiveControl(el))) return true;
   try {
-    if (Number.isFinite(event.clientX) && Number.isFinite(event.clientY))
-      return document.elementsFromPoint(event.clientX, event.clientY).some(el => owgInSecureContext(el));
-  } catch (_) {}
-  return false;
+    // Page-level event paths hide closed-shadow descendants. Extension DOM API
+    // exposes both open and closed roots; without it we cannot establish that
+    // a hit is safe, so suppress high-detail signals rather than guess.
+    const inspect = owgDepthExt?.dom?.openOrClosedShadowRoot;
+    if (typeof inspect !== "function" || !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) return true;
+    const queue = [...document.elementsFromPoint(event.clientX, event.clientY)], seen = new Set();
+    if (!queue.length) return true;
+    while (queue.length) {
+      const el = queue.pop();
+      if (!(el instanceof Element) || seen.has(el)) continue;
+      seen.add(el);
+      if (seen.size > 512 || owgInSecureContext(el)) return true;
+      if (!(el instanceof HTMLElement)) continue;
+      const root = owgDepthExt.dom.openOrClosedShadowRoot(el);
+      if (root) {
+        if (typeof root.elementsFromPoint !== "function") return true;
+        queue.push(...root.elementsFromPoint(event.clientX, event.clientY));
+      }
+    }
+    return false;
+  } catch (_) { return true; }
 }
 
 function owgSafeTarget(start) {
@@ -88,10 +109,12 @@ function owgSafeTarget(start) {
   if (!(el instanceof Element)) return {};
   for (let node = el; node instanceof Element; node = node.parentElement) {
     const tag = String(node.tagName || "").toLowerCase();
-    const role = cleanText(node.getAttribute?.("role"), 80);
-    if (OWG_HOVER_TAGS.has(tag) || OWG_HOVER_ROLES.has(role.toLowerCase()) || node.getAttribute?.("draggable") === "true") {
+    const rawRole = String(node.getAttribute?.("role") || "").trim().toLowerCase();
+    if (OWG_HOVER_TAGS.has(tag) || OWG_HOVER_ROLES.has(rawRole) || node.getAttribute?.("draggable") === "true") {
       const editable = owgEditable(node);
-      return {tag, role, type: owgInSecureContext(node) ? "secure" : cleanText(node.getAttribute?.("type"), 80),
+      const rawType = String(node.getAttribute?.("type") || "").trim().toLowerCase();
+      return {tag: OWG_TARGET_TAGS.has(tag) ? tag : "other", role: OWG_TARGET_ROLES.has(rawRole) ? rawRole : "",
+        type: owgInSecureContext(node) ? "secure" : (OWG_TARGET_TYPES.has(rawType) ? rawType : ""),
         ...(editable ? {editable: true} : {})};
     }
   }

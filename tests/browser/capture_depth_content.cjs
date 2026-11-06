@@ -16,6 +16,7 @@ const path=require('node:path');
   <div id="far" style="position:relative;width:300px;height:200px">empty area
     <div style="position:fixed;left:760px;top:300px;width:120px;height:40px"><input id="pw2" type="password" style="width:120px;height:40px;box-sizing:border-box"><div id="cover" style="position:absolute;inset:0"></div></div>
     <div id="sw" aria-label="password" style="position:fixed;left:760px;top:420px"><button id="reveal" title="Show">Reveal</button></div></div>
+  <div id="closed-shadow" style="position:fixed;left:620px;top:450px;width:110px;height:45px"></div>
   <div id="card" draggable="true" role="button" aria-label="Invoice card" style="width:100px;height:40px">Invoice</div>
   <div id="draft" draggable="true" contenteditable="true" role="button" style="width:100px;height:40px">private draft words</div>
   <div id="plain" draggable="true" role="button" style="width:100px;height:40px">Quarterly salary review</div>
@@ -34,7 +35,10 @@ const path=require('node:path');
    const page=await browser.newPage({viewport:{width:1000,height:700}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
    const load=async(signals)=>{
      await page.goto('about:blank');await page.setContent(html);
-     await page.evaluate(([s])=>{window.__msgs=[];window.chrome={runtime:{sendMessage(m){window.__msgs.push(m);return Promise.resolve();}},
+     await page.evaluate(([s])=>{window.__msgs=[];
+       const roots=new WeakMap();const host=document.querySelector('#closed-shadow');const shadow=host.attachShadow({mode:'closed'});
+       shadow.innerHTML='<input type="password" style="width:100px;height:40px">';roots.set(host,shadow);
+       window.chrome={dom:{openOrClosedShadowRoot(el){return roots.get(el)||el.shadowRoot;}},runtime:{sendMessage(m){window.__msgs.push(m);return Promise.resolve();}},
        storage:{local:{get:async()=>({openworkgraph_capture_depth_v1:s}),set:async()=>{}},onChanged:{addListener(fn){window.__changed=fn;}}}};},[settings(signals)]);
      await page.addScriptTag({content});await page.addScriptTag({content:depth});
      await page.waitForTimeout(50);
@@ -73,6 +77,13 @@ const path=require('node:path');
    assert.equal(drops[0].target.label,undefined);assert.equal(drops[0].metadata.source_target.label,undefined);assert.equal(drops[0].metadata.source_target.role,'button');
    assert.equal(drops[0].metadata.completion,'complete');
    const ends=await msgs('drag_end');assert.equal(ends.at(-1).metadata.completion,'complete');
+   // Even structural attributes can mirror a person's typed text.
+   await page.evaluate(()=>{const el=document.querySelector('#mirror');el.setAttribute('role','SYNTHETIC_DRAFT_742');
+     el.setAttribute('type','SYNTHETIC_DRAFT_742');el.dispatchEvent(new DragEvent('dragstart',{bubbles:true}));});
+   const hostile=(await msgs('drag_start')).at(-1);
+   assert.equal(hostile.target.tag,'div');assert.equal(hostile.target.role,'');assert.equal(hostile.target.type,'');
+   assert(!JSON.stringify(hostile).includes('SYNTHETIC_DRAFT_742'),'page-controlled structural fields do not carry draft text');
+   await page.evaluate(()=>{const el=document.querySelector('#mirror');el.setAttribute('role','button');el.removeAttribute('type');});
    // An abandoned drag is marked incomplete.
    await page.evaluate(()=>{const dt=new DataTransfer();dt.setData('text/plain','SECRET PAYLOAD');
      const card=document.getElementById('card');card.dispatchEvent(new DragEvent('dragstart',{bubbles:true,dataTransfer:dt}));
@@ -124,6 +135,19 @@ const path=require('node:path');
    await page.evaluate(()=>window.dispatchEvent(new Event('pagehide')));
    const overCover=([t,x,y])=>x>=covered.x/1000-0.005&&x<=(covered.x+covered.width)/1000+0.005&&y>=covered.y/700-0.005&&y<=(covered.y+covered.height)/700+0.005;
    assert(!(await msgs('pointer_trajectory')).flatMap(b=>b.metadata.points).some(overCover),'no samples over a covered password field');
+   // Closed shadow roots retarget events to the host. The extension API must
+   // inspect the actual root, and absent that API must fail closed.
+   const closed=await page.locator('#closed-shadow').boundingBox();
+   await page.mouse.move(900,650);
+   for(let i=0;i<4;i++){await page.mouse.move(closed.x+10+i*15,closed.y+20);await page.waitForTimeout(120);}
+   await page.evaluate(()=>window.dispatchEvent(new Event('pagehide')));
+   const overClosed=([t,x,y])=>x>=closed.x/1000&&x<=(closed.x+closed.width)/1000&&y>=closed.y/700&&y<=(closed.y+closed.height)/700;
+   assert(!(await msgs('pointer_trajectory')).flatMap(b=>b.metadata.points).some(overClosed),'closed-shadow password is not sampled');
+   const beforeUnavailable=(await msgs('pointer_trajectory')).length;
+   await page.evaluate(()=>{delete window.chrome.dom;});
+   for(let i=0;i<4;i++){await page.mouse.move(400+i*15,320);await page.waitForTimeout(120);}
+   await page.evaluate(()=>window.dispatchEvent(new Event('pagehide')));
+   assert.equal((await msgs('pointer_trajectory')).length,beforeUnavailable,'no detail when shadow inspection is unavailable');
    // Standard: nothing new is emitted at all, and a settings change takes effect live.
    await load({hover_dwell:false,drag_drop:false,pointer_trajectory:false});
    await page.hover('#menu');await page.waitForTimeout(800);await page.mouse.move(900,650);await page.dragAndDrop('#card','#bin');
