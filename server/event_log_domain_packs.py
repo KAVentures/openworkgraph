@@ -294,9 +294,81 @@ SERVICE_MANAGEMENT_1_0_0: dict[str, Any] = {
     ],
 }
 
+SALES_LEAD_1_0_0: dict[str, Any] = {
+    "format": FORMAT, "pack_id": "sales_lead_management", "version": "1.0.0",
+    "title": "Sales lead qualification",
+    "reference_goal": "Lead qualification and opportunity handoff reference lifecycle",
+    "description": ("Review how recorded sales leads move from creation through qualification to an "
+                    "opportunity handoff. Compare elapsed times with your chosen review targets and inspect "
+                    "missing or out-of-order steps. The selected log defines the case population."),
+    "object_types": [
+        {"role": "lead", "label": "Lead case", "required": True},
+    ],
+    "activities": [
+        {"role": "create_lead", "label": "Create lead", "required": True},
+        {"role": "qualify_lead", "label": "Qualify lead", "required": True},
+        {"role": "create_opportunity", "label": "Create opportunity", "required": True},
+        {"role": "review_lead", "label": "Review lead", "required": False},
+        {"role": "reopen_lead", "label": "Reopen lead", "required": False},
+    ],
+    "parameters": [
+        {"name": "qualification_hours", "label": "Qualify within (hours of creation)", "unit": "hours",
+         "default": 48, "min": 0.25, "max": 8760},
+        {"name": "handoff_hours", "label": "Create opportunity within (hours of qualification)", "unit": "hours",
+         "default": 24, "min": 0.25, "max": 8760},
+    ],
+    "metrics": [
+        {"case_type": "@lead", "metric": {"name": "sales_lead_time_to_qualify", "kind": "time_between",
+                                        "from_activity": "@create_lead", "to_activity": "@qualify_lead"}},
+        {"case_type": "@lead", "metric": {"name": "sales_lead_qualification_to_opportunity", "kind": "time_between",
+                                        "from_activity": "@qualify_lead", "to_activity": "@create_opportunity"}},
+        {"case_type": "@lead", "metric": {"name": "sales_lead_reviews", "kind": "activity_count",
+                                        "activity": "@review_lead"}},
+        {"case_type": "@lead", "metric": {"name": "sales_lead_reopens", "kind": "activity_count",
+                                        "activity": "@reopen_lead"}},
+    ],
+    "compliance": [
+        {"case_type": "@lead", "rule": {"template": "precedence", "a": "@create_lead", "b": "@qualify_lead"}},
+        {"case_type": "@lead", "rule": {"template": "precedence", "a": "@qualify_lead", "b": "@create_opportunity"}},
+        {"case_type": "@lead", "rule": {"template": "response_within", "a": "@create_lead", "b": "@qualify_lead",
+                                      "seconds": "$qualification_hours"}},
+        {"case_type": "@lead", "rule": {"template": "response_within", "a": "@qualify_lead", "b": "@create_opportunity",
+                                      "seconds": "$handoff_hours"}},
+        {"case_type": "@lead", "rule": {"template": "existence", "a": "@create_opportunity", "min": 0, "max": 1}},
+    ],
+    "object_rules": [],
+    "reference_model": {
+        "types": [
+            {"object_type": "@lead", "steps": ["@create_lead", {"optional": "@review_lead"},
+                                             "@qualify_lead", "@create_opportunity"]},
+        ],
+        "arcs": [
+            {"activity": "@create_lead", "object_type": "@lead", "variable": False},
+            {"activity": "@review_lead", "object_type": "@lead", "variable": False},
+            {"activity": "@qualify_lead", "object_type": "@lead", "variable": False},
+            {"activity": "@create_opportunity", "object_type": "@lead", "variable": False},
+        ],
+    },
+    "assumptions": [
+        "The reference is a single lead's successful qualification and opportunity handoff, not the full sales pipeline.",
+        "Open, rejected, disqualified or unobserved cases may appear as missing responses or model deviations; "
+        "these results do not establish a missed obligation or an actual breach.",
+        "At most one opportunity-creation event per lead is an illustrative check; repeated events may be valid "
+        "or refer to the same opportunity and are flagged for review, not counted as distinct CRM opportunities.",
+        "The simple reference path permits at most one review and does not model reopening, so repeated reviews "
+        "or a mapped reopen may appear as deviations.",
+        "Time metrics compare the first recorded occurrence of each mapped activity, include waiting and "
+        "nonworking hours, and are not employee effort. Response rules check each initiating event.",
+        "Targets are editable illustrative parameters, not your approved sales policy or service levels.",
+        "Review and reopen activities are optional mappings; missing mappings leave their metrics unavailable.",
+        "No source identity, revenue, conversion, permission to act or business outcome is verified by this pack.",
+    ],
+}
+
 PACKS: dict[str, dict[str, dict[str, Any]]] = {"order_to_cash": {"1.0.0": ORDER_TO_CASH_1_0_0},
                                               "procure_to_pay": {"1.0.0": PROCURE_TO_PAY_1_0_0},
-                                              "service_management": {"1.0.0": SERVICE_MANAGEMENT_1_0_0}}
+                                              "service_management": {"1.0.0": SERVICE_MANAGEMENT_1_0_0},
+                                              "sales_lead_management": {"1.0.0": SALES_LEAD_1_0_0}}
 
 
 class _Strict(BaseModel):
