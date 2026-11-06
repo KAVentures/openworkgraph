@@ -4,6 +4,14 @@ import pytest
 from server import reconstruction_semantic_assignment as assignment
 
 
+@pytest.fixture(autouse=True)
+def singleton_components(monkeypatch):
+    # Isolated score-manifest tests supply synthetic queue rows, not source events.
+    monkeypatch.setattr(assignment, "link_observations", lambda events: {
+        "members": {name: [name] for name in ("a", "b", "c", "d")}
+    })
+
+
 def queue_for(*pairs):
     return {
         "version": 1, "evidence_sha256": "a" * 64, "truncated": False,
@@ -99,3 +107,25 @@ def test_conflicted_status_without_declared_safe_reason_is_refused(monkeypatch):
     monkeypatch.setattr(assignment, "prioritized_review_queue", lambda events, limit: queue)
     with pytest.raises(ValueError, match="eligible"):
         assignment.semantic_assignment([], manifest(("a", "b", .93)), consent=True)
+
+
+def test_subthreshold_distractor_does_not_veto_strong_match(monkeypatch):
+    # A .79 distractor is below the minimum review-proposal confidence.
+    # It must not veto an otherwise eligible .84 link via the .08 margin.
+    monkeypatch.setattr(assignment, "prioritized_review_queue",
+                        lambda events, limit: queue_for(("a", "b"), ("a", "c"), ("c", "d")))
+    result = assignment.semantic_assignment(
+        [], manifest(("a", "b", .84), ("a", "c", .79), ("c", "d", .94)), consent=True)
+    assert {(p["event_id"], p["toward_event_id"]) for p in result["proposals"]} == {
+        ("a", "b"), ("c", "d")}
+    assert result["abstained_ambiguous_endpoints"] == 0
+    assert result["requires_human_review"] is True
+
+
+def test_above_floor_near_tie_still_abstains(monkeypatch):
+    monkeypatch.setattr(assignment, "prioritized_review_queue",
+                        lambda events, limit: queue_for(("a", "b"), ("a", "c")))
+    result = assignment.semantic_assignment(
+        [], manifest(("a", "b", .84), ("a", "c", .81)), consent=True)
+    assert result["proposals"] == []
+    assert result["abstained_ambiguous_endpoints"] == 1

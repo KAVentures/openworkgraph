@@ -837,7 +837,8 @@
         const line = document.createElement('div');
         line.className = 'pv-row pv-sub';
         const text = document.createElement('span');
-        text.textContent = conn.label + (conn.host ? ' · ' + conn.host : '') + ' · connected ' + String(conn.connected_at || '').slice(0, 10);
+        text.textContent = conn.label + (conn.host ? ' · ' + conn.host : '') + ' · connected ' + String(conn.connected_at || '').slice(0, 10)
+          + (conn.reauthorization_required ? ' · Reconnect required: the last token refresh could not be confirmed.' : '');
         const remove = document.createElement('button');
         remove.type = 'button'; remove.className = 'secondary'; remove.textContent = 'Disconnect';
         remove.onclick = async () => {

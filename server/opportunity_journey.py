@@ -39,7 +39,8 @@ def journey(idea_id: str) -> dict:
             source = sources.get(deployment)
             linked.append({'deployment_id': deployment, 'linked_at': linked_at,
                            'status': reports._status(spec, source, available),
-                           'reported_run_count': source['reported_run_count'] if source else None})
+                           'reported_run_count': source['reported_run_count'] if source else None,
+                           **reports.run_counts(source)})
         items.append({'project_id': project, 'idea_revision': revision, 'created_at': at,
                       'idea_revision_is_current': revision == idea['revision'],
                       'process_reference': json.loads(reference), 'spec_sha256': spec, 'archive_sha256': archive,

@@ -1,0 +1,7 @@
+# Component-exclusive semantic reconstruction proposals
+
+The opt-in semantic assignment CLI (`python -m server.reconstruction_semantic_assignment --events EVENTS.json --scores SCORES.json --consent`) now treats each deterministically linked source component as one assignment unit. Multiple candidate endpoints from the same component cannot independently link that component to different targets. For each pair of components, the highest-scored eligible event pair is the displayed representative; ties are deterministic. Close competing component scores (margin below 0.08) cause abstention, including when the competing pairs use different member events. Unrelated components remain independently eligible.
+
+Only existing risk-filtered review-queue candidates can enter the optimizer. Explicit consent and an exact source evidence digest remain mandatory. Scores are uncalibrated externally supplied numbers, not proof, and proposals never change canonical case membership or authorize actions. The deterministic component builder retains its own scope and record-conflict constraints. Invalid or absent source membership cannot be used to bypass component exclusivity.
+
+Run `pytest tests/test_reconstruction_semantic_assignment.py tests/test_semantic_component_exclusivity.py` for focused regressions. This does not establish the preregistered held-out assignment F1 >= 0.90, contamination <= 0.05, interruption rejection, or real consenting-user validation. Those remain separate release gates.

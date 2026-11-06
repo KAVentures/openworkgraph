@@ -135,3 +135,73 @@ session; AI bearer tokens and MCP clients cannot read or change them.
 | `GET /v1/automation-monitoring/deployments/{id}/monitor?recent_days=7&baseline_days=28` | The monitoring report. |
 | `POST /v1/automation-monitoring/deployments/{id}/event-log` | Copy the steps into the event-log workspace (`X-OWG-Local-Storage-Confirmed: true`). |
 | `POST /v1/automation-monitoring/deployments/{id}/delete` | Delete the deployment and all its runs. |
+
+## Signed report channels
+
+Instead of exporting a file and importing it, an automation can push its run
+reports to OWG itself. On a deployment, choose **Signed report channel**, then
+**Create report channel**. The channel secret is shown once. Store it in your
+automation's secret store; OWG never shows it again, and **Rotate secret**
+replaces it.
+
+The automation POSTs to `/v1/automation-monitoring/channels/{channel_id}/reports`
+with:
+
+- the local API token (`Authorization: Bearer …`), like every `/v1` request;
+- `Content-Type: application/json` and this body:
+  `{"format": "openworkgraph.signed-run-report.v1", "version_label": "v1.4.0", "report": { …run report… }}`;
+- `X-OWG-Report-Timestamp`: Unix seconds, within five minutes of OWG's clock;
+- `X-OWG-Report-Sequence`: 1, 2, 3 … for this channel;
+- `X-OWG-Report-Signature`: `v1=` followed by the hex HMAC-SHA256, keyed with the
+  secret, of `"{timestamp}.{sequence}."` plus the exact body bytes.
+
+`shared/automation_report_signing.py` implements the signature with the standard
+library only, so it can be copied into a Python runtime. Any HMAC-SHA256
+implementation works: an n8n Crypto node, Node's `crypto.createHmac`, or Web Crypto.
+
+What OWG does with each request:
+
+| Request | Result |
+|---|---|
+| Wrong signature, missing headers or a stale timestamp | `401`; nothing stored; a *rejected signatures* incident |
+| Exact resend of a sequence number (e.g. after a lost response) | `200` with `duplicate: true`; nothing stored again |
+| A used sequence number with different bytes | `409`; a *reused sequence numbers* incident |
+| A sequence number more than 2,000 below the highest seen | `409` |
+| A higher sequence number that skips some | Imported; the skipped numbers are listed as missing and counted in a *lost reports* incident until they arrive |
+| A report for a different workflow spec than the deployment's | `409`; nothing stored or rebound; a *version drift* incident naming the new spec hash and version label |
+| A revoked channel | `403` |
+
+Each accepted report adds to the channel's version inventory. For each
+`(version_label, workflow_spec_sha256)` it records first and last seen, reports
+and runs. A deployment has at most one live channel, and deleting the deployment
+deletes its channels and incidents.
+
+## Incidents
+
+Imported runs, whether signed or imported by hand, and channel problems are
+grouped into deduplicated incidents:
+
+- *Failed runs* and *Runs handed to a person*, keyed by their first failing or
+  handed-off step;
+- *Rejected signatures*, *Reused sequence numbers*, *Lost reports* and *Version drift*.
+
+Each incident keeps occurrence counts, first and last seen, up to ten sample run
+IDs and your notes. **Show incidents** lists them with **Acknowledge**,
+**Resolve** and **Reopen** buttons.
+
+- A triage decision names the incident's last-seen time, so a decision made
+  before new occurrences arrived is refused.
+- A new occurrence after resolution reopens the incident and counts the reopening.
+- Triage records your decision only. It never re-runs an automation, replays a
+  business write or contacts a provider; every response says so.
+
+Dashboard-session routes:
+
+| Route | Purpose |
+|---|---|
+| `POST /v1/automation-monitoring/deployments/{id}/channel` | Create a channel |
+| `GET /v1/automation-monitoring/channels` | List channels |
+| `POST …/channels/{id}/rotate` | Rotate the secret |
+| `POST …/channels/{id}/revoke` | Revoke the channel |
+| `GET /v1/automation-monitoring/incidents?status=&deployment_id=` | List incidents |
+| `POST …/incidents/{id}/triage` | Triage, with `status`, `note` and optional `expected_last_seen` |

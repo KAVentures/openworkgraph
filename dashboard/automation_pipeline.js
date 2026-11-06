@@ -588,6 +588,23 @@
     return view;
   }
 
+  function comparisonRows(ideas){
+    const known=value=>value===null||value===undefined?'Not assessed':value;
+    return [
+      ['State',...ideas.map(i=>STATE_LABELS[i.state]||i.state)],
+      ['Saved revision',...ideas.map(i=>i.revision)],
+      ['Source',...ideas.map(i=>[i.source?.kind,i.source?.reference].filter(Boolean).join(' · '))],
+      ['Modeled hours / month',...ideas.map(i=>known(i.score?.modeled_hours_per_month))],
+      ['Ease / 100',...ideas.map(i=>known(i.score?.ease_score))],
+      ['Priority',...ideas.map(i=>i.score?QUADRANTS[i.score.quadrant]:'Not assessed')],
+      ['Cases / month (entered)',...ideas.map(i=>known(i.assessment?.cases_per_month))],
+      ['Minutes / case (entered)',...ideas.map(i=>known(i.assessment?.minutes_per_case))],
+      ['Eligible share % (entered)',...ideas.map(i=>i.assessment?Number((i.assessment.eligible_share*100).toFixed(4)):'Not assessed')],
+      ['Compliance review declared needed',...ideas.map(i=>!i.assessment?'Not assessed':i.assessment.compliance_review_needed?'Yes':'No')],
+      ...QUESTIONS.map(([key,label])=>[label+' / 5',...ideas.map(i=>known(i.assessment?.ease[key]))])
+    ];
+  }
+
   async function api(path,init){
     await window.__owgAuthReady;
     const response=await fetch(path,{cache:'no-store',...(init||{})});
@@ -614,12 +631,14 @@
     const quadrant=select('owgPipelineQuadrant',[['','All priorities'],...Object.entries(QUADRANTS),['unassessed','Not assessed']]);
     const sort=select('owgPipelineSort',[['priority','Priority (default)'],['impact','Modeled hours: highest first'],['ease','Ease: highest first'],['recent','Recently updated'],['title','Title A–Z']]);
     const reset=button('Reset view','secondary');reset.id='owgPipelineReset';
-    tools.append(field('Show',filter),field('Search ideas',search),field('Priority',quadrant),field('Sort',sort),reset,exportLink);
+    const reload=button('Refresh opportunities','secondary');reload.id='owgPipelineRefresh';
+    tools.append(field('Show',filter),field('Search ideas',search),field('Priority',quadrant),field('Sort',sort),reset,reload,exportLink);
     exportLink.title='Exports every idea in the selected state; search and priority filters apply only to the table.';
     const status=el('div',null,'muted');status.id='owgPipelineStatus';status.setAttribute('role','status');status.setAttribute('aria-live','polite');
     const counts=el('div',null,'muted');counts.id='owgPipelineCounts';
     const list=el('div');list.id='owgPipelineList';
     const viewCount=el('div',null,'muted');viewCount.id='owgPipelineViewCount';viewCount.setAttribute('role','status');
+    const comparison=el('div');comparison.id='owgPipelineComparison';
     const detail=el('div');detail.id='owgPipelineDetail';
     const resumeFile=input('owgPipelineResumeBundleFile','file');
     resumeFile.accept='.json,application/json';
@@ -676,10 +695,11 @@
     auditSection.append(el('h3','Human handoff review inbox'),
       el('p','Review approved or implemented opportunities in explicit pages of up to 12. Each page is a fresh, point-in-time local read; other pages are not certified, approved or executed.','muted'),
       auditNavigation,auditButton,auditStatus,auditHost,auditCumulative,auditCombinedDownload,auditTriageSection);
-    card.append(row,resumeSection,auditSection,tools,status,counts,viewCount,list,detail);
+    card.append(row,resumeSection,auditSection,tools,status,counts,viewCount,list,comparison,detail);
     panel.appendChild(card);
 
     let latestIdeas=[],refreshGeneration=0,resumeGeneration=0,auditGeneration=0,auditPageIndex=0,auditAbort=null;
+    const compared=new Set();
     const auditPages=new Map();let auditBasis=null,triageGeneration=0;
     const pilotInspected=new Set(); // Ephemeral local inspection only; never approval or execution.
     const pilotDispositions=new Map(); // Ephemeral follow-up plans, never authorization.
@@ -1030,14 +1050,37 @@
       const ideas=portfolioView(latestIdeas,{query:search.value,quadrant:quadrant.value,sort:sort.value});
       viewCount.textContent=ideas.length+' shown of '+latestIdeas.length+' in selected state. CSV includes the entire selected state.';
       const wrap=el('div',null,'table-wrap');const t=el('table');const head=el('tr');
-      ['Idea','State','Ease','Modeled hours / month','Priority',''].forEach(h=>head.appendChild(el('th',h)));
+      ['Compare','Idea','State','Ease','Modeled hours / month','Priority',''].forEach(h=>head.appendChild(el('th',h)));
       const thead=el('thead');thead.appendChild(head);const body=el('tbody');
       ideas.forEach(idea=>{
         const tr=el('tr');const open=button('Open','secondary');open.setAttribute('aria-label','Open idea '+idea.title);open.onclick=()=>show(idea.idea_id).catch(e=>{status.textContent=e.message;});
+        const choose=input('owgCompare_'+idea.idea_id,'checkbox');choose.checked=compared.has(idea.idea_id);
+        choose.disabled=compared.size>=4&&!choose.checked;choose.setAttribute('aria-label','Compare idea '+idea.title);
+        choose.onchange=()=>{
+          if(choose.checked){if(compared.size>=4)return;compared.add(idea.idea_id);}else compared.delete(idea.idea_id);
+          render();document.getElementById('owgCompare_'+idea.idea_id)?.focus();
+        };
+        const choiceCell=el('td');choiceCell.appendChild(choose);tr.appendChild(choiceCell);
         [idea.title,STATE_LABELS[idea.state],idea.score?idea.score.ease_score:'—',idea.score?idea.score.modeled_hours_per_month:'—',idea.score?QUADRANTS[idea.score.quadrant]:'Not assessed'].forEach(v=>tr.appendChild(el('td',v)));
         const cell=el('td');cell.appendChild(open);tr.appendChild(cell);body.appendChild(tr);
       });
       t.append(thead,body);wrap.appendChild(t);list.replaceChildren(ideas.length?wrap:el('div','No ideas in this view.','muted'));
+      const selected=[...compared].map(id=>latestIdeas.find(i=>i.idea_id===id)).filter(Boolean);
+      const clear=button('Clear comparison','secondary');clear.id='owgPipelineCompareClear';clear.disabled=!selected.length;
+      clear.onclick=()=>{compared.clear();render();};
+      comparison.replaceChildren(el('h4','Compare opportunities'),
+        el('div',selected.length+' of 4 selected. Choose ideas in the table; search and priority filters may hide selected rows. Changing state clears ideas unavailable in that state. Values are from the last list refresh.','muted'),clear);
+      if(selected.length<2){comparison.appendChild(el('div','Select at least two ideas to compare their saved assessments.','muted'));return;}
+      const compareWrap=el('div',null,'table-wrap'),compareTable=el('table');compareTable.id='owgPipelineComparisonTable';
+      const compareHead=el('thead'),compareHeader=el('tr');
+      ['Assessment basis',...selected.map(i=>i.title)].forEach(title=>{const th=el('th',title);th.scope='col';compareHeader.appendChild(th);});
+      compareHead.appendChild(compareHeader);const compareBody=el('tbody');
+      for(const [label,...values] of comparisonRows(selected)){
+        const tr=el('tr'),th=el('th',label);th.scope='row';tr.appendChild(th);
+        values.forEach(value=>tr.appendChild(el('td',value)));compareBody.appendChild(tr);
+      }
+      compareTable.append(compareHead,compareBody);compareWrap.appendChild(compareTable);
+      comparison.append(el('p','Modelled values use each idea’s own entered assumptions. Cases and benefits may overlap; no portfolio savings total or recommendation is inferred. Compliance declarations are not completed reviews.','muted'),compareWrap);
     }
 
     async function refresh(){
@@ -1045,9 +1088,11 @@
       const generation=++refreshGeneration;
       const q=filter.value?'?state='+encodeURIComponent(filter.value):'';
       const r=await (await api('/v1/automation-pipeline'+q)).json();
-      if(generation!==refreshGeneration)return;
+      if(generation!==refreshGeneration)return false;
       counts.textContent=Object.entries(r.counts).filter(([,n])=>n).map(([s,n])=>STATE_LABELS[s]+': '+n).join(' · ')||'No ideas yet.';
-      latestIdeas=r.ideas;syncAuditPages();updateCumulative();render();
+      latestIdeas=r.ideas;
+      for(const id of compared)if(!latestIdeas.some(i=>i.idea_id===id))compared.delete(id);
+      syncAuditPages();updateCumulative();render();return true;
     }
 
     let detailGeneration=0;
@@ -1335,7 +1380,7 @@
             artifact.appendChild(list);
             const linked=el('ul');
             const labels={matching_reported_specification:'Matching reported specification',unavailable:'Reported deployment unavailable',specification_mismatch:'Reported specification changed',unbound_specification:'Reported specification unbound',check_failed:'Reported specification could not be checked'};
-            p.reported_specifications.forEach(r=>linked.appendChild(el('li',r.deployment_id+' · '+(labels[r.status]||'Unknown report status')+(r.reported_run_count===null?'':' · '+r.reported_run_count+' reported runs')+'. Artifact execution and individual run/case attribution are unverified.')));
+            p.reported_specifications.forEach(r=>linked.appendChild(el('li',r.deployment_id+' · '+(labels[r.status]||'Unknown report status')+(r.reported_run_count===null?'':' · '+r.reported_run_count+' reported runs')+(Number.isSafeInteger(r.runs_reporting_specification_count)?' · '+r.runs_reporting_specification_count+' runs reported this exact specification, '+r.unhashed_run_count+' without a hash':'')+'. Artifact execution and individual run/case attribution are unverified.')));
             artifact.append(el('h5','Reported specifications'),p.reported_specifications.length?linked:el('p','No reported specifications linked.'));
             const checks=p.source_check_exports;
             artifact.append(el('h5','Source-check exports'),el('p',checks.count?checks.count+' recorded · latest '+checks.last_export_at+' · document SHA-256 '+checks.last_document_sha256+'. Receipt and result are not retained; no outcome can be inferred from this record.':'No source-check exports recorded.'));
@@ -1812,7 +1857,7 @@
             specification_mismatch:'Specification changed or does not match',unavailable:'Reported deployment unavailable',check_failed:'Report source could not be checked'};
           data.links.forEach(r=>{
             const source=data.deployments.find(d=>d.deployment_id===r.deployment_id);
-            const item=el('li',(source?source.name:r.deployment_id)+' · '+(labels[r.status]||'Unknown status'));
+            const item=el('li',(source?source.name:r.deployment_id)+' · '+(labels[r.status]||'Unknown status')+(Number.isSafeInteger(r.runs_reporting_specification_count)?' · '+r.runs_reporting_specification_count+' runs reported this exact specification, '+r.unhashed_run_count+' without a hash':''));
             const remove=button('Remove report link','secondary');remove.setAttribute('aria-label','Remove report link '+r.deployment_id);
             remove.onclick=async()=>{
               try{await post('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/project-reports/unlink',{
@@ -1839,6 +1884,7 @@
             if(preferredSourceProjectId&&saved.projects.some(p=>p.project_id===preferredSourceProjectId))
               selected.value=preferredSourceProjectId;
             const expectation=select('owgPipelineSourceExpectation',[]);
+            const runChoice=select('owgPipelineSourceRun',[]);let runs=[];
             const sourceRef=input('owgPipelineSourceRecord','text','owg:r:…');sourceRef.maxLength=38;sourceRef.autocomplete='off';sourceRef.spellcheck=false;
             const confirmed=input('owgPipelineSourceConsent','checkbox');const consentText=el('label');consentText.append(confirmed,document.createTextNode(' Read this exact observed record and download the minimized source-check document. Existing provider opt-ins still apply.'));
             const run=button('Read source and download check','secondary');run.id='owgPipelineSourceExport';run.disabled=true;
@@ -1846,17 +1892,19 @@
             let entries=[],formVersion=0,optionsVersion=0,pending=false;
             const ready=()=>{run.disabled=pending||!entries.length||!confirmed.checked||!/^owg:r:[0-9a-f]{32}$/.test(sourceRef.value.trim());confirmed.disabled=pending||!entries.length;};
             const invalidate=()=>{formVersion++;confirmed.checked=false;ready();};
-            sourceRef.oninput=invalidate;expectation.onchange=invalidate;confirmed.onchange=ready;
+            sourceRef.oninput=invalidate;expectation.onchange=invalidate;runChoice.onchange=invalidate;confirmed.onchange=ready;
             const base=()=>'/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/projects/'+encodeURIComponent(selected.value);
             const loadOptions=async()=>{
-              const version=++optionsVersion;invalidate();entries=[];expectation.replaceChildren();ready();
+              const version=++optionsVersion;invalidate();entries=[];runs=[];expectation.replaceChildren();
+              const none=el('option','No specific run');none.value='';runChoice.replaceChildren(none);ready();
               if(!selected.value){note.textContent='Export a linked project before checking source state.';return;}
               const path=base();
               const results=await Promise.allSettled([api(path+'/source-check-options').then(r=>r.json()),api(path+'/source-check-exports').then(r=>r.json())]);
               if(generation!==detailGeneration||view!==sourceView||version!==optionsVersion)return;
               const options=results[0],records=results[1];
               if(options.status==='fulfilled'&&options.value.current_idea_revision===idea.revision){
-                entries=options.value.expectations;
+                entries=options.value.expectations;runs=options.value.attributable_runs||[];
+                runs.forEach((r,i)=>{const opt=el('option',r.run_id+' · '+r.run_status+' · started '+r.run_started_at);opt.value=String(i);runChoice.appendChild(opt);});
                 entries.forEach((e,i)=>{const opt=el('option',e.activity_label+' · '+e.operation.replaceAll('_',' '));opt.value=String(i);expectation.appendChild(opt);});
                 note.textContent=entries.length?'Select the exact observed record. Source state does not prove agent causality, run/case identity or customer outcomes.':'This saved process has no confirmed source-state expectation. Review one in a new saved revision before creating its idea/project.';
               }else note.textContent=options.status==='rejected'?options.reason.message:'The idea changed; reopen it before checking a source.';
@@ -1872,6 +1920,8 @@
               const entry=entries[Number(expectation.value)],path=base(),version=formVersion;
               const payload={expected_revision:idea.revision,terminal_activity_id:entry.terminal_activity_id,expected_operation:entry.operation,
                 resource_ref:sourceRef.value.trim(),source_read_and_export_confirmed:confirmed.checked};
+              const chosen=runChoice.value===''?null:runs[Number(runChoice.value)];
+              if(chosen)payload.run_reference={deployment_id:chosen.deployment_id,run_id:chosen.run_id};
               confirmed.checked=false;pending=true;ready();
               try{
                 const response=await api(path+'/source-check-export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
@@ -1883,7 +1933,7 @@
               finally{pending=false;ready();}
             };
             checkHost.replaceChildren(el('h4','Selected source-state check'),el('div','This performs an explicitly authorized read through existing source adapters. The receipt is downloaded only; OWG retains a checksum, not the receipt or a verified-state value.','muted'),
-              field('Exported project for source check',selected),field('Confirmed source-state expectation',expectation),field('Observed record reference (owg:r:…)',sourceRef),consentText,run,note,history);
+              field('Exported project for source check',selected),field('Confirmed source-state expectation',expectation),field('Reported run (only runs that reported this project\'s exact specification, from linked reports)',runChoice),field('Observed record reference (owg:r:…)',sourceRef),consentText,run,note,history);
             await loadOptions();
           }catch(e){if(generation===detailGeneration&&view===sourceView)status.textContent=e.message;}
         };
@@ -1955,6 +2005,7 @@
     quadrant.onchange=()=>{clearCumulative('Priority filter changed; review pages again.');render();};
     sort.onchange=()=>{clearCumulative('Sort changed; review pages again.');render();};
     reset.onclick=()=>{search.value='';quadrant.value='';sort.value='priority';filter.value='';refresh().catch(e=>{status.textContent=e.message;});};
+    reload.onclick=()=>refresh().then(current=>{if(current)status.textContent='Opportunities refreshed.';}).catch(e=>{status.textContent=e.message;});
     filter.onchange=()=>refresh().catch(e=>{status.textContent=e.message;});
     exportLink.onclick=async()=>{try{
       const blob=await (await api('/v1/automation-pipeline/export.csv'+(filter.value?'?state='+encodeURIComponent(filter.value):''))).blob();
@@ -1963,6 +2014,6 @@
     refresh().catch(e=>{status.textContent=e.message;});
   }
 
-  window.__owgPipelineModel={assessmentBody,portfolioView,handoffReviewPacket,handoffDependencyReview,compareHandoffReviewPackets,compareRecordedProjects,compareProjectHandoffReadiness,portfolioHandoffRow,combinedPortfolioHandoffReview,portfolioReviewTriage,handoffInspectionWorklist,handoffInspectionSnapshotDigest,restoreHandoffInspectionKeys,pilotDispositionWorklist};
+  window.__owgPipelineModel={assessmentBody,portfolioView,comparisonRows,handoffReviewPacket,handoffDependencyReview,compareHandoffReviewPackets,compareRecordedProjects,compareProjectHandoffReadiness,portfolioHandoffRow,combinedPortfolioHandoffReview,portfolioReviewTriage,handoffInspectionWorklist,handoffInspectionSnapshotDigest,restoreHandoffInspectionKeys,pilotDispositionWorklist};
   if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('DOMContentLoaded',build);
 })();
