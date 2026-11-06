@@ -28,6 +28,30 @@ const path=require('node:path');
    await page.locator('#owgEventLogManage').waitFor({state:'hidden'});
    assert.equal(await page.locator('#owgEventLogManage').isHidden(),true);
 
+   // The latest header read controls readiness when file and delimiter change quickly.
+   await page.locator('#owgEventLogFile').setInputFiles({name:'first.csv',mimeType:'text/csv',buffer:Buffer.from('old_case,old_activity,old_time\na,b,c\n')});
+   await page.locator('#owgEventLogStatus').filter({hasText:'File mapping ready'}).waitFor();
+   await page.evaluate(()=>{window.__originalText=Blob.prototype.text;window.__readQueue=[];Blob.prototype.text=function(){const blob=this;return new Promise(resolve=>window.__readQueue.push(()=>window.__originalText.call(blob).then(resolve)));};});
+   await page.locator('#owgEventLogFile').setInputFiles({name:'second.csv',mimeType:'text/csv',buffer:Buffer.from('new_case;new_activity;new_time\na;b;c\n')});
+   await page.waitForFunction(()=>window.__readQueue.length===1);
+   await page.locator('#owgEventLogDelimiter').selectOption(';');
+   await page.waitForFunction(()=>window.__readQueue.length===2);
+   await page.locator('#owgEventLogConsent').check();
+   await page.evaluate(()=>window.__readQueue[0]());
+   await page.waitForTimeout(100);
+   assert.equal(await page.locator('#owgEventLogImport').isDisabled(),true);
+   assert.match(await page.locator('#owgEventLogStatus').textContent(),/Reading file columns/);
+   await page.evaluate(()=>{Blob.prototype.text=window.__originalText;window.__readQueue[1]();});
+   await page.locator('#owgEventLogStatus').filter({hasText:'File mapping ready'}).waitFor();
+   assert.equal(await page.locator('#owgEventLogCase').inputValue(),'new_case');
+   assert.equal(await page.locator('#owgEventLogActivity').inputValue(),'new_activity');
+   assert.equal(await page.locator('#owgEventLogTime').inputValue(),'new_time');
+   assert.equal(await page.locator('#owgEventLogImport').isEnabled(),true);
+   await page.locator('#owgEventLogDelimiter').selectOption(',');
+   assert.equal(await page.locator('#owgEventLogConsent').isChecked(),false);
+   assert.equal(await page.locator('#owgEventLogImport').isDisabled(),true);
+   await page.locator('#owgEventLogFile').setInputFiles([]);
+
    const csv='Id,CaseId,CreatedDate,Field,NewValue,OldValue\n017000000000001,500000000000001,2026-01-01T00:00:00Z,created,,SECRET_OLD\n017000000000002,500000000000001,2026-01-01T01:00:00Z,Status,<img src=x onerror=window.__attack=1>,SECRET_OLD\n017000000000003,500000000000001,invalid,Description,SECRET_DESCRIPTION,\n';
    await page.locator('#owgSalesforceFile').setInputFiles({name:'bad.csv',mimeType:'text/csv',buffer:Buffer.from([255])});
    await page.locator('#owgSalesforceAccount').fill('synthetic-sandbox');

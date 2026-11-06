@@ -90,4 +90,3 @@ def project(raw: bytes, *, account: str, cases: list[str]) -> tuple[str, dict]:
               'identity_basis': 'caller_declared_account_and_literal_ids',
               'business_writes_performed': False}
     return output.getvalue(), report
-

@@ -147,7 +147,7 @@
     card.append(manage,results,salesforceSourceSection((csv,namespace,isCurrent)=>{
       if(!isCurrent())return;
       // Invalidate any in-flight column read for the previous import file.
-      columnReadSequence++;readingColumns=false;
+      columnReadSequence++;readingColumns=false;columnsReady=true;
       const transfer=new DataTransfer();transfer.items.add(new File([csv],'selected-salesforce-cases.csv',{type:'text/csv'}));
       file.files=transfer.files;salesforceStagedFile=file.files[0];
       name.value='Selected Salesforce cases';format.value='csv';delimiter.value=',';
@@ -169,10 +169,10 @@
     const browse=document.getElementById('owgProcessCSV');
     if(browse)browse.insertAdjacentElement('afterend',card);else panel.appendChild(card);
 
-    let readingColumns=false,columnReadSequence=0;
+    let readingColumns=false,columnsReady=false,columnReadSequence=0;
     const refreshImport=()=>{const csv=format.value==='csv',active=csv&&useIdentity.checked;
       const valid=!active||(eventId.value&&!!sourceNamespace.value!==!!sourceColumn.value&&!(caseNamespace.value&&caseColumn.value)&&!keep.checked);
-      const ready=!readingColumns&&file.files&&file.files[0]&&consent.checked&&valid;importButton.disabled=!(ready&&name.value.trim());appendButton.disabled=!(ready&&state.logId);show(mapping,csv);show(identity,csv);show(identityFields,active);};
+      const ready=!readingColumns&&(!csv||columnsReady)&&file.files&&file.files[0]&&consent.checked&&valid;importButton.disabled=!(ready&&name.value.trim());appendButton.disabled=!(ready&&state.logId);show(mapping,csv);show(identity,csv);show(identityFields,active);};
     for(const control of [useIdentity,eventId,sourceNamespace,sourceColumn,caseNamespace,caseColumn,jsonColumn]){
       control.addEventListener('change',()=>{consent.checked=false;refreshImport();});
       if(control.tagName==='INPUT'&&control.type==='text')control.addEventListener('input',()=>{consent.checked=false;refreshImport();});
@@ -186,28 +186,40 @@
     }
     async function readColumns(){
       const sequence=++columnReadSequence;
-      const chosen=file.files&&file.files[0];if(!chosen||format.value!=='csv')return;
+      const chosen=file.files&&file.files[0];
+      columnsReady=false;
+      if(!chosen||format.value!=='csv'){
+        readingColumns=false;refreshImport();return;
+      }
       const sep=delimiter.value==='t'?'\t':delimiter.value;
-      const columns=csvHeader(await chosen.slice(0,65536).text(),sep);
-      if(sequence!==columnReadSequence||file.files?.[0]!==chosen||format.value!=='csv'||(delimiter.value==='t'?'\t':delimiter.value)!==sep)return;
-      const options=columns.map(c=>[c,c]);
-      setOptions(cols.case,options);setOptions(cols.activity,options);setOptions(cols.time,options);setOptions(cols.resource,[['','(none)'],...options]);
-      cols.case.value=guess(columns,['case','order','ticket','id'])||columns[0]||'';
-      cols.activity.value=guess(columns,['activity','event','step','action'])||columns[1]||'';
-      cols.time.value=guess(columns,['time','date','ts'])||columns[2]||'';
-      cols.resource.value=guess(columns,['resource','user','who','agent','owner']);
-      setOptions(extras,options);[...extras.options].forEach(o=>{o.selected=/lifecycle/i.test(o.value);});
-      setOptions(eventId,[['','Choose a column'],...options]);
-      for(const control of [sourceColumn,caseColumn,jsonColumn])setOptions(control,[['','(none)'],...options]);
-      eventId.value=columns.includes('source_event_id')?'source_event_id':'';
-      sourceColumn.value=columns.includes('source_namespace')?'source_namespace':'';
-      caseColumn.value=columns.includes('case_namespace')?'case_namespace':'';
-      jsonColumn.value=columns.includes('attributes')?'attributes':'';
-      refreshImport();
+      readingColumns=true;status('Reading file columns…');refreshImport();
+      try{
+        const columns=csvHeader(await chosen.slice(0,65536).text(),sep);
+        if(sequence!==columnReadSequence||file.files?.[0]!==chosen||format.value!=='csv'||(delimiter.value==='t'?'\t':delimiter.value)!==sep)return;
+        const options=columns.map(c=>[c,c]);
+        setOptions(cols.case,options);setOptions(cols.activity,options);setOptions(cols.time,options);setOptions(cols.resource,[['','(none)'],...options]);
+        cols.case.value=guess(columns,['case','order','ticket','id'])||columns[0]||'';
+        cols.activity.value=guess(columns,['activity','event','step','action'])||columns[1]||'';
+        cols.time.value=guess(columns,['time','date','ts'])||columns[2]||'';
+        cols.resource.value=guess(columns,['resource','user','who','agent','owner']);
+        setOptions(extras,options);[...extras.options].forEach(o=>{o.selected=/lifecycle/i.test(o.value);});
+        setOptions(eventId,[['','Choose a column'],...options]);
+        for(const control of [sourceColumn,caseColumn,jsonColumn])setOptions(control,[['','(none)'],...options]);
+        eventId.value=columns.includes('source_event_id')?'source_event_id':'';
+        sourceColumn.value=columns.includes('source_namespace')?'source_namespace':'';
+        caseColumn.value=columns.includes('case_namespace')?'case_namespace':'';
+        jsonColumn.value=columns.includes('attributes')?'attributes':'';
+        columnsReady=!!(cols.case.value&&cols.activity.value&&cols.time.value);
+        status(columnsReady?'File mapping ready. Review the selected columns before storing.':'Choose a CSV with case, activity and time columns.');
+      }catch(_){
+        if(sequence===columnReadSequence)status('Could not read the column names.');
+      }finally{
+        if(sequence===columnReadSequence){readingColumns=false;refreshImport();}
+      }
     }
-    file.onchange=async()=>{const chosen=file.files&&file.files[0];if(chosen){format.value=detectFormat(chosen.name);if(!name.value)name.value=chosen.name.replace(/\.[^.]+$/,'').slice(0,120);if(chosen.name.toLowerCase().endsWith('.tsv'))delimiter.value='t';}consent.checked=false;readingColumns=true;status('Reading file columns…');refreshImport();try{await readColumns();if(file.files?.[0]===chosen)status('File mapping ready. Review the selected columns before storing.');}catch(_){if(file.files?.[0]===chosen)status('Could not read the column names.');}finally{if(file.files?.[0]===chosen){readingColumns=false;refreshImport();}}};
-    format.onchange=()=>{refreshImport();readColumns().catch(()=>{});};
-    delimiter.onchange=()=>readColumns().catch(()=>{});
+    file.onchange=()=>{const chosen=file.files&&file.files[0];if(chosen){format.value=detectFormat(chosen.name);if(!name.value)name.value=chosen.name.replace(/\.[^.]+$/,'').slice(0,120);if(chosen.name.toLowerCase().endsWith('.tsv'))delimiter.value='t';}consent.checked=false;readColumns();};
+    format.onchange=()=>{consent.checked=false;readColumns();};
+    delimiter.onchange=()=>{consent.checked=false;readColumns();};
     consent.onchange=refreshImport;name.oninput=refreshImport;
     importButton.onclick=async()=>{
       const chosen=file.files&&file.files[0];if(!chosen||!consent.checked)return;
