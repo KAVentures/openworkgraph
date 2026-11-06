@@ -169,6 +169,31 @@ behaviour.
   on the chosen page as a 20 × 20 grid of counts. Only the counts reach the dashboard,
   never the points. It is not a measure of attention, effort or performance.
 
+## Performance
+
+`tests/test_capture_depth_scale_acceptance.py` seeds an isolated history and times what
+high-fidelity capture adds. A small history (6,000 events) runs with every test run. The
+300k-event acceptance, OWG's existing large-history bar, runs in the scale-acceptance
+workflow (`OWG_SCALE_ACCEPTANCE=1`). It has 270,000 structural events and 30,000
+high-fidelity ones (10,000 each of hover, drag and pointer batches of 40 points) over 60
+days, half of them older than a 30-day retention limit.
+
+Measured in this repository's CI-like container:
+
+| Step | 300k-event history | Budget |
+|---|---|---|
+| High-fidelity ingest | 1.3 ms per event | < 20 ms |
+| Coverage manifest (90 days) | 0.31 s | < 30 s |
+| Friction candidates (31 days, bounded to 20,000 events) | 0.96 s | < 30 s |
+| Heatmap page list / one page | 0.18 s / 0.19 s | < 30 s |
+| Retention purge (14,980 events) | 1.8 s | < 120 s |
+| Delete interaction detail now (15,020 events) | 1.4 s | < 120 s |
+
+Retention and delete-now remove exactly the high-fidelity rows and their stored points,
+and keep every structural event. Friction candidates say when their 20,000-event window
+was truncated. CPU, memory and battery use of long-running capture on real devices are not
+covered by these tests.
+
 ## Not yet done
 
 - Desktop hover, drag and pointer movement are covered by unit tests with a simulated
@@ -184,7 +209,7 @@ behaviour.
 | Route | Purpose |
 |---|---|
 | `GET /v1/capture-depth` | Current profile, signals, parameters |
-| `PUT /v1/capture-depth` | Change them; dashboard session only. Takes `profile`, `signals`, `parameters` and, for pointer movement, `acknowledgement_version` |
+| `PUT /v1/capture-depth` | Change them; dashboard session only. Takes `profile`, `signals`, `parameters`, `duration_days` (1–90, default 7) and, for pointer movement, `acknowledgement_version` |
 | `GET /v1/capture-coverage` | Coverage manifest |
 | `GET /v1/capture-coverage/friction?hours=` | Friction candidates; dashboard session only |
 | `GET /v1/capture-coverage/heatmap?hostname=&pathname=&hours=` | Pages with pointer samples or one page's grid of counts; dashboard session only |
