@@ -130,7 +130,7 @@ class OperatorCycleTests(unittest.TestCase):
                 "--grant-file", "grant", "--candidate", "candidate",
                 "--csv-path", "events.csv", "--receipt-file", "receipt",
                 "--consent-local-read", "--confirm-removals-reviewed"]
-        with patch.dict("os.environ", {"OWG_DASHBOARD_SESSION": "session"}), \\
+        with patch.dict("os.environ", {"OWG_DASHBOARD_SESSION": "session"}), \
              patch.object(cycle, "recovery_triage", return_value={
                  "status": "receipt_verified", "next_action": "operator_may_separately_prepare_handoff"
              }) as delegate, contextlib.redirect_stdout(io.StringIO()) as out:
