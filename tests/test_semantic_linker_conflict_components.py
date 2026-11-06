@@ -54,4 +54,5 @@ def test_reproducible_for_different_pair_iteration_order():
     edges = [(1, 2), (1, 3), (2, 3), (2, 4), (3, 4)]
     a = linker._compatible_groups(set(map(frozenset, edges)), groups, {})
     b = linker._compatible_groups(set(map(frozenset, reversed(edges))), groups, {})
-    assert a == b == ([[1, 2, 3]], 1)
+    # Global coverage retains two disjoint corroborated pairs (four items).
+    assert a == b == ([[1, 2], [3, 4]], 0)

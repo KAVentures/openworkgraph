@@ -11,12 +11,12 @@ def _pairs(*edges):
 
 
 def test_bridge_does_not_destroy_larger_supported_group():
-    # Lowest-ID greedy used to take 1-2, leaving 3-4 as only a pair.
-    # The mutually supported 2-3-4 clique should be preserved.
+    # The global packing objective prefers two safe pairs covering four items
+    # to the larger clique covering three; both remain review-only.
     pairs = _pairs((1, 2), (2, 3), (2, 4), (3, 4))
     result, refused = _compatible_groups(pairs, _groups(4), {})
-    assert result == [[2, 3, 4]]
-    assert refused == 1
+    assert result == [[1, 2], [3, 4]]
+    assert refused == 0
 
 
 def test_no_transitive_bridge_and_deterministic_order():

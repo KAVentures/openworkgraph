@@ -318,6 +318,62 @@ def _compatible_groups(pairs: set[frozenset[int]], groups: list[list[str]],
             return None
         return best
 
+    # For small components, optimize the *partition*, not merely the next clique.
+    # A single maximum clique may strand several members that could otherwise
+    # form two disjoint, fully corroborated groups. This is review-only.
+    def packed_groups(nodes: set[int]) -> list[list[int]] | None:
+        if len(nodes) > 10:
+            return None
+        from functools import lru_cache
+
+        ordered = sorted(nodes)
+        cliques: list[tuple[int, tuple[int, ...]]] = []
+        for mask in range(1, 1 << len(ordered)):
+            if mask.bit_count() < 2:
+                continue
+            members = tuple(ordered[i] for i in range(len(ordered)) if mask & (1 << i))
+            if all(compatible(list(members[:i]), member)
+                   for i, member in enumerate(members)):
+                cliques.append((mask, members))
+        by_first: dict[int, list[tuple[int, tuple[int, ...]]]] = {}
+        for mask, members in cliques:
+            for i in range(len(ordered)):
+                if mask & (1 << i):
+                    by_first.setdefault(i, []).append((mask, members))
+
+        @lru_cache(maxsize=1024)
+        def solve(available: int) -> tuple[int, int, tuple[tuple[int, ...], ...]]:
+            if not available:
+                return (0, 0, ())
+            first = (available & -available).bit_length() - 1
+            best = solve(available & ~(1 << first))
+            for mask, members in by_first.get(first, []):
+                if mask & available != mask:
+                    continue
+                covered, edges, groups_found = solve(available ^ mask)
+                candidate = (covered + len(members),
+                             edges + len(members) * (len(members) - 1) // 2,
+                             tuple(sorted((*groups_found, members))))
+                if candidate[:2] > best[:2] or (candidate[:2] == best[:2]
+                                                  and candidate[2] < best[2]):
+                    best = candidate
+            return best
+
+        return [list(group) for group in solve((1 << len(ordered)) - 1)[2]]
+
+    # Search each connected component independently; disconnected candidates
+    # cannot share a supported clique and need not consume one another's budget.
+    for component in _components(pairs):
+        subset = remaining.intersection(component)
+        packed = packed_groups(subset)
+        if packed is None:
+            continue
+        for group in packed:
+            accepted.append(group)
+            remaining.difference_update(group)
+        refused += len(subset.intersection(remaining))
+        remaining.difference_update(subset)
+
     while remaining:
         choices: list[list[int]] = []
         for seed in sorted(remaining):
