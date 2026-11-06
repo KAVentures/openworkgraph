@@ -75,6 +75,39 @@ per-person scoring.
 Hover dwell and pointer movement are context only. Workflow reconstruction does not
 treat them as steps, or as merge evidence by themselves.
 
+## Desktop
+
+The desktop recorder reads the same capture-depth choice, at most every two
+seconds, so a change needs no restart.
+
+- **Drag and drop** (`screen_drag`): a mouse press and release at least 16 pixels and
+  150 ms apart. It records the start and end points and, when UI labels are on, the
+  accessibility targets under both. The ordinary click is still recorded. Dragged
+  data and file names are never read.
+- **Pointer movement** (`screen_pointer_trajectory`, Full fidelity only):
+  - samples are taken at the chosen rate, in screen pixels relative to the primary
+    display (negative on monitors left of or above it);
+  - batches hold at most 200 points or 10 seconds;
+  - no sample is taken while the accessibility element under the pointer is a secure
+    field, and the batch ends there. The check runs whenever a sample would be taken and
+    the pointer has moved more than 8 pixels. If the check fails, the field is treated
+    as secure;
+  - no screenshot is taken for these events;
+  - the points are stored apart from the event, as in the browser, so shared views
+    and exports see only a count and duration.
+- **Desktop hover dwell** (`screen_hover_dwell`, Enhanced):
+  - A rest is the pointer staying within 3 pixels for the chosen threshold. It ends when
+    the pointer moves away (`pointer_left`) or a button is pressed (`activated`).
+  - It counts only when the accessibility element under the pointer is a non-secure
+    interactive control: button, link, menu item, tab, checkbox, radio, combo box,
+    slider, switch or option.
+  - Rests over text, empty space, secure fields or apps without accessibility targets
+    are dropped. With UI labels turned off, no desktop hover is recorded.
+
+The server's `/v1/events` ingest drops desktop hovers, drags and pointer samples the
+current capture depth does not allow. It also drops malformed samples, hovers without a
+non-secure target, and events from excluded apps.
+
 ## Enforcement
 
 The local server enforces capture depth at ingest, so a stale or modified extension
@@ -89,8 +122,7 @@ cannot store a disabled signal. It also:
 `GET /v1/capture-coverage` lists each capture modality as `on`, `off`, `unsupported`
 or not seen, with counts of high-fidelity events over the last seven days. It covers
 browser structural events, hover dwell, drag and drop, pointer movement, desktop
-clicks, desktop hover, drag and pointer (unsupported for now), screenshots and work
-text. Reconstruction and agents can use it to tell a missing signal from an absent
+clicks, desktop hover, drag and pointer, screenshots and work text. Reconstruction and agents can use it to tell a missing signal from an absent
 behaviour.
 
 ## Keeping and deleting interaction detail
@@ -110,8 +142,10 @@ behaviour.
 
 ## Not yet done
 
-- Desktop hover, drag and drop and pointer movement on macOS and Windows: the
-  manifest lists them as `unsupported`.
+- Desktop hover, drag and pointer movement are covered by unit tests with a simulated
+  mouse listener and simulated accessibility targets only. They have not yet been
+  regression-tested on real macOS or Windows machines, including permissions,
+  multi-monitor layouts and lock states.
 - Iframes from other origins are covered only where the content script already runs.
 - The issue's ablation evaluation, on held-out interleaved workflows, has not been run.
   No reconstruction accuracy gain is claimed until it has.
