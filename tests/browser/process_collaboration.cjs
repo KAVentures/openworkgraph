@@ -104,6 +104,7 @@ const pathModule = require("node:path");
     });
     await upload(alice, pathModule.join(scratch, "process.json"));
     assert.equal(await alice.locator("#inventory button").count(), 0);
+    const handoffPublishedResponse = alice.waitForResponse(response => response.request().method() === "POST" && new URL(response.url()).pathname === "/v1/human/processes");
     await alice
       .getByRole("button", {
         name: "Publish as a new shared process",
@@ -118,6 +119,46 @@ const pathModule = require("node:path");
       await alice.locator("#design").textContent(),
       /Evidence missing/,
     );
+    // Browser acceptance of the real authenticated handoff preflight against the
+    // synthetic Gateway. The packet is kept in Chromium, never posted to it.
+    const handoffPublished = await (await handoffPublishedResponse).json();
+    assert.ok(handoffPublished.process?.workflow_id, "publication returns a process identity");
+    const handoffProcess = handoffPublished.process;
+    const handoffPacket = (overrides = {}) => ({
+      format: "openworkgraph.evidence-handoff-review.v1",
+      scope: "human_review_only",
+      execution_authorized: false,
+      source_read_authorized: false,
+      process: {
+        workflow_id: handoffProcess.workflow_id,
+        revision: handoffProcess.revision,
+        content_sha256: handoffProcess.content_sha256,
+        ...overrides,
+      },
+    });
+    const setHandoffPacket = async packet => alice.locator("#handoffPacket").setInputFiles({
+      name: "local-review.json", mimeType: "application/json",
+      buffer: Buffer.from(JSON.stringify(packet)),
+    });
+    let uploadedHandoff = false;
+    alice.on("request", request => {
+      if (request.method() !== "GET" && request.postData()?.includes("openworkgraph.evidence-handoff-review.v1")) uploadedHandoff = true;
+    });
+    await setHandoffPacket(handoffPacket());
+    await alice.locator("#handoffCheck").click();
+    await alice.locator("#handoffStatus").filter({hasText: "MATCH: Fresh authorized process revision"}).waitFor();
+    assert.match(await alice.locator("#handoffStatus").textContent(), /No packet checked|execution authorization remain unverified/i);
+    assert.equal(uploadedHandoff, false, "review packet bytes must remain local");
+    await setHandoffPacket(handoffPacket({revision: handoffProcess.revision + 1}));
+    await alice.locator("#handoffCheck").click();
+    await alice.locator("#handoffStatus").filter({hasText: "REFUSED:"}).waitFor();
+    await setHandoffPacket(handoffPacket());
+    const detailUrl = "**/v1/human/processes/" + handoffProcess.workflow_id;
+    await alice.route(detailUrl, async route => route.fulfill({status:403, contentType:"application/json", body:'{"detail":"denied"}'}), {times:1});
+    await alice.locator("#handoffCheck").click();
+    await alice.locator("#handoffStatus").filter({hasText: "REFUSED:"}).waitFor();
+    assert.equal(uploadedHandoff, false);
+
     assert.equal(
       await alice
         .getByRole("button", { name: "Record design review", exact: true })
