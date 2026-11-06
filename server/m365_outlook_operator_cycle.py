@@ -14,6 +14,7 @@ from .m365_outlook_verified_next_round import run_verified_next_round
 from .m365_outlook_verified_append_receipt import append_and_record
 from .m365_outlook_resume_handoff import prepare_handoff
 from .m365_outlook_candidate_review import review as review_candidate
+from .m365_outlook_recovery_triage import triage as recovery_triage
 from .m365_outlook_owg_receipt import ReceiptError, UncertainReceipt
 from .m365_outlook_delta import DeltaError
 
@@ -85,10 +86,24 @@ def handoff(*, consent_local_read=False, confirm_removals_reviewed=False, **kwar
             "checkpoint_advanced": False, "provider_requests": 0,
             "automatic_retry": False}
 
+def recover(*, consent_local_read=False, confirm_removals_reviewed=False, **kwargs):
+    """Read-only authenticated recovery decision; never retries uncertain appends."""
+    if consent_local_read is not True or confirm_removals_reviewed is not True:
+        raise ReceiptError("Separate local read and removal review consent required")
+    result = recovery_triage(
+        consent_local_read=True, confirm_removals_reviewed=True, **kwargs)
+    if result.get("status") not in (
+            "receipt_verified", "handoff_verified",
+            "manual_reconciliation_required"):
+        raise ReceiptError("Recovery did not produce a recognized decision")
+    return {"format": FORMAT, "phase": "recover", **result,
+            "checkpoint_advanced": False, "automatic_retry_allowed": False}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="phase", required=True)
-    for phase in ("extract", "review", "append", "handoff"):
+    for phase in ("extract", "review", "append", "handoff", "recover"):
         p = sub.add_parser(phase)
         for flag in ("tenant", "mailbox", "folder"):
             p.add_argument("--" + flag, required=True)
@@ -109,6 +124,12 @@ def main(argv=None):
                 p.add_argument("--" + flag, action="store_true")
         elif phase == "review":
             p.add_argument("--candidate", type=Path, required=True)
+        elif phase == "recover":
+            for flag in ("candidate", "csv-path", "receipt-file"):
+                p.add_argument("--" + flag, type=Path, required=True)
+            for flag in ("journal-dir", "handoff-dir"):
+                p.add_argument("--" + flag, type=Path)
+            p.add_argument("--confirm-removals-reviewed", action="store_true")
         elif phase == "append":
             for flag in ("candidate", "csv-path", "receipt-file"):
                 p.add_argument("--" + flag, type=Path, required=True)
@@ -132,10 +153,12 @@ def main(argv=None):
             result = review(**args)
         elif phase == "append":
             result = append(**args)
+        elif phase == "recover":
+            result = recover(**args)
         else:
             result = handoff(**args)
         print(json.dumps(result, sort_keys=True))
-        return 0
+        return 3 if phase == "recover" and result["status"] == "manual_reconciliation_required" else 0
     except UncertainReceipt:
         print(json.dumps({"format": FORMAT, "phase": phase,
                           "status": "uncertain", "retry_allowed": False}, sort_keys=True))
