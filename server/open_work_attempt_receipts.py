@@ -5,7 +5,7 @@ retention and revocation; no provider credentials or raw provider responses.
 """
 from __future__ import annotations
 
-import json
+import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,6 +28,8 @@ def _connect(path: str):
         raise ValueError("journal symlink refused")
     target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     db = sqlite3.connect(str(target), timeout=5)
+    if os.name == "posix":
+        os.chmod(target, 0o600)
     db.execute("PRAGMA busy_timeout=5000")
     db.execute("""CREATE TABLE IF NOT EXISTS attempt_receipts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
