@@ -146,6 +146,7 @@ def resumption_candidates(
             "unfinished_state_is_inferred": False,
             "ask_when_ambiguous": True,
             "identity_segments_are_observation_bursts_not_tasks": True,
+            "resource_local_assignment_requires_correlated_observations": True,
         },
         "derived": True,
         "authoritative": False,
@@ -175,7 +176,7 @@ def resumption_candidates(
     result["coverage"]["pointer_rows_scanned"] = len(pointer_rows)
     if len(pointer_rows) >= MAX_POINTER_ROWS:
         result["coverage"]["scan_truncated"] = True
-    by_session: list[dict[str, Any]] = [{"refs": {}, "events": [], "tracks": {}} for _ in sessions]
+    by_session: list[dict[str, Any]] = [{"refs": {}, "events": [], "tracks": {}, "coobserved": set()} for _ in sessions]
     for row in pointer_rows:
         data = dict(row)
         instant = data.get("instant")
@@ -186,6 +187,10 @@ def resumption_candidates(
             continue
         pointers = _pointer(sanitized_pointers(data.get("metadata_json")))
         bucket = by_session[index]
+        identities_in_event = sorted({_identity(pointer) for pointer in pointers})
+        for left_pos, left in enumerate(identities_in_event):
+            for right in identities_in_event[left_pos + 1:]:
+                bucket["coobserved"].add((left, right))
         for pointer in pointers:
             identity = _identity(pointer)
             bucket["refs"].setdefault(identity, pointer)
@@ -263,6 +268,17 @@ def resumption_candidates(
         specific = [ref for ref in shared if sessions_seen[ref] < routine_threshold]
         overlap = len(shared) / len(current_refs | set(earlier["refs"]))
         status, confidence = _assess(specific, overlap)
+        # Session-wide overlap may combine unrelated cases A and B.
+        # Only simultaneous observations in BOTH sessions corroborate a pair.
+        correlated_pairs = sorted(current["coobserved"] & earlier["coobserved"])
+        correlated_specific = [pair for pair in correlated_pairs
+                               if pair[0] in specific and pair[1] in specific]
+        if correlated_specific:
+            assignment_status = "corroborated_candidate"
+        elif specific:
+            assignment_status = "unresolved_independent_resources"
+        else:
+            assignment_status = "ambiguous_routine_context"
         start, end = sessions[index]
         gap_seconds = max(0.0, (current_start - end) * 86400)
         candidates.append({
@@ -300,6 +316,9 @@ def resumption_candidates(
             "gap_seconds": round(gap_seconds),
             "crosses_calendar_day": _when(end).date() != _when(current_start).date(),
             "association_status": status,
+            "case_assignment_status": assignment_status,
+            "case_assignment_proven": False,
+            "correlated_resource_pair_count": len(correlated_specific),
             "confidence": confidence,
             "proves_same_work": False,
             "task_label": None,
