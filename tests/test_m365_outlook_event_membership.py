@@ -47,12 +47,12 @@ def _run(body, **changes):
     transport = Transport(body)
     kwargs = dict(tenant="t", mailbox="m", folder="f", grant_file="grant",
                   candidate="candidate", csv_path="candidate.csv",
-                  log_id="log1", confirm_log_id="log1", port=8765,
-                  session="session", consent_local_read=True, opener=transport)
+                  log_id="log_0123456789abcdef", confirm_log_id="log_0123456789abcdef", port=8765,
+                  session="abcdefghijklmnop", consent_local_read=True, opener=transport)
     kwargs.update(changes)
     candidate_csv = b"case_id,activity,timestamp,source_event_id\r\ncase1,read,2026-01-01T00:00:00Z,event1\r\n"
     with patch.object(membership, "_grant"), patch.object(membership, "_scope", return_value="a"*64), \
-         patch.object(membership, "_session", return_value="session"), \
+         patch.object(membership, "_session", return_value="abcdefghijklmnop"), \
          patch.object(membership, "_artifact", return_value=(candidate_csv, {"events": 1})), \
          patch.object(membership, "_inventory", return_value=[]), \
          patch.object(membership, "_target", return_value=1):
