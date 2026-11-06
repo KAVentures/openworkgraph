@@ -189,7 +189,12 @@
       const chosen=file.files&&file.files[0];
       columnsReady=false;
       if(!chosen||format.value!=='csv'){
-        readingColumns=false;refreshImport();return;
+        // Non-CSV imports have no column read, but still need the same ready
+        // status as before. Incrementing the sequence above prevents a stale
+        // CSV read from changing this status or the current file's readiness.
+        readingColumns=false;
+        status(chosen?'File mapping ready. Review the selected columns before storing.':'');
+        refreshImport();return;
       }
       const sep=delimiter.value==='t'?'\t':delimiter.value;
       readingColumns=true;status('Reading file columns…');refreshImport();

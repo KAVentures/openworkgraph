@@ -52,6 +52,28 @@ const path=require('node:path');
    assert.equal(await page.locator('#owgEventLogImport').isDisabled(),true);
    await page.locator('#owgEventLogFile').setInputFiles([]);
 
+   // Selecting XES or OCEL while an earlier CSV read is pending must show the
+   // normal ready status, require fresh storage consent, and ignore the stale read.
+   for(const [filename,expected] of [['sample.xes','xes'],['sample.jsonocel','ocel']]){
+     await page.evaluate(()=>{window.__originalText=Blob.prototype.text;window.__readQueue=[];Blob.prototype.text=function(){const blob=this;return new Promise(resolve=>window.__readQueue.push(()=>window.__originalText.call(blob).then(resolve)));};});
+     await page.locator('#owgEventLogFile').setInputFiles({name:'pending.csv',mimeType:'text/csv',buffer:Buffer.from('old_case,old_activity,old_time\na,b,c\n')});
+     await page.waitForFunction(()=>window.__readQueue.length===1);
+     await page.locator('#owgEventLogFile').setInputFiles({name:filename,mimeType:'text/plain',buffer:Buffer.from('fixture')});
+     assert.equal(await page.locator('#owgEventLogFormat').inputValue(),expected);
+     await page.locator('#owgEventLogStatus').filter({hasText:'File mapping ready'}).waitFor();
+     assert.equal(await page.locator('#owgEventLogConsent').isChecked(),false);
+     assert.equal(await page.locator('#owgEventLogImport').isDisabled(),true);
+     await page.locator('#owgEventLogConsent').check();
+     assert.equal(await page.locator('#owgEventLogImport').isEnabled(),true);
+     await page.evaluate(()=>{Blob.prototype.text=window.__originalText;window.__readQueue[0]();});
+     await page.waitForTimeout(100);
+     assert.match(await page.locator('#owgEventLogStatus').textContent(),/File mapping ready/);
+     assert.equal(await page.locator('#owgEventLogImport').isEnabled(),true);
+     await page.locator('#owgEventLogFile').setInputFiles([]);
+     assert.equal(await page.locator('#owgEventLogImport').isDisabled(),true);
+     assert.equal(await page.locator('#owgEventLogStatus').textContent(),'');
+   }
+
    const csv='Id,CaseId,CreatedDate,Field,NewValue,OldValue\n017000000000001,500000000000001,2026-01-01T00:00:00Z,created,,SECRET_OLD\n017000000000002,500000000000001,2026-01-01T01:00:00Z,Status,<img src=x onerror=window.__attack=1>,SECRET_OLD\n017000000000003,500000000000001,invalid,Description,SECRET_DESCRIPTION,\n';
    await page.locator('#owgSalesforceFile').setInputFiles({name:'bad.csv',mimeType:'text/csv',buffer:Buffer.from([255])});
    await page.locator('#owgSalesforceAccount').fill('synthetic-sandbox');
