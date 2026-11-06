@@ -23,6 +23,8 @@ MIN_GAP_MINUTES = 5
 MAX_GAP_MINUTES = 12 * 60
 MAX_ACTIVITY_ROWS = 200_000
 MAX_POINTER_ROWS = 50_000
+# Resource-specific silence can be hidden by unrelated activity in a global session.
+IDENTITY_INTERRUPTION_MINUTES = 5
 
 
 def _when(julian_day: float) -> datetime:
@@ -77,6 +79,41 @@ def _assess(specific: list[tuple[str, str, str]], overlap: float) -> tuple[str, 
     return "ambiguous", 0.3
 
 
+def _identity_bursts(observations: list[tuple[float, str]], threshold_days: float) -> list[dict[str, Any]]:
+    """Partition a resource's observed events; gaps are uncertainty, not task boundaries.
+
+    A global idle-gap session can remain active while work on this identity stops.
+    This returns bounded observed bursts, never interpolated activity or inferred work.
+    """
+    bursts: list[dict[str, Any]] = []
+    for instant, event_id in sorted(observations):
+        if not bursts or instant - bursts[-1]["last"] > threshold_days:
+            bursts.append({"first": instant, "last": instant, "event_ids": []})
+        burst = bursts[-1]
+        burst["last"] = instant
+        if len(burst["event_ids"]) < 6:
+            burst["event_ids"].append(event_id)
+    return bursts
+
+
+def _visible_bursts(track: dict[str, Any], threshold_days: float) -> dict[str, Any]:
+    bursts = _identity_bursts(track["observations"], threshold_days)
+    selected = bursts[-20:]
+    return {
+        "segments": [{
+            "first_observed_at": _iso(burst["first"]),
+            "last_observed_at": _iso(burst["last"]),
+            "evidence_event_ids": burst["event_ids"],
+            "gap_from_previous_seconds": (
+                max(0, round((burst["first"] - bursts[len(bursts) - len(selected) + i - 1]["last"]) * 86400))
+                if len(bursts) - len(selected) + i > 0 else None
+            ),
+        } for i, burst in enumerate(selected)],
+        "segments_truncated": len(bursts) > len(selected),
+        "segments_are_observation_bursts_not_tasks": True,
+    }
+
+
 def resumption_candidates(
     connection: Any, *,
     lease: dict[str, Any],
@@ -108,6 +145,7 @@ def resumption_candidates(
             "task_names_are_not_generated": True,
             "unfinished_state_is_inferred": False,
             "ask_when_ambiguous": True,
+            "identity_segments_are_observation_bursts_not_tasks": True,
         },
         "derived": True,
         "authoritative": False,
@@ -152,9 +190,10 @@ def resumption_candidates(
             identity = _identity(pointer)
             bucket["refs"].setdefault(identity, pointer)
             track = bucket["tracks"].setdefault(identity, {"first": float(instant),
-                                                           "last": float(instant), "event_ids": []})
+                                                           "last": float(instant), "event_ids": [], "observations": []})
             track["first"] = min(track["first"], float(instant))
             track["last"] = max(track["last"], float(instant))
+            track["observations"].append((float(instant), str(data.get("event_id") or "")[:120]))
             if len(track["event_ids"]) < 6:
                 track["event_ids"].append(str(data.get("event_id") or "")[:120])
         if pointers and len(bucket["events"]) < 6:
@@ -199,6 +238,7 @@ def resumption_candidates(
                 "last_observed_at": _iso(track["last"]),
                 "idle_gap_session_started_at": _iso(sessions[index][0]),
                 "evidence_event_ids": list(reversed(track["event_ids"])),
+                **_visible_bursts(track, IDENTITY_INTERRUPTION_MINUTES / 1440),
                 "gap_from_previous_seconds": (
                     max(0, round((track["first"] - previous_end) * 86400))
                     if previous_end is not None else None
@@ -244,11 +284,13 @@ def resumption_candidates(
                         "first_observed_at": _iso(earlier["tracks"][ref]["first"]),
                         "last_observed_at": _iso(earlier["tracks"][ref]["last"]),
                         "evidence_event_ids": earlier["tracks"][ref]["event_ids"],
+                        **_visible_bursts(earlier["tracks"][ref], IDENTITY_INTERRUPTION_MINUTES / 1440),
                     },
                     "current": {
                         "first_observed_at": _iso(current["tracks"][ref]["first"]),
                         "last_observed_at": _iso(current["tracks"][ref]["last"]),
                         "evidence_event_ids": current["tracks"][ref]["event_ids"],
+                        **_visible_bursts(current["tracks"][ref], IDENTITY_INTERRUPTION_MINUTES / 1440),
                     },
                 }
                 for ref in shared[:12]
