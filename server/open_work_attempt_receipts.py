@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from .open_work_provider_attempt_verification import _valid
@@ -16,7 +16,7 @@ _MAX_ROWS = 500
 
 
 def _scope(tenant: str, actor: str, attempt: str) -> None:
-    if not all(_valid(x) for x in (tenant, actor, attempt)):
+    if not all(_valid(x) and x not in (".", "..") and "/" not in x and "\\" not in x for x in (tenant, actor, attempt)):
         raise ValueError("invalid journal scope")
 
 
@@ -93,4 +93,26 @@ def purge_scope(path: str, *, tenant: str, actor: str) -> int:
         db.execute("BEGIN IMMEDIATE")
         cursor = db.execute("DELETE FROM attempt_receipts WHERE tenant=? AND actor=?",
                             (tenant, actor))
+        return cursor.rowcount
+
+
+def purge_expired_receipts(path: str, *, tenant: str, actor: str,
+                           older_than_days: int, now: datetime | None = None) -> int:
+    """Explicit actor-scoped retention operation; no implicit background deletion.
+
+    Only receipts strictly older than the UTC cutoff are deleted. This does not
+    revoke access: callers must separately enforce consent and grants.
+    """
+    _scope(tenant, actor, "retention")
+    if type(older_than_days) is not int or not 1 <= older_than_days <= 3650:
+        raise ValueError("invalid retention window")
+    clock = now or datetime.now(timezone.utc)
+    if not isinstance(clock, datetime) or clock.tzinfo is None:
+        raise ValueError("timezone-aware clock required")
+    cutoff = (clock.astimezone(timezone.utc) - timedelta(days=older_than_days)).isoformat()
+    with _connect(path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        cursor = db.execute(
+            "DELETE FROM attempt_receipts WHERE tenant=? AND actor=? AND checked_at<?",
+            (tenant, actor, cutoff))
         return cursor.rowcount
