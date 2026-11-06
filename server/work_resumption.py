@@ -114,6 +114,50 @@ def _visible_bursts(track: dict[str, Any], threshold_days: float) -> dict[str, A
     }
 
 
+def _observed_case_groups(bucket: dict[str, Any]) -> list[dict[str, Any]]:
+    """Partition observed resource identities by same-event co-reference only.
+
+    Connected components are evidence-navigation groups, not confirmed cases:
+    transitive co-reference does not prove a shared business task.
+    """
+    identities = sorted(bucket["refs"])
+    adjacency = {identity: set() for identity in identities}
+    for left, right in bucket["coobserved"]:
+        if left in adjacency and right in adjacency:
+            adjacency[left].add(right)
+            adjacency[right].add(left)
+    visited: set[tuple[str, str, str]] = set()
+    groups: list[dict[str, Any]] = []
+    for identity in identities:
+        if identity in visited:
+            continue
+        pending = [identity]
+        component: list[tuple[str, str, str]] = []
+        visited.add(identity)
+        while pending:
+            node = pending.pop()
+            component.append(node)
+            for neighbor in sorted(adjacency[node]):
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    pending.append(neighbor)
+        component.sort()
+        events = sorted({event_id for node in component
+                         for _instant, event_id in bucket["tracks"][node]["observations"]
+                         if event_id})
+        groups.append({
+            "group_id": f"observed_group_{len(groups) + 1:02d}",
+            "resource_pointers": [bucket["refs"][node] for node in component],
+            "resource_count": len(component),
+            "evidence_event_ids": events[:12],
+            "evidence_truncated": len(events) > 12,
+            "observed_co_reference": len(component) > 1,
+            "proves_same_case": False,
+            "assignment_status": "observed_co_reference" if len(component) > 1 else "independent_resource",
+        })
+    return groups
+
+
 def resumption_candidates(
     connection: Any, *,
     lease: dict[str, Any],
@@ -131,6 +175,8 @@ def resumption_candidates(
         "current_session": None,
         "candidates": [],
         "identity_timelines": [],
+        "observed_case_groups": [],
+        "observed_case_groups_truncated": False,
         "saved_history_access": mode,
         "history_access_limited": mode != "all_saved",
         "session_gap_minutes": gap_minutes,
@@ -147,6 +193,7 @@ def resumption_candidates(
             "ask_when_ambiguous": True,
             "identity_segments_are_observation_bursts_not_tasks": True,
             "resource_local_assignment_requires_correlated_observations": True,
+            "observed_case_groups_are_not_confirmed_tasks": True,
         },
         "derived": True,
         "authoritative": False,
@@ -221,6 +268,9 @@ def resumption_candidates(
         "pointer_count": len(current["refs"]),
         "resource_refs": sorted({identity[2] for identity in current["refs"]})[:24],
     }
+    observed_groups = _observed_case_groups(current)
+    result["observed_case_groups"] = observed_groups[:24]
+    result["observed_case_groups_truncated"] = len(observed_groups) > 24
     if not current["refs"]:
         result["notice"] = ("The latest session has no observed stable pointer, so resumption "
                             "cannot be assessed; this does not mean the work is new.")
