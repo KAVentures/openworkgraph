@@ -2830,6 +2830,20 @@ async def bound_run_receipt_journal(request: Request, response: Response):
                       case_ref=payload["work_item_ref"], run_ref=run["run_ref"],
                       fingerprint=run["run_snapshot_fingerprint"],
                       revision=payload["expected_revision"], guard=guard)
+        # Compare against a fresh, integrity-checked view. Case-wide evidence
+        # can change independently of the operator's run binding/revision.
+        def fresh_digest():
+            provider = read_operation_evidence(admitted, signature, scope=scope,
+                                               secret=secret, guard=guard)
+            people = read_human_outcomes(admitted, signature, scope=scope,
+                                         secret=secret, guard=guard)
+            return hashlib.sha256(json.dumps(
+                [provider, people], sort_keys=True, separators=(",", ":")
+            ).encode()).hexdigest()
+
+        latest_digest = await asyncio.to_thread(fresh_digest)
+        if action is not None and latest_digest != digest:
+            raise CaseDeclarationError("case evidence changed during receipt review")
         await asyncio.to_thread(guard)
         if action is None:
             result = await asyncio.to_thread(review_receipts, **kwargs)
@@ -2837,6 +2851,20 @@ async def bound_run_receipt_journal(request: Request, response: Response):
             result = await asyncio.to_thread(
                 append_receipt, **kwargs, action=action, evidence_digest=digest,
                 supersedes=payload.get("supersedes"))
+        # A read must not label old receipts current after evidence changed.
+        latest_digest = await asyncio.to_thread(fresh_digest)
+        if action is None:
+            result["current_case_evidence_digest"] = latest_digest
+            result["entries"] = [dict(entry, freshness=(
+                "current" if entry["evidence_digest"] == latest_digest else "stale"))
+                for entry in result["entries"]]
+            result["current_review_count"] = sum(
+                entry["freshness"] == "current" and entry["action"] != "retracted"
+                for entry in result["entries"]
+                if entry["id"] not in {e["supersedes"] for e in result["entries"] if e["supersedes"]})
+            result["case_evidence_scope"] = "case_wide_not_run_causal"
+        elif latest_digest != digest:
+            raise CaseDeclarationError("case evidence changed after receipt write; refresh review")
         await asyncio.to_thread(guard)
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError,
             KeyError, ValueError) as exc:
