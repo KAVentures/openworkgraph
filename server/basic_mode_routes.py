@@ -89,6 +89,31 @@ async def put_capture_depth(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
+async def delete_capture_detail(request: Request) -> dict[str, Any]:
+    """Delete recorded high-fidelity interaction detail now: all of it, or older than N days."""
+    from . import capture_depth
+    _require_dashboard_session(request)
+    try:
+        payload = await request.json()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="deletion must be JSON") from None
+    if not isinstance(payload, dict) or set(payload) - {"older_than_days", "confirm"} or payload.get("confirm") is not True:
+        raise HTTPException(status_code=400, detail="send confirm: true, and optionally older_than_days")
+    days = payload.get("older_than_days")
+    if days is not None and (not isinstance(days, int) or isinstance(days, bool) or not 0 <= days <= 3650):
+        raise HTTPException(status_code=400, detail="older_than_days must be 0 to 3650")
+    return capture_depth.delete_high_fidelity(older_than_days=days)
+
+
+def get_pointer_heatmap(request: Request, hostname: str | None = None, pathname: str | None = None,
+                        hours: int = 168) -> dict[str, Any]:
+    from . import capture_depth
+    _require_dashboard_session(request)
+    return capture_depth.pointer_heatmap(hostname=hostname[:253] if hostname else None,
+                                         pathname=pathname[:2048] if pathname else None,
+                                         hours=max(1, min(int(hours), 24 * 365)))
+
+
 def get_capture_coverage(hours: int = 168) -> dict[str, Any]:
     from .interaction_evidence import coverage_manifest
     return coverage_manifest(max(1, min(int(hours), 24 * 90)))
@@ -139,6 +164,8 @@ if not getattr(app.state, "owg_basic_mode_installed", False):
     app.add_api_route("/v1/capture-depth", put_capture_depth, methods=["PUT"])
     app.add_api_route("/v1/capture-coverage", get_capture_coverage, methods=["GET"])
     app.add_api_route("/v1/capture-coverage/friction", get_friction_candidates, methods=["GET"])
+    app.add_api_route("/v1/capture-coverage/heatmap", get_pointer_heatmap, methods=["GET"])
+    app.add_api_route("/v1/capture-depth/delete", delete_capture_detail, methods=["POST"])
     app.add_api_route("/basic-mode.js", basic_mode_script, methods=["GET"])
     app.add_api_route("/v1/update-status", update_status, methods=["GET"])
     from .analysis_handoff import analysis_preview

@@ -344,7 +344,10 @@ def ingest(batch: EventBatch) -> dict[str, int]:
         for e in batch.events
     ])
     learn_persistent_identities(events)
-    return {"inserted": insert_events(events)}
+    inserted = insert_events(events)
+    from . import capture_depth
+    capture_depth.apply_retention()
+    return {"inserted": inserted}
 
 
 @app.post("/v1/heartbeat")
@@ -401,6 +404,9 @@ def browser_event(event: BrowserEvent) -> dict[str, int | str]:
     ctx = _browser_context(event)
     page = event.page.model_dump(exclude_none=True)
     target = capture_depth.bound_target(event.action, event.target.model_dump(exclude_none=True))
+    if target.get("type") == "secure" and not capture_depth.action_allowed_on_excluded(event.action):
+        # Hover, drag and trajectory events are never stored for secure fields, whatever the client sends.
+        return {"inserted": 0, "skipped": "secure_target"}
     metadata = bounded
     metadata.update({
         "source": "browser_extension",
@@ -446,6 +452,7 @@ def browser_event(event: BrowserEvent) -> dict[str, int | str]:
     safe_event = cap_event_title_surfaces(safe_event)
     learn_persistent_identities(safe_event)
     inserted = insert_events([safe_event])
+    capture_depth.apply_retention()
     safe_meta = safe_event.get("metadata") or {}
     safe_page = safe_meta.get("page") if isinstance(safe_meta.get("page"), dict) else {}
     BROWSER_STATUS.clear()

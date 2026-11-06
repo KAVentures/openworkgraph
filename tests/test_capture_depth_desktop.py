@@ -30,15 +30,24 @@ def test_pointer_sampler_throttles_and_batches():
 
 
 def test_capture_depth_file_is_read_and_unacknowledged_trajectories_stay_off(tmp_path):
-    assert capture_depth_signals(tmp_path) == {"drag_drop": False, "pointer_trajectory": False, "trajectory_hz": 4,
-                                               "hover_dwell": False, "hover_dwell_ms": 750}
+    from datetime import datetime, timedelta, timezone
+    later = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    earlier = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    off = {"drag_drop": False, "pointer_trajectory": False, "trajectory_hz": 4, "hover_dwell": False, "hover_dwell_ms": 750}
+    assert capture_depth_signals(tmp_path) == off
     (tmp_path / "capture_depth.json").write_text(json.dumps({"signals": {"drag_drop": True, "pointer_trajectory": True},
-                                                             "parameters": {"trajectory_hz": 9}}))
+                                                             "parameters": {"trajectory_hz": 9}, "expires_at": later}))
     assert capture_depth_signals(tmp_path) == {"drag_drop": True, "pointer_trajectory": False, "trajectory_hz": 9,
                                                "hover_dwell": False, "hover_dwell_ms": 750}
-    (tmp_path / "capture_depth.json").write_text(json.dumps({"signals": {"pointer_trajectory": True},
-                                                             "full_acknowledged_version": "capture-depth-full-v1"}))
+    (tmp_path / "capture_depth.json").write_text(json.dumps({"signals": {"pointer_trajectory": True}, "expires_at": later,
+                                                             "full_acknowledged_version": "capture-depth-full-v2"}))
     assert capture_depth_signals(tmp_path)["pointer_trajectory"] is True
+    # Extra detail is time-limited: an expired or missing period means Standard on the desktop too.
+    for expires in (earlier, None, "soon"):
+        (tmp_path / "capture_depth.json").write_text(json.dumps({"signals": {"drag_drop": True, "pointer_trajectory": True},
+                                                                 "expires_at": expires,
+                                                                 "full_acknowledged_version": "capture-depth-full-v2"}))
+        assert capture_depth_signals(tmp_path) == off
 
 
 def test_sensor_callbacks_follow_live_depth(monkeypatch):
@@ -180,3 +189,20 @@ def test_desktop_trajectory_points_are_stored_apart_from_the_event():
     assert event["metadata"]["points"], "the caller's event is not modified"
     click = {"event_type": "screen_click", "metadata": {"points": [1]}}
     assert _split_pointer_trajectory(click) == (click, None)
+
+
+def test_desktop_hover_and_drag_targets_keep_no_names(depth):
+    depth.save({"profile": "enhanced"})
+    hover = {"event_type": "screen_hover_dwell", "metadata": {"duration_ms": 900, "target": {
+        "role": "button", "name": "private typed words", "label": "x", "description": "y"}}}
+    drag = {"event_type": "screen_drag", "metadata": {"target": {"role": "list item", "name": "Salary review"}}}
+    kept = depth.filter_desktop_events([hover, drag])
+    assert kept[0]["metadata"]["target"] == {"role": "button"}
+    assert kept[1]["metadata"]["target"] == {"role": "list item"}
+    assert hover["metadata"]["target"]["name"] == "private typed words", "the caller's event is not modified"
+
+
+def test_collector_accepts_the_current_full_acknowledgement(depth):
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[1] / "collector" / "interactions.py").read_text(encoding="utf-8")
+    assert f'"{depth.FULL_ACK_VERSION}"' in source, "update the collector when the Full acknowledgement changes"

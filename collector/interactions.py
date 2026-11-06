@@ -148,8 +148,13 @@ def capture_depth_signals(data_dir) -> dict[str, Any]:
         data = json.loads((Path(data_dir) / "capture_depth.json").read_text(encoding="utf-8"))
         signals = data.get("signals") if isinstance(data, dict) else {}
         params = data.get("parameters") if isinstance(data, dict) else {}
-        acknowledged = data.get("full_acknowledged_version") == "capture-depth-full-v1"
-    except (OSError, ValueError):
+        acknowledged = data.get("full_acknowledged_version") == "capture-depth-full-v2"
+        from datetime import datetime, timezone
+        expires = datetime.fromisoformat(str(data.get("expires_at")))
+        if expires.tzinfo is None or expires <= datetime.now(timezone.utc):
+            raise ValueError("extra detail has no current period")
+    except (OSError, ValueError, TypeError, AttributeError):
+        # Unreadable, missing or expired: Standard. Extra detail is always time-limited.
         return {"drag_drop": False, "pointer_trajectory": False, "trajectory_hz": 4, "hover_dwell": False,
                 "hover_dwell_ms": 750}
     hz = params.get("trajectory_hz") if isinstance(params, dict) else None

@@ -16,9 +16,12 @@ function owgNormalizeDepth(value) {
   const s = v.signals && typeof v.signals === "object" ? v.signals : {};
   const p = v.parameters && typeof v.parameters === "object" ? v.parameters : {};
   const num = (x, lo, hi, d) => Number.isInteger(x) && x >= lo && x <= hi ? x : d;
+  // Detail is time-limited: without an expiry in the future, nothing beyond Standard is emitted.
+  const expires = Date.parse(v.expires_at || "");
+  if (!(expires > Date.now())) return OWG_DEPTH_OFF;
   return {signals: {hover_dwell: s.hover_dwell === true, drag_drop: s.drag_drop === true, pointer_trajectory: s.pointer_trajectory === true},
     parameters: {hover_dwell_ms: num(p.hover_dwell_ms, 300, 5000, 750), trajectory_hz: num(p.trajectory_hz, 1, 20, 4),
-      max_events_per_minute: num(p.max_events_per_minute, 10, 600, 60)}};
+      max_events_per_minute: num(p.max_events_per_minute, 10, 600, 60)}, expiresAt: expires};
 }
 
 async function owgLoadDepth() {
@@ -34,6 +37,7 @@ owgLoadDepth();
 
 function owgDepthAllowed() {
   const now = Date.now();
+  if (owgDepth.expiresAt && now >= owgDepth.expiresAt) { owgDepth = OWG_DEPTH_OFF; return false; }
   if (now - owgDepthWindow.start > 60000) owgDepthWindow = {start: now, count: 0};
   if (owgDepthWindow.count >= owgDepth.parameters.max_events_per_minute) return false;
   owgDepthWindow.count += 1;
@@ -52,9 +56,8 @@ function owgInteractiveElement(event) {
   return null;
 }
 
-// Hover and drag targets use author-set structural labels only: aria-label, title, a <label for> that holds
-// no editable content, and placeholder. Element text is never read, nor text referenced by aria-labelledby:
-// a button, row or draggable can hold the user's own content (a message, a task, a draft).
+// Hover and drag targets are structural only: tag, role and type. No label is recorded at all, because
+// element text, aria-label, title, placeholder and <label> text can all hold or be set from the user's content.
 function owgEditable(el) {
   for (let node = el; node instanceof Element; node = node.parentElement) {
     const tag = String(node.tagName || "").toLowerCase();
@@ -64,22 +67,20 @@ function owgEditable(el) {
   return false;
 }
 
-function owgHoldsEditable(el) {
-  return owgEditable(el) || !!el.querySelector?.("[contenteditable],input,textarea,select");
+// A control is secure if it, or any element around it, is a secure field or widget.
+function owgInSecureContext(el) {
+  for (let node = el; node instanceof Element; node = node.parentElement) if (isSensitiveControl(node)) return true;
+  return false;
 }
 
-function owgStructuralLabel(el) {
-  if (!(el instanceof Element) || isSensitiveControl(el)) return "";
-  const attr = (name) => cleanText(el.getAttribute?.(name));
-  if (attr("aria-label")) return attr("aria-label");
-  if (attr("title")) return attr("title");
-  if (el.id) {
-    try {
-      const lab = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
-      if (lab && !owgHoldsEditable(lab) && cleanText(lab.textContent)) return cleanText(lab.textContent);
-    } catch (_) {}
-  }
-  return attr("placeholder");
+// Secure if any element on the event path, or anything stacked under the pointer (a field hidden by an overlay), is.
+function owgSecureAt(event) {
+  if (pathElements(event).some(el => isSensitiveControl(el))) return true;
+  try {
+    if (Number.isFinite(event.clientX) && Number.isFinite(event.clientY))
+      return document.elementsFromPoint(event.clientX, event.clientY).some(el => owgInSecureContext(el));
+  } catch (_) {}
+  return false;
 }
 
 function owgSafeTarget(start) {
@@ -88,20 +89,18 @@ function owgSafeTarget(start) {
   for (let node = el; node instanceof Element; node = node.parentElement) {
     const tag = String(node.tagName || "").toLowerCase();
     const role = cleanText(node.getAttribute?.("role"), 80);
-    const interactive = OWG_HOVER_TAGS.has(tag) || OWG_HOVER_ROLES.has(role.toLowerCase()) || node.getAttribute?.("draggable") === "true";
-    const editable = owgEditable(node);
-    const label = editable ? "" : owgStructuralLabel(node);
-    if (interactive || label) {
-      return {tag, role, type: isSensitiveControl(node) ? "secure" : cleanText(node.getAttribute?.("type"), 80),
-        label, ...(editable ? {editable: true} : {})};
+    if (OWG_HOVER_TAGS.has(tag) || OWG_HOVER_ROLES.has(role.toLowerCase()) || node.getAttribute?.("draggable") === "true") {
+      const editable = owgEditable(node);
+      return {tag, role, type: owgInSecureContext(node) ? "secure" : cleanText(node.getAttribute?.("type"), 80),
+        ...(editable ? {editable: true} : {})};
     }
   }
   return {};
 }
 
 // --- hover dwell -------------------------------------------------------------
-let owgHover = null; // {el, key, target, start}
-const owgRecentHover = new Map();
+let owgHover = null; // {el, target, start}
+const owgRecentHover = new WeakMap(); // element -> last recorded hover time
 
 function owgEndHover(endedBy) {
   const current = owgHover;
@@ -109,10 +108,9 @@ function owgEndHover(endedBy) {
   if (!current || !owgDepth.signals.hover_dwell) return;
   const duration = Math.round((performance.now() - current.start) / 50) * 50;
   if (duration < owgDepth.parameters.hover_dwell_ms) return;
-  const last = owgRecentHover.get(current.key) || 0;
+  const last = owgRecentHover.get(current.el) || 0;
   if (Date.now() - last < 2000) return;
-  owgRecentHover.set(current.key, Date.now());
-  if (owgRecentHover.size > 200) owgRecentHover.clear();
+  owgRecentHover.set(current.el, Date.now());
   if (!owgDepthAllowed()) return;
   send("control_hover_dwell", current.target, {duration_ms: Math.min(duration, 600000), ended_by: endedBy,
     threshold_ms: owgDepth.parameters.hover_dwell_ms});
@@ -125,9 +123,9 @@ addEventListener("pointerover", (e) => {
   // arriving anywhere outside the current control also ends its hover.
   if (owgHover && owgHover.el !== el && !(e.target instanceof Node && owgHover.el.contains(e.target))) owgEndHover("pointer_left");
   if (!el || (owgHover && owgHover.el === el)) return;
-  if (isSensitiveControl(el) || el.disabled === true || el.getAttribute?.("aria-disabled") === "true") return;
+  if (owgInSecureContext(el) || owgSecureAt(e) || el.disabled === true || el.getAttribute?.("aria-disabled") === "true") return;
   const target = owgSafeTarget(el);
-  owgHover = {el, key: targetKey(target), target, start: performance.now()};
+  owgHover = {el, target, start: performance.now()};
 }, true);
 addEventListener("pointerout", (e) => {
   if (!owgHover) return;
@@ -157,12 +155,14 @@ function owgPayloadKinds(dataTransfer) {
 
 addEventListener("dragstart", (e) => {
   if (!owgDepth.signals.drag_drop) return;
+  if (owgInSecureContext(e.target instanceof Element ? e.target : null) || owgSecureAt(e)) { owgDrag = null; return; }
   const source = owgSafeTarget(e.target);
   owgDrag = {id: Math.random().toString(36).slice(2, 12), source, dropped: false};
   if (owgDepthAllowed()) send("drag_start", source, {drag_id: owgDrag.id, payload_kinds: owgPayloadKinds(e.dataTransfer), completion: "unknown"});
 }, true);
 addEventListener("drop", (e) => {
   if (!owgDepth.signals.drag_drop) return;
+  if (owgInSecureContext(e.target instanceof Element ? e.target : null) || owgSecureAt(e)) return;
   const destination = owgSafeTarget(e.target);
   const kinds = owgPayloadKinds(e.dataTransfer);
   // A drop with no drag in this page came from elsewhere (another window or the desktop).
@@ -193,20 +193,15 @@ function owgFlushTrajectory() {
     viewport_bucket: `${Math.round(w / 100) * 100}x${Math.round(h / 100) * 100}`});
 }
 
-function owgOverSensitiveControl(event) {
-  // The control under the pointer or any ancestor (e.g. a labelled secure widget).
-  return pathElements(event).some(el => isSensitiveControl(el));
-}
-
 addEventListener("pointermove", (e) => {
   if (!owgDepth.signals.pointer_trajectory || e.pointerType === "touch") return;
-  if (owgOverSensitiveControl(e)) {
-    // Never sample over a secure field: end the current batch here and skip until the pointer leaves.
+  const now = performance.now();
+  if (now - owgTrajectory.lastSample < 1000 / owgDepth.parameters.trajectory_hz) return;
+  if (owgSecureAt(e)) {
+    // Never sample over a secure field, even one under an overlay: end the batch here and skip until it is left.
     owgFlushTrajectory();
     return;
   }
-  const now = performance.now();
-  if (now - owgTrajectory.lastSample < 1000 / owgDepth.parameters.trajectory_hz) return;
   if (!owgTrajectory.start) owgTrajectory.start = now;
   owgTrajectory.lastSample = now;
   const x = Math.min(1, Math.max(0, e.clientX / Math.max(1, innerWidth)));
