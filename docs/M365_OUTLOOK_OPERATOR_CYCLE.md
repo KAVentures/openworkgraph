@@ -1,6 +1,6 @@
 # Microsoft Graph operator sync cycle (R3)
 
-This is an **opt-in, four-command** local workflow that composes the existing production Graph delta reader and authenticated OWG append/receipt writer. It is not a background scheduler, token manager, provider checkpoint commit, or proof of real-tenant acceptance.
+This is an **opt-in, five-command** local workflow that composes the existing production Graph delta reader and authenticated OWG append/receipt writer. It is not a background scheduler, token manager, provider checkpoint commit, or proof of real-tenant acceptance.
 
 ## 1. Extract for human review
 
@@ -46,13 +46,30 @@ provider checkpoints. The next `extract` invocation uses the resulting
 handoff and the previous candidate/CSV/receipt. A successful handoff remains
 count-level verification, not event-level proof or automatic sync authority.
 
+## 5. Investigate uncertain append outcomes (read-only)
+
+Run `python -m server.m365_outlook_operator_cycle recover --help` with
+the scoped tenant/mailbox/folder, grant, exact log ID and confirmation,
+candidate, CSV and receipt paths, plus `--consent-local-read`
+and `--confirm-removals-reviewed`. Optionally provide **both**
+`--journal-dir` and `--handoff-dir` to inspect an existing handoff chain.
+The current `OWG_DASHBOARD_SESSION` is used for authenticated local readback.
+No Microsoft Graph token is needed.
+
+The command delegates to the existing production recovery triage and reports
+`receipt_verified`, `handoff_verified`, or
+`manual_reconciliation_required`. An uncertain or missing receipt returns
+exit code 3 and **never authorizes retry**. No provider request, OWG write,
+checkpoint advancement or automatic replay occurs. Count-level readback
+does not establish event-level membership.
+
 ## Exit codes and guarantees
 
 - `0`: phase succeeded; extraction and offline validation still require human review before append.
 - `2`: refused, no success claimed.
-- `3`: uncertain append; no automatic retry.
+- `3`: uncertain append or recovery requiring manual reconciliation; no automatic retry.
 
-Outputs are minimized JSON status without token, session, raw message or email content. All four phases preserve explicit provider scope, active grant checks, tenant isolation, private artifacts and revocation behavior from their production delegates. No provider checkpoint is advanced and no autonomous cycle runs. The caller must not infer verified business outcomes or source-level event membership.
+Outputs are minimized JSON status without token, session, raw message or email content. All five commands preserve explicit provider scope, active grant checks, tenant isolation, private artifacts and revocation behavior from their production delegates. No provider checkpoint is advanced and no autonomous cycle runs. The caller must not infer verified business outcomes or source-level event membership.
 
 ## Validation and remaining acceptance
 
