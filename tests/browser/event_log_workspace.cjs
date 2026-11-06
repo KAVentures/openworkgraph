@@ -539,6 +539,15 @@ const path=require('node:path');
    const conformance=await page.locator('#owgEventLogConformanceRun').locator('xpath=..').textContent();
    assert.match(conformance,/Approve/);assert.match(conformance,/Fix/);
 
+   // Trace clusters: two requested clusters that together cover every case, each described.
+   await page.locator('#owgClusterK').selectOption('2');
+   const clusterResponse=page.waitForResponse(r=>r.url().includes('/trace-clusters'));
+   await page.locator('#owgClusterRun').click();
+   const clustered=await (await clusterResponse).json();
+   assert.equal(clustered.k,2);assert.equal(clustered.clusters.reduce((n,c)=>n+c.cases,0),clustered.cases);
+   await page.locator('#owgClusterResults table').waitFor();
+   assert.match(await page.locator('#owgClusterResults').textContent(),/2 clusters as requested/);
+
    await page.locator('#owgEventLogOutcomeHours').fill('5');
    await page.locator('#owgEventLogRootCauseRun').click();
    await page.getByText('Holds after correction').waitFor();

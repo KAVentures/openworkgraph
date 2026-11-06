@@ -1,0 +1,7 @@
+# Coverage-first semantic suggestion grouping
+
+The opt-in semantic linker returns review-only suggestions, not canonical case links. Two model answers in consensus mode still require explicit pair agreement. A transitive chain is not enough to merge its endpoints; a candidate group must be a complete mutually supported clique and must not contain distinct resource references for the same provider and kind.
+
+Previously the smallest numbered item seeded each group, which could consume an item shared with a larger, more useful supported group. The subgroup selector now considers every remaining seed, extends it in supported-degree order, and selects the largest safe candidate, breaking ties lexicographically. The search is bounded by the existing 60-item limit and uses no exponential enumeration. This is a deterministic heuristic, **not a globally optimal maximum-clique solver**, and does not establish an accuracy gain on the preregistered family holdout.
+
+Acceptance examples: supported edges 1–2, 2–3, 2–4, 3–4 retain 2–3–4 instead of 1–2; unsupported 1–3 does not become a transitive link; conflicting Jira issue references remain separate. All suggestions require human review and do not grant execution authority. The optional model endpoint still requires the existing explicit acknowledgement and configured consent. Evaluate development-family precision/recall, interruption rejection, and contamination before considering default behavior changes.

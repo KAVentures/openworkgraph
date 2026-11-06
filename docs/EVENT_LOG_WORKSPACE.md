@@ -178,6 +178,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-logs/{log_id}/simulation/calibration` | Arrival rate, routing, activity times and resources measured from the log. |
 | `POST /v1/event-logs/{log_id}/simulate` | Run a what-if scenario against the measured baseline (JSON body, below). |
 | `POST /v1/event-logs/{log_id}/conformance` | Align observed variants with a reference model (JSON body, below). |
+| `POST /v1/event-logs/{log_id}/trace-clusters` | Group cases into clusters of similar behaviour (trace clustering, below). |
 | `GET /v1/event-logs/{log_id}/model-discovery?noise=&activities=` | Discover a draft process model with decisions, loops and parallel steps for review in the process catalog (below). |
 | `GET /v1/event-logs/{log_id}/waiting-time?lifecycle_attribute=&end_attribute=` | Processing and waiting time per activity from lifecycle or end-time attributes (below). |
 | `GET /v1/event-logs/{log_id}/dotted-chart?time=absolute\|relative&order=start\|duration&max_cases=` | Events over time per case for a dotted chart (below). |
@@ -229,6 +230,44 @@ sampled cases per cohort, 400 rounds, fixed seed); and how often each activity
 and variant occurs in each cohort. Cases in both cohorts are counted, and the
 note warns that intervals then overstate certainty. Differences describe the
 cohorts; they do not say why the cohorts differ.
+
+### Trace clusters
+
+When a map has too many variants to read, **Trace clusters** splits the cases into a
+few groups that each read as one way of working, like trace clustering in Celonis,
+Disco or ProM. Send a JSON body; every field is optional:
+
+```json
+{"k": null, "max_k": 8, "max_variants": 200, "max_activities": 40,
+ "cohort": {"activity": "Refund"}, "case_type": "order"}
+```
+
+- **Features.** Each variant (the ordered activities of a case) becomes a vector
+  of `log(1 + count)` per activity plus each directly-follows pair it contains,
+  scaled to unit length. Only the `max_activities` most common activities count
+  (2–60).
+- **Clustering.** The `max_variants` most frequent variants (2–500) are clustered
+  with case-weighted k-means. It starts from the most common variant and then the
+  variant farthest from the chosen centres, so the same log always gives the same
+  clusters. The remaining rare variants join their nearest cluster.
+- **Number of clusters.** Give `k` (2–12), or leave it out and the best silhouette
+  between 2 and `max_k` is used. Every value tried is reported. The silhouette counts
+  each variant once, because weighting by cases would always favour one cluster per
+  variant.
+- **Each cluster** reports:
+  - its cases, share and variants;
+  - its five most common variants;
+  - the activities more and less common in its cases than in the whole log, with
+    both shares and the lift;
+  - its median and mean throughput time and its events per case.
+- **Using a cluster as a case filter.** Each cluster includes a `cohort`,
+  `{"label": "Cluster 1", "variants": [[...], ...]}`. The `variants` cohort key keeps
+  cases whose exact activity sequence is one of those listed (up to 500 variants of
+  up to 1,000 activities). It works wherever cohorts do: KPIs, benchmarks (compare
+  a cluster with the rest of the log) and the other cohort-aware analyses.
+
+Clusters describe the structure of the imported log. They are not process types,
+causes, or a judgement of how any case was handled.
 
 ### Conformance
 

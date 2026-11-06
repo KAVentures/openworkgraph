@@ -363,6 +363,7 @@
     results.appendChild(savedGraphSection(names,inspection));
     results.appendChild(simulationSection());
     results.appendChild(conformanceSection((variants.variants||[])[0]));
+    results.appendChild(clusterSection());
     results.appendChild(discoverySection());
     results.appendChild(driftSection());
     results.appendChild(dottedSection());
@@ -2837,6 +2838,37 @@
     rule.b=values.b;if(!rule.b||rule.b===rule.a)throw new Error('Choose a different activity B.');
     if(values.template==='response_within'){const h=Number(values.hours);if(!(h>0))throw new Error('Enter the time limit in hours.');rule.seconds=Math.round(h*3600);}
     return rule;
+  }
+
+  function clusterSection(){
+    const box=section('Trace clusters');box.id='owgEventLogClusters';
+    box.appendChild(el('div','Group cases whose activities and orderings are similar, so a tangled map splits into a few ways of working. Clusters describe this log; they are not process types or causes.','muted'));
+    const k=select('owgClusterK',[['','Choose automatically'],...[2,3,4,5,6,7,8].map(n=>[String(n),n+' clusters'])]);
+    const run=button('Find clusters');run.id='owgClusterRun';
+    const message=el('div',null,'muted');message.id='owgClusterStatus';message.setAttribute('role','status');
+    const out=el('div');out.id='owgClusterResults';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Number of clusters',k),run);
+    box.append(row,message,out);
+    const generation=state.generation;
+    const shares=list=>list.map(a=>a.activity+' ('+pct(a.case_share_in_cluster)+' vs '+pct(a.case_share_in_log)+')').join('; ')||'—';
+    run.onclick=async()=>{
+      try{
+        message.textContent='Clustering…';run.disabled=true;
+        const body={};if(k.value)body.k=Number(k.value);if(state.caseType)body.case_type=state.caseType;
+        if(state.follows.length)body.cohort={follows:state.follows};
+        const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/trace-clusters',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+        if(generation!==state.generation)return;
+        const rows=r.clusters.map(c=>['Cluster '+c.cluster,Number(c.cases).toLocaleString()+' ('+pct(c.share)+')',Number(c.variants).toLocaleString(),
+          c.median_throughput_seconds===null?'—':duration(c.median_throughput_seconds),c.mean_events_per_case===null?'—':c.mean_events_per_case.toFixed(1),
+          (c.top_variants[0]||{activities:[]}).activities.join(' → '),shares(c.more_common_activities),shares(c.less_common_activities)]);
+        const how=r.k_chosen_by==='silhouette'?r.k+' clusters chosen by silhouette ('+(r.silhouette===null?'—':r.silhouette.toFixed(2))+')':r.k+' clusters as requested';
+        out.replaceChildren(el('div',Number(r.cases).toLocaleString()+' cases, '+Number(r.variants).toLocaleString()+' variants; '+how+'.'+(r.variants_assigned_to_nearest?' '+Number(r.variants_assigned_to_nearest).toLocaleString()+' rare variants joined their nearest cluster.':''),'muted'),
+          table(['Cluster','Cases','Variants','Median throughput','Events per case','Most common variant','More common than in the log','Less common than in the log'],rows),
+          el('div',r.interpretation,'muted'));
+        message.textContent='';
+      }catch(error){message.textContent=error.message;}finally{run.disabled=false;}
+    };
+    return box;
   }
 
   function complianceSection(activityNames){
