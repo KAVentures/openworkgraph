@@ -67,7 +67,7 @@ def test_a_suggestion_joining_two_records_of_one_kind_is_vetoed():
               _event(3, "Salesforce · Other account", ref=B), _event(4, "Salesforce · Other account", ref=B)]
     items, _ = linker.build_items(events)
     result = linker.suggest(events, lambda s, u: json.dumps({"groups": [list(range(1, len(items) + 1))]}))
-    assert result["suggestions"] == [] and result["vetoed"] == 1
+    assert result["suggestions"] == [] and result["vetoed"] == 2  # two unassigned conflicting items
 
 
 def test_configuration_requires_acknowledgement_and_safe_endpoint(tmp_path, monkeypatch):
