@@ -93,6 +93,7 @@ def resumption_candidates(
     result: dict[str, Any] = {
         "current_session": None,
         "candidates": [],
+        "identity_timelines": [],
         "saved_history_access": mode,
         "history_access_limited": mode != "all_saved",
         "session_gap_minutes": gap_minutes,
@@ -180,6 +181,37 @@ def resumption_candidates(
         result["notice"] = ("The latest session has no observed stable pointer, so resumption "
                             "cannot be assessed; this does not mean the work is new.")
         return result
+
+    # Each identity gets a separate chronological evidence trail, even when
+    # idle-gap sessions multiplex unrelated cases. No time-only association.
+    timelines: list[dict[str, Any]] = []
+    for identity in sorted(current["refs"])[:12]:
+        occurrences = [(i, bucket["tracks"][identity]) for i, bucket in enumerate(by_session)
+                       if identity in bucket["tracks"]]
+        if len(occurrences) < 2:
+            continue
+        selected = occurrences[-20:]
+        episodes: list[dict[str, Any]] = []
+        for position, (index, track) in enumerate(selected):
+            previous_end = selected[position - 1][1]["last"] if position else None
+            episodes.append({
+                "first_observed_at": _iso(track["first"]),
+                "last_observed_at": _iso(track["last"]),
+                "idle_gap_session_started_at": _iso(sessions[index][0]),
+                "evidence_event_ids": list(reversed(track["event_ids"])),
+                "gap_from_previous_seconds": (
+                    max(0, round((track["first"] - previous_end) * 86400))
+                    if previous_end is not None else None
+                ),
+            })
+        timelines.append({
+            "pointer": current["refs"][identity],
+            "routine_context": sessions_seen[identity] >= routine_threshold,
+            "episodes": episodes,
+            "episodes_truncated": len(occurrences) > len(selected),
+            "proves_same_task": False,
+        })
+    result["identity_timelines"] = timelines
 
     candidates: list[dict[str, Any]] = []
     current_refs = set(current["refs"])
