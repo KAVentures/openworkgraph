@@ -20,6 +20,7 @@ from starlette.concurrency import run_in_threadpool
 
 from . import event_log_analytics as analytics
 from . import event_log_variant_coverage as variant_coverage
+from . import event_log_duration_distribution as duration_distribution
 from . import event_log_cases as case_pages
 from . import event_log_cohorts as cohorts
 from . import event_log_compliance as compliance
@@ -296,6 +297,18 @@ def event_log_variants(request: Request, log_id: str, case_type: str | None = Qu
                        limit: int = Query(default=20, ge=1, le=200), cohort: dict[str, Any] = Depends(_case_filter)):
     _require_dashboard(request)
     return _respond(workspace.variants, log_id, case_type, limit, cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/duration-distribution")
+def event_log_duration_distribution(request: Request, log_id: str,
+                                    case_type: str | None = Query(default=None, max_length=200),
+                                    cutoffs_seconds: str = Query(default="3600,14400,86400,259200", max_length=110),
+                                    cohort: dict[str, Any] = Depends(_case_filter)):
+    _require_dashboard(request)
+    parts = cutoffs_seconds.split(",")
+    if not 1 <= len(parts) <= 10 or any(not part.isascii() or not part.isdecimal() or len(part) > 10 for part in parts):
+        raise HTTPException(422, "duration thresholds must be comma-separated whole seconds")
+    return _respond(duration_distribution.distribution, log_id, [int(part) for part in parts], case_type, cohort)
 
 
 @router.get("/v1/event-logs/{log_id}/variant-coverage")
