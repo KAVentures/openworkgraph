@@ -166,6 +166,45 @@ const pathModule = require("node:path");
     await deniedHandoffPage.locator("#handoffStatus").filter({hasText:/REFUSED:|Session cleared/}).waitFor();
     assert.equal(uploadedHandoff, false);
 
+    // An expired delegated session (401) must fail closed rather than reuse a
+    // previously authenticated process selection or display a false match.
+    const expiredHandoffPage = await login("alice");
+    await expiredHandoffPage.getByRole("button", {name:"Shared support process · r1",exact:true}).click();
+    await expiredHandoffPage.locator("#selectedTitle").filter({hasText:"revision 1"}).waitFor();
+    await expiredHandoffPage.locator("#handoffPacket").setInputFiles({
+      name:"expired-review.json",mimeType:"application/json",
+      buffer:Buffer.from(JSON.stringify(handoffPacket())),
+    });
+    await expiredHandoffPage.route(detailUrl, async route => route.fulfill({
+      status:401,contentType:"application/json",body:'{"detail":"expired"}',
+    }), {times:1});
+    await expiredHandoffPage.locator("#handoffCheck").click();
+    await expiredHandoffPage.locator("#handoffStatus").filter({hasText:/REFUSED:|Session cleared/}).waitFor();
+    assert.doesNotMatch(await expiredHandoffPage.locator("#handoffStatus").textContent(),/^MATCH:/);
+
+    // A fresh authenticated read may return a newer server revision even when
+    // the selected packet was valid at publication. That is a refusal, not an
+    // implicit update or approval of the old review packet.
+    const driftHandoffPage = await login("alice");
+    await driftHandoffPage.getByRole("button", {name:"Shared support process · r1",exact:true}).click();
+    await driftHandoffPage.locator("#selectedTitle").filter({hasText:"revision 1"}).waitFor();
+    await driftHandoffPage.locator("#handoffPacket").setInputFiles({
+      name:"drift-review.json",mimeType:"application/json",
+      buffer:Buffer.from(JSON.stringify(handoffPacket())),
+    });
+    await driftHandoffPage.route(detailUrl, async route => {
+      const response=await route.fetch();
+      const latest=await response.json();
+      assert.equal(response.status(),200,"drift fixture starts from an authorized read");
+      latest.process.revision=handoffProcess.revision+1;
+      latest.latest_revision=handoffProcess.revision+1;
+      await route.fulfill({response,json:latest});
+    }, {times:1});
+    await driftHandoffPage.locator("#handoffCheck").click();
+    await driftHandoffPage.locator("#handoffStatus").filter({hasText:"REFUSED:"}).waitFor();
+    assert.doesNotMatch(await driftHandoffPage.locator("#handoffStatus").textContent(),/^MATCH:/);
+    assert.equal(uploadedHandoff,false);
+
     // An in-flight authorized detail read must never re-validate a packet after
     // the reviewer clears or replaces the local selection. Hold the actual
     // Gateway request until the local generation has changed.
