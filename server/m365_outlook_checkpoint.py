@@ -23,7 +23,7 @@ from .m365_outlook_resume_handoff import prepare_handoff
 from .m365_outlook_resume_journal import _canonical
 
 FORMAT = "openworkgraph.m365-checkpoint.v1"
-HEX = re.compile(r"[0-9a-f]{64}\\Z")
+HEX = re.compile(r"[0-9a-f]{64}\Z")
 
 
 def _entries(directory: Path, scope: str):
@@ -34,7 +34,7 @@ def _entries(directory: Path, scope: str):
         if not path.name.startswith(prefix):
             continue
         suffix = path.name[len(prefix):]
-        if not re.fullmatch(r"[0-9]{8}\\.json", suffix):
+        if not re.fullmatch(r"[0-9]{8}\.json", suffix):
             raise ReceiptError("Unrecognized checkpoint ledger entry")
         try:
             item = json.loads(_private_read(path, 16384), object_pairs_hook=_unique)
@@ -64,7 +64,7 @@ def _entries(directory: Path, scope: str):
     previous = None
     for index, entry in enumerate(entries, 1):
         if entry["generation"] != index or entry["previous_entry_sha256"] != (
-                hashlib.sha256(_canonical(previous) + b"\\n").hexdigest()
+                hashlib.sha256(_canonical(previous) + b"\n").hexdigest()
                 if previous is not None else None):
             raise ReceiptError("Checkpoint ledger chain broken")
         previous = entry
@@ -155,7 +155,7 @@ def commit_checkpoint(*, tenant, mailbox, folder, log_id, confirm_log_id,
         "generation": len(entries) + 1, "candidate_sha256": digest,
         "cursor_url": cursor,
         "previous_entry_sha256": (
-            hashlib.sha256(_canonical(last) + b"\\n").hexdigest()
+            hashlib.sha256(_canonical(last) + b"\n").hexdigest()
             if last is not None else None),
         "log_id": log_id, "event_membership_verified": True,
         "removals_reviewed": True, "checkpoint_advanced": True,
@@ -163,7 +163,7 @@ def commit_checkpoint(*, tenant, mailbox, folder, log_id, confirm_log_id,
     }
     path = ledger_dir / ("checkpoint-" + scope + "-" +
                          f"{entry['generation']:08d}.json")
-    payload = _canonical(entry) + b"\\n"
+    payload = _canonical(entry) + b"\n"
     _grant(Path(grant_file), tenant, mailbox, folder)
     try:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
