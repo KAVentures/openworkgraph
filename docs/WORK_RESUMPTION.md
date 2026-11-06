@@ -57,3 +57,28 @@ separately for overlap and routine-context analysis; the legacy
 for compatibility. This prevents cross-system collisions from inflating
 confidence or contaminating an interleaved workflow, without exposing any
 additional source text or weakening the saved-history grant.
+
+
+## Interleaved-case evidence tracks
+
+An idle-gap session can contain several unrelated active business cases. The
+existing session-level `evidence_event_ids` and `trace_window` are navigation
+context for the **entire** earlier activity window, not proof for any individual
+case. Consumers should use each candidate's new `pointer_tracks` when inspecting
+a specific resumed object.
+
+Each track corresponds to one exact provider/kind/opaque-reference identity
+from `shared_pointers`. It contains `pointer`, plus `earlier` and `current`
+with `first_observed_at`, `last_observed_at`, and up to six bounded
+`evidence_event_ids` from events actually observing **that identity**.
+Tracks are capped at twelve, matching the shared-pointer display cap; the
+full `shared_pointer_count` and confidence calculation remain unchanged.
+The observations can be separated by other case activity and do **not** imply
+continuous work, verified ownership, a completed handoff, or an automatic merge.
+
+This is an additive response field on the existing local authenticated REST
+route and MCP context, with no new collection, storage, provider access, grant
+or permission. The pointer scan remains bounded and subject to the current AI
+saved-history lease. A truncated scan means tracks may omit earlier evidence;
+it is never evidence that no other work occurred. The older response fields
+remain available for compatible clients.

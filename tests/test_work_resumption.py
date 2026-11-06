@@ -259,3 +259,38 @@ def test_file_and_provider_resource_with_same_token_cannot_cross_match():
     db = _database([(_day(12, "09:00"), {"file_reference": {"file_ref": token}}),
                     (_day(14, "10:00"), resource)])
     assert resumption_candidates(db, lease=ALL)["candidates"] == []
+
+
+def test_interleaved_cases_have_independent_resumption_evidence_tracks():
+    # Both cases occupy the same idle-gap windows, but each track must cite
+    # only observations of its own provider-scoped business identity.
+    db = _database([
+        (_day(12, "09:00"), _ref("a")),  # e1
+        (_day(12, "09:01"), _ref("b")),  # e2
+        (_day(12, "09:02"), _ref("a")),  # e3
+        (_day(14, "10:00"), _ref("b")),  # e4
+        (_day(14, "10:01"), _ref("a")),  # e5
+    ])
+    result = resumption_candidates(db, lease=ALL)
+    [candidate] = result["candidates"]
+    tracks = {t["pointer"]["resource_ref"]: t for t in candidate["pointer_tracks"]}
+    assert set(tracks) == {REF["a"], REF["b"]}
+    assert set(tracks[REF["a"]]["earlier"]["evidence_event_ids"]) == {"e1", "e3"}
+    assert tracks[REF["a"]]["current"]["evidence_event_ids"] == ["e5"]
+    assert tracks[REF["b"]]["earlier"]["evidence_event_ids"] == ["e2"]
+    assert tracks[REF["b"]]["current"]["evidence_event_ids"] == ["e4"]
+    assert tracks[REF["a"]]["earlier"]["first_observed_at"].startswith("2026-10-12T09:00")
+    assert tracks[REF["a"]]["earlier"]["last_observed_at"].startswith("2026-10-12T09:02")
+    assert candidate["shared_pointer_count"] == 2
+    assert candidate["proves_same_work"] is False
+
+
+def test_resumption_tracks_preserve_grant_and_identity_boundaries():
+    db = _database([
+        (_day(12, "09:00"), _ref("a")),
+        (_day(14, "10:00"), {"resource_reference": {
+            "resource_ref": REF["a"], "provider": "jira", "resource_kind": "issue"}}),
+    ])
+    assert resumption_candidates(db, lease=ALL)["candidates"] == []
+    assert resumption_candidates(db, lease={"mode": "off"},
+                                 run_started_at=_day(14, "00:00"))["candidates"] == []

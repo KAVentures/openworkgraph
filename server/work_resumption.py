@@ -136,7 +136,7 @@ def resumption_candidates(
     result["coverage"]["pointer_rows_scanned"] = len(pointer_rows)
     if len(pointer_rows) >= MAX_POINTER_ROWS:
         result["coverage"]["scan_truncated"] = True
-    by_session: list[dict[str, Any]] = [{"refs": {}, "events": []} for _ in sessions]
+    by_session: list[dict[str, Any]] = [{"refs": {}, "events": [], "tracks": {}} for _ in sessions]
     for row in pointer_rows:
         data = dict(row)
         instant = data.get("instant")
@@ -148,7 +148,14 @@ def resumption_candidates(
         pointers = _pointer(sanitized_pointers(data.get("metadata_json")))
         bucket = by_session[index]
         for pointer in pointers:
-            bucket["refs"].setdefault(_identity(pointer), pointer)
+            identity = _identity(pointer)
+            bucket["refs"].setdefault(identity, pointer)
+            track = bucket["tracks"].setdefault(identity, {"first": float(instant),
+                                                           "last": float(instant), "event_ids": []})
+            track["first"] = min(track["first"], float(instant))
+            track["last"] = max(track["last"], float(instant))
+            if len(track["event_ids"]) < 6:
+                track["event_ids"].append(str(data.get("event_id") or "")[:120])
         if pointers and len(bucket["events"]) < 6:
             bucket["events"].append(str(data.get("event_id") or "")[:120])
 
@@ -195,6 +202,25 @@ def resumption_candidates(
             },
             "shared_pointers": [{**current["refs"][ref], "sessions_seen": sessions_seen[ref],
                                  "routine_context": ref not in specific} for ref in shared[:12]],
+            # A session may multiplex unrelated cases. Evidence tracks keep
+            # each matched identity independent instead of presenting the
+            # whole idle-gap window as evidence for every resumed case.
+            "pointer_tracks": [
+                {
+                    "pointer": current["refs"][ref],
+                    "earlier": {
+                        "first_observed_at": _iso(earlier["tracks"][ref]["first"]),
+                        "last_observed_at": _iso(earlier["tracks"][ref]["last"]),
+                        "evidence_event_ids": earlier["tracks"][ref]["event_ids"],
+                    },
+                    "current": {
+                        "first_observed_at": _iso(current["tracks"][ref]["first"]),
+                        "last_observed_at": _iso(current["tracks"][ref]["last"]),
+                        "evidence_event_ids": current["tracks"][ref]["event_ids"],
+                    },
+                }
+                for ref in shared[:12]
+            ],
             "shared_pointer_count": len(shared),
             "pointer_overlap": round(overlap, 2),
             "gap_seconds": round(gap_seconds),
