@@ -403,6 +403,9 @@ def browser_event(event: BrowserEvent) -> dict[str, int | str]:
     ctx = _browser_context(event)
     page = event.page.model_dump(exclude_none=True)
     target = capture_depth.bound_target(event.action, event.target.model_dump(exclude_none=True))
+    if target.get("type") == "secure" and not capture_depth.action_allowed_on_excluded(event.action):
+        # Hover, drag and trajectory events are never stored for secure fields, whatever the client sends.
+        return {"inserted": 0, "skipped": "secure_target"}
     metadata = bounded
     metadata.update({
         "source": "browser_extension",

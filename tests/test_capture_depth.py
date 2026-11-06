@@ -33,7 +33,34 @@ def test_pointer_trajectories_need_their_own_acknowledgement(depth):
     full = depth.save({"profile": "full", "acknowledgement_version": depth.FULL_ACK_VERSION})
     assert full["profile"] == "full" and full["signals"]["pointer_trajectory"]
     assert depth.save({"profile": "standard"})["profile"] == "standard"
-    assert depth.save({"profile": "full"})["profile"] == "full"  # acknowledged once
+    # Turning pointer movement off clears the acknowledgement, so turning it on again asks again.
+    with pytest.raises(depth.CaptureDepthError, match="acknowledge"):
+        depth.save({"profile": "full"})
+    assert depth.save({"profile": "full", "acknowledgement_version": depth.FULL_ACK_VERSION})["profile"] == "full"
+
+
+def test_detailed_capture_is_time_limited_and_expires_to_standard(depth, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    state = depth.save({"profile": "enhanced", "duration_days": 3})
+    expires = datetime.fromisoformat(state["expires_at"])
+    assert timedelta(days=2, hours=23) < expires - datetime.now(timezone.utc) <= timedelta(days=3)
+    assert depth.for_extension()["expires_at"] == state["expires_at"]
+    assert depth.save({"profile": "standard"})["expires_at"] is None
+    for bad in (0, 91, True, "7"):
+        with pytest.raises(depth.CaptureDepthError, match="duration_days"):
+            depth.save({"profile": "enhanced", "duration_days": bad})
+    depth.save({"profile": "full", "acknowledgement_version": depth.FULL_ACK_VERSION, "duration_days": 1})
+    real = datetime
+
+    class Later(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return real.now(tz) + timedelta(days=2)
+    monkeypatch.setattr(depth, "datetime", Later)
+    later = depth.load()
+    assert later["profile"] == "standard" and later["expired"] and later["full_acknowledged_version"] is None
+    assert not depth.action_allowed("pointer_trajectory") and not depth.action_allowed("control_hover_dwell")
+    assert depth.for_extension()["signals"]["hover_dwell"] is False
 
 
 @pytest.mark.parametrize("bad", [{"profile": "max"}, {"signals": {"keystrokes": True}}, {"signals": {"hover_dwell": 1}},
@@ -55,8 +82,15 @@ def test_disabled_signals_are_not_allowed_and_metadata_is_bounded(depth):
     assert depth.bound_metadata("pointer_trajectory", {"points": [[0, 2, 0]]}) is None
     assert depth.bound_metadata("pointer_trajectory", {"points": [[0, 0, 0]] * 201}) is None
     drag = depth.bound_metadata("drag_drop", {"payload_kinds": ["files", "text", "EVIL"], "completion": "complete",
-                                              "data": "file contents", "source_target": {"label": "Invoice row", "value": "x"}})
-    assert drag["payload_kinds"] == ["files", "text"] and "data" not in drag and drag["source_target"] == {"label": "Invoice row"}
+                                              "data": "file contents", "source_target": {"label": "Invoice row", "role": "row",
+                                                                                         "value": "x"}})
+    assert drag["payload_kinds"] == ["files", "text"] and "data" not in drag and drag["source_target"] == {"role": "row"}
+    # No label of any kind is kept for high-fidelity targets: attributes can be set from typed text.
+    assert depth.bound_target("drag_start", {"tag": "div", "role": "button", "label": "private typed words"}) == \
+        {"tag": "div", "role": "button"}
+    assert depth.bound_target("click", {"tag": "button", "label": "Send"}) == {"tag": "button", "label": "Send"}
+    # Ordinary actions cannot carry the keys reserved for high-fidelity data.
+    assert depth.bound_metadata("click", {"points": [[0, 0.1, 0.2]], "sample_hz": 4, "button": 0}) == {"button": 0}
     assert depth.bound_metadata("control_hover_dwell", {"duration_ms": "long"}) is None
 
 
@@ -294,6 +328,58 @@ with TestClient(app) as client:
         assert [r[0] for r in conn.execute("SELECT event_type FROM events").fetchall()] == ["browser_click"]
         assert conn.execute("SELECT count(*) FROM pointer_trajectory_points").fetchone()[0] == 0
     assert client.get("/v1/capture-coverage/heatmap", headers=owner).json()["pages"] == []
+'''
+    env = os.environ.copy()
+    env.update({"WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"), "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth"),
+                "WORKFLOW_OBSERVER_CONFIG": str(tmp_path / "config.json")})
+    result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+
+def test_standard_ingest_drops_coordinates_and_labels_from_any_client_and_backups_disclose_points(tmp_path):
+    code = r'''
+import json, sqlite3, zipfile, tempfile, os
+from datetime import datetime, timezone
+from server import capture_depth, main, local_backup
+from server.db import init_db, connect, rows
+from server.main import BrowserEvent
+from server.privacy_pipeline import redact_for_display
+init_db()
+now = datetime.now(timezone.utc).isoformat()
+page = {"origin": "https://work.example", "hostname": "work.example", "pathname": "/x", "title": "X"}
+assert capture_depth.load()["profile"] == "standard"
+points = [[0, 0.137, 0.519], [250, 0.862, 0.746]]
+# A modified paired client tries to smuggle coordinates into an ordinary click under Standard.
+assert main.browser_event(BrowserEvent(observed_at=now, action="click", page=page, target={"tag": "button", "label": "Send"},
+    metadata={"points": points, "coordinates": "viewport_fraction"}))["inserted"] == 1
+stored = [r for r in rows("SELECT * FROM events") if r["event_type"] == "browser_click"][0]
+assert "points" not in stored["metadata"] and "coordinates" not in stored["metadata"], stored["metadata"]
+assert "0.137" not in json.dumps(redact_for_display(stored))
+# Standard drops the high-fidelity actions themselves.
+assert main.browser_event(BrowserEvent(observed_at=now, action="drag_start", page=page,
+    target={"tag": "div", "role": "button", "label": "private typed words"}, metadata={}))["skipped"] == "capture_depth_signal_off"
+# Enhanced: a drag target whose label was copied from typed text is stored without any label.
+capture_depth.save({"profile": "enhanced"})
+assert main.browser_event(BrowserEvent(observed_at=now, action="drag_start", page=page,
+    target={"tag": "div", "role": "button", "label": "private typed words"},
+    metadata={"source_target": {"tag": "div", "label": "private typed words"}, "payload_kinds": ["text"]}))["inserted"] == 1
+with connect() as conn:
+    blobs = " ".join(r[0] for t in ("events", "normalized_events", "context_events")
+                     for r in conn.execute(f"SELECT metadata_json FROM {t}").fetchall())
+assert "private typed words" not in blobs and "0.137" not in blobs
+assert main.browser_event(BrowserEvent(observed_at=now, action="control_hover_dwell", page=page,
+    target={"tag": "button", "type": "secure"}, metadata={"duration_ms": 900}))["skipped"] == "secure_target"
+# Full: raw points live in their own local table, and a local backup of the database includes them, as stated.
+capture_depth.save({"profile": "full", "acknowledgement_version": capture_depth.FULL_ACK_VERSION})
+assert main.browser_event(BrowserEvent(observed_at=now, action="pointer_trajectory", page=page, metadata={"points": points}))["inserted"] == 1
+assert capture_depth.public()["backups_include_raw_pointer_points"] is True
+target = os.path.join(os.environ["WORKFLOW_OBSERVER_DATA"], "..", "backup.zip")
+local_backup.create_backup(target)
+with zipfile.ZipFile(target) as z:
+    name = next(n for n in z.namelist() if n.endswith("workflow_observer.db"))
+    extracted = z.extract(name, tempfile.mkdtemp())
+with sqlite3.connect(extracted) as db:
+    assert db.execute("SELECT count(*) FROM pointer_trajectory_points").fetchone()[0] == 1
 '''
     env = os.environ.copy()
     env.update({"WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"), "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth"),

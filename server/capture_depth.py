@@ -9,11 +9,16 @@ How much interaction detail is *recorded on this device* is the user's choice:
 Every signal can also be switched on or off on its own. Capture depth is a separate
 decision from retention and sharing: changing it never changes work-text capture,
 screenshots, AI access, MCP, Gateway or export settings. The server enforces the
-setting at ingest, so an out-of-date or modified extension cannot store a disabled signal.
+setting at ingest, so an out-of-date extension cannot store a disabled signal.
+
+Enhanced and Full detail are time-limited: every choice that turns on a high-fidelity
+signal lasts ``duration_days`` (1–90, default 7) and then falls back to Standard on its
+own. The Full acknowledgement is cleared whenever pointer movement is turned off or
+expires, so turning Full on again asks again.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import os
 import tempfile
@@ -22,9 +27,10 @@ from typing import Any
 
 from .db import DATA_DIR
 
-FULL_ACK_VERSION = "capture-depth-full-v1"
-FULL_ACKNOWLEDGEMENT = ("Record sampled pointer movement on this computer while I browse. It stays local; "
-                        "sharing, AI access and exports keep their own separate settings.")
+FULL_ACK_VERSION = "capture-depth-full-v2"
+FULL_ACKNOWLEDGEMENT = ("Record sampled pointer movement on this computer while I browse, for the period I choose. "
+                        "It stays on this computer, including in local backups I make; sharing, AI access and exports "
+                        "keep their own separate settings.")
 SIGNALS = ("hover_dwell", "drag_drop", "friction_candidates", "pointer_trajectory")
 PROFILES: dict[str, dict[str, bool]] = {
     "standard": {"hover_dwell": False, "drag_drop": False, "friction_candidates": False, "pointer_trajectory": False},
@@ -39,6 +45,10 @@ SIGNAL_ACTIONS = {"hover_dwell": {"control_hover_dwell"},
                   "drag_drop": {"drag_start", "drag_drop", "drag_end"},
                   "pointer_trajectory": {"pointer_trajectory"}}
 MAX_TRAJECTORY_POINTS = 200
+DEFAULT_DURATION_DAYS = 7
+MAX_DURATION_DAYS = 90
+# Metadata keys that only high-fidelity events may carry; they are dropped from every other action.
+RESERVED_METADATA_KEYS = ("points", "trajectory", "pointer_points", "sample_hz", "viewport_bucket", "coordinates")
 # Stored event types of the high-fidelity signals, browser and desktop.
 HIGH_FIDELITY_EVENT_TYPES = ("browser_control_hover_dwell", "browser_drag_start", "browser_drag_drop", "browser_drag_end",
                              "browser_pointer_trajectory", "screen_hover_dwell", "screen_drag", "screen_pointer_trajectory")
@@ -58,7 +68,15 @@ def _path():
 
 def _defaults() -> dict[str, Any]:
     return {"profile": "standard", "signals": dict(PROFILES["standard"]), "parameters": dict(DEFAULT_PARAMETERS),
-            "full_acknowledged_version": None, "updated_at": None}
+            "full_acknowledged_version": None, "updated_at": None, "expires_at": None, "expired": False}
+
+
+def _parse_time(value: Any) -> datetime | None:
+    try:
+        moment = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    return moment if moment.tzinfo else None
 
 
 def load() -> dict[str, Any]:
@@ -80,6 +98,15 @@ def load() -> dict[str, Any]:
         data.get("full_acknowledged_version") == FULL_ACK_VERSION else None
     if out["signals"]["pointer_trajectory"] and out["full_acknowledged_version"] is None:
         out["signals"]["pointer_trajectory"] = False
+    expires = _parse_time(data.get("expires_at"))
+    if any(out["signals"].values()):
+        if expires is None or expires <= datetime.now(timezone.utc):
+            # High-fidelity detail is never open-ended: once its period ends, capture is Standard again.
+            out["signals"] = dict(PROFILES["standard"])
+            out["full_acknowledged_version"] = None
+            out["expired"] = expires is not None
+        else:
+            out["expires_at"] = expires.isoformat()
     out["profile"] = profile_for(out["signals"])
     out["updated_at"] = data.get("updated_at")
     return out
@@ -93,8 +120,12 @@ def profile_for(signals: dict[str, bool]) -> str:
 
 
 def save(payload: Any) -> dict[str, Any]:
-    if not isinstance(payload, dict) or set(payload) - {"profile", "signals", "parameters", "acknowledgement_version"}:
-        raise CaptureDepthError("capture depth takes profile, signals, parameters and acknowledgement_version")
+    if not isinstance(payload, dict) or set(payload) - {"profile", "signals", "parameters", "acknowledgement_version",
+                                                         "duration_days"}:
+        raise CaptureDepthError("capture depth takes profile, signals, parameters, duration_days and acknowledgement_version")
+    duration = payload.get("duration_days", DEFAULT_DURATION_DAYS)
+    if not isinstance(duration, int) or isinstance(duration, bool) or not 1 <= duration <= MAX_DURATION_DAYS:
+        raise CaptureDepthError(f"duration_days must be 1 to {MAX_DURATION_DAYS}")
     with _LOCK:
         current = load()
         signals = dict(current["signals"])
@@ -117,13 +148,15 @@ def save(payload: Any) -> dict[str, Any]:
                 if not isinstance(value, int) or isinstance(value, bool) or not low <= value <= high:
                     raise CaptureDepthError(f"{name} must be {low} to {high}")
                 params[name] = value
-        acknowledged = current["full_acknowledged_version"]
+        acknowledged = current["full_acknowledged_version"] if signals["pointer_trajectory"] else None
         if signals["pointer_trajectory"] and acknowledged is None:
             if payload.get("acknowledgement_version") != FULL_ACK_VERSION:
                 raise CaptureDepthError("acknowledge recording pointer movement before turning on pointer trajectories")
             acknowledged = FULL_ACK_VERSION
+        now = datetime.now(timezone.utc)
+        expires = (now + timedelta(days=duration)).isoformat() if any(signals.values()) else None
         data = {"signals": signals, "parameters": params, "full_acknowledged_version": acknowledged,
-                "updated_at": datetime.now(timezone.utc).isoformat()}
+                "updated_at": now.isoformat(), "expires_at": expires, "duration_days": duration if expires else None}
         path = _path()
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, temp = tempfile.mkstemp(prefix=".owg-capture-depth-", suffix=".tmp", dir=path.parent)
@@ -142,10 +175,13 @@ def save(payload: Any) -> dict[str, Any]:
 def public() -> dict[str, Any]:
     state = load()
     return {**state, "profiles": {k: dict(v) for k, v in PROFILES.items()}, "parameter_bounds": PARAMETER_BOUNDS,
+            "duration_days_bounds": [1, MAX_DURATION_DAYS], "default_duration_days": DEFAULT_DURATION_DAYS,
+            "labels_recorded_for_high_fidelity_events": False,
+            "backups_include_raw_pointer_points": True,
             "full_acknowledgement": FULL_ACKNOWLEDGEMENT, "full_acknowledgement_version": FULL_ACK_VERSION,
             "changes_sharing": False, "independent_settings": ["work_text_capture", "screen_capture_mode",
                                                                "ai_access", "mcp_tools", "gateway_sync", "exports"],
-            "never_captured": ["typed_text", "clipboard_contents", "dragged_file_names_or_contents",
+            "never_captured": ["typed_text", "clipboard_contents", "labels_on_hover_and_drag", "secure_field_pointer_samples", "dragged_file_names_or_contents",
                                "dragged_text_or_html", "secure_field_hover", "page_contents"]}
 
 
@@ -242,7 +278,8 @@ def pointer_heatmap(*, hostname: str | None = None, pathname: str | None = None,
 def for_extension() -> dict[str, Any]:
     """The subset the paired extension needs to decide what to emit."""
     state = load()
-    return {"signals": state["signals"], "parameters": state["parameters"], "profile": state["profile"]}
+    return {"signals": state["signals"], "parameters": state["parameters"], "profile": state["profile"],
+            "expires_at": state["expires_at"]}
 
 
 def action_allowed(action: str) -> bool:
@@ -257,17 +294,12 @@ def action_allowed_on_excluded(action: str) -> bool:
     return not any(action in actions for actions in SIGNAL_ACTIONS.values())
 
 
-_EDITABLE_TAGS = {"input", "textarea", "select"}
-
-
 def bound_target(action: str, target: dict[str, Any]) -> dict[str, Any]:
-    """High-fidelity events keep structural target fields only, and no label or name for editable fields."""
+    """High-fidelity events keep structural target fields only (tag, role, type), never a label or name."""
     if not any(action in actions for actions in SIGNAL_ACTIONS.values()):
         return target
-    out = {k: str(target[k])[:160] for k in ("tag", "role", "type", "label") if target.get(k)}
-    if str(out.get("tag", "")).lower() in _EDITABLE_TAGS or out.get("type") == "secure":
-        out.pop("label", None)
-    return out
+    # No label at all: aria-label, title, placeholder and label text can all be set from what the user typed.
+    return {k: str(target[k])[:160] for k in ("tag", "role", "type") if target.get(k)}
 
 
 def bound_metadata(action: str, metadata: dict[str, Any]) -> dict[str, Any] | None:
@@ -305,11 +337,10 @@ def bound_metadata(action: str, metadata: dict[str, Any]) -> dict[str, Any] | No
                **_frame(metadata)}
         if isinstance(metadata.get("source_target"), dict):
             source = metadata["source_target"]
-            out["source_target"] = {k: str(v)[:160] for k, v in source.items() if k in ("tag", "role", "type", "label") and v}
-            if source.get("editable") or str(source.get("tag", "")).lower() in _EDITABLE_TAGS or source.get("type") == "secure":
-                out["source_target"].pop("label", None)
+            out["source_target"] = {k: str(v)[:160] for k, v in source.items() if k in ("tag", "role", "type") and v}
         return out
-    return metadata
+    # Ordinary actions keep their metadata, minus the keys only high-fidelity events may carry.
+    return {k: v for k, v in metadata.items() if k not in RESERVED_METADATA_KEYS}
 
 
 def _frame(metadata: dict[str, Any]) -> dict[str, Any]:

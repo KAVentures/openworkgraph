@@ -282,7 +282,7 @@
       </div>
       <div class="card" id="pvCaptureDepth">
         <h2>Interaction detail</h2>
-        <div class="muted">How much interaction detail the browser extension records on this computer. Standard keeps today's signals. Enhanced adds how long you rest the pointer on buttons and links, drag and drop between controls, and friction candidates such as repeated clicks. Full fidelity also samples pointer movement. Typed text, clipboard contents, dragged data and secure fields are never recorded. Sharing, AI access, exports, screenshots and work text keep their own separate settings.</div>
+        <div class="muted">How much interaction detail the browser extension records on this computer. Standard keeps today's signals. Enhanced adds how long you rest the pointer on buttons and links, drag and drop between controls, and friction candidates such as repeated clicks. Full fidelity also samples pointer movement. Typed text, clipboard contents, dragged data, control labels and secure fields are never recorded. Enhanced and Full fidelity last for the period you choose, then return to Standard. Sharing, AI access, exports, screenshots and work text keep their own separate settings. Local backups include recorded pointer movement.</div>
         <div class="pv-delete" role="radiogroup" aria-label="Interaction detail profile">
           <label><input type="radio" name="pvDepth" value="standard"> Standard</label>
           <label><input type="radio" name="pvDepth" value="enhanced"> Enhanced</label>
@@ -298,6 +298,7 @@
           <label for="pvDepthDwell">Hover counts after (ms)</label><input type="number" id="pvDepthDwell" min="300" max="5000">
           <label for="pvDepthHz">Pointer samples per second</label><input type="number" id="pvDepthHz" min="1" max="20">
           <label for="pvDepthRetention">Keep interaction detail (days)</label><input type="number" id="pvDepthRetention" min="1" max="365">
+          <label for="pvDepthDuration">Record extra detail for</label><select id="pvDepthDuration"><option value="1">1 day</option><option value="7" selected>7 days</option><option value="30">30 days</option><option value="90">90 days</option></select>
         </div>
         <label class="pv-delete"><input type="checkbox" id="pvDepthAck"> <span id="pvDepthAckText"></span></label>
         <div class="pv-delete">
@@ -322,7 +323,7 @@
       </div>
       <div class="card" id="pvBackup">
         <h2>Back up recorded activity</h2>
-        <div class="muted">Saves a verified copy of everything OpenWorkGraph keeps on this computer to the backup folder. Add a passphrase (12+ characters) to also include this computer's keys and encrypt the file. Restoring is done with OpenWorkGraph closed: <code>python -m server.local_backup restore</code>.</div>
+        <div class="muted">Saves a verified copy of everything OpenWorkGraph keeps on this computer to the backup folder. It includes recorded interaction detail, such as sampled pointer movement, so keep it as private as the computer itself. Add a passphrase (12+ characters) to also include this computer's keys and encrypt the file; without one the file is not encrypted. Restoring is done with OpenWorkGraph closed: <code>python -m server.local_backup restore</code>.</div>
         <div class="pv-delete"><input type="password" id="pvBackupPass" autocomplete="new-password" placeholder="Optional passphrase" aria-label="Backup passphrase (optional)"><button type="button" class="secondary" id="pvBackupCreate">Back up now</button></div>
         <div class="muted" id="pvBackupStatus" role="status" aria-live="polite"></div>
       </div>
@@ -792,7 +793,9 @@
       depthBox('pvDepthRetention').value = state.parameters.retention_days;
       depthBox('pvDepthAckText').textContent = state.full_acknowledgement;
       depthBox('pvDepthAck').checked = !!state.full_acknowledged_version;
-      depthBox('pvDepthStatus').textContent = 'Current: ' + ({standard: 'Standard', enhanced: 'Enhanced', full: 'Full fidelity'}[state.profile] || 'Custom') + '.';
+      depthBox('pvDepthStatus').textContent = 'Current: ' + ({standard: 'Standard', enhanced: 'Enhanced', full: 'Full fidelity'}[state.profile] || 'Custom') + '.' +
+        (state.expires_at ? ' Returns to Standard on ' + new Date(state.expires_at).toLocaleString() + '.' : '') +
+        (state.expired ? ' The last period of extra detail has ended.' : '');
     };
     const loadDepth = async () => { try { showDepth(await api('/v1/capture-depth')); } catch (error) { depthBox('pvDepthStatus').textContent = error.message || 'Could not load interaction detail.'; } };
     panel.querySelectorAll('input[name="pvDepth"]').forEach(radio => radio.addEventListener('change', () => {
@@ -801,7 +804,7 @@
     }));
     depthBox('pvDepthSave').onclick = async () => {
       const signals = Object.fromEntries(Object.entries(depthSignals).map(([key, id]) => [key, depthBox(id).checked]));
-      const payload = {signals, parameters: {hover_dwell_ms: Number(depthBox('pvDepthDwell').value), trajectory_hz: Number(depthBox('pvDepthHz').value), retention_days: Number(depthBox('pvDepthRetention').value)}};
+      const payload = {signals, parameters: {hover_dwell_ms: Number(depthBox('pvDepthDwell').value), trajectory_hz: Number(depthBox('pvDepthHz').value), retention_days: Number(depthBox('pvDepthRetention').value)}, duration_days: Number(depthBox('pvDepthDuration').value)};
       if (signals.pointer_trajectory) {
         if (!depthBox('pvDepthAck').checked) { depthBox('pvDepthStatus').textContent = 'Tick the acknowledgement to record pointer movement.'; return; }
         payload.acknowledgement_version = depth.state?.full_acknowledgement_version;

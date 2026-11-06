@@ -25,13 +25,15 @@ const path=require('node:path');
    await card.getByLabel('Enhanced').check();
    assert(await page.locator('#pvDepthHover').isChecked()&&!(await page.locator('#pvDepthTrajectory').isChecked()));
    await page.locator('#pvDepthSave').click();
-   await page.locator('#pvDepthStatus').filter({hasText:'Current: Enhanced. Saved; sharing settings are unchanged.'}).waitFor();
+   await page.locator('#pvDepthStatus').filter({hasText:/Current: Enhanced\. Returns to Standard on .*Saved; sharing settings are unchanged\./}).waitFor();
+   const enhanced=await page.evaluate(async()=>(await (await fetch('/v1/capture-depth')).json()));
+   const days=(Date.parse(enhanced.expires_at)-Date.now())/864e5;assert(days>6.9&&days<=7,'Enhanced lasts the chosen 7 days: '+days);
    await card.getByLabel('Full fidelity').check();await page.locator('#pvDepthSave').click();
    await page.locator('#pvDepthStatus').filter({hasText:'Tick the acknowledgement'}).waitFor();
-   await page.locator('#pvDepthAck').check();await page.locator('#pvDepthHz').fill('8');await page.locator('#pvDepthRetention').fill('14');await page.locator('#pvDepthSave').click();
+   await page.locator('#pvDepthAck').check();await page.locator('#pvDepthHz').fill('8');await page.locator('#pvDepthRetention').fill('14');await page.locator('#pvDepthDuration').selectOption('1');await page.locator('#pvDepthSave').click();
    await page.locator('#pvDepthStatus').filter({hasText:'Current: Full fidelity.'}).waitFor();
    const saved=await page.evaluate(async()=>(await (await fetch('/v1/capture-depth')).json()));
-   assert.equal(saved.parameters.trajectory_hz,8);assert.equal(saved.parameters.retention_days,14);assert.equal(saved.signals.pointer_trajectory,true);
+   assert.equal(saved.parameters.trajectory_hz,8);assert.equal(saved.parameters.retention_days,14);assert(Date.parse(saved.expires_at)-Date.now()<=864e5,'Full lasts the chosen 1 day');assert.equal(saved.signals.pointer_trajectory,true);
    // /v1/browser-context is only for the paired extension; tests/test_capture_depth.py checks its capture_depth.
    assert.equal((await page.evaluate(async()=>(await fetch('/v1/browser-context')).status)) >= 400,true);
    const after=await page.evaluate(async()=>(await (await fetch('/v1/work-text/policy')).json()));
