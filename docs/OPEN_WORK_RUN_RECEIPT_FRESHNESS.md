@@ -1,0 +1,5 @@
+# Bound-run receipt freshness (experimental)
+
+The authenticated, explicitly confirmed run-receipt journal read now compares each retained operator receipt's evidence digest against a freshly read, integrity-checked provider/human **case-wide** history. The response annotates entries with `freshness: current|stale`, provides `current_case_evidence_digest`, `current_review_count`, and `case_evidence_scope: case_wide_not_run_causal`. Historical corrections and retractions remain in the journal. No new provider requests, default grant, agent action, or external writes are introduced.
+
+A changed case evidence digest makes a prior review stale even when its run binding remains valid. This is not a source-confirmed outcome or proof the agent caused a business change. A write fails closed if evidence changes between its initial and pre-write checks; a post-write race returns a refresh error rather than claiming freshness. Concurrent cross-ledger transactions are not atomic; real-provider acceptance and independent run-specific verification remain outstanding.
