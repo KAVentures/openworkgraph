@@ -30,3 +30,8 @@ agent execution permission, or independent proof of causality. Production
 integration still requires actor/grant-scoped authorization, revocation and
 retention, append-only correction history, and real restricted-account
 acceptance. Mocked tests do not establish live-provider acceptance.
+
+
+## Opt-in durable local recheck journal (experimental)
+
+Supply `--journal-path /private/path/receipts.sqlite --tenant TENANT --actor ACTOR --attempt RUN` together with the normal explicit provider-read flags to append a scoped local receipt after each check. Without all four flags, no receipt is written. Rechecks append history rather than overwriting a prior result. Use `--purge-journal-scope` with the same journal, tenant and actor arguments to delete that scope on revocation or retention expiry (the other required identity arguments remain mandatory for this CLI). Never store Stripe credentials or customer payloads. A provider event does not prove operation completion or customer outcome. Journal path and scope must be controlled by the local operator; this experimental CLI is not a tenant-authenticated hosted API and does not implement automatic retention or grant checks. Do not enable this for shared/multi-user installations without an authenticated storage boundary.
