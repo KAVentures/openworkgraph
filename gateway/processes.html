@@ -575,6 +575,8 @@
         const sharedProjects=window.owgSharedOpportunityProjects.create({detailHost:$("sharedProjectDetail"),call,onDenied:()=>{clear();note("Project access changed; sign in again to refresh permissions.");}});
         const dependencies=window.owgProcessDependencies.create({inventoryHost:$("dependencyInventory"),detailHost:$("dependencyDetail"),call,open,onDenied:()=>{clear();note("Dependency access changed; sign in again to refresh permissions.");}});
         const implementation=window.owgImplementationPlans.create({detailHost:$("implementationDetail"),call,onDenied:()=>{clear();note("Implementation-plan access changed; sign in again to refresh permissions.");}});
+        // Initialized before the OIDC callback can synchronously call clear().
+        let handoffGeneration=0;
         function clear(releaseBusy=false) {
           resetHandoff("Session cleared. Recheck after sign-in.");
           $("handoffPacket").value="";
@@ -2166,7 +2168,6 @@
           );
         }
 
-        let handoffGeneration=0;
         function resetHandoff(message="No packet checked.") {
           handoffGeneration++;
           $("handoffStatus").textContent=message;
