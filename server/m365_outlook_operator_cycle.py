@@ -15,6 +15,7 @@ from .m365_outlook_verified_append_receipt import append_and_record
 from .m365_outlook_resume_handoff import prepare_handoff
 from .m365_outlook_candidate_review import review as review_candidate
 from .m365_outlook_recovery_triage import triage as recovery_triage
+from .m365_outlook_event_membership import reconcile as reconcile_membership
 from .m365_outlook_owg_receipt import ReceiptError, UncertainReceipt
 from .m365_outlook_delta import DeltaError
 
@@ -100,10 +101,21 @@ def recover(*, consent_local_read=False, confirm_removals_reviewed=False, **kwar
             "checkpoint_advanced": False, "automatic_retry_allowed": False}
 
 
+def membership(*, consent_local_read=False, **kwargs):
+    """Authenticate a bounded source-event membership readback without writes."""
+    if consent_local_read is not True:
+        raise ReceiptError("Separate local membership read consent required")
+    result = reconcile_membership(consent_local_read=True, **kwargs)
+    if result.get("status") not in ("all_candidate_events_present", "manual_reconciliation_required"):
+        raise ReceiptError("Membership did not produce a recognized decision")
+    return {"format": FORMAT, "phase": "membership", **result,
+            "checkpoint_advanced": False, "automatic_retry_allowed": False}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="phase", required=True)
-    for phase in ("extract", "review", "append", "handoff", "recover"):
+    for phase in ("extract", "review", "append", "handoff", "recover", "membership"):
         p = sub.add_parser(phase)
         for flag in ("tenant", "mailbox", "folder"):
             p.add_argument("--" + flag, required=True)
@@ -124,6 +136,9 @@ def main(argv=None):
                 p.add_argument("--" + flag, action="store_true")
         elif phase == "review":
             p.add_argument("--candidate", type=Path, required=True)
+        elif phase == "membership":
+            for flag in ("candidate", "csv-path"):
+                p.add_argument("--" + flag, type=Path, required=True)
         elif phase == "recover":
             for flag in ("candidate", "csv-path", "receipt-file"):
                 p.add_argument("--" + flag, type=Path, required=True)
@@ -155,10 +170,12 @@ def main(argv=None):
             result = append(**args)
         elif phase == "recover":
             result = recover(**args)
+        elif phase == "membership":
+            result = membership(**args)
         else:
             result = handoff(**args)
         print(json.dumps(result, sort_keys=True))
-        return 3 if phase == "recover" and result["status"] == "manual_reconciliation_required" else 0
+        return 3 if phase in ("recover", "membership") and result["status"] == "manual_reconciliation_required" else 0
     except UncertainReceipt:
         print(json.dumps({"format": FORMAT, "phase": phase,
                           "status": "uncertain", "retry_allowed": False}, sort_keys=True))
