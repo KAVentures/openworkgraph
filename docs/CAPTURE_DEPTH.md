@@ -200,7 +200,7 @@ Measured in this repository's CI-like container:
 
 | Step | 300k-event history | Budget |
 |---|---|---|
-| High-fidelity ingest | 1.3 ms per event | < 20 ms |
+| High-fidelity ingest | 1.3 ms per event (about 46 ms on Windows runners) | < 100 ms |
 | Coverage manifest (90 days) | 0.31 s | < 30 s |
 | Friction candidates (31 days, bounded to 20,000 events) | 0.96 s | < 30 s |
 | Heatmap page list / one page | 0.18 s / 0.19 s | < 30 s |
