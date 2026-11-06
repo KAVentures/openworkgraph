@@ -89,6 +89,24 @@ per-person scoring.
 Hover dwell and pointer movement are context only. Workflow reconstruction does not
 treat them as steps, or as merge evidence by themselves.
 
+**In the workflow trace.** Every hover, drag and pointer event in `get_workflow_trace` (and
+the other rich-evidence views) carries an `interaction_detail` label:
+`{"basis": "observed", "inferred": false, "context_only": true, "workflow_step": false,
+"merge_evidence": false}`, plus the signal. For drags it also says whether completion was
+observed (`completion_basis`); for hovers it notes a control that re-rendered under the
+pointer. When friction candidates are on, each trace page also returns
+`interaction_candidates`: the friction patterns among that page's rows, each marked
+`basis: "inferred_candidate"` and `requires_review: true`. They come with the statements
+that no intent or attention is inferred and that there is no per-person scoring. Neither
+the labels nor the candidates give an agent a reason to act or to merge cases.
+
+**Harder pages.** When a single-page app re-renders the control under a resting pointer,
+the hover carries on as one dwell if the new control has the same tag, role and type
+(`control_rerendered: true`). A different kind of control starts a new hover. Controls
+inside frames are recorded by the frame's own content script, marked
+`frame_kind: "subframe"`, with pointer points relative to the frame's viewport. A resent
+event (the extension retries failed deliveries with the same event ID) is stored once.
+
 ## Desktop
 
 The desktop recorder reads the same capture-depth choice, at most every two
