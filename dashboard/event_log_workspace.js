@@ -3278,7 +3278,20 @@
     const reviewNote=el('p','Acknowledge a specific triggered result locally, or reopen it. Snooze a result for one hour or one day; it returns on refresh after expiry. Reviews never send notifications, approve actions, or imply business outcomes. Stale results require a fresh Check signals.','muted');
     const inbox=el('div');inbox.id='owgSignalInbox';
     const reviewRefresh=button('Refresh review inbox','secondary');reviewRefresh.id='owgSignalReviewRefresh';
-    box.append(row,message,rules,evaluate,out,reviewHeading,reviewNote,reviewRefresh,inbox);
+    const allHeading=el('h4','Across all saved logs');
+    const allNote=el('p','One local overview of saved signal review states across every imported dataset. This does not re-evaluate rules, read source accounts, send alerts or execute work. Open the corresponding log for the existing state-pinned review controls.','muted');
+    const allFilter=select('owgSignalAllFilter',[
+      ['attention','Needs attention'],['all','All states'],['unreviewed','Unreviewed'],
+      ['stale','Stale'],['not_evaluated','Not yet evaluated'],['snoozed','Snoozed'],
+      ['acknowledged','Acknowledged'],['cleared','Cleared'],['unavailable','Unavailable']]);
+    allFilter.setAttribute('aria-label','Across-log signal status filter');
+    const allRefresh=button('Refresh all-log signals','secondary');allRefresh.id='owgSignalAllRefresh';
+    const allStatus=el('div','Load saved signals across logs to review them here.','muted');
+    allStatus.id='owgSignalAllStatus';allStatus.setAttribute('role','status');allStatus.setAttribute('aria-live','polite');
+    const allResults=el('div');allResults.id='owgSignalAllResults';
+    const allControls=el('div',null,'actions');allControls.append(allFilter,allRefresh);
+    box.append(row,message,rules,evaluate,out,reviewHeading,reviewNote,reviewRefresh,inbox,
+      allHeading,allNote,allControls,allStatus,allResults);
     const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/signals';
     const selectedLogId=state.logId;
     const inboxBase=()=>'/v1/event-logs/'+encodeURIComponent(selectedLogId)+'/signal-inbox';
@@ -3325,6 +3338,64 @@
         el('div',r.unreviewed+' signals currently require review. No automatic actions or delivery.','muted'),
         rows.length?table(['Signal','Review status','Evaluated','Acknowledged','Snoozed until',''],rows):el('div','No saved signals to review.','muted'));
     }
+    // Cross-log overview is read-only. Counts cover every saved rule before
+    // bounded display, and the source-log selection is refreshed before opening.
+    // An old response cannot replace the current view after switching datasets.
+    let allRequestId=0;
+    async function refreshAllSignals(){
+      const requestId=++allRequestId;
+      allRefresh.disabled=true;
+      allStatus.textContent='Inspecting saved signal states across local logs…';
+      try{
+        const params=new URLSearchParams({status:allFilter.value,limit:'100'});
+        const r=await getJSON('/v1/event-logs/signal-overview?'+params);
+        if(generation!==state.generation||requestId!==allRequestId)return;
+        const counts=r.counts||{};
+        allStatus.textContent=Number(r.attention||0)+' signal states need attention across '+
+          Number(r.datasets_scanned||0)+' saved logs ('+Number(r.datasets_with_rules||0)+
+          ' with rules). '+Number(counts.unreviewed||0)+' unreviewed, '+
+          Number(counts.stale||0)+' stale, '+Number(counts.not_evaluated||0)+
+          ' unevaluated, '+Number(counts.unavailable||0)+' unavailable; '+
+          Number(counts.snoozed||0)+' snoozed. Showing '+
+          Number(r.returned_rules||0)+' of '+Number(r.matched_rules||0)+' matching rules'+
+          (r.truncated?' (limited; narrow the filter to inspect others)':'')+
+          '. No source refresh or automatic action.';
+        const rows=(r.items||[]).map(item=>{
+          const open=button('Open log','secondary');
+          open.setAttribute('aria-label','Open dataset '+item.log_name+' to review signal '+item.name);
+          open.onclick=async()=>{
+            if(generation!==state.generation)return;
+            if(!state.logs.some(log=>log.log_id===item.log_id)){
+              allStatus.textContent='Dataset selection is stale; refresh the saved logs list.';
+              return;
+            }
+            open.disabled=true;
+            try{
+              await refreshLogs(item.log_id);
+              if(state.logId!==item.log_id)return;
+              await analyse();
+              document.getElementById('owgEventLogSignals')?.scrollIntoView({block:'start'});
+            }catch(error){status(error.message||'Could not open that local dataset.');}
+          };
+          return [item.log_name,item.name,item.status.replace(/_/g,' '),
+            item.evaluated_at||'Not checked',
+            item.scheduled_check?'Scheduled':'On demand',
+            open];
+        });
+        allResults.replaceChildren(rows.length
+          ? table(['Saved log','Signal','Review status','Evaluated','Check mode',''],rows)
+          : el('div','No saved signals match this filter.','muted'));
+      }catch(error){
+        if(generation===state.generation&&requestId===allRequestId){
+          allResults.replaceChildren();
+          allStatus.textContent=error.message||'Cannot inspect local saved signals.';
+        }
+      }finally{
+        if(generation===state.generation&&requestId===allRequestId)allRefresh.disabled=false;
+      }
+    }
+    allFilter.onchange=()=>refreshAllSignals();
+    allRefresh.onclick=()=>refreshAllSignals();
     reviewRefresh.onclick=()=>refreshInbox().catch(error=>{message.textContent=error.message;});
     async function refresh(){
       const r=await getJSON(base());if(generation!==state.generation)return;
@@ -3360,6 +3431,7 @@
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
     };
     refresh().catch(error=>{message.textContent=error.message;});
+    refreshAllSignals();
     return box;
   }
 
