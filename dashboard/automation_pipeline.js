@@ -2007,7 +2007,9 @@
       refresh().then(async()=>{
         if(!current())return;
         if(!handoff.project_id){await show(id);return;}
-        const journey=await (await api('/v1/automation-pipeline/'+encodeURIComponent(id)+'/journey')).json();
+        const journeyResponse=await api('/v1/automation-pipeline/'+encodeURIComponent(id)+'/journey');
+        if(!journeyResponse.ok)throw new Error('Authenticated journey refused ('+journeyResponse.status+').');
+        const journey=await journeyResponse.json();
         if(!current())return;
         const project=journey.projects?.find(p=>p.project_id===handoff.project_id);
         if(journey.idea?.revision!==handoff.idea_revision||!project||
@@ -2020,9 +2022,10 @@
         await show(id);
         if(!current())return;
         const button=document.getElementById('owgPipelineJourney');
-        if(button)await button.onclick();
+        if(!button)throw new Error('Evidence journey control unavailable.');
+        await button.onclick();
         if(current())status.textContent='Opened evidence journey for inspected project '+handoff.project_id+'. Review and approval remain separate.';
-      }).catch(e=>{if(current())status.textContent='Unable to open reviewed evidence: '+e.message;});
+      }).catch(e=>{if(current()){detail.replaceChildren();status.textContent='Unable to open reviewed evidence: '+e.message;}});
     });
 
     add.onclick=async()=>{try{
