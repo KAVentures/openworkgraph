@@ -231,3 +231,18 @@ def test_privacy_ui_only_wires_readonly_bounded_owner_verification():
     assert 'app.add_api_route("/v1/local-backups/health"' in routes
     assert "_require_dashboard_session(request)" in routes.split("async def post_local_backup_health(")[1].split(
         "def _require_dashboard_session(",1)[0]
+
+
+
+def test_large_declared_extracted_payload_is_not_decompressed_in_dashboard(store, monkeypatch):
+    _root, _data, _auth, folder = store
+    path = _write_backup(folder, "owg-backup-high-expansion.zip")
+    monkeypatch.setattr(health, "_declared_uncompressed_size",
+                        lambda candidate: health.MAX_UNCOMPRESSED_BYTES + 1)
+    def forbidden(_path):
+        raise AssertionError("oversize ZIP must not reach full verification")
+    monkeypatch.setattr(local_backup, "verify_backup", forbidden)
+    result = health.check(_request(path.name))
+    assert result["items"][0]["status"] == "exceeds_dashboard_uncompressed_limit"
+    assert not result["items"][0]["verified"]
+    assert result["max_uncompressed_archive_bytes"] == 2 << 30
