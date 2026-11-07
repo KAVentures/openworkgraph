@@ -53,6 +53,13 @@ def test_signature_is_standard_hmac_and_verification_codes():
     assert signing.verify("00" * 32, "1000", "4", h["X-OWG-Report-Signature"], body, now=1000) == "bad_signature"
     assert signing.verify("00" * 32, "1000", "3", h["X-OWG-Report-Signature"], body, now=2000) == "stale_timestamp"
     assert signing.verify("00" * 32, "x", "3", "v1=00", body) == "malformed_headers"
+    too_large = signing.MAX_SEQUENCE + 1
+    signed_large = signing.headers("00" * 32, too_large, body, timestamp=1000)
+    assert signing.verify("00" * 32, "1000", str(too_large),
+                          signed_large["X-OWG-Report-Signature"], body, now=1000) == "malformed_headers"
+    boundary = signing.headers("00" * 32, signing.MAX_SEQUENCE, body, timestamp=1000)
+    assert signing.verify("00" * 32, "1000", str(signing.MAX_SEQUENCE),
+                          boundary["X-OWG-Report-Signature"], body, now=1000) is None
 
 
 def test_secret_is_shown_once_and_one_live_channel_per_deployment(setup, tmp_path):
