@@ -18,6 +18,7 @@ from .m365_outlook_recovery_triage import triage as recovery_triage
 from .m365_outlook_event_membership import reconcile as reconcile_membership
 from .m365_outlook_owg_receipt import ReceiptError, UncertainReceipt
 from .m365_outlook_delta import DeltaError
+from .m365_outlook_checkpoint import commit_checkpoint, inspect_checkpoint
 
 FORMAT = "openworkgraph.m365-operator-cycle.v1"
 
@@ -114,21 +115,53 @@ def membership(*, consent_local_read=False, **kwargs):
             "checkpoint_advanced": False, "automatic_retry_allowed": False}
 
 
+def checkpoint_inspect(*, consent_local_read=False, **kwargs):
+    """Inspect a scoped committed generation without exposing the private cursor."""
+    entry = inspect_checkpoint(consent_local_read=consent_local_read, **kwargs)
+    return {"format": FORMAT, "phase": "checkpoint-inspect",
+            "status": "checkpoint_present" if entry else "empty",
+            "generation": entry["generation"] if entry else 0,
+            "provider_requests": 0, "automatic_retry_allowed": False}
+
+
+def checkpoint_commit(*, consent_local_read=False,
+                      confirm_removals_reviewed=False,
+                      confirm_checkpoint_commit=False, **kwargs):
+    """Explicit reviewed checkpoint transition; never initiates extraction."""
+    result = commit_checkpoint(
+        consent_local_read=consent_local_read,
+        confirm_removals_reviewed=confirm_removals_reviewed,
+        confirm_checkpoint_commit=confirm_checkpoint_commit, **kwargs)
+    if result.get("status") != "checkpoint_committed":
+        raise ReceiptError("Checkpoint not committed")
+    return {"format": FORMAT, "phase": "checkpoint-commit", **result,
+            "provider_requests": 0, "automatic_retry_allowed": False}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="phase", required=True)
-    for phase in ("extract", "review", "append", "handoff", "recover", "membership"):
+    for phase in ("extract", "review", "append", "handoff", "recover", "membership", "checkpoint-inspect", "checkpoint-commit"):
         p = sub.add_parser(phase)
         for flag in ("tenant", "mailbox", "folder"):
             p.add_argument("--" + flag, required=True)
-        if phase != "review":
+        if phase not in ("review", "checkpoint-inspect"):
             for flag in ("log-id", "confirm-log-id"):
                 p.add_argument("--" + flag, required=True)
         p.add_argument("--grant-file", type=Path, required=True)
-        if phase != "review":
+        if phase not in ("review", "checkpoint-inspect"):
             p.add_argument("--port", type=int, default=8765)
         p.add_argument("--consent-local-read", action="store_true")
-        if phase == "extract":
+        if phase.startswith("checkpoint-"):
+            p.add_argument("--ledger-dir", type=Path, required=True)
+        if phase == "checkpoint-commit":
+            for flag in ("candidate", "csv-path", "receipt-file", "journal-dir", "handoff-dir"):
+                p.add_argument("--" + flag, type=Path, required=True)
+            p.add_argument("--successor-label", required=True)
+            p.add_argument("--expected-previous-candidate-sha256")
+            p.add_argument("--confirm-removals-reviewed", action="store_true")
+            p.add_argument("--confirm-checkpoint-commit", action="store_true")
+        elif phase == "extract":
             for flag in ("previous-candidate", "previous-csv", "receipt-file",
                          "journal-dir", "handoff-dir", "output", "candidate"):
                 p.add_argument("--" + flag, type=Path, required=True)
@@ -162,10 +195,14 @@ def main(argv=None):
             p.add_argument("--confirm-removals-reviewed", action="store_true")
     args = vars(parser.parse_args(argv))
     phase = args.pop("phase")
-    if phase != "review":
+    if phase not in ("review", "checkpoint-inspect"):
         args["session"] = os.environ.get("OWG_DASHBOARD_SESSION")
     try:
-        if phase == "extract":
+        if phase == "checkpoint-inspect":
+            result = checkpoint_inspect(**args)
+        elif phase == "checkpoint-commit":
+            result = checkpoint_commit(**args)
+        elif phase == "extract":
             args["token"] = os.environ.get("OWG_M365_GRAPH_TOKEN", "")
             result = extract(**args)
         elif phase == "review":
