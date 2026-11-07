@@ -89,3 +89,34 @@ def test_reviewed_snapshot_atomic_reconciliation_and_scope_isolation(tmp_path):
     assert replace_reviewed_dependencies(**kwargs, snapshot=snapshot)["removed_stale_edges"] == 1
     assert dependency_context(**kwargs, case_id=ref1)["direct"] == []
     assert dependency_context(path, scope="tenant1", actor="bob", case_id="other")["direct"] == ["unrelated"]
+
+
+def test_dependency_store_refuses_unsafe_existing_paths(tmp_path):
+    import os
+    import stat
+    path = tmp_path / "dependencies.sqlite"
+    kwargs = {"path": str(path), "scope": "tenant", "actor": "alice",
+              "case_id": "invoice", "prerequisite": "approval"}
+    assert declare_dependency(**kwargs)
+    if os.name == "posix":
+        os.chmod(path, 0o644)
+        with pytest.raises(ValueError, match="permissions"):
+            declare_dependency(**kwargs)
+        assert stat.S_IMODE(path.stat().st_mode) == 0o644
+        os.chmod(path, 0o600)
+        alias = tmp_path / "hardlink.sqlite"
+        os.link(path, alias)
+        with pytest.raises(ValueError, match="unsafe"):
+            dependency_context(str(path), scope="tenant", actor="alice", case_id="invoice")
+        alias.unlink()
+    symlink = tmp_path / "symlink.sqlite"
+    symlink.symlink_to(path)
+    with pytest.raises(ValueError, match="symlink"):
+        dependency_context(str(symlink), scope="tenant", actor="alice", case_id="invoice")
+    sidecar = tmp_path / "dependencies.sqlite-wal"
+    sidecar.write_bytes(b"unexpected")
+    with pytest.raises(ValueError, match="sidecar"):
+        declare_dependency(**kwargs)
+    sidecar.unlink()
+    assert dependency_context(str(path), scope="tenant", actor="alice",
+                              case_id="invoice")["direct"] == ["approval"]
