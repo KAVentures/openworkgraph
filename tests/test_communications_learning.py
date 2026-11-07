@@ -225,6 +225,7 @@ with TestClient(app) as client:
     assert freshness.status_code == 200, freshness.text
     assert freshness.json()["trained"] and not freshness.json()["usable"]
     assert not freshness.json()["evaluation_current"]
+    assert freshness.json()["evaluation"] is None
     stale = client.post(query + "&classifier=learned", content=body, headers=confirmed)
     assert stale.status_code == 409 and "stale" in stale.text
     assert client.post(query + "&classifier=keyword", content=body, headers=confirmed).status_code == 200
