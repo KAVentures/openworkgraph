@@ -424,54 +424,127 @@ def plan_restore(path: Path, *, passphrase: str | None = None, replace: bool = F
 
 
 def restore_backup(path: Path, *, passphrase: str | None = None, replace: bool = False) -> dict[str, Any]:
-    """Offline restore into the configured data/auth folders (stop OWG first)."""
+    """Stage verified data first, then swap offline stores, rolling back failed swaps.
+
+    All archive files are extracted and rehashed in a same-volume staging directory
+    before an existing store is renamed. The recorder must be stopped. A completed
+    restore keeps pre-restore folders instead of deleting them.
+    """
     summary = plan_restore(path, passphrase=passphrase, replace=replace)
     if not summary["ready"]:
         raise BackupError("; ".join(summary["blockers"]))
     from collector.instance_lock import CollectorLock
 
-    lock = CollectorLock(data_dir())
-    if data_dir().is_dir() and not lock.acquire():
+    data, auth = data_dir(), auth_dir()
+    nested = auth.is_relative_to(data)
+    if (not nested and auth.is_relative_to(data)) or data == auth:
+        raise BackupError("unsupported data and credential target layout")
+    data.parent.mkdir(parents=True, exist_ok=True)
+    # Only acquire when a store exists; creating a lock in an absent directory
+    # would turn an otherwise empty restore target into a conflicting target.
+    lock = CollectorLock(data) if data.is_dir() else None
+    if lock is not None and not lock.acquire():
         raise BackupError("the recorder is running; quit OpenWorkGraph before restoring")
-    lock.release()
-    targets = {"data/": data_dir(), "auth/": auth_dir()}
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    moved: list[str] = []
-    for prefix, target in targets.items():
-        if prefix == "auth/" and not summary["includes_secrets"]:
-            continue
-        if target.exists() and any(p.name != ".collector.lock" for p in target.iterdir()):
-            if not replace:
-                raise BackupError(f"{target} is not empty; pass replace=True to move it aside first")
-            aside = target.with_name(f"{target.name}.pre-restore-{stamp}")
-            target.rename(aside)
-            moved.append(str(aside))
-    auth, data = targets["auth/"], targets["data/"]
-    if not summary["includes_secrets"] and moved and auth.is_relative_to(data):
-        # Keys are not in this backup: keep this computer's current keys so
-        # local tokens and keyed references keep working after the restore.
-        previous = Path(moved[0]) / auth.relative_to(data)
-        if previous.is_dir():
-            shutil.copytree(previous, auth)
-    with _open_archive(path, passphrase) as archive:
-        manifest = json.loads(archive.read(MANIFEST))
-        for entry in manifest["files"]:
-            prefix = entry["path"][:5]
-            destination = targets[prefix] / entry["path"][5:]
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "wb") as handle, archive.open(entry["path"]) as source:
-                digest = hashlib.sha256()
-                copied = 0
-                for chunk in iter(lambda: source.read(1 << 20), b""):
-                    copied += len(chunk)
-                    if copied > entry["bytes"]:
-                        raise BackupError("backup entry exceeds its declared size")
-                    digest.update(chunk)
-                    handle.write(chunk)
-                if copied != entry["bytes"] or digest.hexdigest() != entry["sha256"]:
-                    raise BackupError("backup changed during restoration")
-    return summary | {"restored_files": summary["file_count"], "moved_aside": moved}
+    try:
+        with tempfile.TemporaryDirectory(prefix=".owg-restore-stage-", dir=data.parent) as scratch:
+            root = Path(scratch)
+            staged_data = root / "data"
+            staged_auth = root / "auth"
+            staged_data.mkdir()
+            # An archive without secrets deliberately keeps the local auth store.
+            if nested and not summary["includes_secrets"] and auth.is_dir():
+                shutil.copytree(auth, staged_data / auth.relative_to(data), symlinks=True)
+            try:
+                with _open_archive(path, passphrase) as archive:
+                    validated = _validated_manifest(archive, encrypted=summary["encrypted"])
+                    if (validated["file_count"] != summary["file_count"]
+                            or validated["total_bytes"] != summary["total_bytes"]
+                            or validated["owg_version"] != summary["owg_version"]):
+                        raise BackupError("backup changed after preflight")
+                    for entry in validated["files"]:
+                        name = entry["path"]
+                        prefix, relative = name.split("/", 1)
+                        if prefix == "data":
+                            target = staged_data / relative
+                        elif nested:
+                            target = staged_data / auth.relative_to(data) / relative
+                        else:
+                            target = staged_auth / relative
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        if target.is_symlink() or any(
+                            parent.is_symlink() for parent in target.parents if parent != root.parent
+                        ):
+                            raise BackupError("backup destination conflicts with a symbolic link")
+                        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                        digest = hashlib.sha256()
+                        copied = 0
+                        with os.fdopen(fd, "wb") as handle, archive.open(name) as source:
+                            for chunk in iter(lambda: source.read(1 << 20), b""):
+                                copied += len(chunk)
+                                if copied > entry["bytes"]:
+                                    raise BackupError("backup entry exceeds its declared size")
+                                digest.update(chunk)
+                                handle.write(chunk)
+                        if copied != entry["bytes"] or digest.hexdigest() != entry["sha256"]:
+                            raise BackupError("backup changed during staging")
+            except (zipfile.BadZipFile, EOFError, RuntimeError, zlib.error):
+                raise BackupError("backup changed during staging") from None
+
+            # The archive has been fully verified *and* staged. No live data has
+            # moved yet. Refuse newly active capture or changed target contents.
+            if not nested and summary["includes_secrets"]:
+                auth.parent.mkdir(parents=True, exist_ok=True)
+                targets = [(data, staged_data), (auth, staged_auth)]
+            else:
+                targets = [(data, staged_data)]
+            if any(target.is_symlink() or (target.exists() and not target.is_dir())
+                   for target, _ in targets):
+                raise BackupError("restore target changed after preflight")
+            if not replace and any(
+                target.is_dir() and any(p.name != ".collector.lock" for p in target.iterdir())
+                for target, _ in targets
+            ):
+                raise BackupError("restore target was populated after preflight; use --replace")
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            moved: list[tuple[Path, Path]] = []
+            replaced: list[Path] = []
+            try:
+                for target, source in targets:
+                    if target.exists():
+                        aside = target.with_name(f"{target.name}.pre-restore-{stamp}")
+                        if aside.exists():
+                            raise BackupError("a pre-restore directory already exists; choose another restore")
+                        target.rename(aside)
+                        moved.append((target, aside))
+                    source.rename(target)
+                    replaced.append(target)
+            except Exception:
+                # If any swap fails, keep any newly staged target separately for
+                # inspection, then restore the old folders where possible.
+                for target in reversed(replaced):
+                    if target.exists():
+                        failed = target.with_name(f"{target.name}.failed-restore-{stamp}")
+                        try:
+                            target.rename(failed)
+                        except OSError:
+                            pass
+                rollback_failed = False
+                for target, aside in reversed(moved):
+                    if aside.exists() and not target.exists():
+                        try:
+                            aside.rename(target)
+                        except OSError:
+                            rollback_failed = True
+                raise BackupError(
+                    "restore swap failed; previous folders could not all be recovered automatically"
+                    if rollback_failed else
+                    "restore swap failed; previous folders were restored"
+                ) from None
+            return summary | {"restored_files": summary["file_count"],
+                              "moved_aside": [str(aside) for _, aside in moved]}
+    finally:
+        if lock is not None:
+            lock.release()
 
 
 def backup_folder() -> Path:
