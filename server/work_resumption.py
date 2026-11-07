@@ -329,6 +329,10 @@ def resumption_candidates(
                 "evidence_event_ids": earlier_events[:8],
                 "evidence_truncated": len(earlier_events) > 8,
             })
+        if not earlier_matches:
+            # Without an earlier authorised session that saw the same pair there is
+            # nothing to corroborate; history that is off or out of scope stays silent.
+            continue
         pair_assignments.append({
             "resource_pointers": [current["refs"][node] for node in pair],
             "current_evidence_event_ids": current_events[:8],
