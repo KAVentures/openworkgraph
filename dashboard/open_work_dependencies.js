@@ -86,6 +86,20 @@
           status.textContent = 'Unexpected review response; no results displayed.';
           return;
         }
+        // Treat server responses as untrusted, including malformed success payloads.
+        // Validate the entire shape before rendering any part of a review.
+        const counts = ['reviewed_case_count', 'reviewed_dependency_count',
+          'added_reviewed_edges', 'removed_stale_edges'];
+        const validCount = value => Number.isSafeInteger(value) && value >= 0;
+        const validRefs = value => Array.isArray(value) && value.length <= 10000 &&
+          value.every(item => typeof item === 'string' && /^owg:w:[0-9a-f]{32}$/.test(item));
+        if (!counts.every(key => validCount(data[key])) ||
+            (data.context && (typeof data.context !== 'object' ||
+              !validRefs(data.context.direct) || !validRefs(data.context.prerequisites) ||
+              typeof data.context.truncated !== 'boolean'))) {
+          status.textContent = 'Unexpected review response; no results displayed.';
+          return;
+        }
         status.textContent = 'Current reviewed declarations loaded. No source status or business outcome verified.';
         line('Reviewed cases: ' + Number(data.reviewed_case_count || 0));
         line('Declared dependencies: ' + Number(data.reviewed_dependency_count || 0));
