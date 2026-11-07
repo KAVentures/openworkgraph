@@ -2002,6 +2002,7 @@
         const journey=await (await api('/v1/automation-pipeline/'+encodeURIComponent(id)+'/journey')).json();
         const project=journey.projects?.find(p=>p.project_id===handoff.project_id);
         if(journey.idea?.revision!==handoff.idea_revision||!project||
+           project.idea_revision!==handoff.idea_revision||
            project.spec_sha256!==handoff.spec_sha256||project.archive_sha256!==handoff.archive_sha256){
           status.textContent='Selected export changed. Return to the review workbench and inspect again.';
           return;
