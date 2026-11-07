@@ -151,3 +151,12 @@ for(const raw of [-1,101,NaN,Infinity,'']){
     /labor_impact_sensitivity_percent/);
 }
 """)
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="Node.js unavailable")
+def test_oversized_horizon_values_refuse_false_cent_precision():
+    _node(_LOAD + r"""
+const maxVolume={...shared,monthly_cases:10000000,loaded_hourly_cost:1000000};
+const huge={...rows,ai_agent:row(10080,100,0,1000000000)};
+assert.throws(()=>model.compare(maxVolume,huge),/cent-precision range/);
+""")
