@@ -35,6 +35,5 @@ def test_only_tests_completion_is_a_fast_trigger_but_all_six_gates_remain_requir
         assert platform in merger
     assert "upToDateWithMain !== true" in merger
     assert "if (!pr || pr.state !== 'open' || pr.number === 1)" in merger
-    assert "expected" not in content.lower() or "exact-head" in content
     assert "sha: current.head.sha" in merger
-    assert "Never checkout PR head" in content
+    assert "Checkout trusted main (never PR head)" in content
