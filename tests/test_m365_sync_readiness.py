@@ -161,6 +161,7 @@ def test_extract_after_readiness_preserves_manual_review_boundary():
                 return_value={"status": "operator_review_ready"}) as ready,
           patch("server.m365_outlook_checkpoint_next.extract_from_checkpoint",
                 return_value={"status": "review_required",
+                              "committed_predecessor_generation": 2,
                               "event_snapshots": 3,
                               "removal_markers_for_review": 1}) as extract):
         result = extract_after_readiness(**_extract_kwargs())
@@ -170,3 +171,18 @@ def test_extract_after_readiness_preserves_manual_review_boundary():
     assert result["checkpoint_advanced"] is False
     assert result["owg_append_performed"] is False
     assert result["automatic_retry_allowed"] is False
+
+
+@pytest.mark.parametrize("generation", [None, 1, 3, True, "2"])
+def test_extract_after_readiness_rejects_changed_delegate_generation(generation):
+    """A concurrent checkpoint advance must never be labelled approved."""
+    from server.m365_outlook_sync_readiness import extract_after_readiness
+    with (patch("server.m365_outlook_sync_readiness.readiness",
+                return_value={"status": "operator_review_ready"}),
+          patch("server.m365_outlook_checkpoint_next.extract_from_checkpoint",
+                return_value={"status": "review_required",
+                              "committed_predecessor_generation": generation,
+                              "event_snapshots": 3,
+                              "removal_markers_for_review": 0})):
+        with pytest.raises(ReceiptError, match="generation changed"):
+            extract_after_readiness(**_extract_kwargs())
