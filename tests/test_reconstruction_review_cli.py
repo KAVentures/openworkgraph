@@ -42,6 +42,18 @@ class ReviewQueueTests(unittest.TestCase):
         data = payload([pair("A", "F", ["e"], current_evidence_truncated=True)])
         self.assertTrue(build_review_queue(data)["coverage_incomplete"])
 
+    def test_malformed_coverage_refused_instead_of_crashing(self):
+        data = payload([pair("A", "F", ["e"])])
+        data["coverage"] = ["invalid"]
+        with self.assertRaisesRegex(ValueError, "coverage"):
+            build_review_queue(data)
+
+    def test_unbounded_session_key_cannot_enter_review_output(self):
+        data = payload([pair("A", "F", ["e"], [
+            {"session_started_at": "2" * 10000, "evidence_event_ids": ["old"]}])])
+        with self.assertRaisesRegex(ValueError, "timestamp"):
+            build_review_queue(data)
+
     def test_rejects_unsafe_or_unbounded_data(self):
         for change in (
             {"saved_history_access": "none"},
