@@ -75,10 +75,10 @@ The endpoint does not expose a new unauthenticated rebuild operation.
 
 Incidents now carry a monotonic `review_revision` integer (initially 0).
 Every `POST /v1/automation-monitoring/incidents/{incident_id}/triage`
-must include `expected_review_revision` from the latest authenticated
-incident listing, in addition to the existing optional
-`expected_last_seen` for new-report detection. The OWG dashboard sends
-both values.
+must include **both** `expected_review_revision` and
+`expected_last_seen` from the latest authenticated incident listing.
+The former protects other human reviews; the latter protects against
+new or changed report observations. The OWG dashboard sends both values.
 
 A second reviewer who acts against an older revision receives HTTP **409**,
 rather than overwriting another human's acknowledgement, resolution, or note.
@@ -87,8 +87,8 @@ a no-op retry with the *current* revision does not. Earlier incident records
 without the field are treated as revision 0 and migrate on their first review.
 
 This is a deliberate safety change to the human-review API: clients
-that omit `expected_review_revision` must refresh the incident and include
-it; otherwise the request is refused. No report ingest, signed channel or
+that omit either expected snapshot field must refresh the incident and
+include both; otherwise the request is refused. No report ingest, signed channel or
 case action needs this field. The pre-existing `expected_last_seen` continues
 to prevent reviewing an incident whose reported occurrences changed since
 it was loaded.
