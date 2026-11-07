@@ -113,3 +113,24 @@ another explicitly approved extraction. **Do not automatically retry**: the
 provider request may already have occurred, and generated private artifacts
 may require manual disposition. This is a post-request race detector, **not**
 an atomic lock or a guarantee of serializable Graph reads.
+
+
+### Explicit second phase: reviewed checkpoint commit (Python API)
+
+After the operator has separately inspected and appended the reviewed candidate
+to the authorized OWG log, call
+`server.m365_outlook_sync_readiness.commit_after_review(...)` with the
+reviewed `expected_generation`, the exact previous candidate SHA-256, the
+same scoped preflight evidence, private candidate/CSV/receipt/handoff paths,
+authenticated dashboard session, and **all four** explicit confirmations:
+`consent_local_read`, `confirm_removals_reviewed`,
+`confirm_events_appended`, and `confirm_checkpoint_commit`.
+
+The function does **not** append events or authorize a provider request.
+It delegates to the existing durable checkpoint writer, which verifies
+the reviewed handoff and actual authenticated OWG event membership before
+committing the next generation with exclusive-file concurrency protection.
+A changed predecessor, missing membership, replay, or ambiguous commit
+response refuses; inspect the private ledger before retrying. This is a
+Python operator API, **not yet a dashboard-integrated transaction**.
+Real Microsoft tenant and end-to-end live OWG validation remain outstanding.
