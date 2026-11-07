@@ -81,5 +81,52 @@ class ReviewQueueTests(unittest.TestCase):
                 build_review_queue(data)
 
 
+    def test_grant_scoped_resumption_exposes_review_without_cross_case_contamination(self):
+        import json
+        import sqlite3
+        from server.work_resumption import resumption_candidates
+        db = sqlite3.connect(":memory:")
+        db.row_factory = sqlite3.Row
+        db.execute("CREATE TABLE events(event_id TEXT, observed_at TEXT, metadata_json TEXT)")
+        a = "owg:r:" + "a" * 32
+        b = "owg:r:" + "b" * 32
+        f = "owg:f:" + "f" * 32
+        def meta(ref, coobserved=False):
+            data = {"resource_reference": {"resource_ref": ref, "provider": "github", "resource_kind": "issue"}}
+            if coobserved:
+                data["file_reference"] = {"file_ref": f}
+            return json.dumps(data)
+        rows = [
+            ("old-pair", "2026-10-12T09:00:00Z", meta(a, True)),
+            ("old-unrelated", "2026-10-12T09:01:00Z", meta(b)),
+            ("new-unrelated", "2026-10-14T10:00:00Z", meta(b)),
+            ("new-pair", "2026-10-14T10:01:00Z", meta(a, True)),
+            ("new-single", "2026-10-14T10:02:00Z", meta(a)),
+        ]
+        db.executemany("INSERT INTO events VALUES (?, ?, ?)", rows)
+        result = resumption_candidates(db, lease={"mode": "all_saved"})
+        review = result["event_assignment_review"]
+        self.assertEqual(review["event_reviews_count"], 2)
+        self.assertEqual({r["event_id"] for r in review["event_reviews"]}, {"old-pair", "new-pair"})
+        self.assertTrue(all(not r["confirmed_case"] for r in review["event_reviews"]))
+        self.assertTrue(review["unlisted_events_are_unassigned"])
+        self.assertFalse(review["coverage_incomplete"])
+
+    def test_revoked_resumption_cannot_expose_review(self):
+        import json
+        import sqlite3
+        from server.work_resumption import resumption_candidates
+        db = sqlite3.connect(":memory:")
+        db.row_factory = sqlite3.Row
+        db.execute("CREATE TABLE events(event_id TEXT, observed_at TEXT, metadata_json TEXT)")
+        db.execute("INSERT INTO events VALUES (?, ?, ?)", (
+            "sensitive", "2026-10-14T10:00:00Z", json.dumps({"resource_reference": {
+                "resource_ref": "owg:r:" + "a" * 32, "provider": "github", "resource_kind": "issue"}})))
+        denied = resumption_candidates(db, lease={"mode": "off"},
+                                       run_started_at="2026-10-14T00:00:00Z")
+        self.assertEqual(denied["observed_pair_event_assignments"], [])
+        self.assertNotIn("event_assignment_review", denied)
+
+
 if __name__ == "__main__":
     unittest.main()
