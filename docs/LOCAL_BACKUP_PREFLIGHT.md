@@ -53,7 +53,9 @@ SHA-256 hashes and declared file kinds, no symlinks/devices, no archive-path
 traversal (including Windows alternate separators and drive notation),
 and no unencrypted credential entries. Member hashes are read in bounded
 chunks, and ordinary ZIP files are opened from disk rather than copied into
-memory. Legacy encrypted backups use in-memory AES-GCM decryption and have an
+memory. Newly created unencrypted ZIP backups also stream to an exclusive
+owner-private destination file instead of building the archive in RAM.
+Legacy encrypted backups use in-memory AES-GCM decryption and have an
 explicit 2-GiB archive limit; all backups also have bounded file count and
 uncompressed size. Use smaller rotation intervals for very large encrypted
 stores until streaming encrypted backup format support is available.
