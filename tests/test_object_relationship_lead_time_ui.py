@@ -19,7 +19,7 @@ def test_standalone_page_has_no_inlined_script_or_untrusted_html_interpolation()
     assert "textContent" in javascript
     assert "location.href = 'http" not in javascript
     assert "fetch(path," in javascript and "'OWG-Session '" in javascript
-    assert "object_relationship_lead_times" in html
+    assert 'href="/"' in html and 'id="resultSection"' in html
     assert "href = '/object-relationship-lead-times'" in mining
     for control in ("logSelect", "relationshipSelect", "sourceType", "targetType",
                     "sourceActivity", "targetActivity", "qualifierMode", "sampleLimit",
