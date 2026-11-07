@@ -91,7 +91,11 @@
             const response=await fetch('/v1/review-choice-workbench/'+encodeURIComponent(id)+'/preflight',{
               method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},
               body:JSON.stringify({project_id:projectId,idea_revision:snapshot.idea.revision,
-                spec_sha256:selected.spec_sha256,archive_sha256:selected.archive_sha256})
+                spec_sha256:selected.spec_sha256,archive_sha256:selected.archive_sha256,
+                process_status:snapshot.process_status,process_reference:snapshot.process_reference,
+                dataset_origins:snapshot.dataset_origins,
+                dataset_origin_check_available:snapshot.dataset_origin_check_available,
+                blockers:selected.blockers})
             });
             if(token!==generation||choice.value!==projectId||input.value.trim()!==id)return;
             if(!response.ok)throw new Error('Server review preflight refused ('+response.status+').');
