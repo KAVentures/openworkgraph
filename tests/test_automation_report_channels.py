@@ -169,10 +169,10 @@ def test_failures_group_into_incidents_with_a_review_lifecycle(setup):
     assert failure["fingerprint"] == "step:Charge card" and failure["occurrences"] == 2
     assert set(failure["sample_refs"]) == {"f1", "f2"} and by_kind["run_handoffs"]["fingerprint"] == "step:Approve refund"
     with pytest.raises(incidents.IncidentError):
-        incidents.triage(failure["incident_id"], {"status": "resolved", "expected_last_seen": "stale"})
-    incidents.triage(failure["incident_id"], {"status": "acknowledged", "note": "Card processor outage"})
+        incidents.triage(failure["incident_id"], {"status": "resolved", "expected_last_seen": "stale", "expected_review_revision": 0})
+    incidents.triage(failure["incident_id"], {"status": "acknowledged", "note": "Card processor outage", "expected_review_revision": 0})
     done = incidents.triage(failure["incident_id"], {"status": "resolved", "note": "Processor recovered",
-                                                     "expected_last_seen": failure["last_seen"]})
+                                                     "expected_last_seen": failure["last_seen"], "expected_review_revision": 1})
     assert done["status"] == "resolved" and len(done["notes"]) == 2 and done["automation_rerun"] is False
     send(cid, secret, 3, envelope(report(["f3"], status="failed")))
     reopened = next(i for i in incidents.listing()["incidents"] if i["incident_id"] == failure["incident_id"])
@@ -221,7 +221,7 @@ with TestClient(app) as client:
     listed = client.get("/v1/automation-monitoring/incidents", headers=owner).json()
     failure = next(i for i in listed["incidents"] if i["kind"] == "run_failures")
     triaged = client.post(f"/v1/automation-monitoring/incidents/{failure['incident_id']}/triage", headers=owner,
-                          json={"status": "acknowledged", "note": "Looking"})
+                          json={"status": "acknowledged", "note": "Looking", "expected_review_revision": failure["review_revision"]})
     assert triaged.status_code == 200 and triaged.json()["status"] == "acknowledged"
     gone = client.post(f"/v1/automation-monitoring/deployments/{dep}/delete", headers=owner).json()
     assert gone["report_channels_deleted"] == 1 and gone["incidents_deleted"] >= 2
