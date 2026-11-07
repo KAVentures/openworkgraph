@@ -173,18 +173,29 @@ def _outcome(channel: dict[str, Any], sequence: int, digest: str, outcome: str, 
 
 
 def _track_sequence(channel: dict[str, Any], sequence: int) -> int:
-    """Update gaps; returns how many sequence numbers this report newly showed as missing."""
+    """Track forward gaps with bounded memory, even for a huge signed jump.
+
+    The returned count is an inferred *sequence gap*, not proof of lost
+    deliveries. Keep at most the latest MAX_MISSING sequence IDs for explicit
+    recovery. When earlier gaps are omitted, the truncation indicator stays
+    true even if all retained gap IDs later arrive.
+    """
+    high = channel["highest_sequence"]
     new_gaps = 0
     if sequence in channel["missing"]:
         channel["missing"].remove(sequence)
-    elif sequence > channel["highest_sequence"] + 1:
-        skipped = list(range(channel["highest_sequence"] + 1, sequence))
-        new_gaps = len(skipped)
-        channel["missing"].extend(skipped)
-        if len(channel["missing"]) > MAX_MISSING:
-            channel["missing"] = channel["missing"][-MAX_MISSING:]
+    elif sequence > high + 1:
+        new_gaps = sequence - high - 1
+        # Never allocate a list of length new_gaps: a signed but misconfigured
+        # producer can jump arbitrarily far ahead.
+        start = max(high + 1, sequence - MAX_MISSING)
+        retained = channel["missing"]
+        retained.extend(range(start, sequence))
+        if new_gaps > MAX_MISSING or len(retained) > MAX_MISSING:
             channel["missing_truncated"] = True
-    channel["highest_sequence"] = max(channel["highest_sequence"], sequence)
+        if len(retained) > MAX_MISSING:
+            channel["missing"] = retained[-MAX_MISSING:]
+    channel["highest_sequence"] = max(high, sequence)
     return new_gaps
 
 
