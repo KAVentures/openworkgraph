@@ -39,8 +39,10 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
     pairs = response.get("observed_pair_event_assignments")
     if not isinstance(pairs, list) or len(pairs) > MAX_PAIRS:
         raise ValueError("missing or unbounded pair assignments")
-    if response.get("saved_history_access") in (None, "none", "denied"):
-        raise ValueError("no saved-history access")
+    # Offline JSON is never proof of a current grant. Online callers must also
+    # revalidate authorization/revocation before generating a review response.
+    if response.get("saved_history_access") not in ("all_saved", "current_run"):
+        raise ValueError("no recognized saved-history access")
     coverage = response.get("coverage", {})
     if not isinstance(coverage, dict):
         raise ValueError("invalid coverage metadata")
