@@ -413,3 +413,51 @@ def test_commit_after_review_refuses_ambiguous_commit(response):
                 session="session", consent_local_read=True,
                 confirm_removals_reviewed=True, confirm_events_appended=True,
                 confirm_checkpoint_commit=True)
+
+
+def _cli_commit_args():
+    args = _cli_extract_args()
+    args.remove("--extract-after-readiness")
+    args.remove("--consent-delta-read")
+    args.remove("--consent-local-export")
+    for key in ("--previous-candidate", "--previous-csv", "--output"):
+        pos = args.index(key)
+        del args[pos:pos + 2]
+    args.extend(["--commit-after-review", "--csv-path", "next.csv",
+                 "--expected-previous-candidate-sha256", "a" * 64,
+                 "--confirm-events-appended", "--confirm-checkpoint-commit"])
+    return args
+
+
+def test_cli_commit_requires_separate_approval_and_dashboard_session(monkeypatch, capsys):
+    from server.m365_outlook_sync_readiness import main
+    monkeypatch.setenv("OWG_DASHBOARD_SESSION", "private-session")
+    with patch("server.m365_outlook_sync_readiness.commit_after_review",
+               return_value={"status": "checkpoint_committed", "committed_generation": 3}) as commit:
+        assert main(_cli_commit_args()) == 0
+        assert commit.call_args.kwargs["session"] == "private-session"
+        assert commit.call_args.kwargs["confirm_events_appended"] is True
+        assert commit.call_args.kwargs["expected_previous_candidate_sha256"] == "a" * 64
+    assert "private-session" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("missing", ["--confirm-events-appended", "--confirm-checkpoint-commit",
+                                      "--confirm-removals-reviewed", "--consent-local-read"])
+def test_cli_commit_refuses_missing_approval_before_checkpoint(monkeypatch, missing):
+    from server.m365_outlook_sync_readiness import main
+    monkeypatch.setenv("OWG_DASHBOARD_SESSION", "private-session")
+    args = _cli_commit_args()
+    args.remove(missing)
+    with patch("server.m365_outlook_sync_readiness.commit_after_review") as commit:
+        assert main(args) == 2
+        commit.assert_not_called()
+
+
+def test_cli_commit_refuses_combined_graph_extraction(monkeypatch):
+    from server.m365_outlook_sync_readiness import main
+    monkeypatch.setenv("OWG_DASHBOARD_SESSION", "private-session")
+    with (patch("server.m365_outlook_sync_readiness.commit_after_review") as commit,
+          patch("server.m365_outlook_sync_readiness.extract_after_readiness") as extract):
+        assert main(_cli_commit_args() + ["--extract-after-readiness"]) == 2
+        commit.assert_not_called()
+        extract.assert_not_called()
