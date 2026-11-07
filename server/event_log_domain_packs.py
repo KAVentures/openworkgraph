@@ -558,6 +558,9 @@ EMPLOYEE_OFFBOARDING_1_0_0: dict[str, Any] = {
         "Manager approval, asset return, completed review and closure are optional mapped steps; "
         "only rules and metrics with mapped roles apply. Absence of an unmapped optional role does not "
         "mean policy controls were satisfied or intentionally omitted.",
+        "When manager approval is mapped, an access-revocation event lacking an earlier manager-approval "
+        "event is flagged for review; emergency or exemption cases may legitimately follow another "
+        "authorized procedure. The pack cannot determine those exceptions from activity labels.",
         "Segregation of duties depends on actual recorded actor identities. If resource/actor labels "
         "are absent, the result is unknown and not treated as verified separation.",
         "Timing in supplied event logs is not employee effort saved, verified security compliance, "
