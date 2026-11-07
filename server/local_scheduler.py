@@ -67,7 +67,7 @@ def _validate_quiet_hours(spec: Any) -> dict[str, str] | None:
         raise ScheduleError("quiet hours need timezone, start and end")
     zone = spec["timezone"]
     if (not isinstance(zone, str) or not 1 <= len(zone) <= 64
-            or zone.startswith("/") or ".." in zone or "\" in zone):
+            or zone.startswith("/") or ".." in zone or "\\" in zone):
         raise ScheduleError("unknown quiet-hours timezone")
     try:
         ZoneInfo(zone)
