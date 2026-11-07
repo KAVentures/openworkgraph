@@ -55,7 +55,7 @@ const path=require('node:path');
     // A normal backup becomes visible without any custom refresh of the page.
     await page.locator('#pvBackupCreate').click();
     await page.locator('#pvBackupStatus').filter({hasText:/Saved \d+ files/}).waitFor();
-    await page.locator('#pvBackupChoice option[value^="owg-backup-"]').first().waitFor();
+    await page.locator('#pvBackupChoice option[value^="owg-backup-"]').first().waitFor({state:'attached'});
     const normal=await page.locator('#pvBackupChoice option[value^="owg-backup-"]').first().getAttribute('value');
     await page.locator('#pvBackupChoice').selectOption(normal);
     assert.equal(await page.locator('#pvBackupInspect').isEnabled(),true);
@@ -77,7 +77,7 @@ const path=require('node:path');
     await page.locator('#pvBackupCreate').click();
     await page.locator('#pvBackupStatus').filter({hasText:/encrypted, includes keys/}).waitFor();
     assert.equal(await page.locator('#pvBackupPass').inputValue(),'');
-    await page.locator('#pvBackupChoice option').filter({hasText:/encrypted — offline CLI/}).first().waitFor();
+    await page.locator('#pvBackupChoice option').filter({hasText:/encrypted — offline CLI/}).first().waitFor({state:'attached'});
     const encrypted=await page.locator('#pvBackupChoice option').filter({hasText:/encrypted — offline CLI/}).first().getAttribute('value');
     await page.locator('#pvBackupChoice').selectOption(encrypted);
     await page.locator('#pvBackupInspect').click();
