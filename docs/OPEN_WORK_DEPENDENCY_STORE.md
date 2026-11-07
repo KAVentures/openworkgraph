@@ -21,3 +21,20 @@ Acceptance: run `pytest -q tests/test_open_work_dependency_store.py`.
 Production follow-up: wire it into the existing dashboard-session + source-scope
 gates and case declaration lifecycle, with cross-store consistency and deletion
 tests; keep historical evidence distinct from declared dependencies.
+
+## Existing reviewed-declaration integration adapter
+
+`replace_reviewed_dependencies(path, scope=..., actor=..., snapshot=...)`
+atomically reconciles this local actor-scoped store against the existing
+`open_work_case_graph.project_declared_case_graph` contract. It rejects
+missing prerequisites, cycles, invalid provenance and overclaimed outcomes
+**before writing**, removes stale edges, and leaves other actors untouched.
+Only server-side code holding a freshly authenticated, consent/retention-filtered
+`list_case_declarations` snapshot may call it. Do **not** accept snapshots
+from a browser or MCP caller. The existing dashboard graph route remains the
+authoritative review surface; this mirror grants no new source or agent rights.
+
+Still required before production use: invoke reconciliation only inside the
+existing source-scoped authenticated declaration lifecycle; bind the actor to
+a real authorized session; purge on disconnection/revocation/retention; test
+the cross-store failure/retry path and end-to-end browser/agent behavior.

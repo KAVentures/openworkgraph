@@ -129,3 +129,54 @@ def purge_actor(path: str, *, scope: str, actor: str) -> int:
         return db.execute(
             "DELETE FROM declared_case_dependencies WHERE scope=? AND actor=?",
             (scope, actor)).rowcount
+
+def replace_reviewed_dependencies(
+    path: str, *, scope: str, actor: str, snapshot: dict,
+) -> dict:
+    """Atomically mirror an already-authorized reviewed declaration graph.
+
+    The caller must obtain the snapshot through the authenticated declaration
+    API with current consent and retention. Never accept raw client-supplied
+    edges as reviewed facts; this is an internal integration adapter.
+    Deletions remove stale edges within the actor's scope.
+    """
+    from .open_work_case_graph import project_declared_case_graph
+
+    _valid(scope, actor)
+    graph = project_declared_case_graph(snapshot)
+    if graph["source_state"] != "unknown_until_explicit_recheck":
+        raise ValueError("unexpected source state")
+    desired = set()
+    for edge in graph["edges"]:
+        dependent = edge["dependent_ref"]
+        prerequisite = edge["prerequisite_ref"]
+        _valid(dependent, prerequisite)
+        if edge["edge_type"] != "owner_declared_dependency" or edge["source_verified"] is not False:
+            raise ValueError("untrusted dependency provenance")
+        desired.add((dependent, prerequisite))
+    if len(desired) > _MAX_EDGES:
+        raise ValueError("dependency graph capacity reached")
+    # BEGIN IMMEDIATE serializes concurrent writers. No partial replacement on
+    # malformed snapshots, SQLite errors, or a failed transaction.
+    with _connect(path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        existing = set(db.execute(
+            "SELECT case_id, prerequisite FROM declared_case_dependencies WHERE scope=? AND actor=?",
+            (scope, actor)).fetchall())
+        for case_id, prerequisite in sorted(existing - desired):
+            db.execute(
+                "DELETE FROM declared_case_dependencies WHERE scope=? AND actor=? AND case_id=? AND prerequisite=?",
+                (scope, actor, case_id, prerequisite))
+        for case_id, prerequisite in sorted(desired - existing):
+            db.execute(
+                "INSERT INTO declared_case_dependencies(scope,actor,case_id,prerequisite) VALUES (?,?,?,?)",
+                (scope, actor, case_id, prerequisite))
+    return {
+        "reviewed_case_count": graph["case_count"],
+        "reviewed_dependency_count": len(desired),
+        "removed_stale_edges": len(existing - desired),
+        "added_reviewed_edges": len(desired - existing),
+        "source_status": "unknown",
+        "customer_outcome": "unknown",
+        "agent_execution_authorized": False,
+    }

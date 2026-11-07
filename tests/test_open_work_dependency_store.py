@@ -52,3 +52,40 @@ def test_bounded_traversal_and_bad_scopes(tmp_path):
     with pytest.raises(ValueError):
         declare_dependency(path, scope="one", actor="alice",
                            case_id="same", prerequisite="same")
+
+def test_reviewed_snapshot_atomic_reconciliation_and_scope_isolation(tmp_path):
+    from server.open_work_dependency_store import replace_reviewed_dependencies
+    from server.open_work_case_declarations import CaseDeclarationError
+    path = str(tmp_path / "reviewed.sqlite")
+    kwargs = {"path": path, "scope": "tenant1", "actor": "alice"}
+    ref1 = "owg:w:" + "a" * 32
+    ref2 = "owg:w:" + "b" * 32
+    def row(ref, deps):
+        return {
+            "work_item_ref": ref, "depends_on_work_item_refs": deps,
+            "goal_code": "verify_operation",
+            "expected_outcome_code": "operation_receipt_reviewed",
+            "revision": 1, "updated_at": "2026-11-07T00:00:00Z",
+            "expires_at": "2026-11-08T00:00:00Z",
+            "provenance": "explicit_owner_declaration_not_source_verified",
+            "expected_outcome_verified": False,
+            "business_obligation_verified": False,
+            "customer_outcome_verified": False,
+            "agent_execution_authorized": False,
+            "source_state": "unknown_until_explicit_recheck",
+        }
+    snapshot = {"format": "openworkgraph.local-case-declarations.v1",
+                "items": [row(ref1, [ref2]), row(ref2, [])]}
+    declare_dependency(path, scope="tenant1", actor="bob",
+                       case_id="other", prerequisite="unrelated")
+    assert replace_reviewed_dependencies(**kwargs, snapshot=snapshot)["added_reviewed_edges"] == 1
+    assert dependency_context(**kwargs, case_id=ref1)["direct"] == [ref2]
+    assert replace_reviewed_dependencies(**kwargs, snapshot=snapshot)["added_reviewed_edges"] == 0
+    invalid = {"format": snapshot["format"], "items": [row(ref1, ["missing"])]}
+    with pytest.raises(CaseDeclarationError):
+        replace_reviewed_dependencies(**kwargs, snapshot=invalid)
+    assert dependency_context(**kwargs, case_id=ref1)["direct"] == [ref2]
+    snapshot["items"][0]["depends_on_work_item_refs"] = []
+    assert replace_reviewed_dependencies(**kwargs, snapshot=snapshot)["removed_stale_edges"] == 1
+    assert dependency_context(**kwargs, case_id=ref1)["direct"] == []
+    assert dependency_context(path, scope="tenant1", actor="bob", case_id="other")["direct"] == ["unrelated"]
