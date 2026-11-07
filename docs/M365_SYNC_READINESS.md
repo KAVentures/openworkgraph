@@ -134,3 +134,10 @@ A changed predecessor, missing membership, replay, or ambiguous commit
 response refuses; inspect the private ledger before retrying. This is a
 Python operator API, **not yet a dashboard-integrated transaction**.
 Real Microsoft tenant and end-to-end live OWG validation remain outstanding.
+
+
+### Explicit operator checkpoint commit CLI
+
+After the reviewed candidate has been separately appended to the authenticated OWG log, and its membership and removals have been reviewed, use the same module with `--commit-after-review` instead of `--extract-after-readiness`. Supply the common scope/preflight/grant/ledger arguments, `--expected-generation N`, `--confirm-log-id`, `--candidate`, `--csv-path`, `--receipt-file`, `--journal-dir`, `--handoff-dir`, `--successor-label`, and `--expected-previous-candidate-sha256` (the 64-character lowercase digest of the committed predecessor). Explicitly pass `--consent-local-read --confirm-removals-reviewed --confirm-events-appended --confirm-checkpoint-commit`. Set `OWG_DASHBOARD_SESSION` privately in the environment. No Graph token or Graph read/export consent is needed for this phase.
+
+The two modes are mutually exclusive. This command does **not** append events; it delegates to the authenticated membership-verified checkpoint writer and refuses missing approvals, stale generations, mismatched log identity or ambiguous commit results. On uncertain outcomes, inspect the durable ledger and OWG log before any manual retry. Never interpret the CLI success message as proof of real Microsoft tenant validation.
