@@ -425,9 +425,9 @@ def plan_restore(path: Path, *, passphrase: str | None = None, replace: bool = F
 
 def restore_backup(path: Path, *, passphrase: str | None = None, replace: bool = False) -> dict[str, Any]:
     """Offline restore into the configured data/auth folders (stop OWG first)."""
-    summary = verify_backup(path, passphrase=passphrase)
-    if _version_tuple(summary["owg_version"]) > _version_tuple(current_version()):
-        raise BackupError("this backup is from a newer OpenWorkGraph; upgrade before restoring")
+    summary = plan_restore(path, passphrase=passphrase, replace=replace)
+    if not summary["ready"]:
+        raise BackupError("; ".join(summary["blockers"]))
     from collector.instance_lock import CollectorLock
 
     lock = CollectorLock(data_dir())
@@ -496,11 +496,11 @@ def verify_in_folder(name: str, passphrase: str | None = None) -> dict[str, Any]
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Back up or restore local OpenWorkGraph data")
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("create", "verify", "restore"):
+    for name in ("create", "verify", "plan", "restore"):
         command = sub.add_parser(name)
         command.add_argument("archive", type=Path)
         command.add_argument("--passphrase-env", help="environment variable holding the passphrase")
-        if name == "restore":
+        if name in ("plan", "restore"):
             command.add_argument("--replace", action="store_true",
                                  help="move existing data aside (never deleted) before restoring")
     args = parser.parse_args(argv)
@@ -512,6 +512,10 @@ def main(argv: list[str] | None = None) -> int:
             result = create_backup(args.archive, passphrase=passphrase)
         elif args.command == "verify":
             result = verify_backup(args.archive, passphrase=passphrase)
+        elif args.command == "plan":
+            result = plan_restore(args.archive, passphrase=passphrase, replace=args.replace)
+            print(json.dumps(result, indent=2))
+            return 0 if result["ready"] else 2
         else:
             result = restore_backup(args.archive, passphrase=passphrase, replace=args.replace)
     except BackupError as exc:
@@ -522,7 +526,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 __all__ = ["BackupError", "create_backup", "create_in_folder", "list_backups", "restore_backup",
-           "verify_backup", "verify_in_folder"]
+           "verify_backup", "verify_in_folder", "plan_restore"]
 
 if __name__ == "__main__":
     raise SystemExit(main())
