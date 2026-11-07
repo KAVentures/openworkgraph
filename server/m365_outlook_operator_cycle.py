@@ -173,6 +173,9 @@ def main(argv=None):
                 p.add_argument("--" + flag, action="store_true")
         elif phase == "review":
             p.add_argument("--candidate", type=Path, required=True)
+        elif phase == "checkpoint-inspect":
+            # Ledger inspection requires no candidate or handoff artifacts.
+            pass
         elif phase == "membership":
             for flag in ("candidate", "csv-path"):
                 p.add_argument("--" + flag, type=Path, required=True)
