@@ -437,7 +437,7 @@ def restore_backup(path: Path, *, passphrase: str | None = None, replace: bool =
 
     data, auth = data_dir(), auth_dir()
     nested = auth.is_relative_to(data)
-    if (not nested and auth.is_relative_to(data)) or data == auth:
+    if data == auth or data.is_relative_to(auth):
         raise BackupError("unsupported data and credential target layout")
     data.parent.mkdir(parents=True, exist_ok=True)
     # Only acquire when a store exists; creating a lock in an absent directory
@@ -472,7 +472,7 @@ def restore_backup(path: Path, *, passphrase: str | None = None, replace: bool =
                             target = staged_auth / relative
                         target.parent.mkdir(parents=True, exist_ok=True)
                         if target.is_symlink() or any(
-                            parent.is_symlink() for parent in target.parents if parent != root.parent
+                            parent.is_symlink() for parent in target.parents if parent.is_relative_to(root)
                         ):
                             raise BackupError("backup destination conflicts with a symbolic link")
                         fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -489,6 +489,8 @@ def restore_backup(path: Path, *, passphrase: str | None = None, replace: bool =
                             raise BackupError("backup changed during staging")
             except (zipfile.BadZipFile, EOFError, RuntimeError, zlib.error):
                 raise BackupError("backup changed during staging") from None
+            except OSError:
+                raise BackupError("backup could not be staged; existing data is untouched") from None
 
             # The archive has been fully verified *and* staged. No live data has
             # moved yet. Refuse newly active capture or changed target contents.
@@ -542,6 +544,8 @@ def restore_backup(path: Path, *, passphrase: str | None = None, replace: bool =
                 ) from None
             return summary | {"restored_files": summary["file_count"],
                               "moved_aside": [str(aside) for _, aside in moved]}
+    except OSError:
+        raise BackupError("restore staging failed; existing data remains available") from None
     finally:
         if lock is not None:
             lock.release()
