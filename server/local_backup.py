@@ -448,6 +448,8 @@ def plan_restore(path: Path, *, passphrase: str | None = None, replace: bool = F
     occupied = [p for p in targets if p.is_dir() and any(c.name != ".collector.lock" for c in p.iterdir())]
     if occupied and not replace:
         blockers.append("existing local data would be replaced; explicitly select --replace")
+    if occupied and verified["file_count"] == 0:
+        blockers.append("empty backup cannot replace a nonempty existing data store")
     return {
         **verified, "ready": not blockers, "blockers": blockers,
         "replace_requested": bool(replace), "requires_replace": bool(occupied),
