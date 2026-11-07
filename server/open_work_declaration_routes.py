@@ -2894,10 +2894,14 @@ async def get_local_durable_reviewed_dependencies(request: Request, response: Re
     if ref is not None and not re.fullmatch(r"owg:w:[0-9a-f]{32}", ref):
         raise HTTPException(422, "invalid opaque work item reference")
     scope = await _require_scope()
-    # Single-owner local dashboard identity, never supplied by the caller.
+    # Bind the mirror to the authenticated session, not a global dashboard
+    # owner shared by independently revocable sessions. The raw bearer token
+    # never enters SQLite; each new session reconciles its own reviewed view.
     secret = await asyncio.to_thread(_read_or_create_secret, ".open_work_reference_key")
+    session = request.headers["authorization"][len("owg-session "):].strip()
     actor = "dashboard:" + hmac.new(
-        secret.encode("utf-8"), b"open-work:durable-local-owner:v1",
+        secret.encode("utf-8"),
+        ("open-work:durable-session-actor:v1:" + session).encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()[:32]
     path = str(auth_dir() / ".open_work_reviewed_dependencies.sqlite3")
