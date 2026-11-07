@@ -23,7 +23,10 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
+import stat
+import zlib
 import sqlite3
 import tempfile
 import zipfile
@@ -40,6 +43,11 @@ _SKIP_NAMES = {".DS_Store"}
 _SKIP_SUFFIXES = ("-wal", "-shm", "-journal", ".wal", ".tmp", ".lock")
 _SCRYPT = {"n": 2 ** 15, "r": 8, "p": 1}
 MAX_FILES = 20_000
+MAX_MANIFEST_BYTES = 16 << 20  # enough for 20,000 entries; never read an unbounded manifest
+MAX_ENTRY_BYTES = 50 << 30
+MAX_TOTAL_BYTES = 100 << 30
+MAX_ENCRYPTED_ARCHIVE_BYTES = 2 << 30  # legacy AES-GCM format decrypts in memory
+_SHA256_HEX = re.compile(r"[0-9a-f]{64}\Z")
 
 
 class BackupError(ValueError):
@@ -241,35 +249,178 @@ def create_backup(destination: Path, *, passphrase: str | None = None) -> dict[s
 
 
 def _open_archive(path: Path, passphrase: str | None) -> zipfile.ZipFile:
-    blob = Path(path).read_bytes()
-    if blob.startswith(ENCRYPTED_MAGIC):
-        blob = _decrypt(blob, passphrase)
+    """Read an ordinary archive from disk; legacy encrypted archives need a bounded in-memory decrypt."""
+    path = Path(path)
     try:
-        return zipfile.ZipFile(io.BytesIO(blob))
-    except zipfile.BadZipFile:
-        raise BackupError("not an OpenWorkGraph backup archive") from None
+        with path.open("rb") as handle:
+            encrypted = handle.read(len(ENCRYPTED_MAGIC)) == ENCRYPTED_MAGIC
+        if encrypted:
+            if path.stat().st_size > MAX_ENCRYPTED_ARCHIVE_BYTES:
+                raise BackupError("encrypted backup exceeds the supported in-memory verification limit")
+            blob = _decrypt(path.read_bytes(), passphrase)
+            source: Path | io.BytesIO = io.BytesIO(blob)
+        else:
+            source = path
+        return zipfile.ZipFile(source)
+    except (zipfile.BadZipFile, OSError):
+        raise BackupError("backup archive cannot be read") from None
+
+
+def _safe_member(name: str) -> bool:
+    """Manifest paths are POSIX, including on Windows; no ambiguous separators or aliases."""
+    if not isinstance(name, str) or not name or "\\" in name or "\x00" in name or ":" in name:
+        return False
+    parts = name.split("/")
+    return (len(parts) >= 2 and parts[0] in ("data", "auth")
+            and all(part not in ("", ".", "..") for part in parts)
+            and not name.startswith("/") and name != MANIFEST)
+
+
+def _regular_member(info: zipfile.ZipInfo) -> bool:
+    # Ignore DOS/Unix mode when absent, but never extract symlinks, dirs, devices or FIFOs.
+    mode = info.external_attr >> 16
+    return not info.is_dir() and stat.S_IFMT(mode) in (0, stat.S_IFREG)
+
+
+def _validated_manifest(archive: zipfile.ZipFile, *, encrypted: bool) -> dict[str, Any]:
+    """Validate the complete archive directory and manifest BEFORE reading data members."""
+    infos = archive.infolist()
+    if len(infos) > MAX_FILES + 1 or len({x.filename for x in infos}) != len(infos):
+        raise BackupError("backup contains too many or duplicate entries")
+    index = {x.filename: x for x in infos}
+    metadata = index.get(MANIFEST)
+    if metadata is None or not _regular_member(metadata) or metadata.file_size > MAX_MANIFEST_BYTES:
+        raise BackupError("backup manifest is missing or invalid")
+    try:
+        with archive.open(metadata) as handle:
+            raw = handle.read(MAX_MANIFEST_BYTES + 1)
+        if len(raw) > MAX_MANIFEST_BYTES:
+            raise ValueError()
+        manifest = json.loads(raw)
+    except (ValueError, UnicodeError, EOFError, RuntimeError, zipfile.BadZipFile, zlib.error):
+        raise BackupError("backup manifest is missing or invalid") from None
+    if not isinstance(manifest, dict) or manifest.get("format") != FORMAT:
+        raise BackupError("unsupported backup format")
+    entries = manifest.get("files")
+    if not isinstance(entries, list) or len(entries) > MAX_FILES:
+        raise BackupError("backup file list is invalid or too large")
+    if not isinstance(manifest.get("owg_version"), str) or not 0 < len(manifest["owg_version"]) <= 80:
+        raise BackupError("backup version is missing or invalid")
+    if type(manifest.get("includes_secrets")) is not bool or type(manifest.get("encrypted")) is not bool:
+        raise BackupError("backup encryption metadata is invalid")
+    if manifest["encrypted"] != encrypted or (manifest["includes_secrets"] and not encrypted):
+        raise BackupError("backup encryption metadata does not match the archive")
+    if type(manifest.get("file_count")) is not int or manifest["file_count"] != len(entries):
+        raise BackupError("backup file count does not match its manifest")
+    total = 0
+    names: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise BackupError("backup file entry is invalid")
+        name, kind, size, digest = (entry.get("path"), entry.get("kind"),
+                                   entry.get("bytes"), entry.get("sha256"))
+        if not _safe_member(name) or name in names:
+            raise BackupError("backup contains an unsafe or duplicate path")
+        if name.startswith("auth/") and not manifest["includes_secrets"]:
+            raise BackupError("unencrypted backup cannot contain credentials")
+        if kind not in ("sqlite", "duckdb", "file") or type(size) is not int or size < 0 or size > MAX_ENTRY_BYTES:
+            raise BackupError("backup contains invalid file metadata or an oversized entry")
+        if not isinstance(digest, str) or not _SHA256_HEX.fullmatch(digest):
+            raise BackupError("backup contains an invalid file digest")
+        info = index.get(name)
+        if info is None or not _regular_member(info) or info.file_size != size:
+            raise BackupError("backup file list or sizes do not match the manifest")
+        names.add(name)
+        total += size
+        if total > MAX_TOTAL_BYTES:
+            raise BackupError("backup exceeds the supported restored-data limit")
+    if names != set(index) - {MANIFEST}:
+        raise BackupError("backup file list does not match its manifest")
+    if type(manifest.get("total_bytes")) is not int or manifest["total_bytes"] != total:
+        raise BackupError("backup total size does not match its manifest")
+    return manifest
 
 
 def verify_backup(path: Path, *, passphrase: str | None = None) -> dict[str, Any]:
-    """Check format, file list and every SHA-256; return the manifest summary."""
-    with _open_archive(path, passphrase) as archive:
-        try:
-            manifest = json.loads(archive.read(MANIFEST))
-        except (KeyError, ValueError):
-            raise BackupError("backup manifest is missing or invalid") from None
-        if manifest.get("format") != FORMAT:
-            raise BackupError("unsupported backup format")
-        listed = {entry["path"] for entry in manifest["files"]}
-        present = set(archive.namelist()) - {MANIFEST}
-        if listed != present:
-            raise BackupError("backup file list does not match its manifest")
-        for entry in manifest["files"]:
-            name = entry["path"]
-            if name.startswith("/") or ".." in Path(name).parts or not name.startswith(("data/", "auth/")):
-                raise BackupError("backup contains an unsafe path")
-            if hashlib.sha256(archive.read(name)).hexdigest() != entry["sha256"]:
-                raise BackupError("a file in the backup was changed or damaged")
+    """Stream every member, validating hashes, counts, archive structure and path safety."""
+    path = Path(path)
+    try:
+        with path.open("rb") as head:
+            encrypted = head.read(len(ENCRYPTED_MAGIC)) == ENCRYPTED_MAGIC
+        with _open_archive(path, passphrase) as archive:
+            manifest = _validated_manifest(archive, encrypted=encrypted)
+            for entry in manifest["files"]:
+                digest = hashlib.sha256()
+                size = 0
+                with archive.open(entry["path"]) as handle:
+                    for chunk in iter(lambda: handle.read(1 << 20), b""):
+                        digest.update(chunk)
+                        size += len(chunk)
+                        if size > entry["bytes"]:
+                            raise BackupError("backup entry exceeds its declared size")
+                if size != entry["bytes"] or digest.hexdigest() != entry["sha256"]:
+                    raise BackupError("a file in the backup was changed or damaged")
+    except (zipfile.BadZipFile, EOFError, RuntimeError, zlib.error):
+        raise BackupError("a file in the backup was changed or damaged") from None
     return {key: value for key, value in manifest.items() if key != "files"} | {"verified": True}
+
+
+def _recorder_running(directory: Path) -> bool:
+    """Read-only advisory-lock probe. A missing lock file means no collector owns it."""
+    lock_path = directory / ".collector.lock"
+    if not lock_path.exists():
+        return False
+    try:
+        with lock_path.open("rb") as handle:
+            if os.name == "nt":
+                import msvcrt
+                handle.seek(0)
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                except OSError:
+                    return True
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    return True
+                finally:
+                    try:
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                    except OSError:
+                        pass
+    except OSError:
+        raise BackupError("could not inspect recorder lock; stop OpenWorkGraph and retry") from None
+    return False
+
+
+def plan_restore(path: Path, *, passphrase: str | None = None, replace: bool = False) -> dict[str, Any]:
+    """Read-only offline recovery dry-run; never moves, creates or extracts local data."""
+    verified = verify_backup(path, passphrase=passphrase)
+    data, auth = data_dir(), auth_dir()
+    blockers: list[str] = []
+    if _version_tuple(verified["owg_version"]) > _version_tuple(current_version()):
+        blockers.append("backup was created by a newer OpenWorkGraph version")
+    if data == auth or data.is_relative_to(auth):
+        blockers.append("data/auth folders overlap in an unsupported configuration")
+    if any(p.is_symlink() or (p.exists() and not p.is_dir()) for p in (data, auth)):
+        blockers.append("data or credential target is not a normal directory")
+    elif _recorder_running(data):
+        blockers.append("recorder is running; quit OpenWorkGraph before restoring")
+    nested = auth.is_relative_to(data)
+    targets = [data] + ([auth] if verified["includes_secrets"] and not nested else [])
+    occupied = [p for p in targets if p.is_dir() and any(c.name != ".collector.lock" for c in p.iterdir())]
+    if occupied and not replace:
+        blockers.append("existing local data would be replaced; explicitly select --replace")
+    return {
+        **verified, "ready": not blockers, "blockers": blockers,
+        "replace_requested": bool(replace), "requires_replace": bool(occupied),
+        "data_target": str(data), "auth_target": str(auth),
+        "auth_inside_data": nested,
+        "operation": "offline_restore_preflight_only", "writes_performed": False,
+    }
 
 
 def restore_backup(path: Path, *, passphrase: str | None = None, replace: bool = False) -> dict[str, Any]:
