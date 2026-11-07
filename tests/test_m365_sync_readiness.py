@@ -352,3 +352,64 @@ def test_extract_after_readiness_refuses_non_mapping_provider_result(malformed):
                 return_value=malformed)):
         with pytest.raises(ReceiptError, match="not ready for review"):
             extract_after_readiness(**_extract_kwargs())
+
+
+def test_commit_after_review_requires_explicit_append_and_commit():
+    from server.m365_outlook_sync_readiness import commit_after_review
+    with patch("server.m365_outlook_sync_readiness.readiness") as preflight:
+        with pytest.raises(ReceiptError):
+            commit_after_review(
+                expected_generation=2, expected_previous_candidate_sha256="a"*64,
+                tenant="t", mailbox="m", folder="f", expected_address="m@example.com",
+                grant_file="g", identity_report="i", folder_report="f",
+                ledger_dir="l", log_id="log", confirm_log_id="log",
+                candidate="c", csv_path="csv", receipt_file="r",
+                journal_dir="j", handoff_dir="h", successor_label="next",
+                session="session", consent_local_read=True,
+                confirm_removals_reviewed=True, confirm_checkpoint_commit=True)
+    preflight.assert_not_called()
+
+
+def test_commit_after_review_delegates_membership_and_predecessor_verification():
+    from server.m365_outlook_sync_readiness import commit_after_review
+    with (patch("server.m365_outlook_sync_readiness.readiness") as ready,
+          patch("server.m365_outlook_checkpoint.commit_checkpoint",
+                return_value={"status": "checkpoint_committed",
+                              "generation": 3, "idempotent_replay": False}) as commit):
+        result = commit_after_review(
+            expected_generation=2, expected_previous_candidate_sha256="a"*64,
+            tenant="t", mailbox="m", folder="f", expected_address="m@example.com",
+            grant_file="g", identity_report="i", folder_report="f",
+            ledger_dir="l", log_id="log", confirm_log_id="log",
+            candidate="c", csv_path="csv", receipt_file="r",
+            journal_dir="j", handoff_dir="h", successor_label="next",
+            session="session", consent_local_read=True,
+            confirm_removals_reviewed=True, confirm_events_appended=True,
+            confirm_checkpoint_commit=True)
+    assert result["committed_generation"] == 3
+    assert result["event_membership_verified"] is True
+    assert ready.call_args.kwargs["expected_generation"] == 2
+    assert commit.call_args.kwargs["expected_previous_candidate_sha256"] == "a"*64
+    assert commit.call_args.kwargs["confirm_checkpoint_commit"] is True
+
+
+@pytest.mark.parametrize("response", [
+    {"status": "checkpoint_committed", "generation": 2, "idempotent_replay": False},
+    {"status": "checkpoint_committed", "generation": 3, "idempotent_replay": True},
+    {"status": "refused", "generation": 3, "idempotent_replay": False},
+])
+def test_commit_after_review_refuses_ambiguous_commit(response):
+    from server.m365_outlook_sync_readiness import commit_after_review
+    with (patch("server.m365_outlook_sync_readiness.readiness"),
+          patch("server.m365_outlook_checkpoint.commit_checkpoint", return_value=response)):
+        with pytest.raises(ReceiptError):
+            commit_after_review(
+                expected_generation=2, expected_previous_candidate_sha256="a"*64,
+                tenant="t", mailbox="m", folder="f", expected_address="m@example.com",
+                grant_file="g", identity_report="i", folder_report="f",
+                ledger_dir="l", log_id="log", confirm_log_id="log",
+                candidate="c", csv_path="csv", receipt_file="r",
+                journal_dir="j", handoff_dir="h", successor_label="next",
+                session="session", consent_local_read=True,
+                confirm_removals_reviewed=True, confirm_events_appended=True,
+                confirm_checkpoint_commit=True)
