@@ -165,10 +165,15 @@ def test_extract_after_readiness_preserves_manual_review_boundary():
                               "event_snapshots": 3,
                               "removal_markers_for_review": 1,
                               "checkpoint_advanced": False,
-                              "owg_append_performed": False}) as extract):
+                              "owg_append_performed": False}) as extract,
+          patch("server.m365_outlook_sync_readiness.inspect_checkpoint",
+                return_value={"generation": 2, "log_id": "log"}) as inspect,
+          patch("server.m365_outlook_sync_readiness._grant") as grant):
         result = extract_after_readiness(**_extract_kwargs())
     assert ready.call_args.kwargs["expected_generation"] == 2
     assert extract.call_args.kwargs["log_id"] == "log"
+    assert inspect.call_args.kwargs["consent_local_read"] is True
+    assert grant.called
     assert result["status"] == "review_required"
     assert result["checkpoint_advanced"] is False
     assert result["owg_append_performed"] is False
@@ -291,3 +296,47 @@ def test_operator_cli_rejects_extraction_options_in_inspection_mode(capsys):
         assert main(args) == 2
         ready.assert_not_called()
     assert '"refused"' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("latest", [
+    None, {"generation": 3, "log_id": "log"},
+    {"generation": 2, "log_id": "other"},
+    {"generation": True, "log_id": "log"},
+    {"generation": "2", "log_id": "log"},
+])
+def test_extract_after_readiness_refuses_concurrent_checkpoint_change(latest):
+    """Never present a candidate as review-ready after a competing commit."""
+    from server.m365_outlook_sync_readiness import extract_after_readiness
+    with (patch("server.m365_outlook_sync_readiness.readiness",
+                return_value={"status": "operator_review_ready"}),
+          patch("server.m365_outlook_checkpoint_next.extract_from_checkpoint",
+                return_value={"status": "review_required",
+                              "committed_predecessor_generation": 2,
+                              "event_snapshots": 1,
+                              "removal_markers_for_review": 0,
+                              "checkpoint_advanced": False,
+                              "owg_append_performed": False}),
+          patch("server.m365_outlook_sync_readiness.inspect_checkpoint",
+                return_value=latest),
+          patch("server.m365_outlook_sync_readiness._grant")):
+        with pytest.raises(ReceiptError, match="Checkpoint advanced"):
+            extract_after_readiness(**_extract_kwargs())
+
+
+def test_extract_after_readiness_refuses_revoked_grant_after_graph():
+    from server.m365_outlook_sync_readiness import extract_after_readiness
+    with (patch("server.m365_outlook_sync_readiness.readiness",
+                return_value={"status": "operator_review_ready"}),
+          patch("server.m365_outlook_checkpoint_next.extract_from_checkpoint",
+                return_value={"status": "review_required",
+                              "committed_predecessor_generation": 2,
+                              "event_snapshots": 1,
+                              "removal_markers_for_review": 0,
+                              "checkpoint_advanced": False,
+                              "owg_append_performed": False}),
+          patch("server.m365_outlook_sync_readiness.inspect_checkpoint",
+                return_value={"generation": 2, "log_id": "log"}),
+          patch("server.m365_outlook_sync_readiness._grant",
+                side_effect=ReceiptError("Grant revoked"))):
+        with pytest.raises(ReceiptError, match="Grant revoked"):
+            extract_after_readiness(**_extract_kwargs())
