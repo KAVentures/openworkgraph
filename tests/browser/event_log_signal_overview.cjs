@@ -74,8 +74,8 @@ const path=require('node:path');
     await page.reload();
     await page.locator('[role=tab][data-tab=evidence]').click();
     await page.waitForFunction(()=>document.querySelector('#owgEventLogPick').options.length===2);
-    await page.locator('#owgEventLogPick').selectOption(setup.b);
     await page.waitForFunction(()=>document.querySelector('#owgEventLogCaseType')?.options.length>0);
+    // The overview intentionally does not depend on which log is selected.
     await page.locator('#owgEventLogAnalyze').click();
     await page.locator('#owgSignalAllStatus').filter({hasText:/2 signal states need attention across 2 saved logs/}).waitFor();
     const rows=page.locator('#owgSignalAllResults tbody tr');
