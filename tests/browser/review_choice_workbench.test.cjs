@@ -79,6 +79,37 @@ const getControls=results=>[results.children.find(x=>x.tagName==='select'),resul
    assert.match(status.textContent,/Selection changed/);
    console.log('PASS invalidated inspection remains retryable');
  }
+ // Editing an opportunity permits a fresh inspection while the old request is pending.
+ // Completion of the obsolete request must not reset the newer request's busy state.
+ {
+   const panel=new Node('section');
+   const doc={createElement:t=>new Node(t),getElementById:id=>id==='panel-evidence'?panel:null,
+     addEventListener(k,fn){this[k]=fn;}};
+   const finishes=[];
+   const context={document:doc,window:{__owgAuthReady:Promise.resolve()},
+     fetch:()=>new Promise(resolve=>finishes.push(resolve))};
+   vm.runInNewContext(fs.readFileSync(path.resolve(__dirname,'../../dashboard/review_choice_workbench.js'),'utf8'),context);
+   doc.DOMContentLoaded();
+   const [input,load,status,results]=panel.children[0].children.slice(3);
+   input.value='idea-1';
+   const first=load.onclick();
+   await Promise.resolve();await Promise.resolve();
+   assert.equal(load.disabled,true);
+   input.value='idea-2';input.listeners.input();
+   assert.equal(load.disabled,false);
+   const second=load.onclick();
+   await Promise.resolve();await Promise.resolve();
+   assert.equal(load.disabled,true);
+   finishes[0]({ok:true,json:async()=>basis()});
+   await first;
+   assert.equal(load.disabled,true,'obsolete inspection must not unlock newer request');
+   finishes[1]({ok:true,json:async()=>({...basis(),idea:{...basis().idea,idea_id:'idea-2'}})});
+   await second;
+   assert.equal(load.disabled,false);
+   assert.equal(results.children.length>0,true);
+   assert.match(status.textContent,/Choose an exact export/);
+   console.log('PASS overlapping opportunity inspections retain current busy state');
+ }
  await scenario('stale revision invalidates choice',[basis(),{...basis(),idea:{...basis().idea,revision:4}}],async({results,details,status})=>{const [select,review]=getControls(results);select.value='p1';await review.onclick();assert.equal(review.disabled,true);assert.equal(results.children.length,0);assert.equal(details.children.length,0);assert.match(status.textContent,/Review basis changed/);});
  await scenario('403 denies review and clears choice',[basis(),{ok:false,status:403}],async({results,details,status})=>{const [select,review]=getControls(results);select.value='p1';await review.onclick();assert.equal(review.disabled,true);assert.equal(results.children.length,0);assert.equal(details.children.length,0);assert.match(status.textContent,/Review failed/);});
  await scenario('duplicate project identity rejected',[{...basis(),projects:[basis().projects[0],{...basis().projects[0],archive_sha256:'c'.repeat(64)}]}],async({results,status})=>{assert.equal(results.children.length,0);assert.match(status.textContent,/Incomplete or inconsistent/);});
