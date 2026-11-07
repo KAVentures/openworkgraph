@@ -117,6 +117,26 @@ def process_bpmn(packet: dict[str, Any]) -> str:
         f"Reviewed design {packet['workflow_id']} revision {packet['revision']} "
         f"sha256 {packet['content_sha256']}; not policy or execution authority."
     )
+    # Export *actual BPMN lanes*, not merely notes on activities. Lane labels
+    # are human declarations, not a validated roster, assignment, or agent
+    # permission. Stable first-appearance order avoids nondeterministic diffs.
+    # The existing importer can read the same laneSet/flowNodeRef structure.
+    lanes: dict[str, list[str]] = {}
+    for activity in model.activities:
+        if activity.responsibility_label:
+            lanes.setdefault(activity.responsibility_label, []).append('Activity_' + activity.id)
+    if lanes:
+        lane_set = ET.SubElement(process, f'{{{ns}}}laneSet', {'id': 'LaneSet_OWG'})
+        for index, (label, members) in enumerate(lanes.items(), 1):
+            lane = ET.SubElement(lane_set, f'{{{ns}}}lane', {
+                'id': f'Lane_{index}', 'name': label,
+            })
+            ET.SubElement(lane, f'{{{ns}}}documentation').text = (
+                'Human-declared responsibility label only. Not a verified person, team, '
+                'organizational role, approval or execution authority.'
+            )
+            for member in members:
+                ET.SubElement(lane, f'{{{ns}}}flowNodeRef').text = member
     tags = {'activity': 'task', 'decision': 'exclusiveGateway', 'routing': 'exclusiveGateway', 'start': 'startEvent', 'end': 'endEvent', 'parallel_split':'parallelGateway', 'parallel_join':'parallelGateway', 'inclusive_split':'inclusiveGateway', 'inclusive_join':'inclusiveGateway'}
     for activity in model.activities:
         node = ET.SubElement(process, f'{{{ns}}}{tags[activity.kind]}', {'id': 'Activity_' + activity.id, 'name': activity.label})

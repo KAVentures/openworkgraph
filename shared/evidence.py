@@ -102,6 +102,10 @@ def rich_evidence_row(row: dict[str, Any], *, include_identity: bool = False) ->
             "sensor_id": row.get("sensor_id") or "",
         })
 
+    detail = interaction_detail_label(row.get("event_type"), meta)
+    if detail:
+        result["interaction_detail"] = detail
+
     # Avoid noisy null convenience keys while keeping canonical metadata intact.
     for key in (
         "browser_hostname", "tab_id", "tab_context_id", "browser_session_id", "semantic_action",
@@ -113,6 +117,32 @@ def rich_evidence_row(row: dict[str, Any], *, include_identity: bool = False) ->
     return result
 
 
+# Opt-in high-fidelity interaction events (#634), browser and desktop, and the signal each belongs to.
+_INTERACTION_SIGNALS = {
+    "browser_control_hover_dwell": "hover_dwell", "screen_hover_dwell": "hover_dwell",
+    "browser_drag_start": "drag_drop", "browser_drag_drop": "drag_drop", "browser_drag_end": "drag_drop",
+    "screen_drag": "drag_drop",
+    "browser_pointer_trajectory": "pointer_trajectory", "screen_pointer_trajectory": "pointer_trajectory",
+}
+
+
+def interaction_detail_label(event_type: Any, meta: dict[str, Any]) -> dict[str, Any] | None:
+    """Say plainly what a hover, drag or pointer event is evidence of: an observed interaction, used as
+    context only, never a workflow step, a merge between cases or a reason to act."""
+    signal = _INTERACTION_SIGNALS.get(str(event_type or ""))
+    if signal is None:
+        return None
+    label: dict[str, Any] = {"signal": signal, "basis": "observed", "inferred": False, "context_only": True,
+                             "workflow_step": False, "merge_evidence": False}
+    if signal == "drag_drop":
+        completion = meta.get("completion")
+        label["completion"] = completion if completion in ("complete", "incomplete") else "unknown"
+        label["completion_basis"] = "observed_drop_or_drop_effect" if completion in ("complete", "incomplete") else "not_observed"
+    if signal == "hover_dwell" and meta.get("control_rerendered") is True:
+        label["control_rerendered"] = True
+    return label
+
+
 RAW_RICH_EVIDENCE_CONTRACT = {
     "canonical": "stored privacy-hardened evidence event",
     "metadata_preserved": True,
@@ -120,4 +150,5 @@ RAW_RICH_EVIDENCE_CONTRACT = {
     "typed_text_captured": False,
     "clipboard_contents_captured": False,
     "screenshot_bytes_in_api": False,
+    "interaction_detail": "hover, drag and pointer events are observed context only, never steps or merge evidence",
 }
