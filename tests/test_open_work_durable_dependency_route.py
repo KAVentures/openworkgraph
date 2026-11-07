@@ -226,3 +226,30 @@ def test_durable_route_revoked_dashboard_session_purges_mirror(monkeypatch, tmp_
     assert exc.value.status_code == 403
     assert calls == 2
     assert store.dependency_context(path, scope=scope, actor=actor, case_id=a)["direct"] == []
+
+
+def test_durable_route_reports_cleanup_failure_after_invalid_review(monkeypatch, tmp_path):
+    """A failed review plus failed purge is a 503, never a stale-data success."""
+    from server import local_auth
+    from server import open_work_dependency_store as store
+    from server.open_work_case_declarations import CaseDeclarationError
+
+    scope = "owg:scope:" + "a" * 32
+    monkeypatch.setattr(routes, "dashboard_session_valid", lambda token: token == "valid")
+    monkeypatch.setattr(routes, "_source_scope", lambda: scope)
+    monkeypatch.setattr(routes, "_read_or_create_secret", lambda name: "local-test-secret")
+    monkeypatch.setattr(local_auth, "auth_dir", lambda: tmp_path)
+
+    def fail_review(*args, **kwargs):
+        raise CaseDeclarationError("review no longer authorized")
+
+    def fail_purge(*args, **kwargs):
+        raise OSError("sqlite file locked")
+
+    monkeypatch.setattr(store, "reconcile_current_reviewed_dependencies", fail_review)
+    monkeypatch.setattr(store, "purge_actor", fail_purge)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.get_local_durable_reviewed_dependencies(
+            _request("valid"), Response()))
+    assert exc.value.status_code == 503
+    assert exc.value.detail == "durable dependency review cleanup unavailable"
