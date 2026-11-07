@@ -211,3 +211,75 @@ def test_preflight_cli_returns_actionable_status_and_exit_codes(site):
     assert accepted.returncode == 0, accepted.stderr
     assert json.loads(accepted.stdout)["writes_performed"] is False
     assert not list(root.glob("data.pre-restore-*"))
+
+
+def test_staging_failure_does_not_move_existing_data(site, monkeypatch):
+    root, data, _auth, archive = site
+    before = (data / "workflow_observer.db").read_bytes()
+    real_open = backup.os.open
+
+    def fail_stage(name, flags, *args, **kwargs):
+        if ".owg-restore-stage-" in str(name) and str(name).endswith("workflow_observer.db"):
+            raise OSError("synthetic disk full")
+        return real_open(name, flags, *args, **kwargs)
+
+    monkeypatch.setattr(backup.os, "open", fail_stage)
+    with pytest.raises(backup.BackupError, match="could not be staged"):
+        backup.restore_backup(archive, replace=True)
+    assert (data / "workflow_observer.db").read_bytes() == before
+    assert not list(root.glob("data.pre-restore-*"))
+
+
+def test_swap_failure_restores_both_previous_data_and_external_auth(tmp_path, monkeypatch):
+    data, auth = tmp_path / "data", tmp_path / "credential-store"
+    data.mkdir()
+    auth.mkdir()
+    monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(data))
+    monkeypatch.setenv("WORKFLOW_OBSERVER_AUTH_DIR", str(auth))
+    (data / "sample.txt").write_text("BACKUP-VALUE", encoding="utf-8")
+    (auth / "token.txt").write_text("BACKUP-TOKEN", encoding="utf-8")
+    source = tmp_path / "secret-backup.zip"
+    secret = "synthetic passphrase for recovery"
+    backup.create_backup(source, passphrase=secret)
+    (data / "sample.txt").write_text("CURRENT-DATA", encoding="utf-8")
+    (auth / "token.txt").write_text("CURRENT-AUTH", encoding="utf-8")
+    real_rename = Path.rename
+    failed = False
+
+    def fail_once(self, destination):
+        nonlocal failed
+        if (not failed and ".owg-restore-stage-" in str(self) and
+                self.name == "auth" and Path(destination) == auth):
+            failed = True
+            raise OSError("synthetic authorization-store swap fault")
+        return real_rename(self, destination)
+
+    monkeypatch.setattr(Path, "rename", fail_once)
+    with pytest.raises(backup.BackupError, match="previous folders were restored"):
+        backup.restore_backup(source, passphrase=secret, replace=True)
+    assert failed is True
+    assert (data / "sample.txt").read_text() == "CURRENT-DATA"
+    assert (auth / "token.txt").read_text() == "CURRENT-AUTH"
+    assert not list(tmp_path.glob("*.pre-restore-*"))
+
+
+def test_encrypted_external_credentials_restore_after_successful_stage(tmp_path, monkeypatch):
+    data, auth = tmp_path / "data", tmp_path / "credential-store"
+    data.mkdir()
+    auth.mkdir()
+    monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(data))
+    monkeypatch.setenv("WORKFLOW_OBSERVER_AUTH_DIR", str(auth))
+    (data / "sample.txt").write_text("BACKUP-VALUE", encoding="utf-8")
+    (auth / "token.txt").write_text("BACKUP-TOKEN", encoding="utf-8")
+    source = tmp_path / "secret-backup.zip"
+    secret = "synthetic passphrase for recovery"
+    backup.create_backup(source, passphrase=secret)
+    (data / "sample.txt").write_text("CHANGED", encoding="utf-8")
+    (auth / "token.txt").write_text("CHANGED", encoding="utf-8")
+    plan = backup.plan_restore(source, passphrase=secret, replace=True)
+    assert plan["ready"] and plan["includes_secrets"] and not plan["auth_inside_data"]
+    done = backup.restore_backup(source, passphrase=secret, replace=True)
+    assert done["restored_files"] == 2
+    assert len(done["moved_aside"]) == 2
+    assert (data / "sample.txt").read_text() == "BACKUP-VALUE"
+    assert (auth / "token.txt").read_text() == "BACKUP-TOKEN"
