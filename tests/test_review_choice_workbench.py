@@ -128,3 +128,33 @@ def test_live_review_preflight_is_authenticated_and_revision_pinned(monkeypatch)
     assert client.post(path, json={**payload, 'dataset_origins': [{'status': 'current'}]}, headers=headers).status_code == 409
     assert client.post(path, json={**payload, 'spec_sha256': 'bad'}, headers=headers).status_code == 422
     assert client.post(path, json={**payload, 'project_id': 'missing'}, headers=headers).status_code == 409
+
+
+def test_ambiguous_project_and_oversized_provenance_fail_closed(monkeypatch):
+    """Never silently truncate provenance or select between duplicate exports."""
+    app = FastAPI()
+    app.include_router(routes.router)
+    client = TestClient(app)
+    monkeypatch.setattr(routes, 'dashboard_session_valid', lambda token: token == 'test-session')
+    state = {'origins': 65, 'duplicates': False}
+    def journey(idea_id):
+        project = {'project_id': 'p1', 'idea_revision': 3, 'idea_revision_is_current': True,
+                   'spec_sha256': 'b'*64, 'archive_sha256': 'c'*64,
+                   'reported_specifications': []}
+        return {'idea': {'idea_id': idea_id, 'revision': 3, 'state': 'approved'},
+                'process_status': {'status': 'current', 'process_reference': {}},
+                'projects': [project, dict(project)] if state['duplicates'] else [project],
+                'projects_truncated': False,
+                'dataset_origins': [{'status': 'current'}] * state['origins'],
+                'dataset_origin_check_available': True}
+    monkeypatch.setattr(routes.opportunity_journey, 'journey', journey)
+    headers = {'Authorization': 'OWG-Session test-session'}
+    path = '/v1/review-choice-workbench/idea-1'
+    assert client.get(path, headers=headers).status_code == 409
+    state['origins'] = 1
+    state['duplicates'] = True
+    assert client.get(path, headers=headers).status_code == 409
+    state['duplicates'] = False
+    ok = client.get(path, headers=headers)
+    assert ok.status_code == 200
+    assert len(ok.json()['dataset_origins']) == 1
