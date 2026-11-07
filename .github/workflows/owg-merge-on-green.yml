@@ -5,13 +5,11 @@ name: owg-opt-in-merge-on-green
 # <!-- OWG-MERGE-ON-GREEN:<current-head-sha> --> in the PR description.
 on:
   workflow_run:
-    workflows:
-      - tests
-      - scale-acceptance
-      - explorer-accessibility
-      - starter-runtimes
-      - packaged-launch-smoke
-      - tester-release
+    # The full tests matrix is normally the slowest group. Keep only this
+    # completion as an immediate hint; the hourly fallback also handles
+    # cases where packaging/scale finish after tests or mergeability lags.
+    # The merger itself still checks ALL SIX required workflows and seven jobs.
+    workflows: [tests]
     types: [completed]
   pull_request_target:
     types: [ready_for_review, edited]
@@ -30,8 +28,12 @@ concurrency:
 jobs:
   merge-opted-in:
     if: >-
-      github.event_name == 'pull_request_target' ||
-      (github.event.workflow_run.event == 'pull_request' &&
+      github.event_name == 'schedule' ||
+      (github.event_name == 'pull_request_target' &&
+       github.event.pull_request.draft == false &&
+       contains(github.event.pull_request.body, 'OWG-MERGE-ON-GREEN:')) ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.event == 'pull_request' &&
        github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 5

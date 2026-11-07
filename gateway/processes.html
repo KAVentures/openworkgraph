@@ -263,6 +263,8 @@
     <section id="selected" hidden>
       <h2 id="selectedTitle"></h2>
       <p id="selectedMeta"></p>
+      <fieldset id="handoffPreflight"><legend>Authenticated handoff freshness</legend><p>Local review-only packet; only its workflow ID is used for a fresh authorized Gateway read. Matching is not consent, owner approval, source permission or execution authority.</p><label>Evidence handoff packet (JSON) <input id="handoffPacket" type="file" accept=".json,application/json"></label><button id="handoffCheck" type="button">Check latest authorized revision</button><button id="handoffClear" type="button">Clear check</button><output id="handoffStatus" role="status" aria-live="polite">No packet checked.</output></fieldset>
+
       <button id="revise" disabled>Edit selected design</button>
       <div id="design"></div>
       <div id="repositoryDetail"></div>
@@ -573,7 +575,11 @@
         const sharedProjects=window.owgSharedOpportunityProjects.create({detailHost:$("sharedProjectDetail"),call,onDenied:()=>{clear();note("Project access changed; sign in again to refresh permissions.");}});
         const dependencies=window.owgProcessDependencies.create({inventoryHost:$("dependencyInventory"),detailHost:$("dependencyDetail"),call,open,onDenied:()=>{clear();note("Dependency access changed; sign in again to refresh permissions.");}});
         const implementation=window.owgImplementationPlans.create({detailHost:$("implementationDetail"),call,onDenied:()=>{clear();note("Implementation-plan access changed; sign in again to refresh permissions.");}});
+        // Initialized before the OIDC callback can synchronously call clear().
+        let handoffGeneration=0;
         function clear(releaseBusy=false) {
+          resetHandoff("Session cleared. Recheck after sign-in.");
+          $("handoffPacket").value="";
           identityGeneration++;
           if(releaseBusy){operation++;busy=false;}
           repository.clear();
@@ -1703,6 +1709,7 @@
           note("Opened exact saved revision " + data.process.revision + ".");
         }
         function render(data) {
+          resetHandoff("Process selection changed. Check latest revision.");
           repository.select(data);
           benefits.select(data);
           opportunity.select(data);
@@ -2160,6 +2167,48 @@
               "; no business activity was executed.",
           );
         }
+
+        function resetHandoff(message="No packet checked.") {
+          handoffGeneration++;
+          $("handoffStatus").textContent=message;
+        }
+        $("handoffPacket").addEventListener("change",()=>resetHandoff("Packet changed. Check again."));
+        $("handoffClear").addEventListener("click",()=>{
+          $("handoffPacket").value="";
+          resetHandoff();
+        });
+        $("handoffCheck").addEventListener("click",()=>run(async()=>{
+          resetHandoff("Checking latest authorized process…");
+          const ticket=handoffGeneration, file=$("handoffPacket").files[0], chosen=selected;
+          const fail=reason=>{if(ticket===handoffGeneration)$("handoffStatus").textContent="REFUSED: "+reason+" No execution authorization.";};
+          if(!chosen||!credential||!file){fail("Sign in, select a shared process and a packet.");return;}
+          if(file.size>262144){fail("Packet exceeds 256 KiB.");return;}
+          let packet;
+          try{packet=JSON.parse(await file.text());}catch(_){fail("Invalid packet JSON.");return;}
+          if(ticket!==handoffGeneration||selected!==chosen)return;
+          const p=packet?.process;
+          if(packet?.format!=="openworkgraph.evidence-handoff-review.v1"||
+             packet.scope!=="human_review_only"||packet.execution_authorized!==false||
+             packet.source_read_authorized!==false||!p||
+             typeof p.workflow_id!=="string"||!p.workflow_id||
+             !Number.isSafeInteger(p.revision)||p.revision<1||
+             typeof p.content_sha256!=="string"||!/^[a-f0-9]{64}$/.test(p.content_sha256)){
+            fail("Not a complete revision-pinned, review-only packet.");return;
+          }
+          if(p.workflow_id!==chosen.process?.workflow_id){fail("Packet workflow differs from selected process.");return;}
+          try{
+            const current=await call("/v1/human/processes/"+encodeURIComponent(p.workflow_id));
+            if(ticket!==handoffGeneration||selected!==chosen)return;
+            if(!current?.process||current.process.workflow_id!==p.workflow_id||
+               current.archived||current.viewing_historical_revision||
+               current.process.revision!==p.revision||
+               current.latest_revision!==p.revision||
+               current.process.content_sha256!==p.content_sha256){
+              fail("Current authorized process is archived, changed, inaccessible or mismatched.");return;
+            }
+            $("handoffStatus").textContent="MATCH: Fresh authorized process revision "+p.revision+" and SHA-256 match. Eligible only for further human review. Consent, owner approval, source access, retention and execution authorization remain unverified.";
+          }catch(_){if(ticket===handoffGeneration)fail("Fresh authenticated read failed or access was withdrawn.");}
+        }));
       })();
     </script>
   </body>
