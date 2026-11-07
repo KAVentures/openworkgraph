@@ -31,3 +31,23 @@ generation, preventing stale operator decisions from being mistaken for fresh
 approval. The option is backward compatible with existing local inspections;
 for an operator confirmation/handoff, pass it explicitly. It does not authorize
 Graph access, advance a checkpoint or replace a live provider-grant check.
+
+
+### Combined preflight + checkpoint-bound next round (Python operator API)
+
+The `extract_after_readiness(...)` entry point in
+`server.m365_outlook_sync_readiness` now composes the scoped identity/folder
+preflight and reviewed checkpoint generation with the already merged
+`m365_outlook_checkpoint_next.extract_from_checkpoint` implementation.
+Supply all required paths and identifiers, an exact positive integer
+`expected_generation`, and separate explicit local-read, Graph-read,
+local-export and removal-review consents. A mismatched preflight or missing
+approval refuses before any provider request. The extraction delegate
+independently checks the committed predecessor, authenticated OWG membership,
+receipt and provider grant before a bounded Graph GET.
+
+A successful return means **review required**, not sync complete. The
+candidate must still be reviewed, appended with explicit approval, verified,
+and checkpoint-committed in separate steps. No automatic append, retry or
+checkpoint advancement is performed here. This programmatic composition is
+not yet a dashboard workflow or a real Microsoft tenant acceptance test.
