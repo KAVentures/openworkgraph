@@ -12,23 +12,23 @@ to restore and, if it is encrypted, set a passphrase environment variable
 in your shell. Avoid putting the passphrase in command history or command
 arguments.
 
-\`\`\`bash
+```bash
 python -m server.local_backup verify /path/to/owg-backup.zip
 python -m server.local_backup plan /path/to/owg-backup.zip
 python -m server.local_backup plan /path/to/owg-backup.zip --replace
-\`\`\`
+```
 
-For an encrypted backup, add \`--passphrase-env OWG_BACKUP_PASSPHRASE\`.
+For an encrypted backup, add `--passphrase-env OWG_BACKUP_PASSPHRASE`.
 Never commit, log or share that environment variable's contents.
 
 The plan returns JSON:
-- \`verified\` confirms **archive integrity**, not complete business correctness;
-- \`ready\`, \`blockers\` and \`requires_replace\` explain whether the offline
+- `verified` confirms **archive integrity**, not complete business correctness;
+- `ready`, `blockers` and `requires_replace` explain whether the offline
   restore can proceed without overwriting an existing store;
-- \`owg_version\`, \`file_count\`, \`total_bytes\` and \`includes_secrets\` describe
+- `owg_version`, `file_count`, `total_bytes` and `includes_secrets` describe
   the backup, not current live storage;
-- \`data_target\`, \`auth_target\` and \`auth_inside_data\` state the target layout;
-- \`operation: offline_restore_preflight_only\` and \`writes_performed: false\`
+- `data_target`, `auth_target` and `auth_inside_data` state the target layout;
+- `operation: offline_restore_preflight_only` and `writes_performed: false`
   distinguish the plan from execution.
 
 Exit code 0 means ready; 2 means a verified archive has one or more blockers;
@@ -36,11 +36,11 @@ Exit code 0 means ready; 2 means a verified archive has one or more blockers;
 
 After the plan is ready, run the existing offline restore deliberately:
 
-\`\`\`bash
+```bash
 python -m server.local_backup restore /path/to/owg-backup.zip --replace
-\`\`\`
+```
 
-\`--replace\` moves old data aside with a timestamp before importing archive files;
+`--replace` moves old data aside with a timestamp before importing archive files;
 it does **not** erase the previous data. An archive without secrets preserves
 this device's existing credential files. Encrypted backups include the
 credentials, so their restoration may replace local tokens.
@@ -58,13 +58,14 @@ explicit 2-GiB archive limit; all backups also have bounded file count and
 uncompressed size. Use smaller rotation intervals for very large encrypted
 stores until streaming encrypted backup format support is available.
 
-**Preflight is not an atomic transactional restore.** The current restore
-moves prior stores aside and then writes files. Unexpected disk-full, crash
-or I/O failure during execution may leave an incomplete target; preserve both
-the archive and pre-restore data folder and use the documented offline
-recovery procedure. Never call restore on a live recorder or while another
-restore is in progress. Use a dedicated staging machine for recovery drills
-before restoring production.
+**Restore stages before swapping live stores.** The archive is fully extracted
+and rehashed in a same-volume temporary folder before any existing data folder
+is renamed. A failed rename attempts to roll back all previously moved folders.
+The operation is **not a single atomic transaction across filesystems**:
+power loss, concurrent processes, or a failed rollback may still require
+operator recovery. Keep the archive and any pre-restore / failed-restore
+folders; do not run restore while a recorder or another restore is active.
+Validate production recovery in a dedicated staging machine first.
 
 No new cloud synchronization, AI access, source-system connection, employee
 observation or backup upload is enabled. The archive is local and can contain
@@ -72,10 +73,10 @@ sensitive metadata; treat it as sensitive even without the credential folder.
 
 ## Validation
 
-\`tests/test_local_backup_preflight.py\` uses synthetic local SQLite stores
+`tests/test_local_backup_preflight.py` uses synthetic local SQLite stores
 and intentionally corrupted ZIP archives to exercise read-only plans,
 running-recorder refusal, replacement semantics, CLI exit codes, duplicate
 entries, unsafe paths, forged metadata, symlink entries and byte budgets.
-These tests supplement the existing \`tests/test_local_backup.py\` SQLite /
+These tests supplement the existing `tests/test_local_backup.py` SQLite /
 DuckDB and encrypted round-trip checks. This is not a real-device disaster
 recovery certification.
