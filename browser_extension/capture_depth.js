@@ -113,12 +113,20 @@ function owgEndHover(endedBy) {
   owgRecentHover.set(current.el, Date.now());
   if (!owgDepthAllowed()) return;
   send("control_hover_dwell", current.target, {duration_ms: Math.min(duration, 600000), ended_by: endedBy,
-    threshold_ms: owgDepth.parameters.hover_dwell_ms});
+    threshold_ms: owgDepth.parameters.hover_dwell_ms, ...(current.rerendered ? {control_rerendered: true} : {})});
 }
 
 addEventListener("pointerover", (e) => {
   if (!owgDepth.signals.hover_dwell || e.pointerType === "touch") return;
   const el = owgInteractiveElement(e);
+  // A single-page app can re-render the control under a resting pointer: when the hovered element
+  // has left the document and an equivalent one (same tag, role and type) takes its place, the
+  // hover carries on rather than restarting.
+  if (owgHover && el && el !== owgHover.el && !owgHover.el.isConnected) {
+    const next = owgSafeTarget(el);
+    if (next.tag === owgHover.target.tag && next.role === owgHover.target.role && next.type === owgHover.target.type &&
+        !owgInSecureContext(el)) { owgHover.el = el; owgHover.target = next; owgHover.rerendered = true; return; }
+  }
   // Some Chromium versions skip pointerout when the pointer moves to plain page space, so
   // arriving anywhere outside the current control also ends its hover.
   if (owgHover && owgHover.el !== el && !(e.target instanceof Node && owgHover.el.contains(e.target))) owgEndHover("pointer_left");

@@ -326,7 +326,8 @@ def bound_metadata(action: str, metadata: dict[str, Any]) -> dict[str, Any] | No
             return None
         return {"duration_ms": duration, "ended_by": metadata.get("ended_by") if metadata.get("ended_by") in
                 ("pointer_left", "activated", "page_hidden") else "unknown", "threshold_ms": metadata.get("threshold_ms")
-                if isinstance(metadata.get("threshold_ms"), int) else None, **_frame(metadata)}
+                if isinstance(metadata.get("threshold_ms"), int) else None,
+                **({"control_rerendered": True} if metadata.get("control_rerendered") is True else {}), **_frame(metadata)}
     if action in SIGNAL_ACTIONS["drag_drop"]:
         kinds = metadata.get("payload_kinds")
         kinds = sorted({k for k in kinds if k in ("files", "text", "html", "uri", "element", "other")})[:6] \
