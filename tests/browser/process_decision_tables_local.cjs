@@ -31,6 +31,16 @@ const path=require('node:path');
   await page.getByRole('button',{name:'Check facts against saved rules',exact:true}).click();
   const output=page.locator('#owgCatalogRuleCheckResult');await output.getByText('3 supplied case-fact reports',{exact:true}).waitFor();
   assert.match(await output.textContent(),/unique match → accept/);assert.match(await output.textContent(),/unique match → escalate/);assert.match(await output.textContent(),/Decision table decision_table_1 · unknown/);
+  // The same real local upload should display only selected-case branch coverage:
+  // two concrete branches chosen, plus a third case with unknown facts.
+  const coverage=output.getByText('Decision table decision_table_1 · UNIQUE · 2/2 declared branches selected in these supplied cases',{exact:true});
+  await coverage.waitFor();await coverage.click();
+  const coverageDetails=coverage.locator('xpath=..');
+  assert.match(await coverageDetails.textContent(),/2\/3 supplied cases selected an outgoing branch/);
+  assert.match(await coverageDetails.textContent(),/unknown: 1/);
+  assert.match(await coverageDetails.textContent(),/row_1 → accept · selected 1 case/);
+  assert.match(await coverageDetails.textContent(),/row_2 → escalate · selected 1 case/);
+  assert.match(await coverageDetails.textContent(),/not exhaustive rule coverage/);
   const [download]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Download minimized rule-check report',exact:true}).click()]);
   const report=JSON.parse(await fs.readFile(await download.path(),'utf8'));assert.equal(report.process_reference.revision,2);assert.equal(report.decision_table_as_of_date,'2026-10-26');assert.equal(JSON.stringify(report).includes('amount'),false);
   assert.equal(await page.getByRole('button',{name:'Download OpenAI Agents project',exact:true}).isDisabled(),false);

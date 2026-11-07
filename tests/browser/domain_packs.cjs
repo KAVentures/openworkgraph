@@ -35,7 +35,7 @@ const path=require('node:path');
   await page.locator('#owgDomainPackSetup').click();
   await page.locator('#owgDomainPackStatus').filter({hasText:'Not installed on this log.'}).waitFor();
   // The catalog offers the packs; switching shows their roles and restores this one.
-  assert.deepEqual(await page.locator('#owgDomainPackChoice option').allTextContents(),['Order to cash','Procure to pay','Sales lead qualification','IT service management']);
+  assert.deepEqual(await page.locator('#owgDomainPackChoice option').allTextContents(),['Customer onboarding and activation','Order to cash','Procure to pay','Sales lead qualification','IT service management']);
   await page.locator('#owgDomainPackChoice').selectOption('procure_to_pay');
   await page.locator('#owgDomainPackRole-purchase_order').waitFor();
   assert.equal(await page.locator('#owgDomainPackRole-order').count(),0);
@@ -94,8 +94,37 @@ const path=require('node:path');
   await page.locator('#owgDomainPackReport').getByText('sales_lead_time_to_qualify',{exact:true}).waitFor();
   assert.match(await page.locator('#owgDomainPacks').textContent(),/Open, rejected, disqualified/);
   assert.match(await page.locator('#owgDomainPackReport').textContent(),/not validated against any particular source system/);
+  // Customer onboarding is a real selectable pack in the existing local browser journey,
+  // not just a backend catalog constant. Import its cases and map required/optional roles.
+  const onboardingFixture=JSON.parse(execFileSync(python,['-c','import json,sys;sys.path.insert(0,"tests");from test_event_log_domain_pack_customer_onboarding import CSV,MAPPING;print(json.dumps([CSV,MAPPING]))'],{encoding:'utf8'}));
+  const [onboardingCsv,onboardingMapping]=onboardingFixture;
+  await page.locator('#owgEventLogFile').setInputFiles({name:'onboarding.csv',mimeType:'text/csv',buffer:Buffer.from(onboardingCsv)});
+  await page.locator('#owgEventLogStatus').filter({hasText:'File mapping ready.'}).waitFor();
+  await page.locator('#owgEventLogCase').selectOption('case');
+  await page.locator('#owgEventLogActivity').selectOption('activity');
+  await page.locator('#owgEventLogTime').selectOption('time');
+  await page.locator('#owgEventLogConsent').check();
+  await page.locator('#owgEventLogImport').click();
+  await page.locator('#owgEventLogStatus').filter({hasText:'Imported'}).waitFor();
+  await page.locator('#owgEventLogAnalyze').click();
+  await page.locator('#owgDomainPackSetup').click();
+  await page.locator('#owgDomainPackChoice').selectOption('customer_onboarding');
+  await page.locator('#owgDomainPackRole-onboarding_case').selectOption('case');
+  for(const [role,name] of Object.entries(onboardingMapping.activities))
+    await page.locator('#owgDomainPackRole-'+role).selectOption(name);
+  await page.locator('#owgDomainPackInstall').click();
+  await page.locator('#owgDomainPackStatus').filter({hasText:'Installed 1.0.0.'}).waitFor();
+  await page.locator('#owgDomainPackRun').click();
+  await page.locator('#owgDomainPackReport').getByText('onboarding_open_to_provision',{exact:true}).waitFor();
+  assert.match(await page.locator('#owgDomainPackReport').textContent(),/every Access provisioned is followed by Activated within 1209600 s/);
+  assert.match(await page.locator('#owgDomainPackReport').textContent(),/not validated against any particular source system/);
+  await page.locator('#owgDomainPackParam-provision_hours').fill('96');
+  await page.locator('#owgDomainPackInstall').click();
+  await page.locator('#owgDomainPackStatus').filter({hasText:'Reinstalled 1.0.0.'}).waitFor();
+  await page.locator('#owgDomainPackRun').click();
+  await page.locator('#owgDomainPackReport').getByText('every Opened is followed by Access provisioned within 345600 s',{exact:true}).waitFor();
   assert.deepEqual(errors,[]);
-  console.log('Domain pack browser passed: order-to-cash roles mapped to a log\'s own names, install, report with planted deviations, parameter change and reinstall, WCAG and 390 px width, uninstall, and switching between the order-to-cash and procure-to-pay packs.');
+  console.log('Domain pack browser passed: O2C, procurement, sales and customer onboarding catalog/install/report journeys, mapped CSV roles, parameter reconfiguration, auth-backed imports, WCAG and mobile.');
  }finally{
   if(browser)await browser.close();server.kill('SIGTERM');
   await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);

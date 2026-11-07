@@ -44,12 +44,25 @@ const path=require('node:path');
     await fill('AI agent with human approval human review minutes per case',3);
     await page.getByRole('button',{name:'Compare alternatives',exact:true}).click();
     const result=page.locator('#owgOpportunityAlternativesResult');
-    await result.filter({hasText:'Ordered by your modeled net value only'}).waitFor();
+    await result.filter({hasText:'Ordered by your modeled monthly net value only'}).waitFor();
     const rowsText=await result.locator('tr').allTextContents();
     assert.match(rowsText[1],/^AI agent9SEK 10400/);
     assert.match(rowsText[2],/^Deterministic automation \(API or rules\)8SEK 8600/);
     assert.match(rowsText[3],/^AI agent with human approval6SEK 5600.*No$/);
     assert.match(rowsText[5],/^Keep human-only \(baseline\)0SEK 0/);
+    assert.match(rowsText[1],/SEK 64800SEK 314400/); // AI agent year 1 and 36m after upfront
+    assert.match(rowsText[2],/SEK 63200SEK 269600/); // deterministic
+    assert.match(rowsText[3],/SEK 7200SEK 141600/); // agent with human approval
+    assert.match(rowsText[1],/SEK 21600 to SEK 10800050% eligible cases/);
+    assert.match(rowsText[3],/SEK -21600 to SEK 3600075% eligible cases/);
+    assert.match(rowsText[5],/Not applicable \(human-only baseline\)No$/);
+    const sensitivity=page.getByLabel('Labor impact sensitivity percent',{exact:true});
+    assert.equal(await sensitivity.inputValue(),'25');
+    await sensitivity.fill('0');
+    assert.equal(await result.locator('tr').count(),0); // old assumptions are no longer current
+    await page.getByRole('button',{name:'Compare alternatives',exact:true}).click();
+    const stress=await result.locator('tr').allTextContents();
+    assert.match(stress[1],/SEK 64800 to SEK 64800/);
     // Changing a shared assumption clears the stale comparison.
     await fill('Cases per month',300);
     assert.equal(await result.locator('tr').count(),0);

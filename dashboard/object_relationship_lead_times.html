@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>OCEL relationship timing · OpenWorkGraph</title>
+<style>
+  :root{color-scheme:light;--ink:#20302a;--muted:#4f6257;--edge:#cbd8d0;--accent:#24604c;--back:#f4f7f4;--paper:#fff;--focus:#084d9b}
+  *{box-sizing:border-box}body{margin:0;background:var(--back);color:var(--ink);font:16px/1.5 system-ui,-apple-system,sans-serif}
+  a{color:var(--accent)}a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--focus);outline-offset:3px}
+  header{padding:18px clamp(16px,4vw,50px);background:#edf4ee;border-bottom:1px solid var(--edge)}
+  header a{display:inline-block;margin-bottom:6px}h1{font-size:clamp(1.5rem,3vw,2.25rem);margin:3px 0 0}h2{font-size:1.25rem;margin:0 0 14px}
+  .lead{margin:7px 0 0;max-width:72ch;color:var(--muted)}
+  main{margin:20px auto 60px;padding:0 16px;max-width:1220px}
+  section{background:var(--paper);border:1px solid var(--edge);border-radius:12px;padding:18px;margin:0 0 16px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr));gap:14px}
+  label{font-weight:650;display:block}label .hint{font-weight:400;font-size:.85rem;color:var(--muted)}
+  input,select{width:100%;font:inherit;border:1px solid #99aca0;border-radius:7px;padding:9px 10px;margin-top:5px;min-width:0;background:white;color:var(--ink)}
+  input[type=checkbox]{width:auto}button{font:inherit;border-radius:7px;border:1px solid var(--accent);background:var(--accent);color:#fff;padding:10px 16px;cursor:pointer;font-weight:650}
+  button.secondary{background:white;color:var(--accent)}button[disabled]{opacity:.55;cursor:not-allowed}
+  .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}.muted{color:var(--muted)}.status{margin:12px 0 0;min-height:25px}
+  .metric{border:1px solid var(--edge);border-radius:9px;padding:14px;min-width:0}
+  .metric strong{font-size:1.4rem;display:block;overflow-wrap:anywhere}.metric span{color:var(--muted);font-size:.9rem}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px}
+  .callout{background:#f5f7fa;border-left:4px solid #436b87;padding:12px 14px;margin-top:16px}
+  .tablewrap{overflow:auto;max-width:100%;border:1px solid var(--edge);border-radius:8px}
+  table{border-collapse:collapse;width:100%;min-width:780px}th,td{padding:9px 11px;text-align:left;border-bottom:1px solid #dee5df;vertical-align:top}
+  th{background:#eff4ef;font-size:.9rem}td{font-variant-numeric:tabular-nums;overflow-wrap:anywhere;max-width:230px}
+  tr:last-child td{border-bottom:0}details{margin-top:16px}summary{cursor:pointer;font-weight:650}
+  [hidden]{display:none!important}
+  @media(prefers-color-scheme:dark){:root{color-scheme:dark;--ink:#e6eee7;--muted:#b8cec0;--edge:#445a4d;--accent:#a6e0ba;--back:#15221b;--paper:#233529;--focus:#8bc5ff}
+    header{background:#1d3124}input,select{background:#15241a;color:var(--ink);border-color:#71917d}button{background:#265b40;color:white;border-color:#a6e0ba}
+    button.secondary{background:transparent;color:var(--accent)}.metric{background:#1d3022}.callout{background:#263845}th{background:#2a4030}th,td{border-color:#455a4b}}
+</style>
+<script src="/object-relationship-lead-times.js" defer></script>
+</head>
+<body>
+<header>
+  <a href="/">← Back to OpenWorkGraph</a>
+  <h1>Object relationship lead times</h1>
+  <p class="lead">Compare when activities happened across explicitly related objects in a locally imported OCEL log. This does not infer causal handoffs, actual effort, or verified completion.</p>
+</header>
+<main>
+  <section aria-labelledby="choose-title">
+    <h2 id="choose-title">Select the retained log and relationship</h2>
+    <p class="muted">Local dashboard session required. The imported dataset stays on this computer; this page never contacts a cloud service.</p>
+    <div class="grid">
+      <label for="logSelect">Imported OCEL log <span class="hint">(only authorized, locally retained logs)</span>
+        <select id="logSelect" disabled><option value="">Loading logs…</option></select>
+      </label>
+      <label for="relationshipSelect">Supplied object relationship
+        <select id="relationshipSelect" disabled><option value="">Choose a log first</option></select>
+      </label>
+    </div>
+    <p id="coverage" class="muted" role="note"></p>
+    <div class="row"><button type="button" id="refreshLogs" class="secondary">Refresh saved logs</button></div>
+  </section>
+  <section aria-labelledby="settings-title">
+    <h2 id="settings-title">Choose the events to compare</h2>
+    <form id="queryForm">
+      <div class="grid">
+        <label for="sourceType">Source object type
+          <input id="sourceType" name="sourceType" list="knownTypes" maxlength="200" required autocomplete="off">
+        </label>
+        <label for="targetType">Related target object type
+          <input id="targetType" name="targetType" list="knownTypes" maxlength="200" required autocomplete="off">
+        </label>
+        <label for="sourceActivity">First source activity
+          <input id="sourceActivity" name="sourceActivity" list="sourceActivityList" maxlength="200" required autocomplete="off">
+        </label>
+        <label for="targetActivity">First target activity
+          <input id="targetActivity" name="targetActivity" list="targetActivityList" maxlength="200" required autocomplete="off">
+        </label>
+        <label for="qualifierMode">Relationship qualifier
+          <select id="qualifierMode">
+            <option value="all">All qualifiers on the same directed pair</option>
+            <option value="empty">Only empty qualifier</option>
+            <option value="literal">Exact qualifier value</option>
+          </select>
+        </label>
+        <label for="qualifierValue" id="qualifierValueLabel" hidden>Exact qualifier
+          <input id="qualifierValue" maxlength="80" autocomplete="off" list="knownQualifiers">
+        </label>
+        <label for="sampleLimit">Example pairs to show (0–50)
+          <input id="sampleLimit" type="number" min="0" max="50" step="1" value="20" required>
+        </label>
+      </div>
+      <datalist id="knownTypes"></datalist>
+      <datalist id="sourceActivityList"></datalist>
+      <datalist id="targetActivityList"></datalist>
+      <datalist id="knownQualifiers"></datalist>
+      <div class="row" style="margin-top:18px">
+        <button id="runQuery" type="submit">Analyze relationship timing</button>
+        <button id="resetReport" type="button" class="secondary">Clear results</button>
+      </div>
+    </form>
+    <p id="status" class="status" role="status" aria-live="polite">Open this page from the same tab as your authenticated OWG dashboard.</p>
+  </section>
+  <section id="resultSection" aria-labelledby="results-title" hidden>
+    <h2 id="results-title">Observed relationship timing</h2>
+    <p id="basis" class="muted"></p>
+    <div id="metrics" class="stats" role="group" aria-label="Selected relationship statistics"></div>
+    <p id="limitations" class="callout"></p>
+    <h2 style="margin-top:23px">Observed pair samples</h2>
+    <p id="sampleStatus" class="muted"></p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th scope="col">Source object</th><th scope="col">Related target</th><th scope="col">Ordering</th>
+          <th scope="col">First source event (UTC)</th><th scope="col">First target event (UTC)</th><th scope="col">Elapsed</th></tr></thead>
+        <tbody id="sampleRows"></tbody>
+      </table>
+    </div>
+    <details><summary>Data provenance and caveats</summary><pre id="provenance" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>
+  </section>
+</main>
+</body>
+</html>
