@@ -92,7 +92,12 @@
           if (data.context.truncated) line('Result truncated; do not treat this as a complete graph.');
         }
       } catch (error) {
-        if (error.name !== 'AbortError') status.textContent = 'Could not retrieve current dependencies. No previous result is retained.';
+        // Fetch implementations may reject a superseded request with a non-AbortError.
+        // Only the latest live request is allowed to change the operator view.
+        if (!controller.signal.aborted && requestController === controller &&
+            error.name !== 'AbortError') {
+          status.textContent = 'Could not retrieve current dependencies. No previous result is retained.';
+        }
       } finally {
         if (requestController === controller) {
           requestController = null;
