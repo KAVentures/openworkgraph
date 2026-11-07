@@ -51,7 +51,7 @@
         else {results.append(choice,review);review.disabled=false;}
         status.textContent='Choose an exact export; review is read-only.';
       }catch(e){if(current===generation)status.textContent=e.message;}
-      finally{if(current===generation)load.disabled=false;}
+      finally{load.disabled=false;}
     };
     review.onclick=async()=>{
       const id=input.value.trim(),projectId=choice.value,selected=snapshot?.projects.find(p=>p.project_id===projectId);
