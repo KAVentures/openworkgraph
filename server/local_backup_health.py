@@ -115,6 +115,10 @@ def check(spec: Any) -> dict[str, Any]:
                 row["status"] = "integrity_check_failed"
             except OSError:
                 row["status"] = "unavailable_or_not_regular"
+            except Exception:
+                # Never return an archive reader's exception text: third-party
+                # ZIP metadata or local paths can appear in driver messages.
+                row["status"] = "integrity_check_failed"
             if _fingerprint(path) != before:
                 # It may have been swapped while read. Do not claim the
                 # archive we just checked is still the listed file.
