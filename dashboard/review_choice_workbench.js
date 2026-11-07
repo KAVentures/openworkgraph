@@ -107,7 +107,20 @@
                result.verified_business_outcomes!==false||result.review_required!==true||
                JSON.stringify(result.blockers)!==JSON.stringify(selected.blockers))
               throw new Error('Inconsistent server review evidence.');
-            status.textContent='Current export basis confirmed by server. Human approval and agent handoff are still required.';
+            // Continue into the existing authenticated pipeline decision UI, not a
+            // second approval implementation. Preflight is non-authorizing; the
+            // pipeline requires its own current-revision check on any decision.
+            const continueReview=node('button','Open opportunity decision and handoff');continueReview.type='button';
+            continueReview.onclick=()=>{
+              if(token!==generation||choice.value!==projectId||input.value.trim()!==id)return;
+              const pipelineCard=document.getElementById('owgPipelineCard');
+              if(!pipelineCard){status.textContent='Automation pipeline unavailable. Reopen the dashboard and inspect again.';return;}
+              window.dispatchEvent(new CustomEvent('owg-pipeline-open',{detail:{idea_id:id}}));
+              pipelineCard.scrollIntoView({block:'start',behavior:'auto'});
+              status.textContent='Opened the current opportunity in the pipeline. Review the decision there; no agent access was granted.';
+            };
+            details.append(continueReview);
+            status.textContent='Current export basis confirmed by server. Continue to the existing opportunity decision; agent handoff still requires separate authorization.';
           }catch(e){if(token===generation){clear();status.textContent='Server preflight failed. Inspect again. '+e.message;}}
         };
         details.append(confirm);
