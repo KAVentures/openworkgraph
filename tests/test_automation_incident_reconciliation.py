@@ -33,7 +33,7 @@ def test_signed_reimports_do_not_inflate_resolved_failures_or_touch_review_time(
     assert first["occurrences"] == 2 and first["current_run_count"] == 2
     assert first["count_basis"] == "distinct_retained_run_ids"
     assert set(first["sample_refs"]) == {"f1", "f2"}
-    incidents.triage(first["incident_id"], {"status": "resolved", "note": "Reviewed", "expected_review_revision": 0})
+    incidents.triage(first["incident_id"], {"status": "resolved", "note": "Reviewed", "expected_review_revision": 0, "expected_last_seen": first["last_seen"]})
     after_triage = _incident(dep)
     # Even a valid, separately signed *new sequence* can contain old run IDs.
     repeated = send(channel, secret, 2, envelope(report(["f1", "f2"], status="failed")))
@@ -72,7 +72,7 @@ def test_moving_a_run_to_another_failing_activity_updates_both_groups(store):
     dep, _, _ = store
     routes._import_and_triage(report(["r1"], status="failed", failing="Charge card"), dep)
     first = _incident(dep, fingerprint="step:Charge card")
-    incidents.triage(first["incident_id"], {"status": "acknowledged", "note": "Investigating", "expected_review_revision": 0})
+    incidents.triage(first["incident_id"], {"status": "acknowledged", "note": "Investigating", "expected_review_revision": 0, "expected_last_seen": first["last_seen"]})
     routes._import_and_triage(report(["r1"], status="failed", failing="Send receipt"), dep)
     old = _incident(dep, fingerprint="step:Charge card")
     updated = _incident(dep, fingerprint="step:Send receipt")
@@ -85,7 +85,7 @@ def test_same_count_but_different_run_membership_reopens_a_resolved_incident(sto
     dep, _, _ = store
     routes._import_and_triage(report(["r1"], status="failed"), dep)
     incident = _incident(dep)
-    incidents.triage(incident["incident_id"], {"status": "resolved", "expected_review_revision": 0})
+    incidents.triage(incident["incident_id"], {"status": "resolved", "expected_review_revision": 0, "expected_last_seen": incident["last_seen"]})
     # A batch can replace one failed run and add a different failed run
     # before the next incident reconciliation: same count, different IDs.
     monitoring.import_report(report(["r1"], status="succeeded"), dep)
@@ -113,7 +113,7 @@ def test_legacy_inflation_is_corrected_without_falsely_reopening_human_review(st
     dep, _, _ = store
     routes._import_and_triage(report(["r1"], status="failed"), dep)
     row = _incident(dep)
-    incidents.triage(row["incident_id"], {"status": "resolved", "note": "Done", "expected_review_revision": 0})
+    incidents.triage(row["incident_id"], {"status": "resolved", "note": "Done", "expected_review_revision": 0, "expected_last_seen": row["last_seen"]})
     legacy = incidents._load()
     item = legacy["incidents"][row["incident_id"]]
     item["occurrences"] = 42
@@ -156,7 +156,7 @@ def test_concurrent_human_review_cannot_overwrite_a_newer_decision(store):
     with pytest.raises(incidents.IncidentError, match="expected_review_revision"):
         incidents.triage(first["incident_id"], {"status": "open"})
     with pytest.raises(incidents.IncidentError, match="expected_review_revision"):
-        incidents.triage(first["incident_id"], {"status": "open", "expected_review_revision": True})
+        incidents.triage(first["incident_id"], {"status": "open", "expected_review_revision": True, "expected_last_seen": current["last_seen"]})
 
 
 def test_deleting_deployment_erases_run_receipts_and_triage_notes(store):
