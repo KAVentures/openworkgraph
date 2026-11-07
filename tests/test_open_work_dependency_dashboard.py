@@ -122,6 +122,22 @@ const list = document.getElementById('owgDependencyResults').children[0];
   assert.equal(fetchCount, countBeforeAuth, 'failed auth bootstrap must not fetch');
   assert.match(status.textContent, /Could not retrieve/);
   assert.equal(button.disabled, false);
+  // A syntactically successful HTTP response can still contain malformed or
+  // hostile data. Reject the entire response without showing partial counts.
+  window.__owgAuthReady = Promise.resolve();
+  field.value = 'owg:w:' + 'e'.repeat(32);
+  const malformed = form.listeners.submit({preventDefault() {}});
+  await Promise.resolve();
+  resolveFetch({ok:true, json:async () => ({
+    format:'openworkgraph.reviewed-durable-dependencies.v1',
+    agent_execution_authorized:false, customer_outcome:'unknown',
+    reviewed_case_count:-1, reviewed_dependency_count:1,
+    added_reviewed_edges:0, removed_stale_edges:0
+  })});
+  await malformed;
+  assert.match(status.textContent, /Unexpected review response/);
+  assert.equal(list.children.length, 0);
+  assert.equal(button.disabled, false);
 })().catch(error => { console.error(error); process.exitCode = 1; });
 """
     result = subprocess.run(
