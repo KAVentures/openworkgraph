@@ -55,8 +55,9 @@ only for files verified intact. It deliberately excludes archive
 contents, member names, credentials, absolute paths, source data and
 agent action authority.
 
-The browser operation is capped at **1 GiB per archive** and **2 GiB of
-selected archive input per check**. Larger archives can still be
+The browser operation is capped at **1 GiB per archive**, **2 GiB of
+selected archive input per check**, and **2 GiB of declared uncompressed
+ZIP content** to avoid excessive expansion. Larger archives can still be
 backed up and inspected offline; exceeding the dashboard budget
 does not mean an archive is corrupt. The existing archive reader
 streams plaintext ZIP entries and verifies the same versioned manifest
