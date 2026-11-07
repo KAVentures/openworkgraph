@@ -245,15 +245,18 @@
 
       <div class="card" id="pvSchedules">
         <h2>Scheduled jobs</h2>
-        <div class="muted">Off unless you add one. A schedule repeats a job you could run by hand: refresh a retained Jira profile (its own read consent and account checks still apply) or re-check an event log's saved signals. At least every 15 minutes; failures back off and pause after five in a row. Pausing recording also pauses scheduled source reads. Nothing is sent anywhere.</div>
+        <div class="muted">Off unless you add one. A schedule repeats a job you could run by hand: refresh a retained Jira profile, re-check saved event-log signals, or create a verified local backup. Source reads keep their own consent and pause with recording. Backups require separate acknowledgement, exclude credentials, are NOT encrypted, run at most daily and rotate only scheduled backups (up to 14). Failures back off and pause after five in a row. Nothing is sent anywhere.</div>
         <div class="pv-delete">
-          <select id="pvScheduleKind" aria-label="Job"><option value="retained_jira_profile">Retained Jira profile</option><option value="event_log_signals">Event log signals</option></select>
+          <select id="pvScheduleKind" aria-label="Job"><option value="retained_jira_profile">Retained Jira profile</option><option value="event_log_signals">Event log signals</option><option value="local_backup">Local backup (unencrypted)</option></select>
           <input type="text" id="pvScheduleTarget" placeholder="Profile or event log ID" aria-label="Profile or event log ID" spellcheck="false">
           <input type="number" id="pvScheduleInterval" min="15" value="60" aria-label="Interval in minutes">
           <button type="button" class="secondary" id="pvScheduleAdd">Add schedule</button>
         </div>
+        <label class="muted" id="pvScheduleBackupAckRow" hidden>
+          <input type="checkbox" id="pvScheduleBackupAck"> I understand recurring backups save unencrypted copies of locally recorded activity outside OWG's data folder, without credentials; only automatically created backups are rotated. I will keep the backup folder private.
+        </label>
         <div class="muted" id="pvScheduleStatus" role="status" aria-live="polite"></div>
-        <div id="pvScheduleList" aria-label="Scheduled jobs"></div>
+        <div id="pvScheduleList" role="region" aria-label="Scheduled jobs"></div>
       </div>
       <div class="card" id="pvSemantic">
         <h2>AI help with grouping work</h2>
@@ -1003,7 +1006,8 @@
         const line = document.createElement('div');
         line.className = 'pv-row pv-sub';
         const text = document.createElement('span');
-        text.textContent = (item.kind === 'retained_jira_profile' ? 'Jira profile ' : 'Signals for ') + item.target_id +
+        text.textContent = (item.kind === 'local_backup' ? 'Unencrypted local backup'
+          : (item.kind === 'retained_jira_profile' ? 'Jira profile ' : 'Signals for ') + item.target_id) +
           ' · every ' + item.interval_minutes + ' min · ' + (item.enabled ? 'next ' + String(item.next_run_at || '').slice(0, 16).replace('T', ' ')
           : (item.paused_reason ? 'paused after repeated failures' : 'paused')) + (item.last_result ? ' · last: ' + item.last_result : '');
         const toggle = document.createElement('button');
@@ -1016,13 +1020,41 @@
         scheduleList.append(line);
       }
     };
+    const scheduleKind = panel.querySelector('#pvScheduleKind');
+    const scheduleTarget = panel.querySelector('#pvScheduleTarget');
+    const scheduleInterval = panel.querySelector('#pvScheduleInterval');
+    const scheduleBackupAck = panel.querySelector('#pvScheduleBackupAck');
+    const scheduleBackupAckRow = panel.querySelector('#pvScheduleBackupAckRow');
+    const refreshScheduleKind = () => {
+      const local = scheduleKind.value === 'local_backup';
+      scheduleTarget.disabled = local;
+      scheduleTarget.value = local ? 'local' : '';
+      scheduleTarget.placeholder = local ? 'This computer' : 'Profile or event log ID';
+      scheduleInterval.min = local ? '1440' : '15';
+      scheduleInterval.value = local ? '1440' : '60';
+      scheduleBackupAckRow.hidden = !local;
+      scheduleBackupAck.checked = false;
+    };
+    scheduleKind.onchange = refreshScheduleKind;
+    refreshScheduleKind();
     panel.querySelector('#pvScheduleAdd').onclick = async () => {
-      const kind = panel.querySelector('#pvScheduleKind').value;
-      if (!confirm('Run this job automatically on a schedule? You can pause or remove it at any time.')) return;
+      const kind = scheduleKind.value;
+      const isBackup = kind === 'local_backup';
+      if (isBackup && !scheduleBackupAck.checked) {
+        if (scheduleStatus) scheduleStatus.textContent = 'Acknowledge that scheduled backups are unencrypted and may contain private work activity.';
+        return;
+      }
+      if (!confirm(isBackup
+          ? 'Schedule an unencrypted local backup every day or longer? Copies stay on this computer and can contain private captured work. This does not include credentials or send data to cloud services.'
+          : 'Run this job automatically on a schedule? You can pause or remove it at any time.')) return;
       try {
-        await api('/v1/schedules', send('POST', {kind, target_id: panel.querySelector('#pvScheduleTarget').value.trim(),
-          interval_minutes: Number(panel.querySelector('#pvScheduleInterval').value), confirm_scheduled_runs: true}));
+        await api('/v1/schedules', send('POST', {
+          kind, target_id: isBackup ? 'local' : scheduleTarget.value.trim(),
+          interval_minutes: Number(scheduleInterval.value), confirm_scheduled_runs: true,
+          confirm_unencrypted_local_backup: isBackup && scheduleBackupAck.checked
+        }));
         if (scheduleStatus) scheduleStatus.textContent = 'Schedule added.';
+        scheduleBackupAck.checked = false;
       } catch (error) { if (scheduleStatus) scheduleStatus.textContent = error.message || 'Could not add the schedule.'; }
       refreshSchedules();
     };
