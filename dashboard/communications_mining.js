@@ -123,8 +123,8 @@
       catch(error){status.textContent=error.message;}finally{refresh();}
     };
     const loadTaxonomy=async()=>{try{const t=await api('/v1/communications/taxonomy');taxonomy.value=formatTaxonomy(t.taxonomy);taxStatus.textContent=t.is_default?'Default taxonomy.':'Your saved taxonomy.';}catch(error){taxStatus.textContent=error.message;}};
-    saveTaxonomy.onclick=async()=>{try{const t=await api('/v1/communications/taxonomy',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(parseTaxonomy(taxonomy.value))});taxonomy.value=formatTaxonomy(t.taxonomy);taxStatus.textContent='Taxonomy saved on this computer.';}catch(error){taxStatus.textContent=error.message;}};
-    resetTaxonomy.onclick=async()=>{try{const t=await api('/v1/communications/taxonomy/reset',{method:'POST'});taxonomy.value=formatTaxonomy(t.taxonomy);taxStatus.textContent='Default taxonomy restored.';}catch(error){taxStatus.textContent=error.message;}};
+    saveTaxonomy.onclick=async()=>{try{const t=await api('/v1/communications/taxonomy',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(parseTaxonomy(taxonomy.value))});taxonomy.value=formatTaxonomy(t.taxonomy);taxStatus.textContent='Taxonomy saved on this computer.';renderModel(await api('/v1/communications/review/model'));}catch(error){taxStatus.textContent=error.message;}};
+    resetTaxonomy.onclick=async()=>{try{const t=await api('/v1/communications/taxonomy/reset',{method:'POST'});taxonomy.value=formatTaxonomy(t.taxonomy);taxStatus.textContent='Default taxonomy restored.';renderModel(await api('/v1/communications/review/model'));}catch(error){taxStatus.textContent=error.message;}};
     refresh();loadTaxonomy();
 
     // Review examples: separately consented, retention-bounded, redacted texts the user labels.
@@ -142,6 +142,12 @@
     const names=async()=>{const t=await api('/v1/communications/taxonomy');intentNames=t.taxonomy.intents.map(i=>i.name);};
     function renderModel(m){
       if(!m.trained){model.replaceChildren(el('div','No intent model is trained yet.','muted'));return;}
+      if(m.stale||m.evaluation_current===false){
+        model.replaceChildren(el('h3','Learned model needs retraining'),
+          el('div','The reviewed labels, held-out examples, retention, or intent names have changed since this model was trained. Its previous quality scores are historical and cannot be used to justify new classifications. Train again before choosing Learned model.','note'),
+          el('div','Previous model trained '+m.trained_at+'. No messages have been classified using this stale model.','muted'));
+        return;
+      }
       const e=m.evaluation;const f=v=>v===null||v===undefined?'—':Number(v).toFixed(2);
       model.replaceChildren(el('h3','Learned model'),el('div','Trained '+m.trained_at+' from '+m.training_example_count+' examples; expires '+m.expires_at+'. Holdout: '+e.holdout_examples+' reviewed examples in '+(e.languages.join(', ')||'no language')+'. Macro F1 '+f(e.macro_f1_supported_intents)+'. Estimates, not verified reasons for contact.','muted'),
         table(['Intent','F1','Precision','Recall','Calibration error','Uncertain','Support','By language (F1)'],e.intents.map(i=>[i.intent,f(i.f1),f(i.precision),f(i.recall),f(i.expected_calibration_error),pct(i.uncertain_rate),i.sufficient_support?String(i.positive_examples):i.positive_examples+' (too few)',Object.entries(i.by_language).map(([l,v])=>l+' '+f(v.f1)).join(', ')])),
