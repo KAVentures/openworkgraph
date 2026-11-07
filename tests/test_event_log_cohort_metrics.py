@@ -94,3 +94,42 @@ def test_metric_route_requires_session_before_reading_body(monkeypatch):
     assert response.status_code == 403
     assert "session" in response.json()["detail"].lower()
     assert response.headers.get("cache-control") is None
+
+
+def test_metric_route_with_dashboard_session_and_no_store(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from server import event_log_routes
+
+    app = FastAPI()
+    app.include_router(event_log_routes.router)
+    monkeypatch.setattr(event_log_routes, "dashboard_session_valid", lambda token: token == "valid")
+    conn = FakeConnection()
+    install(monkeypatch, conn)
+    client = TestClient(app)
+    response = client.post(
+        "/v1/event-logs/log_0123456789abcdef/cohort-metric",
+        headers={"Authorization": "OWG-Session valid"},
+        json={"definition": DEFINITION, "cohort": {}},
+    )
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json()["metric"]["sum"] == "30"
+    assert response.json()["raw_cases_returned"] is False
+    assert conn.restricted
+
+
+def test_metric_route_rejects_duplicate_json_keys(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from server import event_log_routes
+
+    app = FastAPI()
+    app.include_router(event_log_routes.router)
+    monkeypatch.setattr(event_log_routes, "dashboard_session_valid", lambda token: token == "valid")
+    response = TestClient(app).post(
+        "/v1/event-logs/log_0123456789abcdef/cohort-metric",
+        headers={"Authorization": "OWG-Session valid", "Content-Type": "application/json"},
+        content='{"cohort":{},"cohort":{},"definition":{}}',
+    )
+    assert response.status_code == 422
