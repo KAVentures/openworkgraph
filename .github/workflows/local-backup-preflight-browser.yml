@@ -10,6 +10,9 @@ on:
       - "server/local_backup_schedule.py"
       - "server/local_scheduler.py"
       - "server/local_scheduler_routes.py"
+      - "tests/test_local_scheduler_quiet_hours.py"
+      - "tests/browser/scheduled_quiet_hours.cjs"
+      - "server/local_scheduler_routes.py"
       - "tests/browser/scheduled_local_backup.cjs"
       - "tests/browser/scheduled_local_backup_app.py"
       - ".github/workflows/local-backup-preflight-browser.yml"
@@ -22,6 +25,9 @@ on:
       - "server/local_backup.py"
       - "server/local_backup_schedule.py"
       - "server/local_scheduler.py"
+      - "server/local_scheduler_routes.py"
+      - "tests/test_local_scheduler_quiet_hours.py"
+      - "tests/browser/scheduled_quiet_hours.cjs"
       - "server/local_scheduler_routes.py"
       - "tests/browser/scheduled_local_backup.cjs"
       - "tests/browser/scheduled_local_backup_app.py"
@@ -56,3 +62,9 @@ jobs:
         run: node --check tests/browser/scheduled_local_backup.cjs
       - name: Verify explicit local backup scheduling in authenticated Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/scheduled_local_backup.cjs
+      - name: Validate local quiet-hour backend semantics
+        run: python -m pytest -q tests/test_local_scheduler_quiet_hours.py
+      - name: Validate scheduled quiet-hours browser syntax
+        run: node --check tests/browser/scheduled_quiet_hours.cjs
+      - name: Verify IANA quiet-hour consent and edits in authenticated Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/scheduled_quiet_hours.cjs
