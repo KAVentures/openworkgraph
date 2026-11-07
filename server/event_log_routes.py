@@ -50,6 +50,7 @@ from . import event_log_linked_attribute_analysis as linked_attribute_analysis
 from . import analysis_snapshot_export
 from . import event_log_signals as signals
 from . import event_log_signal_inbox as signal_inbox
+from . import event_log_signal_overview as signal_overview
 from . import event_log_simulation as simulation
 from . import event_log_trace_clusters as trace_clusters
 from . import event_log_waiting as waiting
@@ -152,6 +153,16 @@ def event_log_workspace_script() -> FileResponse:
 def list_event_logs(request: Request):
     _require_dashboard(request)
     return _respond(workspace.list_logs)
+
+
+@router.get("/v1/event-logs/signal-overview")
+def event_log_signal_overview(
+    request: Request, status: str = Query(default="attention", max_length=20),
+    limit: int = Query(default=100, ge=1, le=200),
+):
+    """Local dashboard-only, non-mutating review queue across saved logs."""
+    _require_dashboard(request)
+    return _respond(signal_overview.overview, status=status, limit=limit)
 
 
 @router.post("/v1/event-logs/import")
