@@ -70,6 +70,15 @@ with TestClient(app) as client:
         assert response.status_code == expected, (input_body, response.status_code, response.text)
     assert client.post(endpoint, content="not-json",
                        headers={**owner, "Content-Type": "text/plain"}).status_code == 415
+    # An item with an allowed filename cannot escape via a local symlink.
+    import os
+    if os.name != "nt":
+        link = local_backup.backup_folder() / "owg-backup-symlink.zip"
+        link.symlink_to(Path(created["archive"]))
+        try:
+            assert client.post(endpoint, json={"name": link.name}, headers=owner).status_code == 422
+        finally:
+            link.unlink()
     too_large = client.post(endpoint, json={"name": "owg-backup-" + "x" * 1000 + ".zip"}, headers=owner)
     assert too_large.status_code == 413
 
