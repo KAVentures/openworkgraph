@@ -208,6 +208,8 @@ def create_backup(destination: Path, *, passphrase: str | None = None) -> dict[s
     files = _collect(data, "data/", exclude=auth if auth.is_relative_to(data) else None)
     if passphrase:
         files += _collect(auth, "auth/", exclude=None)
+    if len(files) > MAX_FILES:
+        raise BackupError(f"more than {MAX_FILES} files; refusing an unbounded backup")
     if destination.resolve().is_relative_to(data.resolve()):
         raise BackupError("store the backup outside the OpenWorkGraph data folder")
     entries: list[dict[str, Any]] = []
@@ -221,7 +223,10 @@ def create_backup(destination: Path, *, passphrase: str | None = None) -> dict[s
                 continue  # removed while backing up; it is not part of this snapshot
             except Exception as exc:
                 raise BackupError(f"could not snapshot {name}: {type(exc).__name__}") from None
-            entries.append({"path": name, "kind": kind, "bytes": target.stat().st_size,
+            snapshot_bytes = target.stat().st_size
+            if snapshot_bytes > MAX_ENTRY_BYTES or sum(item["bytes"] for item in entries) + snapshot_bytes > MAX_TOTAL_BYTES:
+                raise BackupError("backup snapshot exceeds the supported restored-data limit")
+            entries.append({"path": name, "kind": kind, "bytes": snapshot_bytes,
                             "sha256": _sha256(target)})
         manifest = {
             "format": FORMAT,
@@ -239,6 +244,8 @@ def create_backup(destination: Path, *, passphrase: str | None = None) -> dict[s
             for entry in entries:
                 archive.write(staged / entry["path"], entry["path"])
         payload = buffer.getvalue()
+    if passphrase and len(payload) + len(ENCRYPTED_MAGIC) + 44 > MAX_ENCRYPTED_ARCHIVE_BYTES:
+        raise BackupError("encrypted backup exceeds the supported in-memory verification limit")
     blob = _encrypt(payload, passphrase) if passphrase else payload
     destination.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -371,7 +378,7 @@ def _recorder_running(directory: Path) -> bool:
     if not lock_path.exists():
         return False
     try:
-        with lock_path.open("rb") as handle:
+        with lock_path.open("r+b" if os.name == "nt" else "rb") as handle:
             if os.name == "nt":
                 import msvcrt
                 handle.seek(0)
