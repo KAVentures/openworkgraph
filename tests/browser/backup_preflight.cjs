@@ -50,7 +50,7 @@ const path=require('node:path');
     await card.waitFor();
     await page.locator('#pvBackupChoice').waitFor();
     await page.locator('#pvBackupRefresh').click();
-    await page.locator('#pvBackupPlan').getByText(/No backups found/).waitFor();
+    await page.locator('#pvBackupPlan').filter({hasText:/No backups found/}).waitFor();
 
     // A normal backup becomes visible without any custom refresh of the page.
     await page.locator('#pvBackupCreate').click();
@@ -85,6 +85,21 @@ const path=require('node:path');
     assert.equal(preflightRequests.length,1,'encrypted inspection never requests a passphrase');
     assert(!String(await page.locator('#pvBackupPlan').textContent()).includes(secret));
 
+    // A late response for a previously selected file cannot overwrite the
+    // current file's result. Simulate a slow local archive read without writes.
+    await page.route('**/v1/local-backups/preflight', async route=>{
+      await new Promise(resolve=>setTimeout(resolve,350));
+      await route.continue();
+    });
+    await page.locator('#pvBackupChoice').selectOption(normal);
+    await page.locator('#pvBackupInspect').click();
+    await page.locator('#pvBackupPlan').filter({hasText:/Verifying backup contents/}).waitFor();
+    await page.locator('#pvBackupChoice').selectOption(encrypted);
+    await page.locator('#pvBackupInspect').click();
+    await page.locator('#pvBackupPlan').filter({hasText:/Encrypted backup: close OpenWorkGraph/}).waitFor();
+    await page.waitForTimeout(500);
+    assert.match(await page.locator('#pvBackupPlan').textContent(),/Encrypted backup: close OpenWorkGraph/);
+    assert.equal(preflightRequests.length,2);
     // Refresh must preserve a valid selection, not replay an old plan.
     await page.locator('#pvBackupRefresh').click();
     assert.equal(await page.locator('#pvBackupChoice').inputValue(),encrypted);
