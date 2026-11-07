@@ -51,7 +51,10 @@
         if(current!==generation)return;
         const candidate=fresh.projects?.find(p=>p.project_id===projectId);
         if(fresh.projects_truncated||fresh.idea?.revision!==snapshot.idea.revision||
-           fresh.process_status!==snapshot.process_status||!candidate||
+           fresh.process_status!==snapshot.process_status||
+           JSON.stringify(fresh.process_reference)!==JSON.stringify(snapshot.process_reference)||
+           JSON.stringify(fresh.dataset_origins)!==JSON.stringify(snapshot.dataset_origins)||
+           fresh.dataset_origin_check_available!==snapshot.dataset_origin_check_available||!candidate||
            JSON.stringify(candidate)!==JSON.stringify(selected)){
           clear();status.textContent='Review basis changed. Inspect again before choosing.';return;
         }
