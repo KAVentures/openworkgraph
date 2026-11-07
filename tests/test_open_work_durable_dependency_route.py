@@ -188,3 +188,41 @@ def test_durable_route_rejects_ambiguous_query_before_source_access(monkeypatch)
             asyncio.run(routes.get_local_durable_reviewed_dependencies(
                 _request("valid", query), Response()))
         assert exc.value.status_code == 422
+
+
+def test_durable_route_revoked_dashboard_session_purges_mirror(monkeypatch, tmp_path):
+    """Session expiry after reconciliation cannot return a durable graph."""
+    from server import local_auth
+    from server import open_work_dependency_store as store
+    import hashlib
+    import hmac
+
+    scope = "owg:scope:" + "a" * 32
+    a, b = "owg:w:" + "a" * 32, "owg:w:" + "b" * 32
+    actor = "dashboard:" + hmac.new(
+        b"local-test-secret", b"open-work:durable-local-owner:v1",
+        hashlib.sha256,
+    ).hexdigest()[:32]
+    path = str(tmp_path / ".open_work_reviewed_dependencies.sqlite3")
+    calls = 0
+
+    def session_valid(token):
+        nonlocal calls
+        calls += 1
+        return token == "valid" and calls == 1
+
+    def populate(path, **kwargs):
+        store.declare_dependency(path, scope=scope, actor=actor, case_id=a, prerequisite=b)
+        return {"reconciled": True}
+
+    monkeypatch.setattr(routes, "dashboard_session_valid", session_valid)
+    monkeypatch.setattr(routes, "_source_scope", lambda: scope)
+    monkeypatch.setattr(routes, "_read_or_create_secret", lambda name: "local-test-secret")
+    monkeypatch.setattr(local_auth, "auth_dir", lambda: tmp_path)
+    monkeypatch.setattr(store, "reconcile_current_reviewed_dependencies", populate)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.get_local_durable_reviewed_dependencies(
+            _request("valid", "work_item_ref=" + a), Response()))
+    assert exc.value.status_code == 403
+    assert calls == 2
+    assert store.dependency_context(path, scope=scope, actor=actor, case_id=a)["direct"] == []
