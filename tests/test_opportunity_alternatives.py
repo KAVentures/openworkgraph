@@ -88,3 +88,66 @@ def test_comparison_ui_is_bounded_safe_and_optional_in_the_export():
     # Untrusted labels and numbers go through textContent helpers only.
     section = source[source.index("let comparison=null;"):source.index("const style=el('style')")]
     assert "innerHTML" not in section
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="Node.js unavailable")
+def test_horizon_net_after_upfront_and_eligible_break_even_are_explicit_modeled_values():
+    _node(_LOAD + r"""
+const report=model.compare(shared,rows);
+const by=Object.fromEntries(report.alternatives.map(a=>[a.id,a]));
+assert.equal(report.shared_inputs.labor_impact_sensitivity_percent,25);
+assert.equal(report.first_year_sensitivity_is_statistical_confidence_interval,false);
+assert.equal(report.horizon_results_are_undiscounted_assumptions_not_cash_receipts,true);
+assert.equal(report.future_volume_and_costs_verified,false);
+assert.equal(by.eliminate_step.modeled_year_1_net_after_upfront,43000);
+assert.equal(by.eliminate_step.modeled_36_month_net_after_upfront,139000);
+assert.equal(by.eliminate_step.year_1_sensitivity_net_low,31000);
+assert.equal(by.eliminate_step.year_1_sensitivity_net_high,55000);
+assert.equal(by.eliminate_step.break_even_eligible_percent_12m,2.0833);
+assert.equal(by.deterministic_automation.modeled_year_1_net_after_upfront,63200);
+assert.equal(by.deterministic_automation.modeled_36_month_net_after_upfront,269600);
+assert.equal(by.deterministic_automation.break_even_eligible_percent_12m,27.0833);
+assert.equal(by.ai_agent.modeled_year_1_net_after_upfront,64800);
+assert.equal(by.ai_agent.modeled_36_month_net_after_upfront,314400);
+assert.equal(by.ai_agent.break_even_eligible_percent_12m,50);
+assert.equal(by.ai_agent_with_approval.modeled_year_1_net_after_upfront,7200);
+assert.equal(by.ai_agent_with_approval.year_1_sensitivity_net_low,-21600);
+assert.equal(by.ai_agent_with_approval.year_1_sensitivity_net_high,36000);
+assert.equal(by.ai_agent_with_approval.break_even_eligible_percent_12m,75);
+assert.equal(by.human_only.modeled_year_1_net_after_upfront,0);
+assert.equal(by.human_only.modeled_36_month_net_after_upfront,0);
+assert.equal(by.human_only.break_even_eligible_percent_12m,null);
+assert.equal(report.recommendation,null);
+assert.equal(report.authorized_agent_actions,false);
+""")
+
+
+@pytest.mark.skipif(not shutil.which("node"), reason="Node.js unavailable")
+def test_sensitivity_is_adjustable_and_impossible_or_negative_break_even_not_fabricated():
+    _node(_LOAD + r"""
+const noSpread=model.compare({...shared,labor_impact_sensitivity_percent:0},rows);
+const noSpreadAI=noSpread.alternatives.find(a=>a.id==='ai_agent');
+assert.equal(noSpreadAI.year_1_sensitivity_net_low,noSpreadAI.modeled_year_1_net_after_upfront);
+assert.equal(noSpreadAI.year_1_sensitivity_net_high,noSpreadAI.modeled_year_1_net_after_upfront);
+const oneHundred=model.compare({...shared,labor_impact_sensitivity_percent:100},rows);
+const totalAI=oneHundred.alternatives.find(a=>a.id==='ai_agent');
+assert.equal(totalAI.year_1_sensitivity_net_low,-108000);
+assert.equal(totalAI.year_1_sensitivity_net_high,237600);
+const impossible=model.compare(shared,{
+  ...rows,ai_agent:row(1,100,900000,900000),
+  ai_agent_with_approval:row(5,50,0,1000,{review_minutes_per_case:8}),
+});
+const agent=impossible.alternatives.find(a=>a.id==='ai_agent');
+const approval=impossible.alternatives.find(a=>a.id==='ai_agent_with_approval');
+assert.equal(agent.break_even_at_declared_volume_and_net_minutes_12m,false);
+assert.equal(agent.break_even_eligible_percent_12m,null);
+assert(agent.modeled_year_1_net_after_upfront<0);
+assert.equal(approval.break_even_at_declared_volume_and_net_minutes_12m,false);
+assert.equal(approval.break_even_eligible_percent_12m,null);
+assert(approval.year_1_sensitivity_net_low<=approval.year_1_sensitivity_net_high);
+assert(approval.modeled_36_month_net_after_upfront<0);
+for(const raw of [-1,101,NaN,Infinity,'']){
+  assert.throws(()=>model.compare({...shared,labor_impact_sensitivity_percent:raw},rows),
+    /labor_impact_sensitivity_percent/);
+}
+""")
