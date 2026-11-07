@@ -57,9 +57,24 @@ const path=require('node:path');
    const incidentsPanel=page.locator('#owgMonitorIncidentPanel');
    for(const kind of ['Failed runs','Lost reports','Reused sequence numbers','Rejected signatures'])await incidentsPanel.getByText(new RegExp('^'+kind)).first().waitFor();
    const failed=incidentsPanel.locator('fieldset').filter({hasText:'Step: Charge card'});
+   const staleReview=await page.evaluate(async()=>{
+     const r=await fetch('/v1/automation-monitoring/incidents');
+     if(!r.ok)throw Error(await r.text());
+     return (await r.json()).incidents.find(x=>x.kind==='run_failures');
+   });
+   assert.equal(staleReview.review_revision,0);
    await failed.getByRole('textbox').fill('Processor outage');
    await failed.getByRole('button',{name:/^Resolve incident/}).click();
    await incidentsPanel.locator('fieldset').filter({hasText:'Processor outage'}).getByText(/Failed runs · resolved/).waitFor();
+   const conflict=await page.evaluate(async stale=>{
+     const r=await fetch('/v1/automation-monitoring/incidents/'+encodeURIComponent(stale.incident_id)+'/triage',{
+       method:'POST',headers:{'Content-Type':'application/json'},
+       body:JSON.stringify({status:'open',note:'stale reviewer must not overwrite',
+         expected_last_seen:stale.last_seen,expected_review_revision:stale.review_revision})});
+     return {code:r.status,body:await r.json()};
+   },staleReview);
+   assert.equal(conflict.code,409,'stale human review is refused even without a newer run');
+   assert.match(conflict.body.detail,/another review/);
    assert.match(await failed.textContent(),/2 distinct retained runs/);
    const repeated=await send(5,report(['f1','f2'],'failed'),secret);
    assert.equal(repeated.status,200);
@@ -80,6 +95,6 @@ const path=require('node:path');
    await page.locator('#owgMonitorChannelCreate').waitFor();
    assert.equal((await send(7,report(['f6'],'failed'),secret)).status,403);
    assert.deepEqual(errors,[]);
-   console.log('Report channel acceptance passed: shown-once secret, signed import, idempotent resend, replay conflict, bad signature, lost-report gaps, version inventory, incident exact-run replay dedupe, resolve and reopen, revocation, WCAG audit, mobile width.');
+   console.log('Report channel acceptance passed: shown-once secret, signed import, idempotent resend, replay conflict, bad signature, lost-report gaps, version inventory, incident exact-run replay dedupe, versioned human review, resolve and reopen, revocation, WCAG audit, mobile width.');
  }finally{if(browser)await browser.close();server.kill('SIGTERM');await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);if(server.exitCode===null)server.kill('SIGKILL');await fs.rm(scratch,{recursive:true,force:true});}
 })().catch(error=>{console.error(error);process.exit(1);});
