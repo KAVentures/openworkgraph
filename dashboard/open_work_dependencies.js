@@ -67,6 +67,7 @@
           credentials: 'same-origin', cache: 'no-store',
           headers: {'Accept': 'application/json'}, signal: controller.signal
         });
+        if (controller.signal.aborted || requestController !== controller) return;
         if (!response.ok) {
           status.textContent = response.status === 401 || response.status === 403
             ? 'Access unavailable. Reconnect and authorize the source before reviewing.'
@@ -74,6 +75,7 @@
           return;
         }
         const data = await response.json();
+        if (controller.signal.aborted || requestController !== controller) return;
         if (data.format !== 'openworkgraph.reviewed-durable-dependencies.v1' ||
             data.agent_execution_authorized !== false || data.customer_outcome !== 'unknown') {
           status.textContent = 'Unexpected review response; no results displayed.';
