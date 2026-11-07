@@ -167,6 +167,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/communications_mining.cjs
       - name: Verify opt-in high-fidelity browser signals in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/capture_depth_content.cjs
+      - name: Verify high-fidelity capture on re-rendering pages, iframes and quick passes in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/capture_depth_fixtures.cjs
       - name: Verify the interaction-detail Privacy controls in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/capture_depth_privacy.cjs
       - name: Verify the SAP order-to-cash source controls in Chromium
