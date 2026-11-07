@@ -14,6 +14,7 @@ from pathlib import Path
 from .m365_outlook_checkpoint import inspect_checkpoint
 from .m365_outlook_delta import _candidate, _private_read, _scope, MAX_CANDIDATE_BYTES
 from .m365_outlook_owg_receipt import ReceiptError
+from .m365_outlook_sync_readiness import readiness
 from .m365_outlook_verified_next_round import run_verified_next_round
 
 FORMAT = "openworkgraph.m365-checkpoint-next.v1"
@@ -29,12 +30,28 @@ def extract_from_checkpoint(*, tenant, mailbox, folder, log_id, confirm_log_id,
                             consent_local_read=False, consent_delta_read=False,
                             consent_local_export=False,
                             confirm_removals_reviewed=False,
-                            opener=None, membership_opener=None):
+                            opener=None, membership_opener=None,
+                            identity_report=None, folder_report=None,
+                            expected_address=None):
     if not all((consent_local_read is True, consent_delta_read is True,
                 consent_local_export is True, confirm_removals_reviewed is True)):
         raise ReceiptError("Explicit local, provider and removal review consent required")
     if type(log_id) is not str or not log_id or log_id != confirm_log_id:
         raise ReceiptError("Log identity not confirmed")
+    # Optional, explicit provider preflight integration. Fail closed for partial
+    # evidence: identity and folder reports must be checked as a pair, and the
+    # operator must name the expected mailbox address before any Graph read.
+    supplied = (identity_report, folder_report, expected_address)
+    if any(value is not None for value in supplied):
+        if not all(value is not None and value != "" for value in supplied):
+            raise ReceiptError("Complete mailbox and folder preflight evidence required")
+        preflight = readiness(
+            tenant=tenant, mailbox=mailbox, folder=folder,
+            expected_address=expected_address, grant_file=Path(grant_file),
+            identity_report=Path(identity_report), folder_report=Path(folder_report),
+            ledger_dir=Path(ledger_dir), log_id=log_id, consent_local_read=True)
+        if preflight["status"] != "operator_review_ready":
+            raise ReceiptError("Provider preflight not ready")
     previous_candidate = Path(previous_candidate)
     previous_csv = Path(previous_csv)
     entry = inspect_checkpoint(
@@ -84,6 +101,9 @@ def main(argv=None):
                 "receipt-file", "journal-dir", "handoff-dir", "output", "candidate"):
         parser.add_argument("--" + key, type=Path, required=True)
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--identity-report", type=Path)
+    parser.add_argument("--folder-report", type=Path)
+    parser.add_argument("--expected-address")
     for key in ("consent-local-read", "consent-delta-read",
                 "consent-local-export", "confirm-removals-reviewed"):
         parser.add_argument("--" + key, action="store_true")
