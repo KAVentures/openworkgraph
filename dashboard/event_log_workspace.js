@@ -3406,6 +3406,7 @@
         return [rule.name,text,del];})):el('div','No saved signals yet.','muted'));
       evaluate.disabled=!r.rules.length;
       await refreshInbox();
+      await refreshAllSignals();
     }
     add.onclick=async()=>{
       try{
@@ -3431,7 +3432,6 @@
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
     };
     refresh().catch(error=>{message.textContent=error.message;});
-    refreshAllSignals();
     return box;
   }
 
