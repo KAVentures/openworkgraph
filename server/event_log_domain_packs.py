@@ -574,7 +574,9 @@ PACKS: dict[str, dict[str, dict[str, Any]]] = {"order_to_cash": {"1.0.0": ORDER_
 
 
 class _Strict(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # Never persist NaN or Infinity in a policy target/digest. They otherwise
+    # bypass ordinary inclusive range checks because comparisons are unordered.
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 
 class Mapping(_Strict):
