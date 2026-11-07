@@ -163,7 +163,9 @@ def test_extract_after_readiness_preserves_manual_review_boundary():
                 return_value={"status": "review_required",
                               "committed_predecessor_generation": 2,
                               "event_snapshots": 3,
-                              "removal_markers_for_review": 1}) as extract):
+                              "removal_markers_for_review": 1,
+                              "checkpoint_advanced": False,
+                              "owg_append_performed": False}) as extract):
         result = extract_after_readiness(**_extract_kwargs())
     assert ready.call_args.kwargs["expected_generation"] == 2
     assert extract.call_args.kwargs["log_id"] == "log"
