@@ -114,6 +114,31 @@ def test_gaps_are_lost_reports_until_they_arrive(setup):
     assert channels.listing()["channels"][0]["missing_sequences"] == [3]
 
 
+def test_large_signed_sequence_jump_keeps_only_bounded_gap_ids(setup):
+    dep, cid, secret = setup
+    send(cid, secret, 1, envelope(report(["r1"])))
+    big = 100_000_000
+    accepted = send(cid, secret, big, envelope(report(["r_big"])))
+    assert accepted["outcome"] == "imported"
+    assert accepted["new_missing_sequences"] == big - 2
+    channel = channels.listing()["channels"][0]
+    assert channel["highest_sequence"] == big
+    assert channel["missing_count"] == channels.MAX_MISSING
+    assert channel["missing_truncated"] is True
+    assert channel["missing_sequences"] == list(
+        range(big - channels.MAX_MISSING, big - channels.MAX_MISSING + 50))
+    lost = next(i for i in incidents.listing()["incidents"] if i["kind"] == "lost_reports")
+    assert lost["occurrences"] == big - 2, "inferred gap count, not retained IDs"
+
+    # Late arrival recovers an explicitly retained gap without clearing the
+    # warning that much older missing IDs were necessarily discarded.
+    late = send(cid, secret, big - 1, envelope(report(["r_late"])))
+    assert late["outcome"] == "imported"
+    after = channels.listing()["channels"][0]
+    assert after["missing_count"] == channels.MAX_MISSING - 1
+    assert after["missing_truncated"] is True
+
+
 def test_a_different_spec_is_version_drift_not_a_silent_rebind(setup):
     dep, cid, secret = setup
     body = envelope(report(["r1"], spec="b" * 64), label="v2.0.0")
