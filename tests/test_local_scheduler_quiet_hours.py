@@ -217,3 +217,71 @@ def test_privacy_ui_wires_optional_and_existing_job_controls():
     assert "quiet_hours: quietEnabled.checked ? readQuietWindow() : null" in s
     assert "quiet_hours: null" in s
     assert "next_run_at" in s and "last_deferred_until" in s
+
+
+
+def test_second_due_job_paused_during_first_job_is_never_dispatched():
+    a = _create()
+    b = scheduler.create("event_log_signals", "log_other", interval_minutes=15,
+                         confirm_scheduled_runs=True)
+    when = _epoch("2026-11-07T10:00:00Z")
+    data = scheduler._read()
+    for item in data["schedules"].values():
+        item["next_run_epoch"] = when
+    scheduler._write(data)
+    called = []
+    def runner(kind, target):
+        called.append(target)
+        if target == "log_synthetic":
+            scheduler.update(b["schedule_id"], enabled=False)
+        return "succeeded", 0.0
+    assert scheduler.run_due(now=when, runner=runner) == [{
+        "schedule_id": a["schedule_id"], "outcome": "succeeded"}]
+    assert called == ["log_synthetic"]
+    assert scheduler.status()["schedules"][1]["enabled"] is False
+    assert _schedule(b["schedule_id"])["history"] == []
+
+
+def test_second_due_job_freshly_configured_quiet_during_first_is_deferred():
+    a = _create()
+    b = scheduler.create("event_log_signals", "log_other", interval_minutes=15,
+                         confirm_scheduled_runs=True)
+    when = _epoch("2026-11-07T10:00:00Z")
+    data = scheduler._read()
+    for item in data["schedules"].values():
+        item["next_run_epoch"] = when
+    scheduler._write(data)
+    called = []
+    def runner(kind, target):
+        called.append(target)
+        if target == "log_synthetic":
+            scheduler.update(b["schedule_id"], quiet_hours={
+                "timezone": "UTC", "start": "09:00", "end": "17:00"})
+        return "succeeded", 0.0
+    result = scheduler.run_due(now=when, runner=runner)
+    assert result == [{"schedule_id": a["schedule_id"], "outcome": "succeeded"}]
+    assert called == ["log_synthetic"]
+    other = _schedule(b["schedule_id"])
+    assert other["next_run_epoch"] == _epoch("2026-11-07T17:00:00Z")
+    assert other["history"] == [] and other["last_run_epoch"] is None
+
+
+def test_second_due_job_deleted_during_first_is_never_dispatched():
+    a = _create()
+    b = scheduler.create("event_log_signals", "log_other", interval_minutes=15,
+                         confirm_scheduled_runs=True)
+    when = _epoch("2026-11-07T10:00:00Z")
+    data = scheduler._read()
+    for item in data["schedules"].values():
+        item["next_run_epoch"] = when
+    scheduler._write(data)
+    called = []
+    def runner(kind, target):
+        called.append(target)
+        if target == "log_synthetic":
+            scheduler.delete(b["schedule_id"])
+        return "succeeded", 0.0
+    assert scheduler.run_due(now=when, runner=runner) == [{
+        "schedule_id": a["schedule_id"], "outcome": "succeeded"}]
+    assert called == ["log_synthetic"]
+    assert b["schedule_id"] not in scheduler._read()["schedules"]
