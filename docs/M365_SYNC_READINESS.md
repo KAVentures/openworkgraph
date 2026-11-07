@@ -21,3 +21,13 @@ advancement occur. For actual next-round extraction, use the separate
 checkpoint-anchored operator command with its own fresh permissions and
 authenticated membership check. Existing reports can become stale; this
 command does not prove their freshness or replace live provider verification.
+
+
+### Bind operator review to a committed generation
+
+Supply `--expected-generation N` after the operator has inspected generation N.
+The readiness gate refuses if the durable checkpoint has moved to a different
+generation, preventing stale operator decisions from being mistaken for fresh
+approval. The option is backward compatible with existing local inspections;
+for an operator confirmation/handoff, pass it explicitly. It does not authorize
+Graph access, advance a checkpoint or replace a live provider-grant check.
