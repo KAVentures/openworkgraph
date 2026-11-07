@@ -334,6 +334,15 @@ def run_due(now: float | None = None, runner: Runner | None = None) -> list[dict
                    if s["enabled"] and (s.get("next_run_epoch") or 0) <= current]
         for item in sorted(due, key=lambda s: s.get("next_run_epoch") or 0):
             started = time.time() if now is None else now
+            # Due lists are snapshots. A previous job or the owner may have
+            # paused, removed or edited this one while the serial worker ran.
+            # Never dispatch using a stale authorization/configuration view.
+            with _LOCK:
+                live = _read()["schedules"].get(item["schedule_id"])
+                if (not live or not live["enabled"]
+                        or (live.get("next_run_epoch") or 0) > started):
+                    continue
+                item = dict(live)
             if runner is _run_job:
                 try:
                     _check_target(item["kind"], item["target_id"])
