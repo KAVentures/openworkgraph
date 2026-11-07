@@ -51,3 +51,16 @@ candidate must still be reviewed, appended with explicit approval, verified,
 and checkpoint-committed in separate steps. No automatic append, retry or
 checkpoint advancement is performed here. This programmatic composition is
 not yet a dashboard workflow or a real Microsoft tenant acceptance test.
+
+
+### Concurrent checkpoint generation guard
+
+The combined operator API now requires the checkpoint-bound extraction delegate
+also to report the **same exact committed predecessor generation** that the
+operator reviewed. If a concurrent operator advanced the ledger between the
+preflight and delegated extraction, the combined API refuses the result and
+requires inspection before any manual retry. This is a fail-closed result
+check, **not** an atomic lock: a bounded Graph GET may already have occurred
+before the changed generation is detected. It does not authorize automatic
+retry, event append, checkpoint commit, or removal. A full operator-facing
+transaction and real-tenant acceptance are still outstanding.
