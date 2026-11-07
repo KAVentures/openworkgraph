@@ -136,10 +136,13 @@ def run() -> dict[str, Any]:
         survivors = entries[:KEEP_SCHEDULED]
         for old in entries[KEEP_SCHEDULED:]:
             prior = _owned_file(folder, old)
-            if prior is None:
-                survivors.append(old)
-            else:
+            if prior is not None:
                 prior.unlink()
+            elif (folder / old["name"]).exists() or (folder / old["name"]).is_symlink():
+                # Modified/replaced file is no longer ours to delete; retain
+                # its ledger provenance without touching its contents.
+                survivors.append(old)
+            # A genuinely missing old file can drop out of the ledger safely.
         _save(folder, survivors)
         return {
             "verified": True, "encrypted": False, "includes_secrets": False,
