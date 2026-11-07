@@ -1,0 +1,41 @@
+name: draft-smoke
+
+# WIP branches get cheap syntax feedback. Full native/browser/packaging gates
+# run when the author marks the PR ready (and on each subsequent push).
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: draft-smoke-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  draft-syntax:
+    if: github.event.pull_request.draft == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Syntax-check Python without external dependencies
+        run: python -m compileall -q server shared collector tests scripts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Syntax-check browser and dashboard JavaScript
+        shell: bash
+        run: |
+          set -euo pipefail
+          for path in dashboard/*.js browser_extension/*.js gateway/*.js tests/browser/*.cjs .github/scripts/*.cjs; do
+            node --check "$path"
+          done
+      - name: Clarify scope
+        run: |
+          echo "Draft syntax only. Ready-for-review triggers all six full CI workflows."
+          echo "This is not a substitute for native, browser, package or scale acceptance."
