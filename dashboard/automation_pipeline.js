@@ -1992,8 +1992,24 @@
     }
 
     window.addEventListener('owg-pipeline-open',event=>{
-      const id=event.detail?.idea_id;if(typeof id!=='string')return;
-      refresh().then(()=>show(id)).catch(e=>{status.textContent=e.message;});
+      const handoff=event.detail||{},id=handoff.idea_id;
+      if(typeof id!=='string')return;
+      // Carry the exact inspected export as a navigation hint, never as approval.
+      // Recheck it against the authenticated journey before opening the evidence UI.
+      refresh().then(async()=>{
+        await show(id);
+        if(!handoff.project_id)return;
+        const journey=await (await api('/v1/automation-pipeline/'+encodeURIComponent(id)+'/journey')).json();
+        const project=journey.projects?.find(p=>p.project_id===handoff.project_id);
+        if(journey.idea?.revision!==handoff.idea_revision||!project||
+           project.spec_sha256!==handoff.spec_sha256||project.archive_sha256!==handoff.archive_sha256){
+          status.textContent='Selected export changed. Return to the review workbench and inspect again.';
+          return;
+        }
+        const button=document.getElementById('owgPipelineJourney');
+        if(button)await button.onclick();
+        status.textContent='Opened evidence journey for inspected project '+handoff.project_id+'. Review and approval remain separate.';
+      }).catch(e=>{status.textContent='Unable to open reviewed evidence: '+e.message;});
     });
 
     add.onclick=async()=>{try{
