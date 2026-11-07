@@ -100,3 +100,16 @@ markers, explicitly authorize any append, verify the receipt, and commit
 the next checkpoint. The CLI cannot make the Graph request atomic with a
 checkpoint generation change, and does not prove live Microsoft tenant
 acceptance. No automatic retry or checkpoint advancement is permitted.
+
+## Concurrent checkpoint change during Graph read
+
+The extraction gate now re-inspects the durable scoped checkpoint **after**
+the delegated Microsoft Graph request and before reporting `review_required`.
+The current generation and log must still equal the operator-reviewed values,
+and the scoped provider grant is rechecked. If another operator commits a newer
+checkpoint, or the grant is revoked, the command refuses to endorse the
+candidate. Inspect the checkpoint and preflight evidence before considering
+another explicitly approved extraction. **Do not automatically retry**: the
+provider request may already have occurred, and generated private artifacts
+may require manual disposition. This is a post-request race detector, **not**
+an atomic lock or a guarantee of serializable Graph reads.
