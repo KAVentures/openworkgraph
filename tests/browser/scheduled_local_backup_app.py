@@ -16,6 +16,11 @@ from server.secure_app import app  # noqa: E402
 import server.basic_mode_routes  # noqa: E402,F401
 from server.local_scheduler_routes import router  # noqa: E402
 from server.local_auth import create_dashboard_session  # noqa: E402
+import server.main as owg_main  # noqa: E402
+
+# This fixture serves on 8791 so it can run beside other browser tests; the local-origin
+# guard only knows the default 8787 dashboard, so allow this fixture's own origin too.
+owg_main.LOCAL_WEB_ORIGINS.update({"http://127.0.0.1:8791", "http://localhost:8791"})
 
 app.include_router(router)
 (scratch / "session.txt").write_text(create_dashboard_session(), encoding="utf-8")

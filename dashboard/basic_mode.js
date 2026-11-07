@@ -268,7 +268,7 @@
           <input type="checkbox" id="pvScheduleBackupAck"> I understand recurring backups save unencrypted copies of locally recorded activity outside OWG's data folder, without credentials; only automatically created backups are rotated. I will keep the backup folder private.
         </label>
         <div class="muted" id="pvScheduleStatus" role="status" aria-live="polite"></div>
-        <div id="pvScheduleList" aria-label="Scheduled jobs"></div>
+        <div id="pvScheduleList" role="region" aria-label="Scheduled jobs"></div>
       </div>
       <div class="card" id="pvSemantic">
         <h2>AI help with grouping work</h2>
