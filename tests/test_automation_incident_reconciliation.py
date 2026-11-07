@@ -86,10 +86,11 @@ def test_same_count_but_different_run_membership_reopens_a_resolved_incident(sto
     routes._import_and_triage(report(["r1"], status="failed"), dep)
     incident = _incident(dep)
     incidents.triage(incident["incident_id"], {"status": "resolved"})
-    # One run is corrected and a separate run fails: count stays at one.
-    routes._import_and_triage(report(["r1"], status="succeeded"), dep)
-    assert _incident(dep)["status"] == "resolved" and _incident(dep)["occurrences"] == 0
-    routes._import_and_triage(report(["r2"], status="failed"), dep)
+    # A batch can replace one failed run and add a different failed run
+    # before the next incident reconciliation: same count, different IDs.
+    monitoring.import_report(report(["r1"], status="succeeded"), dep)
+    monitoring.import_report(report(["r2"], status="failed"), dep)
+    assert incidents.reconcile_deployment(dep) == [incident["incident_id"]]
     now = _incident(dep)
     assert now["status"] == "open" and now["occurrences"] == 1
     assert now["reopened_count"] == 1 and now["sample_refs"] == ["r2"]
