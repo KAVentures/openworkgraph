@@ -148,7 +148,7 @@ def _require_dashboard_session(request: Request) -> None:
     from .local_auth import dashboard_session_valid
     auth = str(request.headers.get("authorization") or "")
     if not auth.lower().startswith("owg-session ") or not dashboard_session_valid(auth[len("owg-session "):].strip()):
-        raise HTTPException(status_code=403, detail="Local dashboard session required to change capture depth")
+        raise HTTPException(status_code=403, detail="Local dashboard session required")
 
 
 def get_capture_depth() -> dict[str, Any]:

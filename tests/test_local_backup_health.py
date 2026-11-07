@@ -194,7 +194,9 @@ with TestClient(app) as client:
            "Content-Type":"application/json"}
     bearer={"Authorization":"Bearer "+local_auth.ensure_api_token(),
             "Content-Type":"application/json"}
-    assert client.post(url,json=body).status_code==403
+    # No credentials at all: the API authentication middleware refuses first.
+    assert client.post(url,json=body).status_code==401
+    # A valid bearer token is still not the owner's dashboard session.
     assert client.post(url,json=body,headers=bearer).status_code==403
     bad=client.post(url,json={"names":[name]},headers=owner)
     assert bad.status_code==422
