@@ -15,6 +15,8 @@
     const results=node('div');const choice=node('select');choice.setAttribute('aria-label','Exact project for human review');
     const review=node('button','Review selected project');review.type='button';review.disabled=true;
     const details=node('div');let snapshot=null;let generation=0;
+    // A review is bound to the exact choice; switching choices must invalidate it.
+    choice.addEventListener('change',()=>{generation++;details.replaceChildren();review.disabled=!snapshot;status.textContent='Project changed. Review the newly selected export before proceeding.';});
     const clear=()=>{snapshot=null;choice.replaceChildren();results.replaceChildren();details.replaceChildren();review.disabled=true;};
     const validProjects=(projects,revision)=>Array.isArray(projects)&&
       new Set(projects.map(p=>p.project_id)).size===projects.length&&
@@ -57,7 +59,7 @@
       const current=++generation;review.disabled=true;details.replaceChildren();status.textContent='Rechecking current revisions…';
       try{
         const fresh=await request('/v1/review-choice-workbench/'+encodeURIComponent(id));
-        if(current!==generation)return;
+        if(current!==generation||choice.value!==projectId||input.value.trim()!==id)return;
         const candidate=fresh.projects?.find(p=>p.project_id===projectId);
         if(fresh.format!=='openworkgraph.review-choices.v1'||fresh.idea?.idea_id!==id||
            fresh.execution_authorized!==false||fresh.source_read_authorized!==false||
@@ -82,7 +84,7 @@
           node('p','This selection is not an execution approval or a provider source read.'));
         status.textContent='Read-only choice inspected against current local records.';
       }catch(e){if(current===generation){clear();status.textContent='Review failed. Inspect current records again before choosing. '+e.message;}}
-      finally{if(current===generation&&snapshot)review.disabled=false;}
+      finally{if(current===generation&&snapshot&&choice.value===projectId)review.disabled=false;}
     };
     card.append(heading,intro,label,input,load,status,results,details);panel.append(card);
   }
