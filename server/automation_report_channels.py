@@ -260,7 +260,7 @@ def ingest(channel_id: str, timestamp: str, sequence_header: str, signature: str
     if gaps:
         incidents.record(deployment_id, "lost_reports", f"channel:{channel_id}", count=gaps,
                          detail={"channel_id": channel_id})
-    touched = incidents.record_runs(deployment_id, parsed["runs"])
+    touched = incidents.reconcile_deployment(deployment_id)
     return {"duplicate": False, "sequence": sequence, "outcome": "imported", "runs_imported": result["runs_imported"],
             "new_missing_sequences": gaps, "incidents_updated": touched, **incidents.CLAIMS}
 
