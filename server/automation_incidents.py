@@ -104,21 +104,156 @@ def record(deployment_id: str, kind: str, fingerprint: str, *, count: int = 1, s
         return dict(item)
 
 
+def _retained_run_groups(conn, deployment_id: str) -> dict[tuple[str, str], dict[str, Any]]:
+    """Aggregate the *current* deduplicated run store, not report submissions.
+
+    Query in bounded batches rather than reading every step or run into memory.
+    A sorted, unambiguous run-ID digest detects membership changes beyond the
+    ten IDs displayed to a reviewer. Nothing here changes the source runs.
+    """
+    cursor = conn.execute("""
+        SELECT r.run_id, r.status,
+               arg_min(s.activity, s.seq) FILTER (
+                 WHERE s.status = CASE WHEN r.status='failed'
+                                      THEN 'failed' ELSE 'handed_to_human' END
+               ) AS first_problem_activity
+        FROM runs r
+        LEFT JOIN steps s ON s.deployment_id=r.deployment_id AND s.run_id=r.run_id
+        WHERE r.deployment_id=? AND r.status IN ('failed','handed_to_human')
+        GROUP BY r.run_id, r.status
+        ORDER BY r.run_id
+    """, [deployment_id])
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    while True:
+        batch = cursor.fetchmany(1024)
+        if not batch:
+            break
+        for run_id, status, activity in batch:
+            kind = "run_failures" if status == "failed" else "run_handoffs"
+            fingerprint = "step:" + activity if activity is not None else "no_step_reported"
+            key = (kind, fingerprint)
+            row = groups.setdefault(key, {"count": 0, "digest": hashlib.sha256(), "samples": []})
+            row["count"] += 1
+            # Run IDs are already validated printable identifiers by the
+            # report parser; NUL cannot appear in one. Delimit to avoid ambiguity.
+            row["digest"].update(run_id.encode("utf-8") + b"\\0")
+            if len(row["samples"]) < MAX_SAMPLES:
+                row["samples"].append(run_id)
+    return {key: {"count": value["count"], "membership_sha256": value["digest"].hexdigest(),
+                  "samples": value["samples"]}
+            for key, value in groups.items()}
+
+
+def reconcile_deployment(deployment_id: str) -> list[str]:
+    """Reconcile incident counts to distinct retained runs after a committed import.
+
+    A duplicate import cannot inflate counts or reopen a resolved incident.
+    Revisions to a retained run update the current group count and identity.
+    Decreases never auto-resolve a human decision; changes in membership at
+    constant or increasing count reopen a resolved incident for re-review.
+    Existing manual triage notes are preserved. Channel/security incident
+    occurrence counters remain independent of this run-based reconciliation.
+    """
+    from . import automation_monitoring as monitoring
+
+    # Keep both the database snapshot and the sidecar update serialized with
+    # import and deployment deletion, including concurrent signed channels.
+    with monitoring._LOCK, _LOCK:
+        conn = monitoring._connect()
+        try:
+            monitoring._check(conn, deployment_id)
+            groups = _retained_run_groups(conn, deployment_id)
+        finally:
+            conn.close()
+
+        data = _load()
+        items = data["incidents"]
+        now = _now()
+        changed_ids: list[str] = []
+        changed_any = False
+        empty_hash = hashlib.sha256().hexdigest()
+
+        for (kind, fingerprint), group in sorted(groups.items()):
+            incident_id = _incident_id(deployment_id, kind, fingerprint)
+            current = group["count"]
+            digest = group["membership_sha256"]
+            item = items.get(incident_id)
+            if item is None:
+                if len(items) >= MAX_INCIDENTS:
+                    resolved = sorted((v["last_seen"], k) for k, v in items.items()
+                                      if v["status"] == "resolved")
+                    if not resolved:
+                        raise IncidentError("too many open incidents; resolve some first")
+                    del items[resolved[0][1]]
+                items[incident_id] = {
+                    "incident_id": incident_id, "deployment_id": deployment_id, "kind": kind,
+                    "fingerprint": fingerprint, "first_seen": now, "last_seen": now,
+                    "occurrences": current, "current_run_count": current,
+                    "count_basis": "distinct_retained_run_ids",
+                    "run_membership_sha256": digest, "status": "open",
+                    "reopened_count": 0, "sample_refs": group["samples"],
+                    "notes": [], "detail": {},
+                }
+                changed_ids.append(incident_id)
+                changed_any = True
+                continue
+
+            previous_digest = item.get("run_membership_sha256")
+            previous_count = int(item.get("current_run_count", item["occurrences"]))
+            member_changed = previous_digest is not None and previous_digest != digest
+            content_changed = (previous_count != current or member_changed or
+                               previous_digest is None or
+                               item.get("count_basis") != "distinct_retained_run_ids")
+            if not content_changed:
+                continue
+            # Legacy incidents have no retained-run membership evidence.
+            # Correct their count without mistaking that migration for a new
+            # failure and reopening a human-resolved incident.
+            if (member_changed and current >= previous_count and current > 0
+                    and item["status"] == "resolved"):
+                item["status"] = "open"
+                item["reopened_count"] += 1
+            item.update(occurrences=current, current_run_count=current,
+                        count_basis="distinct_retained_run_ids",
+                        run_membership_sha256=digest, sample_refs=group["samples"])
+            if previous_digest is not None and (member_changed or previous_count != current):
+                item["last_seen"] = now
+            changed_ids.append(incident_id)
+            changed_any = True
+
+        # A formerly failing run can later succeed or be reclassified to a
+        # different failing activity. Preserve its review history but no longer
+        # present it as a currently retained failure in the old group.
+        for incident_id, item in items.items():
+            if (item["deployment_id"] != deployment_id or
+                    item["kind"] not in ("run_failures", "run_handoffs") or
+                    (item["kind"], item["fingerprint"]) in groups):
+                continue
+            if (item.get("current_run_count", item["occurrences"]) == 0
+                    and item.get("run_membership_sha256") == empty_hash
+                    and item.get("count_basis") == "distinct_retained_run_ids"):
+                continue
+            previous_digest = item.get("run_membership_sha256")
+            item.update(occurrences=0, current_run_count=0, sample_refs=[],
+                        run_membership_sha256=empty_hash,
+                        count_basis="distinct_retained_run_ids")
+            if previous_digest is not None:
+                item["last_seen"] = now
+            changed_ids.append(incident_id)
+            changed_any = True
+
+        if changed_any:
+            _write(data)
+        return sorted(set(changed_ids))
+
+
 def record_runs(deployment_id: str, runs: list[dict[str, Any]]) -> list[str]:
-    """Group failed and handed-off runs by their first failing or handing-off step."""
-    groups: dict[tuple[str, str], list[str]] = {}
-    for run in runs:
-        if run["status"] not in ("failed", "handed_to_human"):
-            continue
-        kind = "run_failures" if run["status"] == "failed" else "run_handoffs"
-        wanted = "failed" if kind == "run_failures" else "handed_to_human"
-        step = next((s for s in run["steps"] if s[2] == wanted), None)
-        fingerprint = ("step:" + step[1]) if step else "no_step_reported"
-        groups.setdefault((kind, fingerprint), []).append(run["run_id"])
-    touched = []
-    for (kind, fingerprint), run_ids in sorted(groups.items()):
-        touched.append(record(deployment_id, kind, fingerprint, count=len(run_ids), samples=run_ids[:MAX_SAMPLES])["incident_id"])
-    return touched
+    """Compatibility wrapper: count the retained DB, never repeat submitted IDs.
+
+    ``runs`` is intentionally not authoritative. The report importer already
+    committed those records and may have replaced an existing run ID.
+    """
+    return reconcile_deployment(deployment_id)
 
 
 def listing(status: str | None = None, deployment_id: str | None = None) -> dict[str, Any]:
@@ -166,4 +301,4 @@ def forget_deployment(deployment_id: str) -> int:
     return len(doomed)
 
 
-__all__ = ["CLAIMS", "IncidentError", "KINDS", "forget_deployment", "listing", "record", "record_runs", "triage"]
+__all__ = ["CLAIMS", "IncidentError", "KINDS", "forget_deployment", "listing", "record", "record_runs", "reconcile_deployment", "triage"]
