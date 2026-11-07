@@ -138,6 +138,16 @@ const path=require('node:path');
   await page.locator('#owgEventLogConsent').check();
   await page.locator('#owgEventLogImport').click();
   await page.locator('#owgEventLogStatus').filter({hasText:'Imported'}).waitFor();
+  // The status is emitted before refreshLogs selects the newly imported log.
+  // Wait for the import handler to finish to avoid analysing the previous log,
+  // then having its in-flight selection clear the domain-pack results.
+  await page.waitForFunction(() => {
+    const button=document.querySelector('#owgEventLogImport');
+    const selected=document.querySelector('#owgEventLogPick');
+    const caseType=document.querySelector('#owgEventLogCaseType');
+    return button && !button.disabled && selected && selected.value &&
+      caseType && caseType.options.length>0;
+  });
   await page.locator('#owgEventLogAnalyze').click();
   await page.locator('#owgDomainPackSetup').click();
   await page.locator('#owgDomainPackChoice').selectOption('employee_offboarding');
