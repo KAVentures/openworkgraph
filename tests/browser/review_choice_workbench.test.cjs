@@ -13,7 +13,7 @@ async function scenario(title,responses,check,withPipeline=false){
  const doc={createElement:t=>new Node(t),getElementById:id=>id==='panel-evidence'?panel:(withPipeline&&id==='owgPipelineCard'?pipeline:null),addEventListener(k,fn){this[k]=fn;}};
  let opened=0, lastEvent=null;
  let calls=0;
- const context={document:doc,window:{__owgAuthReady:Promise.resolve(),dispatchEvent:e=>{opened++;lastEvent=e;}},fetch:async(_url,options)=>{assert.equal(options.cache,'no-store');const x=responses[calls++];if(x instanceof Error)throw x;return {ok:x.ok!==false,status:x.status||200,json:async()=>x.data||x};}};
+ const context={document:doc,CustomEvent:class {constructor(type,init){this.type=type;this.detail=init.detail;}},window:{__owgAuthReady:Promise.resolve(),dispatchEvent:e=>{opened++;lastEvent=e;}},fetch:async(_url,options)=>{assert.equal(options.cache,'no-store');const x=responses[calls++];if(x instanceof Error)throw x;return {ok:x.ok!==false,status:x.status||200,json:async()=>x.data||x};}};
  vm.runInNewContext(fs.readFileSync(path.resolve(__dirname,'../../dashboard/review_choice_workbench.js'),'utf8'),context);
  doc.DOMContentLoaded();
  const card=panel.children[0];assert.equal(card.id,'owgReviewChoiceWorkbench');
