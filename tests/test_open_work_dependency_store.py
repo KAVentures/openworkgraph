@@ -120,3 +120,81 @@ def test_dependency_store_refuses_unsafe_existing_paths(tmp_path):
     sidecar.unlink()
     assert dependency_context(str(path), scope="tenant", actor="alice",
                               case_id="invoice")["direct"] == ["approval"]
+
+
+def test_live_review_reconciliation_and_revocation_fail_closed(tmp_path):
+    from server.open_work_dependency_store import reconcile_current_reviewed_dependencies
+    from server.open_work_case_declarations import CaseDeclarationError
+
+    path = str(tmp_path / "live.sqlite")
+    scope, actor = "owg:scope:" + "a" * 32, "alice"
+    a, b = "owg:w:" + "a" * 32, "owg:w:" + "b" * 32
+    def row(ref, deps):
+        return {
+            "work_item_ref": ref, "depends_on_work_item_refs": deps,
+            "goal_code": "verify_operation",
+            "expected_outcome_code": "operation_receipt_reviewed",
+            "revision": 1, "updated_at": "2026-11-07T00:00:00Z",
+            "expires_at": "2026-11-08T00:00:00Z",
+            "provenance": "explicit_owner_declaration_not_source_verified",
+            "expected_outcome_verified": False,
+            "business_obligation_verified": False,
+            "customer_outcome_verified": False,
+            "agent_execution_authorized": False,
+            "source_state": "unknown_until_explicit_recheck",
+        }
+    snapshot = {"format": "openworkgraph.local-case-declarations.v1",
+                "items": [row(a, [b]), row(b, [])]}
+    live = {"scope": scope, "snapshot": snapshot}
+    def scope_provider():
+        return live["scope"]
+    def snapshot_provider(_scope):
+        return live["snapshot"]
+    kwargs = dict(path=path, scope=scope, actor=actor,
+                  scope_provider=scope_provider, snapshot_provider=snapshot_provider)
+    result = reconcile_current_reviewed_dependencies(**kwargs)
+    assert result["current_review_rechecked"] is True
+    assert result["agent_execution_authorized"] is False
+    assert dependency_context(path, scope=scope, actor=actor, case_id=a)["direct"] == [b]
+    live["snapshot"] = {"format": snapshot["format"], "items": []}
+    assert reconcile_current_reviewed_dependencies(**kwargs)["removed_stale_edges"] == 1
+    assert dependency_context(path, scope=scope, actor=actor, case_id=a)["direct"] == []
+    live["snapshot"] = snapshot
+    reconcile_current_reviewed_dependencies(**kwargs)
+    live["scope"] = None
+    with pytest.raises(CaseDeclarationError, match="scope"):
+        reconcile_current_reviewed_dependencies(**kwargs)
+    assert dependency_context(path, scope=scope, actor=actor, case_id=a)["direct"] == []
+
+
+def test_live_review_change_during_reconciliation_purges_mirror(tmp_path):
+    from server.open_work_dependency_store import reconcile_current_reviewed_dependencies
+    from server.open_work_case_declarations import CaseDeclarationError
+
+    path = str(tmp_path / "race.sqlite")
+    scope, actor = "owg:scope:" + "c" * 32, "alice"
+    a, b = "owg:w:" + "a" * 32, "owg:w:" + "b" * 32
+    def row(ref, deps):
+        return {
+            "work_item_ref": ref, "depends_on_work_item_refs": deps,
+            "goal_code": "verify_operation",
+            "expected_outcome_code": "operation_receipt_reviewed",
+            "revision": 1, "updated_at": "2026-11-07T00:00:00Z",
+            "expires_at": "2026-11-08T00:00:00Z",
+            "provenance": "explicit_owner_declaration_not_source_verified",
+            "expected_outcome_verified": False,
+            "business_obligation_verified": False,
+            "customer_outcome_verified": False,
+            "agent_execution_authorized": False,
+            "source_state": "unknown_until_explicit_recheck",
+        }
+    original = {"format": "openworkgraph.local-case-declarations.v1",
+                "items": [row(a, [b]), row(b, [])]}
+    revoked = {"format": original["format"], "items": []}
+    calls = iter((original, revoked))
+    with pytest.raises(CaseDeclarationError, match="changed"):
+        reconcile_current_reviewed_dependencies(
+            path, scope=scope, actor=actor,
+            scope_provider=lambda: scope,
+            snapshot_provider=lambda _scope: next(calls))
+    assert dependency_context(path, scope=scope, actor=actor, case_id=a)["direct"] == []
