@@ -36,10 +36,15 @@ Scheduled archives use names like
 `owg-backup-scheduled-20261107T010203123456000000Z.zip`.
 Each run snapshots via OWG's existing local backup creator. Only after the
 new archive passes full manifest/file-digest verification does the scheduler
-delete old archives *created by this job*, keeping the newest 14. Files
-with a different name, including manual archives, encrypted manual archives,
-other system archives, symlinks and unrecognized backups are never touched
-by this rotation. Automatic rotation does not erase separately stored copies.
+record its filename, byte size and modification time in the private on-disk
+`.owg-scheduled-backups-v1.json` ownership ledger. Rotation uses this ledger
+and removes only unchanged owned archives, keeping the newest 14. Manual
+archives are never deleted, **even if a user named one to look like a scheduled
+archive**. Replaced, changed and symlinked files are not deleted, and a
+malformed or symlinked ledger makes the run fail closed. A crash between
+successful archive writing and ledger commit can leave an untracked archive
+which OWG never auto-deletes; the operator can inspect and remove it manually.
+Automatic rotation does not erase separately stored copies.
 
 There is only **one scheduled local backup job** per OWG local scheduler.
 Runs are serialized by its existing lock. Failures use the existing safe
@@ -91,8 +96,8 @@ execution.
 
 `tests/test_local_scheduler_backups.py` covers literal opt-in, cadence,
 fixed local target, no eager execution, actual scheduled snapshot and SHA
-verification, no leaked keys, isolated rotation (including symlinks and
-manual backups), unsafe folder refusal and failure diagnostics/backoff.
+verification, no leaked keys, isolated rotation (including symlinks, manual lookalikes, tampered archives and a durable
+ownership ledger), unsafe folder refusal and failure diagnostics/backoff.
 
 `tests/test_local_scheduler_backup_routes.py` exercises a real local
 ASGI router in a subprocess with an actual dashboard session and
