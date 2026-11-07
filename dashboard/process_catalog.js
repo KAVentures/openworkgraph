@@ -681,6 +681,35 @@
         el('p','Declared predicate results: '+Number(counts.matched||0)+' matched · '+Number(counts.not_matched||0)+' not matched · '+Number(counts.unknown||0)+' unknown. '+
           Number(counts.not_evaluated_unconfirmed||0)+' unconfirmed and '+Number(counts.not_evaluated_unstructured||0)+' unstructured definitions were not evaluated.'),
         el('p','Facts are caller-supplied and unverified. These are descriptive comparisons, not policy compliance, observed-case conformance, business outcomes or permission to execute. A structural match alone does not check business facts.'));
+      // A matched rule is not necessarily a selected route: UNIQUE tables may
+      // overlap, FIRST tables may be blocked by earlier unknowns, and source
+      // facts may be incomplete. Show selected-row coverage explicitly.
+      for(const table of result.decision_table_test_coverage||[]){
+        const detail=el('details');
+        const rowCount=Number(table.selected_row_count||0),declaredCount=Number(table.declared_row_count||0);
+        detail.appendChild(el('summary','Decision table '+table.table_id+' · '+table.hit_policy+
+          ' · '+rowCount+'/'+declaredCount+' declared branches selected in these supplied cases'));
+        detail.appendChild(el('p',Number(table.selected_case_count||0)+'/'+Number(table.cases_checked||0)+
+          ' supplied cases selected an outgoing branch. '+Number(table.evaluated_case_count||0)+
+          ' cases evaluated at least one table row; '+Number(table.not_evaluated_case_count||0)+
+          ' did not. Coverage is descriptive for these supplied cases only, not exhaustive rule coverage.'));
+        const statuses=Object.entries(table.status_counts||{});
+        detail.appendChild(el('p',statuses.map(([key,count])=>key.replaceAll('_',' ')+': '+Number(count||0)).join(' · ')||
+          'No decision outcomes were evaluated.'));
+        const rowList=el('ul');
+        for(const row of table.rows||[]){
+          const n=Number(row.selected_cases||0),matched=Number(row.matched_cases_even_if_ambiguous||0);
+          rowList.appendChild(el('li',row.row_id+' → '+row.target_activity_id+
+            ' · selected '+n+' case'+(n===1?'':'s')+
+            ' · matched '+matched+' case'+(matched===1?'':'s')+
+            (n===0?' · NOT SELECTED in supplied examples':'')+
+            '. A row can match without being selected if another rule overlaps or takes precedence.'));
+        }
+        detail.appendChild(rowList);
+        output.appendChild(detail);
+      }
+      if(result.decision_table_test_coverage?.length)output.appendChild(el('p',
+        'Decision evidence is from a selected local file, not verified actual operations. Rows without a selected example may still be valid; the test set does not prove completeness, fairness, correctness or execution authorization.'));
       const reasons={matched:'Matched declared comparison',not_matched:'Did not match declared comparison',unknown:'Unknown: missing or incompatible fact',
         not_on_proposed_route:'Not on proposed route',not_evaluated_unconfirmed:'Definition not confirmed',not_evaluated_unstructured:'No structured predicate',not_evaluated_invalid_route:'Proposed route outside graph'};
       for(const item of result.cases){
