@@ -238,21 +238,35 @@ def create_backup(destination: Path, *, passphrase: str | None = None) -> dict[s
             "total_bytes": sum(entry["bytes"] for entry in entries),
             "files": entries,
         }
-        buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-            archive.writestr(MANIFEST, json.dumps(manifest, indent=2))
-            for entry in entries:
-                archive.write(staged / entry["path"], entry["path"])
-        payload = buffer.getvalue()
-    if passphrase and len(payload) + len(ENCRYPTED_MAGIC) + 44 > MAX_ENCRYPTED_ARCHIVE_BYTES:
-        raise BackupError("encrypted backup exceeds the supported in-memory verification limit")
-    blob = _encrypt(payload, passphrase) if passphrase else payload
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "wb") as handle:
-        handle.write(blob)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                if passphrase:
+                    # Existing encrypted v1 format uses a whole-archive AES-GCM
+                    # envelope. Keep compatibility but refuse archives too big
+                    # for the bounded legacy verifier before encryption.
+                    buffer = io.BytesIO()
+                    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+                        archive.writestr(MANIFEST, json.dumps(manifest, indent=2))
+                        for entry in entries:
+                            archive.write(staged / entry["path"], entry["path"])
+                    payload = buffer.getvalue()
+                    if len(payload) + len(ENCRYPTED_MAGIC) + 44 > MAX_ENCRYPTED_ARCHIVE_BYTES:
+                        raise BackupError("encrypted backup exceeds the supported in-memory verification limit")
+                    handle.write(_encrypt(payload, passphrase))
+                else:
+                    # Stream plaintext ZIP directly to its exclusive local file.
+                    # A large saved event log must not first fit in RAM.
+                    with zipfile.ZipFile(handle, "w", zipfile.ZIP_DEFLATED) as archive:
+                        archive.writestr(MANIFEST, json.dumps(manifest, indent=2))
+                        for entry in entries:
+                            archive.write(staged / entry["path"], entry["path"])
+        except Exception:
+            destination.unlink(missing_ok=True)
+            raise
     return {key: value for key, value in manifest.items() if key != "files"} | {
-        "archive": str(destination), "archive_bytes": len(blob)}
+        "archive": str(destination), "archive_bytes": destination.stat().st_size}
 
 
 def _open_archive(path: Path, passphrase: str | None) -> zipfile.ZipFile:
