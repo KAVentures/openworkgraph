@@ -145,7 +145,7 @@
       if(m.stale||m.evaluation_current===false){
         model.replaceChildren(el('h3','Learned model needs retraining'),
           el('div','The reviewed labels, held-out examples, retention, or intent names have changed since this model was trained. Its previous quality scores are historical and cannot be used to justify new classifications. Train again before choosing Learned model.','note'),
-          el('div','Previous model trained '+m.trained_at+'. No messages have been classified using this stale model.','muted'));
+          el('div','Previous model trained '+m.trained_at+'. New learned classifications are blocked until retraining.','muted'));
         return;
       }
       const e=m.evaluation;const f=v=>v===null||v===undefined?'—':Number(v).toFixed(2);
