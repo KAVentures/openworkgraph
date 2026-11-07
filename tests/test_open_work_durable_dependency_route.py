@@ -109,3 +109,65 @@ def test_durable_route_purges_stale_mirror_when_review_read_fails(monkeypatch, t
             _request("valid", "work_item_ref=" + a), Response()))
     assert exc.value.status_code == 409
     assert store.dependency_context(path, scope=scope, actor=actor, case_id=a)["direct"] == []
+
+
+def test_durable_route_purges_when_scope_revoked_after_reconciliation(monkeypatch, tmp_path):
+    """A mid-request scope revocation must not leave a readable mirror."""
+    from server import local_auth
+    from server import open_work_dependency_store as store
+    import hashlib
+    import hmac
+
+    scope = "owg:scope:" + "a" * 32
+    a, b = "owg:w:" + "a" * 32, "owg:w:" + "b" * 32
+    actor = "dashboard:" + hmac.new(
+        b"local-test-secret", b"open-work:durable-local-owner:v1",
+        hashlib.sha256,
+    ).hexdigest()[:32]
+    path = str(tmp_path / ".open_work_reviewed_dependencies.sqlite3")
+    monkeypatch.setattr(routes, "dashboard_session_valid", lambda token: token == "valid")
+    monkeypatch.setattr(routes, "_source_scope", lambda: scope)
+    monkeypatch.setattr(routes, "_read_or_create_secret", lambda name: "local-test-secret")
+    monkeypatch.setattr(local_auth, "auth_dir", lambda: tmp_path)
+
+    def populate(path, **kwargs):
+        store.declare_dependency(path, scope=scope, actor=actor, case_id=a, prerequisite=b)
+        return {"reconciled": True}
+
+    async def revoke(_scope):
+        raise HTTPException(403, "source grant revoked")
+
+    monkeypatch.setattr(store, "reconcile_current_reviewed_dependencies", populate)
+    monkeypatch.setattr(routes, "_recheck_source", revoke)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.get_local_durable_reviewed_dependencies(
+            _request("valid", "work_item_ref=" + a), Response()))
+    assert exc.value.status_code == 403
+    assert store.dependency_context(path, scope=scope, actor=actor, case_id=a)["direct"] == []
+
+
+def test_durable_route_refuses_success_if_revocation_cleanup_fails(monkeypatch, tmp_path):
+    """A failed purge must never return the just-reconciled dependency data."""
+    from server import local_auth
+    from server import open_work_dependency_store as store
+    scope = "owg:scope:" + "a" * 32
+    monkeypatch.setattr(routes, "dashboard_session_valid", lambda token: token == "valid")
+    monkeypatch.setattr(routes, "_source_scope", lambda: scope)
+    monkeypatch.setattr(routes, "_read_or_create_secret", lambda name: "local-test-secret")
+    monkeypatch.setattr(local_auth, "auth_dir", lambda: tmp_path)
+    monkeypatch.setattr(store, "reconcile_current_reviewed_dependencies",
+                        lambda path, **kwargs: {"reconciled": True})
+
+    async def revoke(_scope):
+        raise HTTPException(403, "source grant revoked")
+
+    def fail_purge(*args, **kwargs):
+        raise OSError("database locked")
+
+    monkeypatch.setattr(routes, "_recheck_source", revoke)
+    monkeypatch.setattr(store, "purge_actor", fail_purge)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.get_local_durable_reviewed_dependencies(
+            _request("valid"), Response()))
+    assert exc.value.status_code == 503
+    assert "cleanup unavailable" in exc.value.detail
