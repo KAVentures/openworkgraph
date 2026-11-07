@@ -285,6 +285,8 @@ def triage(incident_id: str, payload: Any) -> dict[str, Any]:
     expected = payload.get("expected_review_revision")
     if type(expected) is not int or expected < 0:
         raise IncidentError("exact nonnegative expected_review_revision required; refresh incidents")
+    if not isinstance(payload.get("expected_last_seen"), str) or not payload["expected_last_seen"]:
+        raise IncidentError("exact expected_last_seen required; refresh incidents")
     status, note = payload.get("status"), payload.get("note", "")
     if status not in ("acknowledged", "resolved", "open"):
         raise IncidentError("status must be acknowledged, resolved or open")
@@ -295,7 +297,7 @@ def triage(incident_id: str, payload: Any) -> dict[str, Any]:
         item = data["incidents"].get(incident_id)
         if item is None:
             raise IncidentError("unknown incident")
-        if payload.get("expected_last_seen") is not None and payload["expected_last_seen"] != item["last_seen"]:
+        if payload["expected_last_seen"] != item["last_seen"]:
             raise IncidentError("new occurrences arrived since you opened this incident; review them first")
         previous_revision = item.get("review_revision", 0)
         if expected != previous_revision:
