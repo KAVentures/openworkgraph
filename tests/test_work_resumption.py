@@ -47,7 +47,7 @@ def test_resumed_work_from_a_previous_day_is_found_by_shared_pointers():
     [candidate] = result["candidates"]
     assert candidate["earlier_session"]["started_at"].startswith("2026-10-12T09:00")
     assert [p["resource_ref"] for p in candidate["shared_pointers"]] == [REF["a"], REF["b"]]
-    assert candidate["association_status"] == "likely_resumed" and candidate["confidence"] == 0.8
+    # Shared session pointers alone do not corroborate a single resumed case.\n    assert candidate["association_status"] == "possible" and candidate["confidence"] == 0.55\n    assert candidate["case_assignment_status"] == "unresolved_independent_resources"
     assert candidate["crosses_calendar_day"] is True and candidate["proves_same_work"] is False
     assert candidate["task_label"] is None
     assert candidate["gap_seconds"] == 2 * 86400 - 20 * 60 + 3600
@@ -225,3 +225,114 @@ assert result["orientation"]["earlier_session_resumption_candidates_available"] 
 def test_current_work_context_carries_resumption_candidates_and_fails_soft():
     child = subprocess.run([sys.executable, "-c", COMPACT], cwd=ROOT, text=True, capture_output=True, timeout=60)
     assert child.returncode == 0, child.stderr
+
+
+def test_same_opaque_reference_from_different_providers_is_not_resumption():
+    # Provider-scoped references can collide; equality of the token alone is insufficient.
+    other = {"resource_reference": {"resource_ref": REF["a"],
+             "provider": "jira", "resource_kind": "issue"}}
+    db = _database([(_day(12, "09:00"), _ref("a")),
+                    (_day(14, "10:00"), other)])
+    result = resumption_candidates(db, lease=ALL)
+    assert result["candidates"] == []
+    assert result["current_session"]["pointer_count"] == 1
+
+
+def test_same_token_distinct_kinds_remain_separate_within_session():
+    issue = {"resource_reference": {"resource_ref": REF["a"],
+             "provider": "github", "resource_kind": "issue"}}
+    db = _database([(_day(12, "09:00"), _ref("a")),
+                    (_day(12, "09:01"), issue),
+                    (_day(14, "10:00"), _ref("a")),
+                    (_day(14, "10:01"), issue)])
+    result = resumption_candidates(db, lease=ALL)
+    assert result["current_session"]["pointer_count"] == 2
+    assert result["candidates"][0]["shared_pointer_count"] == 2
+    assert {p["resource_kind"] for p in result["candidates"][0]["shared_pointers"]} == {"issue", "pull_request"}
+
+
+def test_file_and_provider_resource_with_same_token_cannot_cross_match():
+    # Even if a provider emits the same token, file references have separate identity.
+    token = FILE
+    resource = {"resource_reference": {"resource_ref": token,
+                "provider": "github", "resource_kind": "file"}}
+    db = _database([(_day(12, "09:00"), {"file_reference": {"file_ref": token}}),
+                    (_day(14, "10:00"), resource)])
+    assert resumption_candidates(db, lease=ALL)["candidates"] == []
+
+
+def test_interleaved_cases_have_independent_resumption_evidence_tracks():
+    # Both cases occupy the same idle-gap windows, but each track must cite
+    # only observations of its own provider-scoped business identity.
+    db = _database([
+        (_day(12, "09:00"), _ref("a")),  # e1
+        (_day(12, "09:01"), _ref("b")),  # e2
+        (_day(12, "09:02"), _ref("a")),  # e3
+        (_day(14, "10:00"), _ref("b")),  # e4
+        (_day(14, "10:01"), _ref("a")),  # e5
+    ])
+    result = resumption_candidates(db, lease=ALL)
+    [candidate] = result["candidates"]
+    tracks = {t["pointer"]["resource_ref"]: t for t in candidate["pointer_tracks"]}
+    assert set(tracks) == {REF["a"], REF["b"]}
+    assert set(tracks[REF["a"]]["earlier"]["evidence_event_ids"]) == {"e1", "e3"}
+    assert tracks[REF["a"]]["current"]["evidence_event_ids"] == ["e5"]
+    assert tracks[REF["b"]]["earlier"]["evidence_event_ids"] == ["e2"]
+    assert tracks[REF["b"]]["current"]["evidence_event_ids"] == ["e4"]
+    assert tracks[REF["a"]]["earlier"]["first_observed_at"].startswith("2026-10-12T09:00")
+    assert tracks[REF["a"]]["earlier"]["last_observed_at"].startswith("2026-10-12T09:02")
+    assert candidate["shared_pointer_count"] == 2
+    assert candidate["proves_same_work"] is False
+
+
+def test_resumption_tracks_preserve_grant_and_identity_boundaries():
+    db = _database([
+        (_day(12, "09:00"), _ref("a")),
+        (_day(14, "10:00"), {"resource_reference": {
+            "resource_ref": REF["a"], "provider": "jira", "resource_kind": "issue"}}),
+    ])
+    assert resumption_candidates(db, lease=ALL)["candidates"] == []
+    assert resumption_candidates(db, lease={"mode": "off"},
+                                 run_started_at=_day(14, "00:00"))["candidates"] == []
+
+
+def test_interleaved_resumption_timelines_are_resource_scoped_and_chronological():
+    db = _database([
+        (_day(10, "09:00"), _ref("a")),
+        (_day(10, "09:05"), _ref("b")),
+        (_day(11, "09:00"), _ref("b")),
+        (_day(11, "09:05"), _ref("a")),
+        (_day(12, "09:00"), _ref("a")),
+        (_day(12, "09:05"), _ref("b")),
+    ])
+    result = resumption_candidates(db, lease=ALL)
+    timelines = {item["pointer"]["resource_ref"]: item for item in result["identity_timelines"]}
+    assert set(timelines) == {REF["a"], REF["b"]}
+    assert [episode["evidence_event_ids"] for episode in timelines[REF["a"]]["episodes"]] == [
+        ["e1"], ["e4"], ["e5"]]
+    assert [episode["evidence_event_ids"] for episode in timelines[REF["b"]]["episodes"]] == [
+        ["e2"], ["e3"], ["e6"]]
+    assert all(t["proves_same_task"] is False for t in timelines.values())
+    assert all(e["gap_from_previous_seconds"] is None for t in timelines.values()
+               for e in t["episodes"][:1])
+    assert all(e["gap_from_previous_seconds"] > 0 for t in timelines.values()
+               for e in t["episodes"][1:])
+    assert result["candidates"]  # backward-compatible review candidates remain
+
+
+def test_resumption_timeline_respects_history_grant_and_does_not_link_time_alone():
+    db = _database([
+        (_day(10, "09:00"), _ref("a")),
+        (_day(11, "09:00"), _ref("b")),
+        (_day(12, "09:00"), _ref("a")),
+    ])
+    assert resumption_candidates(db, lease={"mode": "off"},
+                                  run_started_at=_day(12, "00:00"))["identity_timelines"] == []
+    selected = resumption_candidates(db, lease={
+        "mode": "selected_range", "since": _day(11, "00:00"),
+        "until": _day(12, "23:59")})
+    assert selected["identity_timelines"] == []
+    full = resumption_candidates(db, lease=ALL)
+    assert [x["pointer"]["resource_ref"] for x in full["identity_timelines"]] == [REF["a"]]
+    assert [e["evidence_event_ids"] for e in full["identity_timelines"][0]["episodes"]] == [
+        ["e1"], ["e3"]]

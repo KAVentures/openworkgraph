@@ -186,6 +186,8 @@ async def _recheck_source(scope: str) -> None:
         # Revoke every actor's durable run/case associations for the old scope.
         # Failure is fail-closed: do not return an apparently valid response.
         await asyncio.to_thread(clear_binding_scope, scope)
+        from .open_work_run_receipts import clear_scope as clear_run_receipt_scope
+        await asyncio.to_thread(clear_run_receipt_scope, scope)
         raise HTTPException(409, "local source connection changed")
 
 
@@ -2751,3 +2753,122 @@ async def review_local_bound_run_evidence_history(request: Request, response: Re
         "customer_outcome_verified": False,
         "agent_execution_authorized": False,
     }
+
+
+@router.post("/v1/open-work/declarations/human-outcomes/bound-run-receipt-journal")
+async def bound_run_receipt_journal(request: Request, response: Response):
+    """Explicit authenticated operator review/correction of a run-specific receipt.
+
+    Entries attest that an operator reviewed *case-wide* evidence while a run
+    binding was current. They never assert provider run identity or customer
+    completion. No provider IO or agent execution is performed.
+    """
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_historical_review", "confirm_run_comparison", "max_cases",
+        "deployment_id", "run_id", "record_link",
+    }, optional={"action", "supersedes", "confirm_receipt_write"})
+    if (payload["confirm_historical_review"] is not True
+            or payload["confirm_run_comparison"] is not True):
+        raise HTTPException(403, "explicit run and historical review required")
+    if type(payload["max_cases"]) is not int or not 1 <= payload["max_cases"] <= 4:
+        raise HTTPException(422, "max_cases must be between 1 and 4")
+    action = payload.get("action")
+    if action is not None and payload.get("confirm_receipt_write") is not True:
+        raise HTTPException(403, "explicit run receipt write confirmation required")
+    if action is None and ("supersedes" in payload or "confirm_receipt_write" in payload):
+        raise HTTPException(422, "write fields require an action")
+    from .open_work_run_case_binding import get_binding
+    from .open_work_run_receipts import review as review_receipts, append as append_receipt
+    historical, admitted, signature, secret = await _load_review_triage(scope, payload)
+    actor = hashlib.sha256(request.headers["authorization"].encode("utf-8")).hexdigest()
+
+    def guard():
+        _operation_ledger_guard(scope, payload["work_item_ref"],
+                                payload["expected_revision"],
+                                payload["expected_edit_token"], signature)
+
+    try:
+        resource = validate_case_record_link(
+            payload["record_link"], admitted, signature, scope=scope, secret=secret)
+        run = await asyncio.to_thread(
+            read_imported_run, deployment_id=payload["deployment_id"],
+            run_id=payload["run_id"], scope=scope, secret=secret)
+        binding = await asyncio.to_thread(
+            get_binding, scope=scope, actor=actor, secret=secret,
+            case_ref=payload["work_item_ref"], run_ref=run["run_ref"],
+            fingerprint=run["run_snapshot_fingerprint"],
+            revision=payload["expected_revision"])
+        if binding is None:
+            raise CaseDeclarationError("current operator run binding required")
+        history = await asyncio.to_thread(
+            read_operation_evidence, admitted, signature, scope=scope,
+            secret=secret, guard=guard)
+        human = await asyncio.to_thread(
+            read_human_outcomes, admitted, signature, scope=scope,
+            secret=secret, guard=guard)
+        digest = hashlib.sha256(json.dumps(
+            [history, human], sort_keys=True, separators=(",", ":")
+        ).encode()).hexdigest()
+        repeated, current, current_sig, _ = await _load_review_triage(scope, payload)
+        current_run = await asyncio.to_thread(
+            read_imported_run, deployment_id=payload["deployment_id"],
+            run_id=payload["run_id"], scope=scope, secret=secret)
+        current_binding = await asyncio.to_thread(
+            get_binding, scope=scope, actor=actor, secret=secret,
+            case_ref=payload["work_item_ref"], run_ref=current_run["run_ref"],
+            fingerprint=current_run["run_snapshot_fingerprint"],
+            revision=payload["expected_revision"])
+        if (repeated != historical or current_sig != signature or current_run != run
+                or current_binding != binding or
+                validate_case_record_link(payload["record_link"], current, current_sig,
+                                          scope=scope, secret=secret) != resource):
+            raise CaseDeclarationError("stale run, case or source review")
+        kwargs = dict(scope=scope, actor=actor, secret=secret,
+                      case_ref=payload["work_item_ref"], run_ref=run["run_ref"],
+                      fingerprint=run["run_snapshot_fingerprint"],
+                      revision=payload["expected_revision"], guard=guard)
+        # Compare against a fresh, integrity-checked view. Case-wide evidence
+        # can change independently of the operator's run binding/revision.
+        def fresh_digest():
+            provider = read_operation_evidence(admitted, signature, scope=scope,
+                                               secret=secret, guard=guard)
+            people = read_human_outcomes(admitted, signature, scope=scope,
+                                         secret=secret, guard=guard)
+            return hashlib.sha256(json.dumps(
+                [provider, people], sort_keys=True, separators=(",", ":")
+            ).encode()).hexdigest()
+
+        latest_digest = await asyncio.to_thread(fresh_digest)
+        if action is not None and latest_digest != digest:
+            raise CaseDeclarationError("case evidence changed during receipt review")
+        await asyncio.to_thread(guard)
+        if action is None:
+            result = await asyncio.to_thread(review_receipts, **kwargs)
+        else:
+            result = await asyncio.to_thread(
+                append_receipt, **kwargs, action=action, evidence_digest=digest,
+                supersedes=payload.get("supersedes"))
+        # A read must not label old receipts current after evidence changed.
+        latest_digest = await asyncio.to_thread(fresh_digest)
+        if action is None:
+            result["current_case_evidence_digest"] = latest_digest
+            result["entries"] = [dict(entry, freshness=(
+                "current" if entry["evidence_digest"] == latest_digest else "stale"))
+                for entry in result["entries"]]
+            result["current_review_count"] = sum(
+                entry["freshness"] == "current" and entry["action"] != "retracted"
+                for entry in result["entries"]
+                if entry["id"] not in {e["supersedes"] for e in result["entries"] if e["supersedes"]})
+            result["case_evidence_scope"] = "case_wide_not_run_causal"
+        elif latest_digest != digest:
+            raise CaseDeclarationError("case evidence changed after receipt write; refresh review")
+        await asyncio.to_thread(guard)
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError,
+            KeyError, ValueError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    response.headers["Cache-Control"] = "no-store"
+    return result

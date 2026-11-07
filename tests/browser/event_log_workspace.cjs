@@ -66,6 +66,12 @@ const path=require('node:path');
    const [coverageJson]=await Promise.all([page.waitForEvent('download'),page.locator('#owgVariantCoverageJson').click()]);
    const coveragePacket=JSON.parse(await fs.readFile(await coverageJson.path(),'utf8'));
    assert.deepEqual(coveragePacket.coverage_targets,coverageResult.coverage_targets);
+   await page.getByRole('button',{name:'Inspect variant 1 cases',exact:true}).click();
+   await page.locator('#owgVariantCoverageCasesStatus').filter({hasText:coverageResult.displayed_variants[0].cases+' matching cases'}).waitFor();
+   await page.locator('#owgVariantCoverageLimit').selectOption('50');
+   const [expandedCoverage]=await Promise.all([page.waitForResponse(r=>r.url().includes('/variant-coverage')&&r.url().includes('limit=50')),page.locator('#owgVariantCoverageRun').click()]);
+   assert.equal((await expandedCoverage.json()).cases,60);
+
 
    assert.match(await page.locator('#owgEventLogResults').textContent(),/Receive → Check → Approve → Close/);
    await page.locator('#owgQuality summary').click();
@@ -154,6 +160,12 @@ const path=require('node:path');
    assert.equal(await page.locator('#owgCaseFilterFrom2').inputValue(),'Fix','rules stay editable after applying');
    assert.match(await page.locator('#owgEventLogResults').textContent(),/Receive → Check → Fix → Check → Close/);
    await page.locator('#owgPlaybackStatus').filter({hasText:'Playing 2 of 2 cases'}).waitFor();
+   // Variant coverage evidence preserves the same whole-case filter, not just its displayed path.
+   const [filteredCoverage]=await Promise.all([page.waitForResponse(r=>r.url().includes('/variant-coverage')),page.locator('#owgVariantCoverageRun').click()]);
+   assert.equal((await filteredCoverage.json()).cases,2);
+   await page.getByRole('button',{name:'Inspect variant 1 cases',exact:true}).click();
+   await page.locator('#owgVariantCoverageCasesStatus').filter({hasText:'2 matching cases (case filter applied)'}).waitFor();
+   assert.deepEqual((await page.locator('#owgVariantCoverageCasesList button').allTextContents()).sort(),['C0','C30']);
    // The case evidence drill-down selects the same filtered cases.
    await page.locator('#owgEventLogCasesBrowse').click();
    await page.locator('#owgEventLogCasesStatus').filter({hasText:'2 matching cases (case filter applied)'}).waitFor();
@@ -168,6 +180,17 @@ const path=require('node:path');
    await page.getByRole('button',{name:'Apply saved filter Rework without approval',exact:true}).click();
    await page.locator('#owgCaseFilterCount').filter({hasText:'Filtered: 2 of 60 cases'}).waitFor();
    await page.locator('#owgFilterSetList').filter({hasText:'Check is directly followed by Fix; Fix is never eventually followed by Approve'}).waitFor();
+   // Distribution uses whole selected cases, and its export preserves exact boundaries.
+   await page.locator('#owgDurationBounds').fill('1, 4, 24');
+   const [filteredDurations]=await Promise.all([page.waitForResponse(r=>r.url().includes('/duration-distribution')),page.locator('#owgDurationRun').click()]);
+   const filteredDurationResult=await filteredDurations.json();
+   assert.equal(filteredDurationResult.cases,2);assert.equal(filteredDurationResult.cases_before_filter,60);
+   assert.deepEqual(filteredDurationResult.bands.map(b=>b.cases),[0,0,2,0]);
+   await page.locator('#owgDurationResults').getByText('Filter applied: 2 of 60 cases.',{exact:false}).waitFor();
+   const [durationCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgDurationDistributionCsv').click()]);
+   const durationText=await fs.readFile(await durationCsv.path(),'utf8');
+   assert.match(durationText,/^lower_seconds_inclusive,upper_seconds_exclusive,cases,share\r\n/);
+   assert.match(durationText,/14400,86400,2,1\r\n/);
    await page.locator('#owgCaseFilterClear').click();
    await page.locator('#owgCaseFilterStatus').filter({hasText:'every case is included'}).waitFor();
    assert.equal(await page.locator('#owgCaseFilterCount').count(),0);
@@ -360,6 +383,17 @@ const path=require('node:path');
    const [kpiCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgEventLogKpiCsv').click()]);
    const kpiText=await fs.readFile(await kpiCsv.path(),'utf8');
    assert.match(kpiText,/^metric,value\r\ncases,20\r\n/);assert.match(kpiText,/rework_rate,1\r\n/);
+   await page.locator('#owgDurationBounds').fill('1, 4, 24');
+   const [allDurations]=await Promise.all([page.waitForResponse(r=>r.url().includes('/duration-distribution')),page.locator('#owgDurationRun').click()]);
+   const allDurationResult=await allDurations.json();
+   assert.equal(allDurationResult.cases,60);
+   assert.deepEqual(allDurationResult.bands.map(b=>b.cases),[40,0,20,0]);
+   await page.locator('#owgDurationResults').getByText('60 selected cases with retained events',{exact:false}).waitFor();
+   assert.equal(await page.locator('#owgDurationResults progress').count(),4);
+   await page.locator('#owgDurationBounds').fill('4, 1');
+   assert.equal(await page.locator('#owgDurationDistributionCsv').count(),0,'edited thresholds invalidate prior downloads');
+   await page.locator('#owgDurationRun').click();
+   await page.locator('#owgDurationResults').getByText('Thresholds must be positive, strictly increasing, and at most 100 years.').waitFor();
 
    await page.locator('#owgEventLogCohortALabel').fill('Bob');await page.locator('#owgEventLogCohortAResource').fill('bob');
    await page.locator('#owgEventLogCohortBLabel').fill('Ann');await page.locator('#owgEventLogCohortBResource').fill('ann');
@@ -538,6 +572,15 @@ const path=require('node:path');
    await page.getByText('Skipped reference step').waitFor();
    const conformance=await page.locator('#owgEventLogConformanceRun').locator('xpath=..').textContent();
    assert.match(conformance,/Approve/);assert.match(conformance,/Fix/);
+
+   // Trace clusters: two requested clusters that together cover every case, each described.
+   await page.locator('#owgClusterK').selectOption('2');
+   const clusterResponse=page.waitForResponse(r=>r.url().includes('/trace-clusters'));
+   await page.locator('#owgClusterRun').click();
+   const clustered=await (await clusterResponse).json();
+   assert.equal(clustered.k,2);assert.equal(clustered.clusters.reduce((n,c)=>n+c.cases,0),clustered.cases);
+   await page.locator('#owgClusterResults table').waitFor();
+   assert.match(await page.locator('#owgClusterResults').textContent(),/2 clusters as requested/);
 
    await page.locator('#owgEventLogOutcomeHours').fill('5');
    await page.locator('#owgEventLogRootCauseRun').click();
@@ -756,6 +799,14 @@ const path=require('node:path');
    assert.doesNotMatch(complianceText,/\bann\b|\bbob\b/);
    await page.getByRole('button',{name:'Save as signal: every Receive is eventually followed by Approve'}).click();
    await page.locator('#owgComplianceStatus').filter({hasText:'Saved as a signal.'}).waitFor();
+   // Suggested rules: candidates the log already follows, added to the rule list for checking.
+   const pendingBefore=await page.locator('#owgComplianceRules tbody tr').count();
+   await page.locator('#owgComplianceConfidence').fill('90');
+   await page.locator('#owgComplianceSuggest').click();
+   await page.locator('#owgComplianceSuggestions table').waitFor();
+   assert.match(await page.locator('#owgComplianceSuggestions').textContent(),/suggestions from \d+ cases.*not policy/);
+   await page.locator('#owgComplianceSuggestions tbody tr').first().getByRole('button').click();
+   assert.equal(await page.locator('#owgComplianceRules tbody tr').count(),pendingBefore+1);
 
    await page.evaluate(()=>{window.scrollTo(0,0);});
    await page.addScriptTag({content:axeSource});

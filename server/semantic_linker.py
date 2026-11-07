@@ -256,6 +256,147 @@ def _components(pairs: set[frozenset[int]]) -> list[list[int]]:
     return sorted(sorted(g) for g in groups.values() if len(g) >= 2)
 
 
+def _compatible_groups(pairs: set[frozenset[int]], groups: list[list[str]],
+                       by_id: dict[str, dict[str, Any]]) -> tuple[list[list[int]], int]:
+    """Keep only complete pair-supported, record-compatible suggestions.
+
+    A model's transitive chain is not proof that its endpoints belong together.
+    Deterministic, disjoint cliques avoid both bridge contamination and the old
+    all-or-nothing veto when one conflicting item spoils a larger proposal.
+    """
+    remaining = set(n for pair in pairs for n in pair)
+    accepted: list[list[int]] = []
+    refused = 0
+    kinds = {n: _record_kinds(by_id, groups[n - 1]) for n in remaining}
+
+    def compatible(candidate: list[int], number: int) -> bool:
+        if any(frozenset((number, other)) not in pairs for other in candidate):
+            return False
+        combined: dict[tuple[str, str], set[str]] = {}
+        for member in [*candidate, number]:
+            for key, refs in kinds[member].items():
+                combined.setdefault(key, set()).update(refs)
+        return all(len(refs) <= 1 for refs in combined.values())
+
+    # A lowest-ID bridge can consume a member of a larger supported group.
+    # Consider each remaining seed and greedily extend by supported degree,
+    # then choose the largest safe clique. Bounded at MAX_ITEMS (60), with no
+    # exponential subset enumeration or dependence on set iteration order.
+    def exact_clique(nodes: set[int]) -> list[int] | None:
+        """Find the largest compatible clique for small candidate sets.
+
+        An explicit exploration budget prevents adversarial dense suggestions
+        from creating unbounded work. None means use the existing greedy path.
+        """
+        if len(nodes) > 14:
+            return None
+        ordered = sorted(nodes)
+        best: list[int] = []
+        visits = 0
+
+        def explore(chosen: list[int], candidates: list[int]) -> None:
+            nonlocal best, visits
+            visits += 1
+            if visits > 12000:
+                raise OverflowError
+            if len(chosen) + len(candidates) < len(best):
+                return
+            if len(chosen) > len(best) or (len(chosen) == len(best) and
+                                           chosen and (not best or chosen < best)):
+                best = chosen[:]
+            for i, number in enumerate(candidates):
+                if len(chosen) + len(candidates) - i < len(best):
+                    break
+                if compatible(chosen, number):
+                    tail = [other for other in candidates[i + 1:]
+                            if frozenset((number, other)) in pairs]
+                    explore([*chosen, number], tail)
+
+        try:
+            explore([], ordered)
+        except OverflowError:
+            return None
+        return best
+
+    # For small components, optimize the *partition*, not merely the next clique.
+    # A single maximum clique may strand several members that could otherwise
+    # form two disjoint, fully corroborated groups. This is review-only.
+    def packed_groups(nodes: set[int]) -> list[list[int]] | None:
+        if len(nodes) > 10:
+            return None
+        from functools import lru_cache
+
+        ordered = sorted(nodes)
+        cliques: list[tuple[int, tuple[int, ...]]] = []
+        for mask in range(1, 1 << len(ordered)):
+            if mask.bit_count() < 2:
+                continue
+            members = tuple(ordered[i] for i in range(len(ordered)) if mask & (1 << i))
+            if all(compatible(list(members[:i]), member)
+                   for i, member in enumerate(members)):
+                cliques.append((mask, members))
+        by_first: dict[int, list[tuple[int, tuple[int, ...]]]] = {}
+        for mask, members in cliques:
+            for i in range(len(ordered)):
+                if mask & (1 << i):
+                    by_first.setdefault(i, []).append((mask, members))
+
+        @lru_cache(maxsize=1024)
+        def solve(available: int) -> tuple[int, int, tuple[tuple[int, ...], ...]]:
+            if not available:
+                return (0, 0, ())
+            first = (available & -available).bit_length() - 1
+            best = solve(available & ~(1 << first))
+            for mask, members in by_first.get(first, []):
+                if mask & available != mask:
+                    continue
+                covered, edges, groups_found = solve(available ^ mask)
+                candidate = (covered + len(members),
+                             edges + len(members) * (len(members) - 1) // 2,
+                             tuple(sorted((*groups_found, members))))
+                if candidate[:2] > best[:2] or (candidate[:2] == best[:2]
+                                                  and candidate[2] < best[2]):
+                    best = candidate
+            return best
+
+        return [list(group) for group in solve((1 << len(ordered)) - 1)[2]]
+
+    # Search each connected component independently; disconnected candidates
+    # cannot share a supported clique and need not consume one another's budget.
+    for component in _components(pairs):
+        subset = remaining.intersection(component)
+        packed = packed_groups(subset)
+        if packed is None:
+            continue
+        for group in packed:
+            accepted.append(group)
+            remaining.difference_update(group)
+        refused += len(subset.intersection(remaining))
+        remaining.difference_update(subset)
+
+    while remaining:
+        choices: list[list[int]] = []
+        for seed in sorted(remaining):
+            candidate = [seed]
+            others = sorted(
+                remaining - {seed},
+                key=lambda n: (-sum(frozenset((n, m)) in pairs
+                                    for m in remaining if m != n), n),
+            )
+            for number in others:
+                if compatible(candidate, number):
+                    candidate.append(number)
+            choices.append(sorted(candidate))
+        greedy_winner = min(choices, key=lambda group: (-len(group), group))
+        winner = exact_clique(remaining) or greedy_winner
+        remaining.difference_update(winner)
+        if len(winner) >= 2:
+            accepted.append(winner)
+        else:
+            refused += 1
+    return sorted(accepted), refused
+
+
 def suggest(events: list[dict[str, Any]], complete: Completion, *, consensus: bool = False) -> dict[str, Any]:
     """``consensus`` asks twice (items in reverse order the second time) and keeps only agreed pairs."""
     items, groups = build_items(events)
@@ -265,15 +406,11 @@ def suggest(events: list[dict[str, Any]], complete: Completion, *, consensus: bo
     pairs = _ask(items, complete, reverse=False)
     if consensus and pairs:
         pairs &= _ask(items, complete, reverse=True)
-    chosen = _components(pairs)
     by_id = {e["event_id"]: e for e in events if isinstance(e, dict) and isinstance(e.get("event_id"), str)}
-    suggestions, vetoed = [], 0
+    chosen, vetoed = _compatible_groups(pairs, groups, by_id)
+    suggestions = []
     for numbers in chosen:
         members = [event_id for n in numbers for event_id in groups[n - 1]]
-        kinds = _record_kinds(by_id, members)
-        if any(len(refs) > 1 for refs in kinds.values()):
-            vetoed += 1  # never join two different records of the same kind
-            continue
         suggestions.append({"items": numbers, "event_ids": members[:200],
                             "association_status": "semantic_suggestion", "requires_review": True})
     return {"format": FORMAT, "suggestions": suggestions, "items_considered": len(items), "vetoed": vetoed,

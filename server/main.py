@@ -338,12 +338,16 @@ def ingest(batch: EventBatch) -> dict[str, int]:
 
     config = _runtime_config()
     from shared.core.browser_title_privacy import cap_event_title_surfaces
-    events = [
+    from .capture_depth import filter_desktop_events
+    events = filter_desktop_events([
         cap_event_title_surfaces(apply_to_desktop_event(e.model_dump(), config))
         for e in batch.events
-    ]
+    ])
     learn_persistent_identities(events)
-    return {"inserted": insert_events(events)}
+    inserted = insert_events(events)
+    from . import capture_depth
+    capture_depth.apply_retention()
+    return {"inserted": inserted}
 
 
 @app.post("/v1/heartbeat")
@@ -389,10 +393,21 @@ def _browser_context(event: BrowserEvent) -> dict[str, str]:
 
 @app.post("/v1/browser-events")
 def browser_event(event: BrowserEvent) -> dict[str, int | str]:
+    # Capture depth (#634) is enforced here, not only in the extension: a disabled
+    # high-fidelity signal is never stored, and its metadata keeps a bounded shape.
+    from . import capture_depth
+    if not capture_depth.action_allowed(event.action):
+        return {"inserted": 0, "skipped": "capture_depth_signal_off"}
+    bounded = capture_depth.bound_metadata(event.action, dict(event.metadata or {}))
+    if bounded is None:
+        return {"inserted": 0, "skipped": "invalid_high_fidelity_event"}
     ctx = _browser_context(event)
     page = event.page.model_dump(exclude_none=True)
-    target = event.target.model_dump(exclude_none=True)
-    metadata = dict(event.metadata or {})
+    target = capture_depth.bound_target(event.action, event.target.model_dump(exclude_none=True))
+    if target.get("type") == "secure" and not capture_depth.action_allowed_on_excluded(event.action):
+        # Hover, drag and trajectory events are never stored for secure fields, whatever the client sends.
+        return {"inserted": 0, "skipped": "secure_target"}
+    metadata = bounded
     metadata.update({
         "source": "browser_extension",
         "browser_sensor_id": ctx["sensor_id"],
@@ -428,12 +443,16 @@ def browser_event(event: BrowserEvent) -> dict[str, int | str]:
         "metadata": metadata,
     }
     safe_event = harden_browser_event(raw_event, _runtime_config())
+    if (safe_event.get("metadata") or {}).get("excluded") and not capture_depth.action_allowed_on_excluded(event.action):
+        # Excluded pages keep structural evidence only; high-fidelity signals are not stored at all.
+        return {"inserted": 0, "skipped": "excluded_page"}
     # Browser ingestion learns identities before insert_events; apply the same
     # title limit here so untrusted page text cannot stall that earlier pass.
     from shared.core.browser_title_privacy import cap_event_title_surfaces
     safe_event = cap_event_title_surfaces(safe_event)
     learn_persistent_identities(safe_event)
     inserted = insert_events([safe_event])
+    capture_depth.apply_retention()
     safe_meta = safe_event.get("metadata") or {}
     safe_page = safe_meta.get("page") if isinstance(safe_meta.get("page"), dict) else {}
     BROWSER_STATUS.clear()

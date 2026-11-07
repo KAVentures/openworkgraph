@@ -26,6 +26,11 @@ if not getattr(core, "_owg_browser_signal_runtime_wrapped", False):
     core._owg_browser_signal_runtime_wrapped = True
 
 
+def _capture_depth_for_extension() -> dict[str, Any]:
+    from .capture_depth import for_extension
+    return for_extension()
+
+
 def browser_context_with_signal_settings() -> dict[str, Any]:
     runtime = core._runtime_config()
     return {
@@ -34,6 +39,8 @@ def browser_context_with_signal_settings() -> dict[str, Any]:
         "device_id": str(core.COLLECTOR_STATUS.get("device_id") or ""),
         "work_session_id": str(core.COLLECTOR_STATUS.get("session_id") or ""),
         "signal_settings": public_settings()["settings"],
+        # Capture depth (#634): what the extension may record on this device.
+        "capture_depth": _capture_depth_for_extension(),
         # Separate explicit, off-by-default content collection permission.
         "work_text_capture": work_text.get_policy()["capture_enabled"],
         # These local patterns are supplied to the paired extension only so it can

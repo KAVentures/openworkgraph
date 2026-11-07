@@ -39,7 +39,11 @@ const path=require('node:path');
   await out.getByRole('button',{name:'Open retained log',exact:true}).waitFor();
   assert.match(await out.textContent(),/4 retained projected events/);
   await page.locator('#owgEventLogAnalyze').click();
-  await page.locator('#owgEventLogResults').getByText('Status: <img src=x onerror=alert(1)>',{exact:true}).first().waitFor();
+  // This label also appears in hidden case-inspector options. Assert it is
+  // rendered as a visible Activities table cell, not interpreted as HTML.
+  const activities=page.locator('#owgEventLogResults').getByRole('table').filter({
+    has:page.getByRole('columnheader',{name:'Cases repeating activity',exact:true})});
+  await activities.getByRole('cell',{name:'Status: <img src=x onerror=alert(1)>',exact:true}).waitFor();
   assert.equal(await page.locator('#owgEventLogResults img').count(),0);
   const body=await page.locator('body').textContent();
   for(const marker of ['ACTOR_SECRET','EMAIL_SECRET','SUMMARY_SECRET','ASSIGNEE_SECRET','owned-token-secret'])assert.equal(body.includes(marker),false);

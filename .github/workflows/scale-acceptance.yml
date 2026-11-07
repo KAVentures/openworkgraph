@@ -28,6 +28,10 @@ jobs:
         env:
           OWG_SCALE_ACCEPTANCE: "1"
         run: python -m pytest -q -s tests/test_large_history_acceptance.py
+      - name: Verify opt-in high-fidelity capture on a 300k-event history
+        env:
+          OWG_SCALE_ACCEPTANCE: "1"
+        run: python -m pytest -q -s tests/test_capture_depth_scale_acceptance.py
       - name: Verify the event-log workspace on a 10M-event log
         env:
           OWG_SCALE_ACCEPTANCE: "1"

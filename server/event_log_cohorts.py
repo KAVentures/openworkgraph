@@ -17,8 +17,10 @@ from .event_log_analytics import risk_difference
 from .event_log_workspace import EventLogWorkspaceError
 
 _SEP = workspace._SEP
-_KEYS = {"label", "started_from", "started_before", "resource", "activity", "attribute", "follows"}
+_KEYS = {"label", "started_from", "started_before", "resource", "activity", "attribute", "follows", "variants"}
 MAX_FOLLOW_RULES = 5
+MAX_COHORT_VARIANTS = 500
+MAX_VARIANT_LENGTH = 1000
 BOOTSTRAP_SAMPLE = 5000
 BOOTSTRAP_ROUNDS = 400
 
@@ -35,7 +37,7 @@ def parse_cohort(spec: Any) -> dict[str, Any]:
         return {}
     if not isinstance(spec, dict) or set(spec) - _KEYS:
         raise EventLogWorkspaceError(
-            "cohort accepts label, started_from, started_before, resource, activity, attribute, follows")
+            "cohort accepts label, started_from, started_before, resource, activity, attribute, follows, variants")
     cohort: dict[str, Any] = {}
     if spec.get("label") not in (None, ""):
         cohort["label"] = _short(spec["label"], "label")[:80]
@@ -56,6 +58,8 @@ def parse_cohort(spec: Any) -> dict[str, Any]:
         cohort["attribute"] = (name.strip(), value.strip())
     if spec.get("follows") not in (None, [], ""):
         cohort["follows"] = _parse_follows(spec["follows"])
+    if spec.get("variants") not in (None, []):
+        cohort["variants"] = _parse_variants(spec["variants"])
     if "started_from" in cohort and "started_before" in cohort and cohort["started_from"] >= cohort["started_before"]:
         raise EventLogWorkspaceError("cohort period is empty")
     return cohort
@@ -74,6 +78,18 @@ def _parse_follows(rules: Any) -> list[dict[str, Any]]:
             raise EventLogWorkspaceError("a follows rule's mode is direct or eventual and negate is true or false")
         parsed.append({"from": _short(rule.get("from"), "follows activity"), "to": _short(rule.get("to"), "follows activity"),
                        "mode": mode, "negate": rule.get("negate", False)})
+    return parsed
+
+
+def _parse_variants(variants: Any) -> list[list[str]]:
+    """Exact variants (each an ordered list of activities), e.g. one trace cluster; a case matches any one."""
+    if not isinstance(variants, list) or not 0 < len(variants) <= MAX_COHORT_VARIANTS:
+        raise EventLogWorkspaceError(f"cohort variants must be a list of 1–{MAX_COHORT_VARIANTS} activity lists")
+    parsed = []
+    for variant in variants:
+        if not isinstance(variant, list) or not 0 < len(variant) <= MAX_VARIANT_LENGTH:
+            raise EventLogWorkspaceError(f"each cohort variant is a list of 1–{MAX_VARIANT_LENGTH} activities")
+        parsed.append([_short(a, "variant activity") for a in variant])
     return parsed
 
 
@@ -118,6 +134,10 @@ def _predicate(cohort: dict[str, Any], log_id: str) -> tuple[str, list[Any]]:
                 HAVING min(k) FILTER (WHERE activity = ?) < max(k) FILTER (WHERE activity = ?)"""
         clauses.append(f"case_id {'NOT IN' if rule['negate'] else 'IN'} ({cases})")
         params += [rule["from"], rule["to"]]
+    if "variants" in cohort:
+        clauses.append(f"""case_id IN (SELECT case_id FROM ce GROUP BY case_id
+            HAVING string_agg(activity, '{_SEP}' ORDER BY ts, event_id) IN (SELECT unnest(?)))""")
+        params.append([_SEP.join(v) for v in cohort["variants"]])
     return (" AND ".join(clauses) or "TRUE"), params
 
 

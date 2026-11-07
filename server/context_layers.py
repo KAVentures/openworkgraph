@@ -47,6 +47,11 @@ _PASSIVE_ACTIONS = {
     "heartbeat",
     "scroll",
     "mouse_move",
+    # High-fidelity local signals (#634) are context, never workflow steps or merge evidence by themselves.
+    "control_hover_dwell",
+    "pointer_trajectory",
+    "screen_pointer_trajectory",
+    "hover_dwell",
 }
 
 

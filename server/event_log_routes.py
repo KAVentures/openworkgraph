@@ -20,6 +20,7 @@ from starlette.concurrency import run_in_threadpool
 
 from . import event_log_analytics as analytics
 from . import event_log_variant_coverage as variant_coverage
+from . import event_log_duration_distribution as duration_distribution
 from . import event_log_cases as case_pages
 from . import event_log_cohorts as cohorts
 from . import event_log_compliance as compliance
@@ -50,6 +51,7 @@ from . import analysis_snapshot_export
 from . import event_log_signals as signals
 from . import event_log_signal_inbox as signal_inbox
 from . import event_log_simulation as simulation
+from . import event_log_trace_clusters as trace_clusters
 from . import event_log_waiting as waiting
 from . import event_log_workspace as workspace
 from .db import DATA_DIR
@@ -100,6 +102,44 @@ def _case_filter(started_from: str = Query(default="", max_length=64),
         except ValueError:
             raise HTTPException(422, "follows must be a JSON list of rules") from None
     return cohort
+
+
+@router.post("/v1/event-logs/prepare-salesforce")
+async def prepare_salesforce_export(request: Request):
+    """Prepare a selected offline export without retaining it as an event log."""
+    _require_dashboard(request)
+    from csv import DictReader
+    from hashlib import sha256
+    from io import StringIO
+    from itertools import islice
+    from shared.salesforce_case_history import MAX_BYTES, project
+
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+        raise HTTPException(415, "JSON export preparation required")
+    raw = bytearray()
+    async for chunk in request.stream():
+        # JSON escapes may double the size; reserve room for selection metadata.
+        if len(raw) + len(chunk) > MAX_BYTES * 2 + 16384:
+            raise HTTPException(413, "Export preparation request too large")
+        raw.extend(chunk)
+    try:
+        data = json.loads(raw)
+        if (type(data) is not dict or set(data) != {"account", "cases", "csv", "confirm_processing"}
+                or data["confirm_processing"] is not True or type(data["csv"]) is not str):
+            raise ValueError()
+        csv_text, report = await run_in_threadpool(project, data["csv"].encode("utf-8"),
+                                                  account=data["account"], cases=data["cases"])
+        # Use the same declared namespace for later manual exports of this account.
+        # It is a declaration, not verified Salesforce organization identity.
+        namespace = "sfexp_" + sha256(data["account"].encode("utf-8")).hexdigest()[:32]
+        preview = list(islice(DictReader(StringIO(csv_text, newline="")), 20))
+        return JSONResponse({"csv": csv_text, "report": report, "namespace": namespace,
+                             "preview": preview, "preview_omitted": report["events"] - len(preview),
+                             "persisted": False}, headers={"Cache-Control": "no-store"})
+    except (ValueError, UnicodeError, RecursionError):
+        raise HTTPException(422, "Check the selected CaseHistory export, case IDs and account namespace") from None
+    finally:
+        raw.clear()
 
 
 @router.get("/event-log-workspace.js")
@@ -297,6 +337,18 @@ def event_log_variants(request: Request, log_id: str, case_type: str | None = Qu
     return _respond(workspace.variants, log_id, case_type, limit, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/duration-distribution")
+def event_log_duration_distribution(request: Request, log_id: str,
+                                    case_type: str | None = Query(default=None, max_length=200),
+                                    cutoffs_seconds: str = Query(default="3600,14400,86400,259200", max_length=110),
+                                    cohort: dict[str, Any] = Depends(_case_filter)):
+    _require_dashboard(request)
+    parts = cutoffs_seconds.split(",")
+    if not 1 <= len(parts) <= 10 or any(not part.isascii() or not part.isdecimal() or len(part) > 10 for part in parts):
+        raise HTTPException(422, "duration thresholds must be comma-separated whole seconds")
+    return _respond(duration_distribution.distribution, log_id, [int(part) for part in parts], case_type, cohort)
+
+
 @router.get("/v1/event-logs/{log_id}/variant-coverage")
 def event_log_variant_coverage(request: Request, log_id: str,
                                case_type: str | None = Query(default=None, max_length=200),
@@ -436,6 +488,19 @@ async def event_log_compliance(request: Request, log_id: str):
     spec = await _json_body(request, "compliance rules")
     try:
         result = await run_in_threadpool(compliance.check, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/compliance/discover")
+async def event_log_rule_discovery(request: Request, log_id: str):
+    """Candidate Declare-style rules most cases already follow; nothing is saved or enforced."""
+    from . import event_log_rule_discovery as discovery
+    _require_dashboard(request)
+    spec = await _json_body(request, "rule discovery settings")
+    try:
+        result = await run_in_threadpool(discovery.discover, log_id, spec)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
@@ -728,6 +793,13 @@ async def event_log_benchmark(request: Request, log_id: str,
     if not isinstance(spec, dict):
         raise HTTPException(422, "benchmark must be a JSON object")
     return _respond(cohorts.benchmark, log_id, spec.get("cohorts"), case_type, spec.get("sla_seconds"))
+
+
+@router.post("/v1/event-logs/{log_id}/trace-clusters")
+async def event_log_trace_clusters(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "trace clustering")
+    return _respond(trace_clusters.clusters, log_id, spec)
 
 
 @router.post("/v1/event-logs/{log_id}/conformance")

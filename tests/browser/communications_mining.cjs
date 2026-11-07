@@ -53,7 +53,7 @@ const path=require('node:path');
    assert.match(text,/Saved the intent event log "tickets intents" with 24 events/);
    for(const leaked of [SECRET,'19811218','client.example','Tracking says'])assert.equal(text.includes(leaked)||bodies.some(b=>b.includes(leaked)),false,leaked+' must not leave the analysis');
 
-   await page.locator('#owgCommsCard summary').click();
+   await page.locator('#owgCommsCard summary',{hasText:'Intent taxonomy'}).click();
    await page.locator('#owgCommsTaxonomy').fill('Churn risk: cancel, subscription\nWhere is it: where is my order, tracking');
    await page.locator('#owgCommsTaxonomySave').click();
    await page.locator('#owgCommsTaxonomyStatus').filter({hasText:'saved'}).waitFor();

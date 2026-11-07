@@ -21,7 +21,7 @@ import sys
 from server.salesforce_case_history_live import (
     LiveHistoryError, _instance, _utc, extract, MAX_WINDOW, MAX_CASES,
 )
-from scripts.salesforce_case_history import ID
+from shared.salesforce_case_history import ID
 
 FORMAT = "openworkgraph.salesforce-incremental.v1"
 MAX_MANIFEST = 8192

@@ -9,9 +9,10 @@ receiving the code on this computer's local callback
 Tokens never leave this computer and are never returned by any API or shown to
 AI. Refresh tokens are stored AES-256-GCM-encrypted in the auth folder, keyed by
 this installation's local secret. Access tokens live in memory only. Rotating
-refresh tokens are saved before the new access token is used, so a crash cannot
-lose the only valid grant. Disconnect calls the provider's revocation endpoint
-when it has one, then forgets everything locally.
+refresh tokens are saved before the new access token is used. A crash or lost
+response between the provider rotating a token and the local save can still
+require reconnection. Disconnect forgets the connection locally before attempting
+provider revocation when available.
 
 Connecting grants exactly the scopes the user approves at the provider. It does
 not enable any OWG read, sync or schedule by itself: each connector still asks
@@ -20,6 +21,7 @@ for its own explicit consent before reading.
 from __future__ import annotations
 
 import base64
+import errno
 import hashlib
 import json
 import os
@@ -83,7 +85,7 @@ PROVIDERS: dict[str, Provider] = {
     "atlassian": Provider(
         "atlassian", "Atlassian (Jira)", "https://auth.atlassian.com/authorize",
         "https://auth.atlassian.com/oauth/token", None, "fixed",
-        ("read:jira-work", "offline_access"),
+        ("read:jira-work", "read:jira-user", "offline_access"),
         extra_authorize=(("audience", "api.atlassian.com"), ("prompt", "consent"))),
     "zendesk": Provider(
         "zendesk", "Zendesk", "https://{host}/oauth/authorizations/new", "https://{host}/oauth/tokens",
@@ -174,6 +176,7 @@ def _public(conn_id: str, conn: dict[str, Any]) -> dict[str, Any]:
         "scopes": conn.get("scopes", []), "connected_at": conn.get("connected_at"),
         "last_refreshed_at": conn.get("last_refreshed_at"),
         "has_refresh_token": bool(conn.get("refresh_token")),
+        "reauthorization_required": conn.get("refresh_state", "ready") != "ready",
         "tokens_exposed": False,
     }
 
@@ -221,9 +224,22 @@ def _token_request(spec: Provider, host: str, form: dict[str, str]) -> dict[str,
         raise OAuthError(f"{spec.label} could not be reached") from None
     if response.status_code != 200:
         raise OAuthError(f"{spec.label} refused the request (HTTP {response.status_code})")
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate field")
+            result[key] = value
+        return result
+
+    def invalid_number(_value):
+        raise ValueError("nonfinite number")
+
     try:
-        body = response.json()
-    except ValueError:
+        if len(response.content) > 1_048_576:
+            raise ValueError("response too large")
+        body = json.loads(response.content, object_pairs_hook=unique_object, parse_constant=invalid_number)
+    except (ValueError, UnicodeError):
         raise OAuthError(f"{spec.label} returned an unreadable token response") from None
     if not isinstance(body, dict) or not isinstance(body.get("access_token"), str) or not body["access_token"]:
         raise OAuthError(f"{spec.label} returned no access token")
@@ -264,7 +280,7 @@ def complete(state: str, code: str) -> dict[str, Any]:
         parsed = urlsplit(instance)
         if parsed.scheme == "https" and parsed.hostname and parsed.hostname.endswith(spec.allowed_suffixes):
             conn["api_host"] = parsed.hostname
-    with _LOCK:
+    with _LOCK, _FileLock():
         data = _load()
         if len(data["connections"]) >= _MAX_CONNECTIONS:
             raise OAuthError("too many connector sign-ins; disconnect one first")
@@ -275,7 +291,9 @@ def complete(state: str, code: str) -> dict[str, Any]:
 
 
 def status() -> dict[str, Any]:
-    with _LOCK:
+    # Do not report an active refresh's intent as an interrupted one in a
+    # second process; wait for the writer to commit or release its lock.
+    with _LOCK, _FileLock():
         data = _load()
     return {"format": FORMAT, "providers": [{"provider": p.name, "label": p.label, "host_kind": p.host_kind,
                                              "default_scopes": list(p.default_scopes),
@@ -285,29 +303,48 @@ def status() -> dict[str, Any]:
 
 
 class _FileLock:
-    """Serialize refresh across OWG processes so a rotated refresh token is never lost."""
+    """Serialize local store mutations across processes, including refresh."""
 
     def __enter__(self):
         path = auth_dir() / ".connector_oauth.lock"
         path.parent.mkdir(parents=True, exist_ok=True)
         self.handle = open(path, "a+b")
         try:
-            import fcntl
-            fcntl.flock(self.handle, fcntl.LOCK_EX)
-        except ImportError:  # Windows: msvcrt byte lock
-            import msvcrt
-            msvcrt.locking(self.handle.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                import fcntl
+            except ImportError:  # Windows: lock the same byte in every process.
+                import msvcrt
+                deadline = time.monotonic() + 30
+                while True:
+                    self.handle.seek(0)
+                    try:
+                        msvcrt.locking(self.handle.fileno(), msvcrt.LK_NBLCK, 1)
+                        break
+                    except OSError as error:
+                        if error.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                            raise
+                        if time.monotonic() >= deadline:
+                            raise OAuthError("connector sign-in is busy; try again") from None
+                        time.sleep(.05)
+            else:
+                fcntl.flock(self.handle, fcntl.LOCK_EX)
+        except Exception:
+            self.handle.close()
+            raise
         return self
 
     def __exit__(self, *exc):
         try:
-            import fcntl
-            fcntl.flock(self.handle, fcntl.LOCK_UN)
-        except ImportError:
-            import msvcrt
-            self.handle.seek(0)
-            msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
-        self.handle.close()
+            try:
+                import fcntl
+            except ImportError:
+                import msvcrt
+                self.handle.seek(0)
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(self.handle, fcntl.LOCK_UN)
+        finally:
+            self.handle.close()
         return False
 
 
@@ -316,24 +353,50 @@ def access_token(connection_id: str) -> str:
     if not _ID.fullmatch(str(connection_id or "")):
         raise OAuthError("unknown connection")
     with _LOCK, _FileLock():
-        cached = _access.get(connection_id)
-        if cached and cached[1] > time.time():
-            return cached[0]
+        # Another process may have disconnected this sign-in while this
+        # process retained a valid-looking token in memory. Check the shared
+        # store before every cache hit, under the same lock used by writers.
         data = _load()
         conn = data["connections"].get(connection_id)
         if conn is None:
+            _access.pop(connection_id, None)
             raise OAuthError("unknown connection")
+        # If the previous process may have sent a rotating refresh token but
+        # did not durably save the result, its outcome is unknowable locally.
+        # Never retry it or return a cached bearer until the user reconnects.
+        if conn.get("refresh_state", "ready") != "ready":
+            _access.pop(connection_id, None)
+            raise OAuthError("sign-in refresh was interrupted; reconnect this business system")
+        cached = _access.get(connection_id)
+        if cached and cached[1] > time.time():
+            return cached[0]
         if not conn.get("refresh_token"):
             raise OAuthError("this sign-in has expired and cannot be refreshed; connect again")
         spec = PROVIDERS[conn["provider"]]
         form = {"grant_type": "refresh_token", "refresh_token": conn["refresh_token"], "client_id": conn["client_id"]}
         if conn.get("client_secret"):
             form["client_secret"] = conn["client_secret"]
-        body = _token_request(spec, conn["host"], form)
-        if isinstance(body.get("refresh_token"), str) and body["refresh_token"]:
-            conn["refresh_token"] = body["refresh_token"]  # rotation: persist before first use
-        conn["last_refreshed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        # Persist an intent before the request. A timeout, crash, malformed
+        # response, or failed final save leaves it set and prevents a second
+        # use of a refresh token the provider may already have rotated.
+        conn["refresh_state"] = "in_flight"
         _save(data)
+        try:
+            body = _token_request(spec, conn["host"], form)
+        except OAuthError:
+            raise OAuthError("sign-in refresh could not be confirmed; reconnect this business system") from None
+        if "refresh_token" in body:
+            replacement = body["refresh_token"]
+            if not isinstance(replacement, str) or not replacement:
+                raise OAuthError("sign-in refresh returned an invalid replacement; reconnect this business system")
+            conn["refresh_token"] = replacement  # rotation: persist before first use
+        conn["last_refreshed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        conn["refresh_state"] = "ready"
+        try:
+            _save(data)
+        except Exception:
+            _access.pop(connection_id, None)
+            raise OAuthError("sign-in refresh could not be saved; reconnect this business system") from None
         _access[connection_id] = (body["access_token"], _expiry(body))
         return body["access_token"]
 
@@ -346,7 +409,7 @@ def api_host(connection_id: str) -> str | None:
 
 def disconnect(connection_id: str) -> dict[str, Any]:
     """Revoke at the provider when supported, then forget the sign-in locally."""
-    with _LOCK:
+    with _LOCK, _FileLock():
         data = _load()
         conn = data["connections"].pop(str(connection_id), None)
         if conn is None:
@@ -356,7 +419,11 @@ def disconnect(connection_id: str) -> dict[str, Any]:
     spec = PROVIDERS[conn["provider"]]
     revoked = "not_supported_by_provider"
     token = conn.get("refresh_token")
-    if spec.revoke and token:
+    if conn.get("refresh_state", "ready") != "ready":
+        # The saved refresh token may already have been consumed. In
+        # particular, do not exchange it again for Zendesk revocation.
+        revoked = "manual_revocation_required_refresh_uncertain"
+    elif spec.revoke and token:
         try:
             with _client() as client:
                 if spec.name == "zendesk":

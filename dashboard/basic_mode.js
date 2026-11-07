@@ -280,6 +280,37 @@
         <div class="muted" id="pvOAuthStatus" role="status" aria-live="polite"></div>
         <div id="pvOAuthList" aria-label="Connected business systems"></div>
       </div>
+      <div class="card" id="pvCaptureDepth">
+        <h2>Interaction detail</h2>
+        <div class="muted">How much interaction detail the browser extension and desktop recorder keep on this computer. Standard keeps today's signals. Enhanced adds how long you rest the pointer on buttons and links, drag and drop between controls, and friction candidates such as repeated clicks. Full fidelity also samples pointer movement. Typed text, clipboard contents, dragged data, control labels and secure fields are never recorded. Enhanced and Full fidelity last for the period you choose, then return to Standard. Sharing, AI access, exports, screenshots and work text keep their own separate settings. Local backups include recorded pointer movement.</div>
+        <div class="pv-delete" role="radiogroup" aria-label="Interaction detail profile">
+          <label><input type="radio" name="pvDepth" value="standard"> Standard</label>
+          <label><input type="radio" name="pvDepth" value="enhanced"> Enhanced</label>
+          <label><input type="radio" name="pvDepth" value="full"> Full fidelity</label>
+        </div>
+        <div class="pv-delete">
+          <label><input type="checkbox" id="pvDepthHover"> Hover dwell on controls</label>
+          <label><input type="checkbox" id="pvDepthDrag"> Drag and drop</label>
+          <label><input type="checkbox" id="pvDepthFriction"> Friction candidates</label>
+          <label><input type="checkbox" id="pvDepthTrajectory"> Sampled pointer movement</label>
+        </div>
+        <div class="pv-delete">
+          <label for="pvDepthDwell">Hover counts after (ms)</label><input type="number" id="pvDepthDwell" min="300" max="5000">
+          <label for="pvDepthHz">Pointer samples per second</label><input type="number" id="pvDepthHz" min="1" max="20">
+          <label for="pvDepthRetention">Keep interaction detail (days)</label><input type="number" id="pvDepthRetention" min="1" max="365">
+          <label for="pvDepthDuration">Record extra detail for</label><select id="pvDepthDuration"><option value="1">1 day</option><option value="7" selected>7 days</option><option value="30">30 days</option><option value="90">90 days</option></select>
+        </div>
+        <label class="pv-delete"><input type="checkbox" id="pvDepthAck"> <span id="pvDepthAckText"></span></label>
+        <div class="pv-delete">
+          <button type="button" class="secondary" id="pvDepthSave">Save interaction detail</button>
+          <button type="button" class="secondary" id="pvDepthCoverage">Show capture coverage</button>
+          <button type="button" class="secondary" id="pvDepthFrictionShow">Show friction candidates</button>
+          <button type="button" class="secondary" id="pvDepthHeatmap">Show pointer heatmap</button>
+          <button type="button" class="danger-quiet" id="pvDepthDelete">Delete interaction detail now</button>
+        </div>
+        <div class="muted" id="pvDepthStatus" role="status" aria-live="polite"></div>
+        <div id="pvDepthResult"></div>
+      </div>
       <div class="card" id="pvDelete">
         <h2>Delete recorded activity</h2>
         <div class="muted">Removes activity from this computer. It cannot be undone. Anything shared with an organization is not recalled. If cloud work-text sharing was enabled, corresponding uploaded copies are removed on the next successful synchronization; while this computer is offline, they may remain available for up to seven days.</div>
@@ -292,7 +323,7 @@
       </div>
       <div class="card" id="pvBackup">
         <h2>Back up recorded activity</h2>
-        <div class="muted">Saves a verified copy of everything OpenWorkGraph keeps on this computer to the backup folder. Add a passphrase (12+ characters) to also include this computer's keys and encrypt the file. Restoring is done with OpenWorkGraph closed: <code>python -m server.local_backup restore</code>.</div>
+        <div class="muted">Saves a verified copy of everything OpenWorkGraph keeps on this computer to the backup folder. It includes recorded interaction detail, such as sampled pointer movement, so keep it as private as the computer itself. Add a passphrase (12+ characters) to also include this computer's keys and encrypt the file; without one the file is not encrypted. Restoring is done with OpenWorkGraph closed: <code>python -m server.local_backup restore</code>.</div>
         <div class="pv-delete"><input type="password" id="pvBackupPass" autocomplete="new-password" placeholder="Optional passphrase" aria-label="Backup passphrase (optional)"><button type="button" class="secondary" id="pvBackupCreate">Back up now</button></div>
         <div class="muted" id="pvBackupStatus" role="status" aria-live="polite"></div>
       </div>
@@ -750,6 +781,96 @@
       window.refreshAiContextDetail?.();
       renderPrivacy();
     };
+    const depth = {state: null};
+    const depthBox = id => panel.querySelector('#' + id);
+    const depthSignals = {hover_dwell: 'pvDepthHover', drag_drop: 'pvDepthDrag', friction_candidates: 'pvDepthFriction', pointer_trajectory: 'pvDepthTrajectory'};
+    const showDepth = state => {
+      depth.state = state;
+      for (const [key, id] of Object.entries(depthSignals)) depthBox(id).checked = !!state.signals[key];
+      panel.querySelectorAll('input[name="pvDepth"]').forEach(r => { r.checked = r.value === state.profile; });
+      depthBox('pvDepthDwell').value = state.parameters.hover_dwell_ms;
+      depthBox('pvDepthHz').value = state.parameters.trajectory_hz;
+      depthBox('pvDepthRetention').value = state.parameters.retention_days;
+      depthBox('pvDepthAckText').textContent = state.full_acknowledgement;
+      depthBox('pvDepthAck').checked = !!state.full_acknowledged_version;
+      depthBox('pvDepthStatus').textContent = 'Current: ' + ({standard: 'Standard', enhanced: 'Enhanced', full: 'Full fidelity'}[state.profile] || 'Custom') + '.' +
+        (state.expires_at ? ' Returns to Standard on ' + new Date(state.expires_at).toLocaleString() + '.' : '') +
+        (state.expired ? ' The last period of extra detail has ended.' : '');
+    };
+    const loadDepth = async () => { try { showDepth(await api('/v1/capture-depth')); } catch (error) { depthBox('pvDepthStatus').textContent = error.message || 'Could not load interaction detail.'; } };
+    panel.querySelectorAll('input[name="pvDepth"]').forEach(radio => radio.addEventListener('change', () => {
+      const profile = depth.state?.profiles?.[radio.value];
+      if (profile) for (const [key, id] of Object.entries(depthSignals)) depthBox(id).checked = !!profile[key];
+    }));
+    depthBox('pvDepthSave').onclick = async () => {
+      const signals = Object.fromEntries(Object.entries(depthSignals).map(([key, id]) => [key, depthBox(id).checked]));
+      const payload = {signals, parameters: {hover_dwell_ms: Number(depthBox('pvDepthDwell').value), trajectory_hz: Number(depthBox('pvDepthHz').value), retention_days: Number(depthBox('pvDepthRetention').value)}, duration_days: Number(depthBox('pvDepthDuration').value)};
+      if (signals.pointer_trajectory) {
+        if (!depthBox('pvDepthAck').checked) { depthBox('pvDepthStatus').textContent = 'Tick the acknowledgement to record pointer movement.'; return; }
+        payload.acknowledgement_version = depth.state?.full_acknowledgement_version;
+      }
+      try { showDepth(await api('/v1/capture-depth', send('PUT', payload))); depthBox('pvDepthStatus').textContent += ' Saved; sharing settings are unchanged.'; }
+      catch (error) { depthBox('pvDepthStatus').textContent = error.message || 'Could not save interaction detail.'; }
+    };
+    const depthTable = (rows) => { const t = document.createElement('table'); const b = document.createElement('tbody');
+      rows.forEach(([k, v]) => { const tr = document.createElement('tr'); const th = document.createElement('th'); th.textContent = k; const td = document.createElement('td'); td.textContent = v; tr.append(th, td); b.appendChild(tr); });
+      t.appendChild(b); return t; };
+    depthBox('pvDepthCoverage').onclick = async () => {
+      try {
+        const m = await api('/v1/capture-coverage');
+        depthBox('pvDepthResult').replaceChildren(depthTable([...Object.entries(m.modalities).map(([k, v]) => [k.replace(/_/g, ' '), String(v).replace(/_/g, ' ')]),
+          ...Object.entries(m.high_fidelity_event_counts).map(([k, v]) => [k.replace(/^browser_/, '').replace(/_/g, ' ') + ' events (7 days)', String(v)])]));
+      } catch (error) { depthBox('pvDepthStatus').textContent = error.message || 'Could not load capture coverage.'; }
+    };
+    depthBox('pvDepthFrictionShow').onclick = async () => {
+      try {
+        const r = await api('/v1/capture-coverage/friction');
+        if (!r.enabled) { depthBox('pvDepthResult').replaceChildren(Object.assign(document.createElement('div'), {className: 'muted', textContent: 'Friction candidates are off.'})); return; }
+        const names = {rapid_repeated_activation: 'Repeated clicks', quick_backtrack: 'Went straight back', hover_menu_not_followed: 'Menu opened, nothing chosen', slow_completion: 'Slow to complete'};
+        const list = document.createElement('ul');
+        r.candidates.slice(0, 50).forEach(c => { const li = document.createElement('li'); li.textContent = (names[c.kind] || c.kind) + ' · ' + c.at + ' · ' + (c.page || '') + (c.seconds ? ' · ' + c.seconds + ' s' : '') + (c.count ? ' · ' + c.count + '×' : ''); list.appendChild(li); });
+        depthBox('pvDepthResult').replaceChildren(Object.assign(document.createElement('div'), {className: 'muted', textContent: r.candidates.length + ' candidates in the last ' + r.hours + ' hours. These are observed patterns to review, not judgements about attention, intent or performance.'}), list);
+      } catch (error) { depthBox('pvDepthStatus').textContent = error.message || 'Could not load friction candidates.'; }
+    };
+    const depthNote = text => Object.assign(document.createElement('div'), {className: 'muted', textContent: text});
+    const drawHeatmap = (r) => {
+      const max = Math.max(1, ...r.grid.flat());
+      const grid = document.createElement('div');
+      grid.setAttribute('role', 'img');
+      grid.setAttribute('aria-label', 'Pointer heatmap of ' + r.page.hostname + (r.page.pathname || '') + ': ' + r.samples + ' samples; darker cells had more samples.');
+      grid.style.cssText = 'display:grid;grid-template-columns:repeat(' + r.grid_size + ',1fr);width:min(100%,360px);aspect-ratio:16/10;border:1px solid currentColor;';
+      r.grid.flat().forEach(n => { const cell = document.createElement('div'); cell.style.background = 'rgba(37,99,235,' + (n / max).toFixed(3) + ')'; grid.appendChild(cell); });
+      return grid;
+    };
+    depthBox('pvDepthHeatmap').onclick = async () => {
+      try {
+        const r = await api('/v1/capture-coverage/heatmap');
+        if (!r.pages.length) { depthBox('pvDepthResult').replaceChildren(depthNote('No sampled pointer movement in the last 7 days. It is recorded only at Full fidelity.')); return; }
+        const pick = document.createElement('select'); pick.id = 'pvDepthHeatmapPage'; pick.setAttribute('aria-label', 'Page for the pointer heatmap');
+        r.pages.forEach(p => pick.appendChild(Object.assign(document.createElement('option'), {value: p.page, textContent: p.page + ' (' + p.samples + ' samples)'})));
+        const out = document.createElement('div'); out.id = 'pvDepthHeatmapGrid';
+        const show = async () => {
+          const chosen = r.pages.find(p => p.page === pick.value);
+          const slash = chosen.page.indexOf('/');
+          const q = new URLSearchParams({hostname: slash < 0 ? chosen.page : chosen.page.slice(0, slash)});
+          if (slash >= 0) q.set('pathname', chosen.page.slice(slash));
+          const h = await api('/v1/capture-coverage/heatmap?' + q);
+          out.replaceChildren(drawHeatmap(h), depthNote(h.samples + ' samples in ' + h.batches + ' batches. ' + h.interpretation));
+        };
+        pick.onchange = () => show().catch(error => { depthBox('pvDepthStatus').textContent = error.message || 'Could not load the heatmap.'; });
+        depthBox('pvDepthResult').replaceChildren(depthNote('A local review aid: only cell counts are shown, never the recorded points.'), pick, out);
+        await show();
+      } catch (error) { depthBox('pvDepthStatus').textContent = error.message || 'Could not load the heatmap.'; }
+    };
+    depthBox('pvDepthDelete').onclick = async () => {
+      if (!window.confirm('Delete all recorded hover, drag and pointer detail from this computer? Clicks, pages and other activity are kept. This cannot be undone.')) return;
+      try {
+        const r = await api('/v1/capture-depth/delete', send('POST', {confirm: true}));
+        depthBox('pvDepthStatus').textContent = 'Deleted ' + r.deleted_events + ' interaction detail events. Other activity is kept.';
+        depthBox('pvDepthResult').replaceChildren();
+      } catch (error) { depthBox('pvDepthStatus').textContent = error.message || 'Could not delete interaction detail.'; }
+    };
+    loadDepth();
     panel.querySelector('#pvBackupCreate').onclick = async () => {
       const status = panel.querySelector('#pvBackupStatus');
       const pass = panel.querySelector('#pvBackupPass');
@@ -837,7 +958,8 @@
         const line = document.createElement('div');
         line.className = 'pv-row pv-sub';
         const text = document.createElement('span');
-        text.textContent = conn.label + (conn.host ? ' · ' + conn.host : '') + ' · connected ' + String(conn.connected_at || '').slice(0, 10);
+        text.textContent = conn.label + (conn.host ? ' · ' + conn.host : '') + ' · connected ' + String(conn.connected_at || '').slice(0, 10)
+          + (conn.reauthorization_required ? ' · Reconnect required: the last token refresh could not be confirmed.' : '');
         const remove = document.createElement('button');
         remove.type = 'button'; remove.className = 'secondary'; remove.textContent = 'Disconnect';
         remove.onclick = async () => {

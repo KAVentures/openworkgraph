@@ -4,7 +4,7 @@
   const MODEL_FORMAT='openworkgraph.reference-model.v1';
   const state={logs:[],logId:'',caseType:'',generation:0,refresh:0,follows:[],objectTypes:[]};
   // Views that honour the workspace case filter; every other section uses all cases.
-  const FILTERED=new Set(['summary','variants','variant-coverage','activities','kpis','process-map','playback','dotted-chart','waiting-time','drift','model-discovery','organization']);
+  const FILTERED=new Set(['summary','variants','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','waiting-time','drift','model-discovery','organization']);
 
   const el=(tag,text,cls)=>{
     const node=document.createElement(tag);
@@ -136,15 +136,43 @@
     const manage=el('div',null,'row');manage.id='owgEventLogManage';manage.style.cssText='align-items:end;margin-top:12px';show(manage,false);
     manage.append(field('Stored log',pick),field('Case notion',caseType),analyze,field('Export as',exportFormat),exportButton,remove);
     const results=el('div');results.id='owgEventLogResults';
-    card.append(manage,results,jiraSourceSection());
+    let salesforceStagedFile=null;
+    const unstageSalesforce=()=>{
+      if(salesforceStagedFile&&file.files?.[0]===salesforceStagedFile){
+        file.value='';consent.checked=false;refreshImport();
+        status('Earlier Salesforce selection cleared from the import form.');
+      }
+      salesforceStagedFile=null;
+    };
+    card.append(manage,results,salesforceSourceSection((csv,namespace,isCurrent)=>{
+      if(!isCurrent())return;
+      // Invalidate any in-flight column read for the previous import file.
+      columnReadSequence++;readingColumns=false;columnsReady=true;
+      const transfer=new DataTransfer();transfer.items.add(new File([csv],'selected-salesforce-cases.csv',{type:'text/csv'}));
+      file.files=transfer.files;salesforceStagedFile=file.files[0];
+      name.value='Selected Salesforce cases';format.value='csv';delimiter.value=',';
+      // The projection has a fixed, reviewed four-column schema; use it directly
+      // so a delayed column read cannot overwrite another chosen file's mapping.
+      const options=['case_id','activity','timestamp','source_event_id'].map(x=>[x,x]);
+      for(const column of [cols.case,cols.activity,cols.time])setOptions(column,options);
+      setOptions(cols.resource,[['','(none)'],...options]);setOptions(extras,options);
+      setOptions(eventId,[['','Choose a column'],...options]);
+      for(const column of [sourceColumn,caseColumn,jsonColumn])setOptions(column,[['','(none)'],...options]);
+      cols.case.value='case_id';cols.activity.value='activity';cols.time.value='timestamp';cols.resource.value='';
+      useIdentity.checked=true;eventId.value='source_event_id';sourceNamespace.value=namespace;
+      sourceColumn.value='';caseNamespace.value='';caseColumn.value='';jsonColumn.value='';
+      keep.checked=false;consent.checked=false;refreshImport();
+      status('Salesforce events staged. Review the mapping and separately confirm local storage.');
+      file.focus();
+    },unstageSalesforce),jiraSourceSection());
 
     const browse=document.getElementById('owgProcessCSV');
     if(browse)browse.insertAdjacentElement('afterend',card);else panel.appendChild(card);
 
-    let readingColumns=false;
+    let readingColumns=false,columnsReady=false,columnReadSequence=0;
     const refreshImport=()=>{const csv=format.value==='csv',active=csv&&useIdentity.checked;
       const valid=!active||(eventId.value&&!!sourceNamespace.value!==!!sourceColumn.value&&!(caseNamespace.value&&caseColumn.value)&&!keep.checked);
-      const ready=!readingColumns&&file.files&&file.files[0]&&consent.checked&&valid;importButton.disabled=!(ready&&name.value.trim());appendButton.disabled=!(ready&&state.logId);show(mapping,csv);show(identity,csv);show(identityFields,active);};
+      const ready=!readingColumns&&(!csv||columnsReady)&&file.files&&file.files[0]&&consent.checked&&valid;importButton.disabled=!(ready&&name.value.trim());appendButton.disabled=!(ready&&state.logId);show(mapping,csv);show(identity,csv);show(identityFields,active);};
     for(const control of [useIdentity,eventId,sourceNamespace,sourceColumn,caseNamespace,caseColumn,jsonColumn]){
       control.addEventListener('change',()=>{consent.checked=false;refreshImport();});
       if(control.tagName==='INPUT'&&control.type==='text')control.addEventListener('input',()=>{consent.checked=false;refreshImport();});
@@ -157,27 +185,46 @@
       if(useIdentity.checked)for(const [key,value] of Object.entries({event_id_column:eventId.value,source_namespace:sourceNamespace.value,source_namespace_column:sourceColumn.value,case_namespace:caseNamespace.value,case_namespace_column:caseColumn.value,attributes_json_column:jsonColumn.value}))if(value)q.set(key,value);
     }
     async function readColumns(){
-      const chosen=file.files&&file.files[0];if(!chosen||format.value!=='csv')return;
+      const sequence=++columnReadSequence;
+      const chosen=file.files&&file.files[0];
+      columnsReady=false;
+      if(!chosen||format.value!=='csv'){
+        // Non-CSV imports have no column read, but still need the same ready
+        // status as before. Incrementing the sequence above prevents a stale
+        // CSV read from changing this status or the current file's readiness.
+        readingColumns=false;
+        status(chosen?'File mapping ready. Review the selected columns before storing.':'');
+        refreshImport();return;
+      }
       const sep=delimiter.value==='t'?'\t':delimiter.value;
-      const columns=csvHeader(await chosen.slice(0,65536).text(),sep);
-      const options=columns.map(c=>[c,c]);
-      setOptions(cols.case,options);setOptions(cols.activity,options);setOptions(cols.time,options);setOptions(cols.resource,[['','(none)'],...options]);
-      cols.case.value=guess(columns,['case','order','ticket','id'])||columns[0]||'';
-      cols.activity.value=guess(columns,['activity','event','step','action'])||columns[1]||'';
-      cols.time.value=guess(columns,['time','date','ts'])||columns[2]||'';
-      cols.resource.value=guess(columns,['resource','user','who','agent','owner']);
-      setOptions(extras,options);[...extras.options].forEach(o=>{o.selected=/lifecycle/i.test(o.value);});
-      setOptions(eventId,[['','Choose a column'],...options]);
-      for(const control of [sourceColumn,caseColumn,jsonColumn])setOptions(control,[['','(none)'],...options]);
-      eventId.value=columns.includes('source_event_id')?'source_event_id':'';
-      sourceColumn.value=columns.includes('source_namespace')?'source_namespace':'';
-      caseColumn.value=columns.includes('case_namespace')?'case_namespace':'';
-      jsonColumn.value=columns.includes('attributes')?'attributes':'';
-      refreshImport();
+      readingColumns=true;status('Reading file columns…');refreshImport();
+      try{
+        const columns=csvHeader(await chosen.slice(0,65536).text(),sep);
+        if(sequence!==columnReadSequence||file.files?.[0]!==chosen||format.value!=='csv'||(delimiter.value==='t'?'\t':delimiter.value)!==sep)return;
+        const options=columns.map(c=>[c,c]);
+        setOptions(cols.case,options);setOptions(cols.activity,options);setOptions(cols.time,options);setOptions(cols.resource,[['','(none)'],...options]);
+        cols.case.value=guess(columns,['case','order','ticket','id'])||columns[0]||'';
+        cols.activity.value=guess(columns,['activity','event','step','action'])||columns[1]||'';
+        cols.time.value=guess(columns,['time','date','ts'])||columns[2]||'';
+        cols.resource.value=guess(columns,['resource','user','who','agent','owner']);
+        setOptions(extras,options);[...extras.options].forEach(o=>{o.selected=/lifecycle/i.test(o.value);});
+        setOptions(eventId,[['','Choose a column'],...options]);
+        for(const control of [sourceColumn,caseColumn,jsonColumn])setOptions(control,[['','(none)'],...options]);
+        eventId.value=columns.includes('source_event_id')?'source_event_id':'';
+        sourceColumn.value=columns.includes('source_namespace')?'source_namespace':'';
+        caseColumn.value=columns.includes('case_namespace')?'case_namespace':'';
+        jsonColumn.value=columns.includes('attributes')?'attributes':'';
+        columnsReady=!!(cols.case.value&&cols.activity.value&&cols.time.value);
+        status(columnsReady?'File mapping ready. Review the selected columns before storing.':'Choose a CSV with case, activity and time columns.');
+      }catch(_){
+        if(sequence===columnReadSequence)status('Could not read the column names.');
+      }finally{
+        if(sequence===columnReadSequence){readingColumns=false;refreshImport();}
+      }
     }
-    file.onchange=async()=>{const chosen=file.files&&file.files[0];if(chosen){format.value=detectFormat(chosen.name);if(!name.value)name.value=chosen.name.replace(/\.[^.]+$/,'').slice(0,120);if(chosen.name.toLowerCase().endsWith('.tsv'))delimiter.value='t';}consent.checked=false;readingColumns=true;status('Reading file columns…');refreshImport();try{await readColumns();status('File mapping ready. Review the selected columns before storing.');}catch(_){status('Could not read the column names.');}finally{readingColumns=false;refreshImport();}};
-    format.onchange=()=>{refreshImport();readColumns().catch(()=>{});};
-    delimiter.onchange=()=>readColumns().catch(()=>{});
+    file.onchange=()=>{const chosen=file.files&&file.files[0];if(chosen){format.value=detectFormat(chosen.name);if(!name.value)name.value=chosen.name.replace(/\.[^.]+$/,'').slice(0,120);if(chosen.name.toLowerCase().endsWith('.tsv'))delimiter.value='t';}consent.checked=false;readColumns();};
+    format.onchange=()=>{consent.checked=false;readColumns();};
+    delimiter.onchange=()=>{consent.checked=false;readColumns();};
     consent.onchange=refreshImport;name.oninput=refreshImport;
     importButton.onclick=async()=>{
       const chosen=file.files&&file.files[0];if(!chosen||!consent.checked)return;
@@ -226,6 +273,53 @@
     };
     refreshImport();
     refreshLogs('').catch(()=>{});
+  }
+
+  function salesforceSourceSection(stage,unstage){
+    const box=section('Salesforce CaseHistory export');box.id='owgSalesforceSource';
+    box.append(el('p','Prepare creation and status events from an authorized CSV export on this computer. Preparing does not store a log or contact Salesforce. Selected IDs and status labels are processed locally; history completeness is unknown.','muted'));
+    const file=input('owgSalesforceFile','file');file.accept='.csv';
+    const account=input('owgSalesforceAccount','text','Stable account namespace');account.maxLength=128;
+    const cases=el('textarea');cases.id='owgSalesforceCases';cases.rows=3;cases.maxLength=700;cases.placeholder='One exact CaseId per line (up to 32)';
+    const consent=input('owgSalesforceConsent','checkbox');
+    const prepare=button('Prepare selected cases','secondary');prepare.id='owgSalesforcePrepare';prepare.disabled=true;
+    const out=el('div');out.id='owgSalesforceReview';out.setAttribute('role','status');out.setAttribute('aria-live','polite');
+    let generation=0;
+    const invalidate=()=>{generation++;out.replaceChildren();consent.checked=false;unstage();refresh();};
+    function refresh(){prepare.disabled=!(file.files?.[0]&&account.value.trim()&&cases.value.trim()&&consent.checked);}
+    file.onchange=invalidate;account.oninput=invalidate;cases.oninput=invalidate;
+    consent.onchange=()=>{if(!consent.checked){generation++;out.replaceChildren();unstage();}refresh();};
+    prepare.onclick=async()=>{
+      const selected=file.files?.[0];if(!selected||!consent.checked)return;
+      const current=++generation;prepare.disabled=true;
+      try{
+        if(selected.size>16*1024*1024)throw new Error('Choose an export no larger than 16 MiB.');
+        let text;try{text=new TextDecoder('utf-8',{fatal:true}).decode(await selected.arrayBuffer());}
+        catch(_){throw new Error('The export must be valid UTF-8.');}
+        const spec={account:account.value.trim(),cases:cases.value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean),csv:text,confirm_processing:true};
+        if(current!==generation)return;
+        const result=await (await api('/v1/event-logs/prepare-salesforce',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        if(current!==generation)return;
+        const r=result.report;
+        const reviewed=input('owgSalesforceReviewed','checkbox');
+        const use=button('Use reviewed events in import form','secondary');use.id='owgSalesforceStage';use.disabled=true;
+        reviewed.onchange=()=>{use.disabled=!reviewed.checked;};
+        use.onclick=async()=>{
+          if(current!==generation||!reviewed.checked)return;
+          use.disabled=true;
+          try{await stage(result.csv,result.namespace,()=>current===generation);}
+          catch(error){if(current===generation)out.appendChild(el('p',error.message,'muted'));}
+        };
+        out.replaceChildren(table(['Export review','Count'],[['Input rows',r.input_rows],['Selected cases',r.selected_cases],['Represented cases',r.represented_cases],['Projected events',r.events],['Unselected rows',r.unselected_rows],['Excluded fields',r.excluded_fields],['Duplicate rows',r.duplicate_rows],['Additional events at tied timestamps',r.tied_timestamp_events]]),
+          el('p','Showing '+result.preview.length+' of '+r.events+' projected events. Case keys are derived from your declared account and are not anonymization. Tied timestamps use deterministic ID order, not confirmed business order.','muted'),
+          table(['Derived case key','Activity','Timestamp'],result.preview.map(x=>[x.case_id,x.activity,x.timestamp])),
+          el('p','Only creation and status labels are included. Missing history is unknown. The source namespace is based on your account declaration; use the same declaration for later manual exports. Live connector-managed logs use a different scope. No events have been stored.','muted'),
+          field('I reviewed this projection and want to stage it for import',reviewed),use);
+      }catch(error){if(current===generation)out.replaceChildren(el('p',error.message,'muted'));}
+      finally{if(current===generation)refresh();}
+    };
+    box.append(field('CaseHistory CSV export',file),field('Account namespace',account),field('Selected case IDs',cases),field('Process this selected export locally',consent),prepare,out);
+    return box;
   }
 
   function jiraSourceSection(){
@@ -349,7 +443,7 @@
     variantBox.appendChild(table(['Path','Cases','Share','Median time','Evidence'],(variants.variants||[]).map(v=>{const open=button('Inspect cases','secondary');open.onclick=()=>inspection.path(v.path);return [v.path.join(' → '),Number(v.cases).toLocaleString(),pct(v.share),duration(v.median_duration_seconds),open];})));
     variantBox.appendChild(el('div',Number(variants.distinct_variants).toLocaleString()+' distinct variants.','muted'));
     results.appendChild(variantBox);
-    results.appendChild(variantCoverageSection());
+    results.appendChild(variantCoverageSection(names));
     results.appendChild(objectMapSection());
     if(summary.log&&summary.log.object_relationships)results.appendChild(objectRelationshipSection());
     results.appendChild(processMapSection());
@@ -358,11 +452,13 @@
     activityBox.appendChild(table(['Activity','Events','Cases','Cases repeating activity','Evidence'],(activities.activities||[]).map(a=>{const open=button('Inspect cases','secondary');open.setAttribute('aria-label','Inspect cases containing '+a.activity);open.onclick=()=>inspection.activity(a.activity);return [a.activity,a.events,a.cases,a.repeated_in_cases,open];})));
     results.append(activityBox,inspection.node);
     results.appendChild(kpiSection(names));
+    results.appendChild(durationDistributionSection());
     results.appendChild(benchmarkSection(names));
     results.appendChild(impactSection(names));
     results.appendChild(savedGraphSection(names,inspection));
     results.appendChild(simulationSection());
     results.appendChild(conformanceSection((variants.variants||[])[0]));
+    results.appendChild(clusterSection());
     results.appendChild(discoverySection());
     results.appendChild(driftSection());
     results.appendChild(dottedSection());
@@ -569,15 +665,18 @@
     box.appendChild(row);
     return {node:box,read:()=>cohortSpec({label:label.value,from:from.value,before:before.value,resource:resource.value,activity:activity.value,attribute:attribute.value})};
   }
-  function variantCoverageSection(){
+  function variantCoverageSection(activityNames){
     const box=section('Variant coverage');
     const run=button('Analyse variant coverage','secondary');run.id='owgVariantCoverageRun';
-    const out=el('div');box.append(el('p','See how many observed paths cover most cases, before deciding which variations to investigate.'),run,out);
+    const budget=select('owgVariantCoverageLimit',[['20','20 variants'],['50','50 variants'],['100','100 variants'],['200','200 variants']]);
+    const inspection=caseInspector(activityNames,{prefix:'owgVariantCoverageCases'});
+    for(const control of inspection.node.querySelectorAll('button'))control.setAttribute('aria-label','Variant coverage: '+control.textContent);
+    const out=el('div');box.append(el('p','See how many observed paths cover most cases, before deciding which variations to investigate.'),field('Maximum displayed variants',budget),run,out,inspection.node);
     run.onclick=async()=>{
       run.disabled=true;
       const generation=state.generation;
       try{
-        const r=await getJSON(logPath('variant-coverage'));
+        const r=await getJSON(logPath('variant-coverage',{limit:budget.value}));
         if(generation!==state.generation)return;
         const exports=exportButtons('owgVariantCoverage',()=>r,()=>[
           ['rank','path','cases','case_share','cumulative_cases','cumulative_share','path_truncated'],
@@ -585,7 +684,13 @@
         exports.enable(true);
         out.replaceChildren(
           table(['Target case coverage','Variants needed'],r.coverage_targets.map(t=>[t.target_percent+'%',t.variants_needed??'—'])),
-          table(['Rank','Observed path','Cases','Cumulative coverage'],r.displayed_variants.map(v=>[v.rank,v.path.join(' → ')+(v.path_truncated?' … ('+v.path_activity_count+' activities)':''),v.cases,pct(v.cumulative_share)])),
+          table(['Rank','Observed path','Cases','Cumulative coverage','Evidence'],r.displayed_variants.map(v=>{
+            const inspect=button('Inspect variant '+v.rank+' cases','secondary');
+            inspect.disabled=v.path_truncated;
+            if(v.path_truncated)inspect.title='The displayed path is shortened; selecting it would incorrectly match a prefix. Browse cases by activity instead.';
+            else inspect.onclick=()=>inspection.path(v.path);
+            return [v.rank,v.path.join(' → ')+(v.path_truncated?' … ('+v.path_activity_count+' activities; exact-path inspection unavailable)':''),v.cases,pct(v.cumulative_share),inspect];
+          })),
           el('p',r.cases+' cases across '+r.distinct_variants+' variants. '+r.omitted_variants+' variants containing '+r.omitted_cases+' cases are outside the displayed rows. Targets use every variant, including omitted rows.','muted'),
           el('p',r.interpretation,'muted'),exports.node);
       }catch(error){if(generation===state.generation)out.replaceChildren(el('p',error.message,'muted'));}
@@ -1180,6 +1285,57 @@
         out.replaceChildren(table(['Cases','Throughput p50','p90','p95','Rework rate','SLA breach rate','Automation rate'],[[Number(k.cases).toLocaleString(),duration(t.p50),duration(t.p90),duration(t.p95),pct(k.rework_rate),k.sla?pct(k.sla.breach_rate):'—',k.automation?pct(k.automation.automation_rate):'—']]),
           el('div','Rework means a case repeats an activity. Automation rate counts events by the resources you listed.','muted'));
       }catch(error){last=null;exports.enable(false);out.replaceChildren(el('div',error.message,'muted'));}
+    };
+    return box;
+  }
+
+  // Exact, non-overlapping bands of observed first-to-last event duration.
+  function durationDistributionSection(){
+    const box=section('Case duration distribution');
+    const bounds=input('owgDurationBounds','text','1, 4, 24, 72');bounds.value='1, 4, 24, 72';bounds.maxLength=110;
+    const unit=select('owgDurationUnit',[['1','seconds'],['60','minutes'],['3600','hours'],['86400','days']]);unit.value='3600';
+    const run=button('Analyse duration distribution','secondary');run.id='owgDurationRun';
+    const controls=el('div',null,'row');controls.style.alignItems='end';
+    controls.append(field('Thresholds, smallest to largest',bounds),field('Threshold unit',unit),run);
+    const out=el('div');out.id='owgDurationResults';out.setAttribute('role','status');
+    box.append(el('p','Count cases by time between their first and last recorded events. Enter up to 10 whole-number thresholds. This is observed elapsed time, not work time or proof of completion.','muted'),controls,out);
+    let version=0;
+    function invalidate(){version++;out.replaceChildren(el('div','Thresholds changed. Analyse again to refresh these results.','muted'));}
+    bounds.oninput=invalidate;unit.onchange=invalidate;
+    function textFor(seconds){
+      if(seconds%86400===0)return (seconds/86400)+' '+(seconds===86400?'day':'days');
+      if(seconds%3600===0)return (seconds/3600)+' '+(seconds===3600?'hour':'hours');
+      if(seconds%60===0)return (seconds/60)+' '+(seconds===60?'minute':'minutes');
+      return seconds+' '+(seconds===1?'second':'seconds');
+    }
+    function label(b){
+      if(b.upper_seconds===null)return textFor(b.lower_seconds)+' or more';
+      if(b.lower_seconds===0)return 'Less than '+textFor(b.upper_seconds);
+      return textFor(b.lower_seconds)+' to less than '+textFor(b.upper_seconds);
+    }
+    run.onclick=async()=>{
+      const generation=state.generation,ticket=++version;run.disabled=true;
+      out.replaceChildren(el('div','Analysing duration distribution…','muted'));
+      try{
+        const parts=bounds.value.split(',').map(x=>x.trim()),multiplier=Number(unit.value);
+        if(!parts.length||parts.length>10||parts.some(x=>!/^[0-9]{1,10}$/.test(x)))throw new Error('Enter 1–10 whole-number thresholds separated by commas.');
+        const cutoffs=parts.map(x=>Number(x)*multiplier);
+        if(cutoffs.some((x,i)=>!Number.isSafeInteger(x)||x<1||x>3155760000||(i>0&&x<=cutoffs[i-1])))throw new Error('Thresholds must be positive, strictly increasing, and at most 100 years.');
+        const r=await getJSON(logPath('duration-distribution',{cutoffs_seconds:cutoffs.join(',')}));
+        if(generation!==state.generation||ticket!==version||!box.isConnected)return;
+        const exports=exportButtons('owgDurationDistribution',()=>r,()=>[
+          ['lower_seconds_inclusive','upper_seconds_exclusive','cases','share'],
+          ...r.bands.map(b=>[b.lower_seconds,b.upper_seconds,b.cases,b.share])]);exports.enable(true);
+        const rows=r.bands.map(b=>{
+          const share=el('div',b.share===null?'—':pct(b.share));
+          if(b.share!==null){const bar=document.createElement('progress');bar.max=1;bar.value=b.share;bar.style.cssText='display:block;width:100%;max-width:200px';bar.setAttribute('aria-label',label(b)+': '+pct(b.share)+' of selected cases');share.appendChild(bar);}
+          return [label(b),Number(b.cases).toLocaleString(),share];
+        });
+        const scope=r.cases_before_filter==null?'':(' Filter applied: '+Number(r.cases).toLocaleString()+' of '+Number(r.cases_before_filter).toLocaleString()+' cases.');
+        out.replaceChildren(el('p',Number(r.cases).toLocaleString()+' selected cases with retained events; '+Number(r.single_event_cases).toLocaleString()+' contain only one retained event.'+scope,'muted'),
+          table(['Observed duration','Cases','Share of selected cases'],rows),el('p',r.interpretation,'muted'),exports.node);
+      }catch(error){if(generation===state.generation&&ticket===version&&box.isConnected)out.replaceChildren(el('div',error.message,'muted'));}
+      finally{if(box.isConnected)run.disabled=false;}
     };
     return box;
   }
@@ -2839,6 +2995,37 @@
     return rule;
   }
 
+  function clusterSection(){
+    const box=section('Trace clusters');box.id='owgEventLogClusters';
+    box.appendChild(el('div','Group cases whose activities and orderings are similar, so a tangled map splits into a few ways of working. Clusters describe this log; they are not process types or causes.','muted'));
+    const k=select('owgClusterK',[['','Choose automatically'],...[2,3,4,5,6,7,8].map(n=>[String(n),n+' clusters'])]);
+    const run=button('Find clusters');run.id='owgClusterRun';
+    const message=el('div',null,'muted');message.id='owgClusterStatus';message.setAttribute('role','status');
+    const out=el('div');out.id='owgClusterResults';
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Number of clusters',k),run);
+    box.append(row,message,out);
+    const generation=state.generation;
+    const shares=list=>list.map(a=>a.activity+' ('+pct(a.case_share_in_cluster)+' vs '+pct(a.case_share_in_log)+')').join('; ')||'—';
+    run.onclick=async()=>{
+      try{
+        message.textContent='Clustering…';run.disabled=true;
+        const body={};if(k.value)body.k=Number(k.value);if(state.caseType)body.case_type=state.caseType;
+        if(state.follows.length)body.cohort={follows:state.follows};
+        const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/trace-clusters',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+        if(generation!==state.generation)return;
+        const rows=r.clusters.map(c=>['Cluster '+c.cluster,Number(c.cases).toLocaleString()+' ('+pct(c.share)+')',Number(c.variants).toLocaleString(),
+          c.median_throughput_seconds===null?'—':duration(c.median_throughput_seconds),c.mean_events_per_case===null?'—':c.mean_events_per_case.toFixed(1),
+          (c.top_variants[0]||{activities:[]}).activities.join(' → '),shares(c.more_common_activities),shares(c.less_common_activities)]);
+        const how=r.k_chosen_by==='silhouette'?r.k+' clusters chosen by silhouette ('+(r.silhouette===null?'—':r.silhouette.toFixed(2))+')':r.k+' clusters as requested';
+        out.replaceChildren(el('div',Number(r.cases).toLocaleString()+' cases, '+Number(r.variants).toLocaleString()+' variants; '+how+'.'+(r.variants_assigned_to_nearest?' '+Number(r.variants_assigned_to_nearest).toLocaleString()+' rare variants joined their nearest cluster.':''),'muted'),
+          table(['Cluster','Cases','Variants','Median throughput','Events per case','Most common variant','More common than in the log','Less common than in the log'],rows),
+          el('div',r.interpretation,'muted'));
+        message.textContent='';
+      }catch(error){message.textContent=error.message;}finally{run.disabled=false;}
+    };
+    return box;
+  }
+
   function complianceSection(activityNames){
     const box=section('Compliance rules');box.id='owgEventLogCompliance';
     box.appendChild(el('div','Check cases against rules such as "every order is approved before payment" or "the person who creates a purchase order does not approve it". Results describe this log; they are not an audit or legal finding, and no names are shown.','muted'));
@@ -2856,8 +3043,28 @@
     const pending=el('div');pending.id='owgComplianceRules';
     const message=el('div',null,'muted');message.id='owgComplianceStatus';message.setAttribute('role','status');
     const out=el('div');out.id='owgComplianceResults';
-    box.append(row,pending,run,message,out);
+    const confidence=input('owgComplianceConfidence','number');confidence.min='50';confidence.max='100';confidence.step='1';confidence.value='95';
+    const support=input('owgComplianceSupport','number');support.min='0';support.max='100';support.step='1';support.value='10';
+    const suggest=button('Suggest rules from this log','secondary');suggest.id='owgComplianceSuggest';
+    const suggestions=el('div');suggestions.id='owgComplianceSuggestions';
+    const suggestRow=el('div',null,'row');suggestRow.style.alignItems='end';
+    suggestRow.append(field('Followed by at least (% of cases)',confidence),field('Applies to at least (% of cases)',support),suggest);
+    box.append(row,suggestRow,suggestions,pending,run,message,out);
     const rules=[];const generation=state.generation;
+    suggest.onclick=async()=>{
+      try{
+        const body={min_confidence:Number(confidence.value)/100,min_support:Number(support.value)/100};if(state.caseType)body.case_type=state.caseType;
+        const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/compliance/discover',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+        if(generation!==state.generation)return;
+        const same=(x,y)=>JSON.stringify(x)===JSON.stringify(y);
+        const rows=r.candidates.map(c=>{
+          const take=button('Add','secondary');take.setAttribute('aria-label','Add suggested rule: '+c.description);
+          take.onclick=()=>{if(rules.length>=20){message.textContent='Check at most 20 rules at once.';return;}if(!rules.some(x=>same(x,c.rule)))rules.push(c.rule);drawPending();};
+          return [c.description,pct(c.confidence)+' ['+pct(c.confidence_ci95[0])+', '+pct(c.confidence_ci95[1])+']',pct(c.support),Number(c.violating_cases).toLocaleString(),take];});
+        suggestions.replaceChildren(el('div',r.candidates.length+' suggestions from '+Number(r.cases).toLocaleString()+' cases'+(r.activities_truncated?' (the '+r.activities_considered+' most frequent of '+r.activities_in_log+' activities)':'')+'. '+r.interpretation,'muted'),
+          r.candidates.length?table(['Suggested rule','Followed by (95% CI)','Applies to','Violating cases',''],rows):el('div','No rule meets these thresholds. Lower them to see more.','muted'));
+      }catch(error){suggestions.replaceChildren(el('div',error.message,'muted'));}
+    };
     const label=r=>({response:'every '+r.a+' is eventually followed by '+r.b,precedence:'every '+r.b+' needs an earlier '+r.a,response_within:'every '+r.a+' is followed by '+r.b+' within '+duration(r.seconds),segregation_of_duties:r.a+' and '+r.b+' are done by different people',not_coexistence:r.a+' and '+r.b+' never happen together',existence:r.a+' happens '+(r.max===undefined?'at least '+r.min:r.min===r.max?'exactly '+r.min:r.min+'–'+r.max)+' times'}[r.template]);
     function drawPending(){
       pending.replaceChildren(rules.length?table(['Rule',''],rules.map((r,i)=>{const del=button('Remove','secondary');del.setAttribute('aria-label','Remove rule '+label(r));del.onclick=()=>{rules.splice(i,1);drawPending();};return [label(r),del];})):el('div','No rules added yet.','muted'));

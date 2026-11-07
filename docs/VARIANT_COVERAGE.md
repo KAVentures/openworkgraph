@@ -23,3 +23,16 @@ Downloads include activity labels and log metadata, so review before sharing.
 Frequency is not automation suitability or employee effort. These paths do not
 prove a true business boundary, complete source coverage, or verified outcomes.
 No source events, process definitions or permissions change.
+
+## Investigating the long tail
+
+Choose 20, 50, 100 or 200 displayed variants, then analyse again. Coverage targets
+still use the whole selected population at every display budget. Each complete
+shown path has an **Inspect variant N cases** button. It opens complete case
+histories in the coverage section's dedicated evidence inspector, retaining the
+selected case notion and active whole-case filter. The inspector's additional
+local controls can narrow that selection further; they do not change the Pareto
+ranking above. Case keys remain supplied identities, not verified people or
+business outcomes. Paths shortened to 100 steps have disabled exact inspection,
+because selecting that displayed prefix could return different cases. The
+inspector remains available to browse those cases by explicit activity/cohort.

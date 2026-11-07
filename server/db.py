@@ -308,6 +308,16 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_events_event_type ON events(event_type);
             CREATE INDEX IF NOT EXISTS idx_norm_actor ON normalized_events(actor_id, observed_at);
             CREATE INDEX IF NOT EXISTS idx_norm_sensor ON normalized_events(sensor_id, observed_at);
+            -- Sampled pointer coordinates (#634) live apart from the event rows, so no event
+            -- read, MCP, API or export path can return them; deleting the event deletes them.
+            CREATE TABLE IF NOT EXISTS pointer_trajectory_points (
+                event_id TEXT PRIMARY KEY,
+                points_json TEXT NOT NULL
+            );
+            CREATE TRIGGER IF NOT EXISTS trg_events_delete_trajectory_points AFTER DELETE ON events
+            BEGIN
+                DELETE FROM pointer_trajectory_points WHERE event_id = old.event_id;
+            END;
             """
         )
         _backfill_derived(conn)
@@ -531,6 +541,34 @@ def protect_existing_titles(*, batch_size: int = 1000, pause_seconds: float = 0.
             time.sleep(min(float(pause_seconds), 0.2))
 
 
+def _split_pointer_trajectory(e: dict[str, Any]) -> tuple[dict[str, Any], list[Any] | None]:
+    """Move sampled pointer coordinates out of the event, leaving a count and duration (#634)."""
+    meta = e.get("metadata")
+    if not isinstance(meta, dict) or not isinstance(meta.get("points"), list) or not (
+            str(e.get("event_type") or "").endswith("pointer_trajectory") or meta.get("action") == "pointer_trajectory"):
+        return e, None
+    points = meta["points"]
+    last = points[-1] if points and isinstance(points[-1], list) and points[-1] else [None]
+    summary = {k: v for k, v in meta.items() if k != "points"}
+    summary.update(point_count=len(points),
+                   duration_ms=last[0] if isinstance(last[0], (int, float)) and not isinstance(last[0], bool) else None,
+                   raw_points_stored_locally=True, raw_points_shared=False)
+    return {**e, "metadata": summary}, points
+
+
+def pointer_trajectory_points(event_id: str) -> list[Any] | None:
+    """The locally stored coordinates of one trajectory event, for on-device use only."""
+    with connect() as conn:
+        row = conn.execute("SELECT points_json FROM pointer_trajectory_points WHERE event_id = ?", (event_id,)).fetchone()
+    if row is None:
+        return None
+    try:
+        value = json.loads(row[0])
+    except ValueError:
+        return None
+    return value if isinstance(value, list) else None
+
+
 def insert_events(events: Iterable[dict[str, Any]]) -> int:
     """Persist rich evidence plus operational and context derivatives atomically.
 
@@ -570,8 +608,12 @@ def insert_events(events: Iterable[dict[str, Any]]) -> int:
         for raw in events:
             e = sanitize_event_identifiers(dict(raw))
             e = protect_titles_at_rest(e)
+            e, trajectory = _split_pointer_trajectory(e)
             added = _insert_event(conn, "events", e)
             inserted += added
+            if added and trajectory is not None:
+                conn.execute("INSERT OR REPLACE INTO pointer_trajectory_points (event_id, points_json) VALUES (?, ?)",
+                             (e["event_id"], json.dumps(trajectory, separators=(",", ":"))))
             normalized = normalize_event(e)
             if not _insert_event(conn, "normalized_events", normalized) and not added:
                 _merge_agent_structure(conn, "normalized_events", normalized)
