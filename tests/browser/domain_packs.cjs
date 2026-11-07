@@ -158,7 +158,8 @@ const path=require('node:path');
   await offReport.getByText('offboarding_start_to_revocation',{exact:true}).waitFor();
   const offText=await offReport.textContent();
   assert.match(offText,/every Offboarding opened is followed by Access revocation logged within 86400 s/);
-  assert.match(offText,/does NOT prove that every identity provider/);
+  assert.match(await page.locator('#owgDomainPackForm').textContent(),
+    /does NOT prove that every identity provider/);
   assert.match(offText,/not validated against any particular source system/);
   assert.match(offText,/offboarding_revocation_events/);
   await page.locator('#owgDomainPackParam-revocation_hours').fill('72');
