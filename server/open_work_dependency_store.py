@@ -6,6 +6,7 @@ outcome. The caller must authorize the actor and source scope before use.
 from __future__ import annotations
 
 import os
+from contextlib import closing
 import re
 import sqlite3
 import stat
@@ -82,7 +83,7 @@ def declare_dependency(path: str, *, scope: str, actor: str,
     _valid(scope, actor, case_id, prerequisite)
     if case_id == prerequisite:
         raise ValueError("self dependency")
-    with _connect(path) as db:
+    with closing(_connect(path)) as db, db:
         db.execute("BEGIN IMMEDIATE")
         graph = _edges(db, scope, actor)
         if prerequisite in graph.get(case_id, set()):
@@ -108,7 +109,7 @@ def remove_dependency(path: str, *, scope: str, actor: str,
                       case_id: str, prerequisite: str) -> bool:
     """Explicitly remove an owner-declared edge; never delete source evidence."""
     _valid(scope, actor, case_id, prerequisite)
-    with _connect(path) as db:
+    with closing(_connect(path)) as db, db:
         db.execute("BEGIN IMMEDIATE")
         return bool(db.execute(
             "DELETE FROM declared_case_dependencies WHERE scope=? AND actor=? AND case_id=? AND prerequisite=?",
@@ -125,7 +126,7 @@ def dependency_context(path: str, *, scope: str, actor: str,
     _valid(scope, actor, case_id)
     if type(limit) is not int or not 1 <= limit <= 100:
         raise ValueError("invalid result limit")
-    with _connect(path) as db:
+    with closing(_connect(path)) as db, db:
         graph = _edges(db, scope, actor)
     direct = sorted(graph.get(case_id, ()))
     visited: set[str] = set()
@@ -148,7 +149,7 @@ def dependency_context(path: str, *, scope: str, actor: str,
 def purge_actor(path: str, *, scope: str, actor: str) -> int:
     """Caller must invoke on consent withdrawal, deletion or scope revocation."""
     _valid(scope, actor)
-    with _connect(path) as db:
+    with closing(_connect(path)) as db, db:
         db.execute("BEGIN IMMEDIATE")
         return db.execute(
             "DELETE FROM declared_case_dependencies WHERE scope=? AND actor=?",
@@ -229,7 +230,7 @@ def replace_reviewed_dependencies(
         raise ValueError("dependency graph capacity reached")
     # BEGIN IMMEDIATE serializes concurrent writers. No partial replacement on
     # malformed snapshots, SQLite errors, or a failed transaction.
-    with _connect(path) as db:
+    with closing(_connect(path)) as db, db:
         db.execute("BEGIN IMMEDIATE")
         existing = set(db.execute(
             "SELECT case_id, prerequisite FROM declared_case_dependencies WHERE scope=? AND actor=?",
