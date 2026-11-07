@@ -145,6 +145,60 @@ def extract_after_readiness(*, expected_generation, tenant, mailbox, folder,
             "automatic_retry_allowed": False}
 
 
+
+def commit_after_review(*, expected_generation, expected_previous_candidate_sha256,
+                        tenant, mailbox, folder, expected_address, grant_file,
+                        identity_report, folder_report, ledger_dir, log_id,
+                        confirm_log_id, candidate, csv_path, receipt_file,
+                        journal_dir, handoff_dir, successor_label, port=8765,
+                        session=None, consent_local_read=False,
+                        confirm_removals_reviewed=False,
+                        confirm_events_appended=False,
+                        confirm_checkpoint_commit=False,
+                        membership_opener=None):
+    """Explicit second phase: verify actual OWG membership, then commit cursor.
+
+    Never appends events. The caller must separately append the reviewed
+    candidate and explicitly attest to that operation; the checkpoint module
+    independently verifies authenticated event membership and the handoff.
+    """
+    if (type(expected_generation) is not int or expected_generation < 1
+            or type(expected_previous_candidate_sha256) is not str
+            or len(expected_previous_candidate_sha256) != 64
+            or any(c not in "0123456789abcdef" for c in expected_previous_candidate_sha256)
+            or consent_local_read is not True
+            or confirm_removals_reviewed is not True
+            or confirm_events_appended is not True
+            or confirm_checkpoint_commit is not True
+            or type(log_id) is not str or not log_id
+            or log_id != confirm_log_id or not session):
+        raise ReceiptError("Explicit append review and checkpoint approval required")
+    readiness(tenant=tenant, mailbox=mailbox, folder=folder,
+              expected_address=expected_address, grant_file=grant_file,
+              identity_report=identity_report, folder_report=folder_report,
+              ledger_dir=ledger_dir, log_id=log_id, consent_local_read=True,
+              expected_generation=expected_generation)
+    from .m365_outlook_checkpoint import commit_checkpoint
+    result = commit_checkpoint(
+        tenant=tenant, mailbox=mailbox, folder=folder, log_id=log_id,
+        confirm_log_id=confirm_log_id, grant_file=grant_file,
+        candidate=candidate, csv_path=csv_path, receipt_file=receipt_file,
+        journal_dir=journal_dir, handoff_dir=handoff_dir,
+        successor_label=successor_label, ledger_dir=ledger_dir,
+        expected_previous_candidate_sha256=expected_previous_candidate_sha256,
+        port=port, session=session, consent_local_read=True,
+        confirm_removals_reviewed=True, confirm_checkpoint_commit=True,
+        membership_opener=membership_opener)
+    if (type(result) is not dict or result.get("status") != "checkpoint_committed"
+            or type(result.get("generation")) is not int
+            or result["generation"] != expected_generation + 1
+            or result.get("idempotent_replay") is not False):
+        raise ReceiptError("Checkpoint commit requires manual ledger inspection")
+    return {"format": FORMAT, "status": "checkpoint_committed",
+            "committed_generation": result["generation"],
+            "event_membership_verified": True,
+            "automatic_retry_allowed": False}
+
 def main(argv=None):
     """Local operator CLI: inspect readiness or explicitly request a review candidate.
 
