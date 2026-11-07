@@ -340,3 +340,15 @@ def test_extract_after_readiness_refuses_revoked_grant_after_graph():
                 side_effect=ReceiptError("Grant revoked"))):
         with pytest.raises(ReceiptError, match="Grant revoked"):
             extract_after_readiness(**_extract_kwargs())
+
+
+@pytest.mark.parametrize("malformed", [None, False, [], "review_required", 42])
+def test_extract_after_readiness_refuses_non_mapping_provider_result(malformed):
+    """Malformed adapter output must fail closed as an operator refusal, not crash."""
+    from server.m365_outlook_sync_readiness import extract_after_readiness
+    with (patch("server.m365_outlook_sync_readiness.readiness",
+                return_value={"status": "operator_review_ready"}),
+          patch("server.m365_outlook_checkpoint_next.extract_from_checkpoint",
+                return_value=malformed)):
+        with pytest.raises(ReceiptError, match="not ready for review"):
+            extract_after_readiness(**_extract_kwargs())
