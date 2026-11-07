@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import re
 import stat
+import zipfile
 from typing import Any
 
 from . import local_backup
@@ -18,6 +19,7 @@ from . import local_backup
 MAX_SELECTED = 5
 MAX_ARCHIVE_BYTES = 1 << 30  # 1 GiB per archive for a dashboard check
 MAX_TOTAL_ARCHIVE_BYTES = 2 << 30  # 2 GiB of ZIP input per request
+MAX_UNCOMPRESSED_BYTES = 2 << 30  # never expand very highly compressed multi-GiB payloads
 _NAME = re.compile(r"owg-backup-[A-Za-z0-9_.-]{1,128}\.zip\Z")
 
 
@@ -49,6 +51,20 @@ def _fingerprint(path: Path):
     if not stat.S_ISREG(st.st_mode):
         return None
     return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+
+
+def _declared_uncompressed_size(path: Path) -> int:
+    """Cheap central-directory budget check, not a substitute for hashes."""
+    with zipfile.ZipFile(path, "r") as archive:
+        infos = archive.infolist()
+        if len(infos) > local_backup.MAX_FILES + 1:
+            return MAX_UNCOMPRESSED_BYTES + 1
+        total = 0
+        for info in infos:
+            total += info.file_size
+            if total > MAX_UNCOMPRESSED_BYTES:
+                break
+        return total
 
 
 def check(spec: Any) -> dict[str, Any]:
@@ -84,18 +100,21 @@ def check(spec: Any) -> dict[str, Any]:
         else:
             inspected_bytes += before[2]
             try:
-                verified = local_backup.verify_backup(path)
-            except local_backup.BackupError:
+                declared_size = _declared_uncompressed_size(path)
+                if declared_size > MAX_UNCOMPRESSED_BYTES:
+                    row["status"] = "exceeds_dashboard_uncompressed_limit"
+                else:
+                    verified = local_backup.verify_backup(path)
+                    if verified.get("includes_secrets") or verified.get("encrypted"):
+                        row["status"] = "requires_offline_inspection"
+                    else:
+                        row.update(status="verified", verified=True,
+                                   owg_version=verified.get("owg_version"),
+                                   file_count=verified.get("file_count"))
+            except (local_backup.BackupError, zipfile.BadZipFile):
                 row["status"] = "integrity_check_failed"
             except OSError:
                 row["status"] = "unavailable_or_not_regular"
-            else:
-                if verified.get("includes_secrets") or verified.get("encrypted"):
-                    row["status"] = "requires_offline_inspection"
-                else:
-                    row.update(status="verified", verified=True,
-                               owg_version=verified.get("owg_version"),
-                               file_count=verified.get("file_count"))
             if _fingerprint(path) != before:
                 # It may have been swapped while read. Do not claim the
                 # archive we just checked is still the listed file.
@@ -112,6 +131,7 @@ def check(spec: Any) -> dict[str, Any]:
         "max_archives_per_check": MAX_SELECTED,
         "max_single_archive_bytes": MAX_ARCHIVE_BYTES,
         "max_total_archive_bytes": MAX_TOTAL_ARCHIVE_BYTES,
+        "max_uncompressed_archive_bytes": MAX_UNCOMPRESSED_BYTES,
         "all_selected_verified": all(item["verified"] for item in results),
         "restores_performed": 0, "archive_contents_returned": False,
         "offline_restore_authorized": False, "local_only": True,
