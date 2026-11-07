@@ -2872,3 +2872,47 @@ async def bound_run_receipt_journal(request: Request, response: Response):
     await _recheck_source(scope)
     response.headers["Cache-Control"] = "no-store"
     return result
+
+
+@router.get("/v1/open-work/declarations/durable-dependencies")
+async def get_local_durable_reviewed_dependencies(request: Request, response: Response):
+    """Session-gated read-through of current reviewed edges; no agent authority."""
+    from .local_auth import auth_dir
+    from .open_work_dependency_store import (
+        dependency_context, purge_actor, reconcile_current_reviewed_dependencies,
+    )
+
+    _dashboard_only(request)
+    response.headers["Cache-Control"] = "no-store"
+    scope = await _require_scope()
+    # Single-owner local dashboard identity, never supplied by the caller.
+    secret = await asyncio.to_thread(_read_or_create_secret, ".open_work_reference_key")
+    actor = "dashboard:" + hmac.new(
+        secret.encode("utf-8"), b"open-work:durable-local-owner:v1",
+        hashlib.sha256,
+    ).hexdigest()[:32]
+    path = str(auth_dir() / ".open_work_reviewed_dependencies.sqlite3")
+    ref = request.query_params.get("work_item_ref")
+    if ref is not None and not re.fullmatch(r"owg:w:[0-9a-f]{32}", ref):
+        raise HTTPException(422, "invalid opaque work item reference")
+    try:
+        result = await asyncio.to_thread(
+            reconcile_current_reviewed_dependencies,
+            path, scope=scope, actor=actor,
+        )
+        if ref is not None:
+            result = {**result, "context": await asyncio.to_thread(
+                dependency_context, path, scope=scope, actor=actor, case_id=ref,
+            )}
+        await _recheck_source(scope)
+    except HTTPException:
+        await asyncio.to_thread(purge_actor, path, scope=scope, actor=actor)
+        raise
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError,
+            ValueError) as exc:
+        raise _safe_error(exc) from None
+    return {
+        **result, "format": "openworkgraph.reviewed-durable-dependencies.v1",
+        "source_read_performed": False, "agent_execution_authorized": False,
+        "customer_outcome": "unknown", "available": True,
+    }
