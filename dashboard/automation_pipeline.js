@@ -1991,7 +1991,12 @@
         await journeyButton.onclick();
     }
 
+    // A later navigation invalidates every earlier asynchronous handoff attempt.
+    // Never let an obsolete response open a decision surface or overwrite status.
+    let handoffGeneration=0;
     window.addEventListener('owg-pipeline-open',event=>{
+      const generation=++handoffGeneration;
+      const current=()=>generation===handoffGeneration;
       const handoff=event.detail||{},id=handoff.idea_id;
       if(typeof id!=='string')return;
       // Carry the exact inspected export as a navigation hint, never as approval.
@@ -2000,8 +2005,10 @@
       // A rejected handoff must never leave an unrelated approval visible.
       detail.replaceChildren();
       refresh().then(async()=>{
+        if(!current())return;
         if(!handoff.project_id){await show(id);return;}
         const journey=await (await api('/v1/automation-pipeline/'+encodeURIComponent(id)+'/journey')).json();
+        if(!current())return;
         const project=journey.projects?.find(p=>p.project_id===handoff.project_id);
         if(journey.idea?.revision!==handoff.idea_revision||!project||
            project.idea_revision!==handoff.idea_revision||
@@ -2011,10 +2018,11 @@
         }
         // Only reveal the decision surface after authenticated exact-export checks.
         await show(id);
+        if(!current())return;
         const button=document.getElementById('owgPipelineJourney');
         if(button)await button.onclick();
-        status.textContent='Opened evidence journey for inspected project '+handoff.project_id+'. Review and approval remain separate.';
-      }).catch(e=>{status.textContent='Unable to open reviewed evidence: '+e.message;});
+        if(current())status.textContent='Opened evidence journey for inspected project '+handoff.project_id+'. Review and approval remain separate.';
+      }).catch(e=>{if(current())status.textContent='Unable to open reviewed evidence: '+e.message;});
     });
 
     add.onclick=async()=>{try{
