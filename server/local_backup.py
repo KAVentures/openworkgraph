@@ -365,7 +365,7 @@ def _validated_manifest(archive: zipfile.ZipFile, *, encrypted: bool) -> dict[st
             raise BackupError("backup contains an invalid file digest")
         info = index.get(name)
         if info is None or not _regular_member(info) or info.file_size != size:
-            raise BackupError("backup file list or sizes do not match the manifest")
+            raise BackupError("backup file list or sizes do not match the manifest; archive changed or damaged")
         names.add(name)
         total += size
         if total > MAX_TOTAL_BYTES:
