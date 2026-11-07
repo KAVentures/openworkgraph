@@ -20,8 +20,8 @@ trained.
    example, or allow a labelled example to expire. The saved model remains
    locally present, but its **quality score becomes historical**:
    `usable: false`, `stale: true`, `evaluation_current: false`.
-   The dashboard displays **Learned model needs retraining** and withholds
-   the old performance table until retraining.
+   The dashboard displays **Learned model needs retraining** and both the
+   API and dashboard withhold the old performance scores until retraining.
 3. Adding or deleting an **unlabelled** example does not change the basis;
    correcting a label to the exact same value does not either.
 4. Rename or remove an intent from the taxonomy and the saved model also
