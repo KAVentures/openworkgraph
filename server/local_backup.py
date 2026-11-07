@@ -321,7 +321,7 @@ def _validated_manifest(archive: zipfile.ZipFile, *, encrypted: bool) -> dict[st
         if len(raw) > MAX_MANIFEST_BYTES:
             raise ValueError()
         manifest = json.loads(raw)
-    except (ValueError, UnicodeError, EOFError, RuntimeError, zipfile.BadZipFile, zlib.error):
+    except (ValueError, UnicodeError, EOFError, RuntimeError, RecursionError, zipfile.BadZipFile, zlib.error):
         raise BackupError("backup manifest is missing or invalid") from None
     if not isinstance(manifest, dict) or manifest.get("format") != FORMAT:
         raise BackupError("unsupported backup format")
