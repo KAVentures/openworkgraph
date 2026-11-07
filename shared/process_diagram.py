@@ -45,18 +45,77 @@ def add_process_diagram(root: ET.Element, process: ET.Element, *, entry_id: str)
     for node_id in by_id:
         if node_id not in levels:
             levels[node_id] = fallback
+
+    # BPMN 2.0 lanes are actual semantic elements; DI must represent them
+    # spatially as well. If no laneSet is present preserve the original layout
+    # and XML byte-for-byte for existing callers and reviewed model digests.
+    lane_sets = process.findall('{'+MODEL+'}laneSet')
+    if len(lane_sets) > 1:
+        raise ValueError('The process diagram supports at most one lane set')
+    lanes: list[tuple[str, list[str]]] = []
+    lane_for: dict[str, str] = {}
+    if lane_sets:
+        for lane in lane_sets[0]:
+            if lane.tag != '{'+MODEL+'}lane':
+                raise ValueError('Diagram lanes must be plain BPMN lane elements')
+            lane_id = lane.attrib.get('id', '')
+            if not lane_id or any(row[0] == lane_id for row in lanes):
+                raise ValueError('Diagram lanes must have unique IDs')
+            if lane.find('{'+MODEL+'}childLaneSet') is not None:
+                raise ValueError('Nested lane diagrams are unsupported; review the source model')
+            members = [(child.text or '').strip() for child in lane.findall('{'+MODEL+'}flowNodeRef')]
+            if not members:
+                raise ValueError('A lane needs at least one referenced activity')
+            for member in members:
+                if member not in by_id or member in lane_for:
+                    raise ValueError('Lane references must point to distinct existing diagram activities')
+                lane_for[member] = lane_id
+            lanes.append((lane_id, members))
     diagram = ET.SubElement(root, '{'+BPMNDI+'}BPMNDiagram', {'id': 'Diagram_OWG'})
     plane = ET.SubElement(diagram, '{'+BPMNDI+'}BPMNPlane',
                           {'id': 'Plane_OWG', 'bpmnElement': process.attrib['id']})
     rows = defaultdict(int)
     positions = {}
     top = 100 + len(flows) * 8
+    lane_bands: dict[str | None, tuple[int, int]] = {}
+    if lanes:
+        groups: list[str | None] = [lane_id for lane_id, _ in lanes]
+        if len(lane_for) < len(by_id):
+            groups.append(None)  # Unassigned nodes are not assigned a fictitious lane.
+        cursor = top
+        for group in groups:
+            by_level: dict[int, int] = defaultdict(int)
+            for node_id in by_id:
+                if lane_for.get(node_id) == group:
+                    by_level[levels[node_id]] += 1
+            band_height = max(180, max(by_level.values(), default=1) * 160 + 40)
+            lane_bands[group] = (cursor, band_height)
+            cursor += band_height + 22
+        # Wide enough to enclose all nodes at the final level plus a margin.
+        lane_width = 100 + 280 * max(levels.values()) + 180 + 90 - 20
+        # Draw lane rectangles before activity shapes so they are backgrounds.
+        for lane_id, _ in lanes:
+            y, height = lane_bands[lane_id]
+            shape = ET.SubElement(plane, '{'+BPMNDI+'}BPMNShape',
+                                  {'id': 'LaneShape_'+lane_id, 'bpmnElement':lane_id,
+                                   'isHorizontal':'true'})
+            ET.SubElement(shape, '{'+DC+'}Bounds',
+                          {'x':'20', 'y':str(y), 'width':str(lane_width), 'height':str(height)})
+            label = ET.SubElement(shape, '{'+BPMNDI+'}BPMNLabel')
+            ET.SubElement(label, '{'+DC+'}Bounds',
+                          {'x':'25', 'y':str(y+12), 'width':'70', 'height':'60'})
     for node_id, node in by_id.items():
         kind = node.tag.removeprefix('{'+MODEL+'}')
         width, height = (50, 50) if kind in {'exclusiveGateway','parallelGateway','inclusiveGateway'} else ((36, 36) if kind.endswith('Event') else (180, 80))
         level = levels[node_id]
-        x, y = 100 + 280 * level + (180-width)//2, top + 160*rows[level] + (80-height)//2
-        rows[level] += 1
+        x = 100 + 280 * level + (180-width)//2
+        if lanes:
+            group = lane_for.get(node_id)
+            y = lane_bands[group][0] + 40 + 160 * rows[(group, level)] + (80-height)//2
+            rows[(group, level)] += 1
+        else:
+            y = top + 160 * rows[level] + (80-height)//2
+            rows[level] += 1
         positions[node_id] = (x, y, width, height)
         shape = ET.SubElement(plane, '{'+BPMNDI+'}BPMNShape',
                               {'id': 'Shape_'+node_id, 'bpmnElement': node_id})

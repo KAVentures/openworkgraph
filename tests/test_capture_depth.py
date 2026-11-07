@@ -367,12 +367,16 @@ assert main.browser_event(BrowserEvent(observed_at=now, action="drag_start", pag
 # Enhanced: a drag target whose label was copied from typed text is stored without any label.
 capture_depth.save({"profile": "enhanced"})
 assert main.browser_event(BrowserEvent(observed_at=now, action="drag_start", page=page,
+    target={"tag": "SYNTHETIC_DRAFT_742", "role": "SYNTHETIC_DRAFT_742", "type": "SYNTHETIC_DRAFT_742"},
+    metadata={"source_target": {"tag":"div", "role":"SYNTHETIC_DRAFT_742", "type":"SYNTHETIC_DRAFT_742"},
+              "drag_id":"SYNTHETIC_DRAFT_742", "top_frame":"SYNTHETIC_DRAFT_742"}))["inserted"] == 1
+assert main.browser_event(BrowserEvent(observed_at=now, action="drag_start", page=page,
     target={"tag": "div", "role": "button", "label": "private typed words"},
     metadata={"source_target": {"tag": "div", "label": "private typed words"}, "payload_kinds": ["text"]}))["inserted"] == 1
 with connect() as conn:
     blobs = " ".join(r[0] for t in ("events", "normalized_events", "context_events")
                      for r in conn.execute(f"SELECT metadata_json FROM {t}").fetchall())
-assert "private typed words" not in blobs and "0.137" not in blobs
+assert "private typed words" not in blobs and "SYNTHETIC_DRAFT_742" not in blobs and "0.137" not in blobs
 assert main.browser_event(BrowserEvent(observed_at=now, action="control_hover_dwell", page=page,
     target={"tag": "button", "type": "secure"}, metadata={"duration_ms": 900}))["skipped"] == "secure_target"
 # Full: raw points live in their own local table, and a local backup of the database includes them, as stated.
@@ -386,6 +390,84 @@ with zipfile.ZipFile(target) as z:
     extracted = z.extract(name, tempfile.mkdtemp())
 with sqlite3.connect(extracted) as db:
     assert db.execute("SELECT count(*) FROM pointer_trajectory_points").fetchone()[0] == 1
+'''
+    env = os.environ.copy()
+    env.update({"WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"), "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth"),
+                "WORKFLOW_OBSERVER_CONFIG": str(tmp_path / "config.json")})
+    result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+
+def test_retried_high_fidelity_events_are_stored_once(tmp_path):
+    code = r'''
+from datetime import datetime, timezone
+from server import capture_depth, main
+from server.db import init_db, connect
+from server.main import BrowserEvent
+init_db()
+capture_depth.save({"profile": "full", "acknowledgement_version": capture_depth.FULL_ACK_VERSION})
+now = datetime.now(timezone.utc).isoformat()
+page = {"origin": "https://work.example", "hostname": "work.example", "pathname": "/x", "title": "X"}
+events = [
+    dict(event_id="retry-traj", action="pointer_trajectory", metadata={"points": [[0, 0.1, 0.2], [250, 0.3, 0.4]]}),
+    dict(event_id="retry-hover", action="control_hover_dwell", target={"tag": "button"},
+         metadata={"duration_ms": 900, "control_rerendered": True}),
+    dict(event_id="retry-drag", action="drag_start", target={"tag": "div", "role": "button"}, metadata={"payload_kinds": ["text"]}),
+]
+# The extension's queue resends an event with the same id after a failed delivery.
+first = [main.browser_event(BrowserEvent(observed_at=now, page=page, **e))["inserted"] for e in events]
+second = [main.browser_event(BrowserEvent(observed_at=now, page=page, **e))["inserted"] for e in events]
+assert first == [1, 1, 1] and second == [0, 0, 0], (first, second)
+with connect() as conn:
+    for table in ("events", "normalized_events", "context_events"):
+        assert conn.execute(f"SELECT count(*) FROM {table} WHERE event_id LIKE 'retry-%'").fetchone()[0] == 3, table
+    assert conn.execute("SELECT count(*) FROM pointer_trajectory_points").fetchone()[0] == 1
+    hover = conn.execute("SELECT metadata_json FROM events WHERE event_id = 'retry-hover'").fetchone()[0]
+assert '"control_rerendered": true' in hover
+'''
+    env = os.environ.copy()
+    env.update({"WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"), "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth"),
+                "WORKFLOW_OBSERVER_CONFIG": str(tmp_path / "config.json")})
+    result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+
+def test_workflow_trace_labels_interaction_detail_observed_and_friction_inferred(tmp_path):
+    code = r'''
+from datetime import datetime, timedelta, timezone
+from server import capture_depth, main
+from server.db import init_db
+from server.main import BrowserEvent
+from server.mcp_trace import workflow_trace
+init_db()
+start = datetime.now(timezone.utc) - timedelta(minutes=5)
+page = {"origin": "https://work.example", "hostname": "work.example", "pathname": "/orders", "title": "Orders"}
+def send(action, seconds, **kw):
+    return main.browser_event(BrowserEvent(observed_at=(start + timedelta(seconds=seconds)).isoformat(), action=action,
+                                           page=page, **kw))
+send("click", 0, target={"tag": "button", "label": "Save"})
+trace = workflow_trace(since=(start - timedelta(minutes=1)).isoformat(), limit=50)
+assert "interaction_candidates" not in trace, "Standard: no candidates are offered"
+capture_depth.save({"profile": "enhanced"})
+send("control_hover_dwell", 1, target={"tag": "button", "role": "menuitem"},
+     metadata={"duration_ms": 900, "ended_by": "pointer_left", "control_rerendered": True})
+send("drag_start", 2, target={"tag": "div", "role": "button"}, metadata={"payload_kinds": ["text"], "completion": "unknown"})
+send("drag_end", 3, target={"tag": "div", "role": "button"}, metadata={"payload_kinds": [], "completion": "incomplete"})
+for i in range(3):
+    send("click", 10 + i * 0.4, target={"tag": "button", "label": "Retry"})
+trace = workflow_trace(since=(start - timedelta(minutes=1)).isoformat(), limit=50)
+rows = {r["event_type"]: r for r in trace["rows"]}
+hover = rows["browser_control_hover_dwell"]["interaction_detail"]
+assert hover == {"signal": "hover_dwell", "basis": "observed", "inferred": False, "context_only": True,
+                 "workflow_step": False, "merge_evidence": False, "control_rerendered": True}, hover
+assert rows["browser_drag_end"]["interaction_detail"]["completion"] == "incomplete"
+assert rows["browser_drag_start"]["interaction_detail"]["completion_basis"] == "not_observed"
+assert "interaction_detail" not in rows["browser_click"]
+candidates = trace["interaction_candidates"]
+# The menu hover with no choice within 5 s and the three quick clicks on one control.
+assert [c["kind"] for c in candidates] == ["hover_menu_not_followed", "rapid_repeated_activation"], candidates
+assert all(c["basis"] == "inferred_candidate" and c["requires_review"] and not c["workflow_step"] for c in candidates)
+assert trace["interaction_intent_or_attention_inferred"] is False and trace["interaction_per_person_scoring"] is False
 '''
     env = os.environ.copy()
     env.update({"WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"), "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth"),

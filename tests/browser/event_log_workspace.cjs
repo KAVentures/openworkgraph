@@ -434,6 +434,17 @@ const path=require('node:path');
    assert.equal(simReport.analysis.scenario.cases,500);
    assert.ok(simReport.analysis.assumptions.length);
    assert.match(simReport.interpretation,/not measured savings/);
+   // Compare two downloaded report packets locally within the simulation view.
+   const compareBox=page.locator('#owgSimulationReportCompare');await compareBox.waitFor();
+   const secondSim=JSON.parse(JSON.stringify(simReport));secondSim.analysis.scenario.label='Second scenario';
+   await page.locator('#owgSimulationCompareFiles').setInputFiles([
+     {name:'baseline.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(simReport))},
+     {name:'second.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(secondSim))}]);
+   await compareBox.getByRole('button',{name:'Compare reports'}).click();
+   await compareBox.getByText('Showing 2 user-selected reports.',{exact:false}).waitFor();
+   assert.equal(await compareBox.locator('tbody tr').count(),4);
+   assert.match(await compareBox.textContent(),/Scope and dataset equality are not verified/);
+
    const [simCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgEventLogSimulationCsv').click()]);
    const simCsvText=await fs.readFile(await simCsv.path(),'utf8');
    assert.match(simCsvText,/^section,run,metric,value,unit\r\n/);

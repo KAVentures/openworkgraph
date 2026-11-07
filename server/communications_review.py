@@ -264,6 +264,41 @@ def delete(example_ids: list[str]) -> dict[str, Any]:
     return {"deleted": before - len(data["examples"]), "trained_model_unchanged_until_retrained": True}
 
 
+
+def _training_basis(examples: list[dict[str, Any]], intents: list[str]) -> str:
+    """Digest only inputs that shaped the trained model or its held-out score.
+
+    Do not include unlabelled examples, which play no role until someone
+    labels them. Include expiry and split to invalidate after retention or a
+    changed split. No message text is returned to the caller.
+    """
+    relevant = [
+        {"id": e["example_id"], "text": e["text"], "labels": e["labels"],
+         "language": e["language"], "split": e["split"], "expires_at": e["expires_at"]}
+        for e in examples if isinstance(e.get("labels"), list)
+    ]
+    relevant.sort(key=lambda e: e["id"])
+    payload = {"version": 1, "intents": sorted(intents), "examples": relevant}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False,
+                                     separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _freshness(model: dict[str, Any], data: dict[str, Any],
+               intent_names: list[str] | None = None) -> tuple[bool, str | None]:
+    if not data["settings"].get("enabled"):
+        return False, "review_examples_disabled"
+    if not isinstance(model.get("training_basis_sha256"), str):
+        return False, "legacy_model_has_no_training_basis"
+    expected = [n for n in (intent_names if intent_names is not None
+                             else model.get("taxonomy_intents", []))
+                if n.lower() not in RESERVED]
+    if sorted(expected) != sorted(model.get("taxonomy_intents", [])):
+        return False, "intent_taxonomy_changed"
+    if _training_basis(data["examples"], expected) != model["training_basis_sha256"]:
+        return False, "labelled_examples_changed_or_expired"
+    return True, None
+
+
 def train_model(intent_names: list[str]) -> dict[str, Any]:
     intents = [n for n in intent_names if n.lower() not in RESERVED]
     with _LOCK:
@@ -272,6 +307,7 @@ def train_model(intent_names: list[str]) -> dict[str, Any]:
         labelled = [e for e in data["examples"] if e["labels"] is not None]
         training = [e for e in labelled if e["split"] == "train"]
         holdout = [e for e in labelled if e["split"] == "holdout"]
+        training_basis = _training_basis(data["examples"], intents)
     try:
         model = learning.train(training, intents)
     except learning.LearningError as exc:
@@ -281,24 +317,32 @@ def train_model(intent_names: list[str]) -> dict[str, Any]:
     days = data["settings"]["retention_days"]
     body = {**model, "trained_at": trained_at.isoformat(),
             "expires_at": (trained_at + timedelta(days=days)).isoformat(),
-            "taxonomy_intents": intents, "evaluation": report}
+            "taxonomy_intents": intents, "evaluation": report,
+            "training_basis_sha256": training_basis}
     body["model_sha256"] = hashlib.sha256(json.dumps(model, sort_keys=True).encode()).hexdigest()
     with _LOCK:
-        if not _load()["settings"].get("enabled"):
+        latest = _load()
+        if not latest["settings"].get("enabled"):
             raise ReviewError("review examples were turned off while training")
+        if _training_basis(latest["examples"], intents) != training_basis:
+            raise ReviewError("review examples changed during training; train again")
         _write(_model_path(), body)
-    return model_status()
+    return model_status(intent_names)
 
 
-def model_status() -> dict[str, Any]:
+def model_status(intent_names: list[str] | None = None) -> dict[str, Any]:
     with _LOCK:
+        data = _load()
         model = _load_model()
-    if model is None:
-        return {"trained": False}
-    return {"trained": True, "trained_at": model["trained_at"], "expires_at": model["expires_at"],
+        if model is None:
+            return {"trained": False, "usable": False, "evaluation_current": False}
+        fresh, reason = _freshness(model, data, intent_names)
+    return {"trained": True, "usable": fresh, "stale": not fresh,
+            "stale_reason": reason, "evaluation_current": fresh,
+            "trained_at": model["trained_at"], "expires_at": model["expires_at"],
             "model_sha256": model["model_sha256"], "intents": sorted(model["intents"]),
             "skipped_intents": model["skipped_intents"], "training_example_count": model["training_example_count"],
-            "evaluation": model["evaluation"], "thresholds": model["thresholds"],
+            "evaluation": model["evaluation"] if fresh else None, "thresholds": model["thresholds"],
             "estimates_not_verified_reasons_for_contact": True}
 
 
@@ -309,15 +353,18 @@ def delete_model() -> dict[str, Any]:
     return {"deleted": existed}
 
 
-def learned_classifier():
-    """``(predict, reference)`` for the current model, or ``None`` when there is none."""
+def learned_classifier(intent_names: list[str] | None = None):
+    """Provide only a current trained classifier, never stale evaluation claims."""
     with _LOCK:
+        data = _load()
         model = _load_model()
-    if model is None:
-        return None
+        if model is None:
+            return None
+        fresh, _ = _freshness(model, data, intent_names)
+        if not fresh:
+            raise ReviewError("intent model is stale after review or taxonomy changes; retrain before use")
     return learning.predictor(model), {"model_sha256": model["model_sha256"], "trained_at": model["trained_at"],
                                        "intents": sorted(model["intents"])}
-
 
 __all__ = ["ACK_VERSION", "ReviewError", "add_examples", "configure", "delete", "delete_model", "label",
            "learned_classifier", "listing", "model_status", "settings", "train_model"]

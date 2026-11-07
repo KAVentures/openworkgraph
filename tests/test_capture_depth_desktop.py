@@ -202,6 +202,19 @@ def test_desktop_hover_and_drag_targets_keep_no_names(depth):
     assert hover["metadata"]["target"]["name"] == "private typed words", "the caller's event is not modified"
 
 
+def test_desktop_structural_fields_refuse_page_controlled_text(depth):
+    depth.save({"profile": "enhanced"})
+    secret = "SYNTHETIC_DRAFT_742"
+    hover = {"event_type": "screen_hover_dwell", "metadata": {"duration_ms": 900,
+             "target": {"role": secret, "localized_role": secret, "type": secret, "tag": secret}}}
+    drag = {"event_type": "screen_drag", "metadata": {"target": {"role": "AXButton", "type": secret},
+            "source_target": {"role": secret, "localized_role": secret}}}
+    kept = depth.filter_desktop_events([hover, drag])
+    assert secret not in str(kept)
+    assert kept[0]["metadata"]["target"] == {}
+    assert kept[1]["metadata"]["target"] == {"role": "AXButton"}
+
+
 def test_collector_accepts_the_current_full_acknowledgement(depth):
     from pathlib import Path
     source = (Path(__file__).resolve().parents[1] / "collector" / "interactions.py").read_text(encoding="utf-8")
