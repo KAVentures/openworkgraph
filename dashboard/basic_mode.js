@@ -344,7 +344,7 @@
             <h3>Check saved backup integrity</h3>
             <div class="muted">Explicitly verify up to five listed plaintext archives, checking every stored file against its manifest hashes. This may read large local backups. Encrypted or oversize files require offline checks. A healthy archive is not a completed restore test.</div>
             <div class="muted" id="pvBackupHealthStatus" role="status" aria-live="polite">No integrity inventory checked yet.</div>
-            <div id="pvBackupHealthRows" aria-label="Saved backup integrity results"></div>
+            <div id="pvBackupHealthRows" role="region" aria-label="Saved backup integrity results"></div>
           </div>
           <div class="pv-control">
             <button type="button" class="secondary" id="pvBackupHealthRun" disabled>Verify first 5 listed backups</button>
