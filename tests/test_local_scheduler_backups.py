@@ -134,11 +134,15 @@ def test_unsafe_backup_folder_fails_closed_with_no_scheduled_output(store, monke
     item = make()
     monkeypatch.setenv("OWG_BACKUP_DIR", str(store / "data" / "archives"))
     with pytest.raises(scheduler.ScheduleError, match="folder"):
-        scheduler._check_target("local_backup", "local")
-    # A schedule previously created with a safe location also refuses to
-    # create a snapshot once the location is changed to somewhere unsafe.
+        scheduler._check_backup_location()
+    # An unsafe folder is a retryable operational error, NOT a deleted
+    # business target. The owner's opted-in schedule must survive so they
+    # can repair the location without losing its confirmation.
     assert scheduler.run_due(now=10**10) == [{"schedule_id": item["schedule_id"],
-                                               "outcome": "removed_target_gone"}]
+                                               "outcome": "failed:local_backup_unavailable"}]
+    state = scheduler.status()["schedules"][0]
+    assert state["schedule_id"] == item["schedule_id"]
+    assert state["consecutive_failures"] == 1
     assert not (store / "data" / "archives").exists()
 
 
@@ -214,3 +218,11 @@ def test_external_ledger_symlink_is_not_read_or_overwritten(store):
         automated.run()
     assert external.read_text() == '{"some_other_configuration":true}'
     assert link.is_symlink()
+
+
+def test_invalid_folder_refused_at_schedule_creation(store, monkeypatch):
+    monkeypatch.setenv("OWG_BACKUP_DIR", str(store / "data" / "should-not-exist"))
+    with pytest.raises(scheduler.ScheduleError, match="folder"):
+        make()
+    assert scheduler.status()["schedules"] == []
+    assert not (store / "data" / "should-not-exist").exists()
