@@ -62,7 +62,6 @@ def check(spec: Any) -> dict[str, Any]:
     folder = local_backup.backup_folder()
     results: list[dict[str, Any]] = []
     inspected_bytes = 0
-    stamp = datetime.now(timezone.utc).isoformat()
     for name in names:
         item = listed[name]
         row: dict[str, Any] = {
@@ -105,7 +104,7 @@ def check(spec: Any) -> dict[str, Any]:
         results.append(row)
     return {
         "format": "openworkgraph.local-backup-health.v1",
-        "checked_at": stamp, "items": results,
+        "checked_at": datetime.now(timezone.utc).isoformat(), "items": results,
         "requested": len(names),
         "verified": sum(bool(item["verified"]) for item in results),
         "not_verified": sum(not item["verified"] for item in results),
