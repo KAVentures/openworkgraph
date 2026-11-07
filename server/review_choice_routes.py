@@ -64,6 +64,11 @@ class ReviewBasis(BaseModel):
     idea_revision: int = Field(ge=0)
     spec_sha256: str = Field(pattern=r"^[a-fA-F0-9]{64}$")
     archive_sha256: str = Field(pattern=r"^[a-fA-F0-9]{64}$")
+    process_status: str
+    process_reference: dict | None = None
+    dataset_origins: list[dict]
+    dataset_origin_check_available: bool
+    blockers: list[str]
 
 
 @router.post("/v1/review-choice-workbench/{idea_id}/preflight")
@@ -75,6 +80,11 @@ def preflight(request: Request, idea_id: str, basis: ReviewBasis):
     """
     response = choices(request, idea_id)  # same dashboard-session enforcement
     snapshot = json.loads(response.body)
+    if (snapshot["process_status"] != basis.process_status or
+            snapshot["process_reference"] != basis.process_reference or
+            snapshot["dataset_origins"] != basis.dataset_origins or
+            snapshot["dataset_origin_check_available"] != basis.dataset_origin_check_available):
+        raise HTTPException(409, "Review provenance changed; re-inspect")
     if snapshot["projects_truncated"]:
         raise HTTPException(409, "Review history truncated; re-inspect before proceeding")
     if snapshot["idea"]["revision"] != basis.idea_revision:
@@ -83,6 +93,8 @@ def preflight(request: Request, idea_id: str, basis: ReviewBasis):
     if len(matches) != 1:
         raise HTTPException(409, "Project no longer uniquely available; re-inspect")
     project = matches[0]
+    if project["blockers"] != basis.blockers:
+        raise HTTPException(409, "Review blockers changed; re-inspect")
     if (project["spec_sha256"].lower() != basis.spec_sha256.lower() or
             project["archive_sha256"].lower() != basis.archive_sha256.lower() or
             project["idea_revision"] != basis.idea_revision):
