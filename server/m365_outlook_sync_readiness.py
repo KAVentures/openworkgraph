@@ -13,7 +13,7 @@ FORMAT = "openworkgraph.m365-sync-readiness.v1"
 
 def readiness(*, tenant, mailbox, folder, expected_address, grant_file: Path,
               identity_report: Path, folder_report: Path, ledger_dir: Path,
-              log_id, consent_local_read=False):
+              log_id, consent_local_read=False, expected_generation=None):
     if consent_local_read is not True:
         raise ReceiptError("Explicit local evidence read consent required")
     scope = _scope(tenant, mailbox, folder)
@@ -47,6 +47,12 @@ def readiness(*, tenant, mailbox, folder, expected_address, grant_file: Path,
                                consent_local_read=True)
     if entry is None or entry.get("log_id") != log_id:
         raise ReceiptError("No committed checkpoint for requested log")
+    # A reviewed operator decision is bound to a specific committed generation.
+    # Reject stale review when another operator advances the ledger in between.
+    if expected_generation is not None:
+        if (type(expected_generation) is not int or expected_generation < 1
+                or entry.get("generation") != expected_generation):
+            raise ReceiptError("Committed checkpoint generation changed")
     _grant(Path(grant_file), tenant, mailbox, folder)
     return {"format": FORMAT, "status": "operator_review_ready",
             "committed_generation": entry["generation"],
@@ -62,6 +68,7 @@ def main(argv=None):
     for key in ("grant-file", "identity-report", "folder-report", "ledger-dir"):
         p.add_argument("--" + key, required=True, type=Path)
     p.add_argument("--consent-local-read", action="store_true")
+    p.add_argument("--expected-generation", type=int)
     a = vars(p.parse_args(argv))
     try:
         print(json.dumps(readiness(**a), sort_keys=True))
