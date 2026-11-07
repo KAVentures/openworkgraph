@@ -283,3 +283,45 @@ def test_encrypted_external_credentials_restore_after_successful_stage(tmp_path,
     assert len(done["moved_aside"]) == 2
     assert (data / "sample.txt").read_text() == "BACKUP-VALUE"
     assert (auth / "token.txt").read_text() == "BACKUP-TOKEN"
+
+
+def test_valid_encrypted_nested_auth_restore_recovers_keys_and_data(site):
+    root, data, auth, _plain = site
+    secret = "nested credentials test passphrase"
+    archive = root / "full-secret.zip"
+    backup.create_backup(archive, passphrase=secret)
+    (auth / ".api_token").write_text("replaced later", encoding="utf-8")
+    db = sqlite3.connect(data / "workflow_observer.db")
+    db.execute("INSERT INTO events VALUES ('later')")
+    db.commit()
+    db.close()
+    result = backup.restore_backup(archive, passphrase=secret, replace=True)
+    assert result["includes_secrets"] is True
+    assert (auth / ".api_token").read_text() == "a test-only synthetic token"
+    assert sqlite3.connect(data / "workflow_observer.db").execute(
+        "SELECT id FROM events ORDER BY id").fetchall() == [("before",)]
+
+
+def test_forged_plaintext_credentials_under_data_prefix_are_refused(site):
+    root, data, auth, archive = site
+    token = b"synthetic credential that should never be stored in plaintext"
+    forged = root / "disguised-auth.zip"
+    with zipfile.ZipFile(archive) as original:
+        source_manifest = json.loads(original.read(backup.MANIFEST))
+        data_entries = [(name, original.read(name)) for name in original.namelist()
+                        if name != backup.MANIFEST]
+    import hashlib
+    source_manifest["files"].append({
+        "path": "data/auth/.api_token", "kind": "file",
+        "bytes": len(token), "sha256": hashlib.sha256(token).hexdigest(),
+    })
+    source_manifest["file_count"] += 1
+    source_manifest["total_bytes"] += len(token)
+    with zipfile.ZipFile(forged, "w") as output:
+        output.writestr(backup.MANIFEST, json.dumps(source_manifest))
+        for name, content in data_entries:
+            output.writestr(name, content)
+        output.writestr("data/auth/.api_token", token)
+    with pytest.raises(backup.BackupError, match="unencrypted backup cannot contain credentials"):
+        backup.verify_backup(forged)
+    assert (auth / ".api_token").read_text() == "a test-only synthetic token"
