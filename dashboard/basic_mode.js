@@ -245,13 +245,25 @@
 
       <div class="card" id="pvSchedules">
         <h2>Scheduled jobs</h2>
-        <div class="muted">Off unless you add one. A schedule repeats a job you could run by hand: refresh a retained Jira profile, re-check saved event-log signals, or create a verified local backup. Source reads keep their own consent and pause with recording. Backups require separate acknowledgement, exclude credentials, are NOT encrypted, run at most daily and rotate only scheduled backups (up to 14). Failures back off and pause after five in a row. Nothing is sent anywhere.</div>
+        <div class="muted">Off unless you add one. A schedule repeats a job you could run by hand: refresh a retained Jira profile, re-check saved event-log signals, or create a verified local backup. Source reads keep their own consent and pause with recording. Backups require separate acknowledgement, exclude credentials, are NOT encrypted, run at most daily and rotate only scheduled backups (up to 14). Optional per-job quiet hours defer due jobs without counting a run; daylight saving follows the chosen timezone. Failures back off and pause after five in a row. Nothing is sent anywhere.</div>
         <div class="pv-delete">
           <select id="pvScheduleKind" aria-label="Job"><option value="retained_jira_profile">Retained Jira profile</option><option value="event_log_signals">Event log signals</option><option value="local_backup">Local backup (unencrypted)</option></select>
           <input type="text" id="pvScheduleTarget" placeholder="Profile or event log ID" aria-label="Profile or event log ID" spellcheck="false">
           <input type="number" id="pvScheduleInterval" min="15" value="60" aria-label="Interval in minutes">
           <button type="button" class="secondary" id="pvScheduleAdd">Add schedule</button>
         </div>
+        <label class="muted" for="pvScheduleQuietEnabled">
+          <input type="checkbox" id="pvScheduleQuietEnabled"> Only run outside quiet hours (optional, per schedule)
+        </label>
+        <div class="pv-delete" id="pvScheduleQuietFields" hidden>
+          <label for="pvScheduleQuietStart">Quiet from</label>
+          <input type="time" id="pvScheduleQuietStart" value="22:00" step="60">
+          <label for="pvScheduleQuietEnd">Quiet until</label>
+          <input type="time" id="pvScheduleQuietEnd" value="07:00" step="60">
+          <label for="pvScheduleQuietTimezone">Timezone</label>
+          <input type="text" id="pvScheduleQuietTimezone" placeholder="Europe/Stockholm" maxlength="64" spellcheck="false">
+        </div>
+        <div class="muted">For an existing job, set the window above and choose Apply quiet hours on that job, or clear its current window. Pausing or removing a job remains separate.</div>
         <label class="muted" id="pvScheduleBackupAckRow" hidden>
           <input type="checkbox" id="pvScheduleBackupAck"> I understand recurring backups save unencrypted copies of locally recorded activity outside OWG's data folder, without credentials; only automatically created backups are rotated. I will keep the backup folder private.
         </label>
@@ -1066,6 +1078,27 @@
     };
     const scheduleList = panel.querySelector('#pvScheduleList');
     const scheduleStatus = panel.querySelector('#pvScheduleStatus');
+    const quietEnabled = panel.querySelector('#pvScheduleQuietEnabled');
+    const quietFields = panel.querySelector('#pvScheduleQuietFields');
+    const quietStart = panel.querySelector('#pvScheduleQuietStart');
+    const quietEnd = panel.querySelector('#pvScheduleQuietEnd');
+    const quietTimezone = panel.querySelector('#pvScheduleQuietTimezone');
+    quietTimezone.value = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    quietEnabled.onchange = () => {
+      quietFields.hidden = !quietEnabled.checked;
+      // A flex author rule can override the UA [hidden] rule; keep the
+      // optional inputs truly absent from visual and keyboard layouts.
+      quietFields.style.display = quietEnabled.checked ? 'flex' : 'none';
+    };
+    quietEnabled.onchange();
+    const readQuietWindow = () => {
+      const windowSpec = {timezone: quietTimezone.value.trim(), start: quietStart.value, end: quietEnd.value};
+      if (!windowSpec.timezone || !/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(windowSpec.start) ||
+          !/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(windowSpec.end) ||
+          windowSpec.start === windowSpec.end)
+        throw new Error('Enter a timezone and two different valid 24-hour quiet-hour times.');
+      return windowSpec;
+    };
     const refreshSchedules = async () => {
       const state = await api('/v1/schedules').catch(() => null);
       if (!scheduleList || !state) return;
@@ -1077,14 +1110,50 @@
         text.textContent = (item.kind === 'local_backup' ? 'Unencrypted local backup'
           : (item.kind === 'retained_jira_profile' ? 'Jira profile ' : 'Signals for ') + item.target_id) +
           ' · every ' + item.interval_minutes + ' min · ' + (item.enabled ? 'next ' + String(item.next_run_at || '').slice(0, 16).replace('T', ' ')
-          : (item.paused_reason ? 'paused after repeated failures' : 'paused')) + (item.last_result ? ' · last: ' + item.last_result : '');
+          : (item.paused_reason ? 'paused after repeated failures' : 'paused')) +
+          (item.quiet_hours ? ' · quiet ' + item.quiet_hours.start + '–' + item.quiet_hours.end +
+            ' ' + item.quiet_hours.timezone + (item.quiet_hours_active ? ' (now)' : '') : '') +
+          (item.last_deferred_until ? ' · last quiet deferral until ' + String(item.last_deferred_until).slice(0, 16).replace('T',' ') + ' UTC' : '') +
+          (item.last_result ? ' · last: ' + item.last_result : '');
         const toggle = document.createElement('button');
         toggle.type = 'button'; toggle.className = 'secondary'; toggle.textContent = item.enabled ? 'Pause' : 'Resume';
         toggle.onclick = async () => { await api('/v1/schedules/update', send('POST', {schedule_id: item.schedule_id, enabled: !item.enabled})).catch(() => null); refreshSchedules(); };
         const remove = document.createElement('button');
         remove.type = 'button'; remove.className = 'secondary'; remove.textContent = 'Remove';
         remove.onclick = async () => { await api('/v1/schedules/delete', send('POST', {schedule_id: item.schedule_id})).catch(() => null); refreshSchedules(); };
-        line.append(text, toggle, remove);
+        const setQuiet = document.createElement('button');
+        setQuiet.type = 'button'; setQuiet.className = 'secondary';
+        setQuiet.textContent = item.quiet_hours ? 'Update quiet hours' : 'Apply quiet hours';
+        setQuiet.setAttribute('aria-label', setQuiet.textContent + ' for ' + item.kind + ' ' + item.target_id);
+        setQuiet.onclick = async () => {
+          if (!quietEnabled.checked) {
+            if (scheduleStatus) scheduleStatus.textContent = 'Tick the optional quiet-hours checkbox and choose the window first.';
+            return;
+          }
+          try {
+            await api('/v1/schedules/update', send('POST', {schedule_id: item.schedule_id,
+              quiet_hours: readQuietWindow()}));
+            if (scheduleStatus) scheduleStatus.textContent = 'Quiet hours saved for this job; missed runs are not backfilled.';
+          } catch (error) {
+            if (scheduleStatus) scheduleStatus.textContent = error.message || 'Could not save quiet hours.';
+          }
+          refreshSchedules();
+        };
+        line.append(text, toggle, remove, setQuiet);
+        if (item.quiet_hours) {
+          const clear = document.createElement('button');
+          clear.type = 'button'; clear.className = 'secondary'; clear.textContent = 'Clear quiet hours';
+          clear.setAttribute('aria-label', 'Clear quiet hours for ' + item.kind + ' ' + item.target_id);
+          clear.onclick = async () => {
+            try {
+              await api('/v1/schedules/update', send('POST', {schedule_id: item.schedule_id,
+                quiet_hours: null}));
+              if (scheduleStatus) scheduleStatus.textContent = 'Quiet hours cleared for this job.';
+            } catch (error) { if (scheduleStatus) scheduleStatus.textContent = error.message || 'Could not clear quiet hours.'; }
+            refreshSchedules();
+          };
+          line.append(clear);
+        }
         scheduleList.append(line);
       }
     };
@@ -1119,7 +1188,8 @@
         await api('/v1/schedules', send('POST', {
           kind, target_id: isBackup ? 'local' : scheduleTarget.value.trim(),
           interval_minutes: Number(scheduleInterval.value), confirm_scheduled_runs: true,
-          confirm_unencrypted_local_backup: isBackup && scheduleBackupAck.checked
+          confirm_unencrypted_local_backup: isBackup && scheduleBackupAck.checked,
+          quiet_hours: quietEnabled.checked ? readQuietWindow() : null
         }));
         if (scheduleStatus) scheduleStatus.textContent = 'Schedule added.';
         scheduleBackupAck.checked = false;
