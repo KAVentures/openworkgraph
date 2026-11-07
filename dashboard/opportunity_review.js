@@ -269,9 +269,10 @@
             el('td',comparison.currency+' '+item.modeled_36_month_net_after_upfront),
             el('td',comparison.currency+' '+item.year_1_sensitivity_net_low+' to '+
               comparison.currency+' '+item.year_1_sensitivity_net_high),
-            el('td',item.break_even_eligible_percent_12m===null
-              ? 'Not reachable under assumptions'
-              : item.break_even_eligible_percent_12m+'% eligible cases'),
+            el('td',item.baseline?'Not applicable (human-only baseline)':
+              item.break_even_eligible_percent_12m===null
+                ? 'Not reachable under assumptions'
+                : item.break_even_eligible_percent_12m+'% eligible cases'),
             el('td',item.autonomous_business_actions?'Yes':'No'));
           table.appendChild(tr);
         });
