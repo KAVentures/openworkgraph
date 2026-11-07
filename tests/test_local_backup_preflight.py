@@ -249,7 +249,7 @@ def test_swap_failure_restores_both_previous_data_and_external_auth(tmp_path, mo
 
     def fail_once(self, destination):
         nonlocal failed
-        if (not failed and ".owg-restore-stage-" in str(self) and
+        if (not failed and ".owg-restore-auth-" in str(self) and
                 self.name == "auth" and Path(destination) == auth):
             failed = True
             raise OSError("synthetic authorization-store swap fault")
