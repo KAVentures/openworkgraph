@@ -1016,7 +1016,12 @@
     const quietEnd = panel.querySelector('#pvScheduleQuietEnd');
     const quietTimezone = panel.querySelector('#pvScheduleQuietTimezone');
     quietTimezone.value = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-    quietEnabled.onchange = () => { quietFields.hidden = !quietEnabled.checked; };
+    quietEnabled.onchange = () => {
+      quietFields.hidden = !quietEnabled.checked;
+      // A flex author rule can override the UA [hidden] rule; keep the
+      // optional inputs truly absent from visual and keyboard layouts.
+      quietFields.style.display = quietEnabled.checked ? 'flex' : 'none';
+    };
     quietEnabled.onchange();
     const readQuietWindow = () => {
       const windowSpec = {timezone: quietTimezone.value.trim(), start: quietStart.value, end: quietEnd.value};
