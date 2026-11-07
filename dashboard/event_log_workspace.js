@@ -3433,13 +3433,13 @@
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/predictions/monitoring',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
         if(generation!==state.generation||t!==watchTurn)return;
         const v=monitoringRows(r);
-        const activity=r.activity_quality;
-        const activityDetail=activity?[
+        const activityQuality=r.activity_quality;
+        const activityDetail=activityQuality?[
           el('h4','Where prediction errors occur'),
-          el('p','Latest supported window #'+activity.window+'. The table averages repeated predictions within each completed case first, then across cases. At least '+activity.minimum_distinct_completed_cases+' completed cases per activity; '+activity.withheld_low_support_states+' states withheld for low support and '+activity.withheld_over_limit_states+' beyond the display limit. A case can contribute to several states. No employee rankings or causal claims.','muted'),
-          activity.activities.length?table(
+          el('p','Latest supported window #'+activityQuality.window+'. The table averages repeated predictions within each completed case first, then across cases. At least '+activityQuality.minimum_distinct_completed_cases+' completed cases per activity; '+activityQuality.withheld_low_support_states+' states withheld for low support and '+activityQuality.withheld_over_limit_states+' beyond the display limit. A case can contribute to several states. No employee rankings or causal claims.','muted'),
+          activityQuality.activities.length?table(
             ['Activity state','Completed cases','Prediction points','Typical error','Naive error','Range covered (case-level)',...(spec.outcome?['Outcome Brier','Base-rate Brier']:[])],
-            activity.activities.map(a=>[
+            activityQuality.activities.map(a=>[
               a.activity,Number(a.scored_cases).toLocaleString(),Number(a.scored_prefixes).toLocaleString(),
               duration(a.mean_absolute_error_seconds),duration(a.naive_mean_absolute_error_seconds),
               pct(a.p10_p90_case_averaged_coverage)+' ['+pct(a.p10_p90_coverage_ci95[0])+', '+pct(a.p10_p90_coverage_ci95[1])+']',
@@ -3447,7 +3447,7 @@
                 a.case_averaged_brier_score===null?'—':Number(a.case_averaged_brier_score).toFixed(3),
                 a.case_averaged_base_rate_brier_score===null?'—':Number(a.case_averaged_base_rate_brier_score).toFixed(3)]:[])]))
             :el('p','No activity states have the minimum completed-case support.','muted'),
-          el('p',activity.interpretation,'muted')
+          el('p',activityQuality.interpretation,'muted')
         ]:[el('p','No historical prediction window has enough comparable completed cases for an activity breakdown.','muted')];
         monitorOut.replaceChildren(el('h4','Prediction quality over time'),el('div',v.summary,'note'),
           table(['Window','Cases scored','Typical error','Naive error','Range held the time',...(spec.outcome?['Brier score']:[])],v.rows.map(row=>spec.outcome?row:row.slice(0,5))),
