@@ -136,18 +136,17 @@ const path=require('node:path');
   await page.locator('#owgEventLogActivity').selectOption('activity');
   await page.locator('#owgEventLogTime').selectOption('time');
   await page.locator('#owgEventLogConsent').check();
+  const priorLogId=await page.locator('#owgEventLogPick').inputValue();
   await page.locator('#owgEventLogImport').click();
   await page.locator('#owgEventLogStatus').filter({hasText:'Imported'}).waitFor();
-  // The status is emitted before refreshLogs selects the newly imported log.
-  // Wait for the import handler to finish to avoid analysing the previous log,
-  // then having its in-flight selection clear the domain-pack results.
-  await page.waitForFunction(() => {
-    const button=document.querySelector('#owgEventLogImport');
-    const selected=document.querySelector('#owgEventLogPick');
-    const caseType=document.querySelector('#owgEventLogCaseType');
-    return button && !button.disabled && selected && selected.value &&
-      caseType && caseType.options.length>0;
-  });
+  // The status appears before refreshLogs selects the newly imported log.
+  // Only analyse once selectLog has finished and populated the case notion.
+  await page.waitForFunction(previous => {
+    const pick=document.querySelector('#owgEventLogPick');
+    const type=document.querySelector('#owgEventLogCaseType');
+    return pick && pick.value && pick.value!==previous &&
+      type && type.options.length>0 && type.value;
+  },priorLogId);
   await page.locator('#owgEventLogAnalyze').click();
   await page.locator('#owgDomainPackSetup').click();
   await page.locator('#owgDomainPackChoice').selectOption('employee_offboarding');
