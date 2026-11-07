@@ -137,3 +137,51 @@ def test_bad_mapping_and_target_fail_closed():
     with pytest.raises(workspace.EventLogWorkspaceError, match="from 0.25 to 8760"):
         packs.install(log, PACK, {"version": "1.0.0", "mapping": MAPPING,
                                   "parameters": {"provision_hours": 0.1}})
+
+
+def test_customer_onboarding_through_authenticated_local_http_routes(tmp_path):
+    """Exercise the real import/catalog/install/report/delete journey and permission boundary."""
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+
+    code = r'''
+import sys
+sys.path.insert(0, "tests")
+from fastapi.testclient import TestClient
+from server.secure_app import app
+from server import local_auth
+from test_event_log_domain_pack_customer_onboarding import CSV, MAPPING
+with TestClient(app) as client:
+    owner = {"Authorization": "OWG-Session " + local_auth.create_dashboard_session()}
+    bearer = {"Authorization": "Bearer " + local_auth.ensure_api_token()}
+    path = "/v1/event-logs/import?format=csv&name=onboarding&case_column=case&activity_column=activity&timestamp_column=time"
+    assert client.post(path, content=CSV.encode(), headers=owner).status_code == 403
+    create = client.post(path, content=CSV.encode(), headers={**owner, "x-owg-local-storage-confirmed": "true"})
+    assert create.status_code == 200, create.text
+    log = "/v1/event-logs/" + create.json()["log_id"]
+    catalog = client.get("/v1/event-log-domain-packs", headers=owner)
+    assert catalog.status_code == 200 and catalog.headers["cache-control"] == "no-store"
+    assert any(p["pack_id"] == "customer_onboarding" for p in catalog.json()["packs"])
+    assert client.post(log + "/domain-packs/customer_onboarding",
+                       json={"version":"1.0.0","mapping":MAPPING}, headers=bearer).status_code in (401, 403)
+    install = client.post(log + "/domain-packs/customer_onboarding",
+                          json={"version":"1.0.0","mapping":MAPPING}, headers=owner)
+    assert install.status_code == 200, install.text
+    report = client.get(log + "/domain-packs/customer_onboarding/report", headers=owner)
+    assert report.status_code == 200 and report.headers["cache-control"] == "no-store", report.text
+    assert len(report.json()["metrics"]) == 4
+    assert report.json()["source_system_validated"] is False
+    assert client.get(log + "/domain-packs/customer_onboarding/report", headers=bearer).status_code in (401, 403)
+    assert client.delete(log + "/domain-packs/customer_onboarding", headers=owner).json()["metrics_removed"] == 4
+    assert client.get(log + "/domain-packs/customer_onboarding/report", headers=owner).status_code == 422
+'''
+    root = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    env.update({"WORKFLOW_OBSERVER_DATA": str(tmp_path / "local_data"),
+                "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "local_auth"),
+                "WORKFLOW_OBSERVER_CONFIG": str(tmp_path / "config.json")})
+    run = subprocess.run([sys.executable, "-c", code], cwd=root, env=env,
+                         capture_output=True, text=True, timeout=120)
+    assert run.returncode == 0, f"stdout={run.stdout}\nstderr={run.stderr}"
