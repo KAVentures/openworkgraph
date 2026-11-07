@@ -71,6 +71,30 @@ the full retained history; a standalone rebuild can also be invoked with
 `incidents.reconcile_deployment(deployment_id)` from trusted local code.
 The endpoint does not expose a new unauthenticated rebuild operation.
 
+## Bounded signed sequence gaps
+
+The same R18 review also closes an operational denial-of-service risk in signed
+report ingestion. Previously, receiving a valid HMAC-signed report with a large
+forward sequence number constructed `list(range(previous + 1, incoming))` in
+memory. A misconfigured producer could require immense allocation.
+
+The channel now counts the gap arithmetically and keeps **at most 1,000 recent
+missing sequence numbers** for recovery. When more gaps exist than fit, the
+existing `missing_truncated` flag is set and remains set even if some retained
+IDs subsequently arrive. `new_missing_sequences` is an **inferred difference
+in signed sequence numbers**, never a verified count of lost deliveries. Signed
+sequence numbers outside **1 to 2⁵³−1** are refused, ensuring they are exactly
+representable by browser and JSON clients.
+
+This does not change signing keys, revoke/rotate behavior, existing replay
+windows, or access permissions. Because older gaps can be truncated, operators
+must not equate a zero retained missing-list count with proof of complete
+delivery if `missing_truncated` is true.
+
+Tests in `tests/test_automation_report_channels.py` cover large, valid signed
+jumps, the 1,000-entry retained cap, late recovery, persistent truncation, and
+the exact-integer boundary.
+
 ## Test coverage
 
 `tests/test_automation_incident_reconciliation.py` exercises repeat signed
