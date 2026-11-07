@@ -213,6 +213,7 @@ def create_backup(destination: Path, *, passphrase: str | None = None) -> dict[s
     if destination.resolve().is_relative_to(data.resolve()):
         raise BackupError("store the backup outside the OpenWorkGraph data folder")
     entries: list[dict[str, Any]] = []
+    total_snapshot_bytes = 0
     with tempfile.TemporaryDirectory(prefix="owg-backup-") as scratch:
         staged = Path(scratch)
         for source, name in files:
@@ -224,8 +225,9 @@ def create_backup(destination: Path, *, passphrase: str | None = None) -> dict[s
             except Exception as exc:
                 raise BackupError(f"could not snapshot {name}: {type(exc).__name__}") from None
             snapshot_bytes = target.stat().st_size
-            if snapshot_bytes > MAX_ENTRY_BYTES or sum(item["bytes"] for item in entries) + snapshot_bytes > MAX_TOTAL_BYTES:
+            if snapshot_bytes > MAX_ENTRY_BYTES or total_snapshot_bytes + snapshot_bytes > MAX_TOTAL_BYTES:
                 raise BackupError("backup snapshot exceeds the supported restored-data limit")
+            total_snapshot_bytes += snapshot_bytes
             entries.append({"path": name, "kind": kind, "bytes": snapshot_bytes,
                             "sha256": _sha256(target)})
         manifest = {
@@ -235,7 +237,7 @@ def create_backup(destination: Path, *, passphrase: str | None = None) -> dict[s
             "includes_secrets": bool(passphrase),
             "encrypted": bool(passphrase),
             "file_count": len(entries),
-            "total_bytes": sum(entry["bytes"] for entry in entries),
+            "total_bytes": total_snapshot_bytes,
             "files": entries,
         }
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -342,8 +344,18 @@ def _validated_manifest(archive: zipfile.ZipFile, *, encrypted: bool) -> dict[st
                                    entry.get("bytes"), entry.get("sha256"))
         if not _safe_member(name) or name in names:
             raise BackupError("backup contains an unsafe or duplicate path")
-        if name.startswith("auth/") and not manifest["includes_secrets"]:
-            raise BackupError("unencrypted backup cannot contain credentials")
+        if not manifest["includes_secrets"]:
+            # Do not permit credentials to be laundered under the ordinary
+            # data prefix, including the common data/auth layout.
+            forbidden = {"data/auth/"}
+            try:
+                relative_auth = auth_dir().relative_to(data_dir()).as_posix().strip("/")
+                if relative_auth:
+                    forbidden.add("data/" + relative_auth + "/")
+            except ValueError:
+                pass
+            if name.startswith("auth/") or any(name.startswith(prefix) for prefix in forbidden):
+                raise BackupError("unencrypted backup cannot contain credentials")
         if kind not in ("sqlite", "duckdb", "file") or type(size) is not int or size < 0 or size > MAX_ENTRY_BYTES:
             raise BackupError("backup contains invalid file metadata or an oversized entry")
         if not isinstance(digest, str) or not _SHA256_HEX.fullmatch(digest):
