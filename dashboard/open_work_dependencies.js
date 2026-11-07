@@ -46,11 +46,16 @@
     form.addEventListener('submit', async event => {
       event.preventDefault();
       const ref = field.value.trim();
+      // Cancel the prior request even if this submission fails validation.
+      // An older response must never overwrite a newer validation error.
+      if (requestController) requestController.abort();
       if (ref && !/^owg:w:[0-9a-f]{32}$/.test(ref)) {
+        requestController = null;
+        button.disabled = false;
+        list.replaceChildren();
         status.textContent = 'Enter a valid opaque work-item reference or leave the field empty.';
         return;
       }
-      if (requestController) requestController.abort();
       const controller = new AbortController();
       requestController = controller;
       button.disabled = true;
@@ -80,7 +85,7 @@
         line('Newly mirrored edges: ' + Number(data.added_reviewed_edges || 0));
         line('Stale edges removed: ' + Number(data.removed_stale_edges || 0));
         if (data.context) {
-          line('Direct prerequisites: ' + (data.context.direct || []).join(', ') || 'None');
+          line('Direct prerequisites: ' + ((data.context.direct || []).join(', ') || 'None'));
           line('All prerequisites: ' + ((data.context.prerequisites || []).join(', ') || 'None'));
           if (data.context.truncated) line('Result truncated; do not treat this as a complete graph.');
         }
