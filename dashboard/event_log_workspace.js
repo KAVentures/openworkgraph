@@ -3288,8 +3288,27 @@
       const requestId=++inboxRefreshId;
       const r=await getJSON(inboxBase());
       if(generation!==state.generation||requestId!==inboxRefreshId)return;
+      const selected=new Map();
+      const bulk=button('Acknowledge selected (0)','secondary');
+      bulk.id='owgSignalBulkAcknowledge';
+      bulk.disabled=true;
+      const updateBulk=()=>{
+        bulk.textContent='Acknowledge selected ('+selected.size+')';
+        bulk.disabled=selected.size===0||selected.size>20;
+      };
       const rows=(r.items||[]).map(item=>{
         const action=el('div');
+        let selection='—';
+        if(item.status==='unreviewed'&&item.state_fingerprint){
+          const check=el('input');check.type='checkbox';
+          check.setAttribute('aria-label','Select signal '+item.name+' for acknowledgement');
+          check.onchange=()=>{
+            if(check.checked)selected.set(item.rule_id,{rule_id:item.rule_id,state_fingerprint:item.state_fingerprint});
+            else selected.delete(item.rule_id);
+            updateBulk();
+          };
+          selection=check;
+        }
         if(item.state_fingerprint&&item.triggered===true){
           const acknowledged=item.status==='acknowledged';
           const click=button(acknowledged?'Reopen':'Acknowledge','secondary');
@@ -3318,12 +3337,27 @@
             };action.appendChild(defer);
           }
         }
-        return [item.name,item.status.replace(/_/g,' '),item.evaluated_at||'not checked',
+        return [selection,item.name,item.status.replace(/_/g,' '),item.evaluated_at||'not checked',
           item.acknowledged_at||'—',item.snoozed_until||'—',action];
       });
+      bulk.onclick=async()=>{
+        if(generation!==state.generation||state.logId!==selectedLogId||bulk.disabled)return;
+        const reviews=[...selected.values()];
+        if(!reviews.length||reviews.length>20)return;
+        if(!window.confirm('Acknowledge '+reviews.length+' selected signal(s)? This records local review only, never an approval for actions.'))return;
+        bulk.disabled=true;
+        try{
+          await api(inboxBase()+'/acknowledge-batch',{
+            method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reviews})});
+          message.textContent=reviews.length+' signal(s) acknowledged locally.';
+        }catch(error){message.textContent=error.message;}
+        finally{await refreshInbox().catch(error=>{message.textContent=error.message;});}
+      };
       inbox.replaceChildren(
         el('div',r.unreviewed+' signals currently require review. No automatic actions or delivery.','muted'),
-        rows.length?table(['Signal','Review status','Evaluated','Acknowledged','Snoozed until',''],rows):el('div','No saved signals to review.','muted'));
+        el('div','Select up to 20 unreviewed signals for one atomic acknowledgement. Snoozed and stale results cannot be bulk-reviewed.','muted'),
+        bulk,
+        rows.length?table(['Select','Signal','Review status','Evaluated','Acknowledged','Snoozed until',''],rows):el('div','No saved signals to review.','muted'));
     }
     reviewRefresh.onclick=()=>refreshInbox().catch(error=>{message.textContent=error.message;});
     async function refresh(){
