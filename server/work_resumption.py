@@ -217,6 +217,10 @@ def resumption_candidates(
     result["coverage"]["activity_rows_scanned"] = len(instants)
     result["coverage"]["scan_truncated"] = truncated
     if not instants:
+        # An authorized empty time window still has a reviewable, empty result.
+        # Denied/revoked leases return earlier without generating review data.
+        from .reconstruction_review_cli import build_review_queue
+        result["event_assignment_review"] = build_review_queue(result)
         return result
     sessions = _sessions(instants, gap_minutes / 1440)
     starts = [start for start, _end in sessions]
