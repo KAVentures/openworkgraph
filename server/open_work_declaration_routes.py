@@ -2911,6 +2911,10 @@ async def get_local_durable_reviewed_dependencies(request: Request, response: Re
                 dependency_context, path, scope=scope, actor=actor, case_id=ref,
             )}
         await _recheck_source(scope)
+        # Dashboard sessions are independently revocable while a read-through
+        # is running. Revalidate immediately before returning any mirrored
+        # dependency data; the HTTPException path purges the actor mirror.
+        _dashboard_only(request)
     except HTTPException:
         # Source authorization can disappear *after* reconciliation. Purge the
         # mirror before propagating the denial; if the purge fails, fail closed
