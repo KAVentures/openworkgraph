@@ -102,6 +102,7 @@ const path=require('node:path');
     assert.equal(preflightRequests.length,2);
     // Refresh must preserve a valid selection, not replay an old plan.
     await page.locator('#pvBackupRefresh').click();
+    await page.locator('#pvBackupPlan').filter({hasText:/Choose a backup and inspect/}).waitFor();
     assert.equal(await page.locator('#pvBackupChoice').inputValue(),encrypted);
     const after=await page.locator('#pvBackupPlan').textContent();
     assert.match(after,/Choose a backup and inspect/);
