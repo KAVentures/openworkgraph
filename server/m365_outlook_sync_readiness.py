@@ -113,6 +113,16 @@ def extract_after_readiness(*, expected_generation, tenant, mailbox, folder,
     if (type(result.get("committed_predecessor_generation")) is not int
             or result["committed_predecessor_generation"] != expected_generation):
         raise ReceiptError("Checkpoint generation changed during extraction; inspect before retry")
+    # A delegate's review candidate is not evidence of a completed import.
+    # Fail closed if its response is malformed, claims mutation, or omits
+    # counts needed by the operator to review removals and snapshots.
+    if (type(result.get("event_snapshots")) is not int
+            or result["event_snapshots"] < 0
+            or type(result.get("removal_markers_for_review")) is not int
+            or result["removal_markers_for_review"] < 0
+            or result.get("checkpoint_advanced") is not False
+            or result.get("owg_append_performed") is not False):
+        raise ReceiptError("Unsafe or incomplete extraction review evidence")
     return {"format": FORMAT, "status": "review_required",
             "committed_predecessor_generation": expected_generation,
             "event_snapshots": result["event_snapshots"],
