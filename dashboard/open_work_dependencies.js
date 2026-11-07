@@ -62,6 +62,11 @@
       list.replaceChildren();
       status.textContent = 'Checking current reviewed declarations…';
       try {
+        // Wait for the dashboard's authenticated fetch bootstrap before reading.
+        if (typeof window !== 'undefined' && window.__owgAuthReady) {
+          await window.__owgAuthReady;
+        }
+        if (controller.signal.aborted || requestController !== controller) return;
         const query = ref ? '?work_item_ref=' + encodeURIComponent(ref) : '';
         const response = await fetch('/v1/open-work/declarations/durable-dependencies' + query, {
           credentials: 'same-origin', cache: 'no-store',
