@@ -18,9 +18,10 @@ from server.local_scheduler_routes import router  # noqa: E402
 from server.local_auth import create_dashboard_session  # noqa: E402
 import server.main as owg_main  # noqa: E402
 
-# This fixture serves on 8791 so it can run beside other browser tests; the local-origin
-# guard only knows the default 8787 dashboard, so allow this fixture's own origin too.
-owg_main.LOCAL_WEB_ORIGINS.update({"http://127.0.0.1:8791", "http://localhost:8791"})
+# The scheduled-backup (8791) and quiet-hours (8792) browser tests serve this fixture on their
+# own ports so they can run beside other browser tests; the local-origin guard only knows the
+# default 8787 dashboard, so allow those fixture origins too.
+owg_main.LOCAL_WEB_ORIGINS.update({f"http://{host}:{port}" for host in ("127.0.0.1", "localhost") for port in (8791, 8792)})
 
 app.include_router(router)
 (scratch / "session.txt").write_text(create_dashboard_session(), encoding="utf-8")
