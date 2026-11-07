@@ -64,3 +64,39 @@ check, **not** an atomic lock: a bounded Graph GET may already have occurred
 before the changed generation is detected. It does not authorize automatic
 retry, event append, checkpoint commit, or removal. A full operator-facing
 transaction and real-tenant acceptance are still outstanding.
+
+
+### Operator command: generate a reviewed next-round candidate
+
+The same module now provides an explicit command-line entry point for the
+combined readiness and checkpoint-bound Graph read. This is an operator-facing
+CLI, **not** an automatic import or a dashboard. Run
+`python -m server.m365_outlook_sync_readiness --help` for the exact flags.
+
+After inspecting the committed checkpoint generation and preflight reports,
+provide the usual required scope and report flags, plus:
+
+```text
+--extract-after-readiness --expected-generation N --confirm-log-id LOG_ID
+--previous-candidate PATH --previous-csv PATH --receipt-file PATH
+--journal-dir PATH --handoff-dir PATH --successor-label LABEL
+--output NEW.csv --candidate NEW.json
+--consent-local-read --consent-delta-read --consent-local-export
+--confirm-removals-reviewed
+```
+
+The command reads `OWG_M365_GRAPH_TOKEN` and `OWG_DASHBOARD_SESSION`
+from its process environment; **never put credentials on the command line**.
+Run only with private, owner-controlled artifacts and an authorized session.
+It refuses missing review inputs, stale generations, missing credentials or
+separate consents before delegation. The JSON output contains only a bounded
+review summary or a generic refusal, never tokens, provider URLs, message
+contents, or mailbox identifiers. Existing standalone readiness inspection
+remains available without the extraction flag.
+
+A successful result is `review_required`, **not** an imported event log.
+An operator must separately inspect the generated candidate and removal
+markers, explicitly authorize any append, verify the receipt, and commit
+the next checkpoint. The CLI cannot make the Graph request atomic with a
+checkpoint generation change, and does not prove live Microsoft tenant
+acceptance. No automatic retry or checkpoint advancement is permitted.
