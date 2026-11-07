@@ -342,7 +342,7 @@ def model_status(intent_names: list[str] | None = None) -> dict[str, Any]:
             "trained_at": model["trained_at"], "expires_at": model["expires_at"],
             "model_sha256": model["model_sha256"], "intents": sorted(model["intents"]),
             "skipped_intents": model["skipped_intents"], "training_example_count": model["training_example_count"],
-            "evaluation": model["evaluation"], "thresholds": model["thresholds"],
+            "evaluation": model["evaluation"] if fresh else None, "thresholds": model["thresholds"],
             "estimates_not_verified_reasons_for_contact": True}
 
 
