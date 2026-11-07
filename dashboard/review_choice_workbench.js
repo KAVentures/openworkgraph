@@ -31,7 +31,10 @@
         const data=await request('/v1/review-choice-workbench/'+encodeURIComponent(id));
         if(current!==generation)return;
         if(data.format!=='openworkgraph.review-choices.v1'||data.idea?.idea_id!==id||
-           !Array.isArray(data.projects)||data.projects_truncated||data.execution_authorized!==false)
+           !Array.isArray(data.projects)||data.projects_truncated||data.execution_authorized!==false||
+           data.source_read_authorized!==false||data.verified_business_outcomes!==false||
+           !data.projects.every(p=>typeof p.project_id==='string'&&p.project_id.length>0&&
+             Array.isArray(p.blockers)&&p.execution_authorized===false&&p.review_required===true))
           throw new Error('Incomplete or inconsistent review basis.');
         snapshot=data;
         results.append(node('p','Opportunity revision '+data.idea.revision+' · '+data.idea.state+' · saved process '+data.process_status));
@@ -50,7 +53,10 @@
         const fresh=await request('/v1/review-choice-workbench/'+encodeURIComponent(id));
         if(current!==generation)return;
         const candidate=fresh.projects?.find(p=>p.project_id===projectId);
-        if(fresh.projects_truncated||fresh.idea?.revision!==snapshot.idea.revision||
+        if(fresh.format!=='openworkgraph.review-choices.v1'||fresh.idea?.idea_id!==id||
+           fresh.execution_authorized!==false||fresh.source_read_authorized!==false||
+           fresh.verified_business_outcomes!==false||!Array.isArray(fresh.projects)||
+           fresh.projects_truncated||fresh.idea?.revision!==snapshot.idea.revision||
            fresh.process_status!==snapshot.process_status||
            JSON.stringify(fresh.process_reference)!==JSON.stringify(snapshot.process_reference)||
            JSON.stringify(fresh.dataset_origins)!==JSON.stringify(snapshot.dataset_origins)||
@@ -67,7 +73,7 @@
         details.append(node('p','Outstanding review requirements:'),blockers,
           node('p','This selection is not an execution approval or a provider source read.'));
         status.textContent='Read-only choice inspected against current local records.';
-      }catch(e){if(current===generation)status.textContent=e.message;}
+      }catch(e){if(current===generation){clear();status.textContent='Review failed. Inspect current records again before choosing. '+e.message;}}
       finally{if(current===generation&&snapshot)review.disabled=false;}
     };
     card.append(heading,intro,label,input,load,status,results,details);panel.append(card);
