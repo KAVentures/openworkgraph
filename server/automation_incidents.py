@@ -90,7 +90,8 @@ def record(deployment_id: str, kind: str, fingerprint: str, *, count: int = 1, s
                 del data["incidents"][resolved[0][1]]
             item = {"incident_id": incident_id, "deployment_id": deployment_id, "kind": kind,
                     "fingerprint": fingerprint, "first_seen": now, "last_seen": now, "occurrences": 0,
-                    "status": "open", "reopened_count": 0, "sample_refs": [], "notes": [], "detail": {}}
+                    "status": "open", "reopened_count": 0, "review_revision": 0,
+                    "sample_refs": [], "notes": [], "detail": {}}
             data["incidents"][incident_id] = item
         elif item["status"] == "resolved":
             item["status"] = "open"
@@ -191,8 +192,8 @@ def reconcile_deployment(deployment_id: str) -> list[str]:
                     "occurrences": current, "current_run_count": current,
                     "count_basis": "distinct_retained_run_ids",
                     "run_membership_sha256": digest, "status": "open",
-                    "reopened_count": 0, "sample_refs": group["samples"],
-                    "notes": [], "detail": {},
+                    "reopened_count": 0, "review_revision": 0,
+                    "sample_refs": group["samples"], "notes": [], "detail": {},
                 }
                 changed_ids.append(incident_id)
                 changed_any = True
@@ -266,12 +267,24 @@ def listing(status: str | None = None, deployment_id: str | None = None) -> dict
     # Open first, then acknowledged, then resolved; most recent first within each.
     items.sort(key=lambda i: i["last_seen"], reverse=True)
     items.sort(key=lambda i: STATUSES.index(i["status"]))
+    for incident in items:
+        incident.setdefault("review_revision", 0)  # pre-upgrade human reviews
     return {"incidents": items, "counts": {s: sum(i["status"] == s for i in items) for s in STATUSES}, **CLAIMS}
 
 
 def triage(incident_id: str, payload: Any) -> dict[str, Any]:
-    if not isinstance(payload, dict) or set(payload) - {"status", "note", "expected_last_seen"}:
-        raise IncidentError("triage takes status, note and expected_last_seen")
+    """Only apply a human review against the exact review + occurrence snapshot.
+
+    `expected_last_seen` protects against newly observed report events.
+    `expected_review_revision` separately protects two dashboard reviewers
+    from silently overwriting one another even when no new report arrived.
+    """
+    if (not isinstance(payload, dict) or
+            set(payload) - {"status", "note", "expected_last_seen", "expected_review_revision"}):
+        raise IncidentError("triage takes status, note, expected_last_seen and expected_review_revision")
+    expected = payload.get("expected_review_revision")
+    if type(expected) is not int or expected < 0:
+        raise IncidentError("exact nonnegative expected_review_revision required; refresh incidents")
     status, note = payload.get("status"), payload.get("note", "")
     if status not in ("acknowledged", "resolved", "open"):
         raise IncidentError("status must be acknowledged, resolved or open")
@@ -284,11 +297,18 @@ def triage(incident_id: str, payload: Any) -> dict[str, Any]:
             raise IncidentError("unknown incident")
         if payload.get("expected_last_seen") is not None and payload["expected_last_seen"] != item["last_seen"]:
             raise IncidentError("new occurrences arrived since you opened this incident; review them first")
-        item["status"] = status
-        if note.strip():
-            item["notes"] = [*item["notes"], {"at": _now(), "status": status, "note": note.strip()}][-MAX_NOTES:]
-        _write(data)
-        return {**item, **CLAIMS}
+        previous_revision = item.get("review_revision", 0)
+        if expected != previous_revision:
+            raise IncidentError("another review changed this incident; refresh before updating it")
+        trimmed_note = note.strip()
+        if item["status"] != status or trimmed_note:
+            item["status"] = status
+            if trimmed_note:
+                item["notes"] = [*item["notes"],
+                                 {"at": _now(), "status": status, "note": trimmed_note}][-MAX_NOTES:]
+            item["review_revision"] = previous_revision + 1
+            _write(data)
+        return {**item, "review_revision": item.get("review_revision", 0), **CLAIMS}
 
 
 def forget_deployment(deployment_id: str) -> int:
