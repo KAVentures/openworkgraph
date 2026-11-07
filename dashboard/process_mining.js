@@ -42,6 +42,11 @@
     const card=make('section',null,'card');card.id='owgProcessCSV';
     card.appendChild(make('h2','Process mining · event logs'));
     card.appendChild(make('p','Import a small CSV log or open an explicitly selected source projection to inspect supplied paths, transitions, elapsed durations and repeated activities. Preview stays local; nothing is saved or sent to an AI.','muted'));
+    const objectTiming = make('a','Explore OCEL object relationship lead times');
+    objectTiming.href = '/object-relationship-lead-times';
+    objectTiming.title = 'Inspect supplied object-to-object relationships in saved local OCEL logs';
+    card.appendChild(objectTiming);
+    card.appendChild(make('p','For imported OCEL logs, compare exact related object pairs and their observed event timing. Requires a current dashboard session and does not change capture or send data externally.','muted'));
     const p=make('p','CSV header: case_id,activity,timestamp (optional source). Timestamps must include a UTC offset, e.g. 2026-10-20T10:00:00Z. Only use files you are authorized to analyze. Use column mapping below for optional participant/team labels. Case IDs are replaced with temporary labels; activity names are displayed as supplied.','muted');
     card.appendChild(p);
     const wrap=make('div',null,'owg-process-controls');
