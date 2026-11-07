@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import re
 import sqlite3
+import stat
 from pathlib import Path
 
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
@@ -27,10 +28,33 @@ def _connect(path: str) -> sqlite3.Connection:
     if p.is_symlink():
         raise ValueError("symlink database refused")
     p.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # Never chmod an existing, potentially shared inode. Reject hard links,
+    # special files and permissive files before SQLite opens the database.
+    try:
+        info = p.lstat()
+    except FileNotFoundError:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(p, flags, 0o600)
+        except FileExistsError:
+            pass  # Concurrent creator; inspect the resulting path below.
+        else:
+            os.close(fd)
+        info = p.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or p.is_symlink():
+        raise ValueError("unsafe dependency database path")
+    if os.name == "posix" and info.st_mode & 0o077:
+        raise ValueError("dependency database permissions too broad")
+    # An untrusted WAL/SHM sidecar could contain undeleted declarations.
+    # This experimental store only supports SQLite's DELETE journal mode.
+    for suffix in ("-wal", "-shm"):
+        if Path(str(p) + suffix).exists() or Path(str(p) + suffix).is_symlink():
+            raise ValueError("unsupported dependency database sidecar")
     db = sqlite3.connect(str(p), timeout=5)
-    if os.name == "posix":
-        os.chmod(p, 0o600)
     db.execute("PRAGMA busy_timeout=5000")
+    if db.execute("PRAGMA journal_mode").fetchone()[0].lower() != "delete":
+        db.close()
+        raise ValueError("unsupported dependency database journal mode")
     db.execute("""CREATE TABLE IF NOT EXISTS declared_case_dependencies (
         scope TEXT NOT NULL, actor TEXT NOT NULL, case_id TEXT NOT NULL,
         prerequisite TEXT NOT NULL,
