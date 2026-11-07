@@ -7,6 +7,11 @@ on:
       - "dashboard/basic_mode.js"
       - "server/basic_mode_routes.py"
       - "server/local_backup.py"
+      - "server/local_backup_schedule.py"
+      - "server/local_scheduler.py"
+      - "server/local_scheduler_routes.py"
+      - "tests/browser/scheduled_local_backup.cjs"
+      - "tests/browser/scheduled_local_backup_app.py"
       - ".github/workflows/local-backup-preflight-browser.yml"
   push:
     branches: ["main"]
@@ -15,6 +20,11 @@ on:
       - "dashboard/basic_mode.js"
       - "server/basic_mode_routes.py"
       - "server/local_backup.py"
+      - "server/local_backup_schedule.py"
+      - "server/local_scheduler.py"
+      - "server/local_scheduler_routes.py"
+      - "tests/browser/scheduled_local_backup.cjs"
+      - "tests/browser/scheduled_local_backup_app.py"
       - ".github/workflows/local-backup-preflight-browser.yml"
 
 permissions:
@@ -42,3 +52,7 @@ jobs:
         run: node --check tests/browser/backup_preflight.cjs
       - name: Verify real authenticated Privacy backup preflight in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/backup_preflight.cjs
+      - name: Syntax check the local scheduled-backup dashboard flow
+        run: node --check tests/browser/scheduled_local_backup.cjs
+      - name: Verify explicit local backup scheduling in authenticated Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/scheduled_local_backup.cjs
