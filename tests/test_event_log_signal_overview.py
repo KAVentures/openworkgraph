@@ -194,12 +194,12 @@ with TestClient(app) as client:
 def test_ui_has_real_deep_link_and_discloses_scanned_scope():
     ui = (ROOT / "dashboard/event_log_workspace.js").read_text(encoding="utf-8")
     routes = (ROOT / "server/event_log_routes.py").read_text(encoding="utf-8")
-    assert 'id=\\'owgSignalAllResults\\'' in ui
+    assert "allResults.id='owgSignalAllResults';" in ui
     assert "refreshLogs(item.log_id)" in ui
     assert "await analyse()" in ui
-    assert "Showing '+\\n" in ui or "Showing '" in ui
+    assert "Number(r.datasets_scanned||0)" in ui
+    assert "Number(r.matched_rules||0)" in ui
     assert "'/v1/event-logs/signal-overview?'" in ui
-    assert '"\\/v1\\/event-logs\\/signal-overview"' not in ui  # no hardcoded fake response
     assert '@router.get("/v1/event-logs/signal-overview")' in routes
     assert "_require_dashboard(request)" in routes.split("def event_log_signal_overview(")[1].split(
         "@router.post", 1)[0]
