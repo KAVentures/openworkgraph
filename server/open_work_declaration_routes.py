@@ -2884,6 +2884,15 @@ async def get_local_durable_reviewed_dependencies(request: Request, response: Re
 
     _dashboard_only(request)
     response.headers["Cache-Control"] = "no-store"
+    # A query may not silently override scope or review semantics. Reject
+    # duplicates and unexpected parameters rather than choosing a first value.
+    # Do this before opening the source scope or durable storage.
+    if (len(request.query_params) != len(set(request.query_params)) or
+        any(key != "work_item_ref" for key in request.query_params)):
+        raise HTTPException(422, "exact durable dependency query fields required")
+    ref = request.query_params.get("work_item_ref")
+    if ref is not None and not re.fullmatch(r"owg:w:[0-9a-f]{32}", ref):
+        raise HTTPException(422, "invalid opaque work item reference")
     scope = await _require_scope()
     # Single-owner local dashboard identity, never supplied by the caller.
     secret = await asyncio.to_thread(_read_or_create_secret, ".open_work_reference_key")
@@ -2892,9 +2901,6 @@ async def get_local_durable_reviewed_dependencies(request: Request, response: Re
         hashlib.sha256,
     ).hexdigest()[:32]
     path = str(auth_dir() / ".open_work_reviewed_dependencies.sqlite3")
-    ref = request.query_params.get("work_item_ref")
-    if ref is not None and not re.fullmatch(r"owg:w:[0-9a-f]{32}", ref):
-        raise HTTPException(422, "invalid opaque work item reference")
     try:
         result = await asyncio.to_thread(
             reconcile_current_reviewed_dependencies,
