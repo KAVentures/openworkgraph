@@ -198,3 +198,34 @@ def test_live_review_change_during_reconciliation_purges_mirror(tmp_path):
             scope_provider=lambda: scope,
             snapshot_provider=lambda _scope: next(calls))
     assert dependency_context(path, scope=scope, actor=actor, case_id=a)["direct"] == []
+
+
+def test_dependency_store_closes_connections_after_success_and_failure(tmp_path, monkeypatch):
+    """SQLite context managers commit transactions but do not close handles."""
+    import sqlite3
+    from server import open_work_dependency_store as store
+
+    original_connect = sqlite3.connect
+    opened = []
+
+    class TrackedConnection(sqlite3.Connection):
+        pass
+
+    def tracked_connect(*args, **kwargs):
+        conn = original_connect(*args, **kwargs, factory=TrackedConnection)
+        opened.append(conn)
+        return conn
+
+    monkeypatch.setattr(store.sqlite3, "connect", tracked_connect)
+    path = str(tmp_path / "handles.sqlite")
+    kw = {"path": path, "scope": "tenant", "actor": "owner"}
+    assert store.declare_dependency(**kw, case_id="a", prerequisite="b")
+    assert store.dependency_context(**kw, case_id="a")["direct"] == ["b"]
+    with pytest.raises(ValueError, match="cycle"):
+        store.declare_dependency(**kw, case_id="b", prerequisite="a")
+    assert store.remove_dependency(**kw, case_id="a", prerequisite="b")
+    assert store.purge_actor(**kw) == 0
+    assert len(opened) >= 5
+    for conn in opened:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            conn.execute("SELECT 1")
