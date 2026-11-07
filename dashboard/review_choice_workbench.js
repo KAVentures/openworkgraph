@@ -82,6 +82,31 @@
         blockers.append(node('li','Independent execution and business outcomes remain unverified'));
         details.append(node('p','Outstanding review requirements:'),blockers,
           node('p','This selection is not an execution approval or a provider source read.'));
+        const confirm=node('button','Revalidate review basis on server');confirm.type='button';
+        confirm.onclick=async()=>{
+          const token=++generation;confirm.disabled=true;
+          status.textContent='Checking exact export against current local records…';
+          try{
+            await window.__owgAuthReady;
+            const response=await fetch('/v1/review-choice-workbench/'+encodeURIComponent(id)+'/preflight',{
+              method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},
+              body:JSON.stringify({project_id:projectId,idea_revision:snapshot.idea.revision,
+                spec_sha256:selected.spec_sha256,archive_sha256:selected.archive_sha256})
+            });
+            if(token!==generation||choice.value!==projectId||input.value.trim()!==id)return;
+            if(!response.ok)throw new Error('Server review preflight refused ('+response.status+').');
+            const result=await response.json();
+            if(result.format!=='openworkgraph.review-preflight.v1'||result.idea_id!==id||
+               result.idea_revision!==snapshot.idea.revision||result.project_id!==projectId||
+               result.spec_sha256!==selected.spec_sha256||result.archive_sha256!==selected.archive_sha256||
+               result.execution_authorized!==false||result.source_read_authorized!==false||
+               result.verified_business_outcomes!==false||result.review_required!==true||
+               JSON.stringify(result.blockers)!==JSON.stringify(selected.blockers))
+              throw new Error('Inconsistent server review evidence.');
+            status.textContent='Current export basis confirmed by server. Human approval and agent handoff are still required.';
+          }catch(e){if(token===generation){clear();status.textContent='Server preflight failed. Inspect again. '+e.message;}}
+        };
+        details.append(confirm);
         status.textContent='Read-only choice inspected against current local records.';
       }catch(e){if(current===generation){clear();status.textContent='Review failed. Inspect current records again before choosing. '+e.message;}}
       finally{if(current===generation&&snapshot&&choice.value===projectId)review.disabled=false;}
