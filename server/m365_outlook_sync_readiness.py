@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 from .m365_outlook_delta import _scope, _grant, _private_read
 from .m365_outlook_checkpoint import inspect_checkpoint
@@ -132,6 +133,11 @@ def extract_after_readiness(*, expected_generation, tenant, mailbox, folder,
 
 
 def main(argv=None):
+    """Local operator CLI: inspect readiness or explicitly request a review candidate.
+
+    Bearer and dashboard credentials are read only from the environment, never
+    accepted as command-line arguments or emitted in a response.
+    """
     p = argparse.ArgumentParser(description=__doc__)
     for key in ("tenant", "mailbox", "folder", "expected-address", "log-id"):
         p.add_argument("--" + key, required=True)
@@ -139,13 +145,60 @@ def main(argv=None):
         p.add_argument("--" + key, required=True, type=Path)
     p.add_argument("--consent-local-read", action="store_true")
     p.add_argument("--expected-generation", type=int)
+    p.add_argument("--extract-after-readiness", action="store_true",
+                   help="Explicitly request a bounded Graph review candidate; never import")
+    for key in ("confirm-log-id", "successor-label"):
+        p.add_argument("--" + key)
+    for key in ("previous-candidate", "previous-csv", "receipt-file",
+                "journal-dir", "handoff-dir", "output", "candidate"):
+        p.add_argument("--" + key, type=Path)
+    p.add_argument("--port", type=int, default=8765)
+    for key in ("consent-delta-read", "consent-local-export",
+                "confirm-removals-reviewed"):
+        p.add_argument("--" + key, action="store_true")
     a = vars(p.parse_args(argv))
+    extraction = a.pop("extract_after_readiness")
     try:
-        print(json.dumps(readiness(**a), sort_keys=True))
+        if extraction:
+            # Fail before any Graph or local artifact access when mandatory
+            # operator decisions, inputs, or credentials are absent.
+            mandatory = ("expected_generation", "confirm_log_id",
+                         "previous_candidate", "previous_csv", "receipt_file",
+                         "journal_dir", "handoff_dir", "successor_label",
+                         "output", "candidate")
+            if (any(a[k] is None for k in mandatory)
+                    or type(a["expected_generation"]) is not int
+                    or a["expected_generation"] < 1
+                    or not all(a[k] is True for k in
+                               ("consent_local_read", "consent_delta_read",
+                                "consent_local_export", "confirm_removals_reviewed"))
+                    or a["log_id"] != a["confirm_log_id"]
+                    or not os.environ.get("OWG_M365_GRAPH_TOKEN")
+                    or not os.environ.get("OWG_DASHBOARD_SESSION")):
+                raise ReceiptError("Explicit reviewed extraction inputs required")
+            result = extract_after_readiness(
+                **a, token=os.environ["OWG_M365_GRAPH_TOKEN"],
+                session=os.environ["OWG_DASHBOARD_SESSION"])
+        else:
+            # Extraction-only arguments must not silently be ignored.
+            if (any(a[k] is not None for k in
+                    ("confirm_log_id", "successor_label", "previous_candidate",
+                     "previous_csv", "receipt_file", "journal_dir", "handoff_dir",
+                     "output", "candidate"))
+                    or any(a[k] for k in ("consent_delta_read",
+                                          "consent_local_export",
+                                          "confirm_removals_reviewed"))):
+                raise ReceiptError("Extraction options require explicit extraction mode")
+            result = readiness(**{k: a[k] for k in
+                ("tenant", "mailbox", "folder", "expected_address", "log_id",
+                 "grant_file", "identity_report", "folder_report", "ledger_dir",
+                 "consent_local_read", "expected_generation")})
+        print(json.dumps(result, sort_keys=True))
         return 0
-    except (ReceiptError, ValueError, TypeError, OSError):
+    except (ReceiptError, ValueError, TypeError, KeyError, OSError):
         print(json.dumps({"format": FORMAT, "status": "refused",
-                          "checkpoint_advanced": False}, sort_keys=True))
+                          "checkpoint_advanced": False,
+                          "automatic_retry_allowed": False}, sort_keys=True))
         return 2
 
 
