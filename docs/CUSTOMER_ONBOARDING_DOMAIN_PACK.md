@@ -44,7 +44,7 @@ independent proof of a missed obligation or breach. Repeated initiation events
 are checked independently by the existing response-rule engine.
 
 The synthetic regression fixture in
-\`tests/test_event_log_domain_pack_customer_onboarding.py\` covers a
+`tests/test_event_log_domain_pack_customer_onboarding.py` covers a
 normal onboarding case, delayed provisioning and activation, early closure,
 duplicate activation, recorded rework and an incomplete case. Tests exercise
 catalog discovery, install, report, parameter override, optional mappings,
