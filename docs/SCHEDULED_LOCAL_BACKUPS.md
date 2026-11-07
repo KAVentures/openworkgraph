@@ -59,9 +59,13 @@ passphrase-based flow, and arrange secure storage according to your own
 organization's requirements.
 
 The local backup folder must be outside both the data and credential
-folders. A changed unsafe path refuses execution. Archive creation and
-verification can fail due to disk, permission or corruption; on failure,
-retention does not run. This is not remote/off-site disaster recovery,
+folders. An invalid folder is refused at creation time. If that path changes
+after a valid schedule is saved, the job stays configured but its due run
+fails with a fixed, content-free status and ordinary backoff; it is **not**
+silently removed as a missing source target. Correct the path and resume
+if it has paused after five failures. Archive creation and verification
+can fail due to disk, permission or corruption; on failure, retention does
+not run. This is not remote/off-site disaster recovery,
 a guarantee of filesystem crash consistency across all applications,
 or proof that real business outcomes can be reconstructed.
 
