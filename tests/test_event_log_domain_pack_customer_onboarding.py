@@ -95,8 +95,10 @@ def test_missing_optional_roles_do_not_silently_apply_checks():
                     "parameters": {"provision_hours": 96, "activation_days": 30}},
     )
     assert len(installed["metric_ids"]) == 3
+    # Reportable metric/compliance roles are listed as not applicable; an
+    # optional reference-model-only handoff is silently omitted from the model.
     assert {x["unmapped_role"] for x in installed["not_applicable"]} == {
-        "requirements_verified", "rework_requested", "handoff_received", "case_closed",
+        "requirements_verified", "rework_requested", "case_closed",
     }
     report = packs.report(log, PACK)
     assert report["parameters"] == {"provision_hours": 96.0, "activation_days": 30.0}
