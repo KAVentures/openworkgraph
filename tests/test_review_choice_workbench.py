@@ -165,9 +165,11 @@ def test_preflight_continue_uses_existing_pipeline_decision_not_implicit_approva
     script = (Path(__file__).resolve().parents[1] / 'dashboard/review_choice_workbench.js').read_text()
     pipeline = (Path(__file__).resolve().parents[1] / 'dashboard/automation_pipeline.js').read_text()
     assert "Open opportunity decision and handoff" in script
-    assert "new CustomEvent('owg-pipeline-open',{detail:{idea_id:id}})" in script
+    assert "new CustomEvent('owg-pipeline-open',{detail:{idea_id:id,project_id:projectId" in script
     assert "window.addEventListener('owg-pipeline-open'" in pipeline
-    assert "refresh().then(()=>show(id))" in pipeline
+    assert "if(!journeyResponse.ok)throw new Error" in pipeline
+    assert "if(!button)throw new Error" in pipeline
+    assert "if(current()){detail.replaceChildren();" in pipeline
     assert "if(token!==generation||choice.value!==projectId||input.value.trim()!==id)return;" in script
     assert "if(!pipelineCard)" in script
     assert "details.append(continueReview);" in script
