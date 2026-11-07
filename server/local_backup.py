@@ -594,8 +594,13 @@ def list_backups() -> dict[str, Any]:
     items = []
     if folder.is_dir():
         for path in sorted(folder.glob("owg-backup-*.zip"), reverse=True)[:50]:
-            items.append({"name": path.name, "bytes": path.stat().st_size,
-                          "encrypted": path.read_bytes()[:len(ENCRYPTED_MAGIC)] == ENCRYPTED_MAGIC})
+            try:
+                with path.open("rb") as handle:
+                    encrypted = handle.read(len(ENCRYPTED_MAGIC)) == ENCRYPTED_MAGIC
+                size = path.stat().st_size
+            except OSError:
+                continue
+            items.append({"name": path.name, "bytes": size, "encrypted": encrypted})
     return {"folder": str(folder), "backups": items, "restore": "offline: python -m server.local_backup restore <archive>"}
 
 
