@@ -367,12 +367,16 @@ assert main.browser_event(BrowserEvent(observed_at=now, action="drag_start", pag
 # Enhanced: a drag target whose label was copied from typed text is stored without any label.
 capture_depth.save({"profile": "enhanced"})
 assert main.browser_event(BrowserEvent(observed_at=now, action="drag_start", page=page,
+    target={"tag": "SYNTHETIC_DRAFT_742", "role": "SYNTHETIC_DRAFT_742", "type": "SYNTHETIC_DRAFT_742"},
+    metadata={"source_target": {"tag":"div", "role":"SYNTHETIC_DRAFT_742", "type":"SYNTHETIC_DRAFT_742"},
+              "drag_id":"SYNTHETIC_DRAFT_742", "top_frame":"SYNTHETIC_DRAFT_742"}))["inserted"] == 1
+assert main.browser_event(BrowserEvent(observed_at=now, action="drag_start", page=page,
     target={"tag": "div", "role": "button", "label": "private typed words"},
     metadata={"source_target": {"tag": "div", "label": "private typed words"}, "payload_kinds": ["text"]}))["inserted"] == 1
 with connect() as conn:
     blobs = " ".join(r[0] for t in ("events", "normalized_events", "context_events")
                      for r in conn.execute(f"SELECT metadata_json FROM {t}").fetchall())
-assert "private typed words" not in blobs and "0.137" not in blobs
+assert "private typed words" not in blobs and "SYNTHETIC_DRAFT_742" not in blobs and "0.137" not in blobs
 assert main.browser_event(BrowserEvent(observed_at=now, action="control_hover_dwell", page=page,
     target={"tag": "button", "type": "secure"}, metadata={"duration_ms": 900}))["skipped"] == "secure_target"
 # Full: raw points live in their own local table, and a local backup of the database includes them, as stated.
