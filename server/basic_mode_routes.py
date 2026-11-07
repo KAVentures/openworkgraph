@@ -93,7 +93,7 @@ async def post_local_backup_preflight(request: Request) -> Response:
         if (not isinstance(value, dict) or set(value) != {"name"}
                 or not isinstance(value["name"], str) or len(value["name"]) > 160
                 or not value["name"].startswith("owg-backup-")
-                or any(c in value["name"] for c in ("/", "\\\\", "\\x00", ":"))):
+                or any(ord(c) in (0, 47, 58, 92) for c in value["name"])):
             raise HTTPException(422, "Choose one listed local backup by name")
         selected = next((item for item in local_backup.list_backups()["backups"]
                          if item["name"] == value["name"]), None)
