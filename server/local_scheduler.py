@@ -123,6 +123,8 @@ def create(kind: str, target_id: str, *, interval_minutes: int, confirm_schedule
         if confirm_unencrypted_local_backup is not True:
             raise ScheduleError("explicit unencrypted local backup acknowledgement required")
     _check_target(kind, target_id)
+    if kind == "local_backup":
+        _check_backup_location()
     now = time.time()
     with _LOCK:
         data = _read()
@@ -183,15 +185,21 @@ def forget_target(kind: str, target_id: str) -> None:
             _write(data)
 
 
+def _check_backup_location() -> None:
+    from . import local_backup
+    backup = local_backup.backup_folder()
+    if (backup.is_symlink() or backup.resolve().is_relative_to(local_backup.data_dir().resolve())
+            or backup.resolve().is_relative_to(local_backup.auth_dir().resolve())):
+        raise ScheduleError("backup folder cannot be inside local data or credentials")
+
+
 def _check_target(kind: str, target_id: str) -> None:
     if kind == "local_backup":
         if target_id != "local":
             raise ScheduleError("local backup target must be local")
-        from . import local_backup
-        backup = local_backup.backup_folder()
-        if (backup.is_symlink() or backup.resolve().is_relative_to(local_backup.data_dir().resolve())
-                or backup.resolve().is_relative_to(local_backup.auth_dir().resolve())):
-            raise ScheduleError("backup folder cannot be inside local data or credentials")
+        # The local target exists as a capability regardless of current disk
+        # configuration. A failed *run* should back off, not delete the job
+        # as though a source profile or event-log dataset were removed.
         return
     if kind == "retained_jira_profile":
         from . import jira_retained_profiles as profiles
