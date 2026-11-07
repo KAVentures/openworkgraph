@@ -88,10 +88,10 @@ def test_live_review_preflight_is_authenticated_and_revision_pinned(monkeypatch)
     app.include_router(routes.router)
     client = TestClient(app)
     monkeypatch.setattr(routes, 'dashboard_session_valid', lambda token: token == 'test-session')
-    state = {'revision': 3, 'digest': 'b'*64, 'truncated': False}
+    state = {'revision': 3, 'digest': 'b'*64, 'truncated': False, 'process': 'current'}
     def journey(idea_id):
         return {'idea': {'idea_id': idea_id, 'revision': state['revision'], 'state': 'approved'},
-                'process_status': {'status': 'current', 'process_reference': {}},
+                'process_status': {'status': state['process'], 'process_reference': {}},
                 'projects': [{'project_id': 'p1', 'idea_revision': state['revision'],
                               'idea_revision_is_current': True, 'spec_sha256': state['digest'],
                               'archive_sha256': 'c'*64, 'reported_specifications': []}],
@@ -100,7 +100,10 @@ def test_live_review_preflight_is_authenticated_and_revision_pinned(monkeypatch)
     monkeypatch.setattr(routes.opportunity_journey, 'journey', journey)
     path = '/v1/review-choice-workbench/idea-1/preflight'
     payload = {'project_id': 'p1', 'idea_revision': 3, 'spec_sha256': 'b'*64,
-               'archive_sha256': 'c'*64}
+               'archive_sha256': 'c'*64, 'process_status': 'current',
+               'process_reference': {}, 'dataset_origins': [],
+               'dataset_origin_check_available': True,
+               'blockers': ['dataset_origin_not_linked', 'no_customer_report']}
     assert client.post(path, json=payload).status_code == 403
     headers = {'Authorization': 'OWG-Session test-session'}
     ok = client.post(path, json=payload, headers=headers)
@@ -118,5 +121,10 @@ def test_live_review_preflight_is_authenticated_and_revision_pinned(monkeypatch)
     state['truncated'] = True
     assert client.post(path, json=payload, headers=headers).status_code == 409
     state['truncated'] = False
+    state['process'] = 'changed'
+    assert client.post(path, json=payload, headers=headers).status_code == 409
+    state['process'] = 'current'
+    assert client.post(path, json={**payload, 'blockers': []}, headers=headers).status_code == 409
+    assert client.post(path, json={**payload, 'dataset_origins': [{'status': 'current'}]}, headers=headers).status_code == 409
     assert client.post(path, json={**payload, 'spec_sha256': 'bad'}, headers=headers).status_code == 422
     assert client.post(path, json={**payload, 'project_id': 'missing'}, headers=headers).status_code == 409
