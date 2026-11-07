@@ -212,6 +212,12 @@ def main(argv=None):
         p.add_argument("--" + key, required=True, type=Path)
     p.add_argument("--consent-local-read", action="store_true")
     p.add_argument("--expected-generation", type=int)
+    p.add_argument("--commit-after-review", action="store_true",
+                   help="Commit only after separately appending reviewed events to OWG")
+    p.add_argument("--expected-previous-candidate-sha256")
+    p.add_argument("--confirm-events-appended", action="store_true")
+    p.add_argument("--confirm-checkpoint-commit", action="store_true")
+    p.add_argument("--csv-path", type=Path)
     p.add_argument("--extract-after-readiness", action="store_true",
                    help="Explicitly request a bounded Graph review candidate; never import")
     for key in ("confirm-log-id", "successor-label"):
@@ -225,8 +231,35 @@ def main(argv=None):
         p.add_argument("--" + key, action="store_true")
     a = vars(p.parse_args(argv))
     extraction = a.pop("extract_after_readiness")
+    committing = a.pop("commit_after_review")
     try:
-        if extraction:
+        if extraction and committing:
+            raise ReceiptError("Select exactly one operator action")
+        if committing:
+            mandatory = ("expected_generation", "confirm_log_id", "candidate",
+                         "csv_path", "receipt_file", "journal_dir", "handoff_dir",
+                         "successor_label", "expected_previous_candidate_sha256")
+            if (any(a[k] is None for k in mandatory)
+                    or a["expected_generation"] < 1
+                    or not all(a[k] is True for k in
+                               ("consent_local_read", "confirm_removals_reviewed",
+                                "confirm_events_appended", "confirm_checkpoint_commit"))
+                    or a["log_id"] != a["confirm_log_id"]
+                    or a["consent_delta_read"] or a["consent_local_export"]
+                    or a["previous_candidate"] is not None or a["previous_csv"] is not None
+                    or a["output"] is not None
+                    or not os.environ.get("OWG_DASHBOARD_SESSION")):
+                raise ReceiptError("Explicit reviewed checkpoint commit inputs required")
+            result = commit_after_review(**{k: a[k] for k in
+                ("expected_generation", "expected_previous_candidate_sha256",
+                 "tenant", "mailbox", "folder", "expected_address", "grant_file",
+                 "identity_report", "folder_report", "ledger_dir", "log_id",
+                 "confirm_log_id", "candidate", "csv_path", "receipt_file",
+                 "journal_dir", "handoff_dir", "successor_label", "port",
+                 "consent_local_read", "confirm_removals_reviewed",
+                 "confirm_events_appended", "confirm_checkpoint_commit")},
+                 session=os.environ["OWG_DASHBOARD_SESSION"])
+        elif extraction:
             # Fail before any Graph or local artifact access when mandatory
             # operator decisions, inputs, or credentials are absent.
             mandatory = ("expected_generation", "confirm_log_id",
@@ -240,6 +273,9 @@ def main(argv=None):
                                ("consent_local_read", "consent_delta_read",
                                 "consent_local_export", "confirm_removals_reviewed"))
                     or a["log_id"] != a["confirm_log_id"]
+                    or a["csv_path"] is not None
+                    or a["expected_previous_candidate_sha256"] is not None
+                    or a["confirm_events_appended"] or a["confirm_checkpoint_commit"]
                     or not os.environ.get("OWG_M365_GRAPH_TOKEN")
                     or not os.environ.get("OWG_DASHBOARD_SESSION")):
                 raise ReceiptError("Explicit reviewed extraction inputs required")
@@ -249,10 +285,12 @@ def main(argv=None):
         else:
             # Extraction-only arguments must not silently be ignored.
             if (any(a[k] is not None for k in
-                    ("confirm_log_id", "successor_label", "previous_candidate",
+                    ("confirm_log_id", "successor_label", "csv_path",
+                     "expected_previous_candidate_sha256", "previous_candidate",
                      "previous_csv", "receipt_file", "journal_dir", "handoff_dir",
                      "output", "candidate"))
-                    or any(a[k] for k in ("consent_delta_read",
+                    or any(a[k] for k in ("confirm_events_appended",
+                                          "confirm_checkpoint_commit", "consent_delta_read",
                                           "consent_local_export",
                                           "confirm_removals_reviewed"))):
                 raise ReceiptError("Extraction options require explicit extraction mode")
