@@ -16,6 +16,13 @@
     const review=node('button','Review selected project');review.type='button';review.disabled=true;
     const details=node('div');let snapshot=null;let generation=0;
     const clear=()=>{snapshot=null;choice.replaceChildren();results.replaceChildren();details.replaceChildren();review.disabled=true;};
+    const validProjects=projects=>Array.isArray(projects)&&
+      new Set(projects.map(p=>p.project_id)).size===projects.length&&
+      projects.every(p=>typeof p.project_id==='string'&&p.project_id.length>0&&
+        /^[a-f0-9]{64}$/i.test(p.spec_sha256)&&/^[a-f0-9]{64}$/i.test(p.archive_sha256)&&
+        Number.isSafeInteger(p.idea_revision)&&p.idea_revision>=0&&
+        Array.isArray(p.blockers)&&p.blockers.every(b=>typeof b==='string')&&
+        p.execution_authorized===false&&p.review_required===true);
     input.addEventListener('input',()=>{generation++;clear();status.textContent='Selection changed. Inspect again before reviewing.';});
     async function request(path){
       await window.__owgAuthReady;
@@ -31,10 +38,9 @@
         const data=await request('/v1/review-choice-workbench/'+encodeURIComponent(id));
         if(current!==generation)return;
         if(data.format!=='openworkgraph.review-choices.v1'||data.idea?.idea_id!==id||
-           !Array.isArray(data.projects)||data.projects_truncated||data.execution_authorized!==false||
+           !validProjects(data.projects)||data.projects_truncated||data.execution_authorized!==false||
            data.source_read_authorized!==false||data.verified_business_outcomes!==false||
-           !data.projects.every(p=>typeof p.project_id==='string'&&p.project_id.length>0&&
-             Array.isArray(p.blockers)&&p.execution_authorized===false&&p.review_required===true))
+           !Number.isSafeInteger(data.idea?.revision)||data.idea.revision<0)
           throw new Error('Incomplete or inconsistent review basis.');
         snapshot=data;
         results.append(node('p','Opportunity revision '+data.idea.revision+' · '+data.idea.state+' · saved process '+data.process_status));
@@ -43,7 +49,7 @@
         else {results.append(choice,review);review.disabled=false;}
         status.textContent='Choose an exact export; review is read-only.';
       }catch(e){if(current===generation)status.textContent=e.message;}
-      finally{load.disabled=false;}
+      finally{if(current===generation)load.disabled=false;}
     };
     review.onclick=async()=>{
       const id=input.value.trim(),projectId=choice.value,selected=snapshot?.projects.find(p=>p.project_id===projectId);
@@ -55,7 +61,7 @@
         const candidate=fresh.projects?.find(p=>p.project_id===projectId);
         if(fresh.format!=='openworkgraph.review-choices.v1'||fresh.idea?.idea_id!==id||
            fresh.execution_authorized!==false||fresh.source_read_authorized!==false||
-           fresh.verified_business_outcomes!==false||!Array.isArray(fresh.projects)||
+           fresh.verified_business_outcomes!==false||!validProjects(fresh.projects)||
            fresh.projects_truncated||fresh.idea?.revision!==snapshot.idea.revision||
            fresh.process_status!==snapshot.process_status||
            JSON.stringify(fresh.process_reference)!==JSON.stringify(snapshot.process_reference)||
