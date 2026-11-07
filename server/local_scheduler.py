@@ -7,7 +7,10 @@ schedule with an explicit confirmation. Supported jobs:
   read/retention consent still applies, and its per-read site and account checks
   are unchanged);
 - ``event_log_signals``: re-evaluate the saved signal rules of an event log so
-  the signal inbox reflects the current data.
+  the signal inbox reflects the current data;
+- ``local_backup``: at most daily, create a verified unencrypted snapshot
+  outside the data folder, excluding credentials; rotate owned scheduled files
+  only after success, with separate user acknowledgment.
 
 Each schedule has an interval of at least 15 minutes. One job runs at a time.
 A failure backs off exponentially (up to 24 hours, never earlier than a
@@ -33,7 +36,8 @@ from typing import Any, Callable
 from .db import DATA_DIR
 
 FORMAT = "openworkgraph.local-schedules.v1"
-KINDS = ("retained_jira_profile", "event_log_signals")
+KINDS = ("retained_jira_profile", "event_log_signals", "local_backup")
+MIN_BACKUP_INTERVAL_MINUTES = 24 * 60
 MIN_INTERVAL_MINUTES = 15
 MAX_INTERVAL_MINUTES = 7 * 24 * 60
 MAX_SCHEDULES = 20
@@ -103,7 +107,8 @@ def status() -> dict[str, Any]:
             "business_writes": False, "delivers_to_third_parties": False}
 
 
-def create(kind: str, target_id: str, *, interval_minutes: int, confirm_scheduled_runs: bool) -> dict[str, Any]:
+def create(kind: str, target_id: str, *, interval_minutes: int, confirm_scheduled_runs: bool,
+           confirm_unencrypted_local_backup: bool = False) -> dict[str, Any]:
     if confirm_scheduled_runs is not True:
         raise ScheduleError("explicit confirmation required to run this job on a schedule")
     if kind not in KINDS:
@@ -112,6 +117,11 @@ def create(kind: str, target_id: str, *, interval_minutes: int, confirm_schedule
         raise ScheduleError("invalid target")
     if type(interval_minutes) is not int or not MIN_INTERVAL_MINUTES <= interval_minutes <= MAX_INTERVAL_MINUTES:
         raise ScheduleError(f"interval must be {MIN_INTERVAL_MINUTES}-{MAX_INTERVAL_MINUTES} minutes")
+    if kind == "local_backup":
+        if interval_minutes < MIN_BACKUP_INTERVAL_MINUTES:
+            raise ScheduleError("local backup interval must be at least 1440 minutes")
+        if confirm_unencrypted_local_backup is not True:
+            raise ScheduleError("explicit unencrypted local backup acknowledgement required")
     _check_target(kind, target_id)
     now = time.time()
     with _LOCK:
@@ -139,6 +149,8 @@ def update(schedule_id: str, *, enabled: bool | None = None, interval_minutes: i
         if interval_minutes is not None:
             if type(interval_minutes) is not int or not MIN_INTERVAL_MINUTES <= interval_minutes <= MAX_INTERVAL_MINUTES:
                 raise ScheduleError(f"interval must be {MIN_INTERVAL_MINUTES}-{MAX_INTERVAL_MINUTES} minutes")
+            if item["kind"] == "local_backup" and interval_minutes < MIN_BACKUP_INTERVAL_MINUTES:
+                raise ScheduleError("local backup interval must be at least 1440 minutes")
             item["interval_minutes"] = interval_minutes
         if enabled is not None:
             if type(enabled) is not bool:
@@ -171,6 +183,15 @@ def forget_target(kind: str, target_id: str) -> None:
 
 
 def _check_target(kind: str, target_id: str) -> None:
+    if kind == "local_backup":
+        if target_id != "local":
+            raise ScheduleError("local backup target must be local")
+        from . import local_backup
+        backup = local_backup.backup_folder()
+        if (backup.is_symlink() or backup.resolve().is_relative_to(local_backup.data_dir().resolve())
+                or backup.resolve().is_relative_to(local_backup.auth_dir().resolve())):
+            raise ScheduleError("backup folder cannot be inside local data or credentials")
+        return
     if kind == "retained_jira_profile":
         from . import jira_retained_profiles as profiles
         ids = {p["profile_id"] for p in profiles.status().get("profiles", [])}
@@ -195,6 +216,15 @@ def _recording() -> bool:
 
 def _run_job(kind: str, target_id: str) -> tuple[str, float]:
     """Run one job; returns (outcome code, provider retry-after seconds)."""
+    if kind == "local_backup":
+        if target_id != "local":
+            return "failed:invalid_local_backup_target", 0.0
+        from . import local_backup_schedule
+        try:
+            local_backup_schedule.run()
+            return "succeeded:local_backup_verified", 0.0
+        except local_backup_schedule.ScheduledBackupError:
+            return "failed:local_backup_unavailable", 0.0
     if kind == "retained_jira_profile":
         if not _recording():
             return "skipped_recording_paused", 0.0
@@ -290,5 +320,5 @@ def stop() -> None:
     _STOP.set()
 
 
-__all__ = ["KINDS", "ScheduleError", "create", "delete", "forget_target", "run_due", "start", "status",
+__all__ = ["KINDS", "MIN_BACKUP_INTERVAL_MINUTES", "ScheduleError", "create", "delete", "forget_target", "run_due", "start", "status",
            "stop", "update"]
