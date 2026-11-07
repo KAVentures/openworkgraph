@@ -16,11 +16,11 @@
     const review=node('button','Review selected project');review.type='button';review.disabled=true;
     const details=node('div');let snapshot=null;let generation=0;
     const clear=()=>{snapshot=null;choice.replaceChildren();results.replaceChildren();details.replaceChildren();review.disabled=true;};
-    const validProjects=projects=>Array.isArray(projects)&&
+    const validProjects=(projects,revision)=>Array.isArray(projects)&&
       new Set(projects.map(p=>p.project_id)).size===projects.length&&
       projects.every(p=>typeof p.project_id==='string'&&p.project_id.length>0&&
         /^[a-f0-9]{64}$/i.test(p.spec_sha256)&&/^[a-f0-9]{64}$/i.test(p.archive_sha256)&&
-        Number.isSafeInteger(p.idea_revision)&&p.idea_revision>=0&&
+        Number.isSafeInteger(p.idea_revision)&&p.idea_revision>=0&&p.idea_revision<=revision&&
         Array.isArray(p.blockers)&&p.blockers.every(b=>typeof b==='string')&&
         p.execution_authorized===false&&p.review_required===true);
     input.addEventListener('input',()=>{generation++;clear();status.textContent='Selection changed. Inspect again before reviewing.';});
@@ -38,7 +38,7 @@
         const data=await request('/v1/review-choice-workbench/'+encodeURIComponent(id));
         if(current!==generation)return;
         if(data.format!=='openworkgraph.review-choices.v1'||data.idea?.idea_id!==id||
-           !validProjects(data.projects)||data.projects_truncated||data.execution_authorized!==false||
+           !validProjects(data.projects,data.idea?.revision)||data.projects_truncated||data.execution_authorized!==false||
            data.source_read_authorized!==false||data.verified_business_outcomes!==false||
            !Number.isSafeInteger(data.idea?.revision)||data.idea.revision<0)
           throw new Error('Incomplete or inconsistent review basis.');
@@ -61,13 +61,15 @@
         const candidate=fresh.projects?.find(p=>p.project_id===projectId);
         if(fresh.format!=='openworkgraph.review-choices.v1'||fresh.idea?.idea_id!==id||
            fresh.execution_authorized!==false||fresh.source_read_authorized!==false||
-           fresh.verified_business_outcomes!==false||!validProjects(fresh.projects)||
+           fresh.verified_business_outcomes!==false||!validProjects(fresh.projects,fresh.idea?.revision)||
            fresh.projects_truncated||fresh.idea?.revision!==snapshot.idea.revision||
+           fresh.idea?.state!==snapshot.idea.state||
            fresh.process_status!==snapshot.process_status||
            JSON.stringify(fresh.process_reference)!==JSON.stringify(snapshot.process_reference)||
            JSON.stringify(fresh.dataset_origins)!==JSON.stringify(snapshot.dataset_origins)||
            fresh.dataset_origin_check_available!==snapshot.dataset_origin_check_available||!candidate||
-           JSON.stringify(candidate)!==JSON.stringify(selected)){
+           JSON.stringify(candidate)!==JSON.stringify(selected)||
+           JSON.stringify(fresh.projects)!==JSON.stringify(snapshot.projects)){
           clear();status.textContent='Review basis changed. Inspect again before choosing.';return;
         }
         details.append(node('h3','Human review · exact recorded project'),node('p','Project '+projectId),
