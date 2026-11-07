@@ -74,3 +74,38 @@ def test_durable_route_reconciles_reviewed_edges_and_never_grants_execution(monk
         asyncio.run(routes.get_local_durable_reviewed_dependencies(
             _request("valid", "work_item_ref=untrusted"), Response()))
     assert exc.value.status_code == 422
+
+
+def test_durable_route_purges_stale_mirror_when_review_read_fails(monkeypatch, tmp_path):
+    """A revoked/failed declaration read must not retain previously mirrored edges."""
+    from server import local_auth
+    from server import open_work_dependency_store as store
+
+    scope = "owg:scope:" + "a" * 32
+    a, b = "owg:w:" + "a" * 32, "owg:w:" + "b" * 32
+    monkeypatch.setattr(routes, "dashboard_session_valid", lambda token: token == "valid")
+    monkeypatch.setattr(routes, "_source_scope", lambda: scope)
+    monkeypatch.setattr(routes, "_read_or_create_secret", lambda name: "local-test-secret")
+    monkeypatch.setattr(local_auth, "auth_dir", lambda: tmp_path)
+    monkeypatch.setattr(store, "auth_dir", lambda: tmp_path, raising=False)
+
+    import hashlib
+    import hmac
+    actor = "dashboard:" + hmac.new(
+        b"local-test-secret", b"open-work:durable-local-owner:v1",
+        hashlib.sha256,
+    ).hexdigest()[:32]
+    path = str(tmp_path / ".open_work_reviewed_dependencies.sqlite3")
+    store.declare_dependency(path, scope=scope, actor=actor, case_id=a, prerequisite=b)
+    assert store.dependency_context(path, scope=scope, actor=actor, case_id=a)["direct"] == [b]
+
+    def denied(*args, **kwargs):
+        from server.open_work_case_declarations import CaseDeclarationError
+        raise CaseDeclarationError("reviewed declaration scope changed")
+
+    monkeypatch.setattr(store, "reconcile_current_reviewed_dependencies", denied)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes.get_local_durable_reviewed_dependencies(
+            _request("valid", "work_item_ref=" + a), Response()))
+    assert exc.value.status_code == 409
+    assert store.dependency_context(path, scope=scope, actor=actor, case_id=a)["direct"] == []
