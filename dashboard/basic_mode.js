@@ -1007,7 +1007,7 @@
         line.className = 'pv-row pv-sub';
         const text = document.createElement('span');
         text.textContent = (item.kind === 'local_backup' ? 'Unencrypted local backup'
-          : (item.kind === 'retained_jira_profile' ? 'Jira profile ' : 'Signals for ' + item.target_id)) +
+          : (item.kind === 'retained_jira_profile' ? 'Jira profile ' : 'Signals for ') + item.target_id) +
           ' · every ' + item.interval_minutes + ' min · ' + (item.enabled ? 'next ' + String(item.next_run_at || '').slice(0, 16).replace('T', ' ')
           : (item.paused_reason ? 'paused after repeated failures' : 'paused')) + (item.last_result ? ' · last: ' + item.last_result : '');
         const toggle = document.createElement('button');
