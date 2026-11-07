@@ -112,6 +112,19 @@ class ReviewQueueTests(unittest.TestCase):
         self.assertTrue(review["unlisted_events_are_unassigned"])
         self.assertFalse(review["coverage_incomplete"])
 
+    def test_authorized_empty_history_exposes_empty_review_contract(self):
+        import sqlite3
+        from server.work_resumption import resumption_candidates
+        db = sqlite3.connect(":memory:")
+        db.row_factory = sqlite3.Row
+        db.execute("CREATE TABLE events(event_id TEXT, observed_at TEXT, metadata_json TEXT)")
+        result = resumption_candidates(db, lease={"mode": "all_saved"})
+        self.assertEqual(result["event_assignment_review"]["event_reviews"], [])
+        self.assertEqual(result["event_assignment_review"]["event_reviews_count"], 0)
+        self.assertTrue(result["event_assignment_review"]["requires_human_review"])
+        self.assertFalse(result["event_assignment_review"]["coverage_incomplete"])
+        self.assertFalse(result["authoritative"])
+
     def test_revoked_resumption_cannot_expose_review(self):
         import json
         import sqlite3
