@@ -358,3 +358,47 @@ def test_truncated_encrypted_backup_returns_safe_error(site):
     with pytest.raises(backup.BackupError, match="truncated or damaged"):
         backup.verify_backup(truncated, passphrase="synthetic correct passphrase")
     assert (data / "workflow_observer.db").is_file()
+
+
+def test_rollback_failure_does_not_claim_original_folders_were_restored(tmp_path, monkeypatch):
+    """A second filesystem error during rollback is reported, not concealed."""
+    data, auth = tmp_path / "data", tmp_path / "credential-store"
+    data.mkdir()
+    auth.mkdir()
+    monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(data))
+    monkeypatch.setenv("WORKFLOW_OBSERVER_AUTH_DIR", str(auth))
+    (data / "sample.txt").write_text("BACKUP-VALUE", encoding="utf-8")
+    (auth / "token.txt").write_text("BACKUP-TOKEN", encoding="utf-8")
+    source = tmp_path / "safe-backup.zip"
+    secret = "synthetic recovery-failure passphrase"
+    backup.create_backup(source, passphrase=secret)
+    (data / "sample.txt").write_text("CURRENT-DATA", encoding="utf-8")
+    (auth / "token.txt").write_text("CURRENT-TOKEN", encoding="utf-8")
+    original_rename = Path.rename
+    failed_auth_swap = False
+    failed_data_rollback = False
+
+    def fail_twice(self, destination):
+        nonlocal failed_auth_swap, failed_data_rollback
+        dest = Path(destination)
+        if (not failed_auth_swap and self.name == "auth"
+                and ".owg-restore-auth-" in str(self) and dest == auth):
+            failed_auth_swap = True
+            raise OSError("synthetic auth disk failure")
+        if (not failed_data_rollback and self == data
+                and dest.name.startswith("data.failed-restore-")):
+            failed_data_rollback = True
+            raise OSError("synthetic rollback disk failure")
+        return original_rename(self, destination)
+
+    monkeypatch.setattr(Path, "rename", fail_twice)
+    with pytest.raises(backup.BackupError, match="could not all be recovered automatically"):
+        backup.restore_backup(source, passphrase=secret, replace=True)
+    assert failed_auth_swap and failed_data_rollback
+    original_data = list(tmp_path.glob("data.pre-restore-*"))
+    assert len(original_data) == 1
+    assert (original_data[0] / "sample.txt").read_text() == "CURRENT-DATA"
+    assert (data / "sample.txt").read_text() == "BACKUP-VALUE"
+    assert (auth / "token.txt").read_text() == "CURRENT-TOKEN"
+    # The displaced original is not removed or overwritten and can be
+    # recovered manually with OWG stopped.
