@@ -136,7 +136,7 @@ def _retained_run_groups(conn, deployment_id: str) -> dict[tuple[str, str], dict
             row["count"] += 1
             # Run IDs are already validated printable identifiers by the
             # report parser; NUL cannot appear in one. Delimit to avoid ambiguity.
-            row["digest"].update(run_id.encode("utf-8") + b"\\0")
+            row["digest"].update(run_id.encode("utf-8") + b"\x00")
             if len(row["samples"]) < MAX_SAMPLES:
                 row["samples"].append(run_id)
     return {key: {"count": value["count"], "membership_sha256": value["digest"].hexdigest(),
