@@ -124,6 +124,19 @@ def extract_after_readiness(*, expected_generation, tenant, mailbox, folder,
             or result.get("checkpoint_advanced") is not False
             or result.get("owg_append_performed") is not False):
         raise ReceiptError("Unsafe or incomplete extraction review evidence")
+    # Re-read the durable ledger after Graph returns. The delegated receipt
+    # identifies the generation it used, but another operator may have
+    # committed a newer checkpoint while the provider request was in flight.
+    # This is detection, not an atomic lock; never retry automatically.
+    current = inspect_checkpoint(
+        tenant=tenant, mailbox=mailbox, folder=folder,
+        grant_file=Path(grant_file), ledger_dir=Path(ledger_dir),
+        consent_local_read=True)
+    if (type(current) is not dict or current.get("log_id") != log_id
+            or type(current.get("generation")) is not int
+            or current["generation"] != expected_generation):
+        raise ReceiptError("Checkpoint advanced during Graph read; inspect before retry")
+    _grant(Path(grant_file), tenant, mailbox, folder)
     return {"format": FORMAT, "status": "review_required",
             "committed_predecessor_generation": expected_generation,
             "event_snapshots": result["event_snapshots"],
