@@ -578,20 +578,27 @@ def restore_backup(path: Path, *, passphrase: str | None = None, replace: bool =
             except Exception:
                 # If any swap fails, keep any newly staged target separately for
                 # inspection, then restore the old folders where possible.
+                rollback_failed = False
                 for target in reversed(replaced):
                     if target.exists():
                         failed = target.with_name(f"{target.name}.failed-restore-{stamp}")
                         try:
                             target.rename(failed)
                         except OSError:
-                            pass
-                rollback_failed = False
-                for target, aside in reversed(moved):
-                    if aside.exists() and not target.exists():
-                        try:
-                            aside.rename(target)
-                        except OSError:
+                            # An occupied target prevents moving the original
+                            # directory back. Never claim a successful rollback.
                             rollback_failed = True
+                for target, aside in reversed(moved):
+                    if aside.exists():
+                        if target.exists():
+                            rollback_failed = True
+                        else:
+                            try:
+                                aside.rename(target)
+                            except OSError:
+                                rollback_failed = True
+                    if aside.exists() or not target.is_dir():
+                        rollback_failed = True
                 raise BackupError(
                     "restore swap failed; previous folders could not all be recovered automatically"
                     if rollback_failed else
