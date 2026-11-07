@@ -50,3 +50,54 @@ def test_readiness_rejects_untrusted_preflight():
                       expected_address="m@example.com", grant_file="grant",
                       identity_report="identity", folder_report="folder-report",
                       ledger_dir="ledger", log_id="log", consent_local_read=True)
+
+
+@pytest.mark.parametrize("generation", [1, 3, 0, -1, True, "2"])
+def test_readiness_refuses_stale_or_invalid_checkpoint_generation(generation):
+    scope = "a" * 64
+    identity = {"format": "openworkgraph.m365-mailbox-identity.v1",
+                "status": "mailbox_identity_observed", "scope_sha256": scope,
+                "expected_address_sha256": hashlib.sha256(b"m@example.com").hexdigest(),
+                "mailbox_identifier_matched": True, "upn_matched": True,
+                "checkpoint_advanced": False}
+    folder = {"format": "openworkgraph.m365-folder-preflight.v1",
+              "status": "folder_metadata_observed", "scope_sha256": scope,
+              "folder_id_sha256": hashlib.sha256(b"folder").hexdigest(),
+              "folder_id_matched": True, "checkpoint_advanced": False}
+    with (patch("server.m365_outlook_sync_readiness._scope", return_value=scope),
+          patch("server.m365_outlook_sync_readiness._grant"),
+          patch("server.m365_outlook_sync_readiness._private_read",
+                side_effect=[json.dumps(identity).encode(), json.dumps(folder).encode()]),
+          patch("server.m365_outlook_sync_readiness.inspect_checkpoint",
+                return_value={"log_id": "log", "generation": 2})):
+        with pytest.raises(ReceiptError, match="generation changed"):
+            readiness(tenant="t", mailbox="m", folder="folder",
+                      expected_address="m@example.com", grant_file="grant",
+                      identity_report="identity", folder_report="folder-report",
+                      ledger_dir="ledger", log_id="log", consent_local_read=True,
+                      expected_generation=generation)
+
+
+def test_readiness_accepts_exact_committed_generation():
+    scope = "a" * 64
+    identity = {"format": "openworkgraph.m365-mailbox-identity.v1",
+                "status": "mailbox_identity_observed", "scope_sha256": scope,
+                "expected_address_sha256": hashlib.sha256(b"m@example.com").hexdigest(),
+                "mailbox_identifier_matched": True, "mail_matched": True,
+                "checkpoint_advanced": False}
+    folder = {"format": "openworkgraph.m365-folder-preflight.v1",
+              "status": "folder_metadata_observed", "scope_sha256": scope,
+              "folder_id_sha256": hashlib.sha256(b"folder").hexdigest(),
+              "folder_id_matched": True, "checkpoint_advanced": False}
+    with (patch("server.m365_outlook_sync_readiness._scope", return_value=scope),
+          patch("server.m365_outlook_sync_readiness._grant"),
+          patch("server.m365_outlook_sync_readiness._private_read",
+                side_effect=[json.dumps(identity).encode(), json.dumps(folder).encode()]),
+          patch("server.m365_outlook_sync_readiness.inspect_checkpoint",
+                return_value={"log_id": "log", "generation": 2})):
+        result = readiness(tenant="t", mailbox="m", folder="folder",
+                           expected_address="m@example.com", grant_file="grant",
+                           identity_report="identity", folder_report="folder-report",
+                           ledger_dir="ledger", log_id="log", consent_local_read=True,
+                           expected_generation=2)
+    assert result["committed_generation"] == 2
