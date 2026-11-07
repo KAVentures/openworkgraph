@@ -761,6 +761,8 @@ from .process_pdd_routes import router as _process_pdd_router  # noqa: E402
 app.include_router(_process_pdd_router)
 from .automation_pipeline_routes import router as _automation_pipeline_router  # noqa: E402
 app.include_router(_automation_pipeline_router)
+from .review_choice_routes import router as _review_choice_router  # noqa: E402
+app.include_router(_review_choice_router)
 
 # AI context detail (Redacted/Full) for MCP requests. Imported last so its
 # middleware wraps every route registered above.
