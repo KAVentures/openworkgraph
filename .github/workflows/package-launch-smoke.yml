@@ -2,6 +2,7 @@ name: packaged-launch-smoke
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: ["main"]
 
@@ -17,6 +18,7 @@ concurrency:
 
 jobs:
   windows-easy-install-launch-twice:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -136,6 +138,7 @@ jobs:
           if (Test-Path $installDir) { throw "Install directory remained after uninstall" }
 
   macos-easy-install-launch-twice:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: macos-latest
     timeout-minutes: 20
     steps:
