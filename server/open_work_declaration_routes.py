@@ -2906,7 +2906,13 @@ async def get_local_durable_reviewed_dependencies(request: Request, response: Re
             )}
         await _recheck_source(scope)
     except HTTPException:
-        await asyncio.to_thread(purge_actor, path, scope=scope, actor=actor)
+        # Source authorization can disappear *after* reconciliation. Purge the
+        # mirror before propagating the denial; if the purge fails, fail closed
+        # with a server error rather than exposing the reconciled result.
+        try:
+            await asyncio.to_thread(purge_actor, path, scope=scope, actor=actor)
+        except (OSError, sqlite3.DatabaseError, ValueError) as exc:
+            raise HTTPException(503, "durable dependency revocation cleanup unavailable") from exc
         raise
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError,
             ValueError) as exc:
