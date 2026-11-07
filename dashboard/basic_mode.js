@@ -930,6 +930,7 @@
     backupRefresh.onclick = () => refreshBackupList();
     backupChoice.onchange = () => {
       backupEpoch++;
+      backupRefresh.disabled = false;
       backupInspect.disabled = !backupChoice.value;
       backupPlan.textContent = 'Selection changed. Inspect the chosen backup for current results.';
     };
@@ -968,6 +969,7 @@
       try {
         const result = await api('/v1/local-backups', send('POST', pass.value ? {passphrase: pass.value} : {}));
         status.textContent = `Saved ${result.file_count} files to ${result.archive}${result.encrypted ? ' (encrypted, includes keys)' : ' (keys not included)'}.`;
+        pass.value = '';
         await refreshBackupList();
       } catch (error) { status.textContent = error.message || 'Backup failed.'; }
       finally { pass.value = ''; }
