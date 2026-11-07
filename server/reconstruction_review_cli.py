@@ -41,9 +41,12 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("missing or unbounded pair assignments")
     if response.get("saved_history_access") in (None, "none", "denied"):
         raise ValueError("no saved-history access")
+    coverage = response.get("coverage", {})
+    if not isinstance(coverage, dict):
+        raise ValueError("invalid coverage metadata")
     indexed: dict[tuple[str, str], set[str]] = defaultdict(set)
     incomplete = bool(response.get("observed_pair_event_assignments_truncated") or
-                      response.get("coverage", {}).get("scan_truncated"))
+                      coverage.get("scan_truncated"))
     for pair in pairs:
         if not isinstance(pair, dict) or pair.get("assignment_status") != "observed_same_event_pair" or pair.get("proves_same_case") is not False:
             raise ValueError("unsupported pair assignment")
@@ -69,7 +72,10 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         for session in earlier:
             if not isinstance(session, dict) or not isinstance(session.get("session_started_at"), str):
                 raise ValueError("invalid earlier session")
-            window = "earlier:" + session["session_started_at"]
+            started_at = session["session_started_at"]
+            if not started_at or len(started_at) > 64 or not started_at[0].isdigit():
+                raise ValueError("invalid earlier session timestamp")
+            window = "earlier:" + started_at
             for event_id in _event_ids(session.get("evidence_event_ids")):
                 indexed[(window, event_id)].add(pair_key)
             incomplete |= bool(session.get("evidence_truncated"))
