@@ -45,7 +45,8 @@ async def create_schedule(request: Request):
     data = await _body(request)
     return await _run(scheduler.create, data.get("kind"), data.get("target_id"),
                       interval_minutes=data.get("interval_minutes"),
-                      confirm_scheduled_runs=data.get("confirm_scheduled_runs"))
+                      confirm_scheduled_runs=data.get("confirm_scheduled_runs"),
+                      confirm_unencrypted_local_backup=data.get("confirm_unencrypted_local_backup"))
 
 
 @router.post("/v1/schedules/update")
