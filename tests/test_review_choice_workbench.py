@@ -158,3 +158,17 @@ def test_ambiguous_project_and_oversized_provenance_fail_closed(monkeypatch):
     ok = client.get(path, headers=headers)
     assert ok.status_code == 200
     assert len(ok.json()['dataset_origins']) == 1
+
+
+def test_preflight_continue_uses_existing_pipeline_decision_not_implicit_approval():
+    """The UX bridge must invoke the actual pipeline, never issue a grant."""
+    script = (Path(__file__).resolve().parents[1] / 'dashboard/review_choice_workbench.js').read_text()
+    pipeline = (Path(__file__).resolve().parents[1] / 'dashboard/automation_pipeline.js').read_text()
+    assert "Open opportunity decision and handoff" in script
+    assert "new CustomEvent('owg-pipeline-open',{detail:{idea_id:id}})" in script
+    assert "window.addEventListener('owg-pipeline-open'" in pipeline
+    assert "refresh().then(()=>show(id))" in pipeline
+    assert "if(token!==generation||choice.value!==projectId||input.value.trim()!==id)return;" in script
+    assert "if(!pipelineCard)" in script
+    assert "details.append(continueReview);" in script
+    assert "execution_authorized:false" in pipeline
