@@ -75,6 +75,7 @@ const path=require('node:path');
     await page.locator('[role=tab][data-tab=evidence]').click();
     await page.waitForFunction(()=>document.querySelector('#owgEventLogPick').options.length===2);
     await page.locator('#owgEventLogPick').selectOption(setup.b);
+    await page.waitForFunction(()=>document.querySelector('#owgEventLogCaseType')?.options.length>0);
     await page.locator('#owgEventLogAnalyze').click();
     await page.locator('#owgSignalAllStatus').filter({hasText:/2 signal states need attention across 2 saved logs/}).waitFor();
     const rows=page.locator('#owgSignalAllResults tbody tr');
@@ -107,6 +108,7 @@ const path=require('node:path');
     await page.waitForFunction(id=>document.querySelector('#owgEventLogPick')?.value===id,setup.a);
     await page.locator('#owgSignalInbox').getByRole('button',{name:/Acknowledge signal/}).first().click();
     await page.locator('#owgSignalInbox').getByRole('button',{name:/Reopen signal/}).waitFor();
+    await page.locator('#owgSignalAllFilter').selectOption('unreviewed');
     await page.locator('#owgSignalAllRefresh').click();
     await page.locator('#owgSignalAllStatus').filter({hasText:/1 signal states need attention across 2 saved logs/}).waitFor();
     assert.equal(await page.locator('#owgSignalAllResults tbody tr').count(),0,
