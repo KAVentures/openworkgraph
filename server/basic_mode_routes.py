@@ -101,10 +101,11 @@ async def post_local_backup_preflight(request: Request) -> Response:
             raise HTTPException(404, "Selected local backup was not found")
         if selected["encrypted"]:
             raise HTTPException(422, "Encrypted backups require offline CLI preflight with a passphrase environment variable")
+        selected_path = local_backup.backup_folder() / value["name"]
+        if selected_path.is_symlink() or not selected_path.is_file():
+            raise HTTPException(422, "Selected backup must be a regular file in the local backup folder")
         try:
-            result = await run_in_threadpool(
-                local_backup.plan_restore, local_backup.backup_folder() / value["name"]
-            )
+            result = await run_in_threadpool(local_backup.plan_restore, selected_path)
         except local_backup.BackupError as exc:
             raise HTTPException(422, str(exc)) from None
         from fastapi.responses import JSONResponse
