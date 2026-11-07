@@ -1,5 +1,24 @@
 """Exact event-level observed pair assignment, with independent interleaving."""
-from tests.test_work_resumption_group_continuity import A, B, F, _db, _event
+import json
+import sqlite3
+
+A = "owg:r:" + "a" * 32
+B = "owg:r:" + "b" * 32
+F = "owg:f:" + "f" * 32
+
+def _db(rows):
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    db.execute("CREATE TABLE events(event_id TEXT, observed_at TEXT, metadata_json TEXT)")
+    for i, (when, meta) in enumerate(rows):
+        db.execute("INSERT INTO events VALUES (?, ?, ?)", (str(i), when, json.dumps(meta)))
+    return db
+
+def _event(ref, with_file=False):
+    meta = {"resource_reference": {"resource_ref": ref, "provider": "github", "resource_kind": "issue"}}
+    if with_file:
+        meta["file_reference"] = {"file_ref": F}
+    return meta
 from server.work_resumption import resumption_candidates
 
 
