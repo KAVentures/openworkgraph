@@ -45,3 +45,30 @@ def test_authenticated_choice_and_review_blockers(monkeypatch):
     }
     assert client.get('/v1/review-choice-workbench/'+'x'*129,
                       headers={'Authorization': 'OWG-Session test-session'}).status_code == 422
+
+
+def test_review_refresh_fail_closed_browser_contract():
+    """A failed or inconsistent second fetch must invalidate the prior choice."""
+    script = (Path(__file__).resolve().parents[1] / 'dashboard/review_choice_workbench.js').read_text()
+    assert "data.source_read_authorized!==false" in script
+    assert "data.verified_business_outcomes!==false" in script
+    assert "fresh.execution_authorized!==false" in script
+    assert "fresh.source_read_authorized!==false" in script
+    assert "fresh.verified_business_outcomes!==false" in script
+    assert "fresh.idea?.idea_id!==id" in script
+    assert "Review failed. Inspect current records again before choosing." in script
+    assert "}catch(e){if(current===generation){clear();" in script
+
+
+def test_unknown_idea_and_invalid_identifier_fail_closed(monkeypatch):
+    app = FastAPI()
+    app.include_router(routes.router)
+    client = TestClient(app)
+    monkeypatch.setattr(routes, 'dashboard_session_valid', lambda token: token == 'test-session')
+    def unknown(_):
+        raise routes.pipeline.PipelineError('unknown idea')
+    monkeypatch.setattr(routes.opportunity_journey, 'journey', unknown)
+    headers = {'Authorization': 'OWG-Session test-session'}
+    assert client.get('/v1/review-choice-workbench/unknown', headers=headers).status_code == 404
+    assert client.get('/v1/review-choice-workbench/' + 'x'*129, headers=headers).status_code == 422
+    assert client.get('/v1/review-choice-workbench/unknown').status_code == 403
