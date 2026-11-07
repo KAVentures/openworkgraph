@@ -47,7 +47,7 @@ MAX_FAILURES = 5
 MAX_BACKOFF_SECONDS = 24 * 3600
 TICK_SECONDS = 30
 _TARGET = re.compile(r"^[A-Za-z0-9_:-]{1,80}$")
-_CLOCK = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\\Z".replace("\\\\Z", "\\Z"))
+_CLOCK = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]\Z")
 _QUIET_UNSET = object()
 _LOCK = threading.RLock()
 _RUN_LOCK = threading.Lock()
@@ -67,7 +67,7 @@ def _validate_quiet_hours(spec: Any) -> dict[str, str] | None:
         raise ScheduleError("quiet hours need timezone, start and end")
     zone = spec["timezone"]
     if (not isinstance(zone, str) or not 1 <= len(zone) <= 64
-            or zone.startswith("/") or ".." in zone or "\\\\" in zone):
+            or zone.startswith("/") or ".." in zone or "\" in zone):
         raise ScheduleError("unknown quiet-hours timezone")
     try:
         ZoneInfo(zone)
