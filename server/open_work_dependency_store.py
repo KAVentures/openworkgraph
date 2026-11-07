@@ -154,6 +154,53 @@ def purge_actor(path: str, *, scope: str, actor: str) -> int:
             "DELETE FROM declared_case_dependencies WHERE scope=? AND actor=?",
             (scope, actor)).rowcount
 
+def reconcile_current_reviewed_dependencies(
+    path: str, *, scope: str, actor: str,
+    scope_provider=None, snapshot_provider=None,
+) -> dict:
+    """Fail-closed read-through mirror of current retained, reviewed declarations.
+
+    Internal operator adapter only: callers must derive actor from an authenticated
+    local session. The provider defaults deliberately use the same consent/retention
+    and current Stripe account scope gates as the dashboard declaration routes.
+    No caller-supplied snapshot is accepted. Never expose this directly as a
+    public endpoint or agent authority.
+    """
+    from .open_work_case_declarations import (
+        CaseDeclarationError, list_case_declarations,
+    )
+    from .open_work_declaration_routes import _source_scope
+
+    _valid(scope, actor)
+    current_scope = scope_provider or _source_scope
+    current_snapshot = snapshot_provider or list_case_declarations
+
+    # The scoped provider must agree before AND after reading the reviewed
+    # declaration snapshot. On disconnect/replacement, purge this actor's
+    # mirror rather than retain a stale prerequisite graph.
+    if current_scope() != scope:
+        purge_actor(path, scope=scope, actor=actor)
+        raise CaseDeclarationError("source scope changed or disconnected")
+    snapshot = current_snapshot(scope)
+    if current_scope() != scope:
+        purge_actor(path, scope=scope, actor=actor)
+        raise CaseDeclarationError("source scope changed during review")
+    result = replace_reviewed_dependencies(
+        path, scope=scope, actor=actor, snapshot=snapshot)
+    if current_scope() != scope:
+        purge_actor(path, scope=scope, actor=actor)
+        raise CaseDeclarationError("source scope changed during reconciliation")
+    # The review ledger may have changed while SQLite was being updated.
+    # Require a stable, currently eligible snapshot; if not, erase the
+    # mirror instead of reporting a stale graph as current.
+    latest = current_snapshot(scope)
+    if latest != snapshot or current_scope() != scope:
+        purge_actor(path, scope=scope, actor=actor)
+        raise CaseDeclarationError("reviewed declarations changed during reconciliation")
+    return {**result, "current_review_rechecked": True,
+            "agent_execution_authorized": False}
+
+
 def replace_reviewed_dependencies(
     path: str, *, scope: str, actor: str, snapshot: dict,
 ) -> dict:
