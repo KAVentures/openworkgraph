@@ -37,6 +37,7 @@ class EvaluationTests(unittest.TestCase):
         out = evaluate_review_queue(review, labels)
         self.assertEqual((out["true_positive"], out["false_positive"], out["false_negative"]), (1, 2, 2))
         self.assertEqual(out["cross_case_contamination"], 1)
+        self.assertEqual(out["unrelated_false_positives"], 1)
         self.assertAlmostEqual(out["precision"], 1 / 3)
         self.assertAlmostEqual(out["recall"], 1 / 3)
         self.assertAlmostEqual(out["f1"], 1 / 3)
@@ -49,6 +50,7 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(out["true_positive"], 0)
         self.assertEqual(out["false_negative"], 1)
         self.assertEqual(out["cross_case_contamination"], 0)
+        self.assertEqual(out["unrelated_false_positives"], 0)
 
     def test_missing_gold_labels_refused(self):
         with self.assertRaisesRegex(ValueError, "unlabeled"):
