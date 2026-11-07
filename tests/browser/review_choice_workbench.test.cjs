@@ -15,7 +15,7 @@ async function scenario(title,responses,check){
  vm.runInNewContext(fs.readFileSync(path.resolve(__dirname,'../../dashboard/review_choice_workbench.js'),'utf8'),context);
  doc.DOMContentLoaded();
  const card=panel.children[0];assert.equal(card.id,'owgReviewChoiceWorkbench');
- const [input,load,status,results,details]=card.children.slice(2);
+ const [input,load,status,results,details]=card.children.slice(3);
  input.value='idea-1';await load.onclick();
  await check({input,load,status,results,details,calls:()=>calls});
  console.log('PASS '+title);
