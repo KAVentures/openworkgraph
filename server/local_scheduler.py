@@ -134,7 +134,8 @@ def create(kind: str, target_id: str, *, interval_minutes: int, confirm_schedule
         item = {"schedule_id": schedule_id, "kind": kind, "target_id": target_id,
                 "interval_minutes": interval_minutes, "enabled": True, "created_at": _iso(now),
                 "next_run_epoch": now + interval_minutes * 60, "last_run_epoch": None,
-                "last_result": None, "consecutive_failures": 0, "paused_reason": None, "history": []}
+                "last_result": None, "consecutive_failures": 0, "paused_reason": None, "history": [],
+                **({"unencrypted_local_backup_acknowledged": True} if kind == "local_backup" else {})}
         data["schedules"][schedule_id] = item
         _write(data)
     return _public(item)
