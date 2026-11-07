@@ -2928,11 +2928,15 @@ async def get_local_durable_reviewed_dependencies(request: Request, response: Re
             ValueError) as exc:
         # A failed consent-filtered review read must not leave a previous
         # durable mirror available to a later caller or local process.
-        # Do not mask the original failure if the purge itself also fails.
+        # If cleanup fails, report the unresolved revocation state rather
+        # than disguising it as an ordinary declaration validation failure.
+        # No stale dependency data may be returned on either failure path.
         try:
             await asyncio.to_thread(purge_actor, path, scope=scope, actor=actor)
-        except (OSError, sqlite3.DatabaseError, ValueError):
-            pass
+        except (OSError, sqlite3.DatabaseError, ValueError) as cleanup_exc:
+            raise HTTPException(
+                503, "durable dependency review cleanup unavailable"
+            ) from cleanup_exc
         raise _safe_error(exc) from None
     return {
         **result, "format": "openworkgraph.reviewed-durable-dependencies.v1",
