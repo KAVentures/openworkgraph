@@ -47,7 +47,7 @@ class ReviewQueueTests(unittest.TestCase):
             {"saved_history_access": "none"},
             {"authoritative": True},
             {"observed_pair_event_assignments": [pair("A", "F", ["e"] * 9)]},
-            {"observed_pair_event_assignments": [pair("A", "F", ["e"], proves_same_case=True)]},
+            {"observed_pair_event_assignments": [{**pair("A", "F", ["e"]), "proves_same_case": True}]},
         ):
             data = payload([pair("A", "F", ["e"])])
             data.update(change)
