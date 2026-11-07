@@ -92,7 +92,7 @@ def test_durable_route_purges_stale_mirror_when_review_read_fails(monkeypatch, t
     import hashlib
     import hmac
     actor = "dashboard:" + hmac.new(
-        b"local-test-secret", b"open-work:durable-local-owner:v1",
+        b"local-test-secret", b"open-work:durable-session-actor:v1:valid",
         hashlib.sha256,
     ).hexdigest()[:32]
     path = str(tmp_path / ".open_work_reviewed_dependencies.sqlite3")
@@ -121,7 +121,7 @@ def test_durable_route_purges_when_scope_revoked_after_reconciliation(monkeypatc
     scope = "owg:scope:" + "a" * 32
     a, b = "owg:w:" + "a" * 32, "owg:w:" + "b" * 32
     actor = "dashboard:" + hmac.new(
-        b"local-test-secret", b"open-work:durable-local-owner:v1",
+        b"local-test-secret", b"open-work:durable-session-actor:v1:valid",
         hashlib.sha256,
     ).hexdigest()[:32]
     path = str(tmp_path / ".open_work_reviewed_dependencies.sqlite3")
@@ -200,7 +200,7 @@ def test_durable_route_revoked_dashboard_session_purges_mirror(monkeypatch, tmp_
     scope = "owg:scope:" + "a" * 32
     a, b = "owg:w:" + "a" * 32, "owg:w:" + "b" * 32
     actor = "dashboard:" + hmac.new(
-        b"local-test-secret", b"open-work:durable-local-owner:v1",
+        b"local-test-secret", b"open-work:durable-session-actor:v1:valid",
         hashlib.sha256,
     ).hexdigest()[:32]
     path = str(tmp_path / ".open_work_reviewed_dependencies.sqlite3")
@@ -253,3 +253,43 @@ def test_durable_route_reports_cleanup_failure_after_invalid_review(monkeypatch,
             _request("valid"), Response()))
     assert exc.value.status_code == 503
     assert exc.value.detail == "durable dependency review cleanup unavailable"
+
+
+def test_durable_route_isolates_independent_dashboard_sessions(monkeypatch, tmp_path):
+    """One valid dashboard session cannot read another session's durable mirror."""
+    import hashlib
+    import hmac
+    from server import local_auth
+    from server import open_work_dependency_store as store
+
+    scope = "owg:scope:" + "a" * 32
+    a, b = "owg:w:" + "a" * 32, "owg:w:" + "b" * 32
+    path = str(tmp_path / ".open_work_reviewed_dependencies.sqlite3")
+    monkeypatch.setattr(routes, "dashboard_session_valid",
+                        lambda token: token in ("first", "second"))
+    monkeypatch.setattr(routes, "_source_scope", lambda: scope)
+    monkeypatch.setattr(routes, "_read_or_create_secret", lambda name: "local-test-secret")
+    monkeypatch.setattr(local_auth, "auth_dir", lambda: tmp_path)
+
+    def actor(token):
+        return "dashboard:" + hmac.new(
+            b"local-test-secret",
+            ("open-work:durable-session-actor:v1:" + token).encode(),
+            hashlib.sha256,
+        ).hexdigest()[:32]
+
+    def reconcile(path, **kwargs):
+        if kwargs["actor"] == actor("first"):
+            store.declare_dependency(
+                path, scope=scope, actor=kwargs["actor"],
+                case_id=a, prerequisite=b)
+        return {"reconciled": True}
+
+    monkeypatch.setattr(store, "reconcile_current_reviewed_dependencies", reconcile)
+    first = asyncio.run(routes.get_local_durable_reviewed_dependencies(
+        _request("first", "work_item_ref=" + a), Response()))
+    second = asyncio.run(routes.get_local_durable_reviewed_dependencies(
+        _request("second", "work_item_ref=" + a), Response()))
+    assert first["context"]["direct"] == [b]
+    assert second["context"]["direct"] == []
+    assert actor("first") != actor("second")
