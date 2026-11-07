@@ -191,10 +191,12 @@ def _decrypt(blob: bytes, passphrase: str | None) -> bytes:
     if not passphrase:
         raise BackupError("this backup is encrypted; a passphrase is required")
     head = len(ENCRYPTED_MAGIC)
+    if len(blob) < head + 16 + 12 + 16:
+        raise BackupError("encrypted backup is truncated or damaged")
     salt, nonce, body = blob[head:head + 16], blob[head + 16:head + 28], blob[head + 28:]
     try:
         return AESGCM(_key(passphrase, salt)).decrypt(nonce, body, ENCRYPTED_MAGIC)
-    except InvalidTag:
+    except (InvalidTag, ValueError):
         raise BackupError("wrong passphrase or damaged backup") from None
 
 
