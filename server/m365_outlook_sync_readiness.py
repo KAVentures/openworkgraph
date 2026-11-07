@@ -106,7 +106,7 @@ def extract_after_readiness(*, expected_generation, tenant, mailbox, folder,
         consent_delta_read=True, consent_local_export=True,
         confirm_removals_reviewed=True, opener=opener,
         membership_opener=membership_opener)
-    if result.get("status") != "review_required":
+    if type(result) is not dict or result.get("status") != "review_required":
         raise ReceiptError("Checkpoint-bound extraction not ready for review")
     # A checkpoint may advance between the first readiness inspection and
     # the delegated Graph read. Never label a result as approved for the
