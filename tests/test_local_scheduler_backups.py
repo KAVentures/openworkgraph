@@ -163,3 +163,54 @@ def test_other_existing_schedule_kinds_unchanged_and_no_unencrypted_ack_needed(s
     assert task["kind"] == "event_log_signals"
     assert "unencrypted_local_backup_acknowledged" not in task
     assert scheduler.delete(task["schedule_id"])
+
+
+def test_lookalike_and_replaced_scheduled_archive_are_never_rotated(store, monkeypatch):
+    folder = store / "backups"
+    folder.mkdir()
+    # A manual file can deliberately look identical to a scheduled archive.
+    manual_lookalike = folder / "owg-backup-scheduled-20200101T000000000000000000Z.zip"
+    manual_lookalike.write_bytes(b"manually placed, not owned by scheduler")
+    class Clock:
+        n = 0
+        @classmethod
+        def now(cls, tz):
+            cls.n += 1
+            return datetime(2026, 11, 7, tzinfo=timezone.utc) + timedelta(seconds=cls.n)
+    monkeypatch.setattr(automated, "datetime", Clock)
+    automated.run()
+    altered = automated._scheduled_archives(folder)[0]
+    altered.write_bytes(b"manual replacement of a previously owned archive")
+    for _ in range(17):
+        automated.run()
+    assert manual_lookalike.read_bytes() == b"manually placed, not owned by scheduler"
+    assert altered.read_bytes() == b"manual replacement of a previously owned archive"
+    assert len(automated._scheduled_archives(folder)) == 14
+    assert len(automated._load(folder)) == 15  # modified old archive kept for review
+
+
+def test_damaged_ownership_ledger_blocks_new_snapshot_and_never_prunes(store):
+    folder = store / "backups"
+    folder.mkdir()
+    (folder / ".owg-scheduled-backups-v1.json").write_text(
+        '{"version":1,"archives":[{"name":"../escape","bytes":1,"mtime_ns":1}]}',
+        encoding="utf-8",
+    )
+    with pytest.raises(automated.ScheduledBackupError, match="ledger_invalid"):
+        automated.run()
+    assert not list(folder.glob("owg-backup-scheduled-*.zip"))
+
+
+def test_external_ledger_symlink_is_not_read_or_overwritten(store):
+    if os.name == "nt":
+        pytest.skip("Windows symlink privileges vary")
+    folder = store / "backups"
+    folder.mkdir()
+    external = store / "private-outside.json"
+    external.write_text('{"some_other_configuration":true}', encoding="utf-8")
+    link = folder / ".owg-scheduled-backups-v1.json"
+    link.symlink_to(external)
+    with pytest.raises(automated.ScheduledBackupError, match="ledger_invalid"):
+        automated.run()
+    assert external.read_text() == '{"some_other_configuration":true}'
+    assert link.is_symlink()
