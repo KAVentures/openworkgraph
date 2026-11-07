@@ -112,6 +112,40 @@ class ReviewQueueTests(unittest.TestCase):
         self.assertTrue(review["unlisted_events_are_unassigned"])
         self.assertFalse(review["coverage_incomplete"])
 
+    def test_interleaved_two_cases_and_interruptions_keep_exact_event_provenance(self):
+        import json
+        import sqlite3
+        from server.work_resumption import resumption_candidates
+        db = sqlite3.connect(":memory:")
+        db.row_factory = sqlite3.Row
+        db.execute("CREATE TABLE events(event_id TEXT, observed_at TEXT, metadata_json TEXT)")
+        def metadata(case):
+            return json.dumps({
+                "resource_reference": {
+                    "resource_ref": "owg:r:" + case * 32,
+                    "provider": "github", "resource_kind": "issue"},
+                "file_reference": {"file_ref": "owg:f:" + case * 32}})
+        rows = [
+            ("a-old", "2026-10-12T09:00:00Z", metadata("a")),
+            ("b-old", "2026-10-12T09:01:00Z", metadata("b")),
+            ("a-new", "2026-10-14T10:00:00Z", metadata("a")),
+            ("b-new", "2026-10-14T10:01:00Z", metadata("b")),
+            ("a-return", "2026-10-14T10:15:00Z", metadata("a")),
+        ]
+        db.executemany("INSERT INTO events VALUES (?, ?, ?)", rows)
+        response = resumption_candidates(db, lease={"mode": "all_saved"})
+        review = response["event_assignment_review"]
+        by_event = {row["event_id"]: row for row in review["event_reviews"]}
+        self.assertEqual(set(by_event), {row[0] for row in rows})
+        self.assertTrue(all(len(row["candidate_resource_pairs"]) == 1 for row in by_event.values()))
+        for event_id, row in by_event.items():
+            expected = "a" if event_id.startswith("a-") else "b"
+            identities = row["candidate_resource_pairs"][0]
+            self.assertTrue(all(pointer[2].endswith(expected * 32) for pointer in identities))
+            self.assertFalse(row["confirmed_case"])
+        self.assertTrue(review["unlisted_events_are_unassigned"])
+        self.assertFalse(review["coverage_incomplete"])
+
     def test_authorized_empty_history_exposes_empty_review_contract(self):
         import sqlite3
         from server.work_resumption import resumption_candidates
