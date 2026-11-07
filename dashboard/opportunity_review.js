@@ -80,12 +80,19 @@
     // Missing sensitivity preserves the original comparison contract at 25%.
     const sensitivity=shared.labor_impact_sensitivity_percent===undefined?25:
       number(shared,'labor_impact_sensitivity_percent',0,100,'labor_impact_sensitivity_percent');
-    const scenarioHorizon=(gross,recurring,upfront,eligibleFraction,netMinutes)=>{
+    const scenarioHorizon=(gross,recurring,upfront,netMinutes)=>{
       const monthly=gross-recurring;
       const variation=sensitivity/100;
       const lowMonthly=Math.min(gross*(1-variation),gross*(1+variation))-recurring;
       const highMonthly=Math.max(gross*(1-variation),gross*(1+variation))-recurring;
-      const after=(months,monthlyValue)=>Number((months*monthlyValue-upfront).toFixed(2));
+      const after=(months,monthlyValue)=>{
+        const value=months*monthlyValue-upfront;
+        // Exact cents cannot be represented beyond the safe-number range;
+        // refuse rather than display a bogus precise financial projection.
+        if(!Number.isFinite(value)||Math.abs(value)*100>Number.MAX_SAFE_INTEGER)
+          throw new Error('Modeled horizon value exceeds the cent-precision range; reduce assumptions.');
+        return Number(value.toFixed(2));
+      };
       // At 100% eligibility and the same volume, does an optimistic
       // 12-month scenario cover both recurring costs and implementation?
       const grossAtFullEligibility=monthlyCases*netMinutes*hourly/60;
@@ -109,7 +116,7 @@
       if(alt.id==='human_only')return {id:alt.id,label:alt.label,baseline:true,eligible_cases_per_month:0,
         net_minutes_saved_per_case:0,assumed_hours_saved_per_month:0,gross_labor_value_per_month:0,
         net_monthly_value_before_other_costs:0,simple_payback_months:null,
-        ...scenarioHorizon(0,0,0,0,0),
+        ...scenarioHorizon(0,0,0,0),
         autonomous_business_actions:false,human_approval_required:false,requires_confirmed_business_rules:false};
       const row=rows[alt.id]||{};
       const tag=field=>alt.id+'.'+field;
@@ -127,7 +134,7 @@
         net_minutes_saved_per_case:Number(netMinutes.toFixed(2)),assumed_hours_saved_per_month:Number(hours.toFixed(2)),
         gross_labor_value_per_month:Number(gross.toFixed(2)),net_monthly_value_before_other_costs:Number(net.toFixed(2)),
         simple_payback_months:net>0?Number((oneTime/net).toFixed(2)):null,
-        ...scenarioHorizon(gross,recurring,oneTime,coverage,netMinutes),
+        ...scenarioHorizon(gross,recurring,oneTime,netMinutes),
         autonomous_business_actions:alt.autonomous_actions,human_approval_required:alt.id==='ai_agent_with_approval',
         requires_confirmed_business_rules:alt.needs_rules};
     });
