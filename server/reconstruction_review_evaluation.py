@@ -78,7 +78,7 @@ def evaluate_review_queue(review: dict[str, Any], gold: list[dict[str, Any]]) ->
                 raise ValueError("single-pair event incorrectly classified")
             proposals[key] = candidates[0]
 
-    tp = fp = fn = contamination = 0
+    tp = fp = fn = contamination = unrelated_false_positives = 0
     for key, truth in expected.items():
         pred = proposals.get(key)
         if pred is not None and pred == truth:
@@ -87,6 +87,8 @@ def evaluate_review_queue(review: dict[str, Any], gold: list[dict[str, Any]]) ->
             fp += 1
             if truth is not None:
                 contamination += 1
+            else:
+                unrelated_false_positives += 1
         if truth is not None and pred != truth:
             fn += 1
     precision = tp / (tp + fp) if tp + fp else 0.0
@@ -96,6 +98,7 @@ def evaluate_review_queue(review: dict[str, Any], gold: list[dict[str, Any]]) ->
         "positive_gold_events": sum(x is not None for x in expected.values()),
         "true_positive": tp, "false_positive": fp, "false_negative": fn,
         "cross_case_contamination": contamination,
+        "unrelated_false_positives": unrelated_false_positives,
         "abstentions": abstentions,
         "precision": precision, "recall": recall,
         "f1": 2 * precision * recall / (precision + recall) if precision + recall else 0.0,
