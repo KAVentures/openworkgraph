@@ -103,7 +103,9 @@ memory. A misconfigured producer could require immense allocation.
 The channel now counts the gap arithmetically and keeps **at most 1,000 recent
 missing sequence numbers** for recovery. When more gaps exist than fit, the
 existing `missing_truncated` flag is set and remains set even if some retained
-IDs subsequently arrive. `new_missing_sequences` is an **inferred difference
+IDs subsequently arrive. The report-channel dashboard explicitly warns that a
+truncated recovery window cannot prove completeness, even if its current
+retained missing list is empty. `new_missing_sequences` is an **inferred difference
 in signed sequence numbers**, never a verified count of lost deliveries. Signed
 sequence numbers outside **1 to 2⁵³−1** are refused, ensuring they are exactly
 representable by browser and JSON clients.
