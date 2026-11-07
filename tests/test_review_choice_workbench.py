@@ -72,3 +72,12 @@ def test_unknown_idea_and_invalid_identifier_fail_closed(monkeypatch):
     assert client.get('/v1/review-choice-workbench/unknown', headers=headers).status_code == 404
     assert client.get('/v1/review-choice-workbench/' + 'x'*129, headers=headers).status_code == 422
     assert client.get('/v1/review-choice-workbench/unknown').status_code == 403
+
+
+def test_project_switch_invalidates_previously_inspected_review():
+    """A different export must not inherit the preceding export's reviewed evidence."""
+    script = (Path(__file__).resolve().parents[1] / 'dashboard/review_choice_workbench.js').read_text()
+    assert "choice.addEventListener('change',()=>{generation++;" in script
+    assert "details.replaceChildren();review.disabled=!snapshot;" in script
+    assert "choice.value!==projectId||input.value.trim()!==id" in script
+    assert "current===generation&&snapshot&&choice.value===projectId" in script
