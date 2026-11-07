@@ -143,12 +143,12 @@
         for(const [to,label] of [['acknowledged','Acknowledge'],['resolved','Resolve'],['open','Reopen']]){
           if(to===i.status)continue;
           const b=button(label,'secondary');b.setAttribute('aria-label',label+' incident '+i.incident_id);
-          b.onclick=async()=>{try{await api('/v1/automation-monitoring/incidents/'+encodeURIComponent(i.incident_id)+'/triage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:to,note:note.value,expected_last_seen:i.last_seen})});await renderIncidents();}catch(error){status.textContent=error.message;}};
+          b.onclick=async()=>{try{await api('/v1/automation-monitoring/incidents/'+encodeURIComponent(i.incident_id)+'/triage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:to,note:note.value,expected_last_seen:i.last_seen,expected_review_revision:i.review_revision})});await renderIncidents();}catch(error){status.textContent=error.message;}};
           box.appendChild(b);
         }
         list.appendChild(box);
       });
-      incidentHost.replaceChildren(el('h3','Incidents'),el('div',data.counts.open+' open · '+data.counts.acknowledged+' acknowledged · '+data.counts.resolved+' resolved. Triage records your decision only; nothing is re-run or replayed.','muted'),data.incidents.length?list:el('div','No incidents for this deployment.','muted'));
+      incidentHost.replaceChildren(el('h3','Incidents'),el('div',data.counts.open+' open · '+data.counts.acknowledged+' acknowledged · '+data.counts.resolved+' resolved. Triage is version-checked against other human reviews and new reports. Refresh and retry if it changes. Nothing is re-run or replayed.','muted'),data.incidents.length?list:el('div','No incidents for this deployment.','muted'));
     }
     channelButton.onclick=()=>renderChannel().catch(error=>{status.textContent=error.message;});
     incidentButton.onclick=()=>renderIncidents().catch(error=>{status.textContent=error.message;});
