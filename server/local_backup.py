@@ -552,6 +552,14 @@ def restore_backup(path: Path, *, passphrase: str | None = None, replace: bool =
                 for target, _ in targets
             ):
                 raise BackupError("restore target was populated after preflight; use --replace")
+            if os.name == "nt" and lock is not None:
+                # Windows forbids renaming a folder containing an open file.
+                # Release the collector handle only after staging completes,
+                # then perform one last read-only running-recorder check.
+                lock.release()
+                lock = None
+                if _recorder_running(data):
+                    raise BackupError("recorder restarted during restore; no data was replaced")
             stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
             moved: list[tuple[Path, Path]] = []
             replaced: list[Path] = []
