@@ -349,3 +349,12 @@ def test_empty_archive_cannot_erase_existing_nonempty_store(tmp_path, monkeypatc
     with pytest.raises(backup.BackupError, match="empty backup"):
         backup.restore_backup(archive, replace=True)
     assert (live / "work.txt").read_text() == "DO NOT ERASE"
+
+
+def test_truncated_encrypted_backup_returns_safe_error(site):
+    root, data, _auth, _plain = site
+    truncated = root / "truncated.zip"
+    truncated.write_bytes(backup.ENCRYPTED_MAGIC + b"few")
+    with pytest.raises(backup.BackupError, match="truncated or damaged"):
+        backup.verify_backup(truncated, passphrase="synthetic correct passphrase")
+    assert (data / "workflow_observer.db").is_file()
