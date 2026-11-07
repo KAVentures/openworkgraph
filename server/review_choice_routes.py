@@ -26,6 +26,14 @@ def choices(request: Request, idea_id: str):
     except pipeline.PipelineError as exc:
         raise HTTPException(404 if str(exc) == "unknown idea" else 422, str(exc)) from None
     process = journey["process_status"]
+    # A partial or ambiguous provenance set cannot establish a review basis.
+    # The UI must not silently accept the first 64 origins or a duplicate export.
+    origins = journey["dataset_origins"]
+    if len(origins) > 64:
+        raise HTTPException(409, "Dataset provenance exceeds review limit; narrow selection")
+    project_ids = [p["project_id"] for p in journey["projects"]]
+    if len(project_ids) != len(set(project_ids)):
+        raise HTTPException(409, "Duplicate project identities; re-export before review")
     projects = []
     for project in journey["projects"]:
         blockers = []
@@ -51,7 +59,7 @@ def choices(request: Request, idea_id: str):
     return JSONResponse({"format": "openworkgraph.review-choices.v1",
                          "idea": journey["idea"], "process_status": process.get("status", "unknown"),
                          "process_reference": process.get("process_reference"),
-                         "dataset_origins": [{"status": o.get("status"), "source_content_sha256": o.get("source_content_sha256"), "selection_sha256": o.get("selection_sha256")} for o in journey["dataset_origins"][:64]],
+                         "dataset_origins": [{"status": o.get("status"), "source_content_sha256": o.get("source_content_sha256"), "selection_sha256": o.get("selection_sha256")} for o in origins],
                          "dataset_origin_check_available": journey["dataset_origin_check_available"],
                          "projects": projects, "projects_truncated": journey["projects_truncated"],
                          "execution_authorized": False, "source_read_authorized": False,
