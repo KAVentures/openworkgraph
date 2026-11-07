@@ -111,13 +111,41 @@
             // second approval implementation. Preflight is non-authorizing; the
             // pipeline requires its own current-revision check on any decision.
             const continueReview=node('button','Open opportunity decision and handoff');continueReview.type='button';
-            continueReview.onclick=()=>{
+            continueReview.onclick=async()=>{
               if(token!==generation||choice.value!==projectId||input.value.trim()!==id)return;
               const pipelineCard=document.getElementById('owgPipelineCard');
               if(!pipelineCard){status.textContent='Automation pipeline unavailable. Reopen the dashboard and inspect again.';return;}
-              window.dispatchEvent(new CustomEvent('owg-pipeline-open',{detail:{idea_id:id}}));
-              pipelineCard.scrollIntoView({block:'start',behavior:'auto'});
-              status.textContent='Opened the current opportunity in the pipeline. Review the decision there; no agent access was granted.';
+              // The opportunity can change after the first preflight. Revalidate
+              // immediately before crossing into the decision surface, fail closed.
+              continueReview.disabled=true;
+              status.textContent='Rechecking current evidence before opening the decision…';
+              try{
+                await window.__owgAuthReady;
+                const response=await fetch('/v1/review-choice-workbench/'+encodeURIComponent(id)+'/preflight',{
+                  method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},
+                  body:JSON.stringify({project_id:projectId,idea_revision:snapshot.idea.revision,
+                    spec_sha256:selected.spec_sha256,archive_sha256:selected.archive_sha256,
+                    process_status:snapshot.process_status,process_reference:snapshot.process_reference,
+                    dataset_origins:snapshot.dataset_origins,
+                    dataset_origin_check_available:snapshot.dataset_origin_check_available,
+                    blockers:selected.blockers})
+                });
+                if(token!==generation||choice.value!==projectId||input.value.trim()!==id)return;
+                if(!response.ok)throw new Error('Decision preflight refused ('+response.status+').');
+                const result=await response.json();
+                if(result.format!=='openworkgraph.review-preflight.v1'||result.idea_id!==id||
+                   result.idea_revision!==snapshot.idea.revision||result.project_id!==projectId||
+                   result.spec_sha256!==selected.spec_sha256||result.archive_sha256!==selected.archive_sha256||
+                   result.review_required!==true||result.execution_authorized!==false||
+                   result.source_read_authorized!==false||result.verified_business_outcomes!==false||
+                   JSON.stringify(result.blockers)!==JSON.stringify(selected.blockers))
+                  throw new Error('Decision evidence changed.');
+                window.dispatchEvent(new CustomEvent('owg-pipeline-open',{detail:{idea_id:id}}));
+                pipelineCard.scrollIntoView({block:'start',behavior:'auto'});
+                status.textContent='Opened current opportunity decision; no agent access was granted.';
+              }catch(e){
+                if(token===generation){clear();status.textContent='Decision review expired. Inspect again. '+e.message;}
+              }finally{continueReview.disabled=false;}
             };
             details.append(continueReview);
             status.textContent='Current export basis confirmed by server. Continue to the existing opportunity decision; agent handoff still requires separate authorization.';
