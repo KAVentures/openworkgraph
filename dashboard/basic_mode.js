@@ -326,6 +326,19 @@
         <div class="muted">Saves a verified copy of everything OpenWorkGraph keeps on this computer to the backup folder. It includes recorded interaction detail, such as sampled pointer movement, so keep it as private as the computer itself. Add a passphrase (12+ characters) to also include this computer's keys and encrypt the file; without one the file is not encrypted. Restoring is done with OpenWorkGraph closed: <code>python -m server.local_backup restore</code>.</div>
         <div class="pv-delete"><input type="password" id="pvBackupPass" autocomplete="new-password" placeholder="Optional passphrase" aria-label="Backup passphrase (optional)"><button type="button" class="secondary" id="pvBackupCreate">Back up now</button></div>
         <div class="muted" id="pvBackupStatus" role="status" aria-live="polite"></div>
+        <div class="pv-row" style="margin-top:12px">
+          <div>
+            <h3>Inspect a saved backup before restoring</h3>
+            <div class="muted">Checks an existing backup without changing any data. Encrypted backups must be inspected with the offline command-line tool, never by entering a passphrase here. Restore itself is offline-only.</div>
+            <label for="pvBackupChoice" class="muted">Backup in this computer's backup folder</label>
+            <select id="pvBackupChoice" aria-label="Saved backup"><option value="">Loading saved backups…</option></select>
+            <div class="muted" id="pvBackupPlan" role="status" aria-live="polite">Select a backup to inspect.</div>
+          </div>
+          <div class="pv-control">
+            <button type="button" class="secondary" id="pvBackupRefresh">Refresh list</button>
+            <button type="button" class="secondary" id="pvBackupInspect" disabled>Inspect restore safety</button>
+          </div>
+        </div>
       </div>
       <div class="muted pv-more">More controls (separate retention for agents, saved sessions, browser profiles, organization sharing) are in the <button type="button" class="linkish" id="pvShowAdvanced">Advanced</button> view.</div>`;
     main.insertBefore(panel, $('#panel-settings') || null);
@@ -871,16 +884,97 @@
       } catch (error) { depthBox('pvDepthStatus').textContent = error.message || 'Could not delete interaction detail.'; }
     };
     loadDepth();
+    // All recovery controls are read-only. No dashboard control can execute a restore
+    // or transmit a recovery passphrase to the preflight endpoint.
+    const backupChoice = panel.querySelector('#pvBackupChoice');
+    const backupRefresh = panel.querySelector('#pvBackupRefresh');
+    const backupInspect = panel.querySelector('#pvBackupInspect');
+    const backupPlan = panel.querySelector('#pvBackupPlan');
+    let listedBackups = [], backupEpoch = 0;
+    async function refreshBackupList(preferred = '') {
+      const epoch = ++backupEpoch;
+      backupRefresh.disabled = true;
+      backupInspect.disabled = true;
+      backupPlan.textContent = 'Reading saved backups on this computer…';
+      try {
+        const result = await api('/v1/local-backups');
+        if (epoch !== backupEpoch) return;
+        listedBackups = Array.isArray(result.backups) ? result.backups.filter(item =>
+          item && typeof item.name === 'string' && item.name.startsWith('owg-backup-')) : [];
+        const previous = preferred || backupChoice.value;
+        backupChoice.replaceChildren();
+        const empty = document.createElement('option');
+        empty.value = ''; empty.textContent = listedBackups.length ? 'Choose a saved backup' : 'No saved backups';
+        backupChoice.appendChild(empty);
+        for (const item of listedBackups) {
+          const option = document.createElement('option');
+          option.value = item.name;
+          option.textContent = item.name + (item.encrypted ? ' (encrypted — offline CLI)' : '');
+          backupChoice.appendChild(option);
+        }
+        if (listedBackups.some(item => item.name === previous)) backupChoice.value = previous;
+        backupInspect.disabled = !backupChoice.value;
+        backupPlan.textContent = listedBackups.length
+          ? 'Choose a backup and inspect its integrity and restore blockers. No data will be changed.'
+          : 'No backups found in the configured local backup folder.';
+      } catch (error) {
+        if (epoch !== backupEpoch) return;
+        listedBackups = [];
+        backupChoice.replaceChildren();
+        backupInspect.disabled = true;
+        backupPlan.textContent = error.message || 'Could not list local backups.';
+      } finally {
+        if (epoch === backupEpoch) backupRefresh.disabled = false;
+      }
+    }
+    backupRefresh.onclick = () => refreshBackupList();
+    backupChoice.onchange = () => {
+      backupEpoch++;
+      backupRefresh.disabled = false;
+      backupInspect.disabled = !backupChoice.value;
+      backupPlan.textContent = 'Selection changed. Inspect the chosen backup for current results.';
+    };
+    backupInspect.onclick = async () => {
+      const name = backupChoice.value;
+      const selected = listedBackups.find(item => item.name === name);
+      if (!selected) { backupPlan.textContent = 'Choose a saved backup first.'; return; }
+      if (selected.encrypted) {
+        backupPlan.textContent = 'Encrypted backup: close OpenWorkGraph and use python -m server.local_backup plan with --passphrase-env. No passphrase is sent from this screen.';
+        return;
+      }
+      const epoch = ++backupEpoch;
+      backupInspect.disabled = true;
+      backupPlan.textContent = 'Verifying backup contents and checking whether offline restore is safe…';
+      try {
+        const plan = await api('/v1/local-backups/preflight', send('POST', {name}));
+        if (epoch !== backupEpoch || name !== backupChoice.value) return;
+        const files = Number(plan.file_count) || 0;
+        const bytes = Number(plan.total_bytes) || 0;
+        const outcome = plan.ready
+          ? 'The archive passes integrity checks and has no current preflight blockers.'
+          : 'Offline restore is blocked: ' + (Array.isArray(plan.blockers) ? plan.blockers.join('; ') : 'unknown reason');
+        backupPlan.textContent = `Verified ${files} archived files (${bytes.toLocaleString()} bytes), OWG version ${String(plan.owg_version || 'unknown')}. ${outcome} No files were changed. To restore, first close OpenWorkGraph, then use python -m server.local_backup restore with the archive path and --replace when required; run the CLI preflight again while closed.`;
+      } catch (error) {
+        if (epoch === backupEpoch && name === backupChoice.value) {
+          backupPlan.textContent = (error.message || 'Backup verification failed.') + ' No restore was attempted.';
+        }
+      } finally {
+        if (epoch === backupEpoch) backupInspect.disabled = !backupChoice.value;
+      }
+    };
     panel.querySelector('#pvBackupCreate').onclick = async () => {
       const status = panel.querySelector('#pvBackupStatus');
       const pass = panel.querySelector('#pvBackupPass');
       status.textContent = 'Backing up…';
       try {
         const result = await api('/v1/local-backups', send('POST', pass.value ? {passphrase: pass.value} : {}));
-        pass.value = '';
         status.textContent = `Saved ${result.file_count} files to ${result.archive}${result.encrypted ? ' (encrypted, includes keys)' : ' (keys not included)'}.`;
+        pass.value = '';
+        await refreshBackupList();
       } catch (error) { status.textContent = error.message || 'Backup failed.'; }
+      finally { pass.value = ''; }
     };
+    refreshBackupList();
     panel.querySelector('#pvScreenCaptureSwitch').onclick = async () => {
       const enabled = privacy.screen?.mode === 'full';
       if (!enabled && !confirm('Turn on full screen capture? Every monitor is saved at full resolution on each window switch, click, scroll and interval, including anything personal or confidential that is visible. Images stay on this computer.')) return;
