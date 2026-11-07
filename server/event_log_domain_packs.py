@@ -365,14 +365,221 @@ SALES_LEAD_1_0_0: dict[str, Any] = {
     ],
 }
 
+
+CUSTOMER_ONBOARDING_1_0_0: dict[str, Any] = {
+    "format": FORMAT, "pack_id": "customer_onboarding", "version": "1.0.0",
+    "title": "Customer onboarding and activation",
+    "reference_goal": "Customer onboarding to recorded activation reference lifecycle",
+    "description": ("Review the recorded handoff from an opened customer onboarding case through access "
+                    "provisioning and activation confirmation. Inspect elapsed time, repeated rework and missing "
+                    "or out-of-order steps using the selected log's case identities."),
+    "object_types": [
+        {"role": "onboarding_case", "label": "Onboarding case", "required": True},
+    ],
+    "activities": [
+        {"role": "case_opened", "label": "Open onboarding case", "required": True},
+        {"role": "handoff_received", "label": "Receive handoff", "required": False},
+        {"role": "requirements_verified", "label": "Verify prerequisites", "required": False},
+        {"role": "access_provisioned", "label": "Provision access", "required": True},
+        {"role": "activation_confirmed", "label": "Confirm activation", "required": True},
+        {"role": "rework_requested", "label": "Request rework", "required": False},
+        {"role": "case_closed", "label": "Close case", "required": False},
+    ],
+    "parameters": [
+        {"name": "provision_hours", "label": "Provision within (elapsed hours of opening)", "unit": "hours",
+         "default": 48, "min": 0.25, "max": 8760},
+        {"name": "activation_days", "label": "Confirm activation within (elapsed days of provisioning)",
+         "unit": "days", "default": 14, "min": 1, "max": 365},
+    ],
+    "metrics": [
+        {"case_type": "@onboarding_case",
+         "metric": {"name": "onboarding_open_to_provision", "kind": "time_between",
+                    "from_activity": "@case_opened", "to_activity": "@access_provisioned"}},
+        {"case_type": "@onboarding_case",
+         "metric": {"name": "onboarding_provision_to_activation", "kind": "time_between",
+                    "from_activity": "@access_provisioned", "to_activity": "@activation_confirmed"}},
+        {"case_type": "@onboarding_case",
+         "metric": {"name": "onboarding_open_to_activation", "kind": "time_between",
+                    "from_activity": "@case_opened", "to_activity": "@activation_confirmed"}},
+        {"case_type": "@onboarding_case",
+         "metric": {"name": "onboarding_rework_events", "kind": "activity_count",
+                    "activity": "@rework_requested"}},
+    ],
+    "compliance": [
+        {"case_type": "@onboarding_case",
+         "rule": {"template": "precedence", "a": "@case_opened", "b": "@access_provisioned"}},
+        {"case_type": "@onboarding_case",
+         "rule": {"template": "precedence", "a": "@requirements_verified", "b": "@access_provisioned"}},
+        {"case_type": "@onboarding_case",
+         "rule": {"template": "response_within", "a": "@case_opened", "b": "@access_provisioned",
+                  "seconds": "$provision_hours"}},
+        {"case_type": "@onboarding_case",
+         "rule": {"template": "response_within", "a": "@access_provisioned", "b": "@activation_confirmed",
+                  "seconds": "$activation_days"}},
+        {"case_type": "@onboarding_case",
+         "rule": {"template": "precedence", "a": "@activation_confirmed", "b": "@case_closed"}},
+        {"case_type": "@onboarding_case",
+         "rule": {"template": "existence", "a": "@activation_confirmed", "min": 0, "max": 1}},
+    ],
+    "object_rules": [],
+    "reference_model": {
+        "types": [
+            {"object_type": "@onboarding_case",
+             "steps": ["@case_opened", {"optional": "@handoff_received"},
+                       {"optional": "@requirements_verified"}, "@access_provisioned",
+                       "@activation_confirmed", {"optional": "@case_closed"}]},
+        ],
+        "arcs": [
+            {"activity": "@case_opened", "object_type": "@onboarding_case", "variable": False},
+            {"activity": "@handoff_received", "object_type": "@onboarding_case", "variable": False},
+            {"activity": "@requirements_verified", "object_type": "@onboarding_case", "variable": False},
+            {"activity": "@access_provisioned", "object_type": "@onboarding_case", "variable": False},
+            {"activity": "@activation_confirmed", "object_type": "@onboarding_case", "variable": False},
+            {"activity": "@case_closed", "object_type": "@onboarding_case", "variable": False},
+        ],
+    },
+    "assumptions": [
+        "The mapping must use a stable, authorized onboarding case identifier; equal case IDs from "
+        "different sources are not evidence that the same customer was involved.",
+        "The reference lifecycle shows a simple successful path; cancelled, incomplete, exceptional "
+        "or unobserved cases can appear as missing responses or model deviations.",
+        "Access provisioned and activation confirmed are event labels asserted by the supplied log. "
+        "This pack cannot validate current entitlement, source-of-truth provisioning or customer success.",
+        "The prerequisite-order rule applies only when the optional verification step is mapped. "
+        "Not every onboarding process requires the same approvals or controls.",
+        "A second activation event is flagged for review, not assumed to be a second customer or "
+        "incorrect action. Retries, corrections and multi-product activations may be legitimate.",
+        "The reference path excludes rework, which is counted separately and may appear as a deviation.",
+        "Durations use the first recorded occurrence of mapped activities and include nights, weekends, "
+        "waiting and missing history; they are not employee effort or customer conversion rates.",
+        "Response rules evaluate each recorded initiating event, including those without an observed "
+        "completion. Their targets are editable examples, not validated contractual service levels.",
+        "This pack does not import CRM/identity records, join users, grant execution, certify compliance "
+        "or independently verify any customer outcome.",
+    ],
+}
+
+
+EMPLOYEE_OFFBOARDING_1_0_0: dict[str, Any] = {
+    "format": FORMAT, "pack_id": "employee_offboarding", "version": "1.0.0",
+    "title": "Employee offboarding and access revocation",
+    "reference_goal": "Recorded offboarding initiation to access-revocation and case-review lifecycle",
+    "description": (
+        "Examine employee offboarding case events: elapsed time to the logged access revocation, "
+        "missing/late/out-of-order or duplicate revocation events, optional managerial approval, "
+        "asset return, closure and review. Only supplied event evidence is checked, not live account entitlements."
+    ),
+    "object_types": [
+        {"role": "offboarding_case", "label": "Offboarding case", "required": True},
+    ],
+    "activities": [
+        {"role": "offboarding_started", "label": "Start offboarding", "required": True},
+        {"role": "manager_approved", "label": "Record manager approval", "required": False},
+        {"role": "access_revoked", "label": "Record access revocation", "required": True},
+        {"role": "asset_returned", "label": "Record asset return", "required": False},
+        {"role": "review_completed", "label": "Record completion review", "required": False},
+        {"role": "case_closed", "label": "Close offboarding case", "required": False},
+    ],
+    "parameters": [
+        {"name": "revocation_hours", "label": "Log revocation within (elapsed hours of start)",
+         "unit": "hours", "default": 24, "min": 0.25, "max": 8760},
+        {"name": "closure_days", "label": "Close case within (elapsed days of start)",
+         "unit": "days", "default": 7, "min": 1, "max": 365},
+    ],
+    "metrics": [
+        {"case_type": "@offboarding_case", "metric": {
+            "name": "offboarding_start_to_revocation", "kind": "time_between",
+            "from_activity": "@offboarding_started", "to_activity": "@access_revoked"}},
+        {"case_type": "@offboarding_case", "metric": {
+            "name": "offboarding_start_to_close", "kind": "time_between",
+            "from_activity": "@offboarding_started", "to_activity": "@case_closed"}},
+        {"case_type": "@offboarding_case", "metric": {
+            "name": "offboarding_revocation_events", "kind": "activity_count",
+            "activity": "@access_revoked"}},
+        {"case_type": "@offboarding_case", "metric": {
+            "name": "offboarding_start_to_approval", "kind": "time_between",
+            "from_activity": "@offboarding_started", "to_activity": "@manager_approved"}},
+        {"case_type": "@offboarding_case", "metric": {
+            "name": "offboarding_return_events", "kind": "activity_count",
+            "activity": "@asset_returned"}},
+    ],
+    "compliance": [
+        {"case_type": "@offboarding_case", "rule": {
+            "template": "response_within", "a": "@offboarding_started",
+            "b": "@access_revoked", "seconds": "$revocation_hours"}},
+        {"case_type": "@offboarding_case", "rule": {
+            "template": "precedence", "a": "@offboarding_started", "b": "@access_revoked"}},
+        {"case_type": "@offboarding_case", "rule": {
+            "template": "precedence", "a": "@manager_approved", "b": "@access_revoked"}},
+        {"case_type": "@offboarding_case", "rule": {
+            "template": "precedence", "a": "@access_revoked", "b": "@case_closed"}},
+        {"case_type": "@offboarding_case", "rule": {
+            "template": "existence", "a": "@access_revoked", "min": 1, "max": 1}},
+        {"case_type": "@offboarding_case", "rule": {
+            "template": "response_within", "a": "@offboarding_started",
+            "b": "@case_closed", "seconds": "$closure_days"}},
+        {"case_type": "@offboarding_case", "rule": {
+            "template": "segregation_of_duties", "a": "@manager_approved",
+            "b": "@access_revoked"}},
+    ],
+    "object_rules": [],
+    "reference_model": {
+        "types": [
+            {"object_type": "@offboarding_case", "steps": [
+                "@offboarding_started",
+                {"optional": "@manager_approved"},
+                "@access_revoked",
+                {"optional": "@asset_returned"},
+                {"optional": "@review_completed"},
+                {"optional": "@case_closed"},
+            ]},
+        ],
+        "arcs": [
+            {"activity": "@offboarding_started", "object_type": "@offboarding_case", "variable": False},
+            {"activity": "@manager_approved", "object_type": "@offboarding_case", "variable": False},
+            {"activity": "@access_revoked", "object_type": "@offboarding_case", "variable": False},
+            {"activity": "@asset_returned", "object_type": "@offboarding_case", "variable": False},
+            {"activity": "@review_completed", "object_type": "@offboarding_case", "variable": False},
+            {"activity": "@case_closed", "object_type": "@offboarding_case", "variable": False},
+        ],
+    },
+    "assumptions": [
+        "Every case ID represents one selected offboarding event sequence, as asserted by the supplied mapping; "
+        "colliding IDs across accounts, employees, providers or tenants must be separated before import.",
+        "A recorded access-revocation activity does NOT prove that every identity provider, device, role, "
+        "session, API token, shared credential or third-party application actually revoked access. "
+        "The pack does not query any directory, identity provider or live entitlement.",
+        "The revocation and closure targets are elapsed wall-clock windows, not validated legal, "
+        "contractual or policy deadlines until the owner reviews and configures them.",
+        "A missing revocation activity indicates absent evidence in this log, not proof access remains. "
+        "Partial exports, asynchronous feeds and source deletion can all produce missing events.",
+        "A repeated revocation record is a review candidate, not evidence of duplicated permissions "
+        "or a second deprovisioning action. Retries and independent application revocations may be legitimate.",
+        "Manager approval, asset return, completed review and closure are optional mapped steps; "
+        "only rules and metrics with mapped roles apply. Absence of an unmapped optional role does not "
+        "mean policy controls were satisfied or intentionally omitted.",
+        "When manager approval is mapped, an access-revocation event lacking an earlier manager-approval "
+        "event is flagged for review; emergency or exemption cases may legitimately follow another "
+        "authorized procedure. The pack cannot determine those exceptions from activity labels.",
+        "Segregation of duties depends on actual recorded actor identities. If resource/actor labels "
+        "are absent, the result is unknown and not treated as verified separation.",
+        "Timing in supplied event logs is not employee effort saved, verified security compliance, "
+        "an authorization to delete accounts, or a source-system proof of business outcomes.",
+    ],
+}
+
 PACKS: dict[str, dict[str, dict[str, Any]]] = {"order_to_cash": {"1.0.0": ORDER_TO_CASH_1_0_0},
                                               "procure_to_pay": {"1.0.0": PROCURE_TO_PAY_1_0_0},
                                               "service_management": {"1.0.0": SERVICE_MANAGEMENT_1_0_0},
-                                              "sales_lead_management": {"1.0.0": SALES_LEAD_1_0_0}}
+                                              "sales_lead_management": {"1.0.0": SALES_LEAD_1_0_0},
+                                              "customer_onboarding": {"1.0.0": CUSTOMER_ONBOARDING_1_0_0},
+                                              "employee_offboarding": {"1.0.0": EMPLOYEE_OFFBOARDING_1_0_0}}
 
 
 class _Strict(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # Never persist NaN or Infinity in a policy target/digest. They otherwise
+    # bypass ordinary inclusive range checks because comparisons are unordered.
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 
 class Mapping(_Strict):

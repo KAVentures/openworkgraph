@@ -57,21 +57,49 @@ const path=require('node:path');
    const incidentsPanel=page.locator('#owgMonitorIncidentPanel');
    for(const kind of ['Failed runs','Lost reports','Reused sequence numbers','Rejected signatures'])await incidentsPanel.getByText(new RegExp('^'+kind)).first().waitFor();
    const failed=incidentsPanel.locator('fieldset').filter({hasText:'Step: Charge card'});
+   const staleReview=await page.evaluate(async()=>{
+     const r=await fetch('/v1/automation-monitoring/incidents');
+     if(!r.ok)throw Error(await r.text());
+     return (await r.json()).incidents.find(x=>x.kind==='run_failures');
+   });
+   assert.equal(staleReview.review_revision,0);
    await failed.getByRole('textbox').fill('Processor outage');
    await failed.getByRole('button',{name:/^Resolve incident/}).click();
    await incidentsPanel.locator('fieldset').filter({hasText:'Processor outage'}).getByText(/Failed runs · resolved/).waitFor();
-   await send(5,report(['f5'],'failed'),secret);
+   const conflict=await page.evaluate(async stale=>{
+     const r=await fetch('/v1/automation-monitoring/incidents/'+encodeURIComponent(stale.incident_id)+'/triage',{
+       method:'POST',headers:{'Content-Type':'application/json'},
+       body:JSON.stringify({status:'open',note:'stale reviewer must not overwrite',
+         expected_last_seen:stale.last_seen,expected_review_revision:stale.review_revision})});
+     return {code:r.status,body:await r.json()};
+   },staleReview);
+   assert.equal(conflict.code,409,'stale human review is refused even without a newer run');
+   assert.match(conflict.body.detail,/another review/);
+   assert.match(await failed.textContent(),/2 distinct retained runs/);
+   const repeated=await send(5,report(['f1','f2'],'failed'),secret);
+   assert.equal(repeated.status,200);
+   assert.deepEqual(repeated.body.incidents_updated,[],'a new signed envelope with existing runs is not a new incident');
+   await page.locator('#owgMonitorIncidents').click();
+   await incidentsPanel.locator('fieldset').filter({hasText:'Processor outage'}).getByText(/Failed runs · resolved/).waitFor();
+   assert.match(await incidentsPanel.locator('fieldset').filter({hasText:'Processor outage'}).textContent(),/2 distinct retained runs/);
+   await send(6,report(['f5'],'failed'),secret);
    await page.locator('#owgMonitorIncidents').click();
    await incidentsPanel.locator('fieldset').filter({hasText:'Step: Charge card'}).getByText(/Failed runs · open/).waitFor();
+   assert.match(await incidentsPanel.locator('fieldset').filter({hasText:'Step: Charge card'}).textContent(),/3 distinct retained runs/);
    assert.match(await incidentsPanel.locator('fieldset').filter({hasText:'Step: Charge card'}).textContent(),/reopened 1×/);
+   const huge=await send(100000,report(['large_jump'],'succeeded'),secret);
+   assert.equal(huge.status,200);
+   assert.equal(huge.body.new_missing_sequences,99993);
+   await page.locator('#owgMonitorChannel').click();
+   await panel.getByText(/Earlier missing sequence numbers were truncated/).waitFor();
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgMonitorCard'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id),[]);
    await page.setViewportSize({width:390,height:844});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2));
    await page.locator('#owgMonitorChannel').click();await page.locator('#owgMonitorChannelRevoke').click();
    await page.locator('#owgMonitorChannelCreate').waitFor();
-   assert.equal((await send(6,report(['f6'],'failed'),secret)).status,403);
+   assert.equal((await send(7,report(['f6'],'failed'),secret)).status,403);
    assert.deepEqual(errors,[]);
-   console.log('Report channel acceptance passed: shown-once secret, signed import, idempotent resend, replay conflict, bad signature, lost-report gaps, version inventory, incident resolve and reopen, revocation, WCAG audit, mobile width.');
+   console.log('Report channel acceptance passed: shown-once secret, signed import, idempotent resend, replay conflict, bad signature, lost-report gaps, version inventory, incident exact-run replay dedupe, versioned human review, bounded large sequence gaps, resolve and reopen, revocation, WCAG audit, mobile width.');
  }finally{if(browser)await browser.close();server.kill('SIGTERM');await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);if(server.exitCode===null)server.kill('SIGKILL');await fs.rm(scratch,{recursive:true,force:true});}
 })().catch(error=>{console.error(error);process.exit(1);});
