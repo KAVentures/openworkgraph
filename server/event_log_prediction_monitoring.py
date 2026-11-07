@@ -33,6 +33,8 @@ NOMINAL_COVERAGE = 0.8
 COVERAGE_FLOOR = 0.05          # a flag needs this gap from nominal, not only an interval that excludes it
 ERROR_RISE = 1.25
 MIN_CASES_PER_WINDOW = 10
+MIN_CASES_PER_ACTIVITY = 20  # A displayed activity needs 20 independent completed cases.
+MAX_ACTIVITY_ROWS = 8
 
 
 class MonitoringSpec(predictions.PredictionSpec):
@@ -137,6 +139,75 @@ def _score(conn, low, high, has_outcome: bool) -> dict[str, Any]:
     return out
 
 
+
+def _activity_quality(conn, has_outcome: bool) -> dict[str, Any]:
+    """Review-only latest-window diagnostics by observed *activity state*.
+
+    An activity's repeated prefixes within the same completed case are averaged
+    first. No case names, resource identities or example rows leave this query.
+    Suppress groups with fewer than 20 distinct cases; cap the visible groups.
+    A case can contribute to multiple activity states, so group totals cannot
+    be added to infer independent case counts.
+    """
+    counts = conn.execute("""
+        SELECT count(*), count(*) FILTER (WHERE cases < ?)
+        FROM (SELECT activity, count(DISTINCT case_id) AS cases
+              FROM pt_est WHERE basis IS NOT NULL AND activity IS NOT NULL
+              GROUP BY activity) states
+    """, [MIN_CASES_PER_ACTIVITY]).fetchone()
+    rows = conn.execute("""
+        SELECT activity, count(*) AS cases, sum(prefixes) AS prefixes,
+               avg(covered) AS coverage, stddev_samp(covered) AS coverage_sd,
+               avg(abs_error) AS mae, avg(naive_error) AS naive_mae,
+               avg(outcome_loss) AS outcome_loss, avg(base_loss) AS base_loss
+        FROM (
+            SELECT activity, case_id, count(*) AS prefixes,
+                   avg(CASE WHEN remaining BETWEEN q10 AND q90 THEN 1.0 ELSE 0.0 END) AS covered,
+                   avg(abs(q50 - remaining)) AS abs_error,
+                   avg(abs(naive_q50 - remaining)) AS naive_error,
+                   avg(power(rate - CAST(outcome AS DOUBLE), 2)) AS outcome_loss,
+                   avg(power(base_rate - CAST(outcome AS DOUBLE), 2)) AS base_loss
+            FROM pt_est WHERE basis IS NOT NULL AND activity IS NOT NULL
+            GROUP BY activity, case_id
+        ) case_states
+        GROUP BY activity HAVING count(*) >= ?
+        ORDER BY count(*) DESC, activity ASC LIMIT ?
+    """, [MIN_CASES_PER_ACTIVITY, MAX_ACTIVITY_ROWS]).fetchall()
+    result = []
+    for activity, cases, prefixes, coverage, coverage_sd, mae, baseline, brier, base_brier in rows:
+        margin = 1.959964 * (coverage_sd or 0.0) / math.sqrt(cases)
+        item = {
+            "activity": activity, "scored_cases": cases, "scored_prefixes": prefixes,
+            "mean_absolute_error_seconds": round(mae, 6),
+            "naive_mean_absolute_error_seconds": round(baseline, 6),
+            "p10_p90_case_averaged_coverage": round(coverage, 6),
+            "p10_p90_coverage_ci95": [
+                round(max(0.0, coverage - margin), 6),
+                round(min(1.0, coverage + margin), 6),
+            ],
+        }
+        if has_outcome:
+            item["case_averaged_brier_score"] = round(brier, 6) if brier is not None else None
+            item["case_averaged_base_rate_brier_score"] = (
+                round(base_brier, 6) if base_brier is not None else None)
+        result.append(item)
+    total_states, small_states = (int(counts[0] or 0), int(counts[1] or 0))
+    return {
+        "activities": result,
+        "total_scored_activity_states": total_states,
+        "withheld_low_support_states": small_states,
+        "withheld_over_limit_states": max(0, total_states - small_states - len(result)),
+        "minimum_distinct_completed_cases": MIN_CASES_PER_ACTIVITY,
+        "maximum_displayed_states": MAX_ACTIVITY_ROWS,
+        "unit_of_uncertainty": "completed_case_within_activity_not_correlated_prefix",
+        "no_case_or_resource_identifiers": True,
+        "interpretation": ("Descriptive latest-scored-window errors for the activity at each "
+                           "prediction point; not a ranking of employees or proof of causes. "
+                           "A completed case may contribute to multiple activity states. "
+                           "Intervals are descriptive and not corrected for multiple comparisons."),
+    }
+
+
 def _needed_factors(conn) -> list[float]:
     """Per prefix, the smallest scaling of its range around the median that would have covered it."""
     rows = conn.execute("""SELECT remaining, q10, q50, q90 FROM pt_est WHERE basis IS NOT NULL
@@ -178,12 +249,15 @@ def monitor(log_id: str, spec: Any) -> dict[str, Any]:
             raise workspace.EventLogWorkspaceError("monitoring needs completed cases; check the end activities")
         bounds = [*dict.fromkeys(cuts[0]), cuts[1]]
         windows, factors, previous_factors = [], [], []
+        activity_quality = None
         for n, (low, high) in enumerate(zip(bounds, bounds[1:])):
             window = _score(conn, low, high, has_outcome)
             window["window"] = n + 1
             windows.append(window)
             if window["scored"]:
                 previous_factors, factors = factors, _needed_factors(conn)
+                activity_quality = _activity_quality(conn, has_outcome)
+                activity_quality["window"] = window["window"]
                 if has_outcome:
                     window["reliability"] = _reliability(conn)
         scored = [w for w in windows if w["scored"]]
@@ -221,6 +295,7 @@ def monitor(log_id: str, spec: Any) -> dict[str, Any]:
                                         "ranges that cover too little, below 1 narrows ranges that cover too much.")}
         return {
             "windows": windows, "flags": flags, "recalibration_proposal": proposal,
+            "activity_quality": activity_quality,
             "settings": settings.model_dump(),
             "method": {"split": "completed cases by end time into consecutive windows",
                        "training": "cases that ended before each window", "nominal_coverage": NOMINAL_COVERAGE,
