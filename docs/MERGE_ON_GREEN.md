@@ -12,7 +12,7 @@ Once the feature's implementation and tests are ready:
 1. Mark its PR **Ready for review** (do not use drafts for auto-merge).
 2. Add this literal HTML comment to its PR description, substituting the **full 40-character current PR head commit SHA**:
    `<!-- OWG-MERGE-ON-GREEN:0123456789abcdef0123456789abcdef01234567 -->`
-3. If the branch changes, the comment is **invalid** until the owner updates it to the new SHA. Editing the PR description or marking it ready triggers a recheck. Completing one of the six required workflows also triggers a recheck. An **hourly GitHub Actions fallback** rechecks only explicitly opted-in open PRs in case GitHub had not yet refreshed mergeability when the final workflow finished; this does not consume a ChatGPT automation slot.
+3. If the branch changes, the comment is **invalid** until the owner updates it to the new SHA. Editing the PR description or marking it ready triggers a recheck. **Finishing the native `tests` workflow** is the immediate CI completion hint; all six required workflows and all seven native test jobs are still rechecked on the exact head. If packaging or scale acceptance finishes after `tests`, the **hourly GitHub Actions fallback** now actually executes and rechecks explicitly opted-in open PRs. That fallback previously had a job-condition bug despite its cron trigger being present; the job condition now includes `schedule`. This does not consume a ChatGPT automation slot or touch unapproved PRs.
 
 This marker applies **only to that PR and that exact head**. No other worker PR is opted in by default. Existing author-operated merge paths remain available.
 
@@ -40,3 +40,23 @@ A caller whose GitHub account cannot edit a same-repository PR cannot use the ma
 Run `node --test tests/js/merge_on_green.test.mjs` to exercise pure gate decisions. The tests cover exact-SHA revocation, six workflow groups/seven jobs, native skips, mergeability, drafts, fork/base scope, review state and fail-closed event handling. The coordinator is intentionally **not tested by actually merging a production PR** in CI. Validate once on a disposable same-repository PR when ready, before relying on it as the only merge process.
 
 The token is scoped to `contents:write`, `pull-requests:write`, `actions:read`. The coordinator does not maintain a background timer or manipulate existing worker schedules. It can legitimately refuse to merge a PR even if every visible check is green—for example if the branch is stale, reviews remain pending or the current mergeability state is not clean. That refusal is safer than an unsafe merge.
+
+## Runner-load reduction
+
+The merge coordinator now reacts to **only one** successful pull-request
+workflow completion (`tests`) instead of opening six nearly identical
+merge-coordinator workflows for every single contributor PR. Hourly
+reconciliation catches the rare case where `tests` finished before a
+slower scale, packaging or accessibility gate or GitHub had not yet
+settled mergeability. The `pull_request_target` job also checks for
+an **explicit marker on a non-draft PR before reserving a runner**.
+It still never executes code from pull request heads and never relaxes
+branch-protection rules or the six-workflow/seven-job validation gates.
+
+The workflow contract has Python regression tests
+(`tests/test_merge_on_green_workflow.py`) and a live-path Node harness
+(`tests/js/merge_on_green_schedule.test.mjs`) that exercises scheduled
+reconciliation, approval-only PR discovery, exact-head GitHub merge
+requests, and refusal when CI or main freshness is incomplete. These tests
+do not merge an actual GitHub PR or substitute for a controlled production
+rollout observation.
