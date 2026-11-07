@@ -775,6 +775,13 @@ def event_log_signal_inbox(request: Request, log_id: str):
     return _respond(signal_inbox.list_inbox, log_id)
 
 
+@router.post("/v1/event-logs/{log_id}/signal-inbox/acknowledge-batch")
+async def event_log_signal_batch_acknowledge(request: Request, log_id: str):
+    _require_dashboard(request)
+    spec = await _json_body(request, "batch signal acknowledgement", strict=True)
+    return _respond(signal_inbox.acknowledge_batch, log_id, spec)
+
+
 @router.post("/v1/event-logs/{log_id}/signal-inbox/{rule_id}/snooze")
 async def event_log_signal_snooze(request: Request, log_id: str, rule_id: str):
     _require_dashboard(request)

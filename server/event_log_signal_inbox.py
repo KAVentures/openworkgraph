@@ -180,7 +180,7 @@ def review(log_id: str, rule_id: str, body: dict, *, acknowledge: bool) -> dict:
             conn.close()
 
 
-__all__ = ["list_inbox", "review", "snooze"]
+__all__ = ["list_inbox", "review", "snooze", "acknowledge_batch"]
 
 
 def snooze(log_id: str, rule_id: str, body: dict) -> dict:
@@ -218,3 +218,75 @@ def snooze(log_id: str, rule_id: str, body: dict) -> dict:
         finally:
             conn.close()
     return list_inbox(log_id)
+
+
+def acknowledge_batch(log_id: str, body: dict) -> dict:
+    """Atomically acknowledge 1–20 exact, evaluated signal states.
+
+    This is a deliberate local review operation, never a permission grant.
+    All supplied states must still be triggered, fresh and not snoozed. A
+    stale/deleted/duplicate entry refuses the *entire* batch. Exact retries
+    retain their original acknowledgement timestamps.
+    """
+    reviews = body.get("reviews") if isinstance(body, dict) and set(body) == {"reviews"} else None
+    if not isinstance(reviews, list) or not 1 <= len(reviews) <= 20:
+        raise workspace.EventLogWorkspaceError("provide 1–20 exact signal reviews")
+    seen: set[str] = set()
+    for item in reviews:
+        if (not isinstance(item, dict) or set(item) != {"rule_id", "state_fingerprint"}
+                or not isinstance(item.get("rule_id"), str)
+                or not _RULE_ID.fullmatch(item["rule_id"])
+                or not isinstance(item.get("state_fingerprint"), str)
+                or not _FINGERPRINT.fullmatch(item["state_fingerprint"])):
+            raise workspace.EventLogWorkspaceError("invalid batch signal review entry")
+        if item["rule_id"] in seen:
+            raise workspace.EventLogWorkspaceError("duplicate signal rule in batch")
+        seen.add(item["rule_id"])
+
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            workspace._check_log(conn, log_id)
+            conn.execute("BEGIN TRANSACTION")
+            try:
+                basis = log_basis(conn, log_id)
+                now = _now()
+                pending = []
+                for item in reviews:
+                    rule_id, fingerprint = item["rule_id"], item["state_fingerprint"]
+                    definition, evaluated_at, last_state = _row(conn, log_id, rule_id)
+                    current = _state(log_id, rule_id, json.loads(definition)["name"],
+                                     evaluated_at, last_state, basis=basis)
+                    if (current["state_fingerprint"] != fingerprint
+                            or current["triggered"] is not True):
+                        raise workspace.EventLogWorkspaceError(
+                            "batch contains a stale, cleared or unevaluated signal; refresh first")
+                    snooze = conn.execute(
+                        "SELECT state_fingerprint,until_at FROM signal_snoozes "
+                        "WHERE log_id=? AND rule_id=?", [log_id, rule_id]).fetchone()
+                    if snooze and snooze[0] == fingerprint and snooze[1] > now:
+                        raise workspace.EventLogWorkspaceError(
+                            "batch contains a snoozed signal; resume its review first")
+                    prior = conn.execute(
+                        "SELECT state_fingerprint FROM signal_reviews "
+                        "WHERE log_id=? AND rule_id=?", [log_id, rule_id]).fetchone()
+                    pending.append((rule_id, fingerprint, bool(prior and prior[0] == fingerprint)))
+
+                for rule_id, fingerprint, already_reviewed in pending:
+                    if already_reviewed:
+                        continue  # An exact retry must preserve its original timestamp.
+                    conn.execute("DELETE FROM signal_reviews WHERE log_id=? AND rule_id=?",
+                                 [log_id, rule_id])
+                    conn.execute("DELETE FROM signal_snoozes WHERE log_id=? AND rule_id=?",
+                                 [log_id, rule_id])
+                    conn.execute(
+                        "INSERT INTO signal_reviews "
+                        "(log_id,rule_id,state_fingerprint,acknowledged_at) VALUES (?,?,?,?)",
+                        [log_id, rule_id, fingerprint, now])
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+        finally:
+            conn.close()
+    return {"reviewed": len(reviews), **list_inbox(log_id)}
