@@ -440,7 +440,7 @@ def restore_backup(path: Path, *, passphrase: str | None = None, replace: bool =
     for prefix, target in targets.items():
         if prefix == "auth/" and not summary["includes_secrets"]:
             continue
-        if target.exists() and any(target.iterdir()):
+        if target.exists() and any(p.name != ".collector.lock" for p in target.iterdir()):
             if not replace:
                 raise BackupError(f"{target} is not empty; pass replace=True to move it aside first")
             aside = target.with_name(f"{target.name}.pre-restore-{stamp}")
@@ -460,8 +460,17 @@ def restore_backup(path: Path, *, passphrase: str | None = None, replace: bool =
             destination = targets[prefix] / entry["path"][5:]
             destination.parent.mkdir(parents=True, exist_ok=True)
             fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "wb") as handle:
-                handle.write(archive.read(entry["path"]))
+            with os.fdopen(fd, "wb") as handle, archive.open(entry["path"]) as source:
+                digest = hashlib.sha256()
+                copied = 0
+                for chunk in iter(lambda: source.read(1 << 20), b""):
+                    copied += len(chunk)
+                    if copied > entry["bytes"]:
+                        raise BackupError("backup entry exceeds its declared size")
+                    digest.update(chunk)
+                    handle.write(chunk)
+                if copied != entry["bytes"] or digest.hexdigest() != entry["sha256"]:
+                    raise BackupError("backup changed during restoration")
     return summary | {"restored_files": summary["file_count"], "moved_aside": moved}
 
 
