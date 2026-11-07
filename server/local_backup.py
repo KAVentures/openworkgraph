@@ -575,7 +575,8 @@ def restore_backup(path: Path, *, passphrase: str | None = None, replace: bool =
                     if rollback_failed else
                     "restore swap failed; previous folders were restored"
                 ) from None
-            return summary | {"restored_files": summary["file_count"],
+            return summary | {"operation": "offline_restore", "writes_performed": True,
+                              "restored_files": summary["file_count"],
                               "moved_aside": [str(aside) for _, aside in moved]}
     except OSError:
         raise BackupError("restore staging failed; existing data remains available") from None
