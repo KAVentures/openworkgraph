@@ -25,7 +25,7 @@
         Number.isSafeInteger(p.idea_revision)&&p.idea_revision>=0&&p.idea_revision<=revision&&
         Array.isArray(p.blockers)&&p.blockers.every(b=>typeof b==='string')&&
         p.execution_authorized===false&&p.review_required===true);
-    input.addEventListener('input',()=>{generation++;clear();status.textContent='Selection changed. Inspect again before reviewing.';});
+    input.addEventListener('input',()=>{generation++;clear();load.disabled=false;status.textContent='Selection changed. Inspect again before reviewing.';});
     async function request(path){
       await window.__owgAuthReady;
       const response=await fetch(path,{cache:'no-store'});
@@ -51,7 +51,7 @@
         else {results.append(choice,review);review.disabled=false;}
         status.textContent='Choose an exact export; review is read-only.';
       }catch(e){if(current===generation)status.textContent=e.message;}
-      finally{load.disabled=false;}
+      finally{if(current===generation)load.disabled=false;}
     };
     review.onclick=async()=>{
       const id=input.value.trim(),projectId=choice.value,selected=snapshot?.projects.find(p=>p.project_id===projectId);
