@@ -941,3 +941,17 @@ async def event_log_case_events(request: Request, log_id: str,
 # Reuse this router's dashboard authentication and bounded JSON parser.
 from .event_log_job_routes import add_routes as _add_analysis_job_routes
 _add_analysis_job_routes(router, _require_dashboard, _json_body)
+
+
+@router.post("/v1/event-logs/{log_id}/cohort-metric")
+async def event_log_cohort_metric(
+    request: Request, log_id: str,
+    case_type: str | None = Query(default=None, max_length=200),
+):
+    """Compute a bounded numeric metric on a saved, explicitly selected case cohort."""
+    _require_dashboard(request)
+    spec = await _json_body(request, "cohort metric", strict=True, limit=8192)
+    from . import event_log_cohort_metrics
+    return await run_in_threadpool(
+        _respond, event_log_cohort_metrics.summarize, log_id, spec, case_type
+    )
