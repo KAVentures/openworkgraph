@@ -246,3 +246,31 @@ def test_large_declared_extracted_payload_is_not_decompressed_in_dashboard(store
     assert result["items"][0]["status"] == "exceeds_dashboard_uncompressed_limit"
     assert not result["items"][0]["verified"]
     assert result["max_uncompressed_archive_bytes"] == 2 << 30
+
+
+
+def test_total_budget_skips_later_archives_without_calling_verify(store,monkeypatch):
+    root,data,auth,folder=store
+    a=_write_backup(folder,"owg-backup-budget-a.zip")
+    b=_write_backup(folder,"owg-backup-budget-b.zip")
+    c=_write_backup(folder,"owg-backup-budget-c.zip")
+    size=max(a.stat().st_size,b.stat().st_size,c.stat().st_size)
+    monkeypatch.setattr(health,"MAX_TOTAL_ARCHIVE_BYTES",size*2+1)
+    result=health.check(_request(a.name,b.name,c.name))
+    statuses={r["name"]:r["status"] for r in result["items"]}
+    assert statuses[a.name]=="verified"
+    assert statuses[b.name]=="verified"
+    assert statuses[c.name]=="exceeds_dashboard_request_budget"
+    assert result["verified"]==2 and result["not_verified"]==1
+
+
+def test_unexpected_archive_reader_error_never_leaks_its_message(store,monkeypatch):
+    root,data,auth,folder=store
+    good=_write_backup(folder,"owg-backup-safe-errors.zip")
+    def boom(_path):
+        raise RuntimeError("PRIVATE_WORK_TEXT /synthetic/private/file.txt")
+    monkeypatch.setattr(local_backup,"verify_backup",boom)
+    result=health.check(_request(good.name))
+    assert result["items"][0]["status"]=="integrity_check_failed"
+    assert "PRIVATE_WORK_TEXT" not in str(result)
+    assert "/synthetic/private" not in str(result)
