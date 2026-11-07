@@ -48,6 +48,9 @@ def choices(request: Request, idea_id: str):
                          "blockers": blockers, "review_required": True, "execution_authorized": False})
     return JSONResponse({"format": "openworkgraph.review-choices.v1",
                          "idea": journey["idea"], "process_status": process.get("status", "unknown"),
+                         "process_reference": process.get("process_reference"),
+                         "dataset_origins": [{"status": o.get("status"), "source_content_sha256": o.get("source_content_sha256"), "selection_sha256": o.get("selection_sha256")} for o in journey["dataset_origins"][:64]],
+                         "dataset_origin_check_available": journey["dataset_origin_check_available"],
                          "projects": projects, "projects_truncated": journey["projects_truncated"],
                          "execution_authorized": False, "source_read_authorized": False,
                          "verified_business_outcomes": False}, headers={"Cache-Control": "no-store"})
