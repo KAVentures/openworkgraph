@@ -1,0 +1,52 @@
+"""Focused refusal and successful operator readiness tests."""
+import hashlib
+import json
+from unittest.mock import patch
+import pytest
+from server.m365_outlook_sync_readiness import readiness
+from server.m365_outlook_owg_receipt import ReceiptError
+
+
+def test_readiness_requires_consent():
+    with pytest.raises(ReceiptError):
+        readiness(tenant="t", mailbox="m", folder="f", expected_address="m@example.com",
+                  grant_file="unused", identity_report="unused", folder_report="unused",
+                  ledger_dir="unused", log_id="log")
+
+
+def test_readiness_matching_private_evidence():
+    scope = "a" * 64
+    identity = {"format": "openworkgraph.m365-mailbox-identity.v1",
+                "status": "mailbox_identity_observed", "scope_sha256": scope,
+                "expected_address_sha256": hashlib.sha256(b"m@example.com").hexdigest(),
+                "mailbox_identifier_matched": True, "upn_matched": True,
+                "checkpoint_advanced": False}
+    folder = {"format": "openworkgraph.m365-folder-preflight.v1",
+              "status": "folder_metadata_observed", "scope_sha256": scope,
+              "folder_id_sha256": hashlib.sha256(b"folder").hexdigest(),
+              "folder_id_matched": True, "checkpoint_advanced": False}
+    with (patch("server.m365_outlook_sync_readiness._scope", return_value=scope),
+          patch("server.m365_outlook_sync_readiness._grant"),
+          patch("server.m365_outlook_sync_readiness._private_read",
+                side_effect=[json.dumps(identity).encode(), json.dumps(folder).encode()]),
+          patch("server.m365_outlook_sync_readiness.inspect_checkpoint",
+                return_value={"log_id": "log", "generation": 2})):
+        result = readiness(tenant="t", mailbox="m", folder="folder",
+                           expected_address="m@example.com", grant_file="grant",
+                           identity_report="identity", folder_report="folder-report",
+                           ledger_dir="ledger", log_id="log", consent_local_read=True)
+    assert result["status"] == "operator_review_ready"
+    assert result["provider_requests"] == 0
+    assert result["checkpoint_advanced"] is False
+
+
+def test_readiness_rejects_untrusted_preflight():
+    with (patch("server.m365_outlook_sync_readiness._scope", return_value="a" * 64),
+          patch("server.m365_outlook_sync_readiness._grant"),
+          patch("server.m365_outlook_sync_readiness._private_read",
+                side_effect=[b'{"format":"wrong"}', b'{}'])):
+        with pytest.raises(ReceiptError):
+            readiness(tenant="t", mailbox="m", folder="f",
+                      expected_address="m@example.com", grant_file="grant",
+                      identity_report="identity", folder_report="folder-report",
+                      ledger_dir="ledger", log_id="log", consent_local_read=True)
