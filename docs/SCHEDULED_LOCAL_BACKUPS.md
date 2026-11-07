@@ -33,7 +33,7 @@ trigger new external data collection.
 ## Backup file lifecycle
 
 Scheduled archives use names like
-\`owg-backup-scheduled-20261107T010203123456000000Z.zip\`.
+`owg-backup-scheduled-20261107T010203123456000000Z.zip`.
 Each run snapshots via OWG's existing local backup creator. Only after the
 new archive passes full manifest/file-digest verification does the scheduler
 delete old archives *created by this job*, keeping the newest 14. Files
@@ -65,7 +65,7 @@ or proof that real business outcomes can be reconstructed.
 The existing authenticated local dashboard route is extended, with no
 new authorization mechanism:
 
-\`\`\`json
+```json
 {
   "kind": "local_backup",
   "target_id": "local",
@@ -73,15 +73,15 @@ new authorization mechanism:
   "confirm_scheduled_runs": true,
   "confirm_unencrypted_local_backup": true
 }
-\`\`\`
+```
 
-Submit to \`POST /v1/schedules\` **only with a valid local dashboard
+Submit to `POST /v1/schedules` **only with a valid local dashboard
 session**. The additional acknowledgement must literally be JSON
-\`true\`. Sending it as a string or omitting it fails. Minimum backup
+`true`. Sending it as a string or omitting it fails. Minimum backup
 interval is a full day; updating an existing backup schedule to a shorter
 interval also fails. A local AI/MCP bearer cannot create or change schedules.
 
-\`GET /v1/schedules\` shows the owner the local schedule and its
+`GET /v1/schedules` shows the owner the local schedule and its
 unencrypted-backup acknowledgement. The existing pause/resume and remove
 routes work unchanged. Neither this route nor the job grants AI access,
 company synchronization, connector reads, external delivery or business
@@ -89,14 +89,14 @@ execution.
 
 ## Validation
 
-\`tests/test_local_scheduler_backups.py\` covers literal opt-in, cadence,
+`tests/test_local_scheduler_backups.py` covers literal opt-in, cadence,
 fixed local target, no eager execution, actual scheduled snapshot and SHA
 verification, no leaked keys, isolated rotation (including symlinks and
 manual backups), unsafe folder refusal and failure diagnostics/backoff.
 
-\`tests/test_local_scheduler_backup_routes.py\` exercises a real local
+`tests/test_local_scheduler_backup_routes.py` exercises a real local
 ASGI router in a subprocess with an actual dashboard session and
-bearer-token denial. \`tests/browser/scheduled_local_backup.cjs\` runs
+bearer-token denial. `tests/browser/scheduled_local_backup.cjs` runs
 the Privacy opt-in through authenticated Chromium, including failure
 and success paths, pause/resume/delete, WCAG and narrow mobile width.
 Synthetic data only. The separate path-filtered Chromium workflow is
