@@ -342,6 +342,17 @@
             <button type="button" class="secondary" id="pvBackupInspect" disabled>Inspect restore safety</button>
           </div>
         </div>
+        <div class="pv-row" id="pvBackupHealthPanel" style="margin-top:12px">
+          <div>
+            <h3>Check saved backup integrity</h3>
+            <div class="muted">Explicitly verify up to five listed plaintext archives, checking every stored file against its manifest hashes. This may read large local backups. Encrypted or oversize files require offline checks. A healthy archive is not a completed restore test.</div>
+            <div class="muted" id="pvBackupHealthStatus" role="status" aria-live="polite">No integrity inventory checked yet.</div>
+            <div id="pvBackupHealthRows" role="region" aria-label="Saved backup integrity results"></div>
+          </div>
+          <div class="pv-control">
+            <button type="button" class="secondary" id="pvBackupHealthRun" disabled>Verify first 5 listed backups</button>
+          </div>
+        </div>
       </div>
       <div class="muted pv-more">More controls (separate retention for agents, saved sessions, browser profiles, organization sharing) are in the <button type="button" class="linkish" id="pvShowAdvanced">Advanced</button> view.</div>`;
     main.insertBefore(panel, $('#panel-settings') || null);
@@ -893,9 +904,16 @@
     const backupRefresh = panel.querySelector('#pvBackupRefresh');
     const backupInspect = panel.querySelector('#pvBackupInspect');
     const backupPlan = panel.querySelector('#pvBackupPlan');
-    let listedBackups = [], backupEpoch = 0;
+    const healthRun = panel.querySelector('#pvBackupHealthRun');
+    const healthStatus = panel.querySelector('#pvBackupHealthStatus');
+    const healthRows = panel.querySelector('#pvBackupHealthRows');
+    let listedBackups = [], backupEpoch = 0, healthEpoch = 0;
     async function refreshBackupList(preferred = '') {
       const epoch = ++backupEpoch;
+      healthEpoch++;
+      healthRows.replaceChildren();
+      healthRun.disabled = true;
+      healthStatus.textContent = 'Backup listing refreshed; previous integrity results no longer apply.';
       backupRefresh.disabled = true;
       backupInspect.disabled = true;
       backupPlan.textContent = 'Reading saved backups on this computer…';
@@ -917,6 +935,7 @@
         }
         if (listedBackups.some(item => item.name === previous)) backupChoice.value = previous;
         backupInspect.disabled = !backupChoice.value;
+        healthRun.disabled = listedBackups.length === 0;
         backupPlan.textContent = listedBackups.length
           ? 'Choose a backup and inspect its integrity and restore blockers. No data will be changed.'
           : 'No backups found in the configured local backup folder.';
@@ -963,6 +982,55 @@
         }
       } finally {
         if (epoch === backupEpoch) backupInspect.disabled = !backupChoice.value;
+      }
+    };
+    healthRun.onclick = async () => {
+      const chosen = listedBackups.slice(0, 5).map(item => item.name);
+      if (!chosen.length) { healthStatus.textContent = 'No saved local backups to verify.'; return; }
+      if (!window.confirm('Read and verify up to five already-listed local backups now? No archive will be modified, restored or uploaded. Large archives may require the offline CLI.')) return;
+      const epoch = ++healthEpoch;
+      healthRun.disabled = true;
+      healthRows.replaceChildren();
+      healthStatus.textContent = 'Verifying local archive contents (read only)…';
+      try {
+        const result = await api('/v1/local-backups/health', send('POST', {
+          names: chosen, confirm_local_verification: true
+        }));
+        if (epoch !== healthEpoch) return;
+        const labels = {
+          verified: 'Verified intact at this check',
+          integrity_check_failed: 'Integrity check failed; do not rely on this archive',
+          unavailable_or_not_regular: 'Unavailable or not a regular file',
+          encrypted_requires_offline_cli: 'Encrypted; verify using offline CLI',
+          exceeds_dashboard_archive_limit: 'Too large for dashboard check; use offline CLI',
+          exceeds_dashboard_uncompressed_limit: 'Uncompressed data exceeds the dashboard limit; use offline CLI',
+          exceeds_dashboard_request_budget: 'Check budget reached; use offline CLI',
+          requires_offline_inspection: 'Requires offline inspection',
+          changed_during_check: 'File changed during check; verify again offline'
+        };
+        for (const item of result.items || []) {
+          const row = document.createElement('div');
+          row.className = 'muted';
+          // A saved filename is only ever inserted as text, never as markup.
+          row.textContent = item.name + ' — ' +
+            (labels[item.status] || 'Not verified') +
+            (item.verified ? ' · ' + String(item.file_count) + ' stored files, OWG ' + String(item.owg_version || 'unknown') : '');
+          healthRows.appendChild(row);
+        }
+        healthStatus.textContent = String(result.verified) + ' of ' +
+          String(result.requested) + ' listed backup archives verified at ' +
+          String(result.checked_at) + '. ' + String(result.not_verified) +
+          ' not verified. ' + (listedBackups.length > chosen.length
+            ? String(listedBackups.length - chosen.length) + ' additional listed backups were not inspected. ' : '') +
+          'No restore or write occurred. A passing checksum does not prove recoverability.';
+      } catch (error) {
+        if (epoch === healthEpoch) {
+          healthRows.replaceChildren();
+          healthStatus.textContent = (error.message || 'Could not check archive integrity.') +
+            ' No restore was attempted.';
+        }
+      } finally {
+        if (epoch === healthEpoch) healthRun.disabled = listedBackups.length === 0;
       }
     };
     panel.querySelector('#pvBackupCreate').onclick = async () => {
