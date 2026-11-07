@@ -81,3 +81,42 @@ def test_project_switch_invalidates_previously_inspected_review():
     assert "details.replaceChildren();review.disabled=!snapshot;" in script
     assert "choice.value!==projectId||input.value.trim()!==id" in script
     assert "current===generation&&snapshot&&choice.value===projectId" in script
+
+
+def test_live_review_preflight_is_authenticated_and_revision_pinned(monkeypatch):
+    app = FastAPI()
+    app.include_router(routes.router)
+    client = TestClient(app)
+    monkeypatch.setattr(routes, 'dashboard_session_valid', lambda token: token == 'test-session')
+    state = {'revision': 3, 'digest': 'b'*64, 'truncated': False}
+    def journey(idea_id):
+        return {'idea': {'idea_id': idea_id, 'revision': state['revision'], 'state': 'approved'},
+                'process_status': {'status': 'current', 'process_reference': {}},
+                'projects': [{'project_id': 'p1', 'idea_revision': state['revision'],
+                              'idea_revision_is_current': True, 'spec_sha256': state['digest'],
+                              'archive_sha256': 'c'*64, 'reported_specifications': []}],
+                'projects_truncated': state['truncated'], 'dataset_origins': [],
+                'dataset_origin_check_available': True}
+    monkeypatch.setattr(routes.opportunity_journey, 'journey', journey)
+    path = '/v1/review-choice-workbench/idea-1/preflight'
+    payload = {'project_id': 'p1', 'idea_revision': 3, 'spec_sha256': 'b'*64,
+               'archive_sha256': 'c'*64}
+    assert client.post(path, json=payload).status_code == 403
+    headers = {'Authorization': 'OWG-Session test-session'}
+    ok = client.post(path, json=payload, headers=headers)
+    assert ok.status_code == 200
+    assert ok.headers['cache-control'] == 'no-store'
+    assert ok.json()['execution_authorized'] is False
+    assert ok.json()['review_required'] is True
+    assert 'no_customer_report' in ok.json()['blockers']
+    state['revision'] = 4
+    assert client.post(path, json=payload, headers=headers).status_code == 409
+    state['revision'] = 3
+    state['digest'] = 'd'*64
+    assert client.post(path, json=payload, headers=headers).status_code == 409
+    state['digest'] = 'b'*64
+    state['truncated'] = True
+    assert client.post(path, json=payload, headers=headers).status_code == 409
+    state['truncated'] = False
+    assert client.post(path, json={**payload, 'spec_sha256': 'bad'}, headers=headers).status_code == 422
+    assert client.post(path, json={**payload, 'project_id': 'missing'}, headers=headers).status_code == 409
