@@ -186,3 +186,31 @@ def test_extract_after_readiness_rejects_changed_delegate_generation(generation)
                               "removal_markers_for_review": 0})):
         with pytest.raises(ReceiptError, match="generation changed"):
             extract_after_readiness(**_extract_kwargs())
+
+
+@pytest.mark.parametrize("bad", [
+    {"event_snapshots": None},
+    {"event_snapshots": True},
+    {"event_snapshots": -1},
+    {"removal_markers_for_review": None},
+    {"removal_markers_for_review": -1},
+    {"removal_markers_for_review": "1"},
+    {"checkpoint_advanced": True},
+    {"checkpoint_advanced": None},
+    {"owg_append_performed": True},
+    {"owg_append_performed": None},
+])
+def test_extract_after_readiness_refuses_unsafe_review_receipt(bad):
+    """A malformed delegate receipt must never be presented as approved."""
+    from server.m365_outlook_sync_readiness import extract_after_readiness
+    result = {"status": "review_required",
+              "committed_predecessor_generation": 2,
+              "event_snapshots": 3, "removal_markers_for_review": 0,
+              "checkpoint_advanced": False, "owg_append_performed": False}
+    result.update(bad)
+    with (patch("server.m365_outlook_sync_readiness.readiness",
+                return_value={"status": "operator_review_ready"}),
+          patch("server.m365_outlook_checkpoint_next.extract_from_checkpoint",
+                return_value=result)):
+        with pytest.raises(ReceiptError, match="Unsafe or incomplete"):
+            extract_after_readiness(**_extract_kwargs())
