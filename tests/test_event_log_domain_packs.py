@@ -43,7 +43,7 @@ def _results(report):
 
 
 def test_the_catalog_lists_the_pack_roles_and_definitions():
-    pack = packs.catalog()["packs"][0]
+    pack = next(p for p in packs.catalog()["packs"] if p["pack_id"] == PACK)
     assert pack["pack_id"] == PACK and pack["versions"] == ["1.0.0"] and pack["latest_version"] == "1.0.0"
     assert {r["role"] for r in pack["object_types"] if r["required"]} == {"order", "item", "delivery", "invoice"}
     assert pack["definitions"] == {"metrics": 4, "compliance_rules": 6, "object_rules": 4, "reference_model_types": 5}
