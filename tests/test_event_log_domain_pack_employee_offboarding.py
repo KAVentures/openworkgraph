@@ -201,6 +201,9 @@ def test_install_refuses_missing_required_role_invalid_policy_or_wrong_source():
         _install(log_id, parameters={"revocation_hours": 0})
     with pytest.raises(workspace.EventLogWorkspaceError, match="no parameter"):
         _install(log_id, parameters={"auto_revoke": 1})
+    for nonfinite in (float("nan"), float("inf"), -float("inf")):
+        with pytest.raises(workspace.EventLogWorkspaceError, match="domain pack install"):
+            _install(log_id, parameters={"revocation_hours": nonfinite})
     assert packs.installed(log_id)["installs"] == []
 
 
