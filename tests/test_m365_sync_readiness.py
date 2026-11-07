@@ -216,3 +216,78 @@ def test_extract_after_readiness_refuses_unsafe_review_receipt(bad):
                 return_value=result)):
         with pytest.raises(ReceiptError, match="Unsafe or incomplete"):
             extract_after_readiness(**_extract_kwargs())
+
+
+def _cli_extract_args():
+    return [
+        "--tenant", "t", "--mailbox", "m", "--folder", "f",
+        "--expected-address", "m@example.com", "--log-id", "log",
+        "--grant-file", "grant", "--identity-report", "identity",
+        "--folder-report", "folder", "--ledger-dir", "ledger",
+        "--expected-generation", "2", "--extract-after-readiness",
+        "--confirm-log-id", "log", "--previous-candidate", "prior.json",
+        "--previous-csv", "prior.csv", "--receipt-file", "receipt.json",
+        "--journal-dir", "journal", "--handoff-dir", "handoff",
+        "--successor-label", "next", "--output", "next.csv",
+        "--candidate", "next.json", "--consent-local-read",
+        "--consent-delta-read", "--consent-local-export",
+        "--confirm-removals-reviewed",
+    ]
+
+
+def test_operator_cli_routes_reviewed_extraction_without_secret_arguments(monkeypatch, capsys):
+    from server.m365_outlook_sync_readiness import main
+    monkeypatch.setenv("OWG_M365_GRAPH_TOKEN", "secret-bearer")
+    monkeypatch.setenv("OWG_DASHBOARD_SESSION", "secret-session")
+    with patch("server.m365_outlook_sync_readiness.extract_after_readiness",
+               return_value={"status": "review_required",
+                             "checkpoint_advanced": False}) as extract:
+        assert main(_cli_extract_args()) == 0
+    assert extract.call_args.kwargs["expected_generation"] == 2
+    assert extract.call_args.kwargs["token"] == "secret-bearer"
+    assert extract.call_args.kwargs["session"] == "secret-session"
+    assert extract.call_args.kwargs["confirm_removals_reviewed"] is True
+    output = capsys.readouterr().out
+    assert '"review_required"' in output
+    assert "secret-" not in output
+
+
+@pytest.mark.parametrize("change", [
+    lambda x: x.remove("--consent-delta-read"),
+    lambda x: x.remove("--confirm-removals-reviewed"),
+    lambda x: x.remove("--consent-local-read"),
+    lambda x: x.__setitem__(x.index("--expected-generation") + 1, "0"),
+    lambda x: x.__setitem__(x.index("--confirm-log-id") + 1, "other"),
+])
+def test_operator_cli_refuses_missing_approval_before_delegate(monkeypatch, capsys, change):
+    from server.m365_outlook_sync_readiness import main
+    monkeypatch.setenv("OWG_M365_GRAPH_TOKEN", "secret-bearer")
+    monkeypatch.setenv("OWG_DASHBOARD_SESSION", "secret-session")
+    args = _cli_extract_args()
+    change(args)
+    with patch("server.m365_outlook_sync_readiness.extract_after_readiness") as extract:
+        assert main(args) == 2
+        extract.assert_not_called()
+    assert '"refused"' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("missing", ["OWG_M365_GRAPH_TOKEN", "OWG_DASHBOARD_SESSION"])
+def test_operator_cli_requires_private_credentials(monkeypatch, capsys, missing):
+    from server.m365_outlook_sync_readiness import main
+    monkeypatch.setenv("OWG_M365_GRAPH_TOKEN", "secret-bearer")
+    monkeypatch.setenv("OWG_DASHBOARD_SESSION", "secret-session")
+    monkeypatch.delenv(missing)
+    with patch("server.m365_outlook_sync_readiness.extract_after_readiness") as extract:
+        assert main(_cli_extract_args()) == 2
+        extract.assert_not_called()
+    assert "secret-" not in capsys.readouterr().out
+
+
+def test_operator_cli_rejects_extraction_options_in_inspection_mode(capsys):
+    from server.m365_outlook_sync_readiness import main
+    args = _cli_extract_args()
+    args.remove("--extract-after-readiness")
+    with patch("server.m365_outlook_sync_readiness.readiness") as ready:
+        assert main(args) == 2
+        ready.assert_not_called()
+    assert '"refused"' in capsys.readouterr().out
