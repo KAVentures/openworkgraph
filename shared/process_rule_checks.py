@@ -56,11 +56,10 @@ def check_case_rules(record,cases,as_of_date=None):
             "declared_rows":[{"row_id":r.id,"rule_id":r.rule_id,
                               "target_activity_id":r.target_activity_id} for r in table.rows],
             "status_counts":Counter(), "matched_row_counts":Counter(),
-            "selected_row_counts":Counter(), "selected_target_counts":Counter(),
+            "selected_row_counts":Counter(),
             "evaluated_case_count":0, "cases_checked":0,
         } for table in model.decision_tables
     }
-    tables_by_id={table.id:table for table in model.decision_tables}
     for case in cases:
         route=case.activity_ids;selected=None;route_valid=None
         if route is not None:
@@ -105,7 +104,6 @@ def check_case_rules(record,cases,as_of_date=None):
                                        if row.target_activity_id==target),None)
                     if selected_row is not None:
                         summary["selected_row_counts"][selected_row]+=1
-                        summary["selected_target_counts"][target]+=1
                 tables.append(check)
         rows.append({'case_id':case.case_id,'proposed_route_supplied':route is not None,
                      'proposed_route_structure_matches':route_valid,
