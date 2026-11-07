@@ -1996,9 +1996,11 @@
       if(typeof id!=='string')return;
       // Carry the exact inspected export as a navigation hint, never as approval.
       // Recheck it against the authenticated journey before opening the evidence UI.
+      // Clear any previous decision surface before an asynchronous verification.
+      // A rejected handoff must never leave an unrelated approval visible.
+      detail.replaceChildren();
       refresh().then(async()=>{
-        await show(id);
-        if(!handoff.project_id)return;
+        if(!handoff.project_id){await show(id);return;}
         const journey=await (await api('/v1/automation-pipeline/'+encodeURIComponent(id)+'/journey')).json();
         const project=journey.projects?.find(p=>p.project_id===handoff.project_id);
         if(journey.idea?.revision!==handoff.idea_revision||!project||
@@ -2007,6 +2009,8 @@
           status.textContent='Selected export changed. Return to the review workbench and inspect again.';
           return;
         }
+        // Only reveal the decision surface after authenticated exact-export checks.
+        await show(id);
         const button=document.getElementById('owgPipelineJourney');
         if(button)await button.onclick();
         status.textContent='Opened evidence journey for inspected project '+handoff.project_id+'. Review and approval remain separate.';
