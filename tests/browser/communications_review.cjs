@@ -79,6 +79,26 @@ const path=require('node:path');
    await page.locator('#owgCommsRun').click();
    await page.locator('#owgCommsResults').getByText('Learned intents (a message can have several or none)').waitFor();
    for(const b of bodies)assert(!b.includes('client.example')&&!b.includes(corpus[0].text),'no message text in analysis responses');
+   // Correct a previously reviewed label, then verify the old model can no
+   // longer classify new messages and its old holdout score is not displayed.
+   await page.evaluate(async()=>{
+     const page=await (await fetch('/v1/communications/review/examples?status=labelled&limit=1')).json();
+     const example=page.examples[0];
+     const changed=await fetch('/v1/communications/review/label',{
+       method:'POST',headers:{'Content-Type':'application/json'},
+       body:JSON.stringify({example_id:example.example_id,labels:example.labels,
+                            language:example.language==='sv'?'en':'sv'})});
+     if(!changed.ok)throw new Error(await changed.text());
+   });
+   await page.locator('#owgCommsReview summary').click();
+   await page.locator('#owgCommsReview summary').click();
+   await page.locator('#owgCommsModel').getByText('Learned model needs retraining').waitFor();
+   assert.doesNotMatch(await page.locator('#owgCommsModel').textContent(),/Macro F1/);
+   await page.locator('#owgCommsFile').setInputFiles({name:'tickets.csv',mimeType:'text/csv',buffer:Buffer.from(rows.join('\n'))});
+   await page.waitForFunction(()=>document.querySelectorAll('#owgCommsTextColumns input').length===2);
+   await page.locator('#owgCommsConsent').check();
+   await page.locator('#owgCommsRun').click();
+   await page.locator('#owgCommsStatus').filter({hasText:/stale/}).waitFor();
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgCommsCard'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id),[]);
@@ -89,6 +109,6 @@ const path=require('node:path');
    const after=await page.evaluate(async()=>(await fetch('/v1/communications/review/settings')).json());
    assert.equal(after.example_count,0);assert.equal(after.model_trained,false);
    assert.deepEqual(errors,[]);
-   console.log('Communications review acceptance passed: off by default, acknowledged opt-in, redacted sampled examples, UI labelling, local training with per-language holdout quality, learned aggregate analysis, deletion on turn-off, WCAG audit, mobile width.');
+   console.log('Communications review acceptance passed: off by default, acknowledged opt-in, redacted sampled examples, UI labelling, local training with per-language holdout quality, learned aggregate analysis, review correction invalidation, deletion on turn-off, WCAG audit, mobile width.');
  }finally{if(browser)await browser.close();server.kill('SIGTERM');await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);if(server.exitCode===null)server.kill('SIGKILL');await fs.rm(scratch,{recursive:true,force:true});}
 })().catch(error=>{console.error(error);process.exit(1);});
