@@ -1,5 +1,7 @@
 """Authenticated, read-only choice inspection for local human handoff review."""
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field
+import json
 from fastapi.responses import FileResponse, JSONResponse
 from pathlib import Path
 from .local_auth import dashboard_session_valid
@@ -54,3 +56,44 @@ def choices(request: Request, idea_id: str):
                          "projects": projects, "projects_truncated": journey["projects_truncated"],
                          "execution_authorized": False, "source_read_authorized": False,
                          "verified_business_outcomes": False}, headers={"Cache-Control": "no-store"})
+
+
+class ReviewBasis(BaseModel):
+    """An exact, non-authorizing review preflight; never an execution approval."""
+    project_id: str = Field(min_length=1, max_length=128)
+    idea_revision: int = Field(ge=0)
+    spec_sha256: str = Field(pattern=r"^[a-fA-F0-9]{64}$")
+    archive_sha256: str = Field(pattern=r"^[a-fA-F0-9]{64}$")
+
+
+@router.post("/v1/review-choice-workbench/{idea_id}/preflight")
+def preflight(request: Request, idea_id: str, basis: ReviewBasis):
+    """Recheck a human-selected export against live local evidence, fail closed.
+
+    This endpoint deliberately does not persist an approval, issue an agent grant,
+    or claim any verified outcome. The caller must explicitly review blockers.
+    """
+    response = choices(request, idea_id)  # same dashboard-session enforcement
+    snapshot = json.loads(response.body)
+    if snapshot["projects_truncated"]:
+        raise HTTPException(409, "Review history truncated; re-inspect before proceeding")
+    if snapshot["idea"]["revision"] != basis.idea_revision:
+        raise HTTPException(409, "Opportunity revision changed; re-inspect")
+    matches = [p for p in snapshot["projects"] if p["project_id"] == basis.project_id]
+    if len(matches) != 1:
+        raise HTTPException(409, "Project no longer uniquely available; re-inspect")
+    project = matches[0]
+    if (project["spec_sha256"].lower() != basis.spec_sha256.lower() or
+            project["archive_sha256"].lower() != basis.archive_sha256.lower() or
+            project["idea_revision"] != basis.idea_revision):
+        raise HTTPException(409, "Project evidence changed; re-inspect")
+    return JSONResponse({"format": "openworkgraph.review-preflight.v1",
+                         "idea_id": idea_id, "idea_revision": basis.idea_revision,
+                         "project_id": basis.project_id,
+                         "spec_sha256": project["spec_sha256"],
+                         "archive_sha256": project["archive_sha256"],
+                         "blockers": project["blockers"],
+                         "review_required": True, "execution_authorized": False,
+                         "source_read_authorized": False,
+                         "verified_business_outcomes": False},
+                        headers={"Cache-Control": "no-store"})
