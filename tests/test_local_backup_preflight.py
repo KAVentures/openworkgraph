@@ -326,3 +326,26 @@ def test_forged_plaintext_credentials_under_data_prefix_are_refused(site):
     with pytest.raises(backup.BackupError, match="unencrypted backup cannot contain credentials"):
         backup.verify_backup(forged)
     assert (auth / ".api_token").read_text() == "a test-only synthetic token"
+
+
+def test_empty_archive_cannot_erase_existing_nonempty_store(tmp_path, monkeypatch):
+    from io import BytesIO
+
+    original_dir = tmp_path / "empty-source"
+    original_dir.mkdir()
+    monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(original_dir))
+    monkeypatch.setenv("WORKFLOW_OBSERVER_AUTH_DIR", str(original_dir / "auth"))
+    archive = tmp_path / "empty.zip"
+    backup.create_backup(archive)
+    assert backup.verify_backup(archive)["file_count"] == 0
+    live = tmp_path / "live"
+    live.mkdir()
+    (live / "work.txt").write_text("DO NOT ERASE", encoding="utf-8")
+    monkeypatch.setenv("WORKFLOW_OBSERVER_DATA", str(live))
+    monkeypatch.setenv("WORKFLOW_OBSERVER_AUTH_DIR", str(live / "auth"))
+    plan = backup.plan_restore(archive, replace=True)
+    assert plan["ready"] is False
+    assert "empty backup" in "; ".join(plan["blockers"])
+    with pytest.raises(backup.BackupError, match="empty backup"):
+        backup.restore_backup(archive, replace=True)
+    assert (live / "work.txt").read_text() == "DO NOT ERASE"
