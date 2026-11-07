@@ -309,20 +309,20 @@ def resumption_candidates(
     # This is an observed co-reference, never a task or case assertion.
     pair_assignments: list[dict[str, Any]] = []
     for pair in sorted(current["coobserved"]):
+        current_right_observations = set(current["tracks"][pair[1]]["observations"])
         current_events = sorted({
             event_id for instant, event_id in current["tracks"][pair[0]]["observations"]
-            if event_id and any(other_id == event_id and other_instant == instant
-                                for other_instant, other_id in current["tracks"][pair[1]]["observations"])
+            if event_id and (instant, event_id) in current_right_observations
         })
         earlier_matches: list[dict[str, Any]] = []
         for earlier_index in range(current_index - 1, -1, -1):
             earlier = by_session[earlier_index]
             if pair not in earlier["coobserved"]:
                 continue
+            earlier_right_observations = set(earlier["tracks"][pair[1]]["observations"])
             earlier_events = sorted({
                 event_id for instant, event_id in earlier["tracks"][pair[0]]["observations"]
-                if event_id and any(other_id == event_id and other_instant == instant
-                                    for other_instant, other_id in earlier["tracks"][pair[1]]["observations"])
+                if event_id and (instant, event_id) in earlier_right_observations
             })
             earlier_matches.append({
                 "session_started_at": _iso(sessions[earlier_index][0]),
