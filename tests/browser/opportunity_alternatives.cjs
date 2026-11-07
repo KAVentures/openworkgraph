@@ -55,7 +55,7 @@ const path=require('node:path');
     assert.match(rowsText[3],/SEK 7200SEK 141600/); // agent with human approval
     assert.match(rowsText[1],/SEK 21600 to SEK 10800050% eligible cases/);
     assert.match(rowsText[3],/SEK -21600 to SEK 3600075% eligible cases/);
-    assert.match(rowsText[5],/Not reachable under assumptionsNo$/);
+    assert.match(rowsText[5],/Not applicable \(human-only baseline\)No$/);
     const sensitivity=page.getByLabel('Labor impact sensitivity percent',{exact:true});
     assert.equal(await sensitivity.inputValue(),'25');
     await sensitivity.fill('0');
