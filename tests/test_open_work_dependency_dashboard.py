@@ -51,10 +51,11 @@ const document = {
   createTextNode(value) { return { textContent: value }; }
 };
 let resolveFetch;
+let rejectFetch;
 let seenSignal;
 const fetch = (_url, options) => {
   seenSignal = options.signal;
-  return new Promise(resolve => { resolveFetch = resolve; });
+  return new Promise((resolve, reject) => { resolveFetch = resolve; rejectFetch = reject; });
 };
 vm.runInNewContext(
   fs.readFileSync('dashboard/open_work_dependencies.js', 'utf8'),
@@ -84,6 +85,17 @@ const list = document.getElementById('owgDependencyResults').children[0];
   await old;
   assert.match(status.textContent, /valid opaque/, 'stale response must not overwrite validation');
   assert.equal(list.children.length, 0, 'stale data must not reappear');
+  // A superseded fetch may reject with a network error rather than AbortError.
+  // That rejection must not overwrite the newer validation result.
+  field.value = 'owg:w:' + 'b'.repeat(32);
+  const oldRejected = form.listeners.submit({preventDefault() {}});
+  field.value = 'invalid-again';
+  await form.listeners.submit({preventDefault() {}});
+  rejectFetch(new Error('late network failure'));
+  await oldRejected;
+  assert.match(status.textContent, /valid opaque/, 'stale rejection must not overwrite validation');
+  assert.equal(list.children.length, 0, 'stale rejection must not restore results');
+  assert.equal(button.disabled, false);
 })().catch(error => { console.error(error); process.exitCode = 1; });
 """
     result = subprocess.run(
