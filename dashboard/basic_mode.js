@@ -1000,6 +1000,7 @@
           unavailable_or_not_regular: 'Unavailable or not a regular file',
           encrypted_requires_offline_cli: 'Encrypted; verify using offline CLI',
           exceeds_dashboard_archive_limit: 'Too large for dashboard check; use offline CLI',
+          exceeds_dashboard_uncompressed_limit: 'Uncompressed data exceeds the dashboard limit; use offline CLI',
           exceeds_dashboard_request_budget: 'Check budget reached; use offline CLI',
           requires_offline_inspection: 'Requires offline inspection',
           changed_during_check: 'File changed during check; verify again offline'
