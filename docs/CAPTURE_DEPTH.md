@@ -60,7 +60,14 @@ dropped from these events.
 - No samples are taken while the pointer is over a password, one-time-code, card or
   other secure field, inside a secure widget, or over a secure field hidden under another
   element (the check covers everything stacked under the pointer, not only the element
-  that receives the event). The current batch ends at the field,
+  that receives the event). Open and closed shadow roots at the pointer are inspected
+  using the browser extension's `dom.openOrClosedShadowRoot` API. A bounded geometry
+  scan also covers `pointer-events:none` fields; embedded frame regions are treated
+  conservatively because their contents may not be inspectable from the parent page.
+  If that API or a needed scan is unavailable, or a page exceeds the scan's element,
+  shadow-root or time limits, browser hover, drag and pointer detail is suppressed;
+  ordinary structural capture is unchanged. Complex pages can therefore produce
+  fewer detailed events, and repeated scans add bounded per-event work. The current batch ends at the field,
   and sampling resumes when the pointer leaves it.
 - The raw points are kept on this device in their own table
   (`pointer_trajectory_points`), apart from the event rows, and are deleted with their
@@ -88,6 +95,24 @@ per-person scoring.
 
 Hover dwell and pointer movement are context only. Workflow reconstruction does not
 treat them as steps, or as merge evidence by themselves.
+
+**In the workflow trace.** Every hover, drag and pointer event in `get_workflow_trace` (and
+the other rich-evidence views) carries an `interaction_detail` label:
+`{"basis": "observed", "inferred": false, "context_only": true, "workflow_step": false,
+"merge_evidence": false}`, plus the signal. For drags it also says whether completion was
+observed (`completion_basis`); for hovers it notes a control that re-rendered under the
+pointer. When friction candidates are on, each trace page also returns
+`interaction_candidates`: the friction patterns among that page's rows, each marked
+`basis: "inferred_candidate"` and `requires_review: true`. They come with the statements
+that no intent or attention is inferred and that there is no per-person scoring. Neither
+the labels nor the candidates give an agent a reason to act or to merge cases.
+
+**Harder pages.** When a single-page app re-renders the control under a resting pointer,
+the hover carries on as one dwell if the new control has the same tag, role and type
+(`control_rerendered: true`). A different kind of control starts a new hover. Controls
+inside frames are recorded by the frame's own content script, marked
+`frame_kind: "subframe"`, with pointer points relative to the frame's viewport. A resent
+event (the extension retries failed deliveries with the same event ID) is stored once.
 
 ## Desktop
 
@@ -132,7 +157,8 @@ disabled signal. It also:
 
 - refuses high-fidelity events with malformed or oversized metadata;
 - stores no high-fidelity events on pages you have excluded;
-- keeps only tag, role and type for the targets of hover and drag events;
+- keeps only allowlisted tag, role and type values for the targets of hover and drag
+  events; unknown values are dropped because even these attributes can contain text;
 - drops the keys reserved for high-fidelity data (`points`, `trajectory`,
   `pointer_points`, `sample_hz`, `viewport_bucket`, `coordinates`) from every other
   browser event, so coordinates cannot ride along in an ordinary click;
@@ -182,7 +208,7 @@ Measured in this repository's CI-like container:
 
 | Step | 300k-event history | Budget |
 |---|---|---|
-| High-fidelity ingest | 1.3 ms per event | < 20 ms |
+| High-fidelity ingest | 1.3 ms per event (about 46 ms on Windows runners) | < 100 ms |
 | Coverage manifest (90 days) | 0.31 s | < 30 s |
 | Friction candidates (31 days, bounded to 20,000 events) | 0.96 s | < 30 s |
 | Heatmap page list / one page | 0.18 s / 0.19 s | < 30 s |

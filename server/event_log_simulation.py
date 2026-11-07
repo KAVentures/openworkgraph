@@ -823,7 +823,8 @@ def simulate(model: dict[str, Any], samples: list[float] | None = None) -> dict[
                           "mean_wait_seconds": round(sum(ordered) / len(ordered), 3) if ordered else 0,
                           "p90_wait_seconds": _percentile(ordered, 0.9) or 0, "overloaded": offered_of[t] >= 1})
     abandonment_rows = []
-    if any("queue_timeout_minutes" in p for p in params.values()):
+    has_abandonment_scenario = any("queue_timeout_minutes" in p for p in params.values())
+    if has_abandonment_scenario:
         after = {a: 0 for a in params if "queue_timeout_minutes" in params[a]}
         for case, activity in abandoned.items():
             if case >= warm:
@@ -831,6 +832,36 @@ def simulate(model: dict[str, Any], samples: list[float] | None = None) -> dict[
         abandonment_rows = [{"activity": a, "cases_abandoned": n,
                              "queue_timeout_minutes": params[a]["queue_timeout_minutes"]}
                             for a, n in sorted(after.items())]
+    # Completed-case percentiles alone can reverse the apparent conclusion:
+    # low-priority cases may have disappeared from the queue rather than
+    # improved. Report a complete accounting for each modelled priority class,
+    # using all post-warm-up arrivals, not just the cases that finished.
+    # These labels are user-supplied simulation classes, not demographic traits.
+    priority_outcomes = []
+    if has_abandonment_scenario and classes:
+        for index, item in enumerate(classes):
+            members = [case for case in range(warm, model["cases"]) if klass[case] == index]
+            completed_count = sum(case in finish for case in members)
+            abandoned_by_activity = {activity: 0 for activity in sorted(after)}
+            for case in members:
+                activity = abandoned.get(case)
+                if activity is not None:
+                    abandoned_by_activity[activity] += 1
+            abandoned_count = sum(abandoned_by_activity.values())
+            unresolved_count = len(members) - completed_count - abandoned_count
+            priority_outcomes.append({
+                "name": item["name"], "rank": item["rank"], "declared_share": item["share"],
+                "post_warmup_arrivals": len(members),
+                "completed": completed_count, "abandoned": abandoned_count,
+                "unresolved": unresolved_count,
+                "completion_rate": round(completed_count / len(members), 6) if members else None,
+                "abandonment_rate": round(abandoned_count / len(members), 6) if members else None,
+                "abandoned_by_activity": [
+                    {"activity": name, "cases_abandoned": count}
+                    for name, count in abandoned_by_activity.items()
+                ],
+                "selected_completions_only_for_cycle_time": True,
+            })
     return {
         "cases_simulated": model["cases"],
         "cases_measured": len(cycle),
@@ -840,6 +871,11 @@ def simulate(model: dict[str, Any], samples: list[float] | None = None) -> dict[
                 sum(x["cases_abandoned"] for x in abandonment_rows) / max(1, model["cases"] - warm), 6),
             "abandonment_by_activity": abandonment_rows,
             "abandonment_is_simulated_not_observed": True} if abandonment_rows else {}),
+        **({"priority_outcomes": priority_outcomes,
+            "priority_outcome_basis": "all_post_warmup_arrivals_in_modelled_priority_class",
+            "priority_abandonment_is_simulated_not_observed": True,
+            "priority_outcomes_not_a_fairness_or_causal_estimate": True}
+           if has_abandonment_scenario and classes else {}),
         "cycle_time_seconds": {"p50": _percentile(cycle, 0.5), "p90": _percentile(cycle, 0.9),
                                "mean": sum(cycle) / len(cycle) if cycle else None},
         "completed_per_day": round(len(cycle) / (window / 86400), 3) if window > 0 else None,

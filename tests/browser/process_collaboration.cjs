@@ -104,6 +104,7 @@ const pathModule = require("node:path");
     });
     await upload(alice, pathModule.join(scratch, "process.json"));
     assert.equal(await alice.locator("#inventory button").count(), 0);
+    const handoffPublishedResponse = alice.waitForResponse(response => response.request().method() === "POST" && new URL(response.url()).pathname === "/v1/human/processes");
     await alice
       .getByRole("button", {
         name: "Publish as a new shared process",
@@ -118,6 +119,124 @@ const pathModule = require("node:path");
       await alice.locator("#design").textContent(),
       /Evidence missing/,
     );
+    // Browser acceptance of the real authenticated handoff preflight against the
+    // synthetic Gateway. The packet is kept in Chromium, never posted to it.
+    const handoffPublished = await (await handoffPublishedResponse).json();
+    assert.ok(handoffPublished.process?.workflow_id, "publication returns a process identity");
+    const handoffProcess = handoffPublished.process;
+    const handoffPacket = (overrides = {}) => ({
+      format: "openworkgraph.evidence-handoff-review.v1",
+      scope: "human_review_only",
+      execution_authorized: false,
+      source_read_authorized: false,
+      process: {
+        workflow_id: handoffProcess.workflow_id,
+        revision: handoffProcess.revision,
+        content_sha256: handoffProcess.content_sha256,
+        ...overrides,
+      },
+    });
+    const setHandoffPacket = async packet => alice.locator("#handoffPacket").setInputFiles({
+      name: "local-review.json", mimeType: "application/json",
+      buffer: Buffer.from(JSON.stringify(packet)),
+    });
+    let uploadedHandoff = false;
+    alice.on("request", request => {
+      if (request.method() !== "GET" && request.postData()?.includes("openworkgraph.evidence-handoff-review.v1")) uploadedHandoff = true;
+    });
+    await setHandoffPacket(handoffPacket());
+    await alice.locator("#handoffCheck").click();
+    await alice.locator("#handoffStatus").filter({hasText: "MATCH: Fresh authorized process revision"}).waitFor();
+    assert.match(await alice.locator("#handoffStatus").textContent(), /No packet checked|execution authorization remain unverified/i);
+    assert.equal(uploadedHandoff, false, "review packet bytes must remain local");
+    await setHandoffPacket(handoffPacket({revision: handoffProcess.revision + 1}));
+    await alice.locator("#handoffCheck").click();
+    await alice.locator("#handoffStatus").filter({hasText: "REFUSED:"}).waitFor();
+    // Denial can revoke the session: isolate it from the rest of the lifecycle.
+    const deniedHandoffPage = await login("alice");
+    await deniedHandoffPage.getByRole("button", {name:"Shared support process · r1", exact:true}).click();
+    await deniedHandoffPage.locator("#selectedTitle").filter({hasText:"revision 1"}).waitFor();
+    await deniedHandoffPage.locator("#handoffPacket").setInputFiles({
+      name:"denied-review.json", mimeType:"application/json",
+      buffer:Buffer.from(JSON.stringify(handoffPacket())),
+    });
+    const detailUrl = "**/v1/human/processes/" + handoffProcess.workflow_id;
+    await deniedHandoffPage.route(detailUrl, async route => route.fulfill({status:403, contentType:"application/json", body:'{"detail":"denied"}'}), {times:1});
+    await deniedHandoffPage.locator("#handoffCheck").click();
+    await deniedHandoffPage.locator("#handoffStatus").filter({hasText:/REFUSED:|Session cleared/}).waitFor();
+    assert.equal(uploadedHandoff, false);
+
+    // An expired delegated session (401) must fail closed rather than reuse a
+    // previously authenticated process selection or display a false match.
+    const expiredHandoffPage = await login("alice");
+    await expiredHandoffPage.getByRole("button", {name:"Shared support process · r1",exact:true}).click();
+    await expiredHandoffPage.locator("#selectedTitle").filter({hasText:"revision 1"}).waitFor();
+    await expiredHandoffPage.locator("#handoffPacket").setInputFiles({
+      name:"expired-review.json",mimeType:"application/json",
+      buffer:Buffer.from(JSON.stringify(handoffPacket())),
+    });
+    await expiredHandoffPage.route(detailUrl, async route => route.fulfill({
+      status:401,contentType:"application/json",body:'{"detail":"expired"}',
+    }), {times:1});
+    await expiredHandoffPage.locator("#handoffCheck").click();
+    await expiredHandoffPage.locator("#handoffStatus").filter({hasText:/REFUSED:|Session cleared/}).waitFor({state:"attached"});
+    assert.doesNotMatch(await expiredHandoffPage.locator("#handoffStatus").textContent(),/^MATCH:/);
+
+    // A fresh authenticated read may return a newer server revision even when
+    // the selected packet was valid at publication. That is a refusal, not an
+    // implicit update or approval of the old review packet.
+    const driftHandoffPage = await login("alice");
+    await driftHandoffPage.getByRole("button", {name:"Shared support process · r1",exact:true}).click();
+    await driftHandoffPage.locator("#selectedTitle").filter({hasText:"revision 1"}).waitFor();
+    await driftHandoffPage.locator("#handoffPacket").setInputFiles({
+      name:"drift-review.json",mimeType:"application/json",
+      buffer:Buffer.from(JSON.stringify(handoffPacket())),
+    });
+    await driftHandoffPage.route(detailUrl, async route => {
+      const response=await route.fetch();
+      const latest=await response.json();
+      assert.equal(response.status(),200,"drift fixture starts from an authorized read");
+      latest.process.revision=handoffProcess.revision+1;
+      latest.latest_revision=handoffProcess.revision+1;
+      await route.fulfill({response,json:latest});
+    }, {times:1});
+    await driftHandoffPage.locator("#handoffCheck").click();
+    await driftHandoffPage.locator("#handoffStatus").filter({hasText:"REFUSED:"}).waitFor();
+    assert.doesNotMatch(await driftHandoffPage.locator("#handoffStatus").textContent(),/^MATCH:/);
+    assert.equal(uploadedHandoff,false);
+
+    // An in-flight authorized detail read must never re-validate a packet after
+    // the reviewer clears or replaces the local selection. Hold the actual
+    // Gateway request until the local generation has changed.
+    const racePage = await login("alice");
+    await racePage.getByRole("button", {name:"Shared support process · r1",exact:true}).click();
+    await racePage.locator("#selectedTitle").filter({hasText:"revision 1"}).waitFor();
+    await racePage.locator("#handoffPacket").setInputFiles({
+      name:"race-review.json",mimeType:"application/json",
+      buffer:Buffer.from(JSON.stringify(handoffPacket())),
+    });
+    let releaseHandoffRead;
+    const heldHandoffRead = new Promise(resolve => {releaseHandoffRead=resolve;});
+    await racePage.route(detailUrl, async route => {
+      await heldHandoffRead;
+      await route.continue();
+    }, {times:1});
+    const pendingHandoffRead = racePage.waitForRequest(request =>
+      request.method()==="GET" && new URL(request.url()).pathname==="/v1/human/processes/"+handoffProcess.workflow_id);
+    await racePage.locator("#handoffCheck").click();
+    await pendingHandoffRead;
+    await racePage.locator("#handoffClear").click();
+    assert.equal(await racePage.locator("#handoffPacket").inputValue(),"");
+    const completedHandoffRead = racePage.waitForResponse(response =>
+      new URL(response.url()).pathname==="/v1/human/processes/"+handoffProcess.workflow_id);
+    releaseHandoffRead();
+    await completedHandoffRead;
+    await racePage.evaluate(() => new Promise(resolve =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.equal(await racePage.locator("#handoffStatus").textContent(),"No packet checked.");
+    await racePage.unroute(detailUrl);
+    assert.equal(uploadedHandoff,false);
+
     assert.equal(
       await alice
         .getByRole("button", { name: "Record design review", exact: true })
