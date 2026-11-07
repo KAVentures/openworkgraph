@@ -171,3 +171,20 @@ def test_durable_route_refuses_success_if_revocation_cleanup_fails(monkeypatch, 
             _request("valid"), Response()))
     assert exc.value.status_code == 503
     assert "cleanup unavailable" in exc.value.detail
+
+
+def test_durable_route_rejects_ambiguous_query_before_source_access(monkeypatch):
+    """A caller cannot select ambiguous refs or introduce a scope override."""
+    monkeypatch.setattr(routes, "dashboard_session_valid", lambda token: token == "valid")
+    monkeypatch.setattr(routes, "_source_scope", lambda: pytest.fail("invalid query read source scope"))
+    valid = "owg:w:" + "a" * 32
+    for query in (
+        "work_item_ref=" + valid + "&work_item_ref=" + "owg:w:" + "b" * 32,
+        "work_item_ref=" + valid + "&scope=owg:scope:attacker",
+        "actor=dashboard:attacker",
+        "work_item_ref=",
+    ):
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(routes.get_local_durable_reviewed_dependencies(
+                _request("valid", query), Response()))
+        assert exc.value.status_code == 422
