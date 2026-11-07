@@ -53,13 +53,16 @@ const document = {
 let resolveFetch;
 let rejectFetch;
 let seenSignal;
+let fetchCount = 0;
+const window = {};
 const fetch = (_url, options) => {
+  fetchCount++;
   seenSignal = options.signal;
   return new Promise((resolve, reject) => { resolveFetch = resolve; rejectFetch = reject; });
 };
 vm.runInNewContext(
   fs.readFileSync('dashboard/open_work_dependencies.js', 'utf8'),
-  {document, fetch, AbortController, encodeURIComponent}
+  {document, window, fetch, AbortController, encodeURIComponent}
 );
 const card = document.getElementById('owgDurableDependencyView');
 assert.ok(card, 'dashboard must mount');
@@ -95,6 +98,29 @@ const list = document.getElementById('owgDependencyResults').children[0];
   await oldRejected;
   assert.match(status.textContent, /valid opaque/, 'stale rejection must not overwrite validation');
   assert.equal(list.children.length, 0, 'stale rejection must not restore results');
+  assert.equal(button.disabled, false);
+  // Authentication bootstrap must complete before any API request is sent.
+  let releaseAuth;
+  window.__owgAuthReady = new Promise(resolve => { releaseAuth = resolve; });
+  const countBeforeAuth = fetchCount;
+  field.value = 'owg:w:' + 'c'.repeat(32);
+  const waiting = form.listeners.submit({preventDefault() {}});
+  assert.equal(fetchCount, countBeforeAuth, 'must not fetch before auth bootstrap');
+  assert.equal(button.disabled, true);
+  // Superseding an in-flight auth wait must not issue a late fetch.
+  field.value = 'bad-ref';
+  await form.listeners.submit({preventDefault() {}});
+  releaseAuth();
+  await waiting;
+  assert.equal(fetchCount, countBeforeAuth, 'cancelled auth wait must not fetch');
+  assert.match(status.textContent, /valid opaque/);
+  assert.equal(button.disabled, false);
+  // A failed bootstrap must fail closed without calling the API.
+  window.__owgAuthReady = Promise.reject(new Error('auth bootstrap failed'));
+  field.value = 'owg:w:' + 'd'.repeat(32);
+  await form.listeners.submit({preventDefault() {}});
+  assert.equal(fetchCount, countBeforeAuth, 'failed auth bootstrap must not fetch');
+  assert.match(status.textContent, /Could not retrieve/);
   assert.equal(button.disabled, false);
 })().catch(error => { console.error(error); process.exitCode = 1; });
 """
