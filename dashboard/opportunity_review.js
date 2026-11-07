@@ -76,10 +76,40 @@
     };
     const monthlyCases=number(shared,'monthly_cases',1,10000000,'monthly_cases');
     const hourly=number(shared,'loaded_hourly_cost',0,1000000,'loaded_hourly_cost');
+    // Explicit arithmetic stress test, never a confidence interval or forecast.
+    // Missing sensitivity preserves the original comparison contract at 25%.
+    const sensitivity=shared.labor_impact_sensitivity_percent===undefined?25:
+      number(shared,'labor_impact_sensitivity_percent',0,100,'labor_impact_sensitivity_percent');
+    const scenarioHorizon=(gross,recurring,upfront,eligibleFraction,netMinutes)=>{
+      const monthly=gross-recurring;
+      const variation=sensitivity/100;
+      const lowMonthly=Math.min(gross*(1-variation),gross*(1+variation))-recurring;
+      const highMonthly=Math.max(gross*(1-variation),gross*(1+variation))-recurring;
+      const after=(months,monthlyValue)=>Number((months*monthlyValue-upfront).toFixed(2));
+      // At 100% eligibility and the same volume, does an optimistic
+      // 12-month scenario cover both recurring costs and implementation?
+      const grossAtFullEligibility=monthlyCases*netMinutes*hourly/60;
+      const requiredMonthly=recurring+upfront/12;
+      const requiredPercent=grossAtFullEligibility>0
+        ? 100*requiredMonthly/grossAtFullEligibility : null;
+      const achievable=requiredPercent!==null&&requiredPercent<=100;
+      return {
+        modeled_year_1_net_after_upfront:after(12,monthly),
+        modeled_36_month_net_after_upfront:after(36,monthly),
+        year_1_sensitivity_net_low:after(12,lowMonthly),
+        year_1_sensitivity_net_high:after(12,highMonthly),
+        break_even_eligible_percent_12m:achievable?Number(Math.max(0,requiredPercent).toFixed(4)):null,
+        break_even_at_declared_volume_and_net_minutes_12m:achievable,
+        sensitivity_percent:sensitivity,
+        horizon_months:[12,36],
+        undiscounted_model_not_cash_receipts:true,
+      };
+    };
     const results=ALTERNATIVES.map(alt=>{
       if(alt.id==='human_only')return {id:alt.id,label:alt.label,baseline:true,eligible_cases_per_month:0,
         net_minutes_saved_per_case:0,assumed_hours_saved_per_month:0,gross_labor_value_per_month:0,
         net_monthly_value_before_other_costs:0,simple_payback_months:null,
+        ...scenarioHorizon(0,0,0,0,0),
         autonomous_business_actions:false,human_approval_required:false,requires_confirmed_business_rules:false};
       const row=rows[alt.id]||{};
       const tag=field=>alt.id+'.'+field;
@@ -97,14 +127,20 @@
         net_minutes_saved_per_case:Number(netMinutes.toFixed(2)),assumed_hours_saved_per_month:Number(hours.toFixed(2)),
         gross_labor_value_per_month:Number(gross.toFixed(2)),net_monthly_value_before_other_costs:Number(net.toFixed(2)),
         simple_payback_months:net>0?Number((oneTime/net).toFixed(2)):null,
+        ...scenarioHorizon(gross,recurring,oneTime,coverage,netMinutes),
         autonomous_business_actions:alt.autonomous_actions,human_approval_required:alt.id==='ai_agent_with_approval',
         requires_confirmed_business_rules:alt.needs_rules};
     });
     const ordered=[...results].sort((a,b)=>b.net_monthly_value_before_other_costs-a.net_monthly_value_before_other_costs||a.id.localeCompare(b.id));
     return {format:'openworkgraph.implementation-alternatives-comparison.v1',currency,
-      shared_inputs:{monthly_cases:monthlyCases,loaded_hourly_cost:hourly},alternatives:results,
+      shared_inputs:{monthly_cases:monthlyCases,loaded_hourly_cost:hourly,
+        labor_impact_sensitivity_percent:sensitivity},alternatives:results,
       ordered_by_modeled_net_value:ordered.map(item=>item.id),
       basis:'user_supplied_assumptions_per_alternative_not_observed_labor_or_verified_savings',
+      first_year_sensitivity_is_statistical_confidence_interval:false,
+      horizon_results_are_undiscounted_assumptions_not_cash_receipts:true,
+      compared_horizons_months:[12,36],
+      future_volume_and_costs_verified:false,
       recommendation:null,approved_alternative:null,authorized_agent_actions:false,
       includes_quality_risk_regulatory_compliance:false,guaranteed_savings:false};
   }
@@ -189,31 +225,50 @@
       tbody.appendChild(row);
     });
     altTable.appendChild(tbody);altSection.appendChild(altTable);
+    const sensitivityLabel=el('label','Labor impact sensitivity ± (%) — illustrative change in modeled labor value');
+    const sensitivityField=el('input');sensitivityField.type='number';sensitivityField.min='0';
+    sensitivityField.max='100';sensitivityField.step='1';sensitivityField.value='25';
+    sensitivityField.setAttribute('aria-label','Labor impact sensitivity percent');
+    sensitivityLabel.appendChild(sensitivityField);altSection.appendChild(sensitivityLabel);
+    altSection.appendChild(el('p','The sensitivity range varies modeled labor impact, not real business outcomes. It is not a statistical confidence interval. Year-1 and 36-month totals assume unchanged monthly volume, costs and eligibility; they are undiscounted.','muted'));
     const compareButton=el('button','Compare alternatives','secondary');compareButton.type='button';
     altSection.appendChild(compareButton);
     const altResult=el('div');altResult.id='owgOpportunityAlternativesResult';altResult.setAttribute('role','status');
     altSection.appendChild(altResult);panel.appendChild(altSection);
     const resetComparison=()=>{comparison=null;altResult.replaceChildren();};
     altTable.addEventListener('input',resetComparison);
+    sensitivityField.addEventListener('input',resetComparison);
     compareButton.addEventListener('click',()=>{
       try{
         const values=readValues();const rows={};
         altTable.querySelectorAll('[data-alternative]').forEach(field=>{
           (rows[field.dataset.alternative]=rows[field.dataset.alternative]||{})[field.dataset.alternativeField]=field.value;
         });
-        comparison=compare({currency:values.currency,monthly_cases:values.monthly_cases,loaded_hourly_cost:values.loaded_hourly_cost},rows);
+        comparison=compare({currency:values.currency,monthly_cases:values.monthly_cases,
+          loaded_hourly_cost:values.loaded_hourly_cost,
+          labor_impact_sensitivity_percent:sensitivityField.value},rows);
         const table=el('table');const hr=el('tr');
-        ['Alternative','Net minutes saved per case','Modeled net value / month','Simple payback (months)','Acts without per-case approval'].forEach(h=>hr.appendChild(el('th',h)));
+        ['Alternative','Net minutes saved per case','Modeled net value / month',
+          'Simple payback (months)','Year 1 after upfront costs','36 months after upfront costs',
+          'Year-1 sensitivity low–high','12-month eligible-case break-even',
+          'Acts without per-case approval'].forEach(h=>hr.appendChild(el('th',h)));
         table.appendChild(hr);
         comparison.ordered_by_modeled_net_value.forEach(id=>{
           const item=comparison.alternatives.find(x=>x.id===id);const tr=el('tr');
           tr.append(el('td',item.label),el('td',String(item.net_minutes_saved_per_case)),
             el('td',comparison.currency+' '+item.net_monthly_value_before_other_costs),
             el('td',item.simple_payback_months===null?'—':String(item.simple_payback_months)),
+            el('td',comparison.currency+' '+item.modeled_year_1_net_after_upfront),
+            el('td',comparison.currency+' '+item.modeled_36_month_net_after_upfront),
+            el('td',comparison.currency+' '+item.year_1_sensitivity_net_low+' to '+
+              comparison.currency+' '+item.year_1_sensitivity_net_high),
+            el('td',item.break_even_eligible_percent_12m===null
+              ? 'Not reachable under assumptions'
+              : item.break_even_eligible_percent_12m+'% eligible cases'),
             el('td',item.autonomous_business_actions?'Yes':'No'));
           table.appendChild(tr);
         });
-        altResult.replaceChildren(table,el('p','Ordered by your modeled net value only. Every alternative except human-only still needs confirmed business rules, and none is authorized by this comparison.','muted'));
+        altResult.replaceChildren(table,el('p','Ordered by your modeled monthly net value only—not by 12- or 36-month returns. The sensitivity range is a user-set arithmetic stress test, not a confidence interval. These are undiscounted assumptions, not realized revenue, verified savings, or approved automations. Every non-baseline alternative needs confirmed business rules; no action is authorized.','muted'));
       }catch(error){comparison=null;altResult.replaceChildren(el('p',String(error.message||error),'muted'));}
     });
     const style=el('style');style.textContent=[
