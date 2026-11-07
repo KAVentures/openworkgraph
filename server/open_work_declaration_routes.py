@@ -2910,6 +2910,13 @@ async def get_local_durable_reviewed_dependencies(request: Request, response: Re
         raise
     except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError,
             ValueError) as exc:
+        # A failed consent-filtered review read must not leave a previous
+        # durable mirror available to a later caller or local process.
+        # Do not mask the original failure if the purge itself also fails.
+        try:
+            await asyncio.to_thread(purge_actor, path, scope=scope, actor=actor)
+        except (OSError, sqlite3.DatabaseError, ValueError):
+            pass
         raise _safe_error(exc) from None
     return {
         **result, "format": "openworkgraph.reviewed-durable-dependencies.v1",
