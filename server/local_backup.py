@@ -30,6 +30,7 @@ import zlib
 import sqlite3
 import tempfile
 import zipfile
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -479,10 +480,18 @@ def restore_backup(path: Path, *, passphrase: str | None = None, replace: bool =
     if lock is not None and not lock.acquire():
         raise BackupError("the recorder is running; quit OpenWorkGraph before restoring")
     try:
-        with tempfile.TemporaryDirectory(prefix=".owg-restore-stage-", dir=data.parent) as scratch:
-            root = Path(scratch)
+        with ExitStack() as staging:
+            root = Path(staging.enter_context(
+                tempfile.TemporaryDirectory(prefix=".owg-restore-stage-", dir=data.parent)))
+            # Staging each target on its own filesystem permits an external
+            # credential folder to be restored without cross-device rename.
+            auth_root = root
+            if summary["includes_secrets"] and not nested:
+                auth.parent.mkdir(parents=True, exist_ok=True)
+                auth_root = Path(staging.enter_context(
+                    tempfile.TemporaryDirectory(prefix=".owg-restore-auth-", dir=auth.parent)))
             staged_data = root / "data"
-            staged_auth = root / "auth"
+            staged_auth = auth_root / "auth"
             staged_data.mkdir()
             # An archive without secrets deliberately keeps the local auth store.
             if nested and not summary["includes_secrets"] and auth.is_dir():
@@ -505,7 +514,8 @@ def restore_backup(path: Path, *, passphrase: str | None = None, replace: bool =
                             target = staged_auth / relative
                         target.parent.mkdir(parents=True, exist_ok=True)
                         if target.is_symlink() or any(
-                            parent.is_symlink() for parent in target.parents if parent.is_relative_to(root)
+                            parent.is_symlink() for parent in target.parents
+                            if parent.is_relative_to(root) or parent.is_relative_to(auth_root)
                         ):
                             raise BackupError("backup destination conflicts with a symbolic link")
                         fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
