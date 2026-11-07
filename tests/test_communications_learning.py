@@ -213,6 +213,21 @@ with TestClient(app) as client:
     data = learned.json()
     assert data["learned_intents"] and data["model_reference"]["model_sha256"] == trained.json()["model_sha256"]
     assert EXAMPLES[0]["text"] not in learned.text
+    # A later human correction invalidates the earlier held-out score and
+    # learned classification; the keyword path remains available.
+    [first] = client.get("/v1/communications/review/examples?status=labelled&limit=1",
+                         headers=owner).json()["examples"]
+    correction = client.post("/v1/communications/review/label", headers=owner, json={
+        "example_id": first["example_id"], "labels": first["labels"],
+        "language": "sv" if first["language"] != "sv" else "en"})
+    assert correction.status_code == 200, correction.text
+    freshness = client.get("/v1/communications/review/model", headers=owner)
+    assert freshness.status_code == 200, freshness.text
+    assert freshness.json()["trained"] and not freshness.json()["usable"]
+    assert not freshness.json()["evaluation_current"]
+    stale = client.post(query + "&classifier=learned", content=body, headers=confirmed)
+    assert stale.status_code == 409 and "stale" in stale.text
+    assert client.post(query + "&classifier=keyword", content=body, headers=confirmed).status_code == 200
     off = client.put("/v1/communications/review/settings", headers=owner, json={"enabled": False})
     assert off.json()["example_count"] == 0 and off.json()["model_trained"] is False
     assert client.post(query + "&classifier=learned", content=body, headers=confirmed).status_code == 409
