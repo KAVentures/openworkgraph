@@ -19,6 +19,20 @@ def payload(pairs):
 
 
 class ReviewQueueTests(unittest.TestCase):
+    def test_denied_revoked_and_unknown_access_never_generate_review_rows(self):
+        for mode in ("off", "none", "denied", "revoked", "future_mode", None):
+            data = payload([pair("A", "F", ["e1"])])
+            data["saved_history_access"] = mode
+            with self.subTest(mode=mode), self.assertRaises(ValueError):
+                build_review_queue(data)
+
+    def test_explicit_current_run_scope_is_review_only(self):
+        data = payload([pair("A", "F", ["e1"])])
+        data["saved_history_access"] = "current_run"
+        out = build_review_queue(data)
+        self.assertEqual(out["event_reviews_count"], 1)
+        self.assertFalse(out["event_reviews"][0]["confirmed_case"])
+
     def test_interleaved_unrelated_events_are_never_attributed(self):
         out = build_review_queue(payload([pair("A", "F", ["a1"], [
             {"session_started_at": "2026-11-01T09:00:00Z", "evidence_event_ids": ["a0"]}])]))
