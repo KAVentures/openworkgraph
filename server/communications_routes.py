@@ -161,7 +161,10 @@ async def analyze_export(
         raise HTTPException(403, "Explicit confirmation to keep redacted review examples is required")
     learned = None
     if classifier == "learned":
-        learned = review.learned_classifier()
+        try:
+            learned = review.learned_classifier(_intent_names())
+        except review.ReviewError as exc:
+            raise HTTPException(409, str(exc)) from None
         if learned is None:
             raise HTTPException(409, "train an intent model from reviewed examples first")
     if review_sample and not review.settings()["enabled"]:
@@ -283,7 +286,7 @@ def _trained():
 @router.get("/v1/communications/review/model")
 def get_intent_model(request: Request):
     _require_dashboard(request)
-    return _review_call(review.model_status)
+    return _review_call(review.model_status, _intent_names())
 
 
 @router.post("/v1/communications/review/model/delete")

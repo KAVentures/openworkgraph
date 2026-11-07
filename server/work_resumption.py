@@ -177,6 +177,8 @@ def resumption_candidates(
         "identity_timelines": [],
         "observed_case_groups": [],
         "observed_case_groups_truncated": False,
+        "observed_group_continuity": [],
+        "observed_group_continuity_truncated": False,
         "saved_history_access": mode,
         "history_access_limited": mode != "all_saved",
         "session_gap_minutes": gap_minutes,
@@ -194,6 +196,7 @@ def resumption_candidates(
             "identity_segments_are_observation_bursts_not_tasks": True,
             "resource_local_assignment_requires_correlated_observations": True,
             "observed_case_groups_are_not_confirmed_tasks": True,
+            "group_continuity_requires_shared_observed_pair": True,
         },
         "derived": True,
         "authoritative": False,
@@ -271,6 +274,35 @@ def resumption_candidates(
     observed_groups = _observed_case_groups(current)
     result["observed_case_groups"] = observed_groups[:24]
     result["observed_case_groups_truncated"] = len(observed_groups) > 24
+    # Corroborate current co-reference groups across sessions without treating
+    # session-wide A/B overlap as a joint case. Only literal same-event pairs
+    # observed in both windows qualify; no transitive group inference.
+    group_matches: list[dict[str, Any]] = []
+    for group in observed_groups:
+        if group["resource_count"] < 2:
+            continue
+        group_ids = {_identity(pointer) for pointer in group["resource_pointers"]}
+        for earlier_index in range(current_index - 1, -1, -1):
+            earlier_bucket = by_session[earlier_index]
+            pairs = sorted(pair for pair in current["coobserved"] & earlier_bucket["coobserved"]
+                           if pair[0] in group_ids and pair[1] in group_ids)
+            if not pairs:
+                continue
+            matched = sorted({identity for pair in pairs for identity in pair})
+            earlier_start, earlier_end = sessions[earlier_index]
+            group_matches.append({
+                "current_group_id": group["group_id"],
+                "earlier_session_started_at": _iso(earlier_start),
+                "earlier_session_last_observed_at": _iso(earlier_end),
+                "corroborated_pair_count": len(pairs),
+                "matched_resource_pointers": [current["refs"][identity] for identity in matched[:12]],
+                "matched_resources_truncated": len(matched) > 12,
+                "assignment_status": "observed_pair_continuity_candidate",
+                "proves_same_case": False,
+                "requires_review": True,
+            })
+    result["observed_group_continuity"] = group_matches[:24]
+    result["observed_group_continuity_truncated"] = len(group_matches) > 24
     if not current["refs"]:
         result["notice"] = ("The latest session has no observed stable pointer, so resumption "
                             "cannot be assessed; this does not mean the work is new.")

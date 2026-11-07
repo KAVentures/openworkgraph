@@ -240,4 +240,28 @@ def workflow_trace(
         "data_layer": "privacy_hardened_raw_rich_evidence",
         "evidence_contract": dict(RAW_RICH_EVIDENCE_CONTRACT),
         "derived_task_inference_authoritative": False,
+        **_interaction_candidates(rows),
     }
+
+
+def _interaction_candidates(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Friction candidates among this page's rows, when the user turned them on (#634).
+
+    They are inferred patterns for a person to review, never observed facts, workflow steps or a
+    reason for an agent to act, and they carry no judgement of attention, intent or performance.
+    """
+    from . import capture_depth
+    if not capture_depth.load()["signals"]["friction_candidates"]:
+        return {}
+    from .interaction_evidence import CLAIMS, friction_candidates
+    page_ids = {r.get("event_id") for r in rows}
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        if str(r.get("event_type") or "").startswith("browser_"):
+            meta = r.get("metadata") or {}
+            groups.setdefault(str(meta.get("tab_id") if meta.get("tab_id") is not None else r.get("session_id") or ""), []).append(r)
+    found = [c for group in groups.values() for c in friction_candidates(group)
+             if all(i in page_ids for i in c.get("event_ids", []))]
+    return {"interaction_candidates": [{**c, "basis": "inferred_candidate", "requires_review": True,
+                                        "workflow_step": False} for c in sorted(found, key=lambda c: c["at"])[:50]],
+            "interaction_candidates_scope": "rows_on_this_page", **{f"interaction_{k}": v for k, v in CLAIMS.items()}}

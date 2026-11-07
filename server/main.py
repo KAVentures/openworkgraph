@@ -686,6 +686,13 @@ def export_session(fmt: str, scope: str = "current", include_raw: bool = False, 
     )
 
 
+@app.get("/simulation-report-compare.js")
+def simulation_report_compare_script() -> FileResponse:
+    """Static browser-only comparison code; no simulation data is uploaded."""
+    return FileResponse(ROOT / "dashboard" / "simulation_report_compare.js",
+                        media_type="application/javascript", headers={"Cache-Control": "no-store"})
+
+
 @app.get("/event-log-quality-trends.js")
 def event_log_quality_trends_script() -> FileResponse:
     """Public static code only; the data endpoint still requires a local dashboard session."""
