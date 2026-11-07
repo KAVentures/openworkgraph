@@ -107,6 +107,12 @@ def extract_after_readiness(*, expected_generation, tenant, mailbox, folder,
         membership_opener=membership_opener)
     if result.get("status") != "review_required":
         raise ReceiptError("Checkpoint-bound extraction not ready for review")
+    # A checkpoint may advance between the first readiness inspection and
+    # the delegated Graph read. Never label a result as approved for the
+    # reviewed generation when the delegate observed a different predecessor.
+    if (type(result.get("committed_predecessor_generation")) is not int
+            or result["committed_predecessor_generation"] != expected_generation):
+        raise ReceiptError("Checkpoint generation changed during extraction; inspect before retry")
     return {"format": FORMAT, "status": "review_required",
             "committed_predecessor_generation": expected_generation,
             "event_snapshots": result["event_snapshots"],
