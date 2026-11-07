@@ -86,6 +86,7 @@ def test_restore_uses_preflight_and_preserves_existing_keys(site):
     result = backup.restore_backup(archive, replace=True)
     assert result["restored_files"] == result["file_count"] == 1
     assert result["ready"] is True
+    assert result["operation"] == "offline_restore" and result["writes_performed"] is True
     assert len(result["moved_aside"]) == 1
     assert sqlite3.connect(data / "workflow_observer.db").execute(
         "SELECT id FROM events ORDER BY id").fetchall() == [("before",)]
