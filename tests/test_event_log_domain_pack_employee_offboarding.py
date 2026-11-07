@@ -161,8 +161,8 @@ def test_optional_unmapped_controls_are_disclosed_not_silently_inferred():
     assert len(report["compliance"][0]["results"]) == 3
     assert {item["rule"]["template"] for item in report["compliance"][0]["results"]} == {
         "response_within", "precedence", "existence"}
-    assert "Review completed" not in report["object_model"]["lifecycles"][0].get(
-        "unmodelled_activities", {}) or True  # optional unmapped check via available activities
+    assert report["object_model"]["lifecycles"][0]["object_type"] == "case"
+    assert "manager_approved" not in report["mapping"]["activities"]
 
 
 def test_a_more_generous_elapsed_target_changes_only_its_configured_rule():
