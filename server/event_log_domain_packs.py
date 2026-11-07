@@ -365,10 +365,105 @@ SALES_LEAD_1_0_0: dict[str, Any] = {
     ],
 }
 
+
+CUSTOMER_ONBOARDING_1_0_0: dict[str, Any] = {
+    "format": FORMAT, "pack_id": "customer_onboarding", "version": "1.0.0",
+    "title": "Customer onboarding and activation",
+    "reference_goal": "Customer onboarding to recorded activation reference lifecycle",
+    "description": ("Review the recorded handoff from an opened customer onboarding case through access "
+                    "provisioning and activation confirmation. Inspect elapsed time, repeated rework and missing "
+                    "or out-of-order steps using the selected log's case identities."),
+    "object_types": [
+        {"role": "onboarding_case", "label": "Onboarding case", "required": True},
+    ],
+    "activities": [
+        {"role": "case_opened", "label": "Open onboarding case", "required": True},
+        {"role": "handoff_received", "label": "Receive handoff", "required": False},
+        {"role": "requirements_verified", "label": "Verify prerequisites", "required": False},
+        {"role": "access_provisioned", "label": "Provision access", "required": True},
+        {"role": "activation_confirmed", "label": "Confirm activation", "required": True},
+        {"role": "rework_requested", "label": "Request rework", "required": False},
+        {"role": "case_closed", "label": "Close case", "required": False},
+    ],
+    "parameters": [
+        {"name": "provision_hours", "label": "Provision within (elapsed hours of opening)", "unit": "hours",
+         "default": 48, "min": 0.25, "max": 8760},
+        {"name": "activation_days", "label": "Confirm activation within (elapsed days of provisioning)",
+         "unit": "days", "default": 14, "min": 1, "max": 365},
+    ],
+    "metrics": [
+        {"case_type": "@onboarding_case",
+         "metric": {"name": "onboarding_open_to_provision", "kind": "time_between",
+                    "from_activity": "@case_opened", "to_activity": "@access_provisioned"}},
+        {"case_type": "@onboarding_case",
+         "metric": {"name": "onboarding_provision_to_activation", "kind": "time_between",
+                    "from_activity": "@access_provisioned", "to_activity": "@activation_confirmed"}},
+        {"case_type": "@onboarding_case",
+         "metric": {"name": "onboarding_open_to_activation", "kind": "time_between",
+                    "from_activity": "@case_opened", "to_activity": "@activation_confirmed"}},
+        {"case_type": "@onboarding_case",
+         "metric": {"name": "onboarding_rework_events", "kind": "activity_count",
+                    "activity": "@rework_requested"}},
+    ],
+    "compliance": [
+        {"case_type": "@onboarding_case",
+         "rule": {"template": "precedence", "a": "@case_opened", "b": "@access_provisioned"}},
+        {"case_type": "@onboarding_case",
+         "rule": {"template": "precedence", "a": "@requirements_verified", "b": "@access_provisioned"}},
+        {"case_type": "@onboarding_case",
+         "rule": {"template": "response_within", "a": "@case_opened", "b": "@access_provisioned",
+                  "seconds": "$provision_hours"}},
+        {"case_type": "@onboarding_case",
+         "rule": {"template": "response_within", "a": "@access_provisioned", "b": "@activation_confirmed",
+                  "seconds": "$activation_days"}},
+        {"case_type": "@onboarding_case",
+         "rule": {"template": "precedence", "a": "@activation_confirmed", "b": "@case_closed"}},
+        {"case_type": "@onboarding_case",
+         "rule": {"template": "existence", "a": "@activation_confirmed", "min": 0, "max": 1}},
+    ],
+    "object_rules": [],
+    "reference_model": {
+        "types": [
+            {"object_type": "@onboarding_case",
+             "steps": ["@case_opened", {"optional": "@handoff_received"},
+                       {"optional": "@requirements_verified"}, "@access_provisioned",
+                       "@activation_confirmed", {"optional": "@case_closed"}]},
+        ],
+        "arcs": [
+            {"activity": "@case_opened", "object_type": "@onboarding_case", "variable": False},
+            {"activity": "@handoff_received", "object_type": "@onboarding_case", "variable": False},
+            {"activity": "@requirements_verified", "object_type": "@onboarding_case", "variable": False},
+            {"activity": "@access_provisioned", "object_type": "@onboarding_case", "variable": False},
+            {"activity": "@activation_confirmed", "object_type": "@onboarding_case", "variable": False},
+            {"activity": "@case_closed", "object_type": "@onboarding_case", "variable": False},
+        ],
+    },
+    "assumptions": [
+        "The mapping must use a stable, authorized onboarding case identifier; equal case IDs from "
+        "different sources are not evidence that the same customer was involved.",
+        "The reference lifecycle shows a simple successful path; cancelled, incomplete, exceptional "
+        "or unobserved cases can appear as missing responses or model deviations.",
+        "Access provisioned and activation confirmed are event labels asserted by the supplied log. "
+        "This pack cannot validate current entitlement, source-of-truth provisioning or customer success.",
+        "The prerequisite-order rule applies only when the optional verification step is mapped. "
+        "Not every onboarding process requires the same approvals or controls.",
+        "A second activation event is flagged for review, not assumed to be a second customer or "
+        "incorrect action. Retries, corrections and multi-product activations may be legitimate.",
+        "The reference path excludes rework, which is counted separately and may appear as a deviation.",
+        "Durations use the first recorded occurrence of mapped activities and include nights, weekends, "
+        "waiting and missing history; they are not employee effort or customer conversion rates.",
+        "Response rules evaluate each recorded initiating event, including those without an observed "
+        "completion. Their targets are editable examples, not validated contractual service levels.",
+        "This pack does not import CRM/identity records, join users, grant execution, certify compliance "
+        "or independently verify any customer outcome.",
+    ],
+}
+
 PACKS: dict[str, dict[str, dict[str, Any]]] = {"order_to_cash": {"1.0.0": ORDER_TO_CASH_1_0_0},
                                               "procure_to_pay": {"1.0.0": PROCURE_TO_PAY_1_0_0},
                                               "service_management": {"1.0.0": SERVICE_MANAGEMENT_1_0_0},
-                                              "sales_lead_management": {"1.0.0": SALES_LEAD_1_0_0}}
+                                              "sales_lead_management": {"1.0.0": SALES_LEAD_1_0_0},
+                                              "customer_onboarding": {"1.0.0": CUSTOMER_ONBOARDING_1_0_0}}
 
 
 class _Strict(BaseModel):

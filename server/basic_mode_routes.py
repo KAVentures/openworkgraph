@@ -8,6 +8,8 @@ dashboard layer and can arrange what they built.
 
 from typing import Any
 
+from starlette.concurrency import run_in_threadpool
+
 from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
 
@@ -62,6 +64,54 @@ async def post_local_backup(request: Request) -> dict[str, Any]:
         return local_backup.create_in_folder(passphrase)
     except local_backup.BackupError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+async def post_local_backup_preflight(request: Request) -> Response:
+    """Read-only plan for one backup already in OWG's configured local backup folder.
+
+    This is intentionally a dashboard-only endpoint, not a source/agent API or
+    an online restore. Encrypted archives must use the offline CLI so secrets
+    never enter browser requests. Names are chosen from the bounded local list,
+    not arbitrary user-supplied filesystem paths.
+    """
+    from . import local_backup
+    import json
+
+    _require_dashboard_session(request)
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+        raise HTTPException(415, "JSON backup selection required")
+    raw = bytearray()
+    try:
+        async for chunk in request.stream():
+            if len(raw) + len(chunk) > 512:
+                raise HTTPException(413, "Backup selection is too large")
+            raw.extend(chunk)
+        try:
+            value = json.loads(raw)
+        except (ValueError, UnicodeError):
+            raise HTTPException(422, "Invalid backup selection") from None
+        if (not isinstance(value, dict) or set(value) != {"name"}
+                or not isinstance(value["name"], str) or len(value["name"]) > 160
+                or not value["name"].startswith("owg-backup-")
+                or any(ord(c) in (0, 47, 58, 92) for c in value["name"])):
+            raise HTTPException(422, "Choose one listed local backup by name")
+        selected = next((item for item in local_backup.list_backups()["backups"]
+                         if item["name"] == value["name"]), None)
+        if selected is None:
+            raise HTTPException(404, "Selected local backup was not found")
+        if selected["encrypted"]:
+            raise HTTPException(422, "Encrypted backups require offline CLI preflight with a passphrase environment variable")
+        selected_path = local_backup.backup_folder() / value["name"]
+        if selected_path.is_symlink() or not selected_path.is_file():
+            raise HTTPException(422, "Selected backup must be a regular file in the local backup folder")
+        try:
+            result = await run_in_threadpool(local_backup.plan_restore, selected_path)
+        except local_backup.BackupError as exc:
+            raise HTTPException(422, str(exc)) from None
+        from fastapi.responses import JSONResponse
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
+    finally:
+        raw.clear()
 
 
 def _require_dashboard_session(request: Request) -> None:
@@ -160,6 +210,7 @@ if not getattr(app.state, "owg_basic_mode_installed", False):
     app.add_api_route("/v1/screen-capture", put_screen_capture, methods=["PUT"])
     app.add_api_route("/v1/local-backups", get_local_backups, methods=["GET"])
     app.add_api_route("/v1/local-backups", post_local_backup, methods=["POST"])
+    app.add_api_route("/v1/local-backups/preflight", post_local_backup_preflight, methods=["POST"])
     app.add_api_route("/v1/capture-depth", get_capture_depth, methods=["GET"])
     app.add_api_route("/v1/capture-depth", put_capture_depth, methods=["PUT"])
     app.add_api_route("/v1/capture-coverage", get_capture_coverage, methods=["GET"])
