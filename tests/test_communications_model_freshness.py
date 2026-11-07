@@ -59,6 +59,7 @@ def test_changed_holdout_label_invalidates_quality_and_classifier(prepared):
     assert state["trained"] and not state["usable"]
     assert state["stale_reason"] == "labelled_examples_changed_or_expired"
     assert state["evaluation_current"] is False
+    assert state["evaluation"] is None, "stale quality scores must not be returned"
     assert state["model_sha256"] == old["model_sha256"]
     with pytest.raises(store.ReviewError, match="stale"):
         store.learned_classifier(["Refund", "Account access"])
