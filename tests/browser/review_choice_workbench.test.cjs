@@ -54,6 +54,10 @@ const getControls=results=>[results.children.find(x=>x.tagName==='select'),resul
      assert.equal(lastEvent().detail.idea_revision,3);
      assert.equal(lastEvent().detail.idea_state,basis().idea.state,'handoff must pin inspected opportunity state');
      assert.equal(lastEvent().detail.project_id,'p1');
+     assert.equal(lastEvent().detail.review_basis.project_set_sha256,'d'.repeat(64));
+     assert.equal(lastEvent().detail.review_basis.idea_state,basis().idea.state);
+     assert.equal(lastEvent().detail.review_basis.project_id,'p1');
+     assert.deepEqual(Array.from(lastEvent().detail.review_basis.blockers),[]);
      assert.equal(lastEvent().detail.spec_sha256,'a'.repeat(64));
      assert.equal(lastEvent().detail.archive_sha256,'b'.repeat(64));
    },true);
