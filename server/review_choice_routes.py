@@ -39,6 +39,11 @@ def choices(request: Request, idea_id: str):
         raise HTTPException(409, "Duplicate project identities; re-export before review")
     projects = []
     for project in journey["projects"]:
+        # Never approve a partial customer-report basis; downstream review
+        # helpers cap these lists at 64 and could otherwise omit blockers.
+        reports = project.get("reported_specifications")
+        if not isinstance(reports, list) or len(reports) > 64:
+            raise HTTPException(409, "Project report history incomplete; re-inspect")
         blockers = []
         if process.get("status") != "current":
             blockers.append("saved_process_not_current")
