@@ -2026,6 +2026,33 @@
           status.textContent='Selected export changed. Return to the review workbench and inspect again.';
           return;
         }
+        // The destination independently revalidates the complete inspected basis.
+        // A browser-side preflight is not an authorization or a durable snapshot.
+        const basis=handoff.review_basis;
+        if(!basis||basis.project_id!==handoff.project_id||
+           basis.idea_revision!==handoff.idea_revision||basis.idea_state!==handoff.idea_state||
+           basis.spec_sha256!==handoff.spec_sha256||basis.archive_sha256!==handoff.archive_sha256||
+           !/^[a-f0-9]{64}$/i.test(basis.project_set_sha256||'')){
+          throw new Error('Complete inspected review basis missing. Inspect again.');
+        }
+        const verified=await api('/v1/review-choice-workbench/'+encodeURIComponent(id)+'/preflight',{
+          method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(basis)
+        });
+        if(!verified.ok)throw new Error('Destination review preflight refused ('+verified.status+').');
+        const attestation=await verified.json();
+        if(!current())return;
+        if(attestation.format!=='openworkgraph.review-preflight.v1'||
+           attestation.idea_id!==id||attestation.project_id!==handoff.project_id||
+           attestation.idea_revision!==handoff.idea_revision||
+           attestation.project_set_sha256!==basis.project_set_sha256||
+           attestation.spec_sha256!==handoff.spec_sha256||
+           attestation.archive_sha256!==handoff.archive_sha256||
+           attestation.execution_authorized!==false||attestation.review_required!==true||
+           attestation.source_read_authorized!==false||
+           attestation.verified_business_outcomes!==false||
+           JSON.stringify(attestation.blockers)!==JSON.stringify(basis.blockers)){
+          throw new Error('Destination review attestation inconsistent. Inspect again.');
+        }
         // Only reveal the decision surface after authenticated exact-export checks.
         await show(id);
         if(!current())return;
