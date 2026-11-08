@@ -278,3 +278,44 @@ def test_snapshot_read_failure_purges_only_current_actor(tmp_path, fail_on_call)
                               case_id="invoice")["direct"] == []
     assert dependency_context(path, scope=scope, actor="session_b",
                               case_id="invoice")["direct"] == ["other"]
+
+
+def test_rejected_live_review_purges_stale_actor_mirror_only(tmp_path):
+    """An invalid current review cannot preserve edges from a prior review."""
+    from server.open_work_dependency_store import reconcile_current_reviewed_dependencies
+    from server.open_work_case_declarations import CaseDeclarationError
+
+    path = str(tmp_path / "invalid-live-review.sqlite")
+    scope, actor = "tenant", "session_a"
+    assert declare_dependency(path, scope=scope, actor=actor,
+                              case_id="invoice", prerequisite="review")
+    assert declare_dependency(path, scope=scope, actor="session_b",
+                              case_id="invoice", prerequisite="other")
+
+    # A dangling prerequisite is rejected by the reviewed graph projector.
+    invalid = {
+        "format": "openworkgraph.local-case-declarations.v1",
+        "items": [{
+            "work_item_ref": "owg:w:" + "a" * 32,
+            "depends_on_work_item_refs": ["owg:w:" + "b" * 32],
+            "goal_code": "verify_operation",
+            "expected_outcome_code": "operation_receipt_reviewed",
+            "revision": 1, "updated_at": "2026-11-07T00:00:00Z",
+            "expires_at": "2026-11-08T00:00:00Z",
+            "provenance": "explicit_owner_declaration_not_source_verified",
+            "expected_outcome_verified": False,
+            "business_obligation_verified": False,
+            "customer_outcome_verified": False,
+            "agent_execution_authorized": False,
+            "source_state": "unknown_until_explicit_recheck",
+        }],
+    }
+    with pytest.raises(CaseDeclarationError):
+        reconcile_current_reviewed_dependencies(
+            path, scope=scope, actor=actor,
+            scope_provider=lambda: scope,
+            snapshot_provider=lambda _scope: invalid)
+    assert dependency_context(path, scope=scope, actor=actor,
+                              case_id="invoice")["direct"] == []
+    assert dependency_context(path, scope=scope, actor="session_b",
+                              case_id="invoice")["direct"] == ["other"]
