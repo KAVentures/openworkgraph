@@ -311,15 +311,25 @@ def _audit_operator_result(audit_dir, *, action, tenant, mailbox, folder,
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
-    fd = os.open(directory / name, flags, 0o600)
+    # Pin the audited directory to a file descriptor. A pathname can be
+    # replaced with a symlink between lstat() and receipt creation.
+    dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    dir_flags |= getattr(os, "O_NOFOLLOW", 0)
+    directory_fd = os.open(directory, dir_flags)
     try:
+        verified_mode = os.fstat(directory_fd).st_mode
+        if not stat.S_ISDIR(verified_mode) or verified_mode & 0o077:
+            raise ReceiptError("Audit directory must remain private")
+        fd = os.open(name, flags, 0o600, dir_fd=directory_fd)
+        # The file is created relative to the pinned directory, never through
+        # a newly resolved path. Preserve partial files on write failure.
         with os.fdopen(fd, "wb") as stream:
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
-    except BaseException:
-        # Keep the potentially partial file as evidence; never overwrite it.
-        raise
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
     return name
 
 
