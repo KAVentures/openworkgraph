@@ -696,14 +696,14 @@ def test_private_operator_audit_is_immutable_and_redacted(tmp_path):
     private.mkdir(mode=0o700)
     first = _audit_operator_result(
         private, action="extract", tenant="tenant-secret",
-        mailbox="private@example.com", folder="folder-secret",
+        mailbox="private@example.com", folder="folderSecret",
         log_id="log-secret", generation=2,
         result={"status": "review_required", "event_snapshots": 3,
                 "removal_markers_for_review": 1, "checkpoint_advanced": False,
                 "provider_token": "never-write-token"})
     second = _audit_operator_result(
         private, action="commit", tenant="tenant-secret",
-        mailbox="private@example.com", folder="folder-secret",
+        mailbox="private@example.com", folder="folderSecret",
         log_id="log-secret", generation=2,
         result={"status": "checkpoint_committed", "committed_generation": 3})
     assert first != second
@@ -714,7 +714,7 @@ def test_private_operator_audit_is_immutable_and_redacted(tmp_path):
     assert record["removal_markers_for_review"] == 1
     assert record["expected_generation"] == 2
     assert record["automatic_retry_allowed"] is False
-    for secret in ("private@example.com", "tenant-secret", "folder-secret",
+    for secret in ("private@example.com", "tenant-secret", "folderSecret",
                    "log-secret", "never-write-token"):
         assert secret not in data
     assert os.stat(private / first).st_mode & 0o777 == 0o600
