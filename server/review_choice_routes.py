@@ -31,6 +31,8 @@ def choices(request: Request, idea_id: str):
     origins = journey["dataset_origins"]
     if len(origins) > 64:
         raise HTTPException(409, "Dataset provenance exceeds review limit; narrow selection")
+    if len(journey["projects"]) > 64:
+        raise HTTPException(409, "Project history exceeds review limit; narrow selection")
     project_ids = [p["project_id"] for p in journey["projects"]]
     if len(project_ids) != len(set(project_ids)):
         raise HTTPException(409, "Duplicate project identities; re-export before review")
