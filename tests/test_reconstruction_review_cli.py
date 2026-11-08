@@ -146,6 +146,30 @@ class ReviewQueueTests(unittest.TestCase):
         self.assertTrue(review["unlisted_events_are_unassigned"])
         self.assertFalse(review["coverage_incomplete"])
 
+
+    def test_duplicate_event_id_and_timestamp_across_rows_cannot_forge_pair(self):
+        import json
+        import sqlite3
+        from server.work_resumption import resumption_candidates
+        db = sqlite3.connect(":memory:")
+        db.row_factory = sqlite3.Row
+        db.execute("CREATE TABLE events(event_id TEXT, observed_at TEXT, metadata_json TEXT)")
+        issue = {"resource_reference": {"resource_ref": "owg:r:" + "a" * 32,
+                                         "provider": "github", "resource_kind": "issue"}}
+        file_ref = {"file_reference": {"file_ref": "owg:f:" + "f" * 32}}
+        both = {**issue, **file_ref}
+        rows = [
+            ("old-real", "2026-10-12T09:00:00Z", json.dumps(both)),
+            ("new-real", "2026-10-14T10:00:00Z", json.dumps(both)),
+            ("collision", "2026-10-14T10:01:00Z", json.dumps(issue)),
+            ("collision", "2026-10-14T10:01:00Z", json.dumps(file_ref)),
+        ]
+        db.executemany("INSERT INTO events VALUES (?, ?, ?)", rows)
+        review = resumption_candidates(db, lease={"mode": "all_saved"})["event_assignment_review"]
+        self.assertEqual({row["event_id"] for row in review["event_reviews"]},
+                         {"old-real", "new-real"})
+        self.assertTrue(review["unlisted_events_are_unassigned"])
+
     def test_authorized_empty_history_exposes_empty_review_contract(self):
         import sqlite3
         from server.work_resumption import resumption_candidates
