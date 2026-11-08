@@ -142,3 +142,82 @@ def preflight(request: Request, idea_id: str, basis: ReviewBasis):
                          "source_read_authorized": False,
                          "verified_business_outcomes": False},
                         headers={"Cache-Control": "no-store"})
+
+
+class ReviewDecision(BaseModel):
+    """Human review decision, explicitly distinct from agent execution consent."""
+    basis: ReviewBasis
+    expected_review_revision: int = Field(ge=0)
+    decision: str = Field(pattern=r"^(draft|approved|revoked)$")
+    reviewer_notes: str = Field(default="", max_length=2000)
+
+
+@router.get("/v1/review-choice-workbench/{idea_id}/review/{project_id}")
+def read_review(request: Request, idea_id: str, project_id: str):
+    """Read local durable review state; never return an execution capability."""
+    choices(request, idea_id)  # Authenticate before accessing stored review records.
+    if len(project_id) > 128 or not project_id:
+        raise HTTPException(422, "Invalid project identifier")
+    with pipeline._LOCK, pipeline.closing(pipeline._connect()) as conn:
+        conn.execute("""CREATE TABLE IF NOT EXISTS project_human_reviews (
+            idea_id TEXT NOT NULL, project_id TEXT NOT NULL,
+            revision INTEGER NOT NULL, decision TEXT NOT NULL,
+            basis_sha256 TEXT NOT NULL, reviewer_notes TEXT NOT NULL,
+            updated_at TEXT NOT NULL, PRIMARY KEY(idea_id, project_id))""")
+        row = conn.execute(
+            "SELECT revision, decision, basis_sha256, reviewer_notes, updated_at "
+            "FROM project_human_reviews WHERE idea_id=? AND project_id=?",
+            (idea_id, project_id)).fetchone()
+    return JSONResponse({"format": "openworkgraph.human-review.v1",
+        "idea_id": idea_id, "project_id": project_id,
+        "revision": row[0] if row else 0,
+        "decision": row[1] if row else "unreviewed",
+        "basis_sha256": row[2] if row else None,
+        "reviewer_notes": row[3] if row else "",
+        "updated_at": row[4] if row else None,
+        "execution_authorized": False}, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/review-choice-workbench/{idea_id}/review")
+def save_review(request: Request, idea_id: str, payload: ReviewDecision):
+    """Optimistic, evidence-bound human decision. No agent grants are issued.
+
+    Stale evidence and concurrent reviewer edits both fail closed. An approval
+    here records a reviewed choice only; the execution API must separately
+    enforce explicit action-scoped consent and authorization.
+    """
+    current = json.loads(preflight(request, idea_id, payload.basis).body)
+    if payload.decision == "approved" and current["blockers"]:
+        raise HTTPException(409, "Resolve review blockers before approval")
+    canonical = json.dumps(payload.basis.model_dump(mode="json"),
+                           sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    with pipeline._LOCK, pipeline.closing(pipeline._connect()) as conn:
+        conn.execute("""CREATE TABLE IF NOT EXISTS project_human_reviews (
+            idea_id TEXT NOT NULL, project_id TEXT NOT NULL,
+            revision INTEGER NOT NULL, decision TEXT NOT NULL,
+            basis_sha256 TEXT NOT NULL, reviewer_notes TEXT NOT NULL,
+            updated_at TEXT NOT NULL, PRIMARY KEY(idea_id, project_id))""")
+        row = conn.execute("SELECT revision FROM project_human_reviews "
+                           "WHERE idea_id=? AND project_id=?",
+                           (idea_id, payload.basis.project_id)).fetchone()
+        revision = row[0] if row else 0
+        if revision != payload.expected_review_revision:
+            raise HTTPException(409, "Review changed; reload before editing")
+        next_revision = revision + 1
+        conn.execute("""INSERT INTO project_human_reviews
+            (idea_id, project_id, revision, decision, basis_sha256, reviewer_notes, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(idea_id, project_id) DO UPDATE SET
+            revision=excluded.revision, decision=excluded.decision,
+            basis_sha256=excluded.basis_sha256,
+            reviewer_notes=excluded.reviewer_notes, updated_at=excluded.updated_at""",
+            (idea_id, payload.basis.project_id, next_revision, payload.decision,
+             digest, payload.reviewer_notes, pipeline._now()))
+        conn.commit()
+    return JSONResponse({"format": "openworkgraph.human-review.v1",
+        "idea_id": idea_id, "project_id": payload.basis.project_id,
+        "revision": next_revision, "decision": payload.decision,
+        "basis_sha256": digest, "execution_authorized": False,
+        "review_required_for_execution": True},
+        headers={"Cache-Control": "no-store"})
