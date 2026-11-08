@@ -2,6 +2,7 @@
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 import json
+import hashlib
 from fastapi.responses import FileResponse, JSONResponse
 from pathlib import Path
 from .local_auth import dashboard_session_valid
@@ -58,12 +59,13 @@ def choices(request: Request, idea_id: str):
         projects.append({"project_id": project["project_id"], "idea_revision": project["idea_revision"],
                          "spec_sha256": project["spec_sha256"], "archive_sha256": project["archive_sha256"],
                          "blockers": blockers, "review_required": True, "execution_authorized": False})
+    project_set_sha256 = hashlib.sha256(json.dumps(projects, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()
     return JSONResponse({"format": "openworkgraph.review-choices.v1",
                          "idea": journey["idea"], "process_status": process.get("status", "unknown"),
                          "process_reference": process.get("process_reference"),
                          "dataset_origins": [{"status": o.get("status"), "source_content_sha256": o.get("source_content_sha256"), "selection_sha256": o.get("selection_sha256")} for o in origins],
                          "dataset_origin_check_available": journey["dataset_origin_check_available"],
-                         "projects": projects, "projects_truncated": journey["projects_truncated"],
+                         "projects": projects, "project_set_sha256": project_set_sha256, "projects_truncated": journey["projects_truncated"],
                          "execution_authorized": False, "source_read_authorized": False,
                          "verified_business_outcomes": False}, headers={"Cache-Control": "no-store"})
 
@@ -71,6 +73,7 @@ def choices(request: Request, idea_id: str):
 class ReviewBasis(BaseModel):
     """An exact, non-authorizing review preflight; never an execution approval."""
     project_id: str = Field(min_length=1, max_length=128)
+    project_set_sha256: str = Field(pattern=r"^[a-fA-F0-9]{64}$")
     idea_revision: int = Field(ge=0)
     spec_sha256: str = Field(pattern=r"^[a-fA-F0-9]{64}$")
     archive_sha256: str = Field(pattern=r"^[a-fA-F0-9]{64}$")
@@ -95,6 +98,8 @@ def preflight(request: Request, idea_id: str, basis: ReviewBasis):
             snapshot["dataset_origins"] != basis.dataset_origins or
             snapshot["dataset_origin_check_available"] != basis.dataset_origin_check_available):
         raise HTTPException(409, "Review provenance changed; re-inspect")
+    if snapshot["project_set_sha256"] != basis.project_set_sha256.lower():
+        raise HTTPException(409, "Project history changed; re-inspect")
     if snapshot["projects_truncated"]:
         raise HTTPException(409, "Review history truncated; re-inspect before proceeding")
     if snapshot["idea"]["revision"] != basis.idea_revision:
@@ -112,6 +117,7 @@ def preflight(request: Request, idea_id: str, basis: ReviewBasis):
     return JSONResponse({"format": "openworkgraph.review-preflight.v1",
                          "idea_id": idea_id, "idea_revision": basis.idea_revision,
                          "project_id": basis.project_id,
+                         "project_set_sha256": snapshot["project_set_sha256"],
                          "spec_sha256": project["spec_sha256"],
                          "archive_sha256": project["archive_sha256"],
                          "blockers": project["blockers"],
