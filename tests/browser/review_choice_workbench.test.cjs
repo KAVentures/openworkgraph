@@ -52,6 +52,7 @@ const getControls=results=>[results.children.find(x=>x.tagName==='select'),resul
      assert.equal(calls(),4);assert.equal(opened(),1);
      assert.equal(lastEvent().type,'owg-pipeline-open');
      assert.equal(lastEvent().detail.idea_revision,3);
+     assert.equal(lastEvent().detail.idea_state,basis().idea.state,'handoff must pin inspected opportunity state');
      assert.equal(lastEvent().detail.project_id,'p1');
      assert.equal(lastEvent().detail.spec_sha256,'a'.repeat(64));
      assert.equal(lastEvent().detail.archive_sha256,'b'.repeat(64));
