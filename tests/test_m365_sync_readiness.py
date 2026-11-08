@@ -648,3 +648,42 @@ def test_operator_two_round_review_append_commit_incremental_contract():
         ("owg_append_verified", 3), ("preflight", 3),
         ("membership_and_commit", 3),
     ]
+
+
+@pytest.mark.parametrize("action,expected_key,recovery", [
+    ("commit", "possible_checkpoint_commit", "inspect_durable_ledger"),
+    ("append", "possible_local_append", "inspect_owg_inventory_and_checkpoint"),
+])
+def test_operator_uncertain_write_identifies_correct_reconciliation(monkeypatch, capsys,
+                                                                    action, expected_key, recovery):
+    """Do not mislabel an uncertain checkpoint write as an OWG append."""
+    from server.m365_outlook_sync_readiness import main
+    from server.m365_outlook_owg_receipt import UncertainReceipt
+    monkeypatch.setenv("OWG_DASHBOARD_SESSION", "private-session")
+    if action == "commit":
+        args = _cli_commit_args()
+        target = "server.m365_outlook_sync_readiness.commit_after_review"
+    else:
+        args = _cli_commit_args()
+        args.remove("--commit-after-review")
+        args.remove("--confirm-events-appended")
+        args.remove("--confirm-checkpoint-commit")
+        pos = args.index("--expected-previous-candidate-sha256")
+        del args[pos:pos + 2]
+        for key in ("--receipt-file", "--journal-dir", "--handoff-dir",
+                    "--successor-label"):
+            pos = args.index(key)
+            del args[pos:pos + 2]
+        args.extend(["--append-after-review", "--consent-local-append"])
+        target = "server.m365_outlook_sync_readiness.append_after_review"
+    with patch(target, side_effect=UncertainReceipt("private provider response")):
+        assert main(args) == 3
+    output = capsys.readouterr().out
+    receipt = json.loads(output)
+    assert receipt["status"] == "unverified"
+    assert receipt[expected_key] is True
+    assert receipt["recovery_action"] == recovery
+    assert receipt["automatic_retry_allowed"] is False
+    assert "private" not in output
+    assert ("possible_checkpoint_commit" in receipt) is (action == "commit")
+    assert ("possible_local_append" in receipt) is (action == "append")
