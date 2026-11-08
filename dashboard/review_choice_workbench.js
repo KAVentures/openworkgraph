@@ -40,7 +40,7 @@
         const data=await request('/v1/review-choice-workbench/'+encodeURIComponent(id));
         if(current!==generation)return;
         if(data.format!=='openworkgraph.review-choices.v1'||data.idea?.idea_id!==id||
-           !validProjects(data.projects,data.idea?.revision)||data.projects_truncated||data.execution_authorized!==false||
+           !validProjects(data.projects,data.idea?.revision)||!/^[a-f0-9]{64}$/i.test(data.project_set_sha256)||data.projects_truncated||data.execution_authorized!==false||
            data.source_read_authorized!==false||data.verified_business_outcomes!==false||
            !Number.isSafeInteger(data.idea?.revision)||data.idea.revision<0)
           throw new Error('Incomplete or inconsistent review basis.');
@@ -64,7 +64,7 @@
         if(fresh.format!=='openworkgraph.review-choices.v1'||fresh.idea?.idea_id!==id||
            fresh.execution_authorized!==false||fresh.source_read_authorized!==false||
            fresh.verified_business_outcomes!==false||!validProjects(fresh.projects,fresh.idea?.revision)||
-           fresh.projects_truncated||fresh.idea?.revision!==snapshot.idea.revision||
+           fresh.projects_truncated||fresh.project_set_sha256!==snapshot.project_set_sha256||fresh.idea?.revision!==snapshot.idea.revision||
            fresh.idea?.state!==snapshot.idea.state||
            fresh.process_status!==snapshot.process_status||
            JSON.stringify(fresh.process_reference)!==JSON.stringify(snapshot.process_reference)||
@@ -90,7 +90,7 @@
             await window.__owgAuthReady;
             const response=await fetch('/v1/review-choice-workbench/'+encodeURIComponent(id)+'/preflight',{
               method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},
-              body:JSON.stringify({project_id:projectId,idea_revision:snapshot.idea.revision,
+              body:JSON.stringify({project_id:projectId,project_set_sha256:snapshot.project_set_sha256,idea_revision:snapshot.idea.revision,
                 spec_sha256:selected.spec_sha256,archive_sha256:selected.archive_sha256,
                 process_status:snapshot.process_status,process_reference:snapshot.process_reference,
                 dataset_origins:snapshot.dataset_origins,
@@ -102,6 +102,7 @@
             const result=await response.json();
             if(result.format!=='openworkgraph.review-preflight.v1'||result.idea_id!==id||
                result.idea_revision!==snapshot.idea.revision||result.project_id!==projectId||
+               result.project_set_sha256!==snapshot.project_set_sha256||
                result.spec_sha256!==selected.spec_sha256||result.archive_sha256!==selected.archive_sha256||
                result.execution_authorized!==false||result.source_read_authorized!==false||
                result.verified_business_outcomes!==false||result.review_required!==true||
@@ -123,7 +124,7 @@
                 await window.__owgAuthReady;
                 const response=await fetch('/v1/review-choice-workbench/'+encodeURIComponent(id)+'/preflight',{
                   method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},
-                  body:JSON.stringify({project_id:projectId,idea_revision:snapshot.idea.revision,
+                  body:JSON.stringify({project_id:projectId,project_set_sha256:snapshot.project_set_sha256,idea_revision:snapshot.idea.revision,
                     spec_sha256:selected.spec_sha256,archive_sha256:selected.archive_sha256,
                     process_status:snapshot.process_status,process_reference:snapshot.process_reference,
                     dataset_origins:snapshot.dataset_origins,
@@ -135,6 +136,7 @@
                 const result=await response.json();
                 if(result.format!=='openworkgraph.review-preflight.v1'||result.idea_id!==id||
                    result.idea_revision!==snapshot.idea.revision||result.project_id!==projectId||
+               result.project_set_sha256!==snapshot.project_set_sha256||
                    result.spec_sha256!==selected.spec_sha256||result.archive_sha256!==selected.archive_sha256||
                    result.review_required!==true||result.execution_authorized!==false||
                    result.source_read_authorized!==false||result.verified_business_outcomes!==false||
