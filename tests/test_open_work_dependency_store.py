@@ -319,3 +319,38 @@ def test_rejected_live_review_purges_stale_actor_mirror_only(tmp_path):
                               case_id="invoice")["direct"] == []
     assert dependency_context(path, scope=scope, actor="session_b",
                               case_id="invoice")["direct"] == ["other"]
+
+
+@pytest.mark.parametrize("fail_on_call", [1, 2, 3, 4])
+def test_scope_lookup_exception_purges_only_current_actor(tmp_path, fail_on_call):
+    """A failed authorization lookup must never preserve a stale actor mirror."""
+    from server.open_work_dependency_store import reconcile_current_reviewed_dependencies
+
+    path = str(tmp_path / "scope-lookup.sqlite")
+    scope = "tenant"
+    declare_dependency(path, scope=scope, actor="session_a",
+                       case_id="invoice", prerequisite="review")
+    declare_dependency(path, scope=scope, actor="session_b",
+                       case_id="invoice", prerequisite="other")
+    calls = 0
+
+    def source_scope():
+        nonlocal calls
+        calls += 1
+        if calls == fail_on_call:
+            raise OSError("source metadata unreadable")
+        return scope
+
+    with pytest.raises(OSError, match="source metadata unreadable"):
+        reconcile_current_reviewed_dependencies(
+            path, scope=scope, actor="session_a",
+            scope_provider=source_scope,
+            snapshot_provider=lambda _scope: {
+                "format": "openworkgraph.local-case-declarations.v1",
+                "items": [],
+            },
+        )
+    assert dependency_context(path, scope=scope, actor="session_a",
+                              case_id="invoice")["direct"] == []
+    assert dependency_context(path, scope=scope, actor="session_b",
+                              case_id="invoice")["direct"] == ["other"]
