@@ -141,3 +141,46 @@ Real Microsoft tenant and end-to-end live OWG validation remain outstanding.
 After the reviewed candidate has been separately appended to the authenticated OWG log, and its membership and removals have been reviewed, use the same module with `--commit-after-review` instead of `--extract-after-readiness`. Supply the common scope/preflight/grant/ledger arguments, `--expected-generation N`, `--confirm-log-id`, `--candidate`, `--csv-path`, `--receipt-file`, `--journal-dir`, `--handoff-dir`, `--successor-label`, and `--expected-previous-candidate-sha256` (the 64-character lowercase digest of the committed predecessor). Explicitly pass `--consent-local-read --confirm-removals-reviewed --confirm-events-appended --confirm-checkpoint-commit`. Set `OWG_DASHBOARD_SESSION` privately in the environment. No Graph token or Graph read/export consent is needed for this phase.
 
 The two modes are mutually exclusive. This command does **not** append events; it delegates to the authenticated membership-verified checkpoint writer and refuses missing approvals, stale generations, mismatched log identity or ambiguous commit results. On uncertain outcomes, inspect the durable ledger and OWG log before any manual retry. Never interpret the CLI success message as proof of real Microsoft tenant validation.
+
+
+### Reviewed append CLI and recovery (operator runbook)
+
+After extracting a candidate, inspect the private CSV, candidate metadata,
+removal markers and OWG log target **before** granting append consent. Run
+`python -m server.m365_outlook_sync_readiness` with the common scope,
+preflight, grant and ledger arguments described above, plus:
+
+```text
+--append-after-review --expected-generation N --confirm-log-id LOG_ID
+--candidate NEW.json --csv-path NEW.csv
+--consent-local-read --consent-local-append --confirm-removals-reviewed
+```
+
+Set `OWG_DASHBOARD_SESSION` in the process environment. Do not pass the
+session, Graph token, source contents or other secrets as CLI arguments. The
+append phase requires no Graph token and never advances the delta checkpoint.
+It calls the authenticated OWG append adapter and checks the OWG inventory
+readback. Only a verified append receipt allows the operator to consider the
+**separate** checkpoint-commit command documented above. Retain the private
+candidate, receipt, handoff and ledger evidence under the local retention
+policy. Do not treat a successful append as evidence that a checkpoint moved.
+
+If the command reports `unverified`, `possible_local_append`, or a
+checkpoint-generation conflict, **do not rerun append blindly**. The POST may
+have succeeded even if the response, inventory readback, grant recheck or
+post-append checkpoint inspection failed. Inspect the authorized OWG log's
+actual event membership and the durable ledger generation using the existing
+authenticated read-only tools. Reconcile the candidate's event identities
+against that inventory, check current grant validity and confirm the expected
+predecessor before making a fresh, explicit operator decision. Never infer
+that a failed response means no events were written. An uncertain checkpoint
+commit similarly requires ledger inspection before any retry.
+
+The three operator actions are intentionally mutually exclusive: Graph
+extraction prepares a review candidate, reviewed append verifies OWG
+membership, and checkpoint commit durably advances the cursor. This is a
+manual CLI journey, **not** a transactional dashboard wizard, automated
+recovery service, or proof of a real Microsoft 365 tenant integration. An
+operator must also validate subsequent incremental extraction against the
+newly committed generation. Provider credential expiry, revocation and
+provider-specific failure paths require separate live-tenant acceptance.
