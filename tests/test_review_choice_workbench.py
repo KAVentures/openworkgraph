@@ -308,3 +308,43 @@ def test_oversized_customer_report_history_fails_closed_and_recovers(monkeypatch
     assert response.status_code == 200
     assert response.json()['projects'][0]['blockers'] == ['dataset_origin_not_linked']
     assert client.get(path).status_code == 403
+
+
+def test_matching_customer_report_change_invalidates_review_basis(monkeypatch):
+    """Changed report evidence must invalidate preflight even if blockers stay identical."""
+    app = FastAPI()
+    app.include_router(routes.router)
+    client = TestClient(app)
+    monkeypatch.setattr(routes, 'dashboard_session_valid', lambda token: token == 'test-session')
+    state = {'report_sha': 'd' * 64}
+    def journey(idea_id):
+        return {'idea': {'idea_id': idea_id, 'revision': 3, 'state': 'approved'},
+                'process_status': {'status': 'current', 'process_reference': {}},
+                'projects': [{'project_id': 'p1', 'idea_revision': 3,
+                              'idea_revision_is_current': True, 'spec_sha256': 'b'*64,
+                              'archive_sha256': 'c'*64,
+                              'reported_specifications': [{
+                                  'status': 'matching_reported_specification',
+                                  'report_sha256': state['report_sha']}]}],
+                'projects_truncated': False, 'dataset_origins': [],
+                'dataset_origin_check_available': True}
+    monkeypatch.setattr(routes.opportunity_journey, 'journey', journey)
+    headers = {'Authorization': 'OWG-Session test-session'}
+    path = '/v1/review-choice-workbench/idea-1'
+    first = client.get(path, headers=headers).json()
+    assert first['projects'][0]['blockers'] == ['dataset_origin_not_linked']
+    payload = {'project_id': 'p1', 'project_set_sha256': first['project_set_sha256'],
+               'idea_revision': 3, 'idea_state': 'approved', 'spec_sha256': 'b'*64,
+               'archive_sha256': 'c'*64, 'process_status': 'current',
+               'process_reference': {}, 'dataset_origins': [],
+               'dataset_origin_check_available': True,
+               'blockers': ['dataset_origin_not_linked']}
+    assert client.post(path+'/preflight', json=payload, headers=headers).status_code == 200
+    state['report_sha'] = 'e' * 64
+    second = client.get(path, headers=headers).json()
+    assert second['projects'][0]['blockers'] == first['projects'][0]['blockers']
+    assert second['project_set_sha256'] != first['project_set_sha256']
+    assert client.post(path+'/preflight', json=payload, headers=headers).status_code == 409
+    payload['project_set_sha256'] = second['project_set_sha256']
+    assert client.post(path+'/preflight', json=payload, headers=headers).status_code == 200
+    assert client.post(path+'/preflight', json=payload).status_code == 403
