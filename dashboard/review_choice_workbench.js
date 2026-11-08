@@ -90,7 +90,7 @@
             await window.__owgAuthReady;
             const response=await fetch('/v1/review-choice-workbench/'+encodeURIComponent(id)+'/preflight',{
               method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},
-              body:JSON.stringify({project_id:projectId,project_set_sha256:snapshot.project_set_sha256,idea_revision:snapshot.idea.revision,
+              body:JSON.stringify({project_id:projectId,project_set_sha256:snapshot.project_set_sha256,idea_revision:snapshot.idea.revision,idea_state:snapshot.idea.state,
                 spec_sha256:selected.spec_sha256,archive_sha256:selected.archive_sha256,
                 process_status:snapshot.process_status,process_reference:snapshot.process_reference,
                 dataset_origins:snapshot.dataset_origins,
@@ -124,7 +124,7 @@
                 await window.__owgAuthReady;
                 const response=await fetch('/v1/review-choice-workbench/'+encodeURIComponent(id)+'/preflight',{
                   method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},
-                  body:JSON.stringify({project_id:projectId,project_set_sha256:snapshot.project_set_sha256,idea_revision:snapshot.idea.revision,
+                  body:JSON.stringify({project_id:projectId,project_set_sha256:snapshot.project_set_sha256,idea_revision:snapshot.idea.revision,idea_state:snapshot.idea.state,
                     spec_sha256:selected.spec_sha256,archive_sha256:selected.archive_sha256,
                     process_status:snapshot.process_status,process_reference:snapshot.process_reference,
                     dataset_origins:snapshot.dataset_origins,
