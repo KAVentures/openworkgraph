@@ -769,3 +769,59 @@ def test_operator_audit_failure_after_append_reports_uncertain(monkeypatch, caps
     assert receipt["status"] == "unverified"
     assert receipt["possible_local_append"] is True
     assert receipt["automatic_retry_allowed"] is False
+
+
+@pytest.mark.skipif(__import__("os").name != "posix", reason="POSIX dirfd security contract")
+def test_operator_audit_rejects_directory_replacement_between_checks(tmp_path, monkeypatch):
+    """Replacing a checked private path must not redirect a receipt to an unsafe directory."""
+    import os
+    from server import m365_outlook_sync_readiness as module
+    private = tmp_path / "audit"
+    private.mkdir(mode=0o700)
+    public = tmp_path / "public"
+    public.mkdir(mode=0o755)
+    original_open = module.os.open
+    swapped = []
+
+    def replace_on_open(path, flags, *args, **kwargs):
+        if not swapped and os.fspath(path) == os.fspath(private):
+            swapped.append(True)
+            private.rename(tmp_path / "old-audit")
+            private.symlink_to(public, target_is_directory=True)
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(module.os, "open", replace_on_open)
+    with pytest.raises((OSError, module.ReceiptError)):
+        module._audit_operator_result(
+            private, action="readiness", tenant="t", mailbox="m",
+            folder="f", log_id="log", generation=2,
+            result={"status": "operator_review_ready"})
+    assert swapped
+    assert not list(public.iterdir())
+    assert not list((tmp_path / "old-audit").iterdir())
+
+
+@pytest.mark.skipif(__import__("os").name != "posix", reason="POSIX dirfd security contract")
+def test_operator_audit_revalidates_opened_directory_permissions(tmp_path, monkeypatch):
+    """A directory made public after lstat must fail before creating a receipt."""
+    import os
+    from server import m365_outlook_sync_readiness as module
+    private = tmp_path / "audit"
+    private.mkdir(mode=0o700)
+    original_open = module.os.open
+    swapped = []
+
+    def change_permissions_on_open(path, flags, *args, **kwargs):
+        if not swapped and os.fspath(path) == os.fspath(private):
+            swapped.append(True)
+            private.chmod(0o755)
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(module.os, "open", change_permissions_on_open)
+    with pytest.raises(module.ReceiptError, match="remain private"):
+        module._audit_operator_result(
+            private, action="readiness", tenant="t", mailbox="m",
+            folder="f", log_id="log", generation=2,
+            result={"status": "operator_review_ready"})
+    assert swapped
+    assert not list(private.iterdir())
