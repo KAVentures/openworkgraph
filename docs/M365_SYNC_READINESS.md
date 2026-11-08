@@ -184,3 +184,25 @@ recovery service, or proof of a real Microsoft 365 tenant integration. An
 operator must also validate subsequent incremental extraction against the
 newly committed generation. Provider credential expiry, revocation and
 provider-specific failure paths require separate live-tenant acceptance.
+
+
+### Private, immutable operator audit receipts
+
+Supply `--audit-dir /path/to/private-audit` to any readiness, extraction,
+reviewed append, or checkpoint-commit invocation. Provision the directory
+**beforehand** with owner-only permissions (for example `mkdir -m 700`);
+the operator refuses world/group-readable directories and symlinks. Each
+successful operation creates a distinct mode-0600 JSON record using exclusive
+creation and fsync, with action, UTC time, hashed scope and log identifiers,
+reviewed generation, status, and bounded event/removal counts where available.
+The record intentionally excludes provider tokens, session cookies, mailbox
+addresses, message contents, and raw append receipts. Retain and protect this
+directory under the organization's evidence retention policy; it is not a
+remote Microsoft audit log or a substitute for OWG inventory verification.
+
+If audit persistence fails **after** an append or checkpoint action, the CLI
+reports an uncertain write and disallows blind retry. Inspect the authenticated
+OWG inventory or durable ledger, respectively, and reconcile manually. The
+`--audit-dir` option is optional for backwards compatibility; operators who
+need durable evidence must explicitly enable it. This provides CLI-visible
+audit artifacts, not yet a dashboard audit timeline.
