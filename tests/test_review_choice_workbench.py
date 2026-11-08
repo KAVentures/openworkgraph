@@ -174,3 +174,33 @@ def test_preflight_continue_uses_existing_pipeline_decision_not_implicit_approva
     assert "if(!pipelineCard)" in script
     assert "details.append(continueReview);" in script
     assert "execution_authorized:false" in pipeline
+
+
+def test_oversized_project_history_rejected_before_review_or_preflight(monkeypatch):
+    """Even a falsely untruncated journey cannot be used as a partial approval basis."""
+    app = FastAPI()
+    app.include_router(routes.router)
+    client = TestClient(app)
+    monkeypatch.setattr(routes, 'dashboard_session_valid', lambda token: token == 'test-session')
+    count = {'projects': 65}
+    def journey(idea_id):
+        return {'idea': {'idea_id': idea_id, 'revision': 3, 'state': 'approved'},
+                'process_status': {'status': 'current', 'process_reference': {}},
+                'projects': [{'project_id': f'p{i}', 'idea_revision': 3,
+                              'idea_revision_is_current': True, 'spec_sha256': 'b'*64,
+                              'archive_sha256': 'c'*64, 'reported_specifications': []}
+                             for i in range(count['projects'])],
+                'projects_truncated': False, 'dataset_origins': [],
+                'dataset_origin_check_available': True}
+    monkeypatch.setattr(routes.opportunity_journey, 'journey', journey)
+    headers = {'Authorization': 'OWG-Session test-session'}
+    url = '/v1/review-choice-workbench/idea-1'
+    assert client.get(url, headers=headers).status_code == 409
+    payload = {'project_id': 'p0', 'idea_revision': 3, 'spec_sha256': 'b'*64,
+               'archive_sha256': 'c'*64, 'process_status': 'current',
+               'process_reference': {}, 'dataset_origins': [],
+               'dataset_origin_check_available': True,
+               'blockers': ['dataset_origin_not_linked', 'no_customer_report']}
+    assert client.post(url+'/preflight', headers=headers, json=payload).status_code == 409
+    count['projects'] = 64
+    assert client.get(url, headers=headers).status_code == 200
