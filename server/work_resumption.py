@@ -347,6 +347,9 @@ def resumption_candidates(
     pair_assignments: list[dict[str, Any]] = []
     for pair in sorted(current["coobserved"]):
         current_events = sorted(current["pair_events"].get(pair, ()))
+        if not current_events:
+            # A colliding external event label cannot safely identify the row.
+            continue
         earlier_matches: list[dict[str, Any]] = []
         for earlier_index in range(current_index - 1, -1, -1):
             earlier = by_session[earlier_index]
