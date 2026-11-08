@@ -272,3 +272,39 @@ def test_review_preflight_rejects_state_change_without_revision_bump(monkeypatch
     payload['idea_state'] = 'implemented'
     assert client.post(path+'/preflight', headers=headers, json=payload).status_code == 200
     assert client.post(path+'/preflight', json=payload).status_code == 403
+
+
+def test_oversized_customer_report_history_fails_closed_and_recovers(monkeypatch):
+    """Do not silently omit customer report mismatches beyond the 64-item review cap."""
+    app = FastAPI()
+    app.include_router(routes.router)
+    client = TestClient(app)
+    monkeypatch.setattr(routes, 'dashboard_session_valid', lambda token: token == 'test-session')
+    state = {'count': 65}
+    def journey(idea_id):
+        return {'idea': {'idea_id': idea_id, 'revision': 3, 'state': 'approved'},
+                'process_status': {'status': 'current', 'process_reference': {}},
+                'projects': [{'project_id': 'p1', 'idea_revision': 3,
+                              'idea_revision_is_current': True, 'spec_sha256': 'b'*64,
+                              'archive_sha256': 'c'*64,
+                              'reported_specifications': [
+                                  {'status': 'matching_reported_specification'}
+                                  for _ in range(state['count'])]}],
+                'projects_truncated': False, 'dataset_origins': [],
+                'dataset_origin_check_available': True}
+    monkeypatch.setattr(routes.opportunity_journey, 'journey', journey)
+    path = '/v1/review-choice-workbench/idea-1'
+    headers = {'Authorization': 'OWG-Session test-session'}
+    assert client.get(path, headers=headers).status_code == 409
+    assert client.post(path+'/preflight', headers=headers, json={
+        'project_id': 'p1', 'project_set_sha256': '0'*64,
+        'idea_revision': 3, 'idea_state': 'approved',
+        'spec_sha256': 'b'*64, 'archive_sha256': 'c'*64,
+        'process_status': 'current', 'process_reference': {},
+        'dataset_origins': [], 'dataset_origin_check_available': True,
+        'blockers': ['dataset_origin_not_linked']}).status_code == 409
+    state['count'] = 64
+    response = client.get(path, headers=headers)
+    assert response.status_code == 200
+    assert response.json()['projects'][0]['blockers'] == ['dataset_origin_not_linked']
+    assert client.get(path).status_code == 403
