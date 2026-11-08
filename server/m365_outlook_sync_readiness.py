@@ -405,9 +405,17 @@ def main(argv=None):
     except Exception as exc:
         from .m365_outlook_owg_receipt import UncertainReceipt
         if isinstance(exc, UncertainReceipt):
-            print(json.dumps({"format": FORMAT, "status": "unverified",
-                              "possible_local_append": True,
-                              "automatic_retry_allowed": False}, sort_keys=True))
+            # A lost checkpoint writer response is not evidence of an OWG
+            # append. Distinguish recovery paths without leaking credentials.
+            uncertain = {"format": FORMAT, "status": "unverified",
+                         "automatic_retry_allowed": False}
+            if committing:
+                uncertain["possible_checkpoint_commit"] = True
+                uncertain["recovery_action"] = "inspect_durable_ledger"
+            else:
+                uncertain["possible_local_append"] = True
+                uncertain["recovery_action"] = "inspect_owg_inventory_and_checkpoint"
+            print(json.dumps(uncertain, sort_keys=True))
             return 3
         if not isinstance(exc, (ReceiptError, ValueError, TypeError, KeyError, OSError)):
             raise
