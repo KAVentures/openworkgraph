@@ -825,3 +825,16 @@ def test_operator_audit_revalidates_opened_directory_permissions(tmp_path, monke
             result={"status": "operator_review_ready"})
     assert swapped
     assert not list(private.iterdir())
+
+
+def test_operator_cli_extraction_kwargs_match_real_entrypoint(monkeypatch):
+    """A mocked delegate must not hide unexpected CLI-only keyword arguments."""
+    from inspect import signature
+    from server.m365_outlook_sync_readiness import main, extract_after_readiness
+    monkeypatch.setenv("OWG_M365_GRAPH_TOKEN", "private-token")
+    monkeypatch.setenv("OWG_DASHBOARD_SESSION", "private-session")
+    with patch("server.m365_outlook_sync_readiness.extract_after_readiness",
+               return_value={"status": "review_required", "checkpoint_advanced": False}) as delegate:
+        assert main(_cli_extract_args()) == 0
+    signature(extract_after_readiness).bind(**delegate.call_args.kwargs)
+    assert "consent_local_append" not in delegate.call_args.kwargs
