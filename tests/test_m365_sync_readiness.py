@@ -494,7 +494,8 @@ def test_append_after_review_verifies_checkpoint_without_advancing():
 
 
 def test_append_after_review_rejects_concurrent_checkpoint_advance():
-    from server.m365_outlook_sync_readiness import append_after_review, ReceiptError as GateError
+    from server.m365_outlook_sync_readiness import append_after_review
+    from server.m365_outlook_owg_receipt import UncertainReceipt
     with (patch("server.m365_outlook_sync_readiness.readiness",
                 return_value={"status": "operator_review_ready"}),
           patch("server.m365_outlook_owg_receipt.append_verified",
@@ -502,9 +503,40 @@ def test_append_after_review_rejects_concurrent_checkpoint_advance():
           patch("server.m365_outlook_sync_readiness.inspect_checkpoint",
                 return_value={"log_id": "log", "generation": 3}),
           patch("server.m365_outlook_sync_readiness._grant")):
-        with pytest.raises(GateError, match="Checkpoint changed"):
+        with pytest.raises(UncertainReceipt, match="may have committed"):
             append_after_review(expected_generation=2, tenant="t", mailbox="m",
                 folder="f", expected_address="m", grant_file="g", identity_report="i",
                 folder_report="f", ledger_dir="l", log_id="log", confirm_log_id="log",
                 candidate="c", csv_path="csv", session="session", consent_local_read=True,
                 consent_local_append=True, confirm_removals_reviewed=True)
+
+
+@pytest.mark.parametrize("post_append_failure", ["revoked", "readback", "malformed"])
+def test_append_after_review_preserves_possible_write_on_post_append_failure(post_append_failure):
+    from server.m365_outlook_sync_readiness import append_after_review
+    from server.m365_outlook_owg_receipt import UncertainReceipt
+    latest = {"log_id": "log", "generation": 2}
+    receipt = {"status": "verified", "checkpoint_advanced": False}
+    if post_append_failure == "readback":
+        latest = None
+    if post_append_failure == "malformed":
+        receipt = {"status": "refused", "checkpoint_advanced": False}
+    grant = patch("server.m365_outlook_sync_readiness._grant")
+    with (patch("server.m365_outlook_sync_readiness.readiness",
+                return_value={"status": "operator_review_ready"}),
+          patch("server.m365_outlook_owg_receipt.append_verified",
+                return_value=receipt) as append,
+          patch("server.m365_outlook_sync_readiness.inspect_checkpoint",
+                return_value=latest),
+          grant as grant_check):
+        if post_append_failure == "revoked":
+            grant_check.side_effect = ReceiptError("Grant revoked")
+        with pytest.raises(UncertainReceipt, match="may have committed"):
+            append_after_review(
+                expected_generation=2, tenant="t", mailbox="m", folder="f",
+                expected_address="m", grant_file="g", identity_report="i",
+                folder_report="f", ledger_dir="l", log_id="log",
+                confirm_log_id="log", candidate="c", csv_path="csv",
+                session="session", consent_local_read=True,
+                consent_local_append=True, confirm_removals_reviewed=True)
+        append.assert_called_once()
