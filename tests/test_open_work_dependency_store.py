@@ -247,3 +247,34 @@ def test_source_scope_revocation_purges_all_sessions_but_not_other_tenants(tmp_p
                               case_id="invoice")["direct"] == ["review"]
     with pytest.raises(ValueError):
         purge_scope(path, scope="../invalid")
+
+
+@pytest.mark.parametrize("fail_on_call", [1, 2])
+def test_snapshot_read_failure_purges_only_current_actor(tmp_path, fail_on_call):
+    """A failed review read must not leave stale declarations available."""
+    from server.open_work_dependency_store import reconcile_current_reviewed_dependencies
+
+    path = str(tmp_path / "read-failure.sqlite")
+    scope, actor = "tenant", "session_a"
+    assert declare_dependency(path, scope=scope, actor=actor,
+                              case_id="invoice", prerequisite="review")
+    assert declare_dependency(path, scope=scope, actor="session_b",
+                              case_id="invoice", prerequisite="other")
+    calls = 0
+
+    def read_snapshot(_scope):
+        nonlocal calls
+        calls += 1
+        if calls == fail_on_call:
+            raise RuntimeError("review ledger unavailable")
+        return {"format": "openworkgraph.local-case-declarations.v1",
+                "items": []}
+
+    with pytest.raises(RuntimeError, match="review ledger unavailable"):
+        reconcile_current_reviewed_dependencies(
+            path, scope=scope, actor=actor,
+            scope_provider=lambda: scope, snapshot_provider=read_snapshot)
+    assert dependency_context(path, scope=scope, actor=actor,
+                              case_id="invoice")["direct"] == []
+    assert dependency_context(path, scope=scope, actor="session_b",
+                              case_id="invoice")["direct"] == ["other"]
