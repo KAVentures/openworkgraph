@@ -64,7 +64,16 @@ def choices(request: Request, idea_id: str):
         projects.append({"project_id": project["project_id"], "idea_revision": project["idea_revision"],
                          "spec_sha256": project["spec_sha256"], "archive_sha256": project["archive_sha256"],
                          "blockers": blockers, "review_required": True, "execution_authorized": False})
-    project_set_sha256 = hashlib.sha256(json.dumps(projects, sort_keys=True, separators=(',', ':')).encode('utf-8')).hexdigest()
+    # Bind the review to the complete bounded customer-report evidence, not just
+    # derived blocker labels. A report may change while remaining 'matching'.
+    # Do not return report contents to the browser; only their digest.
+    fingerprint_basis = [
+        {"project": summary, "reported_specifications": raw["reported_specifications"]}
+        for summary, raw in zip(projects, journey["projects"])
+    ]
+    project_set_sha256 = hashlib.sha256(json.dumps(
+        fingerprint_basis, sort_keys=True, separators=(',', ':'), default=str
+    ).encode('utf-8')).hexdigest()
     return JSONResponse({"format": "openworkgraph.review-choices.v1",
                          "idea": journey["idea"], "process_status": process.get("status", "unknown"),
                          "process_reference": process.get("process_reference"),
