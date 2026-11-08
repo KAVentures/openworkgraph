@@ -146,6 +146,56 @@ def extract_after_readiness(*, expected_generation, tenant, mailbox, folder,
 
 
 
+
+def append_after_review(*, expected_generation, tenant, mailbox, folder,
+                        expected_address, grant_file, identity_report,
+                        folder_report, ledger_dir, log_id, confirm_log_id,
+                        candidate, csv_path, port=8765, session=None,
+                        consent_local_read=False, consent_local_append=False,
+                        confirm_removals_reviewed=False, opener=None):
+    """Append a reviewed candidate, verify OWG readback, never advance cursor.
+
+    The caller must independently approve a subsequent checkpoint commit.
+    An uncertain POST is deliberately propagated without automatic retry.
+    """
+    if (type(expected_generation) is not int or expected_generation < 1
+            or consent_local_read is not True
+            or consent_local_append is not True
+            or confirm_removals_reviewed is not True
+            or not session or log_id != confirm_log_id):
+        raise ReceiptError("Explicit reviewed append approval required")
+    readiness(tenant=tenant, mailbox=mailbox, folder=folder,
+              expected_address=expected_address, grant_file=grant_file,
+              identity_report=identity_report, folder_report=folder_report,
+              ledger_dir=ledger_dir, log_id=log_id, consent_local_read=True,
+              expected_generation=expected_generation)
+    from .m365_outlook_owg_receipt import append_verified
+    result = append_verified(
+        tenant=tenant, mailbox=mailbox, folder=folder, grant_file=Path(grant_file),
+        candidate=Path(candidate), csv_path=Path(csv_path),
+        log_id=log_id, confirm_log_id=confirm_log_id, port=port,
+        session=session, consent_local_read=True,
+        consent_local_append=True, opener=opener)
+    # A successful POST is not a checkpoint approval. If the ledger changed
+    # concurrently, refuse the handoff; the operator must inspect manually.
+    current = inspect_checkpoint(
+        tenant=tenant, mailbox=mailbox, folder=folder,
+        grant_file=Path(grant_file), ledger_dir=Path(ledger_dir),
+        consent_local_read=True)
+    if (type(current) is not dict or current.get("log_id") != log_id
+            or current.get("generation") != expected_generation):
+        raise ReceiptError("Checkpoint changed after append; inspect before commit")
+    _grant(Path(grant_file), tenant, mailbox, folder)
+    if (type(result) is not dict
+            or result.get("status") not in ("verified", "verified_empty")
+            or result.get("checkpoint_advanced") is not False):
+        raise ReceiptError("Append evidence not verified")
+    return {"format": FORMAT, "status": "append_review_verified",
+            "committed_predecessor_generation": expected_generation,
+            "append_receipt": result, "checkpoint_advanced": False,
+            "automatic_retry_allowed": False}
+
+
 def commit_after_review(*, expected_generation, expected_previous_candidate_sha256,
                         tenant, mailbox, folder, expected_address, grant_file,
                         identity_report, folder_report, ledger_dir, log_id,
@@ -212,6 +262,9 @@ def main(argv=None):
         p.add_argument("--" + key, required=True, type=Path)
     p.add_argument("--consent-local-read", action="store_true")
     p.add_argument("--expected-generation", type=int)
+    p.add_argument("--append-after-review", action="store_true",
+                   help="Explicitly append reviewed candidate and verify local OWG readback")
+    p.add_argument("--consent-local-append", action="store_true")
     p.add_argument("--commit-after-review", action="store_true",
                    help="Commit only after separately appending reviewed events to OWG")
     p.add_argument("--expected-previous-candidate-sha256")
@@ -232,10 +285,36 @@ def main(argv=None):
     a = vars(p.parse_args(argv))
     extraction = a.pop("extract_after_readiness")
     committing = a.pop("commit_after_review")
+    appending = a.pop("append_after_review")
     try:
-        if extraction and committing:
+        if sum(bool(x) for x in (extraction, committing, appending)) > 1:
             raise ReceiptError("Select exactly one operator action")
-        if committing:
+        if appending:
+            mandatory = ("expected_generation", "confirm_log_id", "candidate", "csv_path")
+            if (any(a[k] is None for k in mandatory)
+                    or a["expected_generation"] < 1
+                    or not all(a[k] is True for k in
+                               ("consent_local_read", "consent_local_append",
+                                "confirm_removals_reviewed"))
+                    or a["log_id"] != a["confirm_log_id"]
+                    or any(a[k] is not None for k in
+                           ("previous_candidate", "previous_csv", "receipt_file",
+                            "journal_dir", "handoff_dir", "successor_label", "output",
+                            "expected_previous_candidate_sha256"))
+                    or any(a[k] for k in
+                           ("consent_delta_read", "consent_local_export",
+                            "confirm_events_appended", "confirm_checkpoint_commit"))
+                    or not os.environ.get("OWG_DASHBOARD_SESSION")):
+                raise ReceiptError("Explicit reviewed append inputs required")
+            result = append_after_review(
+                **{k: a[k] for k in
+                   ("expected_generation", "tenant", "mailbox", "folder",
+                    "expected_address", "grant_file", "identity_report",
+                    "folder_report", "ledger_dir", "log_id", "confirm_log_id",
+                    "candidate", "csv_path", "port", "consent_local_read",
+                    "consent_local_append", "confirm_removals_reviewed")},
+                session=os.environ["OWG_DASHBOARD_SESSION"])
+        elif committing:
             mandatory = ("expected_generation", "confirm_log_id", "candidate",
                          "csv_path", "receipt_file", "journal_dir", "handoff_dir",
                          "successor_label", "expected_previous_candidate_sha256")
@@ -245,6 +324,7 @@ def main(argv=None):
                                ("consent_local_read", "confirm_removals_reviewed",
                                 "confirm_events_appended", "confirm_checkpoint_commit"))
                     or a["log_id"] != a["confirm_log_id"]
+                    or a["consent_local_append"]
                     or a["consent_delta_read"] or a["consent_local_export"]
                     or a["previous_candidate"] is not None or a["previous_csv"] is not None
                     or a["output"] is not None
@@ -275,6 +355,7 @@ def main(argv=None):
                     or a["log_id"] != a["confirm_log_id"]
                     or a["csv_path"] is not None
                     or a["expected_previous_candidate_sha256"] is not None
+                    or a["consent_local_append"]
                     or a["confirm_events_appended"] or a["confirm_checkpoint_commit"]
                     or not os.environ.get("OWG_M365_GRAPH_TOKEN")
                     or not os.environ.get("OWG_DASHBOARD_SESSION")):
@@ -293,7 +374,7 @@ def main(argv=None):
                      "previous_csv", "receipt_file", "journal_dir", "handoff_dir",
                      "output", "candidate"))
                     or any(a[k] for k in ("confirm_events_appended",
-                                          "confirm_checkpoint_commit", "consent_delta_read",
+                                          "confirm_checkpoint_commit", "consent_local_append", "consent_delta_read",
                                           "consent_local_export",
                                           "confirm_removals_reviewed"))):
                 raise ReceiptError("Extraction options require explicit extraction mode")
