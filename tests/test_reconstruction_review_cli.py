@@ -190,9 +190,8 @@ class ReviewQueueTests(unittest.TestCase):
         ])
         result = resumption_candidates(db, lease={"mode": "all_saved"})
         review = result["event_assignment_review"]
-        self.assertEqual(review["event_reviews_count"], 2)
-        self.assertEqual({row["event_id"] for row in review["event_reviews"]},
-                         {"old-a", "old-b"})
+        self.assertEqual(review["event_reviews_count"], 0)
+        self.assertEqual(review["event_reviews"], [])
         self.assertTrue(review["coverage_incomplete"])
         self.assertEqual(result["coverage"]["ambiguous_event_id_collisions"], 1)
 
