@@ -188,6 +188,20 @@ async def _recheck_source(scope: str) -> None:
         await asyncio.to_thread(clear_binding_scope, scope)
         from .open_work_run_receipts import clear_scope as clear_run_receipt_scope
         await asyncio.to_thread(clear_run_receipt_scope, scope)
+        # Disconnect/replacement must revoke ALL session-owned dependency
+        # mirrors for this source, including sessions that never request again.
+        from .local_auth import auth_dir
+        from .open_work_dependency_store import purge_scope
+        try:
+            await asyncio.to_thread(
+                purge_scope,
+                str(auth_dir() / ".open_work_reviewed_dependencies.sqlite3"),
+                scope=scope,
+            )
+        except (OSError, sqlite3.DatabaseError, ValueError) as exc:
+            raise HTTPException(
+                503, "durable dependency source revocation cleanup unavailable"
+            ) from exc
         raise HTTPException(409, "local source connection changed")
 
 
