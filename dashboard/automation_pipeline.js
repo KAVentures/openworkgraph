@@ -2011,8 +2011,15 @@
         if(!journeyResponse.ok)throw new Error('Authenticated journey refused ('+journeyResponse.status+').');
         const journey=await journeyResponse.json();
         if(!current())return;
-        const project=journey.projects?.find(p=>p.project_id===handoff.project_id);
-        if(journey.idea?.revision!==handoff.idea_revision||!project||
+        const matchingProjects=Array.isArray(journey.projects)
+          ? journey.projects.filter(p=>p.project_id===handoff.project_id) : [];
+        // Truncated or ambiguous project history cannot establish an exact handoff.
+        if(journey.projects_truncated||matchingProjects.length!==1){
+          status.textContent='Project evidence is incomplete or ambiguous. Inspect again.';
+          return;
+        }
+        const project=matchingProjects[0];
+        if(journey.idea?.revision!==handoff.idea_revision||
            project.idea_revision!==handoff.idea_revision||
            project.spec_sha256!==handoff.spec_sha256||project.archive_sha256!==handoff.archive_sha256){
           status.textContent='Selected export changed. Return to the review workbench and inspect again.';
