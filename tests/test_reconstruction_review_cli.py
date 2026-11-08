@@ -171,6 +171,31 @@ class ReviewQueueTests(unittest.TestCase):
         self.assertTrue(review["unlisted_events_are_unassigned"])
 
 
+    def test_duplicate_label_on_distinct_real_pairs_is_not_a_multi_case_event(self):
+        import json
+        import sqlite3
+        from server.work_resumption import resumption_candidates
+        db = sqlite3.connect(":memory:")
+        db.row_factory = sqlite3.Row
+        db.execute("CREATE TABLE events(event_id TEXT, observed_at TEXT, metadata_json TEXT)")
+        def metadata(letter):
+            return json.dumps({"resource_reference": {"resource_ref": "owg:r:" + letter * 32,
+                "provider": "github", "resource_kind": "issue"},
+                "file_reference": {"file_ref": "owg:f:" + letter * 32}})
+        db.executemany("INSERT INTO events VALUES (?, ?, ?)", [
+            ("old-a", "2026-10-12T09:00:00Z", metadata("a")),
+            ("old-b", "2026-10-12T09:01:00Z", metadata("b")),
+            ("collision", "2026-10-14T10:00:00Z", metadata("a")),
+            ("collision", "2026-10-14T10:01:00Z", metadata("b")),
+        ])
+        result = resumption_candidates(db, lease={"mode": "all_saved"})
+        review = result["event_assignment_review"]
+        self.assertEqual(review["event_reviews_count"], 2)
+        self.assertEqual({row["event_id"] for row in review["event_reviews"]},
+                         {"old-a", "old-b"})
+        self.assertTrue(review["coverage_incomplete"])
+        self.assertEqual(result["coverage"]["ambiguous_event_id_collisions"], 1)
+
     def test_group_evidence_excludes_single_resource_and_transitive_only_events(self):
         import json
         import sqlite3
