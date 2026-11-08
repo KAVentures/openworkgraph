@@ -384,7 +384,15 @@ def main(argv=None):
                  "consent_local_read", "expected_generation")})
         print(json.dumps(result, sort_keys=True))
         return 0
-    except (ReceiptError, ValueError, TypeError, KeyError, OSError):
+    except Exception as exc:
+        from .m365_outlook_owg_receipt import UncertainReceipt
+        if isinstance(exc, UncertainReceipt):
+            print(json.dumps({"format": FORMAT, "status": "unverified",
+                              "possible_local_append": True,
+                              "automatic_retry_allowed": False}, sort_keys=True))
+            return 3
+        if not isinstance(exc, (ReceiptError, ValueError, TypeError, KeyError, OSError)):
+            raise
         print(json.dumps({"format": FORMAT, "status": "refused",
                           "checkpoint_advanced": False,
                           "automatic_retry_allowed": False}, sort_keys=True))
