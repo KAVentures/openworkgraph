@@ -540,3 +540,30 @@ def test_append_after_review_preserves_possible_write_on_post_append_failure(pos
                 session="session", consent_local_read=True,
                 consent_local_append=True, confirm_removals_reviewed=True)
         append.assert_called_once()
+
+
+@pytest.mark.parametrize("writer_outcome", [
+    OSError("ledger write response lost"),
+    {"status": "refused", "generation": 3, "idempotent_replay": False},
+    {"status": "checkpoint_committed", "generation": 3, "idempotent_replay": True},
+])
+def test_commit_after_review_reports_possible_commit_after_writer_invocation(writer_outcome):
+    """A lost reply must not be reported as a safe-to-retry refusal."""
+    from server.m365_outlook_sync_readiness import commit_after_review
+    from server.m365_outlook_owg_receipt import UncertainReceipt
+    kwargs = dict(
+        expected_generation=2, expected_previous_candidate_sha256="a"*64,
+        tenant="t", mailbox="m", folder="f", expected_address="m@example.com",
+        grant_file="g", identity_report="i", folder_report="f",
+        ledger_dir="l", log_id="log", confirm_log_id="log",
+        candidate="c", csv_path="csv", receipt_file="r",
+        journal_dir="j", handoff_dir="h", successor_label="next",
+        session="session", consent_local_read=True,
+        confirm_removals_reviewed=True, confirm_events_appended=True,
+        confirm_checkpoint_commit=True)
+    with (patch("server.m365_outlook_sync_readiness.readiness"),
+          patch("server.m365_outlook_checkpoint.commit_checkpoint",
+                side_effect=writer_outcome if isinstance(writer_outcome, Exception) else None,
+                return_value=None if isinstance(writer_outcome, Exception) else writer_outcome)):
+        with pytest.raises(UncertainReceipt, match="may have committed"):
+            commit_after_review(**kwargs)
