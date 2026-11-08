@@ -2020,6 +2020,7 @@
         }
         const project=matchingProjects[0];
         if(journey.idea?.revision!==handoff.idea_revision||
+           journey.idea?.state!==handoff.idea_state||
            project.idea_revision!==handoff.idea_revision||
            project.spec_sha256!==handoff.spec_sha256||project.archive_sha256!==handoff.archive_sha256){
           status.textContent='Selected export changed. Return to the review workbench and inspect again.';
