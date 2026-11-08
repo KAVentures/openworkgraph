@@ -279,6 +279,10 @@ def _audit_operator_result(audit_dir, *, action, tenant, mailbox, folder,
     No tokens, message contents, email addresses, or full provider receipts
     are persisted. Exclusive creation prevents replacement of prior evidence.
     """
+    # POSIX mode bits do not prove Windows ACL privacy. Fail closed until
+    # an ACL-aware private-directory and file validator is implemented.
+    if os.name != "posix":
+        raise ReceiptError("Private audit storage unsupported on this platform")
     directory = Path(audit_dir)
     mode = directory.lstat().st_mode
     if not stat.S_ISDIR(mode) or mode & 0o077:
