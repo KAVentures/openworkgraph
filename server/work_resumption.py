@@ -142,9 +142,17 @@ def _observed_case_groups(bucket: dict[str, Any]) -> list[dict[str, Any]]:
                     visited.add(neighbor)
                     pending.append(neighbor)
         component.sort()
-        events = sorted({event_id for node in component
-                         for _instant, event_id in bucket["tracks"][node]["observations"]
-                         if event_id})
+        # For multi-resource groups, show only row-exact pair evidence.
+        # A single-resource event on a member is NOT evidence that the
+        # whole connected component was co-observed (especially for A-B-C
+        # transitive chains). Keep singleton events for independent groups.
+        if len(component) > 1:
+            events = sorted({event_id for (left, right), pair_ids in bucket["pair_events"].items()
+                             if left in component and right in component
+                             for event_id in pair_ids if event_id})
+        else:
+            events = sorted({event_id for _instant, event_id in
+                             bucket["tracks"][component[0]]["observations"] if event_id})
         groups.append({
             "group_id": f"observed_group_{len(groups) + 1:02d}",
             "resource_pointers": [bucket["refs"][node] for node in component],
