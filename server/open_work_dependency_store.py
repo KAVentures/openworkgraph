@@ -155,6 +155,20 @@ def purge_actor(path: str, *, scope: str, actor: str) -> int:
             "DELETE FROM declared_case_dependencies WHERE scope=? AND actor=?",
             (scope, actor)).rowcount
 
+
+def purge_scope(path: str, *, scope: str) -> int:
+    """Remove all session mirrors for a disconnected/replaced source scope.
+
+    The caller must establish source revocation independently. This is a
+    local-only cleanup operation, not a source permission or agent action.
+    """
+    _valid(scope)
+    with closing(_connect(path)) as db, db:
+        db.execute("BEGIN IMMEDIATE")
+        return db.execute(
+            "DELETE FROM declared_case_dependencies WHERE scope=?", (scope,)
+        ).rowcount
+
 def reconcile_current_reviewed_dependencies(
     path: str, *, scope: str, actor: str,
     scope_provider=None, snapshot_provider=None,
