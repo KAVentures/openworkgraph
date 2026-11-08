@@ -141,9 +141,14 @@ function owgSecureAt(event) {
     };
     while (queue.length) {
       const {root, secure: inheritedSecure} = queue.pop();
-      if (typeof root.querySelectorAll !== "function") return true;
-      for (const el of root.querySelectorAll("*")) {
+      // Walk incrementally, including non-elements, so a page cannot make
+      // querySelectorAll materialize an unbounded DOM before limits apply.
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_ALL);
+      let node;
+      while ((node = walker.nextNode()) !== null) {
         if (++count > OWG_SECURE_SCAN_MAX_ELEMENTS || performance.now() - started > OWG_SECURE_SCAN_MAX_MS) return true;
+        if (!(node instanceof Element)) continue;
+        const el = node;
         const secure = inheritedSecure || (el.parentElement && secureAncestors.has(el.parentElement)) || isSensitiveControl(el);
         if (secure) secureAncestors.add(el);
         const opaqueFrame = ["iframe", "frame", "object", "embed"].includes(String(el.tagName || "").toLowerCase());

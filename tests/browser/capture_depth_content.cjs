@@ -214,6 +214,18 @@ const path=require('node:path');
    assert(flood<6000,'synthetic drag flood must not trigger a scan per event: '+flood);
    // Refill the probe budget before testing the independent depth guard.
    await page.waitForTimeout(900);
+   // The scanner must not materialize a full DOM list, and its node limit
+   // includes non-elements (a text-only flood cannot bypass the limit).
+   const boundedWalk=await page.evaluate(()=>{
+     const container=document.createElement('div');
+     for(let i=0;i<10010;i++)container.appendChild(document.createTextNode('x'));
+     document.body.appendChild(container);
+     const original=document.querySelectorAll;let materialized=false;
+     document.querySelectorAll=()=>{materialized=true;throw new Error('whole-DOM materialization');};
+     try{return {suppressed:owgSecureAt({clientX:10,clientY:10,composedPath:()=>[]}),materialized};}
+     finally{document.querySelectorAll=original;container.remove();}
+   });
+   assert.deepEqual(boundedWalk,{suppressed:true,materialized:false},'too many DOM nodes fail closed without materializing a list');
    // Overlong composed paths must not be interpreted as verified-safe.
    const deep=await page.evaluate(()=>{
      let root=document.body;
