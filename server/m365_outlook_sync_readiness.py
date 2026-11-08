@@ -178,18 +178,28 @@ def append_after_review(*, expected_generation, tenant, mailbox, folder,
         consent_local_append=True, opener=opener)
     # A successful POST is not a checkpoint approval. If the ledger changed
     # concurrently, refuse the handoff; the operator must inspect manually.
-    current = inspect_checkpoint(
-        tenant=tenant, mailbox=mailbox, folder=folder,
-        grant_file=Path(grant_file), ledger_dir=Path(ledger_dir),
-        consent_local_read=True)
-    if (type(current) is not dict or current.get("log_id") != log_id
-            or current.get("generation") != expected_generation):
-        raise ReceiptError("Checkpoint changed after append; inspect before commit")
-    _grant(Path(grant_file), tenant, mailbox, folder)
-    if (type(result) is not dict
-            or result.get("status") not in ("verified", "verified_empty")
-            or result.get("checkpoint_advanced") is not False):
-        raise ReceiptError("Append evidence not verified")
+    # Once append_verified has returned, OWG may already contain the events.
+    # Any subsequent failure must preserve that possibility for the operator;
+    # reporting a normal refusal would invite a dangerous blind retry.
+    from .m365_outlook_owg_receipt import UncertainReceipt
+    try:
+        current = inspect_checkpoint(
+            tenant=tenant, mailbox=mailbox, folder=folder,
+            grant_file=Path(grant_file), ledger_dir=Path(ledger_dir),
+            consent_local_read=True)
+        if (type(current) is not dict or current.get("log_id") != log_id
+                or type(current.get("generation")) is not int
+                or current["generation"] != expected_generation):
+            raise ReceiptError("Checkpoint changed after append")
+        _grant(Path(grant_file), tenant, mailbox, folder)
+        if (type(result) is not dict
+                or result.get("status") not in ("verified", "verified_empty")
+                or result.get("checkpoint_advanced") is not False):
+            raise ReceiptError("Append evidence not verified")
+    except Exception:
+        raise UncertainReceipt(
+            "OWG append may have committed; inspect inventory and checkpoint before retry"
+        ) from None
     return {"format": FORMAT, "status": "append_review_verified",
             "committed_predecessor_generation": expected_generation,
             "append_receipt": result, "checkpoint_advanced": False,
