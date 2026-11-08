@@ -190,10 +190,19 @@ def reconcile_current_reviewed_dependencies(
     current_scope = scope_provider or _source_scope
     current_snapshot = snapshot_provider or list_case_declarations
 
+    def scope_is_current() -> bool:
+        # A failed source authorization lookup cannot justify retaining a
+        # previously mirrored actor graph.
+        try:
+            return current_scope() == scope
+        except Exception:
+            purge_actor(path, scope=scope, actor=actor)
+            raise
+
     # The scoped provider must agree before AND after reading the reviewed
     # declaration snapshot. On disconnect/replacement, purge this actor's
     # mirror rather than retain a stale prerequisite graph.
-    if current_scope() != scope:
+    if not scope_is_current():
         purge_actor(path, scope=scope, actor=actor)
         raise CaseDeclarationError("source scope changed or disconnected")
     try:
@@ -203,7 +212,7 @@ def reconcile_current_reviewed_dependencies(
         # retaining a previously mirrored graph for this session actor.
         purge_actor(path, scope=scope, actor=actor)
         raise
-    if current_scope() != scope:
+    if not scope_is_current():
         purge_actor(path, scope=scope, actor=actor)
         raise CaseDeclarationError("source scope changed during review")
     try:
@@ -215,7 +224,7 @@ def reconcile_current_reviewed_dependencies(
         # consent-gated read-through path revokes stale actor edges.
         purge_actor(path, scope=scope, actor=actor)
         raise
-    if current_scope() != scope:
+    if not scope_is_current():
         purge_actor(path, scope=scope, actor=actor)
         raise CaseDeclarationError("source scope changed during reconciliation")
     # The review ledger may have changed while SQLite was being updated.
@@ -226,7 +235,7 @@ def reconcile_current_reviewed_dependencies(
     except Exception:
         purge_actor(path, scope=scope, actor=actor)
         raise
-    if latest != snapshot or current_scope() != scope:
+    if latest != snapshot or not scope_is_current():
         purge_actor(path, scope=scope, actor=actor)
         raise CaseDeclarationError("reviewed declarations changed during reconciliation")
     return {**result, "current_review_rechecked": True,
