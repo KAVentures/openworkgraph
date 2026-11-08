@@ -65,7 +65,8 @@
     if(anchor)anchor.insertAdjacentElement('afterend',card);else panel.appendChild(card);
 
     let deployments=[],renderVersion=0,loadVersion=0,incidentVersion=0;
-    const clearResults=()=>{renderVersion++;incidentVersion++;results.replaceChildren();channelHost.replaceChildren();incidentHost.replaceChildren();};
+    let incidentScope='selected',incidentStatus='',incidentSearch='';
+    const clearResults=()=>{renderVersion++;incidentVersion++;incidentScope='selected';incidentStatus='';incidentSearch='';results.replaceChildren();channelHost.replaceChildren();incidentHost.replaceChildren();};
     const refresh=()=>{importButton.disabled=!(file.files&&file.files[0]&&consent.checked);};
     file.onchange=refresh;consent.onchange=refresh;
     async function load(select){
@@ -131,23 +132,28 @@
       channelHost.replaceChildren(...parts);
     }
     const KIND={run_failures:'Failed runs',run_handoffs:'Runs handed to a person',signature_rejected:'Rejected signatures',replay_conflict:'Reused sequence numbers',lost_reports:'Lost reports',version_drift:'Version drift'};
-    async function renderIncidents(scopeValue='selected',statusValue='',searchValue=''){
+    async function renderIncidents(){
       const selected=pick.value;if(!selected)return;
-      const version=++incidentVersion;
-      const suffix=scopeValue==='all'?'':'?deployment_id='+encodeURIComponent(selected);
-      const data=await api('/v1/automation-monitoring/incidents'+suffix);
-      if(version!==incidentVersion||pick.value!==selected)return;
+      const version=++incidentVersion,requestedScope=incidentScope;
+      const suffix=requestedScope==='all'?'':'?deployment_id='+encodeURIComponent(selected);
+      let data;
+      try{data=await api('/v1/automation-monitoring/incidents'+suffix);}
+      catch(error){if(version===incidentVersion&&pick.value===selected)status.textContent=error.message;return;}
+      if(version!==incidentVersion||pick.value!==selected||incidentScope!==requestedScope)return;
       const scope=document.createElement('select');scope.id='owgMonitorIncidentScope';
-      setOptions(scope,[['selected','Selected deployment'],['all','All local deployments']]);scope.value=scopeValue;
+      setOptions(scope,[['selected','Selected deployment'],['all','All local deployments']]);scope.value=incidentScope;
       const filter=document.createElement('select');filter.id='owgMonitorIncidentStatus';
-      setOptions(filter,[['','All statuses'],['open','Open'],['acknowledged','Acknowledged'],['resolved','Resolved']]);filter.value=statusValue;
-      const search=input('owgMonitorIncidentSearch','search','Deployment, kind or step');search.value=searchValue;
+      setOptions(filter,[['','All statuses'],['open','Open'],['acknowledged','Acknowledged'],['resolved','Resolved']]);filter.value=incidentStatus;
+      const search=input('owgMonitorIncidentSearch','search','Deployment, kind or step');search.value=incidentSearch;
       const controls=el('div',null,'row');controls.style.alignItems='end';
       controls.append(field('Incident scope',scope),field('Incident status',filter),field('Search incidents',search));
-      const refreshList=()=>renderIncidents(scope.value,filter.value,search.value).catch(error=>{status.textContent=error.message;});
-      scope.onchange=refreshList;filter.onchange=()=>draw();search.oninput=()=>draw();
+      const refreshList=()=>renderIncidents();
+      scope.onchange=()=>{incidentScope=scope.value;draw();refreshList();};
+      filter.onchange=()=>{incidentStatus=filter.value;draw();};
+      search.oninput=()=>{incidentSearch=search.value;draw();};
       const body=el('div');
       function draw(){
+      if(incidentScope!==requestedScope){body.replaceChildren(el('div','Loading incidents for the selected scope…','muted'));return;}
       const query=search.value.trim().toLocaleLowerCase();
       const visible=data.incidents.filter(i=>{
         const deployment=deployments.find(d=>d.deployment_id===i.deployment_id);
@@ -164,7 +170,7 @@
         for(const [to,label] of [['acknowledged','Acknowledge'],['resolved','Resolve'],['open','Reopen']]){
           if(to===i.status)continue;
           const b=button(label,'secondary');b.setAttribute('aria-label',label+' incident '+i.incident_id);
-          b.onclick=async()=>{b.disabled=true;try{await api('/v1/automation-monitoring/incidents/'+encodeURIComponent(i.incident_id)+'/triage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:to,note:note.value,expected_last_seen:i.last_seen,expected_review_revision:i.review_revision})});await renderIncidents(scope.value,filter.value,search.value);}catch(error){status.textContent=error.message;b.disabled=false;}};
+          b.onclick=async()=>{b.disabled=true;try{await api('/v1/automation-monitoring/incidents/'+encodeURIComponent(i.incident_id)+'/triage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:to,note:note.value,expected_last_seen:i.last_seen,expected_review_revision:i.review_revision})});if(version===incidentVersion&&pick.value===selected)await renderIncidents();}catch(error){if(version===incidentVersion&&pick.value===selected)status.textContent=error.message;b.disabled=false;}};
           box.appendChild(b);
         }
         list.appendChild(box);
@@ -175,7 +181,7 @@
       incidentHost.replaceChildren(el('h3','Incidents'),controls,reload,body);draw();
     }
     channelButton.onclick=()=>renderChannel().catch(error=>{status.textContent=error.message;});
-    incidentButton.onclick=()=>renderIncidents().catch(error=>{status.textContent=error.message;});
+    incidentButton.onclick=()=>{incidentScope='selected';incidentStatus='';incidentSearch='';renderIncidents();};
     pick.onchange=clearResults;recent.oninput=clearResults;baseline.oninput=clearResults;
     toLog.onclick=async()=>{
       if(!window.confirm('Store this deployment\'s reported steps as an event log on this computer?'))return;
