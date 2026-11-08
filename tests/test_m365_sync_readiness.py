@@ -691,19 +691,27 @@ def test_operator_uncertain_write_identifies_correct_reconciliation(monkeypatch,
 
 def test_private_operator_audit_is_immutable_and_redacted(tmp_path):
     import os
-    from server.m365_outlook_sync_readiness import _audit_operator_result
+    from server.m365_outlook_sync_readiness import _audit_operator_result, ReceiptError
     private = tmp_path / "audit"
     private.mkdir(mode=0o700)
+    if os.name != "posix":
+        with pytest.raises(ReceiptError, match="unsupported"):
+            _audit_operator_result(private, action="readiness",
+                tenant="tenant-secret", mailbox="private-mailbox",
+                folder="folderSecret", log_id="log-secret", generation=2,
+                result={"status": "operator_review_ready"})
+        assert not list(private.iterdir())
+        return
     first = _audit_operator_result(
         private, action="extract", tenant="tenant-secret",
-        mailbox="private@example.com", folder="folderSecret",
+        mailbox="private-mailbox", folder="folderSecret",
         log_id="log-secret", generation=2,
         result={"status": "review_required", "event_snapshots": 3,
                 "removal_markers_for_review": 1, "checkpoint_advanced": False,
                 "provider_token": "never-write-token"})
     second = _audit_operator_result(
         private, action="commit", tenant="tenant-secret",
-        mailbox="private@example.com", folder="folderSecret",
+        mailbox="private-mailbox", folder="folderSecret",
         log_id="log-secret", generation=2,
         result={"status": "checkpoint_committed", "committed_generation": 3})
     assert first != second
