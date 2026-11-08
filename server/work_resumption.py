@@ -232,7 +232,7 @@ def resumption_candidates(
     result["coverage"]["pointer_rows_scanned"] = len(pointer_rows)
     if len(pointer_rows) >= MAX_POINTER_ROWS:
         result["coverage"]["scan_truncated"] = True
-    by_session: list[dict[str, Any]] = [{"refs": {}, "events": [], "tracks": {}, "coobserved": set()} for _ in sessions]
+    by_session: list[dict[str, Any]] = [{"refs": {}, "events": [], "tracks": {}, "coobserved": set(), "pair_events": {}} for _ in sessions]
     for row in pointer_rows:
         data = dict(row)
         instant = data.get("instant")
@@ -247,6 +247,9 @@ def resumption_candidates(
         for left_pos, left in enumerate(identities_in_event):
             for right in identities_in_event[left_pos + 1:]:
                 bucket["coobserved"].add((left, right))
+                event_id = str(data.get("event_id") or "")[:120]
+                if event_id:
+                    bucket["pair_events"].setdefault((left, right), set()).add(event_id)
         for pointer in pointers:
             identity = _identity(pointer)
             bucket["refs"].setdefault(identity, pointer)
@@ -312,21 +315,13 @@ def resumption_candidates(
     # This is an observed co-reference, never a task or case assertion.
     pair_assignments: list[dict[str, Any]] = []
     for pair in sorted(current["coobserved"]):
-        current_right_observations = set(current["tracks"][pair[1]]["observations"])
-        current_events = sorted({
-            event_id for instant, event_id in current["tracks"][pair[0]]["observations"]
-            if event_id and (instant, event_id) in current_right_observations
-        })
+        current_events = sorted(current["pair_events"].get(pair, ()))
         earlier_matches: list[dict[str, Any]] = []
         for earlier_index in range(current_index - 1, -1, -1):
             earlier = by_session[earlier_index]
             if pair not in earlier["coobserved"]:
                 continue
-            earlier_right_observations = set(earlier["tracks"][pair[1]]["observations"])
-            earlier_events = sorted({
-                event_id for instant, event_id in earlier["tracks"][pair[0]]["observations"]
-                if event_id and (instant, event_id) in earlier_right_observations
-            })
+            earlier_events = sorted(earlier["pair_events"].get(pair, ()))
             earlier_matches.append({
                 "session_started_at": _iso(sessions[earlier_index][0]),
                 "evidence_event_ids": earlier_events[:8],
