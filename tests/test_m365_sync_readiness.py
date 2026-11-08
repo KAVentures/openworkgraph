@@ -461,3 +461,50 @@ def test_cli_commit_refuses_combined_graph_extraction(monkeypatch):
         assert main(_cli_commit_args() + ["--extract-after-readiness"]) == 2
         commit.assert_not_called()
         extract.assert_not_called()
+
+
+def test_append_after_review_requires_separate_consent():
+    from server.m365_outlook_sync_readiness import append_after_review, ReceiptError as GateError
+    with pytest.raises(GateError):
+        append_after_review(expected_generation=2, tenant="t", mailbox="m", folder="f",
+            expected_address="m", grant_file="g", identity_report="i",
+            folder_report="f", ledger_dir="l", log_id="log", confirm_log_id="log",
+            candidate="c", csv_path="csv", session="session",
+            consent_local_read=True, confirm_removals_reviewed=True)
+
+
+def test_append_after_review_verifies_checkpoint_without_advancing():
+    from server.m365_outlook_sync_readiness import append_after_review
+    with (patch("server.m365_outlook_sync_readiness.readiness",
+                return_value={"status": "operator_review_ready"}),
+          patch("server.m365_outlook_owg_receipt.append_verified",
+                return_value={"status": "verified", "checkpoint_advanced": False}) as append,
+          patch("server.m365_outlook_sync_readiness.inspect_checkpoint",
+                return_value={"log_id": "log", "generation": 2}),
+          patch("server.m365_outlook_sync_readiness._grant")):
+        result = append_after_review(expected_generation=2, tenant="t", mailbox="m",
+            folder="f", expected_address="m", grant_file="g", identity_report="i",
+            folder_report="f", ledger_dir="l", log_id="log", confirm_log_id="log",
+            candidate="c", csv_path="csv", session="session", consent_local_read=True,
+            consent_local_append=True, confirm_removals_reviewed=True)
+    assert result["status"] == "append_review_verified"
+    assert result["checkpoint_advanced"] is False
+    assert result["automatic_retry_allowed"] is False
+    append.assert_called_once()
+
+
+def test_append_after_review_rejects_concurrent_checkpoint_advance():
+    from server.m365_outlook_sync_readiness import append_after_review, ReceiptError as GateError
+    with (patch("server.m365_outlook_sync_readiness.readiness",
+                return_value={"status": "operator_review_ready"}),
+          patch("server.m365_outlook_owg_receipt.append_verified",
+                return_value={"status": "verified", "checkpoint_advanced": False}),
+          patch("server.m365_outlook_sync_readiness.inspect_checkpoint",
+                return_value={"log_id": "log", "generation": 3}),
+          patch("server.m365_outlook_sync_readiness._grant")):
+        with pytest.raises(GateError, match="Checkpoint changed"):
+            append_after_review(expected_generation=2, tenant="t", mailbox="m",
+                folder="f", expected_address="m", grant_file="g", identity_report="i",
+                folder_report="f", ledger_dir="l", log_id="log", confirm_log_id="log",
+                candidate="c", csv_path="csv", session="session", consent_local_read=True,
+                consent_local_append=True, confirm_removals_reviewed=True)
