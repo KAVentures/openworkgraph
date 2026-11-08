@@ -170,6 +170,31 @@ class ReviewQueueTests(unittest.TestCase):
                          {"old-real", "new-real"})
         self.assertTrue(review["unlisted_events_are_unassigned"])
 
+
+    def test_group_evidence_excludes_single_resource_and_transitive_only_events(self):
+        import json
+        import sqlite3
+        from server.work_resumption import resumption_candidates
+        db = sqlite3.connect(":memory:")
+        db.row_factory = sqlite3.Row
+        db.execute("CREATE TABLE events(event_id TEXT, observed_at TEXT, metadata_json TEXT)")
+        def meta(issue, file_ref=None):
+            out = {"resource_reference": {"resource_ref": "owg:r:" + issue * 32,
+                    "provider": "github", "resource_kind": "issue"}}
+            if file_ref:
+                out["file_reference"] = {"file_ref": "owg:f:" + file_ref * 32}
+            return json.dumps(out)
+        db.executemany("INSERT INTO events VALUES (?, ?, ?)", [
+            ("pair-old", "2026-10-12T09:00:00Z", meta("a", "f")),
+            ("pair-new", "2026-10-14T10:00:00Z", meta("a", "f")),
+            ("issue-only", "2026-10-14T10:01:00Z", meta("a")),
+        ])
+        result = resumption_candidates(db, lease={"mode": "all_saved"})
+        group = next(g for g in result["observed_case_groups"] if g["resource_count"] == 2)
+        self.assertEqual(group["evidence_event_ids"], ["pair-new"])
+        self.assertNotIn("issue-only", group["evidence_event_ids"])
+        self.assertFalse(group["proves_same_case"])
+
     def test_authorized_empty_history_exposes_empty_review_contract(self):
         import sqlite3
         from server.work_resumption import resumption_candidates
