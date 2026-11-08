@@ -100,7 +100,7 @@ def test_live_review_preflight_is_authenticated_and_revision_pinned(monkeypatch)
     monkeypatch.setattr(routes.opportunity_journey, 'journey', journey)
     path = '/v1/review-choice-workbench/idea-1/preflight'
     snapshot = client.get('/v1/review-choice-workbench/idea-1', headers={'Authorization': 'OWG-Session test-session'}).json()
-    payload = {'project_id': 'p1', 'project_set_sha256': snapshot['project_set_sha256'], 'idea_revision': 3, 'spec_sha256': 'b'*64,
+    payload = {'project_id': 'p1', 'project_set_sha256': snapshot['project_set_sha256'], 'idea_revision': 3, 'idea_state': 'approved', 'spec_sha256': 'b'*64,
                'archive_sha256': 'c'*64, 'process_status': 'current',
                'process_reference': {}, 'dataset_origins': [],
                'dataset_origin_check_available': True,
@@ -125,6 +125,7 @@ def test_live_review_preflight_is_authenticated_and_revision_pinned(monkeypatch)
     state['process'] = 'changed'
     assert client.post(path, json=payload, headers=headers).status_code == 409
     state['process'] = 'current'
+    assert client.post(path, json={**payload, 'idea_state': 'implemented'}, headers=headers).status_code == 409
     assert client.post(path, json={**payload, 'blockers': []}, headers=headers).status_code == 409
     assert client.post(path, json={**payload, 'dataset_origins': [{'status': 'current'}]}, headers=headers).status_code == 409
     assert client.post(path, json={**payload, 'spec_sha256': 'bad'}, headers=headers).status_code == 422
@@ -197,7 +198,7 @@ def test_oversized_project_history_rejected_before_review_or_preflight(monkeypat
     headers = {'Authorization': 'OWG-Session test-session'}
     url = '/v1/review-choice-workbench/idea-1'
     assert client.get(url, headers=headers).status_code == 409
-    payload = {'project_id': 'p0', 'project_set_sha256': '0'*64, 'idea_revision': 3, 'spec_sha256': 'b'*64,
+    payload = {'project_id': 'p0', 'project_set_sha256': '0'*64, 'idea_revision': 3, 'idea_state': 'approved', 'spec_sha256': 'b'*64,
                'archive_sha256': 'c'*64, 'process_status': 'current',
                'process_reference': {}, 'dataset_origins': [],
                'dataset_origin_check_available': True,
@@ -229,7 +230,7 @@ def test_preflight_detects_other_project_mutation_and_recovers(monkeypatch):
     path = '/v1/review-choice-workbench/idea-1'
     snapshot = client.get(path, headers=headers).json()
     payload = {'project_id': 'p1', 'project_set_sha256': snapshot['project_set_sha256'],
-               'idea_revision': 3, 'spec_sha256': 'b'*64, 'archive_sha256': 'c'*64,
+               'idea_revision': 3, 'idea_state': 'approved', 'spec_sha256': 'b'*64, 'archive_sha256': 'c'*64,
                'process_status': 'current', 'process_reference': {},
                'dataset_origins': [], 'dataset_origin_check_available': True,
                'blockers': ['dataset_origin_not_linked', 'no_customer_report']}
@@ -239,5 +240,35 @@ def test_preflight_detects_other_project_mutation_and_recovers(monkeypatch):
     new_snapshot = client.get(path, headers=headers).json()
     assert new_snapshot['project_set_sha256'] != snapshot['project_set_sha256']
     payload['project_set_sha256'] = new_snapshot['project_set_sha256']
+    assert client.post(path+'/preflight', headers=headers, json=payload).status_code == 200
+    assert client.post(path+'/preflight', json=payload).status_code == 403
+
+
+def test_review_preflight_rejects_state_change_without_revision_bump(monkeypatch):
+    """A state transition cannot inherit an approval basis even with unchanged hashes."""
+    app = FastAPI()
+    app.include_router(routes.router)
+    client = TestClient(app)
+    monkeypatch.setattr(routes, 'dashboard_session_valid', lambda token: token == 'test-session')
+    state = {'value': 'approved'}
+    def journey(idea_id):
+        return {'idea': {'idea_id': idea_id, 'revision': 3, 'state': state['value']},
+                'process_status': {'status': 'current', 'process_reference': {}},
+                'projects': [{'project_id': 'p1', 'idea_revision': 3, 'idea_revision_is_current': True,
+                              'spec_sha256': 'b'*64, 'archive_sha256': 'c'*64, 'reported_specifications': []}],
+                'projects_truncated': False, 'dataset_origins': [], 'dataset_origin_check_available': True}
+    monkeypatch.setattr(routes.opportunity_journey, 'journey', journey)
+    headers = {'Authorization': 'OWG-Session test-session'}
+    path = '/v1/review-choice-workbench/idea-1'
+    inspected = client.get(path, headers=headers).json()
+    payload = {'project_id': 'p1', 'project_set_sha256': inspected['project_set_sha256'],
+               'idea_revision': 3, 'idea_state': 'approved', 'spec_sha256': 'b'*64,
+               'archive_sha256': 'c'*64, 'process_status': 'current', 'process_reference': {},
+               'dataset_origins': [], 'dataset_origin_check_available': True,
+               'blockers': ['dataset_origin_not_linked', 'no_customer_report']}
+    assert client.post(path+'/preflight', headers=headers, json=payload).status_code == 200
+    state['value'] = 'implemented'
+    assert client.post(path+'/preflight', headers=headers, json=payload).status_code == 409
+    payload['idea_state'] = 'implemented'
     assert client.post(path+'/preflight', headers=headers, json=payload).status_code == 200
     assert client.post(path+'/preflight', json=payload).status_code == 403
