@@ -687,3 +687,77 @@ def test_operator_uncertain_write_identifies_correct_reconciliation(monkeypatch,
     assert "private" not in output
     assert ("possible_checkpoint_commit" in receipt) is (action == "commit")
     assert ("possible_local_append" in receipt) is (action == "append")
+
+
+def test_private_operator_audit_is_immutable_and_redacted(tmp_path):
+    import os
+    from server.m365_outlook_sync_readiness import _audit_operator_result
+    private = tmp_path / "audit"
+    private.mkdir(mode=0o700)
+    first = _audit_operator_result(
+        private, action="extract", tenant="tenant-secret",
+        mailbox="private@example.com", folder="folder-secret",
+        log_id="log-secret", generation=2,
+        result={"status": "review_required", "event_snapshots": 3,
+                "removal_markers_for_review": 1, "checkpoint_advanced": False,
+                "provider_token": "never-write-token"})
+    second = _audit_operator_result(
+        private, action="commit", tenant="tenant-secret",
+        mailbox="private@example.com", folder="folder-secret",
+        log_id="log-secret", generation=2,
+        result={"status": "checkpoint_committed", "committed_generation": 3})
+    assert first != second
+    assert len(list(private.iterdir())) == 2
+    data = (private / first).read_text()
+    record = json.loads(data)
+    assert record["event_snapshots"] == 3
+    assert record["removal_markers_for_review"] == 1
+    assert record["expected_generation"] == 2
+    assert record["automatic_retry_allowed"] is False
+    for secret in ("private@example.com", "tenant-secret", "folder-secret",
+                   "log-secret", "never-write-token"):
+        assert secret not in data
+    assert os.stat(private / first).st_mode & 0o777 == 0o600
+
+
+def test_operator_audit_rejects_public_directory_and_symlink(tmp_path):
+    from server.m365_outlook_sync_readiness import _audit_operator_result, ReceiptError
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    public = tmp_path / "public"
+    public.mkdir(mode=0o755)
+    link = tmp_path / "link"
+    link.symlink_to(private, target_is_directory=True)
+    for directory in (public, link):
+        with pytest.raises(ReceiptError):
+            _audit_operator_result(
+                directory, action="readiness", tenant="t", mailbox="m",
+                folder="f", log_id="log", generation=2,
+                result={"status": "operator_review_ready"})
+    assert not list(private.iterdir())
+    assert not list(public.iterdir())
+
+
+def test_operator_audit_failure_after_append_reports_uncertain(monkeypatch, capsys, tmp_path):
+    from server.m365_outlook_sync_readiness import main
+    monkeypatch.setenv("OWG_DASHBOARD_SESSION", "private-session")
+    args = _cli_commit_args()
+    args.remove("--commit-after-review")
+    args.remove("--confirm-events-appended")
+    args.remove("--confirm-checkpoint-commit")
+    pos = args.index("--expected-previous-candidate-sha256")
+    del args[pos:pos + 2]
+    for key in ("--receipt-file", "--journal-dir", "--handoff-dir",
+                "--successor-label"):
+        pos = args.index(key)
+        del args[pos:pos + 2]
+    args.extend(["--append-after-review", "--consent-local-append",
+                 "--audit-dir", str(tmp_path / "missing")])
+    with patch("server.m365_outlook_sync_readiness.append_after_review",
+               return_value={"status": "append_review_verified",
+                             "checkpoint_advanced": False}):
+        assert main(args) == 3
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["status"] == "unverified"
+    assert receipt["possible_local_append"] is True
+    assert receipt["automatic_retry_allowed"] is False
