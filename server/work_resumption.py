@@ -293,6 +293,9 @@ def resumption_candidates(
                 track["observations"] = [(t, eid) for t, eid in track["observations"]
                                          if eid not in colliding_event_ids]
             bucket["events"] = [eid for eid in bucket["events"] if eid not in colliding_event_ids]
+            # A collided label cannot corroborate a pair across sessions either.
+            # Preserve only edges backed by at least one unambiguous row label.
+            bucket["coobserved"] = {pair for pair, ids in bucket["pair_events"].items() if ids}
 
     sessions_seen: dict[str, int] = {}
     for bucket in by_session:
