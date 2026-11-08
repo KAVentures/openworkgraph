@@ -142,7 +142,7 @@
                    result.source_read_authorized!==false||result.verified_business_outcomes!==false||
                    JSON.stringify(result.blockers)!==JSON.stringify(selected.blockers))
                   throw new Error('Decision evidence changed.');
-                window.dispatchEvent(new CustomEvent('owg-pipeline-open',{detail:{idea_id:id,project_id:projectId,idea_revision:snapshot.idea.revision,idea_state:snapshot.idea.state,spec_sha256:selected.spec_sha256,archive_sha256:selected.archive_sha256}}));
+                window.dispatchEvent(new CustomEvent('owg-pipeline-open',{detail:{idea_id:id,project_id:projectId,idea_revision:snapshot.idea.revision,idea_state:snapshot.idea.state,spec_sha256:selected.spec_sha256,archive_sha256:selected.archive_sha256,review_basis:{project_id:projectId,project_set_sha256:snapshot.project_set_sha256,idea_revision:snapshot.idea.revision,idea_state:snapshot.idea.state,spec_sha256:selected.spec_sha256,archive_sha256:selected.archive_sha256,process_status:snapshot.process_status,process_reference:snapshot.process_reference,dataset_origins:snapshot.dataset_origins,dataset_origin_check_available:snapshot.dataset_origin_check_available,blockers:selected.blockers}}}));
                 pipelineCard.scrollIntoView({block:'start',behavior:'auto'});
                 status.textContent='Opened current opportunity decision; no agent access was granted.';
               }catch(e){
