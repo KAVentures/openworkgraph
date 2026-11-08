@@ -567,3 +567,84 @@ def test_commit_after_review_reports_possible_commit_after_writer_invocation(wri
                 return_value=None if isinstance(writer_outcome, Exception) else writer_outcome)):
         with pytest.raises(UncertainReceipt, match="may have committed"):
             commit_after_review(**kwargs)
+
+
+def test_operator_two_round_review_append_commit_incremental_contract():
+    """Exercise the real operator composition across two committed generations.
+
+    Provider, OWG and durable-ledger boundaries are faked; this is not a live
+    tenant test. Each delegate still receives the exact reviewed generation.
+    """
+    from server.m365_outlook_sync_readiness import (
+        extract_after_readiness, append_after_review, commit_after_review)
+    from server.m365_outlook_owg_receipt import UncertainReceipt
+
+    generation = [2]
+    actions = []
+
+    def ready(**kw):
+        assert kw["expected_generation"] == generation[0]
+        actions.append(("preflight", generation[0]))
+        return {"status": "operator_review_ready"}
+
+    def extract(**kw):
+        actions.append(("graph", generation[0]))
+        return {"status": "review_required",
+                "committed_predecessor_generation": generation[0],
+                "event_snapshots": 1, "removal_markers_for_review": 0,
+                "checkpoint_advanced": False, "owg_append_performed": False}
+
+    def append(**kw):
+        actions.append(("owg_append_verified", generation[0]))
+        assert kw["consent_local_append"] is True
+        return {"status": "verified", "checkpoint_advanced": False}
+
+    def commit(**kw):
+        actions.append(("membership_and_commit", generation[0]))
+        assert kw["confirm_checkpoint_commit"] is True
+        generation[0] += 1
+        return {"status": "checkpoint_committed", "generation": generation[0],
+                "idempotent_replay": False}
+
+    def checkpoint(**kw):
+        return {"generation": generation[0], "log_id": "log"}
+
+    append_kw = dict(tenant="t", mailbox="m", folder="f",
+                     expected_address="m@example.com", grant_file="g",
+                     identity_report="i", folder_report="f", ledger_dir="l",
+                     log_id="log", confirm_log_id="log", candidate="c",
+                     csv_path="csv", session="session", consent_local_read=True,
+                     consent_local_append=True, confirm_removals_reviewed=True)
+    commit_kw = dict(append_kw)
+    commit_kw.pop("consent_local_append")
+    commit_kw.update(expected_previous_candidate_sha256="a"*64,
+                     receipt_file="r", journal_dir="j", handoff_dir="h",
+                     successor_label="next", confirm_events_appended=True,
+                     confirm_checkpoint_commit=True)
+    extraction_kw = _extract_kwargs()
+    extraction_kw["expected_generation"] = 2
+    with (patch("server.m365_outlook_sync_readiness.readiness", side_effect=ready),
+          patch("server.m365_outlook_checkpoint_next.extract_from_checkpoint",
+                side_effect=extract),
+          patch("server.m365_outlook_owg_receipt.append_verified",
+                side_effect=append),
+          patch("server.m365_outlook_checkpoint.commit_checkpoint",
+                side_effect=commit),
+          patch("server.m365_outlook_sync_readiness.inspect_checkpoint",
+                side_effect=checkpoint),
+          patch("server.m365_outlook_sync_readiness._grant")):
+        for round_generation in (2, 3):
+            extraction_kw["expected_generation"] = round_generation
+            assert extract_after_readiness(**extraction_kw)["status"] == "review_required"
+            assert append_after_review(expected_generation=round_generation,
+                                       **append_kw)["status"] == "append_review_verified"
+            assert commit_after_review(expected_generation=round_generation,
+                                       **commit_kw)["committed_generation"] == round_generation + 1
+    assert actions == [
+        ("preflight", 2), ("graph", 2), ("preflight", 2),
+        ("owg_append_verified", 2), ("preflight", 2),
+        ("membership_and_commit", 2),
+        ("preflight", 3), ("graph", 3), ("preflight", 3),
+        ("owg_append_verified", 3), ("preflight", 3),
+        ("membership_and_commit", 3),
+    ]
