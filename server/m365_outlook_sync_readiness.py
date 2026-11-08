@@ -449,7 +449,8 @@ def main(argv=None):
             result = extract_after_readiness(
                 **{k: v for k, v in a.items() if k not in
                    ("csv_path", "expected_previous_candidate_sha256",
-                    "confirm_events_appended", "confirm_checkpoint_commit")},
+                    "consent_local_append", "confirm_events_appended",
+                    "confirm_checkpoint_commit")},
                 token=os.environ["OWG_M365_GRAPH_TOKEN"],
                 session=os.environ["OWG_DASHBOARD_SESSION"])
         else:
