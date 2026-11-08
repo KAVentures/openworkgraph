@@ -206,3 +206,11 @@ OWG inventory or durable ledger, respectively, and reconcile manually. The
 `--audit-dir` option is optional for backwards compatibility; operators who
 need durable evidence must explicitly enable it. This provides CLI-visible
 audit artifacts, not yet a dashboard audit timeline.
+
+**Platform limitation:** Audit receipt creation currently requires POSIX filesystem
+permission semantics. On Windows it refuses before creating a receipt because
+POSIX mode bits cannot establish private Windows ACLs. An append or checkpoint
+operation with `--audit-dir` may already have written before this refusal; the
+CLI reports an uncertain write and requires authenticated inventory or ledger
+reconciliation. Do not assume that Windows audit persistence succeeded. An
+ACL-aware implementation and native Windows validation are still required.
