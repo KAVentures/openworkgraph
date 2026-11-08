@@ -4,6 +4,9 @@ import argparse
 import hashlib
 import json
 import os
+import secrets
+import stat
+from datetime import datetime, timezone
 from pathlib import Path
 from .m365_outlook_delta import _scope, _grant, _private_read
 from .m365_outlook_checkpoint import inspect_checkpoint
@@ -267,6 +270,55 @@ def commit_after_review(*, expected_generation, expected_previous_candidate_sha2
             "event_membership_verified": True,
             "automatic_retry_allowed": False}
 
+
+def _audit_operator_result(audit_dir, *, action, tenant, mailbox, folder,
+                           log_id, generation, result):
+    """Write a private, immutable, minimally scoped operator receipt.
+
+    Audit storage must be provisioned by the operator, not silently created.
+    No tokens, message contents, email addresses, or full provider receipts
+    are persisted. Exclusive creation prevents replacement of prior evidence.
+    """
+    directory = Path(audit_dir)
+    mode = directory.lstat().st_mode
+    if not stat.S_ISDIR(mode) or mode & 0o077:
+        raise ReceiptError("Audit directory must be private and not a symlink")
+    if action not in ("readiness", "extract", "append", "commit"):
+        raise ReceiptError("Invalid audit action")
+    if type(result) is not dict:
+        raise ReceiptError("Invalid audit receipt")
+    record = {
+        "format": "openworkgraph.m365-operator-audit.v1",
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "action": action,
+        "scope_sha256": _scope(tenant, mailbox, folder),
+        "log_id_sha256": hashlib.sha256(log_id.encode()).hexdigest(),
+        "expected_generation": generation,
+        "status": result.get("status"),
+        "automatic_retry_allowed": False,
+    }
+    for key in ("committed_generation", "committed_predecessor_generation",
+                "event_snapshots", "removal_markers_for_review",
+                "checkpoint_advanced", "owg_append_performed"):
+        if key in result and type(result[key]) in (int, bool):
+            record[key] = result[key]
+    data = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\\n").encode()
+    name = "m365-" + secrets.token_hex(16) + ".json"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(directory / name, flags, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except BaseException:
+        # Keep the potentially partial file as evidence; never overwrite it.
+        raise
+    return name
+
+
 def main(argv=None):
     """Local operator CLI: inspect readiness or explicitly request a review candidate.
 
@@ -296,6 +348,7 @@ def main(argv=None):
     for key in ("previous-candidate", "previous-csv", "receipt-file",
                 "journal-dir", "handoff-dir", "output", "candidate"):
         p.add_argument("--" + key, type=Path)
+    p.add_argument("--audit-dir", type=Path, help="Existing private directory for immutable audit receipts")
     p.add_argument("--port", type=int, default=8765)
     for key in ("consent-delta-read", "consent-local-export",
                 "confirm-removals-reviewed"):
@@ -304,6 +357,7 @@ def main(argv=None):
     extraction = a.pop("extract_after_readiness")
     committing = a.pop("commit_after_review")
     appending = a.pop("append_after_review")
+    audit_dir = a.pop("audit_dir")
     try:
         if sum(bool(x) for x in (extraction, committing, appending)) > 1:
             raise ReceiptError("Select exactly one operator action")
@@ -400,6 +454,21 @@ def main(argv=None):
                 ("tenant", "mailbox", "folder", "expected_address", "log_id",
                  "grant_file", "identity_report", "folder_report", "ledger_dir",
                  "consent_local_read", "expected_generation")})
+        if audit_dir is not None:
+            try:
+                audit_name = _audit_operator_result(
+                    audit_dir, action=("append" if appending else
+                                       "commit" if committing else
+                                       "extract" if extraction else "readiness"),
+                    tenant=a["tenant"], mailbox=a["mailbox"], folder=a["folder"],
+                    log_id=a["log_id"], generation=a["expected_generation"],
+                    result=result)
+                result = dict(result, audit_receipt_file=audit_name)
+            except Exception:
+                if appending or committing:
+                    from .m365_outlook_owg_receipt import UncertainReceipt
+                    raise UncertainReceipt("Write may have succeeded; audit failed") from None
+                raise ReceiptError("Audit persistence failed") from None
         print(json.dumps(result, sort_keys=True))
         return 0
     except Exception as exc:
