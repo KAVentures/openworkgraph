@@ -99,7 +99,8 @@ def test_live_review_preflight_is_authenticated_and_revision_pinned(monkeypatch)
                 'dataset_origin_check_available': True}
     monkeypatch.setattr(routes.opportunity_journey, 'journey', journey)
     path = '/v1/review-choice-workbench/idea-1/preflight'
-    payload = {'project_id': 'p1', 'idea_revision': 3, 'spec_sha256': 'b'*64,
+    snapshot = client.get('/v1/review-choice-workbench/idea-1', headers={'Authorization': 'OWG-Session test-session'}).json()
+    payload = {'project_id': 'p1', 'project_set_sha256': snapshot['project_set_sha256'], 'idea_revision': 3, 'spec_sha256': 'b'*64,
                'archive_sha256': 'c'*64, 'process_status': 'current',
                'process_reference': {}, 'dataset_origins': [],
                'dataset_origin_check_available': True,
@@ -196,7 +197,7 @@ def test_oversized_project_history_rejected_before_review_or_preflight(monkeypat
     headers = {'Authorization': 'OWG-Session test-session'}
     url = '/v1/review-choice-workbench/idea-1'
     assert client.get(url, headers=headers).status_code == 409
-    payload = {'project_id': 'p0', 'idea_revision': 3, 'spec_sha256': 'b'*64,
+    payload = {'project_id': 'p0', 'project_set_sha256': '0'*64, 'idea_revision': 3, 'spec_sha256': 'b'*64,
                'archive_sha256': 'c'*64, 'process_status': 'current',
                'process_reference': {}, 'dataset_origins': [],
                'dataset_origin_check_available': True,
@@ -204,3 +205,39 @@ def test_oversized_project_history_rejected_before_review_or_preflight(monkeypat
     assert client.post(url+'/preflight', headers=headers, json=payload).status_code == 409
     count['projects'] = 64
     assert client.get(url, headers=headers).status_code == 200
+
+
+def test_preflight_detects_other_project_mutation_and_recovers(monkeypatch):
+    """Selected project unchanged is insufficient when another reviewed export changes."""
+    app = FastAPI()
+    app.include_router(routes.router)
+    client = TestClient(app)
+    monkeypatch.setattr(routes, 'dashboard_session_valid', lambda token: token == 'test-session')
+    state = {'other': 'd'*64}
+    def journey(idea_id):
+        def project(pid, digest):
+            return {'project_id': pid, 'idea_revision': 3, 'idea_revision_is_current': True,
+                    'spec_sha256': digest, 'archive_sha256': 'c'*64,
+                    'reported_specifications': []}
+        return {'idea': {'idea_id': idea_id, 'revision': 3, 'state': 'approved'},
+                'process_status': {'status': 'current', 'process_reference': {}},
+                'projects': [project('p1', 'b'*64), project('p2', state['other'])],
+                'projects_truncated': False, 'dataset_origins': [],
+                'dataset_origin_check_available': True}
+    monkeypatch.setattr(routes.opportunity_journey, 'journey', journey)
+    headers = {'Authorization': 'OWG-Session test-session'}
+    path = '/v1/review-choice-workbench/idea-1'
+    snapshot = client.get(path, headers=headers).json()
+    payload = {'project_id': 'p1', 'project_set_sha256': snapshot['project_set_sha256'],
+               'idea_revision': 3, 'spec_sha256': 'b'*64, 'archive_sha256': 'c'*64,
+               'process_status': 'current', 'process_reference': {},
+               'dataset_origins': [], 'dataset_origin_check_available': True,
+               'blockers': ['dataset_origin_not_linked', 'no_customer_report']}
+    assert client.post(path+'/preflight', headers=headers, json=payload).status_code == 200
+    state['other'] = 'e'*64
+    assert client.post(path+'/preflight', headers=headers, json=payload).status_code == 409
+    new_snapshot = client.get(path, headers=headers).json()
+    assert new_snapshot['project_set_sha256'] != snapshot['project_set_sha256']
+    payload['project_set_sha256'] = new_snapshot['project_set_sha256']
+    assert client.post(path+'/preflight', headers=headers, json=payload).status_code == 200
+    assert client.post(path+'/preflight', json=payload).status_code == 403
