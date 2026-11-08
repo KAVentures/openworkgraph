@@ -149,6 +149,48 @@
                 if(token===generation){clear();status.textContent='Decision review expired. Inspect again. '+e.message;}
               }finally{continueReview.disabled=false;}
             };
+            // Durable human review is a separate, non-executing decision.
+            const notes=node('textarea');notes.maxLength=2000;notes.setAttribute('aria-label','Human review notes');
+            const reviewState=node('p','Loading saved review…');reviewState.setAttribute('role','status');
+            const saveDraft=node('button','Save review draft');
+            const approve=node('button','Approve reviewed choice');
+            const revoke=node('button','Revoke reviewed choice');
+            for(const b of [saveDraft,approve,revoke])b.type='button';
+            const reviewPath='/v1/review-choice-workbench/'+encodeURIComponent(id)+'/review';
+            let reviewRevision=0;
+            const basis={project_id:projectId,project_set_sha256:snapshot.project_set_sha256,
+              idea_revision:snapshot.idea.revision,idea_state:snapshot.idea.state,
+              spec_sha256:selected.spec_sha256,archive_sha256:selected.archive_sha256,
+              process_status:snapshot.process_status,process_reference:snapshot.process_reference,
+              dataset_origins:snapshot.dataset_origins,
+              dataset_origin_check_available:snapshot.dataset_origin_check_available,blockers:selected.blockers};
+            async function refreshReview(){
+              const response=await fetch(reviewPath+'/'+encodeURIComponent(projectId),{cache:'no-store'});
+              if(!response.ok)throw new Error('Review state unavailable ('+response.status+').');
+              const state=await response.json();
+              if(state.execution_authorized!==false||state.project_id!==projectId)throw new Error('Invalid review state');
+              reviewRevision=state.revision;notes.value=state.reviewer_notes||'';
+              reviewState.textContent='Saved review: '+state.decision+' (revision '+state.revision+'). No agent access granted.';
+            }
+            async function persistReview(decision){
+              for(const b of [saveDraft,approve,revoke])b.disabled=true;
+              try{
+                const response=await fetch(reviewPath,{method:'POST',cache:'no-store',
+                  headers:{'Content-Type':'application/json'},
+                  body:JSON.stringify({basis,expected_review_revision:reviewRevision,decision,reviewer_notes:notes.value})});
+                if(!response.ok)throw new Error('Review save refused ('+response.status+'); re-inspect or reload.');
+                const state=await response.json();
+                if(state.execution_authorized!==false||state.project_id!==projectId)throw new Error('Invalid saved review');
+                reviewRevision=state.revision;
+                reviewState.textContent='Saved '+decision+' at revision '+reviewRevision+'. This does not authorize execution.';
+              }catch(e){reviewState.textContent=e.message;}
+              finally{for(const b of [saveDraft,approve,revoke])b.disabled=false;}
+            }
+            saveDraft.onclick=()=>persistReview('draft');
+            approve.onclick=()=>persistReview('approved');
+            revoke.onclick=()=>persistReview('revoked');
+            details.append(node('h3','Record human review'),notes,saveDraft,approve,revoke,reviewState);
+            refreshReview().catch(e=>{reviewState.textContent=e.message;});
             details.append(continueReview);
             status.textContent='Current export basis confirmed by server. Continue to the existing opportunity decision; agent handoff still requires separate authorization.';
           }catch(e){if(token===generation){clear();status.textContent='Server preflight failed. Inspect again. '+e.message;}}
