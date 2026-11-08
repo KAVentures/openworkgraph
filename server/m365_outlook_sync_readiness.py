@@ -239,21 +239,29 @@ def commit_after_review(*, expected_generation, expected_previous_candidate_sha2
               ledger_dir=ledger_dir, log_id=log_id, consent_local_read=True,
               expected_generation=expected_generation)
     from .m365_outlook_checkpoint import commit_checkpoint
-    result = commit_checkpoint(
-        tenant=tenant, mailbox=mailbox, folder=folder, log_id=log_id,
-        confirm_log_id=confirm_log_id, grant_file=grant_file,
-        candidate=candidate, csv_path=csv_path, receipt_file=receipt_file,
-        journal_dir=journal_dir, handoff_dir=handoff_dir,
-        successor_label=successor_label, ledger_dir=ledger_dir,
-        expected_previous_candidate_sha256=expected_previous_candidate_sha256,
-        port=port, session=session, consent_local_read=True,
-        confirm_removals_reviewed=True, confirm_checkpoint_commit=True,
-        membership_opener=membership_opener)
-    if (type(result) is not dict or result.get("status") != "checkpoint_committed"
-            or type(result.get("generation")) is not int
-            or result["generation"] != expected_generation + 1
-            or result.get("idempotent_replay") is not False):
-        raise ReceiptError("Checkpoint commit requires manual ledger inspection")
+    # Once the writer is invoked, an exception or malformed response cannot
+    # prove that no durable generation was committed. Never invite a blind retry.
+    from .m365_outlook_owg_receipt import UncertainReceipt
+    try:
+        result = commit_checkpoint(
+            tenant=tenant, mailbox=mailbox, folder=folder, log_id=log_id,
+            confirm_log_id=confirm_log_id, grant_file=grant_file,
+            candidate=candidate, csv_path=csv_path, receipt_file=receipt_file,
+            journal_dir=journal_dir, handoff_dir=handoff_dir,
+            successor_label=successor_label, ledger_dir=ledger_dir,
+            expected_previous_candidate_sha256=expected_previous_candidate_sha256,
+            port=port, session=session, consent_local_read=True,
+            confirm_removals_reviewed=True, confirm_checkpoint_commit=True,
+            membership_opener=membership_opener)
+        if (type(result) is not dict or result.get("status") != "checkpoint_committed"
+                or type(result.get("generation")) is not int
+                or result["generation"] != expected_generation + 1
+                or result.get("idempotent_replay") is not False):
+            raise ReceiptError("Unverified checkpoint commit result")
+    except Exception:
+        raise UncertainReceipt(
+            "Checkpoint may have committed; inspect durable ledger before retry"
+        ) from None
     return {"format": FORMAT, "status": "checkpoint_committed",
             "committed_generation": result["generation"],
             "event_membership_verified": True,
