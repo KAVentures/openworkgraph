@@ -229,3 +229,21 @@ def test_dependency_store_closes_connections_after_success_and_failure(tmp_path,
     for conn in opened:
         with pytest.raises(sqlite3.ProgrammingError, match="closed"):
             conn.execute("SELECT 1")
+
+
+def test_source_scope_revocation_purges_all_sessions_but_not_other_tenants(tmp_path):
+    from server.open_work_dependency_store import purge_scope
+    path = str(tmp_path / "revoked.sqlite")
+    for scope, actor in (("old", "session_a"), ("old", "session_b"),
+                         ("current", "session_a")):
+        assert declare_dependency(path, scope=scope, actor=actor,
+                                  case_id="invoice", prerequisite="review")
+    assert purge_scope(path, scope="old") == 2
+    assert purge_scope(path, scope="old") == 0
+    for actor in ("session_a", "session_b"):
+        assert dependency_context(path, scope="old", actor=actor,
+                                  case_id="invoice")["direct"] == []
+    assert dependency_context(path, scope="current", actor="session_a",
+                              case_id="invoice")["direct"] == ["review"]
+    with pytest.raises(ValueError):
+        purge_scope(path, scope="../invalid")
