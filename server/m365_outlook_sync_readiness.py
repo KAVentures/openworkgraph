@@ -302,7 +302,7 @@ def _audit_operator_result(audit_dir, *, action, tenant, mailbox, folder,
                 "checkpoint_advanced", "owg_append_performed"):
         if key in result and type(result[key]) in (int, bool):
             record[key] = result[key]
-    data = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\\n").encode()
+    data = (json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n").encode()
     name = "m365-" + secrets.token_hex(16) + ".json"
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     if hasattr(os, "O_NOFOLLOW"):
