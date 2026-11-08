@@ -196,7 +196,13 @@ def reconcile_current_reviewed_dependencies(
     if current_scope() != scope:
         purge_actor(path, scope=scope, actor=actor)
         raise CaseDeclarationError("source scope changed or disconnected")
-    snapshot = current_snapshot(scope)
+    try:
+        snapshot = current_snapshot(scope)
+    except Exception:
+        # An unavailable, revoked, or unreadable review ledger cannot justify
+        # retaining a previously mirrored graph for this session actor.
+        purge_actor(path, scope=scope, actor=actor)
+        raise
     if current_scope() != scope:
         purge_actor(path, scope=scope, actor=actor)
         raise CaseDeclarationError("source scope changed during review")
@@ -208,7 +214,11 @@ def reconcile_current_reviewed_dependencies(
     # The review ledger may have changed while SQLite was being updated.
     # Require a stable, currently eligible snapshot; if not, erase the
     # mirror instead of reporting a stale graph as current.
-    latest = current_snapshot(scope)
+    try:
+        latest = current_snapshot(scope)
+    except Exception:
+        purge_actor(path, scope=scope, actor=actor)
+        raise
     if latest != snapshot or current_scope() != scope:
         purge_actor(path, scope=scope, actor=actor)
         raise CaseDeclarationError("reviewed declarations changed during reconciliation")
