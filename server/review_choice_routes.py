@@ -75,6 +75,7 @@ class ReviewBasis(BaseModel):
     project_id: str = Field(min_length=1, max_length=128)
     project_set_sha256: str = Field(pattern=r"^[a-fA-F0-9]{64}$")
     idea_revision: int = Field(ge=0)
+    idea_state: str = Field(min_length=1, max_length=64)
     spec_sha256: str = Field(pattern=r"^[a-fA-F0-9]{64}$")
     archive_sha256: str = Field(pattern=r"^[a-fA-F0-9]{64}$")
     process_status: str
@@ -102,6 +103,8 @@ def preflight(request: Request, idea_id: str, basis: ReviewBasis):
         raise HTTPException(409, "Project history changed; re-inspect")
     if snapshot["projects_truncated"]:
         raise HTTPException(409, "Review history truncated; re-inspect before proceeding")
+    if snapshot["idea"]["state"] != basis.idea_state:
+        raise HTTPException(409, "Opportunity state changed; re-inspect")
     if snapshot["idea"]["revision"] != basis.idea_revision:
         raise HTTPException(409, "Opportunity revision changed; re-inspect")
     matches = [p for p in snapshot["projects"] if p["project_id"] == basis.project_id]
