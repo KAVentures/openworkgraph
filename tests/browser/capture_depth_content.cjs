@@ -202,6 +202,28 @@ const path=require('node:path');
    await page.evaluate(()=>window.__changed({openworkgraph_capture_depth_v1:{newValue:{signals:{hover_dwell:true},parameters:{hover_dwell_ms:600},expires_at:new Date(Date.now()-1000).toISOString()}}},'local'));
    await page.hover('#menu');await page.waitForTimeout(800);await page.mouse.move(900,650);await page.waitForTimeout(200);
    assert.equal((await msgs('control_hover_dwell')).length,1,'expired detail is off');
+   // A hostile page cannot force one whole-DOM security scan per synthetic event.
+   await load({hover_dwell:true,drag_drop:true,pointer_trajectory:false});
+   const flood=await page.evaluate(()=>{
+     for(let i=0;i<100;i++)document.body.appendChild(document.createElement('div'));
+     window.__owgInspectCount=0;
+     const el=document.querySelector('#card');
+     for(let i=0;i<200;i++)el.dispatchEvent(new DragEvent('dragstart',{bubbles:true,clientX:10,clientY:10}));
+     return window.__owgInspectCount;
+   });
+   assert(flood<6000,'synthetic drag flood must not trigger a scan per event: '+flood);
+   // Refill the probe budget before testing the independent depth guard.
+   await page.waitForTimeout(900);
+   // Overlong composed paths must not be interpreted as verified-safe.
+   const deep=await page.evaluate(()=>{
+     let root=document.body;
+     for(let i=0;i<150;i++){const el=document.createElement('div');root.appendChild(el);root=el;}
+     root.setAttribute('role','button');root.setAttribute('draggable','true');
+     const before=window.__msgs.length;
+     root.dispatchEvent(new DragEvent('dragstart',{bubbles:true,clientX:10,clientY:10}));
+     return window.__msgs.slice(before).filter(m=>m.action==='drag_start').length;
+   });
+   assert.equal(deep,0,'overlong event paths fail closed');
    assert.deepEqual(errors,[]);
    console.log('Capture-depth content acceptance passed: semantic hover dwell (menus, activation, quick passes, disabled and secure controls), complete/incomplete/external drag without payloads, sampled normalised trajectories, Standard emits nothing new, live settings changes.');
  }finally{await browser.close();}
