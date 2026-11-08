@@ -7,7 +7,7 @@ class Node {
  setAttribute(){}
  addEventListener(k,fn){this.listeners[k]=fn;}
 }
-const basis=()=>({format:'openworkgraph.review-choices.v1',idea:{idea_id:'idea-1',revision:3,state:'approved'},process_status:'current',process_reference:{revision:1},dataset_origins:[],dataset_origin_check_available:true,projects_truncated:false,projects:[{project_id:'p1',idea_revision:3,spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),blockers:[],execution_authorized:false,review_required:true}],execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false});
+const basis=()=>({format:'openworkgraph.review-choices.v1',idea:{idea_id:'idea-1',revision:3,state:'approved'},process_status:'current',process_reference:{revision:1},dataset_origins:[],dataset_origin_check_available:true,project_set_sha256:'d'.repeat(64),projects_truncated:false,projects:[{project_id:'p1',idea_revision:3,spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),blockers:[],execution_authorized:false,review_required:true}],execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false});
 async function scenario(title,responses,check,withPipeline=false){
  const panel=new Node('section'),pipeline=new Node('section');pipeline.scrollIntoView=()=>{};
  const doc={createElement:t=>new Node(t),getElementById:id=>id==='panel-evidence'?panel:(withPipeline&&id==='owgPipelineCard'?pipeline:null),addEventListener(k,fn){this[k]=fn;}};
@@ -26,7 +26,7 @@ const getControls=results=>[results.children.find(x=>x.tagName==='select'),resul
 (async()=>{
  await scenario('successful read-only review',[basis(),basis()],async({results,details,status,calls})=>{const [select,review]=getControls(results);assert.ok(select&&review);select.value='p1';await review.onclick();assert.equal(calls(),2);assert.match(details.children.map(x=>x.textContent).join(' '),/Specification SHA-256/);assert.match(status.textContent,/Read-only choice inspected/);});
  await scenario('decision navigation rechecks server and fails closed on stale review',[basis(),basis(),
-   {format:'openworkgraph.review-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',
+   {format:'openworkgraph.review-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
     spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),blockers:[],review_required:true,
     execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false},
    {ok:false,status:409}],async({results,details,status,calls,opened})=>{
@@ -39,10 +39,10 @@ const getControls=results=>[results.children.find(x=>x.tagName==='select'),resul
    assert.equal(results.children.length,0);assert.match(status.textContent,/Decision review expired/);
  },true);
  await scenario('reviewed choice reaches exact-project pipeline event after two server preflights',[basis(),basis(),
-   {format:'openworkgraph.review-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',
+   {format:'openworkgraph.review-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
     spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),blockers:[],review_required:true,
     execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false},
-   {format:'openworkgraph.review-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',
+   {format:'openworkgraph.review-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
     spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),blockers:[],review_required:true,
     execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false}],
    async({results,details,opened,lastEvent,calls})=>{
