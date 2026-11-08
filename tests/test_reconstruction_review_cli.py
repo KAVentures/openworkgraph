@@ -195,6 +195,30 @@ class ReviewQueueTests(unittest.TestCase):
         self.assertTrue(review["coverage_incomplete"])
         self.assertEqual(result["coverage"]["ambiguous_event_id_collisions"], 1)
 
+    def test_collided_only_pair_does_not_corroborate_continuity(self):
+        import json
+        import sqlite3
+        from server.work_resumption import resumption_candidates
+        db = sqlite3.connect(":memory:")
+        db.row_factory = sqlite3.Row
+        db.execute("CREATE TABLE events(event_id TEXT, observed_at TEXT, metadata_json TEXT)")
+        both = json.dumps({
+            "resource_reference": {"resource_ref": "owg:r:" + "a" * 32,
+                                   "provider": "github", "resource_kind": "issue"},
+            "file_reference": {"file_ref": "owg:f:" + "f" * 32}})
+        db.executemany("INSERT INTO events VALUES (?, ?, ?)", [
+            ("old", "2026-10-12T09:00:00Z", both),
+            ("collision", "2026-10-14T10:00:00Z", both),
+            ("collision", "2026-10-14T10:01:00Z", both),
+        ])
+        result = resumption_candidates(db, lease={"mode": "all_saved"})
+        self.assertEqual(result["observed_group_continuity"], [])
+        self.assertEqual(result["observed_pair_event_assignments"], [])
+        self.assertEqual(result["event_assignment_review"]["event_reviews"], [])
+        self.assertTrue(result["event_assignment_review"]["coverage_incomplete"])
+        self.assertFalse(any(c["case_assignment_status"] == "corroborated_candidate"
+                             for c in result["candidates"]))
+
     def test_group_evidence_excludes_single_resource_and_transitive_only_events(self):
         import json
         import sqlite3
