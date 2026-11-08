@@ -214,6 +214,19 @@ const path=require('node:path');
    assert(flood<6000,'synthetic drag flood must not trigger a scan per event: '+flood);
    // Refill the probe budget before testing the independent depth guard.
    await page.waitForTimeout(900);
+   // Secure display:contents around a shadow slot has no bounding box; its
+   // light-DOM input is still part of the visual secure widget under overlays.
+   const slotted=await page.evaluate(()=>{
+     const host=document.createElement('div');host.style='position:fixed;left:100px;top:100px;width:200px;height:50px';
+     const input=document.createElement('input');input.style='width:180px;height:40px';host.appendChild(input);
+     const shadow=host.attachShadow({mode:'closed'});shadow.innerHTML='<div aria-label="password" style="display:contents"><slot></slot></div>';
+     window.__owgShadowRoots.set(host,shadow);document.body.appendChild(host);
+     const overlay=document.createElement('div');overlay.style='position:fixed;left:100px;top:100px;width:200px;height:50px;z-index:100';document.body.appendChild(overlay);
+     const probe=()=>owgSecureAt({clientX:120,clientY:120,composedPath:()=>[overlay,document.body,document.documentElement,document,window]});
+     const secure=probe();shadow.querySelector('div').setAttribute('aria-label','ordinary');const ordinary=probe();
+     host.remove();overlay.remove();return {secure,ordinary};
+   });
+   assert.deepEqual(slotted,{secure:true,ordinary:false},'secure shadow-slot widget is suppressed; ordinary slot remains usable');
    // The scanner must not materialize a full DOM list, and its node limit
    // includes non-elements (a text-only flood cannot bypass the limit).
    const boundedWalk=await page.evaluate(()=>{

@@ -73,6 +73,9 @@ dropped from these events.
   signals. Bursts beyond that budget and event paths deeper than 128 entries are
   suppressed rather than scanned without limit. This may omit real high-rate
   activity; a skipped drop cannot complete an earlier drag.
+- A secure widget using `display:contents` suppresses browser detail for the page:
+  its box may be absent while slotted descendants render elsewhere. Ordinary
+  non-sensitive `display:contents` elements do not trigger that suppression.
 - The raw points are kept on this device in their own table
   (`pointer_trajectory_points`), apart from the event rows, and are deleted with their
   event. The stored event carries only a point count and duration

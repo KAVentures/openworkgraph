@@ -151,6 +151,11 @@ function owgSecureAt(event) {
         const el = node;
         const secure = inheritedSecure || (el.parentElement && secureAncestors.has(el.parentElement)) || isSensitiveControl(el);
         if (secure) secureAncestors.add(el);
+        // A secure display:contents wrapper has no box of its own. In a
+        // shadow tree its slots can render light-DOM descendants whose parent
+        // chain does not pass through the wrapper. Their geometry cannot be
+        // attributed reliably here, so suppress detailed signals for the page.
+        if (secure && getComputedStyle(el).display === "contents") return true;
         const opaqueFrame = ["iframe", "frame", "object", "embed"].includes(String(el.tagName || "").toLowerCase());
         if ((secure || opaqueFrame) && coversPoint(el)) return true;
         if (!(el instanceof HTMLElement)) continue;
