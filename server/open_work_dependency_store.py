@@ -206,8 +206,15 @@ def reconcile_current_reviewed_dependencies(
     if current_scope() != scope:
         purge_actor(path, scope=scope, actor=actor)
         raise CaseDeclarationError("source scope changed during review")
-    result = replace_reviewed_dependencies(
-        path, scope=scope, actor=actor, snapshot=snapshot)
+    try:
+        result = replace_reviewed_dependencies(
+            path, scope=scope, actor=actor, snapshot=snapshot)
+    except Exception:
+        # Rejected reviewed data cannot justify retaining an older mirror.
+        # Standalone atomic replacement remains unchanged; only the live
+        # consent-gated read-through path revokes stale actor edges.
+        purge_actor(path, scope=scope, actor=actor)
+        raise
     if current_scope() != scope:
         purge_actor(path, scope=scope, actor=actor)
         raise CaseDeclarationError("source scope changed during reconciliation")
