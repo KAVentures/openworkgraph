@@ -18,7 +18,7 @@
     // A review is bound to the exact choice; switching choices must invalidate it.
     choice.addEventListener('change',()=>{generation++;details.replaceChildren();review.disabled=!snapshot;status.textContent='Project changed. Review the newly selected export before proceeding.';});
     const clear=()=>{snapshot=null;choice.replaceChildren();results.replaceChildren();details.replaceChildren();review.disabled=true;};
-    const validProjects=(projects,revision)=>Array.isArray(projects)&&
+    const validProjects=(projects,revision)=>Array.isArray(projects)&&projects.length<=64&&
       new Set(projects.map(p=>p.project_id)).size===projects.length&&
       projects.every(p=>typeof p.project_id==='string'&&p.project_id.length>0&&
         /^[a-f0-9]{64}$/i.test(p.spec_sha256)&&/^[a-f0-9]{64}$/i.test(p.archive_sha256)&&
