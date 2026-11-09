@@ -668,9 +668,14 @@ class Mapping(_Strict):
     activities: dict[Annotated[str, Field(max_length=40)], Name] = Field(max_length=80)
 
 
+class DomainPackConflict(workspace.EventLogWorkspaceError):
+    """The caller's reviewed installation is no longer current."""
+
+
 class InstallSpec(_Strict):
     version: Annotated[str, Field(pattern=r"^\d{1,4}\.\d{1,4}\.\d{1,4}$")]
     mapping: Mapping
+    expected_installation: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")] | None = None
     parameters: dict[Annotated[str, Field(max_length=40)], float] = Field(default_factory=dict, max_length=20)
 
 
@@ -853,6 +858,11 @@ def _check_names(conn, log_id: str, mapping: Mapping) -> None:
             raise workspace.EventLogWorkspaceError(f"{role} is mapped to {name!r}, which is not an activity of this log")
 
 
+def _installation_token(record: dict[str, Any]) -> str:
+    """Opaque equality token for the complete stored installation, including owned IDs."""
+    return _digest(record)
+
+
 def _record(conn, log_id: str, pack_id: str) -> dict[str, Any] | None:
     row = conn.execute("SELECT definition FROM domain_pack_installs WHERE log_id = ? AND pack_id = ?",
                        [log_id, pack_id]).fetchone()
@@ -884,6 +894,10 @@ def install(log_id: str, pack_id: str, spec: Any) -> dict[str, Any]:
             workspace._check_log(conn, log_id)
             _check_names(conn, log_id, parsed.mapping)
             previous = _record(conn, log_id, pack_id)
+            if "expected_installation" in parsed.model_fields_set:
+                current = _installation_token(previous) if previous is not None else None
+                if parsed.expected_installation != current:
+                    raise DomainPackConflict("domain pack installation changed; reload setup before saving")
             saved = {json.loads(d)["metric"]["name"]: m for m, d in conn.execute(
                 "SELECT metric_id, definition FROM metric_definitions WHERE log_id = ?", [log_id]).fetchall()}
             if previous and _version_key(parsed.version) < _version_key(previous["version"]):
@@ -915,7 +929,7 @@ def install(log_id: str, pack_id: str, spec: Any) -> dict[str, Any]:
             raise
         finally:
             conn.close()
-    return {**record, "change": change, "previous_version": previous["version"] if previous else None,
+    return {**record, "installation_token": _installation_token(record), "change": change, "previous_version": previous["version"] if previous else None,
             "not_applicable": definitions["not_applicable"]}
 
 
@@ -935,6 +949,7 @@ def installed(log_id: str) -> dict[str, Any]:
             conn.close()
     installs = [json.loads(d) for (d,) in rows]
     for record in installs:
+        record["installation_token"] = _installation_token(record)
         record["latest_version"] = _pack(record["pack_id"])["version"] if record["pack_id"] in PACKS else None
         record["upgrade_available"] = bool(record["latest_version"]) and \
             _version_key(record["latest_version"]) > _version_key(record["version"])
@@ -942,13 +957,17 @@ def installed(log_id: str) -> dict[str, Any]:
             "names_truncated": len(types) > MAX_NAMES or len(activities) > MAX_NAMES}
 
 
-def uninstall(log_id: str, pack_id: str) -> dict[str, Any]:
+def uninstall(log_id: str, pack_id: str, *, expected_installation: str | None = None) -> dict[str, Any]:
     with workspace._LOCK:
         conn = workspace._connect()
         try:
             conn.execute("BEGIN TRANSACTION")
             workspace._check_log(conn, log_id)
             previous = _record(conn, log_id, pack_id)
+            if expected_installation is not None:
+                current = _installation_token(previous) if previous is not None else None
+                if expected_installation != current:
+                    raise DomainPackConflict("domain pack installation changed; reload setup before removing")
             if previous is None:
                 raise workspace.EventLogWorkspaceError("this domain pack is not installed on the log")
             owned = set(previous["metric_ids"]) & {m for (m,) in conn.execute(

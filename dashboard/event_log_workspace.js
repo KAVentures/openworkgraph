@@ -1084,10 +1084,13 @@
             invalidate();const t2=++turn;install.disabled=true;run.disabled=true;
             try{
               const parameters={};for(const [k,i] of Object.entries(inputs))parameters[k]=Number(i.value);
-              const r=await (await post(base+'/'+pack.pack_id,{version:pack.latest_version,mapping:packMapping(pack,choices),parameters})).json();
+              const basis=installs.installs.find(i=>i.pack_id===pack.pack_id);
+              if(basis&&!/^[a-f0-9]{64}$/.test(basis.installation_token||''))throw new Error('Installation review is unavailable. Reload setup before saving.');
+              const r=await (await post(base+'/'+pack.pack_id,{version:pack.latest_version,mapping:packMapping(pack,choices),parameters,expected_installation:basis?basis.installation_token:null})).json();
+              // Keep the completed save's basis even if later inputs invalidated its display.
+              installs.installs=[...installs.installs.filter(i=>i.pack_id!==pack.pack_id),r];
               if(!current(t2))return;
               run.disabled=remove.disabled=false;
-            installs.installs=[...installs.installs.filter(i=>i.pack_id!==pack.pack_id),r];
               status.textContent=({installed:'Installed',upgraded:'Upgraded from '+r.previous_version+' to',reconfigured:'Reinstalled'}[r.change])+' '+r.version+'. '+r.metric_ids.length+' case metrics were added to this log’s metric library.'+(r.not_applicable.length?' '+r.not_applicable.length+' definitions do not apply without their optional roles.':'');
             }catch(error){if(current(t2))status.textContent=error.message;}
             finally{if(install.isConnected)install.disabled=false;}
@@ -1117,7 +1120,9 @@
           remove.onclick=async()=>{
             invalidate();const t2=++turn;remove.disabled=true;run.disabled=true;
             try{
-              const r=await (await api(base+'/'+pack.pack_id,{method:'DELETE'})).json();
+              const basis=installs.installs.find(i=>i.pack_id===pack.pack_id);
+              if(!basis||!/^[a-f0-9]{64}$/.test(basis.installation_token||''))throw new Error('Installation review is unavailable. Reload setup before removing.');
+              const r=await (await api(base+'/'+pack.pack_id+'?expected_installation='+encodeURIComponent(basis.installation_token),{method:'DELETE'})).json();
               if(!current(t2))return;
               installs.installs=installs.installs.filter(i=>i.pack_id!==pack.pack_id);
             run.disabled=true;out.replaceChildren();status.textContent='Uninstalled '+r.version+'; '+r.metrics_removed+' pack case metrics were removed.';
