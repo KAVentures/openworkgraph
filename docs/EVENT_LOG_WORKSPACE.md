@@ -1045,6 +1045,13 @@ The dashboard's "Process map" section has the two sliders (redrawn as you move t
 verified waiting. Redrawing a one-million-event log takes a few seconds
 (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_process_map.py`).
 
+**Download map (SVG)** and **(PNG)** save the map exactly as drawn at the current slider
+settings, for slides and documents. The SVG is self-contained: styles are inlined, and
+interactive attributes are removed. Its `<desc>` and a two-line footer record the log, the
+slider settings, the coverage shown and that the map is derived from the supplied log, not a
+verified business workflow. The PNG is rendered in the browser at twice the drawn size.
+Nothing is uploaded; activity names in the file are as sensitive as the log.
+
 ## Predicting open cases
 
 `POST /v1/event-logs/{log_id}/predictions` (dashboard session only) estimates remaining time and,

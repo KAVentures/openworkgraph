@@ -159,10 +159,16 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/automation_realized_value.cjs
       - name: Verify the local event-log workspace import, analytics, export and deletion
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_workspace.cjs
+      - name: Verify grouping activities for every analysis in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/activity_mappings.cjs
       - name: Verify supplied source-event IDs and key-preserving CSV round trips
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_source_identity.cjs
+      - name: Verify prediction snapshots scored after newer events in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/prediction_snapshots.cjs
       - name: Verify cancellable local analysis jobs in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/analysis_jobs.cjs
+      - name: Verify batch-processing detection in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_batching.cjs
       - name: Verify imported automation run reports show reported rates, drift and design comparison
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/automation_monitoring.cjs
       - name: Verify signed run-report channels and incident triage in Chromium
@@ -183,6 +189,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/communications_review.cjs
       - name: Verify PDD packages burn screenshot masks into pixels and store nothing
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_pdd.cjs
+      - name: Verify process map SVG and PNG downloads in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_map_export.cjs
       - name: Verify the local automation pipeline records decisions without authorizing execution
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/automation_pipeline.cjs
       - name: Verify automation portfolio planning in Chromium
