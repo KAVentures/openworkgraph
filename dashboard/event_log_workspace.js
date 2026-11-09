@@ -1004,7 +1004,7 @@
     let turn=0;const current=t=>generation===state.generation&&box.isConnected&&t===turn;
     const post=(url,body)=>api(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     setup.onclick=async()=>{
-      const t=++turn;setup.disabled=true;status.textContent='Loading…';
+      const t=++turn;setup.disabled=true;form.replaceChildren();out.replaceChildren();status.textContent='Loading…';
       try{
         const [catalog,installs]=await Promise.all([getJSON('/v1/event-log-domain-packs'),getJSON(base)]);
         if(!current(t))return;
@@ -1017,20 +1017,29 @@
           for(const [kind,names] of [['object_types',installs.log_object_types],['activities',installs.log_activities]])for(const r of pack[kind]){
             const s=select('owgDomainPackRole-'+r.role,[['',r.required?'Choose (required)':'Not in this log'],...names.map(n=>[n,n])]);
             s.value=packGuess(r,names,installed&&installed.mapping[kind][r.role]);s.setAttribute('aria-label',r.label+(r.required?' (required)':' (optional)'));
-            s.onchange=()=>{choices[kind][r.role]=s.value;};choices[kind][r.role]=s.value;
+            s.onchange=()=>{choices[kind][r.role]=s.value;edited();};choices[kind][r.role]=s.value;
             rows.push([kind==='object_types'?'Object type':'Activity',r.label+(r.required?'':' (optional)'),s]);
           }
-          const params=pack.parameters.map(p=>{const i=input('owgDomainPackParam-'+p.name,'number');i.min=String(p.min);i.max=String(p.max);i.value=String(installed?installed.parameters[p.name]:p.default);inputs[p.name]=i;return field(p.label,i);});
+          const params=pack.parameters.map(p=>{const i=input('owgDomainPackParam-'+p.name,'number');i.min=String(p.min);i.max=String(p.max);i.value=String(installed?installed.parameters[p.name]:p.default);inputs[p.name]=i;i.oninput=()=>edited();return field(p.label,i);});
           const install=button(installed?'Install '+pack.latest_version+(installed.version===pack.latest_version?' again':' (upgrade from '+installed.version+')'):'Install '+pack.title+' '+pack.latest_version);install.id='owgDomainPackInstall';
           const run=button('Run pack report','secondary');run.id='owgDomainPackRun';run.disabled=!installed;
           const remove=button('Uninstall','secondary');remove.id='owgDomainPackUninstall';remove.disabled=!installed;
           const paramRow=el('div',null,'row');paramRow.style.alignItems='end';paramRow.append(...params);
-          const actions=el('div',null,'row');actions.append(install,run,remove);
+          let reportSnapshot=null,reportTurn=null;
+          const exportReport=button('Download report JSON','secondary');exportReport.id='owgDomainPackDownload';exportReport.disabled=true;
+          const invalidate=()=>{turn++;reportSnapshot=null;reportTurn=null;exportReport.disabled=true;out.replaceChildren();};
+          const edited=()=>{invalidate();run.disabled=true;status.textContent='Inputs changed. Install the pack to apply them before running a new report.';};
+          exportReport.onclick=()=>{
+            if(!reportSnapshot||!current(reportTurn))return;
+            download('owg-domain-pack-'+pack.pack_id+'-'+reportSnapshot.report.pack.version+'.json',
+              JSON.stringify(reportSnapshot,null,2),'application/json');
+          };
+          const actions=el('div',null,'row');actions.append(install,run,remove,exportReport);
           const assumptions=el('ul');assumptions.className='muted';pack.assumptions.forEach(a=>assumptions.appendChild(el('li',a)));
-          form.replaceChildren(field('Domain pack',chooser),el('h4',pack.title+' '+pack.latest_version),el('div',pack.description,'muted'),table(['Kind','Role','Name in this log'],rows),paramRow,actions,el('h4','Assumptions'),assumptions);
+          form.replaceChildren(field('Domain pack',chooser),el('h4',pack.title+' '+pack.latest_version),el('div',pack.description,'muted'),table(['Kind','Role','Name in this log'],rows),paramRow,actions,el('div','Report downloads include supplied case/object examples and mapped labels. Save and share them only where authorized.','muted'),el('h4','Assumptions'),assumptions);
           status.textContent=(installed?'Installed: '+installed.version+' on '+String(installed.installed_at).slice(0,10)+'.':'Not installed on this log.')+(installs.names_truncated?' Only the 1,000 most frequent object types and activities are offered.':'');
           install.onclick=async()=>{
-            const t2=++turn;install.disabled=true;
+            invalidate();const t2=++turn;install.disabled=true;run.disabled=true;
             try{
               const parameters={};for(const [k,i] of Object.entries(inputs))parameters[k]=Number(i.value);
               const r=await (await post(base+'/'+pack.pack_id,{version:pack.latest_version,mapping:packMapping(pack,choices),parameters})).json();
@@ -1039,15 +1048,20 @@
             installs.installs=[...installs.installs.filter(i=>i.pack_id!==pack.pack_id),r];
               status.textContent=({installed:'Installed',upgraded:'Upgraded from '+r.previous_version+' to',reconfigured:'Reinstalled'}[r.change])+' '+r.version+'. '+r.metric_ids.length+' case metrics were added to this log’s metric library.'+(r.not_applicable.length?' '+r.not_applicable.length+' definitions do not apply without their optional roles.':'');
             }catch(error){if(current(t2))status.textContent=error.message;}
-            finally{if(current(t2))install.disabled=false;}
+            finally{if(install.isConnected)install.disabled=false;}
           };
           run.onclick=async()=>{
-            const t2=++turn;run.disabled=true;out.replaceChildren(el('div','Running…','muted'));
+            invalidate();const t2=++turn;run.disabled=true;out.replaceChildren(el('div','Running…','muted'));
             try{
               const r=await getJSON(base+'/'+pack.pack_id+'/report');
               if(!current(t2))return;
+              reportTurn=t2;
+              reportSnapshot={format:'openworkgraph.domain-pack-report-snapshot.v1',
+                generated_at:new Date().toISOString(),report:r};
+              exportReport.disabled=false;
               const v=packReportRows(r);
               out.replaceChildren(el('div',r.pack.title+' '+r.pack.version+' applied through your mapping.','muted'),
+                el('div','Saved parameters: '+JSON.stringify(r.parameters),'muted'),
                 el('h4','Case metrics'),table(['Metric','Object type','Cases','Median','90th percentile','With a value'],v.metrics),
                 el('h4','Compliance rules'),table(['Object type','Rule','Applies to','Violating','Unknown'],v.compliance),
                 ...(v.objectRules.length?[el('h4','Object rules'),table(['Rule','Applies to','Violating'],v.objectRules)]:[]),
@@ -1058,7 +1072,7 @@
             finally{if(current(t2))run.disabled=false;}
           };
           remove.onclick=async()=>{
-            const t2=++turn;remove.disabled=true;
+            invalidate();const t2=++turn;remove.disabled=true;run.disabled=true;
             try{
               const r=await (await api(base+'/'+pack.pack_id,{method:'DELETE'})).json();
               if(!current(t2))return;

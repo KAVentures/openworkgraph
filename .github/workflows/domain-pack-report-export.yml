@@ -1,0 +1,44 @@
+name: domain-pack-report-export
+
+on:
+  pull_request:
+    paths:
+      - "dashboard/event_log_workspace.js"
+      - "docs/DOMAIN_PACK_REPORT_EXPORT.md"
+      - "tests/browser/domain_pack_report_export.cjs"
+      - ".github/workflows/domain-pack-report-export.yml"
+  push:
+    branches: ["main"]
+    paths:
+      - "dashboard/event_log_workspace.js"
+      - "docs/DOMAIN_PACK_REPORT_EXPORT.md"
+      - "tests/browser/domain_pack_report_export.cjs"
+      - ".github/workflows/domain-pack-report-export.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  report-export-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install local app and tests
+        run: python -m pip install -e ".[dev,gateway]"
+      - name: Exercise selected real log, mapped rules and ASGI authorization
+        run: python -m pytest -q tests/test_event_log_domain_packs.py
+      - name: Install isolated Chromium and axe
+        run: |
+          npm install --prefix "$RUNNER_TEMP/owg-browser" playwright@1.64.1 axe-core@4.10.3
+          node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install --with-deps chromium
+      - name: Validate real browser journey syntax
+        run: node --check tests/browser/domain_pack_report_export.cjs
+      - name: Run actual mapped domain-pack install/report/reconfigure/uninstall
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/domain_pack_report_export.cjs
