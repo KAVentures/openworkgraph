@@ -423,6 +423,55 @@
     caseType.value=state.caseType;
   }
 
+  function activityMappingSection(){
+    const box=section('Group activities');box.id='owgActivityMappings';
+    box.appendChild(el('div','Group low-level activities under one higher-level name for every analysis of this log. The stored events are never changed, and saved signals and object views keep the original activities.','muted'));
+    const host=el('div');const groups=[];const draft=el('ul');draft.id='owgActivityMappingDraft';
+    const name=input('owgActivityMappingName','text','For example: Data entry steps');name.maxLength=200;
+    const label=input('owgActivityGroupLabel','text','Higher-level name');label.maxLength=200;
+    const pick=document.createElement('select');pick.id='owgActivityGroupPick';pick.multiple=true;pick.size=6;
+    const collapse=input('owgActivityMappingCollapse','checkbox');
+    const addGroup=button('Add group','secondary');addGroup.id='owgActivityGroupAdd';
+    const save=button('Save mapping','secondary');save.id='owgActivityMappingSave';
+    const msg=el('div',null,'muted');msg.id='owgActivityMappingStatus';msg.setAttribute('role','status');msg.setAttribute('aria-live','polite');
+    const generation=state.generation;
+    const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/activity-mappings';
+    const post=async(path,body)=>(await api(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+    const drawDraft=()=>draft.replaceChildren(...groups.map((g,i)=>{const li=el('li',g.label+' ← '+g.activities.join(', ')+' ');const rm=button('Remove','secondary');rm.setAttribute('aria-label','Remove group '+g.label);rm.onclick=()=>{groups.splice(i,1);drawDraft();};li.appendChild(rm);return li;}));
+    const render=r=>{
+      if(generation!==state.generation)return;
+      pick.replaceChildren(...r.original_activities.map(a=>{const o=el('option',a.activity+' ('+Number(a.events).toLocaleString()+')');o.value=a.activity;return o;}));
+      const list=el('ul');list.id='owgActivityMappingList';
+      r.mappings.forEach(m=>{
+        const li=el('li',m.name+' · '+m.groups.length+' groups · '+m.mapped_activities+' activities'+(m.collapse_repeats?' · repeats collapsed':'')+(m.applied?' · applied ':' '));
+        const toggle=button(m.applied?'Stop applying':'Apply to analyses','secondary');toggle.setAttribute('aria-label',(m.applied?'Stop applying ':'Apply ')+m.name);
+        toggle.onclick=async()=>{try{await post(base()+'/applied',{mapping_id:m.applied?null:m.mapping_id});await analyse();}catch(e){msg.textContent=e.message;}};
+        const del=button('Delete','secondary');del.setAttribute('aria-label','Delete mapping '+m.name);
+        del.onclick=async()=>{try{await post(base()+'/'+encodeURIComponent(m.mapping_id)+'/delete',{});if(m.applied)await analyse();else render({...r,mappings:(await (await api(base())).json()).mappings});}catch(e){msg.textContent=e.message;}};
+        li.append(toggle,del);list.appendChild(li);
+      });
+      host.replaceChildren(r.mappings.length?list:el('div','No saved mappings.','muted'));
+    };
+    addGroup.onclick=()=>{
+      const chosen=[...pick.selectedOptions].map(o=>o.value);
+      if(!label.value.trim()||!chosen.length){msg.textContent='Name the group and choose at least one activity.';return;}
+      groups.push({label:label.value.trim(),activities:chosen});label.value='';pick.selectedIndex=-1;drawDraft();msg.textContent='';
+    };
+    save.onclick=async()=>{
+      if(!groups.length){msg.textContent='Add at least one group.';return;}
+      try{const m=await post(base(),{name:name.value.trim()||'Activity mapping',groups,collapse_repeats:collapse.checked});
+        groups.length=0;drawDraft();msg.textContent='Saved “'+m.name+'”. Apply it to see it in every analysis.'+(m.activities_not_in_log.length?' Not in this log: '+m.activities_not_in_log.join(', ')+'.':'');
+        render(await (await api(base())).json());}
+      catch(e){msg.textContent=e.message;}
+    };
+    const row=el('div',null,'row');row.style.alignItems='end';
+    const collapseWrap=el('div');const collapseLabel=el('label',' Collapse consecutive repeats into the first');collapseLabel.htmlFor=collapse.id;collapseWrap.append(collapse,collapseLabel);
+    row.append(field('Mapping name',name),field('Group name',label),field('Activities in the group',pick),addGroup);
+    box.append(host,row,draft,collapseWrap,save,msg);
+    api(base()).then(r=>r.json()).then(render).catch(e=>{msg.textContent=e.message;});
+    return box;
+  }
+
   async function analyse(){
     const generation=++state.generation;
     const results=document.getElementById('owgEventLogResults');results.replaceChildren();
@@ -435,7 +484,9 @@
     const d=summary.case_duration_seconds||{};
     overview.appendChild(table(['Cases','Events','Activities','Median case time','90th percentile'],[[Number(summary.cases).toLocaleString(),Number(summary.events).toLocaleString(),summary.activities,duration(d.median),duration(d.p90)]]));
     if(summary.cases_before_filter!==undefined){const note=el('div','Filtered: '+Number(summary.cases).toLocaleString()+' of '+Number(summary.cases_before_filter).toLocaleString()+' cases match the case filter.','muted');note.id='owgCaseFilterCount';overview.appendChild(note);}
+    if(summary.activity_mapping){const m=summary.activity_mapping;const note=el('div','Activities are grouped by the mapping “'+m.name+'”: '+Number(m.events_relabeled).toLocaleString()+' events relabelled'+(m.repeats_collapsed?', '+Number(m.repeats_collapsed).toLocaleString()+' consecutive repeats collapsed':'')+'. The stored events are unchanged; remove the mapping under Group activities to see the original activities.','note');note.id='owgActivityMappingNotice';overview.appendChild(note);}
     results.appendChild(overview);
+    results.appendChild(activityMappingSection());
     results.appendChild(qualitySection());
     results.appendChild(caseFilterSection(names));
     results.appendChild(cohortMetricSection(names));
@@ -455,6 +506,7 @@
     results.append(activityBox,inspection.node);
     results.appendChild(kpiSection(names));
     results.appendChild(durationDistributionSection());
+    results.appendChild(batchingSection());
     results.appendChild(benchmarkSection(names));
     results.appendChild(impactSection(names));
     results.appendChild(savedGraphSection(names,inspection));
@@ -1085,10 +1137,13 @@
             invalidate();const t2=++turn;install.disabled=true;run.disabled=true;
             try{
               const parameters={};for(const [k,i] of Object.entries(inputs))parameters[k]=Number(i.value);
-              const r=await (await post(base+'/'+pack.pack_id,{version:pack.latest_version,mapping:packMapping(pack,choices),parameters})).json();
+              const basis=installs.installs.find(i=>i.pack_id===pack.pack_id);
+              if(basis&&!/^[a-f0-9]{64}$/.test(basis.installation_token||''))throw new Error('Installation review is unavailable. Reload setup before saving.');
+              const r=await (await post(base+'/'+pack.pack_id,{version:pack.latest_version,mapping:packMapping(pack,choices),parameters,expected_installation:basis?basis.installation_token:null})).json();
+              // Keep the completed save's basis even if later inputs invalidated its display.
+              installs.installs=[...installs.installs.filter(i=>i.pack_id!==pack.pack_id),r];
               if(!current(t2))return;
               run.disabled=remove.disabled=false;
-            installs.installs=[...installs.installs.filter(i=>i.pack_id!==pack.pack_id),r];
               status.textContent=({installed:'Installed',upgraded:'Upgraded from '+r.previous_version+' to',reconfigured:'Reinstalled'}[r.change])+' '+r.version+'. '+r.metric_ids.length+' case metrics were added to this log’s metric library.'+(r.not_applicable.length?' '+r.not_applicable.length+' definitions do not apply without their optional roles.':'');
             }catch(error){if(current(t2))status.textContent=error.message;}
             finally{if(install.isConnected)install.disabled=false;}
@@ -1118,7 +1173,9 @@
           remove.onclick=async()=>{
             invalidate();const t2=++turn;remove.disabled=true;run.disabled=true;
             try{
-              const r=await (await api(base+'/'+pack.pack_id,{method:'DELETE'})).json();
+              const basis=installs.installs.find(i=>i.pack_id===pack.pack_id);
+              if(!basis||!/^[a-f0-9]{64}$/.test(basis.installation_token||''))throw new Error('Installation review is unavailable. Reload setup before removing.');
+              const r=await (await api(base+'/'+pack.pack_id+'?expected_installation='+encodeURIComponent(basis.installation_token),{method:'DELETE'})).json();
               if(!current(t2))return;
               installs.installs=installs.installs.filter(i=>i.pack_id!==pack.pack_id);
             run.disabled=true;out.replaceChildren();status.textContent='Uninstalled '+r.version+'; '+r.metrics_removed+' pack case metrics were removed.';
@@ -3173,6 +3230,29 @@
     return box;
   }
 
+  // Self-contained SVG of a drawn map: computed styles are inlined so it renders the same outside the dashboard.
+  function exportableSvg(svg,caption){
+    const clone=svg.cloneNode(true);
+    const source=[svg,...svg.querySelectorAll('*')],target=[clone,...clone.querySelectorAll('*')];
+    const keep=['fill','stroke','stroke-width','stroke-dasharray','opacity','fill-opacity','stroke-opacity','font-size','font-family','font-weight','text-anchor','dominant-baseline','visibility','display'];
+    source.forEach((node,i)=>{const cs=getComputedStyle(node);const decl=keep.map(k=>{const v=cs.getPropertyValue(k);return v?k+':'+v:'';}).filter(Boolean).join(';');if(decl)target[i].setAttribute('style',decl);});
+    clone.querySelectorAll('[tabindex],[role=button]').forEach(n=>{n.removeAttribute('tabindex');n.removeAttribute('role');});
+    clone.setAttribute('xmlns','http://www.w3.org/2000/svg');
+    const box=svg.viewBox&&svg.viewBox.baseVal&&svg.viewBox.baseVal.width?svg.viewBox.baseVal:{x:0,y:0,width:svg.clientWidth||800,height:svg.clientHeight||600};
+    const pad=44,ns='http://www.w3.org/2000/svg';
+    clone.setAttribute('viewBox',box.x+' '+box.y+' '+box.width+' '+(box.height+pad));
+    clone.setAttribute('width',String(Math.round(box.width)));clone.setAttribute('height',String(Math.round(box.height+pad)));
+    clone.removeAttribute('style');
+    const bg=document.createElementNS(ns,'rect');Object.entries({x:box.x,y:box.y,width:box.width,height:box.height+pad,fill:'#ffffff'}).forEach(([k,v])=>bg.setAttribute(k,String(v)));
+    clone.insertBefore(bg,clone.firstChild);
+    const desc=document.createElementNS(ns,'desc');desc.textContent=caption;clone.insertBefore(desc,clone.firstChild);
+    caption.split('\n').slice(0,2).forEach((line,i)=>{const t=document.createElementNS(ns,'text');
+      Object.entries({x:box.x+8,y:box.y+box.height+16+i*16,'font-size':11,'font-family':'sans-serif',fill:'#334155'}).forEach(([k,v])=>t.setAttribute(k,String(v)));t.textContent=line.slice(0,160);clone.appendChild(t);});
+    return {text:new XMLSerializer().serializeToString(clone),width:box.width,height:box.height+pad};
+  }
+  function downloadBlob(blob,name){const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+  function mapFileName(ext){return 'process-map-'+String(state.logId||'log').replace(/[^A-Za-z0-9_-]/g,'').slice(0,40)+'.'+ext;}
+
   function processMapSection(){
     const box=section('Process map');box.id='owgEventLogProcessMap';
     box.appendChild(el('div','Simplify the map with the sliders. Hidden activities are removed first, so arrows can join steps that had hidden work between them. Times are gaps between recorded events, not measured work.','muted'));
@@ -3184,14 +3264,29 @@
     const status=el('div',null,'muted');status.id='owgMapStatus';status.setAttribute('role','status');
     const graphHost=el('div');graphHost.id='owgMapGraph';const slow=el('div');slow.id='owgMapSlowest';
     const player=mapPlayback(box);
-    box.append(row,status,player.node,graphHost,slow);
-    const generation=state.generation;let timer=null,request=0;
+    const svgButton=button('Download map (SVG)','secondary');svgButton.id='owgMapDownloadSvg';
+    const pngButton=button('Download map (PNG)','secondary');pngButton.id='owgMapDownloadPng';
+    const exportRow=el('div',null,'row');exportRow.append(svgButton,pngButton);
+    box.append(row,status,player.node,graphHost,exportRow,slow);
+    const generation=state.generation;let timer=null,request=0,lastCaption='';
+    const currentSvg=()=>graphHost.querySelector('#owgMapDrawing svg')||graphHost.querySelector('svg');
+    svgButton.onclick=()=>{const svg=currentSvg();if(!svg){status.textContent='No map is drawn to download.';return;}
+      downloadBlob(new Blob([exportableSvg(svg,lastCaption).text],{type:'image/svg+xml'}),mapFileName('svg'));};
+    pngButton.onclick=()=>{const svg=currentSvg();if(!svg){status.textContent='No map is drawn to download.';return;}
+      const out=exportableSvg(svg,lastCaption),img=new Image(),scale=2;
+      img.onload=()=>{const canvas=document.createElement('canvas');canvas.width=Math.round(out.width*scale);canvas.height=Math.round(out.height*scale);
+        const ctx=canvas.getContext('2d');ctx.scale(scale,scale);ctx.drawImage(img,0,0,out.width,out.height);
+        canvas.toBlob(blob=>{if(blob)downloadBlob(blob,mapFileName('png'));else status.textContent='The PNG could not be created; download the SVG instead.';},'image/png');};
+      img.onerror=()=>{status.textContent='The PNG could not be created; download the SVG instead.';};
+      img.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(out.text);};
     function schedule(){clearTimeout(timer);timer=setTimeout(()=>draw().catch(error=>{status.textContent=error.message;}),250);}
     async function draw(){
       const mine=++request;
       const r=await getJSON(logPath('process-map',{activities:String(Number(acts.node.value)/100),paths:String(Number(paths.node.value)/100)}));
       if(mine!==request||generation!==state.generation)return;
       const c=r.coverage;
+      lastCaption=(document.querySelector('#owgEventLogPick option:checked')?.textContent||'Event log')+' · activities '+acts.node.value+'%, paths '+paths.node.value+'%'+(r.activity_mapping?' · grouped by '+r.activity_mapping.name:'')+
+        '\nShowing '+c.activities_shown+' activities ('+pct(c.event_share_shown)+' of events) and '+c.transition_types_shown+' of '+c.transition_types_total+' paths. Derived from the supplied log; not a verified business workflow.';
       status.textContent='Showing '+c.activities_shown+' activities ('+pct(c.event_share_shown)+' of events) and '+c.transition_types_shown+' of '+c.transition_types_total+' paths ('+pct(c.transition_share_shown)+' of transitions).'+(c.activity_limit_reached?' The map shows at most 64 activities.':'');
       const draw=window.owgProcessGraph&&window.owgProcessGraph.drawObserved;
       graphHost.replaceChildren();player.reset();
@@ -3553,6 +3648,40 @@
   }
 
   // Builds prediction settings from form values; throws a readable error.
+  function batchingSection(){
+    const box=section('Batch processing');box.id='owgEventLogBatching';
+    box.appendChild(el('div','Find work done in batches: events of one activity by the same resource that follow each other within a short gap. Batches are inferred from timestamps and are not proof that work was deliberately batched.','muted'));
+    const gap=input('owgBatchGap','number');gap.min='0';gap.max='86400';gap.value='60';
+    const size=input('owgBatchSize','number');size.min='2';size.max='1000';size.value='3';
+    const byResource=input('owgBatchByResource','checkbox');byResource.checked=true;
+    const run=button('Find batches','secondary');run.id='owgBatchRun';
+    const out=el('div');out.id='owgBatchResults';out.setAttribute('role','status');
+    const resWrap=el('div');const resLabel=el('label',' Separate by resource');resLabel.htmlFor=byResource.id;resWrap.append(byResource,resLabel);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Gap within a batch (seconds)',gap),field('Smallest batch',size),resWrap,run);
+    box.append(row,out);
+    const generation=state.generation;
+    run.onclick=async()=>{
+      run.disabled=true;
+      try{
+        const spec={gap_seconds:Number(gap.value),min_batch_size:Number(size.value),by_resource:byResource.checked};
+        if(state.caseType)spec.case_type=state.caseType;
+        const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/batching',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        if(generation!==state.generation)return;
+        const shown=r.activities.filter(a=>a.batches>0);
+        const rows=shown.map(a=>[a.activity,pct(a.batched_share)+' of '+Number(a.events).toLocaleString(),String(a.batches)+(a.simultaneous_batches?' ('+a.simultaneous_batches+' at one instant)':''),
+          a.batch_size?a.batch_size.median+' (90th '+a.batch_size.p90+', max '+a.batch_size.max+')':'—',
+          duration(a.median_wait_before_batched_seconds)+' vs '+duration(a.median_wait_before_unbatched_seconds),
+          a.simulation_batch_proposal?'size '+a.simulation_batch_proposal.size+(a.simulation_batch_proposal.max_wait_minutes?', wait up to '+a.simulation_batch_proposal.max_wait_minutes+' min':''):'—']);
+        out.replaceChildren(
+          el('div',Number(r.batched_events).toLocaleString()+' of '+Number(r.events).toLocaleString()+' events were in batches ('+r.grouping+(r.resources_recorded?'':'; no resources are recorded in this log')+').','muted'),
+          shown.length?table(['Activity','Events in batches','Batches','Batch size (median)','Wait before: batched vs not','Simulation proposal'],rows):el('div','No batches with these settings.','muted'),
+          el('div',r.interpretation,'muted'));
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      finally{run.disabled=false;}
+    };
+    return box;
+  }
+
   function predictionSpec(values){
     const ends=String(values.ends||'').split(',').map(x=>x.trim()).filter(Boolean);
     if(!ends.length)throw new Error('List the activities that end a case.');
@@ -3591,8 +3720,50 @@
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities that end a case',ends),field('Also predict',outcome),f.hours,f.activity,field('Learn from',estimator),run,watch);
     const out=el('div');out.id='owgPredictResults';out.setAttribute('role','status');
     const monitorOut=el('div');monitorOut.id='owgPredictMonitoring';monitorOut.setAttribute('role','status');
-    box.append(row,out,monitorOut);
+    const snapButton=button('Save a snapshot to score later','secondary');snapButton.id='owgPredictSnapshot';
+    const snapOut=el('div');snapOut.id='owgPredictSnapshots';
+    const snapStatus=el('div',null,'muted');snapStatus.id='owgPredictSnapshotStatus';snapStatus.setAttribute('role','status');snapStatus.setAttribute('aria-live','polite');
+    box.append(row,out,monitorOut,el('h4','Prediction snapshots'),
+      el('div','A snapshot freezes today\u2019s estimates for every open case (completed-cases learning). After you append newer events, score it to see how the estimates held up against what actually happened.','muted'),
+      snapButton,snapStatus,snapOut);
     const generation=state.generation;
+    const snapBase=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/prediction-snapshots';
+    const listSnapshots=async()=>{
+      const r=await (await api(snapBase())).json();
+      if(generation!==state.generation)return;
+      if(!r.snapshots.length){snapOut.replaceChildren(el('div','No snapshots yet.','muted'));return;}
+      const list=el('ul');
+      r.snapshots.forEach(sn=>{
+        const li=el('li',(sn.as_of||'').slice(0,16).replace('T',' ')+' · '+Number(sn.predicted_cases).toLocaleString()+' open cases frozen ');
+        const score=button('Score now','secondary');score.setAttribute('aria-label','Score snapshot from '+(sn.as_of||''));
+        const remove=button('Delete','secondary');remove.setAttribute('aria-label','Delete snapshot from '+(sn.as_of||''));
+        const result=el('div');result.className='owgSnapshotScore';
+        score.onclick=async()=>{
+          try{
+            const e=await (await api(snapBase()+'/'+encodeURIComponent(sn.snapshot_id)+'/evaluation')).json();
+            const parts=[el('div',Number(e.finished_cases).toLocaleString()+' finished, '+Number(e.still_open_cases).toLocaleString()+' still open'+(e.cases_no_longer_in_log?', '+e.cases_no_longer_in_log+' no longer in the log':'')+'; '+duration(e.seconds_since_snapshot)+' of newer events.')];
+            const t=e.remaining_time;
+            if(t)parts.push(el('div','Typical error '+duration(t.mean_absolute_error_seconds)+' (median '+duration(t.median_absolute_error_seconds)+') vs '+(t.naive_mean_absolute_error_seconds===null?'—':duration(t.naive_mean_absolute_error_seconds))+' for one estimate for every case. Range covered '+pct(t.coverage_10_90)+' ['+pct(t.coverage_10_90_ci95[0])+', '+pct(t.coverage_10_90_ci95[1])+'] against 80% nominal. '+t.still_open_known_misses+' still-open cases are already past their range.'));
+            else parts.push(el('div','No frozen case has finished yet; append newer events and score again.','muted'));
+            if(e.outcome)parts.push(el('div','Outcome: Brier '+Number(e.outcome.brier_score).toFixed(3)+(e.outcome.base_rate_brier_score===null?'':' vs '+Number(e.outcome.base_rate_brier_score).toFixed(3)+' for the base rate')+'; happened in '+pct(e.outcome.observed_rate)+' against '+pct(e.outcome.mean_predicted)+' predicted.'));
+            parts.push(el('div',e.interpretation,'muted'));result.replaceChildren(...parts);
+          }catch(error){result.replaceChildren(el('div',error.message,'muted'));}
+        };
+        remove.onclick=async()=>{try{await api(snapBase()+'/'+encodeURIComponent(sn.snapshot_id)+'/delete',{method:'POST'});await listSnapshots();}catch(error){snapStatus.textContent=error.message;}};
+        li.append(score,remove,result);list.appendChild(li);
+      });
+      snapOut.replaceChildren(list);
+    };
+    snapButton.onclick=async()=>{
+      try{
+        const spec={...predictionSpec({ends:ends.value,outcome:outcome.value,hours:hours.value,activity:activity.value,estimator:'completed_cases'})};
+        delete spec.limit;if(state.caseType)spec.case_type=state.caseType;
+        const sn=await (await api(snapBase(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        snapStatus.textContent='Saved a snapshot of '+Number(sn.predicted_cases).toLocaleString()+' open cases'+(sn.unsupported_open_cases?' ('+sn.unsupported_open_cases+' without enough comparable history)':'')+'.';
+        await listSnapshots();
+      }catch(error){snapStatus.textContent=error.message;}
+    };
+    listSnapshots().catch(()=>{});
     run.onclick=async()=>{
       try{
         const spec=predictionSpec({ends:ends.value,outcome:outcome.value,hours:hours.value,activity:activity.value,estimator:estimator.value});
