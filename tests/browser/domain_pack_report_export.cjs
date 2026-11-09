@@ -95,7 +95,7 @@ const path=require('node:path');
   await page.locator('#owgDomainPackInstall').click();
   await page.locator('#owgDomainPackStatus').filter({hasText:'Reinstalled 1.0.0.'}).waitFor();
   await page.locator('#owgDomainPackRun').click();
-  await report.getByText('Saved parameters: {"invoice_within_days":14,"payment_terms_days":60}',{exact:true}).waitFor();
+  await report.getByText('Saved parameters: Invoice within (days of order): 14; Payment terms (days of invoice): 60',{exact:true}).waitFor();
   const [updatedFile]=await Promise.all([page.waitForEvent('download'),exportButton.click()]);
   const updated=JSON.parse(await fs.readFile(await updatedFile.path(),'utf8'));
   assert.equal(updated.report.parameters.payment_terms_days,60);

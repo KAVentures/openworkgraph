@@ -1061,7 +1061,8 @@
               exportReport.disabled=false;
               const v=packReportRows(r);
               out.replaceChildren(el('div',r.pack.title+' '+r.pack.version+' applied through your mapping.','muted'),
-                el('div','Saved parameters: '+JSON.stringify(r.parameters),'muted'),
+                el('div','Saved parameters: '+Object.entries(r.parameters).map(([name,value])=>
+                  (pack.parameters.find(p=>p.name===name)?.label||name)+': '+value).join('; '),'muted'),
                 el('h4','Case metrics'),table(['Metric','Object type','Cases','Median','90th percentile','With a value'],v.metrics),
                 el('h4','Compliance rules'),table(['Object type','Rule','Applies to','Violating','Unknown'],v.compliance),
                 ...(v.objectRules.length?[el('h4','Object rules'),table(['Rule','Applies to','Violating'],v.objectRules)]:[]),
