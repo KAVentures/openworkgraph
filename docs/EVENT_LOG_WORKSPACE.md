@@ -173,6 +173,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-logs/{log_id}/activities` | Activity frequency and rework (cases that repeat the activity). |
 | `GET /v1/event-logs/{log_id}/kpis?sla_seconds=&automation_resources=` | Throughput p50/p90/p95, rework rate, SLA breach rate, automation rate and weekly completions. |
 | `POST /v1/event-logs/{log_id}/benchmark` | Compare two case cohorts (JSON body, below). |
+| `POST /v1/event-logs/{log_id}/costs` | Process cost from your cost model (below). |
 | `POST /v1/event-logs/{log_id}/map-comparison` | Compare the process maps of two cohorts path by path (below). |
 | `POST /v1/event-logs/comparison` | Compare two saved logs, or one log under two filters (below). |
 | `POST /v1/event-logs/{log_id}/impact` | Before/after impact of an intervention on cycle time, rework, SLA breaches or an activity count, with bootstrap intervals, an optional control cohort and a placebo check. See [INTERVENTION_IMPACT.md](INTERVENTION_IMPACT.md). |
@@ -214,6 +215,41 @@ its first event falls in), `resource` (a resource took part), `activity` (the
 case contains it) and `attribute` (`name=value` on the case object). The
 dashboard downloads the result as JSON or CSV; CSV cells that could be read as
 spreadsheet formulas are prefixed with `'`.
+
+### Process cost
+
+The log records what happened, not what it cost. **Process cost** applies your
+own cost model to the observed events. `POST /v1/event-logs/{log_id}/costs`
+takes:
+
+```json
+{"currency": "EUR", "activity_costs": {"Check invoice": 12.5, "Approve": 4},
+ "default_activity_cost": null, "hourly_open_case_cost": 0.8,
+ "cohort": {}, "case_type": null, "limit": 20}
+```
+
+* `activity_costs`: the cost of one execution of each activity (up to 500
+  activities; each from 0 to 1,000,000,000).
+* `default_activity_cost`: optional; prices every activity not listed.
+  Activities with no price are left out of the totals and listed in
+  `unpriced_activities`; their cost is never guessed.
+* `hourly_open_case_cost`: optional holding cost, charged for each case's time
+  between its first and last event.
+
+The response gives:
+
+* the total, activity and holding cost;
+* the cost of repeated executions (every execution of an activity after its
+  first in the same case) and its share of the total;
+* cost per case (mean, median, 90th percentile, maximum);
+* cost per activity (unit price and where it came from, total, share and the
+  cost of repeated executions);
+* the costliest variants (`limit`, 1–200);
+* cost per recorded resource.
+
+`cohort` takes the same keys as other analyses, so the cost of any filtered set
+of cases can be compared with the rest. Repeated executions are not verified
+rework.
 
 ### Cohort benchmark
 
