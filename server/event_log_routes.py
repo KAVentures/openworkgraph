@@ -632,6 +632,55 @@ async def event_log_predictions(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.get("/v1/event-logs/{log_id}/activity-mappings")
+async def event_log_activity_mappings(request: Request, log_id: str):
+    from . import event_log_activity_mappings as activity_mappings
+    _require_dashboard(request)
+    try:
+        result = await run_in_threadpool(activity_mappings.listing, log_id)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(404, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/activity-mappings")
+async def event_log_create_activity_mapping(request: Request, log_id: str):
+    from . import event_log_activity_mappings as activity_mappings
+    _require_dashboard(request)
+    spec = await _json_body(request, "activity mapping", limit=262144)
+    try:
+        result = await run_in_threadpool(activity_mappings.create, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/activity-mappings/applied")
+async def event_log_apply_activity_mapping(request: Request, log_id: str):
+    """Body ``{"mapping_id": "amap_..."}`` applies one mapping; ``{"mapping_id": null}`` removes it."""
+    from . import event_log_activity_mappings as activity_mappings
+    _require_dashboard(request)
+    body = await _json_body(request, "applied activity mapping")
+    if not isinstance(body, dict) or set(body) != {"mapping_id"} or not (body["mapping_id"] is None or isinstance(body["mapping_id"], str)):
+        raise HTTPException(422, "send {\"mapping_id\": <id or null>}")
+    try:
+        result = await run_in_threadpool(activity_mappings.apply_mapping, log_id, body["mapping_id"])
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(404 if "unknown" in str(exc) else 422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/activity-mappings/{mapping_id}/delete")
+async def event_log_delete_activity_mapping(request: Request, log_id: str, mapping_id: str):
+    from . import event_log_activity_mappings as activity_mappings
+    _require_dashboard(request)
+    try:
+        result = await run_in_threadpool(activity_mappings.delete, log_id, mapping_id)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(404, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/{log_id}/predictions/monitoring")
 async def event_log_prediction_monitoring(request: Request, log_id: str):
     _require_dashboard(request)

@@ -423,6 +423,55 @@
     caseType.value=state.caseType;
   }
 
+  function activityMappingSection(){
+    const box=section('Group activities');box.id='owgActivityMappings';
+    box.appendChild(el('div','Group low-level activities under one higher-level name for every analysis of this log. The stored events are never changed, and saved signals and object views keep the original activities.','muted'));
+    const host=el('div');const groups=[];const draft=el('ul');draft.id='owgActivityMappingDraft';
+    const name=input('owgActivityMappingName','text','For example: Data entry steps');name.maxLength=200;
+    const label=input('owgActivityGroupLabel','text','Higher-level name');label.maxLength=200;
+    const pick=document.createElement('select');pick.id='owgActivityGroupPick';pick.multiple=true;pick.size=6;
+    const collapse=input('owgActivityMappingCollapse','checkbox');
+    const addGroup=button('Add group','secondary');addGroup.id='owgActivityGroupAdd';
+    const save=button('Save mapping','secondary');save.id='owgActivityMappingSave';
+    const msg=el('div',null,'muted');msg.id='owgActivityMappingStatus';msg.setAttribute('role','status');msg.setAttribute('aria-live','polite');
+    const generation=state.generation;
+    const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/activity-mappings';
+    const post=async(path,body)=>(await api(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+    const drawDraft=()=>draft.replaceChildren(...groups.map((g,i)=>{const li=el('li',g.label+' ← '+g.activities.join(', ')+' ');const rm=button('Remove','secondary');rm.setAttribute('aria-label','Remove group '+g.label);rm.onclick=()=>{groups.splice(i,1);drawDraft();};li.appendChild(rm);return li;}));
+    const render=r=>{
+      if(generation!==state.generation)return;
+      pick.replaceChildren(...r.original_activities.map(a=>{const o=el('option',a.activity+' ('+Number(a.events).toLocaleString()+')');o.value=a.activity;return o;}));
+      const list=el('ul');list.id='owgActivityMappingList';
+      r.mappings.forEach(m=>{
+        const li=el('li',m.name+' · '+m.groups.length+' groups · '+m.mapped_activities+' activities'+(m.collapse_repeats?' · repeats collapsed':'')+(m.applied?' · applied ':' '));
+        const toggle=button(m.applied?'Stop applying':'Apply to analyses','secondary');toggle.setAttribute('aria-label',(m.applied?'Stop applying ':'Apply ')+m.name);
+        toggle.onclick=async()=>{try{await post(base()+'/applied',{mapping_id:m.applied?null:m.mapping_id});await analyse();}catch(e){msg.textContent=e.message;}};
+        const del=button('Delete','secondary');del.setAttribute('aria-label','Delete mapping '+m.name);
+        del.onclick=async()=>{try{await post(base()+'/'+encodeURIComponent(m.mapping_id)+'/delete',{});if(m.applied)await analyse();else render({...r,mappings:(await (await api(base())).json()).mappings});}catch(e){msg.textContent=e.message;}};
+        li.append(toggle,del);list.appendChild(li);
+      });
+      host.replaceChildren(r.mappings.length?list:el('div','No saved mappings.','muted'));
+    };
+    addGroup.onclick=()=>{
+      const chosen=[...pick.selectedOptions].map(o=>o.value);
+      if(!label.value.trim()||!chosen.length){msg.textContent='Name the group and choose at least one activity.';return;}
+      groups.push({label:label.value.trim(),activities:chosen});label.value='';pick.selectedIndex=-1;drawDraft();msg.textContent='';
+    };
+    save.onclick=async()=>{
+      if(!groups.length){msg.textContent='Add at least one group.';return;}
+      try{const m=await post(base(),{name:name.value.trim()||'Activity mapping',groups,collapse_repeats:collapse.checked});
+        groups.length=0;drawDraft();msg.textContent='Saved “'+m.name+'”. Apply it to see it in every analysis.'+(m.activities_not_in_log.length?' Not in this log: '+m.activities_not_in_log.join(', ')+'.':'');
+        render(await (await api(base())).json());}
+      catch(e){msg.textContent=e.message;}
+    };
+    const row=el('div',null,'row');row.style.alignItems='end';
+    const collapseWrap=el('div');const collapseLabel=el('label',' Collapse consecutive repeats into the first');collapseLabel.htmlFor=collapse.id;collapseWrap.append(collapse,collapseLabel);
+    row.append(field('Mapping name',name),field('Group name',label),field('Activities in the group',pick),addGroup);
+    box.append(host,row,draft,collapseWrap,save,msg);
+    api(base()).then(r=>r.json()).then(render).catch(e=>{msg.textContent=e.message;});
+    return box;
+  }
+
   async function analyse(){
     const generation=++state.generation;
     const results=document.getElementById('owgEventLogResults');results.replaceChildren();
@@ -435,7 +484,9 @@
     const d=summary.case_duration_seconds||{};
     overview.appendChild(table(['Cases','Events','Activities','Median case time','90th percentile'],[[Number(summary.cases).toLocaleString(),Number(summary.events).toLocaleString(),summary.activities,duration(d.median),duration(d.p90)]]));
     if(summary.cases_before_filter!==undefined){const note=el('div','Filtered: '+Number(summary.cases).toLocaleString()+' of '+Number(summary.cases_before_filter).toLocaleString()+' cases match the case filter.','muted');note.id='owgCaseFilterCount';overview.appendChild(note);}
+    if(summary.activity_mapping){const m=summary.activity_mapping;const note=el('div','Activities are grouped by the mapping “'+m.name+'”: '+Number(m.events_relabeled).toLocaleString()+' events relabelled'+(m.repeats_collapsed?', '+Number(m.repeats_collapsed).toLocaleString()+' consecutive repeats collapsed':'')+'. The stored events are unchanged; remove the mapping under Group activities to see the original activities.','note');note.id='owgActivityMappingNotice';overview.appendChild(note);}
     results.appendChild(overview);
+    results.appendChild(activityMappingSection());
     results.appendChild(qualitySection());
     results.appendChild(caseFilterSection(names));
     results.appendChild(cohortMetricSection(names));

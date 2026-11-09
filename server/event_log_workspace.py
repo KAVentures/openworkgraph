@@ -681,6 +681,8 @@ def delete_log(log_id: str) -> dict[str, Any]:
             _check_log(conn, log_id)
             conn.execute("BEGIN")
             try:
+                from .event_log_activity_mappings import erase as erase_mappings
+                erase_mappings(conn, log_id)
                 from .jira_retained_profiles import forget_dataset
                 forget_dataset(conn, log_id)
                 for table in ("object_relationships", "event_source_keys", "event_source_namespaces", "discovery_snapshots", "log_appends", "log_quality", "quarantine", "quarantine_decisions", "filter_sets",
@@ -733,8 +735,11 @@ def _query(log_id: str, case_type: str | None, fn, *, control=None) -> dict[str,
                 notion = _case_type(query_conn, log_id, case_type)
                 # Materialize the case-notion projection once per request (temp, per connection).
                 query_conn.execute(f"CREATE OR REPLACE TEMP TABLE ce AS {_CASE_EVENTS}", [log_id, notion])
+                from .event_log_activity_mappings import apply_to_case_events
+                mapping = apply_to_case_events(query_conn, log_id)
                 result = fn(query_conn)
-                return {"log": info, "case_notion": notion, **result, **DESCRIPTIVE_ONLY}
+                return {"log": info, "case_notion": notion, **result, **DESCRIPTIVE_ONLY,
+                        **({"activity_mapping": mapping} if mapping else {})}
         finally:
             conn.close()
 
