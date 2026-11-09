@@ -147,7 +147,7 @@ def _observed_case_groups(bucket: dict[str, Any]) -> list[dict[str, Any]]:
         # whole connected component was co-observed (especially for A-B-C
         # transitive chains). Keep singleton events for independent groups.
         if len(component) > 1:
-            events = sorted({event_id for (left, right), pair_ids in bucket["pair_events"].items()
+            events = sorted({event_id for (left, right), pair_ids in bucket.get("pair_events", {}).items()
                              if left in component and right in component
                              for event_id in pair_ids if event_id})
         else:
@@ -226,8 +226,9 @@ def resumption_candidates(
     result["coverage"]["scan_truncated"] = truncated
     if not instants:
         # Only authorized empty windows receive an explicit empty review queue.
-        from .reconstruction_review_cli import build_review_queue
-        result["event_assignment_review"] = build_review_queue(result)
+        from .reconstruction_review_cli import REVIEWABLE_ACCESS, build_review_queue
+        if result.get("saved_history_access") in REVIEWABLE_ACCESS:
+            result["event_assignment_review"] = build_review_queue(result)
         return result
     sessions = _sessions(instants, gap_minutes / 1440)
     starts = [start for start, _end in sessions]
@@ -380,8 +381,10 @@ def resumption_candidates(
     result["observed_pair_event_assignments"] = pair_assignments[:24]
     result["observed_pair_event_assignments_truncated"] = len(pair_assignments) > 24
     # Review-only event attribution under the same grant; never a confirmed case.
-    from .reconstruction_review_cli import build_review_queue
-    result["event_assignment_review"] = build_review_queue(result)
+    # Denied, revoked or unknown history access gets no review queue at all.
+    from .reconstruction_review_cli import REVIEWABLE_ACCESS, build_review_queue
+    if result.get("saved_history_access") in REVIEWABLE_ACCESS:
+        result["event_assignment_review"] = build_review_queue(result)
     result["observed_group_continuity"] = group_matches[:24]
     result["observed_group_continuity_truncated"] = len(group_matches) > 24
     if not current["refs"]:

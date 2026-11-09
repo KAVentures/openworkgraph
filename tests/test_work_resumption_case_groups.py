@@ -11,7 +11,8 @@ def _bucket():
     tracks = {a: {"observations": [(1.0, "event-a"), (1.1, "event-af")]},
               b: {"observations": [(1.05, "event-b")]},
               f: {"observations": [(1.1, "event-af")]}}
-    return {"refs": refs, "tracks": tracks, "coobserved": {(a, f)}}
+    # Multi-resource groups show only row-exact pair evidence (events observing both).
+    return {"refs": refs, "tracks": tracks, "coobserved": {(a, f)}, "pair_events": {(a, f): {"event-af"}}}
 
 
 def test_interleaved_independent_resources_do_not_merge_by_time():
@@ -39,7 +40,9 @@ def test_empty_and_bounded_evidence():
     bucket = _bucket()
     assert _observed_case_groups({"refs": {}, "tracks": {}, "coobserved": set()}) == []
     a = ("jira", "issue", "A")
+    f = ("local_file", "file", "F")
     bucket["tracks"][a]["observations"] = [(float(i), f"event-{i:02d}") for i in range(20)]
+    bucket["pair_events"] = {(a, f): {f"event-{i:02d}" for i in range(20)}}
     groups = _observed_case_groups(bucket)
     paired = next(group for group in groups if group["resource_count"] == 2)
     assert len(paired["evidence_event_ids"]) == 12
