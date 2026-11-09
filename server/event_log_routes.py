@@ -249,6 +249,19 @@ def event_log_quality(request: Request, log_id: str):
     return _respond(quality.quality, log_id)
 
 
+@router.post("/v1/event-logs/{log_id}/derive")
+async def derive_event_log(request: Request, log_id: str):
+    """Save the cases matching a filter as a new event log; the source log is unchanged."""
+    from . import event_log_derive as derived_logs
+    _require_dashboard(request)
+    spec = await _json_body(request, "derived log settings", strict=True, limit=32768)
+    try:
+        result = await run_in_threadpool(derived_logs.derive, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/v1/event-logs/{log_id}/quarantine")
 def event_log_quarantine(request: Request, log_id: str, batch: int | None = Query(default=None, ge=0),
                          after: int = Query(default=0, ge=0), limit: int = Query(default=50, ge=1, le=100)):

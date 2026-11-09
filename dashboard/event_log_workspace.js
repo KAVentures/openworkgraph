@@ -410,6 +410,39 @@
     if(next){pick.value=next;await selectLog(next);}else{state.logId='';state.objectTypes=[];}
   }
 
+  // Save the cases matching a filter as a new saved log, to analyse or compare a slice on its own.
+  function deriveSection(activityNames){
+    const box=section('Save matching cases as a new log');box.id='owgEventLogDerive';
+    box.appendChild(el('div','Copy every event of the cases that match into a new log. The current log is not changed. The new log starts without this log’s activity mapping, saved filters, signals and quality reports.','muted'));
+    const filter=cohortFields('owgDeriveCohort','Cases to copy',activityNames);
+    const name=input('owgDeriveName','text');name.maxLength=120;name.autocomplete='off';
+    const current=state.logs.find(l=>l.log_id===state.logId);name.value=((current&&current.name)||'Log')+' (subset)';
+    const run=button('Save as new log','secondary');run.id='owgDeriveRun';
+    const out=el('div');out.id='owgDeriveResult';out.setAttribute('role','status');
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('New log name',name),run);
+    box.append(filter.node,row,out);
+    const generation=state.generation;
+    run.onclick=async()=>{
+      run.disabled=true;
+      try{
+        const cohort=filter.read();delete cohort.label;
+        if(state.follows.length)cohort.follows=state.follows;
+        if(!Object.keys(cohort).length)throw new Error('Choose which cases to copy.');
+        const spec={name:name.value.trim(),cohort};if(state.caseType)spec.case_type=state.caseType;
+        const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/derive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        if(generation!==state.generation)return;
+        // Add the new log to the picker without leaving the current analysis.
+        const data=await getJSON('/v1/event-logs');state.logs=Array.isArray(data.logs)?data.logs:state.logs;
+        const pick=document.getElementById('owgEventLogPick');setOptions(pick,state.logs.map(l=>[l.log_id,l.name+' · '+Number(l.events).toLocaleString()+' events']));pick.value=state.logId;
+        const open=button('Open '+r.log.name,'secondary');open.id='owgDeriveOpen';
+        open.onclick=()=>refreshLogs(r.log.log_id).then(()=>status('Opened '+r.log.name+'. Select Analyse to explore it.')).catch(error=>status(error.message));
+        out.replaceChildren(el('div','Saved '+r.log.name+': '+Number(r.derived_from.cases_matched).toLocaleString()+' of '+Number(r.derived_from.cases_in_source).toLocaleString()+' cases, '+Number(r.copied.events).toLocaleString()+' events.'),open);
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      finally{run.disabled=false;}
+    };
+    return box;
+  }
+
   async function selectLog(logId){
     const generation=++state.generation;state.logId=logId;state.caseType='';state.follows=[];state.objectTypes=[];
     document.getElementById('owgEventLogResults').replaceChildren();
@@ -514,6 +547,7 @@
     results.appendChild(clusterSection());
     results.appendChild(discoverySection());
     results.appendChild(driftSection());
+    results.appendChild(deriveSection(names));
     results.appendChild(dottedSection());
     results.appendChild(waitingSection());
     results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity)));
