@@ -111,6 +111,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_hierarchies.cjs
       - name: Verify shared analysis publication and revocation in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/shared_analyses.cjs
+      - name: Verify next-activity prediction for open cases in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_next_activity.cjs
       - name: Verify separate shared case disclosure and grants
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/shared_cases.cjs
       - name: Verify shared case query history and snapshot checks

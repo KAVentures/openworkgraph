@@ -1124,6 +1124,42 @@ under 40% of it. The as-of backtest shows the survival estimator with at least 1
 completed cases alone, and 10th–90th percentile coverage near the expected 80%. One million events
 with both estimators take about 18 seconds, including the import, in the scale acceptance.
 
+## Next activity in open cases
+
+**Next activity in open cases**, or `POST /v1/event-logs/{log_id}/next-activity`
+with `{"end_activities": ["Pay", "Close"]}`, estimates what usually comes next
+in each open case. A case is open when its latest activity is not one of
+`end_activities`.
+
+**How it predicts.** It learns from completed cases how often each activity,
+or the end of the case, followed the same last `history` activities (1–4,
+default 2). When fewer than `min_support` completed-case steps (default 5) were
+in that state, it backs off to a shorter history and finally to all
+transitions. Each prediction says which history it used and how many steps
+support it.
+
+Optional settings:
+
+* `top`: the number of next steps returned per case (1–10, default 3);
+* `limit`: the number of open cases returned, most recently active first
+  (1–500, default 50);
+* `backtest_share`: the share of completed cases used for the backtest
+  (default 0.3);
+* `cohort` and `case_type`: as for other analyses.
+
+`expected_next_across_open_cases` sums the probabilities over all open cases,
+giving an estimate of how many cases each step will come up for next.
+
+**Backtest.** The model learns from the completed cases that ended before a
+cutoff. It then predicts every step of the cases that ended after it,
+including their ending. The backtest reports top-1 and top-3 accuracy against
+two baselines: always guessing the most frequent next step, and the most
+frequent successor of the current activity alone. With too few cases on either
+side it says it is unavailable.
+
+The predictions describe this log's history. They are not instructions and say
+nothing about who should act.
+
 ## Processing and waiting time
 
 An optional [declared working-calendar lens](WORKING_CALENDAR_ANALYSIS.md) adds schedule-adjusted
