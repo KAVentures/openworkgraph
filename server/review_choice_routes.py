@@ -282,6 +282,9 @@ def reviewed_handoff_preflight(request: Request, idea_id: str, basis: ReviewBasi
     This is a navigation gate, NOT an execution capability. The execution
     boundary must separately check action-scoped authorization and revocation.
     """
+    auth = str(request.headers.get("authorization") or "")
+    if not auth.lower().startswith("owg-session ") or not dashboard_session_valid(auth[len("owg-session "):].strip()):
+        raise HTTPException(403, "Local dashboard session required")
     current = json.loads(preflight(request, idea_id, basis).body)
     if current["blockers"]:
         raise HTTPException(409, "Unresolved review blockers")
