@@ -568,12 +568,92 @@ EMPLOYEE_OFFBOARDING_1_0_0: dict[str, Any] = {
     ],
 }
 
+EXPENSE_REIMBURSEMENT_1_0_0: dict[str, Any] = {
+    "format": FORMAT, "pack_id": "expense_reimbursement", "version": "1.0.0",
+    "title": "Expense reimbursement",
+    "reference_goal": "Selected payable expense claims from submission to recorded reimbursement",
+    "description": (
+        "Review selected payable expense claims: submission-to-approval and approval-to-payment "
+        "elapsed times, missing or repeated payment records, receipt review, returned claims and closure. "
+        "Recorded payment is not independently verified settlement."
+    ),
+    "object_types": [{"role": "claim", "label": "Expense claim", "required": True}],
+    "activities": [
+        {"role": "submitted", "label": "Submit claim", "required": True},
+        {"role": "receipt_checked", "label": "Check receipts", "required": False},
+        {"role": "returned", "label": "Return for correction", "required": False},
+        {"role": "approved", "label": "Approve claim", "required": True},
+        {"role": "paid", "label": "Record reimbursement", "required": True},
+        {"role": "closed", "label": "Close claim", "required": False},
+    ],
+    "parameters": [
+        {"name": "approval_days", "label": "Approve within (elapsed days of submission)",
+         "unit": "days", "default": 7, "min": 1, "max": 365},
+        {"name": "payment_days", "label": "Record payment within (elapsed days of approval)",
+         "unit": "days", "default": 14, "min": 1, "max": 365},
+    ],
+    "metrics": [
+        {"case_type": "@claim", "metric": {
+            "name": "expense_submission_to_approval", "kind": "time_between",
+            "from_activity": "@submitted", "to_activity": "@approved"}},
+        {"case_type": "@claim", "metric": {
+            "name": "expense_approval_to_payment", "kind": "time_between",
+            "from_activity": "@approved", "to_activity": "@paid"}},
+        {"case_type": "@claim", "metric": {
+            "name": "expense_submission_to_payment", "kind": "time_between",
+            "from_activity": "@submitted", "to_activity": "@paid"}},
+        {"case_type": "@claim", "metric": {
+            "name": "expense_payment_records", "kind": "activity_count", "activity": "@paid"}},
+        {"case_type": "@claim", "metric": {
+            "name": "expense_return_records", "kind": "activity_count", "activity": "@returned"}},
+    ],
+    "compliance": [
+        {"case_type": "@claim", "rule": {"template": "response_within", "a": "@submitted",
+                                           "b": "@approved", "seconds": "$approval_days"}},
+        {"case_type": "@claim", "rule": {"template": "response_within", "a": "@approved",
+                                           "b": "@paid", "seconds": "$payment_days"}},
+        {"case_type": "@claim", "rule": {"template": "precedence", "a": "@submitted", "b": "@approved"}},
+        {"case_type": "@claim", "rule": {"template": "precedence", "a": "@approved", "b": "@paid"}},
+        {"case_type": "@claim", "rule": {"template": "precedence", "a": "@receipt_checked", "b": "@approved"}},
+        {"case_type": "@claim", "rule": {"template": "existence", "a": "@paid", "min": 1, "max": 1}},
+        {"case_type": "@claim", "rule": {"template": "segregation_of_duties", "a": "@submitted", "b": "@approved"}},
+        {"case_type": "@claim", "rule": {"template": "precedence", "a": "@paid", "b": "@closed"}},
+    ],
+    "object_rules": [],
+    "reference_model": {
+        "types": [{"object_type": "@claim", "steps": [
+            "@submitted", {"optional": "@returned"}, {"optional": "@receipt_checked"},
+            "@approved", "@paid", {"optional": "@closed"}]}],
+        "arcs": [{"activity": "@" + role, "object_type": "@claim", "variable": False}
+                 for role in ("submitted", "returned", "receipt_checked", "approved", "paid", "closed")],
+    },
+    "assumptions": [
+        "Select payable reimbursement claims only; rejected, withdrawn, corporate-card and advance claims "
+        "need a separately reviewed model. Missing payment in an open or partial case is absent evidence, "
+        "not a proven overdue obligation. This pack does not infer which claims are payable.",
+        "Each supplied case ID denotes one claim in one account; separate colliding account or tenant IDs before import.",
+        "A recorded payment does NOT prove bank settlement, correct amount/currency, receipt validity, "
+        "tax treatment, fraud detection or verified financial compliance. No banking or expense provider is queried.",
+        "Approval and payment targets are configurable elapsed days, not working days or an adopted business policy.",
+        "Exactly one payment record is a review assumption: instalments, retries, reversals and split reimbursements "
+        "may legitimately create several records. A repeated record does not prove duplicate payment.",
+        "Receipt checking, returns and closure apply only when mapped. Receipt checking before approval "
+        "does not establish that every line item was checked. Exceptions need independent review.",
+        "The reference path allows one return before approval; repeated correction loops and resubmissions "
+        "can deviate without being improper. Durations use the existing first-occurrence metric semantics.",
+        "Segregation of duties compares recorded submitter and approver resources, not verified employee identities; "
+        "missing resources remain unknown. Elapsed time is not employee effort or savings.",
+        "Installing or reporting never authorizes approval, payment, source reads or any other business action.",
+    ],
+}
+
 PACKS: dict[str, dict[str, dict[str, Any]]] = {"order_to_cash": {"1.0.0": ORDER_TO_CASH_1_0_0},
                                               "procure_to_pay": {"1.0.0": PROCURE_TO_PAY_1_0_0},
                                               "service_management": {"1.0.0": SERVICE_MANAGEMENT_1_0_0},
                                               "sales_lead_management": {"1.0.0": SALES_LEAD_1_0_0},
                                               "customer_onboarding": {"1.0.0": CUSTOMER_ONBOARDING_1_0_0},
-                                              "employee_offboarding": {"1.0.0": EMPLOYEE_OFFBOARDING_1_0_0}}
+                                              "employee_offboarding": {"1.0.0": EMPLOYEE_OFFBOARDING_1_0_0},
+                                              "expense_reimbursement": {"1.0.0": EXPENSE_REIMBURSEMENT_1_0_0}}
 
 
 class _Strict(BaseModel):

@@ -35,7 +35,7 @@ const path=require('node:path');
   await page.locator('#owgDomainPackSetup').click();
   await page.locator('#owgDomainPackStatus').filter({hasText:'Not installed on this log.'}).waitFor();
   // The catalog offers the packs; switching shows their roles and restores this one.
-  assert.deepEqual(await page.locator('#owgDomainPackChoice option').allTextContents(),['Customer onboarding and activation','Employee offboarding and access revocation','Order to cash','Procure to pay','Sales lead qualification','IT service management']);
+  assert.deepEqual(await page.locator('#owgDomainPackChoice option').allTextContents(),['Customer onboarding and activation','Employee offboarding and access revocation','Expense reimbursement','Order to cash','Procure to pay','Sales lead qualification','IT service management']);
   await page.locator('#owgDomainPackChoice').selectOption('procure_to_pay');
   await page.locator('#owgDomainPackRole-purchase_order').waitFor();
   assert.equal(await page.locator('#owgDomainPackRole-order').count(),0);
@@ -181,8 +181,50 @@ const path=require('node:path');
   const auditOff=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgDomainPacks'),{
     runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
   assert.deepEqual(auditOff.violations.map(v=>v.id),[]);
+  // Expense reimbursement reuses the actual owner-session import/mapping UI.
+  const [expenseCsv,expenseMapping]=JSON.parse(execFileSync(python,['-c',
+    'import json,sys;sys.path.insert(0,"tests");from test_event_log_domain_pack_expenses import CSV,MAPPING;print(json.dumps([CSV,MAPPING]))'],{encoding:'utf8'}));
+  const beforeExpense=await page.locator('#owgEventLogPick').inputValue();
+  await page.locator('#owgEventLogFile').setInputFiles({name:'expenses.csv',mimeType:'text/csv',buffer:Buffer.from(expenseCsv)});
+  await page.locator('#owgEventLogStatus').filter({hasText:'File mapping ready.'}).waitFor();
+  await page.locator('#owgEventLogCase').selectOption('case');
+  await page.locator('#owgEventLogActivity').selectOption('activity');
+  await page.locator('#owgEventLogTime').selectOption('time');
+  await page.locator('#owgEventLogConsent').check();
+  await page.locator('#owgEventLogImport').click();
+  await page.waitForFunction(previous=>{
+    const pick=document.querySelector('#owgEventLogPick'),type=document.querySelector('#owgEventLogCaseType');
+    return pick&&pick.value&&pick.value!==previous&&type&&type.options.length>0&&type.value;
+  },beforeExpense);
+  await page.locator('#owgEventLogAnalyze').click();
+  await page.locator('#owgDomainPackSetup').click();
+  await page.locator('#owgDomainPackChoice').selectOption('expense_reimbursement');
+  await page.locator('#owgDomainPackRole-claim').selectOption('case');
+  for(const [role,activity] of Object.entries(expenseMapping.activities))
+    await page.locator('#owgDomainPackRole-'+role).selectOption(activity);
+  await page.locator('#owgDomainPackInstall').click();
+  await page.locator('#owgDomainPackStatus').filter({hasText:'Installed 1.0.0. 5 case metrics were added'}).waitFor();
+  await page.locator('#owgDomainPackRun').click();
+  const expenseReport=page.locator('#owgDomainPackReport');
+  await expenseReport.getByText('expense_approval_to_payment',{exact:true}).waitFor();
+  await expenseReport.getByText('every Approved is followed by Paid within 1209600 s',{exact:true}).waitFor();
+  assert.match(await page.locator('#owgDomainPackForm').textContent(),/does NOT prove bank settlement/);
+  assert.match(await expenseReport.textContent(),/not validated against any particular source system/);
+  await page.locator('#owgDomainPackParam-payment_days').fill('30');
+  await page.locator('#owgDomainPackInstall').click();
+  await page.locator('#owgDomainPackStatus').filter({hasText:'Reinstalled 1.0.0.'}).waitFor();
+  await page.locator('#owgDomainPackRun').click();
+  await expenseReport.getByText('every Approved is followed by Paid within 2592000 s',{exact:true}).waitFor();
+  const expenseAudit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgDomainPacks'),{
+    runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
+  assert.deepEqual(expenseAudit.violations.map(v=>v.id),[]);
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth+1),
+    'expense report has no page overflow at 390px');
+  await page.locator('#owgDomainPackUninstall').click();
+  await page.locator('#owgDomainPackStatus').filter({hasText:'Uninstalled 1.0.0; 5 pack case metrics were removed.'}).waitFor();
+  assert.equal(await page.locator('#owgDomainPackRun').isDisabled(),true);
   assert.deepEqual(errors,[]);
-  console.log('Domain pack browser passed: O2C, P2P, sales, customer onboarding and employee offboarding (version-pinned metrics, logged access revocation checks, parameter reconfiguration and uninstall), WCAG/mobile.');
+  console.log('Domain pack browser passed: O2C, P2P, sales, customer onboarding, employee offboarding and expense reimbursement (version-pinned metrics, logged access revocation checks, parameter reconfiguration and uninstall), WCAG/mobile.');
  }finally{
   if(browser)await browser.close();server.kill('SIGTERM');
   await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);
