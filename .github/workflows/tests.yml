@@ -87,6 +87,8 @@ jobs:
           node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install --with-deps chromium
       - name: Verify linked business-attribute analysis in authenticated Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_linked_attributes.cjs
+      - name: Verify the event attribute profile in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_attribute_profile.cjs
       - name: Verify shared process browser lifecycle
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_collaboration.cjs
       - name: Verify declared dependencies and change-impact navigation in Chromium
@@ -111,10 +113,14 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_hierarchies.cjs
       - name: Verify shared analysis publication and revocation in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/shared_analyses.cjs
+      - name: Verify next-activity prediction for open cases in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_next_activity.cjs
       - name: Verify separate shared case disclosure and grants
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/shared_cases.cjs
       - name: Verify shared case query history and snapshot checks
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/shared_case_queries.cjs
+      - name: Verify saving matching cases as a new event log in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_derive.cjs
       - name: Verify linked roster offboarding across company portals
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/roster_offboarding.cjs
       - name: Verify the local focus and switching report in Chromium
@@ -167,8 +173,12 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_workspace.cjs
       - name: Verify grouping activities for every analysis in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/activity_mappings.cjs
+      - name: Verify process cost from a dashboard cost model in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_costs.cjs
       - name: Verify supplied source-event IDs and key-preserving CSV round trips
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_source_identity.cjs
+      - name: Verify case filters on event attributes kept from a CSV import
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_attribute_filter.cjs
       - name: Verify prediction snapshots scored after newer events in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/prediction_snapshots.cjs
       - name: Verify cancellable local analysis jobs in Chromium

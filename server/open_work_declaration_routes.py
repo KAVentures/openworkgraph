@@ -188,6 +188,20 @@ async def _recheck_source(scope: str) -> None:
         await asyncio.to_thread(clear_binding_scope, scope)
         from .open_work_run_receipts import clear_scope as clear_run_receipt_scope
         await asyncio.to_thread(clear_run_receipt_scope, scope)
+        # Disconnect/replacement must revoke ALL session-owned dependency
+        # mirrors for this source, including sessions that never request again.
+        from .local_auth import auth_dir
+        from .open_work_dependency_store import purge_scope
+        try:
+            await asyncio.to_thread(
+                purge_scope,
+                str(auth_dir() / ".open_work_reviewed_dependencies.sqlite3"),
+                scope=scope,
+            )
+        except (OSError, sqlite3.DatabaseError, ValueError) as exc:
+            raise HTTPException(
+                503, "durable dependency source revocation cleanup unavailable"
+            ) from exc
         raise HTTPException(409, "local source connection changed")
 
 
@@ -2872,3 +2886,79 @@ async def bound_run_receipt_journal(request: Request, response: Response):
     await _recheck_source(scope)
     response.headers["Cache-Control"] = "no-store"
     return result
+
+
+@router.get("/v1/open-work/declarations/durable-dependencies")
+async def get_local_durable_reviewed_dependencies(request: Request, response: Response):
+    """Session-gated read-through of current reviewed edges; no agent authority."""
+    from .local_auth import auth_dir
+    from .open_work_dependency_store import (
+        dependency_context, purge_actor, reconcile_current_reviewed_dependencies,
+    )
+
+    _dashboard_only(request)
+    response.headers["Cache-Control"] = "no-store"
+    # A query may not silently override scope or review semantics. Reject
+    # duplicates and unexpected parameters rather than choosing a first value.
+    # Do this before opening the source scope or durable storage.
+    # ``len(query_params)`` counts distinct keys, so repeated keys need ``multi_items``.
+    items = request.query_params.multi_items()
+    if len(items) != len({key for key, _ in items}) or any(key != "work_item_ref" for key, _ in items):
+        raise HTTPException(422, "exact durable dependency query fields required")
+    ref = request.query_params.get("work_item_ref")
+    if ref is not None and not re.fullmatch(r"owg:w:[0-9a-f]{32}", ref):
+        raise HTTPException(422, "invalid opaque work item reference")
+    scope = await _require_scope()
+    # Bind the mirror to the authenticated session, not a global dashboard
+    # owner shared by independently revocable sessions. The raw bearer token
+    # never enters SQLite; each new session reconciles its own reviewed view.
+    secret = await asyncio.to_thread(_read_or_create_secret, ".open_work_reference_key")
+    session = request.headers["authorization"][len("owg-session "):].strip()
+    actor = "dashboard:" + hmac.new(
+        secret.encode("utf-8"),
+        ("open-work:durable-session-actor:v1:" + session).encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()[:32]
+    path = str(auth_dir() / ".open_work_reviewed_dependencies.sqlite3")
+    try:
+        result = await asyncio.to_thread(
+            reconcile_current_reviewed_dependencies,
+            path, scope=scope, actor=actor,
+        )
+        if ref is not None:
+            result = {**result, "context": await asyncio.to_thread(
+                dependency_context, path, scope=scope, actor=actor, case_id=ref,
+            )}
+        await _recheck_source(scope)
+        # Dashboard sessions are independently revocable while a read-through
+        # is running. Revalidate immediately before returning any mirrored
+        # dependency data; the HTTPException path purges the actor mirror.
+        _dashboard_only(request)
+    except HTTPException:
+        # Source authorization can disappear *after* reconciliation. Purge the
+        # mirror before propagating the denial; if the purge fails, fail closed
+        # with a server error rather than exposing the reconciled result.
+        try:
+            await asyncio.to_thread(purge_actor, path, scope=scope, actor=actor)
+        except (OSError, sqlite3.DatabaseError, ValueError) as exc:
+            raise HTTPException(503, "durable dependency revocation cleanup unavailable") from exc
+        raise
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError,
+            ValueError) as exc:
+        # A failed consent-filtered review read must not leave a previous
+        # durable mirror available to a later caller or local process.
+        # If cleanup fails, report the unresolved revocation state rather
+        # than disguising it as an ordinary declaration validation failure.
+        # No stale dependency data may be returned on either failure path.
+        try:
+            await asyncio.to_thread(purge_actor, path, scope=scope, actor=actor)
+        except (OSError, sqlite3.DatabaseError, ValueError) as cleanup_exc:
+            raise HTTPException(
+                503, "durable dependency review cleanup unavailable"
+            ) from cleanup_exc
+        raise _safe_error(exc) from None
+    return {
+        **result, "format": "openworkgraph.reviewed-durable-dependencies.v1",
+        "source_read_performed": False, "agent_execution_authorized": False,
+        "customer_outcome": "unknown", "available": True,
+    }
