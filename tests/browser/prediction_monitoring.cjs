@@ -46,7 +46,15 @@ const path=require('node:path');
   assert.deepEqual(sent.end_activities,['Close']);assert.equal(sent.windows,6);assert.equal('estimator' in sent,false);
   const out=page.locator('#owgPredictMonitoring');
   await out.getByText(/^In the latest window ranges have become too narrow and typical error has risen\./).waitFor();
-  assert.equal(await out.locator('tbody tr').count(),6);
+  assert.equal(await out.locator('table').first().locator('tbody tr').count(),6);
+  await out.getByText('Where prediction errors occur').waitFor();
+  const quality=out.locator('table').nth(1);
+  assert.equal(await quality.locator('tbody tr').count(),2,
+   'Open and Work states with sufficient independent completed cases');
+  const qualityText=await quality.textContent();
+  assert.match(qualityText,/Open/);assert.match(qualityText,/Work/);
+  assert.match(await out.textContent(),/At least 20 completed cases per activity/);
+
   assert.match(await out.textContent(),/Proposal, not applied: scale each range around its median by \d\.\d\d×/);
   await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
   const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgEventLogPredictions'),{
@@ -55,7 +63,7 @@ const path=require('node:path');
   await page.setViewportSize({width:390,height:900});
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth+1),'no horizontal page scroll at 390 px');
   assert.deepEqual(errors,[]);
-  console.log('Prediction monitoring browser passed: rolling windows on a slowing process, narrow-range and rising-error flags, a recalibration proposal that is not applied, WCAG and 390 px width.');
+  console.log('Prediction monitoring browser passed: rolling windows, activity-level quality diagnostics, narrow-range and rising-error flags, review-only proposal, WCAG and 390 px width.');
  }finally{
   if(browser)await browser.close();server.kill('SIGTERM');
   await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);

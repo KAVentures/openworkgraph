@@ -22,7 +22,7 @@ def evaluate_review_queue(review: dict[str, Any], gold: list[dict[str, Any]]) ->
     if not isinstance(review, dict) or not isinstance(review.get("event_reviews"), list):
         raise ValueError("invalid review queue")
     if review.get("coverage_incomplete") is not False:
-        raise ValueError("complete coverage must be explicitly verified before scoring")
+        raise ValueError("evidence may be truncated: complete coverage must be explicitly verified before scoring")
     if review.get("unlisted_events_are_unassigned") is not True or review.get("no_case_identity_inferred") is not True:
         raise ValueError("review must preserve unassigned events and non-authoritative case identity")
     if review.get("event_reviews_count") != len(review["event_reviews"]):

@@ -11,7 +11,8 @@ const path=require('node:path');
  const settings={signals:{hover_dwell:true,drag_drop:true,pointer_trajectory:true},
    parameters:{hover_dwell_ms:600,trajectory_hz:10,max_events_per_minute:600},profile:'custom',
    expires_at:new Date(Date.now()+3600e3).toISOString()};
- const stub=`window.chrome={runtime:{sendMessage(m){(window.top.__all||(window.top.__all=[])).push(m);return Promise.resolve();}},
+ // The extension DOM API exposes open and closed shadow roots; without it high-detail capture fails closed.
+ const stub=`window.chrome={dom:{openOrClosedShadowRoot(el){return el.shadowRoot;}},runtime:{sendMessage(m){(window.top.__all||(window.top.__all=[])).push(m);return Promise.resolve();}},
    storage:{local:{get:async()=>({openworkgraph_capture_depth_v1:${JSON.stringify(settings)}}),set:async()=>{}},onChanged:{addListener(){}}}};`;
  const html=`<!doctype html><html><body style="margin:0">
   <div id="app" style="position:absolute;left:20px;top:20px"><button id="spa" style="width:120px;height:40px">Send</button></div>

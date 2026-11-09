@@ -57,6 +57,24 @@ const path=require('node:path');
    await page.locator('#owgEventLogAnalyze').click();
    const qualityPayload=await (await qualityResponsePromise).json();
    await page.locator('#owgEventLogResults h3',{hasText:'Most common variants'}).waitFor();
+   // R9: real browser, authenticated saved-log aggregate, cohort filtering and safe error display.
+   await page.locator('#owgCohortMetricSection').waitFor();
+   await page.locator('#owgCohortMetricField').selectOption('duration_hours');
+   const [cohortMetricResponse]=await Promise.all([
+     page.waitForResponse(r=>r.url().includes('/cohort-metric')&&r.request().method()==='POST'),
+     page.locator('#owgCohortMetricRun').click()
+   ]);
+   assert.equal(cohortMetricResponse.status(),200);
+   const cohortMetric=await cohortMetricResponse.json();
+   assert.equal(cohortMetric.metric.rows,60);
+   assert.equal(cohortMetric.raw_cases_returned,false);
+   await page.locator('#owgCohortMetricResult table').waitFor();
+   assert.match(await page.locator('#owgCohortMetricResult').textContent(),/60 matching cases/);
+   assert.doesNotMatch(JSON.stringify(cohortMetric),/"case_id"/);
+   await page.locator('#owgCohortMetricFilterFrom').fill('2025-01-01');
+   await page.locator('#owgCohortMetricRun').click();
+   await page.locator('#owgCohortMetricResult').getByText('0 matching cases',{exact:false}).waitFor();
+   await page.locator('#owgCohortMetricFilterFrom').fill('');
    const [coverageResponse]=await Promise.all([page.waitForResponse(r=>r.url().includes('/variant-coverage')),page.locator('#owgVariantCoverageRun').click()]);
    const coverageResult=await coverageResponse.json();
    assert.equal(coverageResult.cases,60);
@@ -434,6 +452,17 @@ const path=require('node:path');
    assert.equal(simReport.analysis.scenario.cases,500);
    assert.ok(simReport.analysis.assumptions.length);
    assert.match(simReport.interpretation,/not measured savings/);
+   // Compare two downloaded report packets locally within the simulation view.
+   const compareBox=page.locator('#owgSimulationReportCompare');await compareBox.waitFor();
+   const secondSim=JSON.parse(JSON.stringify(simReport));secondSim.analysis.scenario.label='Second scenario';
+   await page.locator('#owgSimulationCompareFiles').setInputFiles([
+     {name:'baseline.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(simReport))},
+     {name:'second.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(secondSim))}]);
+   await compareBox.getByRole('button',{name:'Compare reports'}).click();
+   await compareBox.getByText('Showing 2 user-selected reports.',{exact:false}).waitFor();
+   assert.equal(await compareBox.locator('tbody tr').count(),4);
+   assert.match(await compareBox.textContent(),/Scope and dataset equality are not verified/);
+
    const [simCsv]=await Promise.all([page.waitForEvent('download'),page.locator('#owgEventLogSimulationCsv').click()]);
    const simCsvText=await fs.readFile(await simCsv.path(),'utf8');
    assert.match(simCsvText,/^section,run,metric,value,unit\r\n/);

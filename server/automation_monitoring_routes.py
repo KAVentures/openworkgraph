@@ -75,8 +75,7 @@ async def import_report(request: Request, deployment_id: str | None = Query(defa
 
 def _import_and_triage(document: Any, deployment_id: str | None) -> dict[str, Any]:
     result = monitoring.import_report(document, deployment_id)
-    result["incidents_updated"] = incidents.record_runs(result["deployment"]["deployment_id"],
-                                                        monitoring.parse_report(document)["runs"])
+    result["incidents_updated"] = incidents.reconcile_deployment(result["deployment"]["deployment_id"])
     return result
 
 

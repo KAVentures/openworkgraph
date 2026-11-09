@@ -112,6 +112,137 @@ class ReviewQueueTests(unittest.TestCase):
         self.assertTrue(review["unlisted_events_are_unassigned"])
         self.assertFalse(review["coverage_incomplete"])
 
+    def test_interleaved_two_cases_and_interruptions_keep_exact_event_provenance(self):
+        import json
+        import sqlite3
+        from server.work_resumption import resumption_candidates
+        db = sqlite3.connect(":memory:")
+        db.row_factory = sqlite3.Row
+        db.execute("CREATE TABLE events(event_id TEXT, observed_at TEXT, metadata_json TEXT)")
+        def metadata(case):
+            return json.dumps({
+                "resource_reference": {
+                    "resource_ref": "owg:r:" + case * 32,
+                    "provider": "github", "resource_kind": "issue"},
+                "file_reference": {"file_ref": "owg:f:" + case * 32}})
+        rows = [
+            ("a-old", "2026-10-12T09:00:00Z", metadata("a")),
+            ("b-old", "2026-10-12T09:01:00Z", metadata("b")),
+            ("a-new", "2026-10-14T10:00:00Z", metadata("a")),
+            ("b-new", "2026-10-14T10:01:00Z", metadata("b")),
+            ("a-return", "2026-10-14T10:15:00Z", metadata("a")),
+        ]
+        db.executemany("INSERT INTO events VALUES (?, ?, ?)", rows)
+        response = resumption_candidates(db, lease={"mode": "all_saved"})
+        review = response["event_assignment_review"]
+        by_event = {row["event_id"]: row for row in review["event_reviews"]}
+        self.assertEqual(set(by_event), {row[0] for row in rows})
+        self.assertTrue(all(len(row["candidate_resource_pairs"]) == 1 for row in by_event.values()))
+        for event_id, row in by_event.items():
+            expected = "a" if event_id.startswith("a-") else "b"
+            identities = row["candidate_resource_pairs"][0]
+            self.assertTrue(all(pointer[2].endswith(expected * 32) for pointer in identities))
+            self.assertFalse(row["confirmed_case"])
+        self.assertTrue(review["unlisted_events_are_unassigned"])
+        self.assertFalse(review["coverage_incomplete"])
+
+
+    def test_duplicate_event_id_and_timestamp_across_rows_cannot_forge_pair(self):
+        import json
+        import sqlite3
+        from server.work_resumption import resumption_candidates
+        db = sqlite3.connect(":memory:")
+        db.row_factory = sqlite3.Row
+        db.execute("CREATE TABLE events(event_id TEXT, observed_at TEXT, metadata_json TEXT)")
+        issue = {"resource_reference": {"resource_ref": "owg:r:" + "a" * 32,
+                                         "provider": "github", "resource_kind": "issue"}}
+        file_ref = {"file_reference": {"file_ref": "owg:f:" + "f" * 32}}
+        both = {**issue, **file_ref}
+        rows = [
+            ("old-real", "2026-10-12T09:00:00Z", json.dumps(both)),
+            ("new-real", "2026-10-14T10:00:00Z", json.dumps(both)),
+            ("collision", "2026-10-14T10:01:00Z", json.dumps(issue)),
+            ("collision", "2026-10-14T10:01:00Z", json.dumps(file_ref)),
+        ]
+        db.executemany("INSERT INTO events VALUES (?, ?, ?)", rows)
+        review = resumption_candidates(db, lease={"mode": "all_saved"})["event_assignment_review"]
+        self.assertEqual({row["event_id"] for row in review["event_reviews"]},
+                         {"old-real", "new-real"})
+        self.assertTrue(review["unlisted_events_are_unassigned"])
+
+
+    def test_duplicate_label_on_distinct_real_pairs_is_not_a_multi_case_event(self):
+        import json
+        import sqlite3
+        from server.work_resumption import resumption_candidates
+        db = sqlite3.connect(":memory:")
+        db.row_factory = sqlite3.Row
+        db.execute("CREATE TABLE events(event_id TEXT, observed_at TEXT, metadata_json TEXT)")
+        def metadata(letter):
+            return json.dumps({"resource_reference": {"resource_ref": "owg:r:" + letter * 32,
+                "provider": "github", "resource_kind": "issue"},
+                "file_reference": {"file_ref": "owg:f:" + letter * 32}})
+        db.executemany("INSERT INTO events VALUES (?, ?, ?)", [
+            ("old-a", "2026-10-12T09:00:00Z", metadata("a")),
+            ("old-b", "2026-10-12T09:01:00Z", metadata("b")),
+            ("collision", "2026-10-14T10:00:00Z", metadata("a")),
+            ("collision", "2026-10-14T10:01:00Z", metadata("b")),
+        ])
+        result = resumption_candidates(db, lease={"mode": "all_saved"})
+        review = result["event_assignment_review"]
+        self.assertEqual(review["event_reviews_count"], 0)
+        self.assertEqual(review["event_reviews"], [])
+        self.assertTrue(review["coverage_incomplete"])
+        self.assertEqual(result["coverage"]["ambiguous_event_id_collisions"], 1)
+
+    def test_collided_only_pair_does_not_corroborate_continuity(self):
+        import json
+        import sqlite3
+        from server.work_resumption import resumption_candidates
+        db = sqlite3.connect(":memory:")
+        db.row_factory = sqlite3.Row
+        db.execute("CREATE TABLE events(event_id TEXT, observed_at TEXT, metadata_json TEXT)")
+        both = json.dumps({
+            "resource_reference": {"resource_ref": "owg:r:" + "a" * 32,
+                                   "provider": "github", "resource_kind": "issue"},
+            "file_reference": {"file_ref": "owg:f:" + "f" * 32}})
+        db.executemany("INSERT INTO events VALUES (?, ?, ?)", [
+            ("old", "2026-10-12T09:00:00Z", both),
+            ("collision", "2026-10-14T10:00:00Z", both),
+            ("collision", "2026-10-14T10:01:00Z", both),
+        ])
+        result = resumption_candidates(db, lease={"mode": "all_saved"})
+        self.assertEqual(result["observed_group_continuity"], [])
+        self.assertEqual(result["observed_pair_event_assignments"], [])
+        self.assertEqual(result["event_assignment_review"]["event_reviews"], [])
+        self.assertTrue(result["event_assignment_review"]["coverage_incomplete"])
+        self.assertFalse(any(c["case_assignment_status"] == "corroborated_candidate"
+                             for c in result["candidates"]))
+
+    def test_group_evidence_excludes_single_resource_and_transitive_only_events(self):
+        import json
+        import sqlite3
+        from server.work_resumption import resumption_candidates
+        db = sqlite3.connect(":memory:")
+        db.row_factory = sqlite3.Row
+        db.execute("CREATE TABLE events(event_id TEXT, observed_at TEXT, metadata_json TEXT)")
+        def meta(issue, file_ref=None):
+            out = {"resource_reference": {"resource_ref": "owg:r:" + issue * 32,
+                    "provider": "github", "resource_kind": "issue"}}
+            if file_ref:
+                out["file_reference"] = {"file_ref": "owg:f:" + file_ref * 32}
+            return json.dumps(out)
+        db.executemany("INSERT INTO events VALUES (?, ?, ?)", [
+            ("pair-old", "2026-10-12T09:00:00Z", meta("a", "f")),
+            ("pair-new", "2026-10-14T10:00:00Z", meta("a", "f")),
+            ("issue-only", "2026-10-14T10:01:00Z", meta("a")),
+        ])
+        result = resumption_candidates(db, lease={"mode": "all_saved"})
+        group = next(g for g in result["observed_case_groups"] if g["resource_count"] == 2)
+        self.assertEqual(group["evidence_event_ids"], ["pair-new"])
+        self.assertNotIn("issue-only", group["evidence_event_ids"])
+        self.assertFalse(group["proves_same_case"])
+
     def test_authorized_empty_history_exposes_empty_review_contract(self):
         import sqlite3
         from server.work_resumption import resumption_candidates

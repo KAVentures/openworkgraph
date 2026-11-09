@@ -26,6 +26,10 @@ def _event_ids(value: Any) -> list[str]:
     return sorted(set(value))
 
 
+# History-access modes that may produce a review queue; anything else is denied.
+REVIEWABLE_ACCESS = ("all_saved", "current_run")
+
+
 def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
     """Create deterministic event-level review decisions, never confirmed cases.
 
@@ -41,7 +45,7 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("missing or unbounded pair assignments")
     # Offline JSON is never proof of a current grant. Online callers must also
     # revalidate authorization/revocation before generating a review response.
-    if response.get("saved_history_access") not in ("all_saved", "current_run"):
+    if response.get("saved_history_access") not in REVIEWABLE_ACCESS:
         raise ValueError("no recognized saved-history access")
     coverage = response.get("coverage", {})
     if not isinstance(coverage, dict):
@@ -83,7 +87,11 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
             incomplete |= bool(session.get("evidence_truncated"))
         incomplete |= bool(pair.get("current_evidence_truncated") or pair.get("earlier_sessions_truncated"))
     rows = []
-    for (window, event_id), candidates in sorted(indexed.items()):
+    # Chronological: earlier sessions by their start, then the current window.
+    def _order(item):
+        (window, event_id), _ = item
+        return (0, window, event_id) if window.startswith("earlier:") else (1, window, event_id)
+    for (window, event_id), candidates in sorted(indexed.items(), key=_order):
         rows.append({"window": window, "event_id": event_id,
                      "candidate_resource_pairs": [json.loads(p) for p in sorted(candidates)],
                      "review_status": "ambiguous_multiple_pairs" if len(candidates) > 1 else "observed_pair_needs_review",

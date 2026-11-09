@@ -23,6 +23,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import secrets
 from datetime import datetime, timezone
 from typing import Annotated, Any
 
@@ -365,14 +366,301 @@ SALES_LEAD_1_0_0: dict[str, Any] = {
     ],
 }
 
+
+CUSTOMER_ONBOARDING_1_0_0: dict[str, Any] = {
+    "format": FORMAT, "pack_id": "customer_onboarding", "version": "1.0.0",
+    "title": "Customer onboarding and activation",
+    "reference_goal": "Customer onboarding to recorded activation reference lifecycle",
+    "description": ("Review the recorded handoff from an opened customer onboarding case through access "
+                    "provisioning and activation confirmation. Inspect elapsed time, repeated rework and missing "
+                    "or out-of-order steps using the selected log's case identities."),
+    "object_types": [
+        {"role": "onboarding_case", "label": "Onboarding case", "required": True},
+    ],
+    "activities": [
+        {"role": "case_opened", "label": "Open onboarding case", "required": True},
+        {"role": "handoff_received", "label": "Receive handoff", "required": False},
+        {"role": "requirements_verified", "label": "Verify prerequisites", "required": False},
+        {"role": "access_provisioned", "label": "Provision access", "required": True},
+        {"role": "activation_confirmed", "label": "Confirm activation", "required": True},
+        {"role": "rework_requested", "label": "Request rework", "required": False},
+        {"role": "case_closed", "label": "Close case", "required": False},
+    ],
+    "parameters": [
+        {"name": "provision_hours", "label": "Provision within (elapsed hours of opening)", "unit": "hours",
+         "default": 48, "min": 0.25, "max": 8760},
+        {"name": "activation_days", "label": "Confirm activation within (elapsed days of provisioning)",
+         "unit": "days", "default": 14, "min": 1, "max": 365},
+    ],
+    "metrics": [
+        {"case_type": "@onboarding_case",
+         "metric": {"name": "onboarding_open_to_provision", "kind": "time_between",
+                    "from_activity": "@case_opened", "to_activity": "@access_provisioned"}},
+        {"case_type": "@onboarding_case",
+         "metric": {"name": "onboarding_provision_to_activation", "kind": "time_between",
+                    "from_activity": "@access_provisioned", "to_activity": "@activation_confirmed"}},
+        {"case_type": "@onboarding_case",
+         "metric": {"name": "onboarding_open_to_activation", "kind": "time_between",
+                    "from_activity": "@case_opened", "to_activity": "@activation_confirmed"}},
+        {"case_type": "@onboarding_case",
+         "metric": {"name": "onboarding_rework_events", "kind": "activity_count",
+                    "activity": "@rework_requested"}},
+    ],
+    "compliance": [
+        {"case_type": "@onboarding_case",
+         "rule": {"template": "precedence", "a": "@case_opened", "b": "@access_provisioned"}},
+        {"case_type": "@onboarding_case",
+         "rule": {"template": "precedence", "a": "@requirements_verified", "b": "@access_provisioned"}},
+        {"case_type": "@onboarding_case",
+         "rule": {"template": "response_within", "a": "@case_opened", "b": "@access_provisioned",
+                  "seconds": "$provision_hours"}},
+        {"case_type": "@onboarding_case",
+         "rule": {"template": "response_within", "a": "@access_provisioned", "b": "@activation_confirmed",
+                  "seconds": "$activation_days"}},
+        {"case_type": "@onboarding_case",
+         "rule": {"template": "precedence", "a": "@activation_confirmed", "b": "@case_closed"}},
+        {"case_type": "@onboarding_case",
+         "rule": {"template": "existence", "a": "@activation_confirmed", "min": 0, "max": 1}},
+    ],
+    "object_rules": [],
+    "reference_model": {
+        "types": [
+            {"object_type": "@onboarding_case",
+             "steps": ["@case_opened", {"optional": "@handoff_received"},
+                       {"optional": "@requirements_verified"}, "@access_provisioned",
+                       "@activation_confirmed", {"optional": "@case_closed"}]},
+        ],
+        "arcs": [
+            {"activity": "@case_opened", "object_type": "@onboarding_case", "variable": False},
+            {"activity": "@handoff_received", "object_type": "@onboarding_case", "variable": False},
+            {"activity": "@requirements_verified", "object_type": "@onboarding_case", "variable": False},
+            {"activity": "@access_provisioned", "object_type": "@onboarding_case", "variable": False},
+            {"activity": "@activation_confirmed", "object_type": "@onboarding_case", "variable": False},
+            {"activity": "@case_closed", "object_type": "@onboarding_case", "variable": False},
+        ],
+    },
+    "assumptions": [
+        "The mapping must use a stable, authorized onboarding case identifier; equal case IDs from "
+        "different sources are not evidence that the same customer was involved.",
+        "The reference lifecycle shows a simple successful path; cancelled, incomplete, exceptional "
+        "or unobserved cases can appear as missing responses or model deviations.",
+        "Access provisioned and activation confirmed are event labels asserted by the supplied log. "
+        "This pack cannot validate current entitlement, source-of-truth provisioning or customer success.",
+        "The prerequisite-order rule applies only when the optional verification step is mapped. "
+        "Not every onboarding process requires the same approvals or controls.",
+        "A second activation event is flagged for review, not assumed to be a second customer or "
+        "incorrect action. Retries, corrections and multi-product activations may be legitimate.",
+        "The reference path excludes rework, which is counted separately and may appear as a deviation.",
+        "Durations use the first recorded occurrence of mapped activities and include nights, weekends, "
+        "waiting and missing history; they are not employee effort or customer conversion rates.",
+        "Response rules evaluate each recorded initiating event, including those without an observed "
+        "completion. Their targets are editable examples, not validated contractual service levels.",
+        "This pack does not import CRM/identity records, join users, grant execution, certify compliance "
+        "or independently verify any customer outcome.",
+    ],
+}
+
+
+EMPLOYEE_OFFBOARDING_1_0_0: dict[str, Any] = {
+    "format": FORMAT, "pack_id": "employee_offboarding", "version": "1.0.0",
+    "title": "Employee offboarding and access revocation",
+    "reference_goal": "Recorded offboarding initiation to access-revocation and case-review lifecycle",
+    "description": (
+        "Examine employee offboarding case events: elapsed time to the logged access revocation, "
+        "missing/late/out-of-order or duplicate revocation events, optional managerial approval, "
+        "asset return, closure and review. Only supplied event evidence is checked, not live account entitlements."
+    ),
+    "object_types": [
+        {"role": "offboarding_case", "label": "Offboarding case", "required": True},
+    ],
+    "activities": [
+        {"role": "offboarding_started", "label": "Start offboarding", "required": True},
+        {"role": "manager_approved", "label": "Record manager approval", "required": False},
+        {"role": "access_revoked", "label": "Record access revocation", "required": True},
+        {"role": "asset_returned", "label": "Record asset return", "required": False},
+        {"role": "review_completed", "label": "Record completion review", "required": False},
+        {"role": "case_closed", "label": "Close offboarding case", "required": False},
+    ],
+    "parameters": [
+        {"name": "revocation_hours", "label": "Log revocation within (elapsed hours of start)",
+         "unit": "hours", "default": 24, "min": 0.25, "max": 8760},
+        {"name": "closure_days", "label": "Close case within (elapsed days of start)",
+         "unit": "days", "default": 7, "min": 1, "max": 365},
+    ],
+    "metrics": [
+        {"case_type": "@offboarding_case", "metric": {
+            "name": "offboarding_start_to_revocation", "kind": "time_between",
+            "from_activity": "@offboarding_started", "to_activity": "@access_revoked"}},
+        {"case_type": "@offboarding_case", "metric": {
+            "name": "offboarding_start_to_close", "kind": "time_between",
+            "from_activity": "@offboarding_started", "to_activity": "@case_closed"}},
+        {"case_type": "@offboarding_case", "metric": {
+            "name": "offboarding_revocation_events", "kind": "activity_count",
+            "activity": "@access_revoked"}},
+        {"case_type": "@offboarding_case", "metric": {
+            "name": "offboarding_start_to_approval", "kind": "time_between",
+            "from_activity": "@offboarding_started", "to_activity": "@manager_approved"}},
+        {"case_type": "@offboarding_case", "metric": {
+            "name": "offboarding_return_events", "kind": "activity_count",
+            "activity": "@asset_returned"}},
+    ],
+    "compliance": [
+        {"case_type": "@offboarding_case", "rule": {
+            "template": "response_within", "a": "@offboarding_started",
+            "b": "@access_revoked", "seconds": "$revocation_hours"}},
+        {"case_type": "@offboarding_case", "rule": {
+            "template": "precedence", "a": "@offboarding_started", "b": "@access_revoked"}},
+        {"case_type": "@offboarding_case", "rule": {
+            "template": "precedence", "a": "@manager_approved", "b": "@access_revoked"}},
+        {"case_type": "@offboarding_case", "rule": {
+            "template": "precedence", "a": "@access_revoked", "b": "@case_closed"}},
+        {"case_type": "@offboarding_case", "rule": {
+            "template": "existence", "a": "@access_revoked", "min": 1, "max": 1}},
+        {"case_type": "@offboarding_case", "rule": {
+            "template": "response_within", "a": "@offboarding_started",
+            "b": "@case_closed", "seconds": "$closure_days"}},
+        {"case_type": "@offboarding_case", "rule": {
+            "template": "segregation_of_duties", "a": "@manager_approved",
+            "b": "@access_revoked"}},
+    ],
+    "object_rules": [],
+    "reference_model": {
+        "types": [
+            {"object_type": "@offboarding_case", "steps": [
+                "@offboarding_started",
+                {"optional": "@manager_approved"},
+                "@access_revoked",
+                {"optional": "@asset_returned"},
+                {"optional": "@review_completed"},
+                {"optional": "@case_closed"},
+            ]},
+        ],
+        "arcs": [
+            {"activity": "@offboarding_started", "object_type": "@offboarding_case", "variable": False},
+            {"activity": "@manager_approved", "object_type": "@offboarding_case", "variable": False},
+            {"activity": "@access_revoked", "object_type": "@offboarding_case", "variable": False},
+            {"activity": "@asset_returned", "object_type": "@offboarding_case", "variable": False},
+            {"activity": "@review_completed", "object_type": "@offboarding_case", "variable": False},
+            {"activity": "@case_closed", "object_type": "@offboarding_case", "variable": False},
+        ],
+    },
+    "assumptions": [
+        "Every case ID represents one selected offboarding event sequence, as asserted by the supplied mapping; "
+        "colliding IDs across accounts, employees, providers or tenants must be separated before import.",
+        "A recorded access-revocation activity does NOT prove that every identity provider, device, role, "
+        "session, API token, shared credential or third-party application actually revoked access. "
+        "The pack does not query any directory, identity provider or live entitlement.",
+        "The revocation and closure targets are elapsed wall-clock windows, not validated legal, "
+        "contractual or policy deadlines until the owner reviews and configures them.",
+        "A missing revocation activity indicates absent evidence in this log, not proof access remains. "
+        "Partial exports, asynchronous feeds and source deletion can all produce missing events.",
+        "A repeated revocation record is a review candidate, not evidence of duplicated permissions "
+        "or a second deprovisioning action. Retries and independent application revocations may be legitimate.",
+        "Manager approval, asset return, completed review and closure are optional mapped steps; "
+        "only rules and metrics with mapped roles apply. Absence of an unmapped optional role does not "
+        "mean policy controls were satisfied or intentionally omitted.",
+        "When manager approval is mapped, an access-revocation event lacking an earlier manager-approval "
+        "event is flagged for review; emergency or exemption cases may legitimately follow another "
+        "authorized procedure. The pack cannot determine those exceptions from activity labels.",
+        "Segregation of duties depends on actual recorded actor identities. If resource/actor labels "
+        "are absent, the result is unknown and not treated as verified separation.",
+        "Timing in supplied event logs is not employee effort saved, verified security compliance, "
+        "an authorization to delete accounts, or a source-system proof of business outcomes.",
+    ],
+}
+
+EXPENSE_REIMBURSEMENT_1_0_0: dict[str, Any] = {
+    "format": FORMAT, "pack_id": "expense_reimbursement", "version": "1.0.0",
+    "title": "Expense reimbursement",
+    "reference_goal": "Selected payable expense claims from submission to recorded reimbursement",
+    "description": (
+        "Review selected payable expense claims: submission-to-approval and approval-to-payment "
+        "elapsed times, missing or repeated payment records, receipt review, returned claims and closure. "
+        "Recorded payment is not independently verified settlement."
+    ),
+    "object_types": [{"role": "claim", "label": "Expense claim", "required": True}],
+    "activities": [
+        {"role": "submitted", "label": "Submit claim", "required": True},
+        {"role": "receipt_checked", "label": "Check receipts", "required": False},
+        {"role": "returned", "label": "Return for correction", "required": False},
+        {"role": "approved", "label": "Approve claim", "required": True},
+        {"role": "paid", "label": "Record reimbursement", "required": True},
+        {"role": "closed", "label": "Close claim", "required": False},
+    ],
+    "parameters": [
+        {"name": "approval_days", "label": "Approve within (elapsed days of submission)",
+         "unit": "days", "default": 7, "min": 1, "max": 365},
+        {"name": "payment_days", "label": "Record payment within (elapsed days of approval)",
+         "unit": "days", "default": 14, "min": 1, "max": 365},
+    ],
+    "metrics": [
+        {"case_type": "@claim", "metric": {
+            "name": "expense_submission_to_approval", "kind": "time_between",
+            "from_activity": "@submitted", "to_activity": "@approved"}},
+        {"case_type": "@claim", "metric": {
+            "name": "expense_approval_to_payment", "kind": "time_between",
+            "from_activity": "@approved", "to_activity": "@paid"}},
+        {"case_type": "@claim", "metric": {
+            "name": "expense_submission_to_payment", "kind": "time_between",
+            "from_activity": "@submitted", "to_activity": "@paid"}},
+        {"case_type": "@claim", "metric": {
+            "name": "expense_payment_records", "kind": "activity_count", "activity": "@paid"}},
+        {"case_type": "@claim", "metric": {
+            "name": "expense_return_records", "kind": "activity_count", "activity": "@returned"}},
+    ],
+    "compliance": [
+        {"case_type": "@claim", "rule": {"template": "response_within", "a": "@submitted",
+                                           "b": "@approved", "seconds": "$approval_days"}},
+        {"case_type": "@claim", "rule": {"template": "response_within", "a": "@approved",
+                                           "b": "@paid", "seconds": "$payment_days"}},
+        {"case_type": "@claim", "rule": {"template": "precedence", "a": "@submitted", "b": "@approved"}},
+        {"case_type": "@claim", "rule": {"template": "precedence", "a": "@approved", "b": "@paid"}},
+        {"case_type": "@claim", "rule": {"template": "precedence", "a": "@receipt_checked", "b": "@approved"}},
+        {"case_type": "@claim", "rule": {"template": "existence", "a": "@paid", "min": 1, "max": 1}},
+        {"case_type": "@claim", "rule": {"template": "segregation_of_duties", "a": "@submitted", "b": "@approved"}},
+        {"case_type": "@claim", "rule": {"template": "precedence", "a": "@paid", "b": "@closed"}},
+    ],
+    "object_rules": [],
+    "reference_model": {
+        "types": [{"object_type": "@claim", "steps": [
+            "@submitted", {"optional": "@returned"}, {"optional": "@receipt_checked"},
+            "@approved", "@paid", {"optional": "@closed"}]}],
+        "arcs": [{"activity": "@" + role, "object_type": "@claim", "variable": False}
+                 for role in ("submitted", "returned", "receipt_checked", "approved", "paid", "closed")],
+    },
+    "assumptions": [
+        "Select payable reimbursement claims only; rejected, withdrawn, corporate-card and advance claims "
+        "need a separately reviewed model. Missing payment in an open or partial case is absent evidence, "
+        "not a proven overdue obligation. This pack does not infer which claims are payable.",
+        "Each supplied case ID denotes one claim in one account; separate colliding account or tenant IDs before import.",
+        "A recorded payment does NOT prove bank settlement, correct amount/currency, receipt validity, "
+        "tax treatment, fraud detection or verified financial compliance. No banking or expense provider is queried.",
+        "Approval and payment targets are configurable elapsed days, not working days or an adopted business policy.",
+        "Exactly one payment record is a review assumption: instalments, retries, reversals and split reimbursements "
+        "may legitimately create several records. A repeated record does not prove duplicate payment.",
+        "Receipt checking, returns and closure apply only when mapped. Receipt checking before approval "
+        "does not establish that every line item was checked. Exceptions need independent review.",
+        "The reference path allows one return before approval; repeated correction loops and resubmissions "
+        "can deviate without being improper. Durations use the existing first-occurrence metric semantics.",
+        "Segregation of duties compares recorded submitter and approver resources, not verified employee identities; "
+        "missing resources remain unknown. Elapsed time is not employee effort or savings.",
+        "Installing or reporting never authorizes approval, payment, source reads or any other business action.",
+    ],
+}
+
 PACKS: dict[str, dict[str, dict[str, Any]]] = {"order_to_cash": {"1.0.0": ORDER_TO_CASH_1_0_0},
                                               "procure_to_pay": {"1.0.0": PROCURE_TO_PAY_1_0_0},
                                               "service_management": {"1.0.0": SERVICE_MANAGEMENT_1_0_0},
-                                              "sales_lead_management": {"1.0.0": SALES_LEAD_1_0_0}}
+                                              "sales_lead_management": {"1.0.0": SALES_LEAD_1_0_0},
+                                              "customer_onboarding": {"1.0.0": CUSTOMER_ONBOARDING_1_0_0},
+                                              "employee_offboarding": {"1.0.0": EMPLOYEE_OFFBOARDING_1_0_0},
+                                              "expense_reimbursement": {"1.0.0": EXPENSE_REIMBURSEMENT_1_0_0}}
 
 
 class _Strict(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # Never persist NaN or Infinity in a policy target/digest. They otherwise
+    # bypass ordinary inclusive range checks because comparisons are unordered.
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 
 class Mapping(_Strict):
@@ -380,9 +668,14 @@ class Mapping(_Strict):
     activities: dict[Annotated[str, Field(max_length=40)], Name] = Field(max_length=80)
 
 
+class DomainPackConflict(workspace.EventLogWorkspaceError):
+    """The caller's reviewed installation is no longer current."""
+
+
 class InstallSpec(_Strict):
     version: Annotated[str, Field(pattern=r"^\d{1,4}\.\d{1,4}\.\d{1,4}$")]
     mapping: Mapping
+    expected_installation: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")] | None = None
     parameters: dict[Annotated[str, Field(max_length=40)], float] = Field(default_factory=dict, max_length=20)
 
 
@@ -565,10 +858,28 @@ def _check_names(conn, log_id: str, mapping: Mapping) -> None:
             raise workspace.EventLogWorkspaceError(f"{role} is mapped to {name!r}, which is not an activity of this log")
 
 
+def _installation_token(record: dict[str, Any]) -> str:
+    """Opaque equality token for the complete stored installation, including owned IDs."""
+    return _digest(record)
+
+
 def _record(conn, log_id: str, pack_id: str) -> dict[str, Any] | None:
     row = conn.execute("SELECT definition FROM domain_pack_installs WHERE log_id = ? AND pack_id = ?",
                        [log_id, pack_id]).fetchone()
     return json.loads(row[0]) if row else None
+
+
+def _insert_pack_metric(conn, log_id: str, metric: dict[str, Any], now: datetime) -> str:
+    """Use the metric library's schema, but write inside the pack transaction."""
+    try:
+        validated = query.SavedMetric.model_validate({"metric": metric}).metric
+    except ValidationError:
+        raise workspace.EventLogWorkspaceError("domain pack contains an invalid case metric") from None
+    metric_id = "met_" + secrets.token_hex(8)
+    definition = {"format": query.METRIC_FORMAT, "metric": validated.model_dump()}
+    conn.execute("INSERT INTO metric_definitions VALUES (?, ?, ?, ?)",
+                 [log_id, metric_id, now, json.dumps(definition, sort_keys=True)])
+    return metric_id
 
 
 def install(log_id: str, pack_id: str, spec: Any) -> dict[str, Any]:
@@ -579,37 +890,46 @@ def install(log_id: str, pack_id: str, spec: Any) -> dict[str, Any]:
     with workspace._LOCK:
         conn = workspace._connect()
         try:
+            conn.execute("BEGIN TRANSACTION")
             workspace._check_log(conn, log_id)
             _check_names(conn, log_id, parsed.mapping)
             previous = _record(conn, log_id, pack_id)
+            if "expected_installation" in parsed.model_fields_set:
+                current = _installation_token(previous) if previous is not None else None
+                if parsed.expected_installation != current:
+                    raise DomainPackConflict("domain pack installation changed; reload setup before saving")
             saved = {json.loads(d)["metric"]["name"]: m for m, d in conn.execute(
                 "SELECT metric_id, definition FROM metric_definitions WHERE log_id = ?", [log_id]).fetchall()}
-        finally:
-            conn.close()
-        if previous and _version_key(parsed.version) < _version_key(previous["version"]):
-            raise workspace.EventLogWorkspaceError(
-                f"version {previous['version']} is installed; downgrading to {parsed.version} is refused")
-        owned = set(previous["metric_ids"]) if previous else set()
-        clash = [n for n, m in saved.items() if m not in owned and any(d["metric"]["name"] == n for d in definitions["metrics"])]
-        if clash:
-            raise workspace.EventLogWorkspaceError(f"a saved case metric named {clash[0]} exists and is not this pack's")
-        for metric_id in owned & set(saved.values()):
-            query.delete_metric(log_id, metric_id)
-        metric_ids = [query.save_metric(log_id, {"metric": d["metric"]})["metric_id"] for d in definitions["metrics"]]
-        change = ("installed" if not previous else "upgraded" if parsed.version != previous["version"] else "reconfigured")
-        history = ([*previous["history"], {k: previous[k] for k in ("version", "installed_at", "definitions_sha256")}]
-                   if previous else [])[-MAX_HISTORY:]
-        record = {"format": INSTALL_FORMAT, "pack_id": pack_id, "version": parsed.version,
-                  "installed_at": now.isoformat() + "Z", "mapping": mapping, "parameters": params,
-                  "definitions_sha256": _digest(definitions), "metric_ids": metric_ids, "history": history}
-        conn = workspace._connect()
-        try:
+            if previous and _version_key(parsed.version) < _version_key(previous["version"]):
+                raise workspace.EventLogWorkspaceError(
+                    f"version {previous['version']} is installed; downgrading to {parsed.version} is refused")
+            owned = set(previous["metric_ids"]) if previous else set()
+            clash = [n for n, m in saved.items() if m not in owned
+                     and any(d["metric"]["name"] == n for d in definitions["metrics"])]
+            if clash:
+                raise workspace.EventLogWorkspaceError(f"a saved case metric named {clash[0]} exists and is not this pack's")
+            if len(saved) - len(owned & set(saved.values())) + len(definitions["metrics"]) > query.MAX_SAVED:
+                raise workspace.EventLogWorkspaceError(
+                    f"a log can hold at most {query.MAX_SAVED} saved case metrics")
+            for metric_id in owned & set(saved.values()):
+                conn.execute("DELETE FROM metric_definitions WHERE log_id = ? AND metric_id = ?", [log_id, metric_id])
+            metric_ids = [_insert_pack_metric(conn, log_id, d["metric"], now) for d in definitions["metrics"]]
+            change = ("installed" if not previous else "upgraded" if parsed.version != previous["version"] else "reconfigured")
+            history = ([*previous["history"], {k: previous[k] for k in ("version", "installed_at", "definitions_sha256")}]
+                       if previous else [])[-MAX_HISTORY:]
+            record = {"format": INSTALL_FORMAT, "pack_id": pack_id, "version": parsed.version,
+                      "installed_at": now.isoformat() + "Z", "mapping": mapping, "parameters": params,
+                      "definitions_sha256": _digest(definitions), "metric_ids": metric_ids, "history": history}
             conn.execute("DELETE FROM domain_pack_installs WHERE log_id = ? AND pack_id = ?", [log_id, pack_id])
             conn.execute("INSERT INTO domain_pack_installs VALUES (?, ?, ?, ?)",
                          [log_id, pack_id, now, json.dumps(record, sort_keys=True)])
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
         finally:
             conn.close()
-    return {**record, "change": change, "previous_version": previous["version"] if previous else None,
+    return {**record, "installation_token": _installation_token(record), "change": change, "previous_version": previous["version"] if previous else None,
             "not_applicable": definitions["not_applicable"]}
 
 
@@ -629,6 +949,7 @@ def installed(log_id: str) -> dict[str, Any]:
             conn.close()
     installs = [json.loads(d) for (d,) in rows]
     for record in installs:
+        record["installation_token"] = _installation_token(record)
         record["latest_version"] = _pack(record["pack_id"])["version"] if record["pack_id"] in PACKS else None
         record["upgrade_available"] = bool(record["latest_version"]) and \
             _version_key(record["latest_version"]) > _version_key(record["version"])
@@ -636,21 +957,30 @@ def installed(log_id: str) -> dict[str, Any]:
             "names_truncated": len(types) > MAX_NAMES or len(activities) > MAX_NAMES}
 
 
-def uninstall(log_id: str, pack_id: str) -> dict[str, Any]:
+def uninstall(log_id: str, pack_id: str, *, expected_installation: str | None = None) -> dict[str, Any]:
     with workspace._LOCK:
         conn = workspace._connect()
         try:
+            conn.execute("BEGIN TRANSACTION")
             workspace._check_log(conn, log_id)
             previous = _record(conn, log_id, pack_id)
+            if expected_installation is not None:
+                current = _installation_token(previous) if previous is not None else None
+                if expected_installation != current:
+                    raise DomainPackConflict("domain pack installation changed; reload setup before removing")
             if previous is None:
                 raise workspace.EventLogWorkspaceError("this domain pack is not installed on the log")
             owned = set(previous["metric_ids"]) & {m for (m,) in conn.execute(
                 "SELECT metric_id FROM metric_definitions WHERE log_id = ?", [log_id]).fetchall()}
             conn.execute("DELETE FROM domain_pack_installs WHERE log_id = ? AND pack_id = ?", [log_id, pack_id])
+            for metric_id in owned:
+                conn.execute("DELETE FROM metric_definitions WHERE log_id = ? AND metric_id = ?", [log_id, metric_id])
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
         finally:
             conn.close()
-        for metric_id in owned:
-            query.delete_metric(log_id, metric_id)
     return {"uninstalled": True, "pack_id": pack_id, "version": previous["version"], "metrics_removed": len(owned)}
 
 
