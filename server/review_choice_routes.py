@@ -243,6 +243,11 @@ def revoke_review(request: Request, idea_id: str, project_id: str, payload: Revi
     if not idea_id or len(idea_id) > 128 or not project_id or len(project_id) > 128:
         raise HTTPException(422, "Invalid review identifier")
     with pipeline._LOCK, pipeline.closing(pipeline._connect()) as conn:
+        conn.execute("""CREATE TABLE IF NOT EXISTS project_human_reviews (
+            idea_id TEXT NOT NULL, project_id TEXT NOT NULL,
+            revision INTEGER NOT NULL, decision TEXT NOT NULL,
+            basis_sha256 TEXT NOT NULL, reviewer_notes TEXT NOT NULL,
+            updated_at TEXT NOT NULL, PRIMARY KEY(idea_id, project_id))""")
         # A missing review cannot be revoked or used to create a new one.
         row = conn.execute(
             "SELECT revision, decision FROM project_human_reviews WHERE idea_id=? AND project_id=?",
