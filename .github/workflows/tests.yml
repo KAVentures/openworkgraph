@@ -87,6 +87,8 @@ jobs:
           node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install --with-deps chromium
       - name: Verify linked business-attribute analysis in authenticated Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_linked_attributes.cjs
+      - name: Verify the event attribute profile in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_attribute_profile.cjs
       - name: Verify shared process browser lifecycle
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_collaboration.cjs
       - name: Verify declared dependencies and change-impact navigation in Chromium
@@ -113,10 +115,14 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_case_tags.cjs
       - name: Verify shared analysis publication and revocation in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/shared_analyses.cjs
+      - name: Verify next-activity prediction for open cases in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_next_activity.cjs
       - name: Verify separate shared case disclosure and grants
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/shared_cases.cjs
       - name: Verify shared case query history and snapshot checks
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/shared_case_queries.cjs
+      - name: Verify saving matching cases as a new event log in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_derive.cjs
       - name: Verify linked roster offboarding across company portals
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/roster_offboarding.cjs
       - name: Verify the local focus and switching report in Chromium
@@ -129,6 +135,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_logs.cjs
       - name: Verify explicitly minimized participant/team labels and complete-case cohorts
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_participants.cjs
+      - name: Verify when-work-happens time patterns in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_time_patterns.cjs
       - name: Verify reviewed shared case-key imports and per-event source provenance
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_shared_cases.cjs
       - name: Verify reviewed grouping corrections preserve canonical histories
@@ -151,10 +159,14 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_parallel.cjs
       - name: Verify content-free recorder reports in the company admin console
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/fleet_status.cjs
+      - name: Verify the local time-allocation report in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/time_allocation.cjs
       - name: Verify scoped identity provisioning and credential lifecycle in the admin console
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/scim_provisioning.cjs
       - name: Verify content-free device sync health in the company admin console
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/fleet_sync_health.cjs
+      - name: Verify work in progress over time in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_wip.cjs
       - name: Verify side-by-side implementation alternatives in opportunity review
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/opportunity_alternatives.cjs
       - name: Verify realized-value measurements for implemented ideas in Chromium
@@ -163,6 +175,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_workspace.cjs
       - name: Verify grouping activities for every analysis in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/activity_mappings.cjs
+      - name: Verify process cost from a dashboard cost model in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_costs.cjs
       - name: Verify supplied source-event IDs and key-preserving CSV round trips
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_source_identity.cjs
       - name: Verify case filters on event attributes kept from a CSV import
@@ -173,12 +187,16 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/analysis_jobs.cjs
       - name: Verify batch-processing detection in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_batching.cjs
+      - name: Verify comparing two saved event logs in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_comparison.cjs
       - name: Verify imported automation run reports show reported rates, drift and design comparison
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/automation_monitoring.cjs
       - name: Verify signed run-report channels and incident triage in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/automation_report_channels.cjs
       - name: Verify consented communications mining keeps only aggregates
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/communications_mining.cjs
+      - name: Verify rework and loop analysis in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_rework.cjs
       - name: Verify opt-in high-fidelity browser signals in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/capture_depth_content.cjs
       - name: Verify high-fidelity capture on re-rendering pages, iframes and quick passes in Chromium
@@ -191,6 +209,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/sap_o2c.cjs
       - name: Verify communications review examples and learned intents in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/communications_review.cjs
+      - name: Verify stuck open-case detection in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_stuck.cjs
       - name: Verify PDD packages burn screenshot masks into pixels and store nothing
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_pdd.cjs
       - name: Verify process map SVG and PNG downloads in Chromium
