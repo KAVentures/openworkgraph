@@ -400,7 +400,11 @@ def main(argv=None):
     try:
         if sum(bool(x) for x in (extraction, committing, appending)) > 1:
             raise ReceiptError("Select exactly one operator action")
-        if (appending or committing) and audit_dir is not None:
+        if appending or committing:
+            # Durable evidence is mandatory before either mutation. A missing
+            # directory is a definite refusal, never an uncertain write.
+            if audit_dir is None:
+                raise ReceiptError("Private audit directory required for mutation")
             _preflight_audit_directory(audit_dir)
         if appending:
             mandatory = ("expected_generation", "confirm_log_id", "candidate", "csv_path")
