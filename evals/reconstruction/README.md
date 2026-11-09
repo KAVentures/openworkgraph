@@ -522,3 +522,33 @@ programming rather than factorial permutations of predicted fragments.
 Paid/independent model trials and verified real-work episodes remain necessary to
 establish usefulness. Passing transport tests, oracle scores or synthetic thresholds
 cannot substitute for those measurements.
+
+## Interaction-detail ablation (#634)
+
+Enhanced and Full fidelity capture add hover dwells, drag and drop and sampled
+pointer trajectories. They describe how a control was used and are never
+membership evidence on their own:
+
+    python -m evals.reconstruction.interaction_detail --split development
+
+adds, around each committed browser action, the in-context hover (and drag) a
+browser would record on the same page, tab and record, plus pointer samples
+without any record, then scores the exact-record lanes and the linked items
+with the detail, without it, and with it removed again by the
+`interaction_detail` ablation (which must reproduce the baseline exactly).
+
+The first run found that detail did change the shipped groupings: a hover
+repeats the record of its action, so a one-off interruption looked like a
+record observed twice (record-lane contamination 0.021 → 0.088, interruption
+rejection 1.0 → 0.80), and pointer samples joined linked items through their
+tab (114 assigned; interruption rejection 1.0 → 0.17). Both groupings now build
+membership from the other observations only; a detail event joins the single
+item that already holds its exact record with at least two observations, and
+stays unassigned otherwise. On the development split, contamination,
+interruption rejection and precision are unchanged with detail added, no pointer
+sample is assigned and no item is joined by detail. The small recall/F1 rise
+comes only from in-context hovers joining their own record.
+
+The added events are synthetic and positioned by construction: this is an
+engineering check, not evidence that interaction detail improves
+reconstruction of real work. That needs independently labeled real sessions.
