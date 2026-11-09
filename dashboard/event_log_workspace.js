@@ -508,6 +508,7 @@
     results.appendChild(durationDistributionSection());
     results.appendChild(batchingSection());
     results.appendChild(benchmarkSection(names));
+    results.appendChild(timePatternSection(names));
     results.appendChild(impactSection(names));
     results.appendChild(stuckSection());
     results.appendChild(savedGraphSection(names,inspection));
@@ -1505,6 +1506,44 @@
           table(['Observed duration','Cases','Share of selected cases'],rows),el('p',r.interpretation,'muted'),exports.node);
       }catch(error){if(generation===state.generation&&ticket===version&&box.isConnected)out.replaceChildren(el('div',error.message,'muted'));}
       finally{if(box.isConnected)run.disabled=false;}
+    };
+    return box;
+  }
+
+  function timePatternSection(activityNames){
+    const box=section('When work happens');box.id='owgEventLogTimePatterns';
+    box.appendChild(el('div','Events and new cases by weekday and hour in your time zone, and the share of events outside working hours. Recorded time is not proof of when people worked.','muted'));
+    const zone=input('owgPatternZone','text');zone.maxLength=64;
+    try{zone.value=Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC';}catch(_){zone.value='UTC';}
+    const act=select('owgPatternActivity',[['','All activities'],...activityNames.slice(0,500).map(a=>[a,a])]);
+    const startH=input('owgPatternStart','number');startH.min='0';startH.max='23';startH.value='8';
+    const endH=input('owgPatternEnd','number');endH.min='1';endH.max='24';endH.value='18';
+    const run=button('Show when work happens','secondary');run.id='owgPatternRun';
+    const out=el('div');out.id='owgPatternResults';out.setAttribute('role','status');
+    const row=el('div',null,'row');row.style.alignItems='end';
+    row.append(field('Time zone',zone),field('Activity',act),field('Working hours from',startH),field('to',endH),run);
+    box.append(row,out);
+    const generation=state.generation;
+    run.onclick=async()=>{
+      run.disabled=true;
+      try{
+        const spec={time_zone:zone.value.trim()||'UTC',work_start_hour:Number(startH.value),work_end_hour:Number(endH.value)};
+        if(act.value)spec.activity=act.value;if(state.caseType)spec.case_type=state.caseType;
+        const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/time-patterns',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        if(generation!==state.generation)return;
+        const max=Math.max(1,...r.events.flat());
+        const wrap=el('div',null,'table-wrap'),t=el('table'),head=el('tr');t.id='owgPatternGrid';
+        const corner=el('th','Weekday');corner.scope='col';head.appendChild(corner);
+        for(let h=0;h<24;h++){const th=el('th',String(h).padStart(2,'0'));th.scope='col';head.appendChild(th);}
+        const thead=el('thead');thead.appendChild(head);const body=el('tbody');
+        r.events.forEach((rowCounts,d)=>{const tr=el('tr');const th=el('th',r.weekdays[d].slice(0,3));th.scope='row';tr.appendChild(th);
+          rowCounts.forEach(n=>{const td=el('td',n?String(n):'');td.style.background=n?'rgba(37,99,235,'+(0.12+0.6*n/max).toFixed(3)+')':'';td.style.textAlign='center';tr.appendChild(td);});body.appendChild(tr);});
+        t.append(thead,body);wrap.appendChild(t);
+        const busy=r.busiest.map(b=>b.weekday+' '+String(b.hour).padStart(2,'0')+':00 ('+b.events+')').join(', ');
+        out.replaceChildren(el('div',Number(r.total_events).toLocaleString()+' events and '+Number(r.total_case_arrivals).toLocaleString()+' new cases in '+r.settings.time_zone+'. '+(r.outside_working_hours_share===null?'':pct(r.outside_working_hours_share)+' of events fell outside '+String(r.settings.work_start_hour).padStart(2,'0')+':00–'+String(r.settings.work_end_hour).padStart(2,'0')+':00 on working days.')),
+          wrap,el('div',busy?'Busiest: '+busy+'.':'No events.','muted'),el('div',r.interpretation,'muted'));
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      finally{run.disabled=false;}
     };
     return box;
   }

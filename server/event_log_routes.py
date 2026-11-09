@@ -297,6 +297,19 @@ def delete_event_log(request: Request, log_id: str):
     return _respond(workspace.delete_log, log_id)
 
 
+@router.post("/v1/event-logs/{log_id}/time-patterns")
+async def event_log_time_patterns(request: Request, log_id: str):
+    """Events and case arrivals by local weekday and hour."""
+    from . import event_log_time_patterns as time_patterns
+    _require_dashboard(request)
+    spec = await _json_body(request, "time-pattern settings", strict=True, limit=16384)
+    try:
+        result = await run_in_threadpool(time_patterns.time_patterns, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/v1/event-logs/{log_id}/summary")
 def event_log_summary(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                       cohort: dict[str, Any] = Depends(_case_filter)):
