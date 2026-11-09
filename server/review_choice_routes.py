@@ -273,3 +273,38 @@ def revoke_review(request: Request, idea_id: str, project_id: str, payload: Revi
         "idea_id": idea_id, "project_id": project_id,
         "revision": next_revision, "decision": "revoked",
         "execution_authorized": False}, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/review-choice-workbench/{idea_id}/reviewed-handoff-preflight")
+def reviewed_handoff_preflight(request: Request, idea_id: str, basis: ReviewBasis):
+    """Require a durable, still-current human approval before opening handoff.
+
+    This is a navigation gate, NOT an execution capability. The execution
+    boundary must separately check action-scoped authorization and revocation.
+    """
+    current = json.loads(preflight(request, idea_id, basis).body)
+    if current["blockers"]:
+        raise HTTPException(409, "Unresolved review blockers")
+    canonical = json.dumps(basis.model_dump(mode="json"),
+                           sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    with pipeline._LOCK, pipeline.closing(pipeline._connect()) as conn:
+        # Missing table means no approval, never an implicit approval.
+        conn.execute("""CREATE TABLE IF NOT EXISTS project_human_reviews (
+            idea_id TEXT NOT NULL, project_id TEXT NOT NULL,
+            revision INTEGER NOT NULL, decision TEXT NOT NULL,
+            basis_sha256 TEXT NOT NULL, reviewer_notes TEXT NOT NULL,
+            updated_at TEXT NOT NULL, PRIMARY KEY(idea_id, project_id))""")
+        row = conn.execute(
+            "SELECT revision, decision, basis_sha256 FROM project_human_reviews "
+            "WHERE idea_id=? AND project_id=?",
+            (idea_id, basis.project_id)).fetchone()
+    if row is None or row[1] != "approved" or row[2] != digest:
+        raise HTTPException(409, "Current evidence requires explicit human approval")
+    return JSONResponse({
+        "format": "openworkgraph.reviewed-handoff-preflight.v1",
+        "idea_id": idea_id, "project_id": basis.project_id,
+        "review_revision": row[0], "project_set_sha256": basis.project_set_sha256,
+        "human_review_approved": True, "execution_authorized": False,
+        "source_read_authorized": False
+    }, headers={"Cache-Control": "no-store"})
