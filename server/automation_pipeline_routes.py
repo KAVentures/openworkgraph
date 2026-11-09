@@ -68,6 +68,12 @@ def export_pipeline(request: Request, state: str | None = Query(default=None, ma
         "Cache-Control": "no-store", "Content-Disposition": 'attachment; filename="automation-pipeline.csv"'})
 
 
+@router.get("/v1/automation-pipeline/portfolio")
+def portfolio_rollup(request: Request):
+    _require_dashboard(request)
+    return _respond(pipeline.portfolio)
+
+
 @router.post("/v1/automation-pipeline")
 async def create_idea(request: Request):
     _require_dashboard(request)
@@ -167,6 +173,12 @@ def get_idea(request: Request, idea_id: str):
 async def assess_idea(request: Request, idea_id: str):
     _require_dashboard(request)
     return _respond(pipeline.assess, idea_id, await _json(request))
+
+
+@router.post("/v1/automation-pipeline/{idea_id}/planning")
+async def plan_idea(request: Request, idea_id: str):
+    _require_dashboard(request)
+    return _respond(pipeline.plan, idea_id, await _json(request))
 
 
 @router.post("/v1/automation-pipeline/{idea_id}/transition")
