@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 import re
 from typing import Any
 
+from .interaction_detail_events import is_interaction_detail
+
 _RESOURCE = re.compile(r"^owg:r:[0-9a-f]{32}$")
 _TOKEN = re.compile(r"^[a-z][a-z0-9_]{0,47}$")
 _EVENT_ID = re.compile(r"^[A-Za-z0-9:._-]{1,120}$")
@@ -75,6 +77,7 @@ def record_case_lanes(
     seen_events: set[tuple[str, str]] = set()
     actors: dict[str, set[str]] = defaultdict(set)
     sessions: dict[str, set[str]] = defaultdict(set)
+    structural: dict[str, int] = defaultdict(int)
     duplicates = 0
     dropped_timestamps = 0
     # Preserve no raw row outside this temporary in-memory call.
@@ -117,6 +120,8 @@ def record_case_lanes(
         # window titles, UI strings, browser URLs, clipboard or source locators.
         action = _token(event.get("event_type"))
         source = _token(event.get("source"))
+        if not is_interaction_detail(event):
+            structural[ref] += 1
         grouped[ref].append((stamp, event_id, {
             "observed_at": stamp,
             "action": action,
@@ -124,7 +129,9 @@ def record_case_lanes(
         }))
     ordered: list[dict[str, Any]] = []
     for ref, rows in grouped.items():
-        if ref in conflicts or len(rows) < 2:
+        # Hover, drag and pointer detail repeats the record of the action it
+        # accompanies; it can never be the second observation that makes a lane.
+        if ref in conflicts or structural[ref] < 2:
             continue
         rows.sort(key=lambda x: (x[0], x[1]))
         identity = identities[ref]

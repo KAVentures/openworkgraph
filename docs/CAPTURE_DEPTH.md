@@ -234,8 +234,18 @@ covered by these tests.
   regression-tested on real macOS or Windows machines, including permissions,
   multi-monitor layouts and lock states.
 - Iframes from other origins are covered only where the content script already runs.
-- The issue's ablation evaluation, on held-out interleaved workflows, has not been run.
-  No reconstruction accuracy gain is claimed until it has.
+- The issue's ablation evaluation on independently labeled real sessions has not been
+  run. No reconstruction accuracy gain is claimed until it has.
+
+## Reconstruction
+
+Hover, drag and pointer events are never membership evidence. Exact-record lanes and
+linked work items are built from the other observations; a detail event joins only
+the item that already holds its exact record (with at least two observations), and a
+pointer sample, which carries no record, stays unassigned. A hover can therefore
+never turn a one-off interruption into a lane or merge two pieces of work.
+`python -m evals.reconstruction.interaction_detail` measures this on the synthetic
+corpus with and without added detail (see `evals/reconstruction/README.md`).
 
 ## Routes
 
