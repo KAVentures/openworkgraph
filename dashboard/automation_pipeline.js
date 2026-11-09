@@ -1132,6 +1132,54 @@
       }else if(idea.source.kind==='process_catalog'){
         box.appendChild(el('div','This source is a descriptive reference only; no saved process revision is linked.','muted'));
       }
+      if(['approved','implemented'].includes(idea.state)){
+        const value=el('section');value.id='owgPipelineRealized';value.setAttribute('aria-label','Realized value');
+        value.appendChild(el('h4','Realized value'));
+        const host=el('div');host.id='owgRealizedReport';
+        const kind=select('owgMeasPeriod',[['baseline','Baseline (before)'],['after','After implementation']]);
+        const start=input('owgMeasStart','date'),end=input('owgMeasEnd','date');
+        const cases=input('owgMeasCases','number','Cases');cases.min='0';cases.step='1';
+        const minutes=input('owgMeasMinutes','number','Minutes per case');minutes.min='0';minutes.step='any';
+        const source=select('owgMeasSource',[['entered','Entered by hand'],['time_tracking','Time tracking'],['system_report','System report'],['event_log','Event log']]);
+        const ref=input('owgMeasRef','text','Optional reference');ref.maxLength=200;
+        const addMeasure=button('Record measurement','secondary');addMeasure.id='owgMeasAdd';
+        const measStatus=el('div',null,'muted');measStatus.id='owgMeasStatus';measStatus.setAttribute('role','status');measStatus.setAttribute('aria-live','polite');
+        const fmt=v=>v===null||v===undefined?'—':String(v);
+        const draw=r=>{
+          const parts=[];
+          if(r.measurements.length){
+            const wrap=el('div',null,'table-wrap'),t=el('table'),head=el('tr');t.id='owgRealizedTable';
+            ['Period','Dates','Cases','Hours','Hours / month','Minutes / case','Source',''].forEach(h=>{const th=el('th',h);th.scope='col';head.appendChild(th);});
+            const thead=el('thead');thead.appendChild(head);const body=el('tbody');
+            r.measurements.forEach(m=>{const tr=el('tr');
+              [m.period==='after'?'After':'Baseline',m.start+' – '+m.end,m.cases,m.hours,m.hours_per_month,fmt(m.minutes_per_case_observed),m.source.replace('_',' ')+(m.source_reference?' · '+m.source_reference:'')].forEach(v=>tr.appendChild(el('td',String(v))));
+              const del=button('Remove','secondary');del.setAttribute('aria-label','Remove '+m.period+' measurement from '+m.start);
+              del.onclick=async()=>{try{draw(await post('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/measurements/'+encodeURIComponent(m.measurement_id)+'/delete',{}));}catch(e){measStatus.textContent=e.message;}};
+              const cell=el('td');cell.appendChild(del);tr.appendChild(cell);body.appendChild(tr);});
+            t.append(thead,body);wrap.appendChild(t);parts.push(wrap);
+          }else parts.push(el('div','No measurements yet. Record a baseline from before the change, then periods after it.','muted'));
+          const c=r.comparison;
+          if(c){
+            const list=el('ul');list.id='owgRealizedComparison';
+            list.append(el('li','Minutes per case: '+fmt(c.minutes_per_case_change)+' fewer after (baseline '+fmt(r.baseline.minutes_per_case)+', after '+fmt(r.after.minutes_per_case)+').'),
+              el('li','At the after volume that is '+fmt(c.hours_per_month_from_per_case_change_at_after_volume)+' hours a month; the assessment modeled '+fmt(c.modeled_hours_per_month)+(c.observed_vs_modeled_ratio!==null?' (ratio '+c.observed_vs_modeled_ratio+').':'.')),
+              el('li','Total hours a month changed by '+fmt(c.observed_hours_per_month_change)+' (range '+c.observed_change_range.join(' to ')+'); case volume changed by '+fmt(c.case_volume_change_per_month)+' a month.'));
+            parts.push(list);
+            if(c.single_period_each)parts.push(el('div','Only one baseline and one after period: no range of variation yet.','muted'));
+          }else if(r.measurements.length)parts.push(el('div','Record at least one baseline and one after period to compare.','muted'));
+          parts.push(el('p',r.interpretation,'muted'));host.replaceChildren(...parts);
+        };
+        addMeasure.onclick=async()=>{
+          const body={period:kind.value,start:start.value,end:end.value,cases:Number(cases.value),minutes_per_case:Number(minutes.value),source:source.value,source_reference:ref.value};
+          addMeasure.disabled=true;
+          try{draw(await post('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/measurements',body));measStatus.textContent='Measurement recorded.';}
+          catch(e){measStatus.textContent=e.message;}finally{addMeasure.disabled=false;}
+        };
+        const grid=el('div',null,'row');grid.style.alignItems='end';
+        grid.append(field('Period',kind),field('From',start),field('To',end),field('Cases handled',cases),field('Minutes per case',minutes),field('Source',source),field('Reference',ref),addMeasure);
+        value.append(grid,measStatus,host);box.appendChild(value);
+        api('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/realized-value').then(r=>r.json()).then(r=>{if(generation===detailGeneration)draw(r);}).catch(e=>{measStatus.textContent=e.message;});
+      }
       // These selections are navigation hints only, never an authorization or a source read.
       let preferredReportProjectId=null,preferredSourceProjectId=null;
       const journeyButton=button('View evidence journey','secondary');journeyButton.id='owgPipelineJourney';
