@@ -8,6 +8,8 @@ schedule with an explicit confirmation. Supported jobs:
   are unchanged);
 - ``event_log_signals``: re-evaluate the saved signal rules of an event log so
   the signal inbox reflects the current data;
+- ``event_log_report``: save a copy of an event log's self-contained HTML report
+  in the local data folder, keeping the newest ten;
 - ``local_backup``: at most daily, create a verified unencrypted snapshot
   outside the data folder, excluding credentials; rotate owned scheduled files
   only after success, with separate user acknowledgment.
@@ -37,7 +39,7 @@ from typing import Any, Callable
 from .db import DATA_DIR
 
 FORMAT = "openworkgraph.local-schedules.v1"
-KINDS = ("retained_jira_profile", "event_log_signals", "local_backup")
+KINDS = ("retained_jira_profile", "event_log_signals", "event_log_report", "local_backup")
 MIN_BACKUP_INTERVAL_MINUTES = 24 * 60
 MIN_INTERVAL_MINUTES = 15
 MAX_INTERVAL_MINUTES = 7 * 24 * 60
@@ -315,6 +317,14 @@ def _run_job(kind: str, target_id: str) -> tuple[str, float]:
         except JiraIngestionError as error:
             code = re.sub(r"[^a-z0-9_]", "", str(error).lower())[:80] or "jira_error"
             return "failed:" + code, float(getattr(error, "retry_seconds", 0) or 0)
+    if kind == "event_log_report":
+        from . import event_log_saved_reports as saved_reports
+        from .event_log_workspace import EventLogWorkspaceError
+        try:
+            saved_reports.save(target_id)
+        except EventLogWorkspaceError:
+            return "failed:event_log_unavailable", 0.0
+        return "succeeded:report_saved", 0.0
     from . import event_log_signals as signals
     result = signals.evaluate(target_id)
     return f"succeeded:{len(result.get('signals', []))}_signals", 0.0

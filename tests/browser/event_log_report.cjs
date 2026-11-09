@@ -40,6 +40,22 @@ const path=require('node:path');
    assert.doesNotMatch(html,/<script/i);
    assert.match(html,/not verified rework/);
    await page.locator('#owgEventLogStatus').filter({hasText:'Report ready'}).waitFor();
+   // Saved copies: none yet, save one now, then download it.
+   await page.locator('#owgEventLogSavedReports').click();
+   await page.locator('#owgEventLogSavedList').filter({hasText:'No saved copies yet.'}).waitFor();
+   assert.equal(await page.locator('#owgEventLogSavedReports').getAttribute('aria-expanded'),'true');
+   await page.locator('#owgEventLogSaveCopy').click();
+   await page.locator('#owgEventLogSavedList').filter({hasText:/Saved report-\d{8}T\d{6}Z\.html\./}).waitFor();
+   assert.equal(await page.locator('#owgEventLogSavedList tbody tr').count(),1);
+   const [copy]=await Promise.all([page.waitForEvent('download'),page.locator('#owgEventLogSavedList').getByRole('button',{name:/^Download saved report report-/}).click()]);
+   assert.match(copy.suggestedFilename(),/^log_[0-9a-f]{16}-report-\d{8}T\d{6}Z\.html$/);
+   const copyHtml=await fs.readFile(await copy.path(),'utf8');
+   assert(copyHtml.startsWith('<!doctype html>')&&copyHtml.includes('<h1>orders</h1>'));
+   await page.addScriptTag({content:axeSource});
+   const savedAudit=await page.evaluate(async()=>window.axe.run({include:[['#owgEventLogManage'],['#owgEventLogSavedList']]},{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
+   assert.deepEqual(savedAudit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);
+   await page.locator('#owgEventLogSavedReports').click();
+   assert.equal(await page.locator('#owgEventLogSavedList').isVisible(),false);
    // Opened on its own, the saved report renders with no network and no errors.
    const offline=await context.newPage(),offlineErrors=[],requests=[];
    offline.on('pageerror',e=>offlineErrors.push(e.message));offline.on('request',r=>requests.push(r.url()));

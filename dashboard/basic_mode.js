@@ -245,9 +245,9 @@
 
       <div class="card" id="pvSchedules">
         <h2>Scheduled jobs</h2>
-        <div class="muted">Off unless you add one. A schedule repeats a job you could run by hand: refresh a retained Jira profile, re-check saved event-log signals, or create a verified local backup. Source reads keep their own consent and pause with recording. Backups require separate acknowledgement, exclude credentials, are NOT encrypted, run at most daily and rotate only scheduled backups (up to 14). Optional per-job quiet hours defer due jobs without counting a run; daylight saving follows the chosen timezone. Failures back off and pause after five in a row. Nothing is sent anywhere.</div>
+        <div class="muted">Off unless you add one. A schedule repeats a job you could run by hand: refresh a retained Jira profile, re-check saved event-log signals, save a copy of an event log's report, or create a verified local backup. Source reads keep their own consent and pause with recording. Backups require separate acknowledgement, exclude credentials, are NOT encrypted, run at most daily and rotate only scheduled backups (up to 14). Optional per-job quiet hours defer due jobs without counting a run; daylight saving follows the chosen timezone. Failures back off and pause after five in a row. Nothing is sent anywhere.</div>
         <div class="pv-delete">
-          <select id="pvScheduleKind" aria-label="Job"><option value="retained_jira_profile">Retained Jira profile</option><option value="event_log_signals">Event log signals</option><option value="local_backup">Local backup (unencrypted)</option></select>
+          <select id="pvScheduleKind" aria-label="Job"><option value="retained_jira_profile">Retained Jira profile</option><option value="event_log_signals">Event log signals</option><option value="event_log_report">Event log report copy</option><option value="local_backup">Local backup (unencrypted)</option></select>
           <input type="text" id="pvScheduleTarget" placeholder="Profile or event log ID" aria-label="Profile or event log ID" spellcheck="false">
           <input type="number" id="pvScheduleInterval" min="15" value="60" aria-label="Interval in minutes">
           <button type="button" class="secondary" id="pvScheduleAdd">Add schedule</button>
