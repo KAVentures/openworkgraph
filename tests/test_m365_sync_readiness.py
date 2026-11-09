@@ -746,7 +746,12 @@ def test_operator_audit_rejects_public_directory_and_symlink(tmp_path):
     assert not list(public.iterdir())
 
 
-def test_operator_audit_failure_after_append_reports_uncertain(monkeypatch, capsys, tmp_path):
+def test_operator_audit_missing_directory_refuses_before_append(monkeypatch, capsys, tmp_path):
+    """An unavailable audit directory must not produce an uncertain write.
+
+    Preflight now runs before the append delegate. This is a definite
+    refusal, unlike an audit persistence failure after a successful POST.
+    """
     from server.m365_outlook_sync_readiness import main
     monkeypatch.setenv("OWG_DASHBOARD_SESSION", "private-session")
     args = _cli_commit_args()
@@ -761,14 +766,14 @@ def test_operator_audit_failure_after_append_reports_uncertain(monkeypatch, caps
         del args[pos:pos + 2]
     args.extend(["--append-after-review", "--consent-local-append",
                  "--audit-dir", str(tmp_path / "missing")])
-    with patch("server.m365_outlook_sync_readiness.append_after_review",
-               return_value={"status": "append_review_verified",
-                             "checkpoint_advanced": False}):
-        assert main(args) == 3
+    with patch("server.m365_outlook_sync_readiness.append_after_review") as append:
+        assert main(args) == 2
+        append.assert_not_called()
     receipt = json.loads(capsys.readouterr().out)
-    assert receipt["status"] == "unverified"
-    assert receipt["possible_local_append"] is True
+    assert receipt["status"] == "refused"
+    assert receipt["checkpoint_advanced"] is False
     assert receipt["automatic_retry_allowed"] is False
+    assert "possible_local_append" not in receipt
 
 
 @pytest.mark.skipif(__import__("os").name != "posix", reason="POSIX dirfd security contract")
