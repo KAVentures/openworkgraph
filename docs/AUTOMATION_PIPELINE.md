@@ -266,3 +266,28 @@ A reported specification match
 does not prove artifact execution, individual run/case attribution, agent
 causality or business outcomes. This view connects the existing local segments;
 it does not fill those evidence gaps or create a second evidence store.
+
+## Realized value
+
+Approved and implemented ideas have a *Realized value* section. Record measurement periods:
+a **baseline** that ends before the idea was implemented, and **after** periods that start on
+or after the implementation date (an idea must be implemented first). Each period gives its
+dates (at most 366 days, never in the future), the cases handled and either minutes per case
+or total hours, plus where the numbers came from (entered, time tracking, a system report or
+an event log, with an optional reference). At most 48 measurements per idea; deleting the idea
+deletes them.
+
+The report normalizes each period to a 30.44-day month and compares baseline with after:
+
+- **minutes per case** before and after, and what that difference is worth in hours a month
+  at the after volume, next to the hours the assessment modeled (with their ratio);
+- **total hours a month** and **case volume** before and after, with a range when there are
+  several periods.
+
+Per-case effort separates an effort change from a volume change: total hours can rise because
+more cases arrived even when each case got quicker. An observed difference between periods is
+not proof that the automation caused it (`causal_effect_claimed: false`); volume, staffing and
+seasonality can contribute. No money is estimated and ideas are never added together.
+
+`GET …/{id}/realized-value`, `POST …/{id}/measurements`,
+`POST …/{id}/measurements/{measurement_id}/delete` (dashboard session only).
