@@ -587,9 +587,14 @@ class Mapping(_Strict):
     activities: dict[Annotated[str, Field(max_length=40)], Name] = Field(max_length=80)
 
 
+class DomainPackConflict(workspace.EventLogWorkspaceError):
+    """The caller's reviewed installation is no longer current."""
+
+
 class InstallSpec(_Strict):
     version: Annotated[str, Field(pattern=r"^\d{1,4}\.\d{1,4}\.\d{1,4}$")]
     mapping: Mapping
+    expected_installation: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")] | None = None
     parameters: dict[Annotated[str, Field(max_length=40)], float] = Field(default_factory=dict, max_length=20)
 
 
@@ -778,6 +783,11 @@ def _record(conn, log_id: str, pack_id: str) -> dict[str, Any] | None:
     return json.loads(row[0]) if row else None
 
 
+def _installation_token(record: dict[str, Any]) -> str:
+    """Opaque equality token for the complete stored installation, including owned IDs."""
+    return _digest(record)
+
+
 def install(log_id: str, pack_id: str, spec: Any) -> dict[str, Any]:
     pack, parsed, params = _parse_install(pack_id, spec)
     mapping = parsed.mapping.model_dump()
@@ -789,6 +799,10 @@ def install(log_id: str, pack_id: str, spec: Any) -> dict[str, Any]:
             workspace._check_log(conn, log_id)
             _check_names(conn, log_id, parsed.mapping)
             previous = _record(conn, log_id, pack_id)
+            if "expected_installation" in parsed.model_fields_set:
+                current = _installation_token(previous) if previous is not None else None
+                if parsed.expected_installation != current:
+                    raise DomainPackConflict("domain pack installation changed; reload setup before saving")
             saved = {json.loads(d)["metric"]["name"]: m for m, d in conn.execute(
                 "SELECT metric_id, definition FROM metric_definitions WHERE log_id = ?", [log_id]).fetchall()}
         finally:
@@ -816,7 +830,7 @@ def install(log_id: str, pack_id: str, spec: Any) -> dict[str, Any]:
                          [log_id, pack_id, now, json.dumps(record, sort_keys=True)])
         finally:
             conn.close()
-    return {**record, "change": change, "previous_version": previous["version"] if previous else None,
+    return {**record, "installation_token": _installation_token(record), "change": change, "previous_version": previous["version"] if previous else None,
             "not_applicable": definitions["not_applicable"]}
 
 
@@ -836,6 +850,7 @@ def installed(log_id: str) -> dict[str, Any]:
             conn.close()
     installs = [json.loads(d) for (d,) in rows]
     for record in installs:
+        record["installation_token"] = _installation_token(record)
         record["latest_version"] = _pack(record["pack_id"])["version"] if record["pack_id"] in PACKS else None
         record["upgrade_available"] = bool(record["latest_version"]) and \
             _version_key(record["latest_version"]) > _version_key(record["version"])

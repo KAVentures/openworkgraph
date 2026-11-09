@@ -1033,7 +1033,9 @@
             const t2=++turn;install.disabled=true;
             try{
               const parameters={};for(const [k,i] of Object.entries(inputs))parameters[k]=Number(i.value);
-              const r=await (await post(base+'/'+pack.pack_id,{version:pack.latest_version,mapping:packMapping(pack,choices),parameters})).json();
+              const basis=installs.installs.find(i=>i.pack_id===pack.pack_id);
+              if(basis&&!/^[a-f0-9]{64}$/.test(basis.installation_token||''))throw new Error('Installation review is unavailable. Reload setup before saving.');
+              const r=await (await post(base+'/'+pack.pack_id,{version:pack.latest_version,mapping:packMapping(pack,choices),parameters,expected_installation:basis?basis.installation_token:null})).json();
               if(!current(t2))return;
               run.disabled=remove.disabled=false;
             installs.installs=[...installs.installs.filter(i=>i.pack_id!==pack.pack_id),r];

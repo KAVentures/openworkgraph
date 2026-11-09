@@ -590,6 +590,8 @@ async def event_log_domain_pack_install(request: Request, log_id: str, pack_id: 
     spec = await _json_body(request, "domain pack install", strict=True)
     try:
         result = await run_in_threadpool(domain_packs.install, log_id, pack_id, spec)
+    except domain_packs.DomainPackConflict as exc:
+        raise HTTPException(409, str(exc)) from None
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
