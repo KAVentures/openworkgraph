@@ -4,7 +4,7 @@
   const MODEL_FORMAT='openworkgraph.reference-model.v1';
   const state={logs:[],logId:'',caseType:'',generation:0,refresh:0,follows:[],objectTypes:[]};
   // Views that honour the workspace case filter; every other section uses all cases.
-  const FILTERED=new Set(['summary','variants','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','waiting-time','drift','model-discovery','organization']);
+  const FILTERED=new Set(['summary','variants','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','waiting-time','drift','model-discovery','organization','report.html']);
 
   const el=(tag,text,cls)=>{
     const node=document.createElement(tag);
@@ -134,7 +134,8 @@
     const exportButton=button('Export','secondary');exportButton.id='owgEventLogExport';
     const remove=button('Delete log','secondary');remove.id='owgEventLogDelete';
     const manage=el('div',null,'row');manage.id='owgEventLogManage';manage.style.cssText='align-items:end;margin-top:12px';show(manage,false);
-    manage.append(field('Stored log',pick),field('Case notion',caseType),analyze,field('Export as',exportFormat),exportButton,remove);
+    const reportButton=button('Download report','secondary');reportButton.id='owgEventLogReport';reportButton.title='A self-contained HTML report: overview, KPIs, top variants and activities';
+    manage.append(field('Stored log',pick),field('Case notion',caseType),analyze,field('Export as',exportFormat),exportButton,reportButton,remove);
     const results=el('div');results.id='owgEventLogResults';
     let salesforceStagedFile=null;
     const unstageSalesforce=()=>{
@@ -263,6 +264,17 @@
         const link=el('a');link.href=url;link.download=state.logId+'.'+({sourcecsv:'csv',ocel:'jsonocel',ocelxml:'xmlocel'}[exportFormat.value]||exportFormat.value);
         document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
         status('Export ready.'+relationshipExportNote());
+      }catch(error){status(error.message);}
+    };
+    reportButton.onclick=async()=>{
+      if(!state.logId)return;
+      try{
+        status('Preparing report…');
+        const response=await api(logPath('report.html'));
+        const url=URL.createObjectURL(await response.blob());
+        const link=el('a');link.href=url;link.download=state.logId+'-report.html';
+        document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+        status('Report ready: a single HTML file with no scripts that opens offline.');
       }catch(error){status(error.message);}
     };
     remove.onclick=async()=>{
