@@ -156,6 +156,10 @@
             for(const b of [saveDraft,approve,revoke])b.type='button';
             const reviewPath='/v1/review-choice-workbench/'+encodeURIComponent(id)+'/review';
             let reviewRevision=0;
+            // A pending read must never overwrite a later save/revoke result.
+            // Disable mutation until the authoritative revision has loaded.
+            let reviewRequestGeneration=0;
+            for(const b of [saveDraft,approve,revoke])b.disabled=true;
             // Async review state belongs to the inspected choice, not to a later selection.
             const reviewGeneration=token;
             const reviewStillSelected=()=>reviewGeneration===generation&&
@@ -167,16 +171,19 @@
               dataset_origins:snapshot.dataset_origins,
               dataset_origin_check_available:snapshot.dataset_origin_check_available,blockers:selected.blockers};
             async function refreshReview(){
+              const requestGeneration=++reviewRequestGeneration;
               const response=await fetch(reviewPath+'/'+encodeURIComponent(projectId),{cache:'no-store'});
               if(!response.ok)throw new Error('Review state unavailable ('+response.status+').');
               const state=await response.json();
-              if(!reviewStillSelected())return;
+              if(!reviewStillSelected()||requestGeneration!==reviewRequestGeneration)return;
               if(state.execution_authorized!==false||state.project_id!==projectId)throw new Error('Invalid review state');
               reviewRevision=state.revision;notes.value=state.reviewer_notes||'';
               reviewState.textContent='Saved review: '+state.decision+' (revision '+state.revision+'). No agent access granted.';
+              for(const b of [saveDraft,approve,revoke])b.disabled=false;
             }
             async function persistReview(decision){
               if(!reviewStillSelected())return;
+              ++reviewRequestGeneration;
               for(const b of [saveDraft,approve,revoke])b.disabled=true;
               try{
                 const response=await fetch(reviewPath,{method:'POST',cache:'no-store',
@@ -195,6 +202,7 @@
             approve.onclick=()=>persistReview('approved');
             revoke.onclick=async()=>{
               if(!reviewStillSelected()||reviewRevision<1)return;
+              ++reviewRequestGeneration;
               // Revocation must work when evidence has changed since approval.
               // Never depend on the stale-basis preflight for withdrawing consent.
               for(const b of [saveDraft,approve,revoke])b.disabled=true;
@@ -214,7 +222,7 @@
               finally{for(const b of [saveDraft,approve,revoke])b.disabled=false;}
             };
             details.append(node('h3','Record human review'),notes,saveDraft,approve,revoke,reviewState);
-            refreshReview().catch(e=>{if(reviewStillSelected())reviewState.textContent=e.message;});
+            refreshReview().catch(e=>{if(reviewStillSelected()){reviewState.textContent=e.message;for(const b of [saveDraft,approve,revoke])b.disabled=true;}});
             details.append(continueReview);
             status.textContent='Current export basis confirmed by server. Continue to the existing opportunity decision; agent handoff still requires separate authorization.';
           }catch(e){if(token===generation){clear();status.textContent='Server preflight failed. Inspect again. '+e.message;}}
