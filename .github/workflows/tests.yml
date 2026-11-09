@@ -117,6 +117,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/shared_case_queries.cjs
       - name: Verify linked roster offboarding across company portals
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/roster_offboarding.cjs
+      - name: Verify the local focus and switching report in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/focus_report.cjs
       - name: Verify company sign-in and process-only browser sessions
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_signin.cjs
       - name: Verify company sign-in and analysis-only browser sessions

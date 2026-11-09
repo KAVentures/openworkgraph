@@ -757,6 +757,8 @@ from .automation_monitoring_routes import router as _automation_monitoring_route
 app.include_router(_automation_monitoring_router)
 from .communications_routes import router as _communications_router  # noqa: E402
 app.include_router(_communications_router)
+from .focus_report_routes import router as _focus_report_router  # noqa: E402
+app.include_router(_focus_report_router)
 from .process_pdd_routes import router as _process_pdd_router  # noqa: E402
 app.include_router(_process_pdd_router)
 from .automation_pipeline_routes import router as _automation_pipeline_router  # noqa: E402
