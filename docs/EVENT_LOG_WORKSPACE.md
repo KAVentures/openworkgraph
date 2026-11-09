@@ -174,6 +174,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-logs/{log_id}/kpis?sla_seconds=&automation_resources=` | Throughput p50/p90/p95, rework rate, SLA breach rate, automation rate and weekly completions. |
 | `POST /v1/event-logs/{log_id}/benchmark` | Compare two case cohorts (JSON body, below). |
 | `POST /v1/event-logs/{log_id}/map-comparison` | Compare the process maps of two cohorts path by path (below). |
+| `POST /v1/event-logs/comparison` | Compare two saved logs, or one log under two filters (below). |
 | `POST /v1/event-logs/{log_id}/impact` | Before/after impact of an intervention on cycle time, rework, SLA breaches or an activity count, with bootstrap intervals, an optional control cohort and a placebo check. See [INTERVENTION_IMPACT.md](INTERVENTION_IMPACT.md). |
 | `GET /v1/event-logs/{log_id}/simulation/calibration` | Arrival rate, routing, activity times and resources measured from the log. |
 | `POST /v1/event-logs/{log_id}/simulate` | Run a what-if scenario against the measured baseline (JSON body, below). |
@@ -1350,3 +1351,36 @@ The builder supports [cancellable local analysis jobs](LOCAL_ANALYSIS_JOBS.md),
 with bounded queues, deadlines, session-scoped status/results and explicit cancellation.
 
 Selected Jira issues can also be read manually into a retained local source-ID log with separate read/retention/label consent. See [Retained Jira ingestion](RETAINED_JIRA_INGESTION.md) for scope, lifecycle, checkpoint, pagination and completeness limits.
+
+## Comparing two logs
+
+**Compare with another log** (after **Analyse**) compares the selected log with
+another saved log. Typical uses are two regions or business units exported
+separately, or the same process before and after a system migration. The REST
+form also compares one log with itself under two case filters:
+
+```json
+{"baseline": {"log_id": "log_…", "case_type": null, "cohort": {}},
+ "comparison": {"log_id": "log_…", "cohort": {"started_from": "2024-07-01"}},
+ "limit": 25}
+```
+
+`cohort` takes the same keys as other analyses. `limit` (1–200) caps each ranked
+list. The response contains:
+
+* **KPIs for each side and their difference:** cases, events per case, the
+  share of cases that repeat an activity (with a 95% interval for the
+  difference), and case-duration quantiles. It also gives the probability that a
+  random comparison case takes longer than a random baseline case (0.5 means no
+  shift).
+* **Activities and paths:** those present only in the baseline, those present
+  only in the comparison, and the largest differences in the share of cases
+  that contain each one. Each difference has a Newcombe 95% interval.
+* **Variants:** how many variants occur in both logs and what share of each
+  log's cases they cover, plus the variants whose share differs most.
+
+Activities are matched by exact name after each log's applied activity
+mapping. Define a mapping to harmonize names that differ between source
+systems. The comparison is descriptive: the two logs may differ in extraction,
+coverage and case mix, so a difference is not evidence of its cause. The
+intervals are not corrected for the number of rows shown.

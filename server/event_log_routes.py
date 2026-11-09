@@ -145,6 +145,19 @@ async def prepare_salesforce_export(request: Request):
         raw.clear()
 
 
+@router.post("/v1/event-logs/comparison")
+async def compare_event_logs(request: Request):
+    """Compare two saved logs (or one log under two filters): KPIs, activities, paths and variants."""
+    from . import event_log_log_comparison as log_comparison
+    _require_dashboard(request)
+    spec = await _json_body(request, "log comparison", strict=True, limit=32768)
+    try:
+        result = await run_in_threadpool(log_comparison.compare, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/event-log-workspace.js")
 def event_log_workspace_script() -> FileResponse:
     """Static dashboard client; it only calls the authenticated routes below."""
