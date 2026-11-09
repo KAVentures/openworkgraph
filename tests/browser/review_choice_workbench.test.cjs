@@ -13,7 +13,10 @@ async function scenario(title,responses,check,withPipeline=false){
  const doc={createElement:t=>new Node(t),getElementById:id=>id==='panel-evidence'?panel:(withPipeline&&id==='owgPipelineCard'?pipeline:null),addEventListener(k,fn){this[k]=fn;}};
  let opened=0, lastEvent=null;
  let calls=0;
- const context={document:doc,CustomEvent:class {constructor(type,init){this.type=type;this.detail=init.detail;}},window:{__owgAuthReady:Promise.resolve(),dispatchEvent:e=>{opened++;lastEvent=e;}},fetch:async(_url,options)=>{assert.equal(options.cache,'no-store');const x=responses[calls++];if(x instanceof Error)throw x;return {ok:x.ok!==false,status:x.status||200,json:async()=>x.data||x};}};
+ const context={document:doc,CustomEvent:class {constructor(type,init){this.type=type;this.detail=init.detail;}},window:{__owgAuthReady:Promise.resolve(),dispatchEvent:e=>{opened++;lastEvent=e;}},fetch:async(url,options)=>{assert.equal(options.cache,'no-store');
+   // The saved-review read is answered separately so scenarios keep counting their decision calls.
+   if(!options.method&&/\/review\/[^/]+$/.test(String(url)))return {ok:true,status:200,json:async()=>({project_id:'p1',revision:0,decision:'draft',reviewer_notes:'',execution_authorized:false})};
+   const x=responses[calls++];if(x instanceof Error)throw x;return {ok:x.ok!==false,status:x.status||200,json:async()=>x.data||x};}};
  vm.runInNewContext(fs.readFileSync(path.resolve(__dirname,'../../dashboard/review_choice_workbench.js'),'utf8'),context);
  doc.DOMContentLoaded();
  const card=panel.children[0];assert.equal(card.id,'owgReviewChoiceWorkbench');
@@ -42,8 +45,9 @@ const getControls=results=>[results.children.find(x=>x.tagName==='select'),resul
    {format:'openworkgraph.review-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
     spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),blockers:[],review_required:true,
     execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false},
-   {format:'openworkgraph.review-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
-    spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),blockers:[],review_required:true,
+   // The decision handoff now requires a durable human approval (reviewed-handoff preflight).
+   {format:'openworkgraph.reviewed-handoff-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
+    spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),human_review_approved:true,
     execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false}],
    async({results,details,opened,lastEvent,calls})=>{
      const [select,review]=getControls(results);select.value='p1';await review.onclick();
