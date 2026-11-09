@@ -550,6 +550,7 @@
     results.appendChild(simulationSection());
     results.appendChild(conformanceSection((variants.variants||[])[0]));
     results.appendChild(clusterSection());
+    results.appendChild(caseTagSection(names));
     results.appendChild(discoverySection());
     results.appendChild(driftSection());
     results.appendChild(deriveSection(names));
@@ -833,6 +834,7 @@
     for(const key of ['resource','activity'])if(values[key]&&values[key].trim())spec[key]=values[key];
     if(values.attribute&&values.attribute.trim()){if(!/^[^=]+=.*/.test(values.attribute.trim()))throw new Error('Attribute must look like name=value.');spec.attribute=values.attribute.trim();}
     if(values.eventAttribute&&values.eventAttribute.trim()){if(!/^[^=]+=.*/.test(values.eventAttribute.trim()))throw new Error('Event attribute must look like name=value.');spec.event_attribute=values.eventAttribute.trim();}
+    if(values.tag&&values.tag.trim())spec.tag=values.tag.trim().slice(0,60);
     return spec;
   }
   function cohortFields(prefix,legend,activityNames){
@@ -844,10 +846,11 @@
     const activity=select(prefix+'Activity',[['','any'],...activityNames.slice(0,500).map(a=>[a,a])]);
     const attribute=input(prefix+'Attribute','text','name=value');
     const eventAttribute=input(prefix+'EventAttribute','text','name=value');eventAttribute.title='Cases with at least one event carrying this value, such as a column kept from a CSV import';
+    const tag=input(prefix+'Tag','text','any');tag.maxLength=60;tag.title='Cases you tagged under Case tags';
     const row=el('div',null,'row');row.style.alignItems='end';
-    row.append(field('Name',label),field('Started from (UTC)',from),field('Started before (UTC)',before),field('Resource',resource),field('Contains activity',activity),field('Case attribute',attribute),field('Event attribute',eventAttribute));
+    row.append(field('Name',label),field('Started from (UTC)',from),field('Started before (UTC)',before),field('Resource',resource),field('Contains activity',activity),field('Case attribute',attribute),field('Event attribute',eventAttribute),field('Tagged',tag));
     box.appendChild(row);
-    return {node:box,read:()=>cohortSpec({label:label.value,from:from.value,before:before.value,resource:resource.value,activity:activity.value,attribute:attribute.value,eventAttribute:eventAttribute.value})};
+    return {node:box,read:()=>cohortSpec({label:label.value,from:from.value,before:before.value,resource:resource.value,activity:activity.value,attribute:attribute.value,eventAttribute:eventAttribute.value,tag:tag.value})};
   }
   function variantCoverageSection(activityNames){
     const box=section('Variant coverage');
@@ -892,6 +895,51 @@
     const link=el('a');link.href=url;link.download=name;document.body.appendChild(link);link.click();link.remove();
     setTimeout(()=>URL.revokeObjectURL(url),1000);
   }
+  // Analyst tags on cases: mark cases while investigating, then filter any analysis with "Tagged".
+  function caseTagSection(activityNames){
+    const box=section('Case tags');box.id='owgCaseTags';
+    box.appendChild(el('div','Tag cases you have looked at, such as “checked” or “root cause: missing PO”, then choose the tag under “Tagged” in any filter. Tags are your judgement, stored on this computer; the log itself is not changed.','muted'));
+    const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/case-tags';
+    const list=el('div');list.id='owgCaseTagList';list.setAttribute('role','status');
+    const tag=input('owgCaseTagName','text','for example checked');tag.maxLength=60;tag.autocomplete='off';
+    const note=input('owgCaseTagNote','text','optional');note.maxLength=500;
+    const ids=document.createElement('textarea');ids.id='owgCaseTagIds';ids.rows=2;ids.placeholder='case IDs, one per line or comma-separated (leave empty to tag the cases matching the filter below)';
+    const filter=cohortFields('owgCaseTagCohort','Or tag every case that matches',activityNames);
+    const add=button('Tag cases','secondary');add.id='owgCaseTagAdd';
+    const out=el('div');out.id='owgCaseTagResult';out.setAttribute('role','status');
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Tag',tag),field('Note',note));
+    box.append(list,row,field('Cases',ids),filter.node,add,out);
+    const generation=state.generation;
+    const render=r=>{
+      if(!r.tags.length){list.replaceChildren(el('div','No tags yet.','muted'));return;}
+      list.replaceChildren(table(['Tag','Cases','With a note','Last tagged',''],r.tags.map(t=>{
+        const wrap=el('div',null,'row');
+        const showCases=button('Show cases','secondary');showCases.setAttribute('aria-label','Show cases tagged '+t.tag);
+        const remove=button('Remove tag','secondary');remove.setAttribute('aria-label','Remove tag '+t.tag);
+        showCases.onclick=async()=>{try{const c=await getJSON(base()+'?tag='+encodeURIComponent(t.tag)+'&limit=200');out.replaceChildren(el('h4','Cases tagged '+t.tag),table(['Case','Note','Tagged'],c.cases.map(x=>[x.case_id,x.note||'—',String(x.tagged_at).slice(0,16).replace('T',' ')])));}catch(error){out.replaceChildren(el('div',error.message,'muted'));}};
+        remove.onclick=async()=>{if(!window.confirm('Remove the tag “'+t.tag+'” from all '+t.cases+' cases?'))return;try{const r2=await (await api(base()+'/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tag:t.tag})})).json();render(r2);out.replaceChildren(el('div','Removed “'+t.tag+'” from '+r2.removed+' cases.'));}catch(error){out.replaceChildren(el('div',error.message,'muted'));}};
+        wrap.append(showCases,remove);
+        return [t.tag,Number(t.cases).toLocaleString(),Number(t.cases_with_note).toLocaleString(),String(t.last_tagged_at).slice(0,16).replace('T',' '),wrap];})));
+    };
+    getJSON(base()).then(r=>{if(generation===state.generation)render(r);}).catch(error=>list.replaceChildren(el('div',error.message,'muted')));
+    add.onclick=async()=>{
+      add.disabled=true;
+      try{
+        if(!tag.value.trim())throw new Error('Enter a tag.');
+        const spec={tag:tag.value.trim(),note:note.value.trim()};if(state.caseType)spec.case_type=state.caseType;
+        const list2=ids.value.split(/[\n,]/).map(x=>x.trim()).filter(Boolean);
+        if(list2.length)spec.case_ids=list2.slice(0,1000);
+        else{const cohort=filter.read();delete cohort.label;if(!Object.keys(cohort).length)throw new Error('Enter case IDs or choose which cases match.');spec.cohort=cohort;}
+        const r=await (await api(base(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        if(generation!==state.generation)return;
+        render(r);
+        out.replaceChildren(el('div','Tagged '+Number(r.tagged).toLocaleString()+' cases “'+r.tag+'”'+(r.already_tagged?' ('+r.already_tagged+' already had it; their note was replaced)':'')+(r.unknown_case_ids?'; '+r.unknown_case_ids+' IDs are not cases of this log':'')+'.'));
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      finally{add.disabled=false;}
+    };
+    return box;
+  }
+
   function exportButtons(prefix,getResult,csvRows){
     const json=button('Download JSON','secondary');json.id=prefix+'Json';json.disabled=true;
     const csv=button('Download CSV','secondary');csv.id=prefix+'Csv';csv.disabled=true;

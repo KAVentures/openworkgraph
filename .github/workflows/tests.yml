@@ -111,6 +111,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_rule_library.cjs
       - name: Verify versioned repository hierarchies and drift in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_hierarchies.cjs
+      - name: Verify analyst case tags and the tag case filter in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_case_tags.cjs
       - name: Verify shared analysis publication and revocation in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/shared_analyses.cjs
       - name: Verify next-activity prediction for open cases in Chromium

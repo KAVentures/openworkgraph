@@ -96,10 +96,12 @@ def _case_filter(started_from: str = Query(default="", max_length=64),
                  activity: str = Query(default="", max_length=200),
                  attribute: str = Query(default="", max_length=200),
                  event_attribute: str = Query(default="", max_length=200),
+                 tag: str = Query(default="", max_length=60),
                  follows: str = Query(default="", max_length=4000)) -> dict[str, Any]:
     """The case filter shared by analysis views; ``follows`` is a JSON list of follower rules."""
     cohort: dict[str, Any] = {"started_from": started_from, "started_before": started_before, "resource": resource,
-                              "activity": activity, "attribute": attribute, "event_attribute": event_attribute}
+                              "activity": activity, "attribute": attribute, "event_attribute": event_attribute,
+                              "tag": tag}
     if follows:
         try:
             cohort["follows"] = json.loads(follows)
@@ -323,6 +325,40 @@ async def event_log_quarantine_release(request: Request, log_id: str):
 async def event_log_quarantine_discard(request: Request, log_id: str):
     _require_dashboard(request)
     return _respond(quarantine.discard, log_id, await _json_body(request, "discard"))
+
+
+@router.get("/v1/event-logs/{log_id}/case-tags")
+def event_log_case_tags(request: Request, log_id: str, tag: str | None = Query(default=None, max_length=60),
+                        limit: int = Query(default=200, ge=1, le=1000)):
+    """The log's case tags with counts; with ``tag``, the tagged cases and their notes."""
+    from . import event_log_case_tags as case_tags
+    _require_dashboard(request)
+    return _respond(case_tags.listing, log_id, tag, limit)
+
+
+@router.post("/v1/event-logs/{log_id}/case-tags")
+async def event_log_add_case_tags(request: Request, log_id: str):
+    """Tag cases by ID or by a case filter. Tags are the analyst's judgement; events are not changed."""
+    from . import event_log_case_tags as case_tags
+    _require_dashboard(request)
+    spec = await _json_body(request, "case tags", strict=True, limit=262144)
+    try:
+        result = await run_in_threadpool(case_tags.add, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/case-tags/remove")
+async def event_log_remove_case_tags(request: Request, log_id: str):
+    from . import event_log_case_tags as case_tags
+    _require_dashboard(request)
+    spec = await _json_body(request, "case tags", strict=True, limit=262144)
+    try:
+        result = await run_in_threadpool(case_tags.remove, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 @router.get("/v1/event-logs/{log_id}/appends")

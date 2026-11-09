@@ -17,8 +17,8 @@ from .event_log_analytics import risk_difference
 from .event_log_workspace import EventLogWorkspaceError
 
 _SEP = workspace._SEP
-_KEYS = {"label", "started_from", "started_before", "resource", "activity", "attribute", "event_attribute", "follows",
-         "variants"}
+_KEYS = {"label", "started_from", "started_before", "resource", "activity", "attribute", "event_attribute", "tag",
+         "follows", "variants"}
 MAX_FOLLOW_RULES = 5
 MAX_COHORT_VARIANTS = 500
 MAX_VARIANT_LENGTH = 1000
@@ -39,7 +39,7 @@ def parse_cohort(spec: Any) -> dict[str, Any]:
     if not isinstance(spec, dict) or set(spec) - _KEYS:
         raise EventLogWorkspaceError(
             "cohort accepts label, started_from, started_before, resource, activity, attribute, event_attribute, "
-            "follows, variants")
+            "tag, follows, variants")
     cohort: dict[str, Any] = {}
     if spec.get("label") not in (None, ""):
         cohort["label"] = _short(spec["label"], "label")[:80]
@@ -49,7 +49,7 @@ def parse_cohort(spec: Any) -> dict[str, Any]:
             if stamp is None:
                 raise EventLogWorkspaceError(f"cohort {key} must be a timezone-qualified ISO time")
             cohort[key] = stamp.astimezone(timezone.utc).replace(tzinfo=None)
-    for key in ("resource", "activity"):
+    for key in ("resource", "activity", "tag"):
         if spec.get(key) not in (None, ""):
             cohort[key] = _short(spec[key], key)
     # ``attribute`` matches the case object; ``event_attribute`` matches any event of the case,
@@ -124,6 +124,10 @@ def _predicate(cohort: dict[str, Any], log_id: str) -> tuple[str, list[Any]]:
         clauses.append("case_id IN (SELECT case_id FROM ce WHERE resource = ?)"); params.append(cohort["resource"])
     if "activity" in cohort:
         clauses.append("case_id IN (SELECT case_id FROM ce WHERE activity = ?)"); params.append(cohort["activity"])
+    if "tag" in cohort:
+        # Cases the analyst tagged (event_log_case_tags); a tag is a judgement, not source data.
+        clauses.append("case_id IN (SELECT case_id FROM case_tags WHERE log_id = ? AND tag = ?)")
+        params += [log_id, cohort["tag"].strip()]
     if "attribute" in cohort:
         clauses.append("""case_id IN (SELECT object_id FROM objects WHERE log_id = ?
             AND list_contains(map_extract(json_transform(attributes, '"MAP(VARCHAR, VARCHAR)"'), ?), ?))""")
