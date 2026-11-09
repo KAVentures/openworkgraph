@@ -416,3 +416,12 @@ def test_review_load_does_not_race_with_save_or_revocation():
     assert 'requestGeneration!==reviewRequestGeneration' in script
     assert script.count('++reviewRequestGeneration;') >= 3
     assert "refreshReview().catch(e=>{if(reviewStillSelected()){reviewState.textContent=e.message;for(const b of [saveDraft,approve,revoke])b.disabled=true;}});" in script
+
+
+def test_review_mutation_uncertain_result_fails_closed_browser_contract():
+    """An HTTP failure may follow a committed write; reload revision before retry."""
+    script = (Path(__file__).resolve().parents[1] / 'dashboard/review_choice_workbench.js').read_text()
+    assert script.count("Reloading authoritative review revision") == 2
+    assert script.count("try{await refreshReview();}") == 2
+    assert script.count("Review state uncertain. Inspect again before editing:") == 2
+    assert script.count("if(!reviewStillSelected())for(const b of [saveDraft,approve,revoke])b.disabled=true;") == 2
