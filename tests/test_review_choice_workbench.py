@@ -386,3 +386,17 @@ def test_emergency_review_revocation_survives_stale_evidence(monkeypatch, tmp_pa
     with sqlite3.connect(db) as conn:
         row = conn.execute("SELECT decision, revision, reviewer_notes FROM project_human_reviews").fetchone()
     assert row == ("revoked", 5, "review notes")
+
+
+def test_saved_review_recovery_ui_uses_authenticated_revision_checked_revocation():
+    """Recovery remains accessible without an inspectable opportunity."""
+    script = (Path(__file__).resolve().parents[1] / 'dashboard/review_choice_workbench.js').read_text()
+    assert "Recover or revoke a saved review" in script
+    assert "card.append(heading,intro,label,input,load,status,results,details,recovery)" in script
+    assert "const state=await request(recoveryPath(idea,project))" in script
+    assert "await window.__owgAuthReady" in script
+    assert "expected_review_revision:revision" in script
+    assert "state.revision!==revision+1" in script
+    assert "recoveryIdea.addEventListener('input',resetRecovery)" in script
+    assert "recoveryProject.addEventListener('input',resetRecovery)" in script
+    assert "recoveryRevoke.disabled=state.revision===0||state.decision==='revoked'" in script
