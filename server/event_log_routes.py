@@ -639,6 +639,19 @@ async def event_log_map_comparison(request: Request, log_id: str,
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/rework")
+async def event_log_rework(request: Request, log_id: str):
+    """Repeated activities, loop patterns and how cases with rework compare."""
+    from . import event_log_rework as rework_analysis
+    _require_dashboard(request)
+    spec = await _json_body(request, "rework settings", strict=True, limit=16384)
+    try:
+        result = await run_in_threadpool(rework_analysis.rework, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/{log_id}/predictions")
 async def event_log_predictions(request: Request, log_id: str):
     _require_dashboard(request)
