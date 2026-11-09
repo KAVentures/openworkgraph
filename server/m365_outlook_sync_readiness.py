@@ -271,6 +271,31 @@ def commit_after_review(*, expected_generation, expected_previous_candidate_sha2
             "automatic_retry_allowed": False}
 
 
+def _preflight_audit_directory(audit_dir):
+    """Fail before a provider/OWG mutation if audit storage is unavailable.
+
+    The final receipt writer independently pins and revalidates its directory;
+    this preliminary check is not a substitute for its race protection.
+    """
+    if os.name != "posix":
+        raise ReceiptError("Private audit storage unsupported on this platform")
+    directory = Path(audit_dir)
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        if not stat.S_ISDIR(directory.lstat().st_mode):
+            raise ReceiptError("Audit directory must be a real directory")
+        fd = os.open(directory, flags)
+        try:
+            mode = os.fstat(fd).st_mode
+            if not stat.S_ISDIR(mode) or mode & 0o077:
+                raise ReceiptError("Audit directory must remain private")
+        finally:
+            os.close(fd)
+    except (OSError, ValueError) as exc:
+        raise ReceiptError("Private audit directory unavailable") from None
+
+
 def _audit_operator_result(audit_dir, *, action, tenant, mailbox, folder,
                            log_id, generation, result):
     """Write a private, immutable, minimally scoped operator receipt.
@@ -375,6 +400,8 @@ def main(argv=None):
     try:
         if sum(bool(x) for x in (extraction, committing, appending)) > 1:
             raise ReceiptError("Select exactly one operator action")
+        if (appending or committing) and audit_dir is not None:
+            _preflight_audit_directory(audit_dir)
         if appending:
             mandatory = ("expected_generation", "confirm_log_id", "candidate", "csv_path")
             if (any(a[k] is None for k in mandatory)
