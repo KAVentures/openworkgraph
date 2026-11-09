@@ -757,6 +757,19 @@ async def event_log_linked_attribute_analysis(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/work-in-progress")
+async def event_log_work_in_progress(request: Request, log_id: str):
+    """Arrivals, completions and open cases per day or week, with a Little's law check."""
+    from . import event_log_wip as wip
+    _require_dashboard(request)
+    spec = await _json_body(request, "work-in-progress settings", strict=True, limit=16384)
+    try:
+        result = await run_in_threadpool(wip.work_in_progress, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/{log_id}/analysis")
 async def event_log_run_analysis(request: Request, log_id: str):
     _require_dashboard(request)
