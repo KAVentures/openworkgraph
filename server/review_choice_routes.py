@@ -221,3 +221,45 @@ def save_review(request: Request, idea_id: str, payload: ReviewDecision):
         "basis_sha256": digest, "execution_authorized": False,
         "review_required_for_execution": True},
         headers={"Cache-Control": "no-store"})
+
+
+class ReviewRevocation(BaseModel):
+    """Emergency revocation does not require an unchanged evidence snapshot."""
+    expected_review_revision: int = Field(ge=1)
+
+
+@router.post("/v1/review-choice-workbench/{idea_id}/review/{project_id}/revoke")
+def revoke_review(request: Request, idea_id: str, project_id: str, payload: ReviewRevocation):
+    """Revoke a previously saved decision even if its provenance is now stale.
+
+    The ordinary review-save endpoint deliberately requires fresh evidence.
+    Revocation must remain possible after an opportunity, project or origin
+    changes; otherwise a stale approval can remain recorded indefinitely.
+    This operation grants no capability and uses the same local session check.
+    """
+    auth = str(request.headers.get("authorization") or "")
+    if not auth.lower().startswith("owg-session ") or not dashboard_session_valid(auth[len("owg-session "):].strip()):
+        raise HTTPException(403, "Local dashboard session required")
+    if not idea_id or len(idea_id) > 128 or not project_id or len(project_id) > 128:
+        raise HTTPException(422, "Invalid review identifier")
+    with pipeline._LOCK, pipeline.closing(pipeline._connect()) as conn:
+        # A missing review cannot be revoked or used to create a new one.
+        row = conn.execute(
+            "SELECT revision, decision FROM project_human_reviews WHERE idea_id=? AND project_id=?",
+            (idea_id, project_id)).fetchone()
+        if row is None:
+            raise HTTPException(404, "No saved review to revoke")
+        if row[0] != payload.expected_review_revision:
+            raise HTTPException(409, "Review changed; reload before revoking")
+        if row[1] == "revoked":
+            raise HTTPException(409, "Review already revoked; reload")
+        next_revision = row[0] + 1
+        conn.execute(
+            "UPDATE project_human_reviews SET revision=?, decision='revoked', updated_at=? "
+            "WHERE idea_id=? AND project_id=? AND revision=?",
+            (next_revision, pipeline._now(), idea_id, project_id, row[0]))
+        conn.commit()
+    return JSONResponse({"format": "openworkgraph.human-review.v1",
+        "idea_id": idea_id, "project_id": project_id,
+        "revision": next_revision, "decision": "revoked",
+        "execution_authorized": False}, headers={"Cache-Control": "no-store"})
