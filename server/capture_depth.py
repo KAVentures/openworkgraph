@@ -476,5 +476,5 @@ def _frame(metadata: dict[str, Any]) -> dict[str, Any]:
 
 
 __all__ = ["CaptureDepthError", "FULL_ACK_VERSION", "HIGH_FIDELITY_EVENT_TYPES", "PROFILES", "SIGNALS", "action_allowed",
-           "action_allowed_on_excluded", "apply_retention", "bound_metadata", "enforce_storage_quota", "high_fidelity_storage", "bound_target", "delete_high_fidelity",
+           "action_allowed_on_excluded", "apply_retention", "bound_metadata", "bound_target", "delete_high_fidelity",
            "filter_desktop_events", "for_extension", "load", "pointer_heatmap", "public", "save"]
