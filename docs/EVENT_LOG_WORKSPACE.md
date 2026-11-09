@@ -171,6 +171,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-logs/{log_id}/variants` | Most frequent variants with share and median duration. |
 | `GET /v1/event-logs/{log_id}/directly-follows` | Directly-follows graph with start and end activities. |
 | `GET /v1/event-logs/{log_id}/activities` | Activity frequency and rework (cases that repeat the activity). |
+| `POST /v1/event-logs/{log_id}/attribute-profile` | Coverage, type, level and frequent values of every event attribute (below). |
 | `GET /v1/event-logs/{log_id}/kpis?sla_seconds=&automation_resources=` | Throughput p50/p90/p95, rework rate, SLA breach rate, automation rate and weekly completions. |
 | `POST /v1/event-logs/{log_id}/benchmark` | Compare two case cohorts (JSON body, below). |
 | `POST /v1/event-logs/{log_id}/costs` | Process cost from your cost model (below). |
@@ -199,6 +200,30 @@ authorizes nothing.
 
 The dashboard card **Large event logs** (Evidence tab) offers all of the
 following after **Analyse**.
+
+### Attribute profile
+
+**Attributes** (and `POST /v1/event-logs/{log_id}/attribute-profile` with
+`{"top_values": 10, "cohort": {}, "case_type": null}`) lists every event
+attribute in the log, ordered by how many cases carry it. Each attribute
+shows:
+
+* its event and case coverage;
+* its number of distinct values;
+* whether every value is a number. CSV cells are text, and text that parses as
+  a finite number counts as numeric;
+* whether it is **case-level** (one value in every case that has it, like a
+  region) or **event-level** (changes within at least one case, like an amount
+  at a step);
+* whether it is unique per event, like a ticket number.
+
+Categorical attributes list their most frequent values (`top_values` 1–50) with
+their share of cases and the median duration of cases with that value. Numeric
+attributes get min, quartiles, max and mean.
+
+Blank cells and JSON nulls count as missing. At most 100 attributes are
+returned (`attributes_truncated` says when more exist). Durations per value are
+descriptive: cases with a value can differ from the rest in many other ways.
 
 ### KPIs
 

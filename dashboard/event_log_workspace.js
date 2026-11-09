@@ -488,6 +488,7 @@
     results.appendChild(overview);
     results.appendChild(activityMappingSection());
     results.appendChild(qualitySection());
+    results.appendChild(attributeProfileSection());
     results.appendChild(caseFilterSection(names));
     results.appendChild(cohortMetricSection(names));
 
@@ -3874,6 +3875,39 @@
         out.replaceChildren(
           el('div',Number(r.batched_events).toLocaleString()+' of '+Number(r.events).toLocaleString()+' events were in batches ('+r.grouping+(r.resources_recorded?'':'; no resources are recorded in this log')+').','muted'),
           shown.length?table(['Activity','Events in batches','Batches','Batch size (median)','Wait before: batched vs not','Simulation proposal'],rows):el('div','No batches with these settings.','muted'),
+          el('div',r.interpretation,'muted'));
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      finally{run.disabled=false;}
+    };
+    return box;
+  }
+
+  // Which event attributes the log carries: coverage, type, case- or event-level, frequent values.
+  function attributeProfileSection(){
+    const box=section('Attributes');box.id='owgAttributeProfile';
+    box.appendChild(el('div','See which attributes the events carry, how often, whether each stays fixed within a case, and the most frequent values with the median duration of their cases. Use it to choose filters and comparisons.','muted'));
+    const run=button('Profile attributes','secondary');run.id='owgAttributeProfileRun';
+    const out=el('div');out.id='owgAttributeProfileResults';out.setAttribute('role','status');
+    box.append(run,out);
+    const generation=state.generation;
+    const num=v=>v===null||v===undefined?'—':Number(v).toLocaleString(undefined,{maximumFractionDigits:2});
+    run.onclick=async()=>{
+      run.disabled=true;
+      try{
+        const spec={top_values:5};
+        if(state.caseType)spec.case_type=state.caseType;
+        if(state.follows.length)spec.cohort={follows:state.follows};
+        const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/attribute-profile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        if(generation!==state.generation)return;
+        if(!r.attributes.length){out.replaceChildren(el('div','The events carry no attributes. Keep extra columns as attributes when importing a CSV.','muted'));return;}
+        const rows=r.attributes.map(a=>[a.attribute,pct(a.case_coverage)+' of cases',
+          a.kind==='numeric'?'number':'text',a.level==='case'?'fixed per case':'changes within '+Number(a.cases_where_value_changes).toLocaleString()+' cases',
+          Number(a.distinct_values).toLocaleString()+(a.unique_per_event?' (unique per event)':''),
+          a.numeric?num(a.numeric.min)+' – '+num(a.numeric.max)+', median '+num(a.numeric.median):a.unique_per_event?'—':a.top_values.map(v=>v.value+' ('+pct(v.case_share)+', '+duration(v.median_case_duration_seconds)+')').join('; ')]);
+        out.replaceChildren(
+          el('div',Number(r.cases).toLocaleString()+' cases; median case time '+duration(r.median_case_duration_seconds)+'. Frequent values show the share of cases and their median case time.','muted'),
+          table(['Attribute','Present in','Type','Level','Distinct values','Range or frequent values'],rows),
+          ...(r.attributes_truncated?[el('div','Only the 100 most common attributes are shown.','muted')]:[]),
           el('div',r.interpretation,'muted'));
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
       finally{run.disabled=false;}

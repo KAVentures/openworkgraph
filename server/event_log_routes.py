@@ -343,6 +343,19 @@ def event_log_summary(request: Request, log_id: str, case_type: str | None = Que
     return _respond(workspace.summary, log_id, case_type, cohort=cohort)
 
 
+@router.post("/v1/event-logs/{log_id}/attribute-profile")
+async def event_log_attribute_profile(request: Request, log_id: str):
+    """Coverage, type, level and frequent values of every event attribute."""
+    from . import event_log_attribute_profile as attribute_profile
+    _require_dashboard(request)
+    spec = await _json_body(request, "attribute profile settings", strict=True, limit=16384)
+    try:
+        result = await run_in_threadpool(attribute_profile.profile, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/v1/event-logs/{log_id}/object-types")
 def event_log_object_types(request: Request, log_id: str):
     _require_dashboard(request)
