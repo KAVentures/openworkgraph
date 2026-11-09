@@ -445,6 +445,7 @@
     variantBox.appendChild(el('div',Number(variants.distinct_variants).toLocaleString()+' distinct variants.','muted'));
     results.appendChild(variantBox);
     results.appendChild(variantCoverageSection(names));
+    results.appendChild(reworkSection());
     results.appendChild(objectMapSection());
     if(summary.log&&summary.log.object_relationships)results.appendChild(objectRelationshipSection());
     results.appendChild(processMapSection());
@@ -1347,6 +1348,31 @@
   }
 
   // Exact, non-overlapping bands of observed first-to-last event duration.
+  function reworkSection(){
+    const box=section('Rework and loops');box.id='owgEventLogRework';
+    box.appendChild(el('div','Activities that happen again in the same case, the loops they form, and how cases with rework compare with cases without.','muted'));
+    const run=button('Find rework','secondary');run.id='owgReworkRun';
+    const out=el('div');out.id='owgReworkResults';out.setAttribute('role','status');
+    box.append(run,out);
+    const generation=state.generation;
+    run.onclick=async()=>{
+      run.disabled=true;
+      try{
+        const spec={};if(state.caseType)spec.case_type=state.caseType;
+        const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/rework',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        if(generation!==state.generation)return;
+        const k=r.loop_kinds,c=r.comparison;
+        const parts=[el('div',pct(r.rework_rate)+' of '+Number(r.cases).toLocaleString()+' cases repeat at least one activity: '+k.self_loop+' with an immediate repeat, '+k.short_loop+' with a short loop (one step in between), '+k.longer_loop+' with a longer return.')];
+        if(r.activities.length)parts.push(table(['Activity','Cases repeating it','Share of its cases','Extra occurrences'],r.activities.map(a=>[a.activity,Number(a.cases_repeating).toLocaleString(),pct(a.repeat_share_of_cases_with_activity),Number(a.extra_occurrences).toLocaleString()])));
+        if(r.loop_patterns.length)parts.push(el('h4','Most common loops'),table(['Loop','Cases'],r.loop_patterns.map(p=>[p.pattern.join(' → '),Number(p.cases).toLocaleString()])));
+        if(c)parts.push(el('div','Median throughput '+duration(c.median_throughput_with_rework_seconds)+' with rework vs '+duration(c.median_throughput_without_rework_seconds)+' without'+(c.median_difference_ci95_seconds?' (difference 95% interval '+duration(c.median_difference_ci95_seconds[0])+' to '+duration(c.median_difference_ci95_seconds[1])+')':'')+'; '+c.mean_events_with_rework+' vs '+c.mean_events_without_rework+' events per case.'));
+        parts.push(el('div',r.interpretation,'muted'));out.replaceChildren(...parts);
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      finally{run.disabled=false;}
+    };
+    return box;
+  }
+
   function durationDistributionSection(){
     const box=section('Case duration distribution');
     const bounds=input('owgDurationBounds','text','1, 4, 24, 72');bounds.value='1, 4, 24, 72';bounds.maxLength=110;
