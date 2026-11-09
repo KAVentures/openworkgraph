@@ -513,6 +513,28 @@ def event_log_kpis(request: Request, log_id: str, case_type: str | None = Query(
     return _respond(analytics.kpis, log_id, case_type, sla_seconds, resources, cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/report.html")
+def event_log_report(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                     sla_seconds: int | None = Query(default=None, ge=1, le=10 ** 9),
+                     variants: int = Query(default=15, ge=1, le=50),
+                     cohort: dict[str, Any] = Depends(_case_filter)):
+    """A self-contained, script-free HTML report (overview, KPIs, variants, activities) to save or share."""
+    from fastapi.responses import HTMLResponse
+
+    from . import event_log_report as report
+    _require_dashboard(request)
+    try:
+        html = report.report_html(log_id, case_type, cohort, sla_seconds=sla_seconds, variant_limit=variants)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return HTMLResponse(html, headers={
+        "Cache-Control": "no-store",
+        "Content-Disposition": f'attachment; filename="{log_id}-report.html"',
+        # The report has no scripts or external resources; forbid them if it is opened from the response.
+        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
+    })
+
+
 @router.get("/v1/event-logs/{log_id}/process-map")
 def event_log_process_map(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                           activities: float = Query(default=1.0, gt=0, le=1), paths: float = Query(default=1.0, gt=0, le=1),

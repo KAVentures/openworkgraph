@@ -192,11 +192,39 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET`/`POST /v1/event-logs/{log_id}/case-tags`, `POST .../case-tags/remove` | Analyst tags on cases (below). |
 | `GET /v1/event-logs/{log_id}/root-cause?outcome=...` | Case features associated with an outcome, with confidence intervals. |
 | `GET /v1/event-logs/{log_id}/export?format=csv\|xes\|ocel\|ocelxml` | Download the log. |
+| `GET /v1/event-logs/{log_id}/report.html?sla_seconds=&variants=` | Download a self-contained HTML report (below). |
 
 Analysis routes take an optional `case_type` for OCEL logs. Every response is
 `Cache-Control: no-store` and is marked descriptive: it reports what the log
 contains and makes no causal claims, verifies no business policy and
 authorizes nothing.
+
+## Shareable HTML report
+
+**Download report**, next to **Export**, saves `<log_id>-report.html`, a single
+file to attach to an email or ticket. It holds:
+
+* the log's name, source and time range;
+* tiles for cases, events, activities, variants, median and p90 case duration,
+  the share of cases that repeat an activity, events per case and, with
+  `sla_seconds`, the share of cases over the SLA;
+* the most frequent variants (15 by default; `variants` takes 1–50), with their
+  share of cases and median duration;
+* activity frequencies;
+* cases completed per week.
+
+The report applies the selected case notion, the applied activity mapping and
+any case filter (`started_from`, `started_before`, `resource`, `activity`,
+`attribute`, `follows`). When a filter is in effect, it states how many of the
+log's cases it covers.
+
+The file contains no scripts and loads nothing from the network, so it opens
+the same offline. The response forbids scripts and external resources with a
+Content-Security-Policy. Log names, activities and attribute values are
+HTML-escaped. Every figure is descriptive and the report carries the same
+caveat as the dashboard: durations are observed elapsed time, and repeated
+activities are not verified rework. The route requires the local dashboard
+session.
 
 ## Analytics
 
