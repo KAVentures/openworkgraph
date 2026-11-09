@@ -3203,6 +3203,29 @@
     return box;
   }
 
+  // Self-contained SVG of a drawn map: computed styles are inlined so it renders the same outside the dashboard.
+  function exportableSvg(svg,caption){
+    const clone=svg.cloneNode(true);
+    const source=[svg,...svg.querySelectorAll('*')],target=[clone,...clone.querySelectorAll('*')];
+    const keep=['fill','stroke','stroke-width','stroke-dasharray','opacity','fill-opacity','stroke-opacity','font-size','font-family','font-weight','text-anchor','dominant-baseline','visibility','display'];
+    source.forEach((node,i)=>{const cs=getComputedStyle(node);const decl=keep.map(k=>{const v=cs.getPropertyValue(k);return v?k+':'+v:'';}).filter(Boolean).join(';');if(decl)target[i].setAttribute('style',decl);});
+    clone.querySelectorAll('[tabindex],[role=button]').forEach(n=>{n.removeAttribute('tabindex');n.removeAttribute('role');});
+    clone.setAttribute('xmlns','http://www.w3.org/2000/svg');
+    const box=svg.viewBox&&svg.viewBox.baseVal&&svg.viewBox.baseVal.width?svg.viewBox.baseVal:{x:0,y:0,width:svg.clientWidth||800,height:svg.clientHeight||600};
+    const pad=44,ns='http://www.w3.org/2000/svg';
+    clone.setAttribute('viewBox',box.x+' '+box.y+' '+box.width+' '+(box.height+pad));
+    clone.setAttribute('width',String(Math.round(box.width)));clone.setAttribute('height',String(Math.round(box.height+pad)));
+    clone.removeAttribute('style');
+    const bg=document.createElementNS(ns,'rect');Object.entries({x:box.x,y:box.y,width:box.width,height:box.height+pad,fill:'#ffffff'}).forEach(([k,v])=>bg.setAttribute(k,String(v)));
+    clone.insertBefore(bg,clone.firstChild);
+    const desc=document.createElementNS(ns,'desc');desc.textContent=caption;clone.insertBefore(desc,clone.firstChild);
+    caption.split('\n').slice(0,2).forEach((line,i)=>{const t=document.createElementNS(ns,'text');
+      Object.entries({x:box.x+8,y:box.y+box.height+16+i*16,'font-size':11,'font-family':'sans-serif',fill:'#334155'}).forEach(([k,v])=>t.setAttribute(k,String(v)));t.textContent=line.slice(0,160);clone.appendChild(t);});
+    return {text:new XMLSerializer().serializeToString(clone),width:box.width,height:box.height+pad};
+  }
+  function downloadBlob(blob,name){const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+  function mapFileName(ext){return 'process-map-'+String(state.logId||'log').replace(/[^A-Za-z0-9_-]/g,'').slice(0,40)+'.'+ext;}
+
   function processMapSection(){
     const box=section('Process map');box.id='owgEventLogProcessMap';
     box.appendChild(el('div','Simplify the map with the sliders. Hidden activities are removed first, so arrows can join steps that had hidden work between them. Times are gaps between recorded events, not measured work.','muted'));
@@ -3214,14 +3237,29 @@
     const status=el('div',null,'muted');status.id='owgMapStatus';status.setAttribute('role','status');
     const graphHost=el('div');graphHost.id='owgMapGraph';const slow=el('div');slow.id='owgMapSlowest';
     const player=mapPlayback(box);
-    box.append(row,status,player.node,graphHost,slow);
-    const generation=state.generation;let timer=null,request=0;
+    const svgButton=button('Download map (SVG)','secondary');svgButton.id='owgMapDownloadSvg';
+    const pngButton=button('Download map (PNG)','secondary');pngButton.id='owgMapDownloadPng';
+    const exportRow=el('div',null,'row');exportRow.append(svgButton,pngButton);
+    box.append(row,status,player.node,graphHost,exportRow,slow);
+    const generation=state.generation;let timer=null,request=0,lastCaption='';
+    const currentSvg=()=>graphHost.querySelector('#owgMapDrawing svg')||graphHost.querySelector('svg');
+    svgButton.onclick=()=>{const svg=currentSvg();if(!svg){status.textContent='No map is drawn to download.';return;}
+      downloadBlob(new Blob([exportableSvg(svg,lastCaption).text],{type:'image/svg+xml'}),mapFileName('svg'));};
+    pngButton.onclick=()=>{const svg=currentSvg();if(!svg){status.textContent='No map is drawn to download.';return;}
+      const out=exportableSvg(svg,lastCaption),img=new Image(),scale=2;
+      img.onload=()=>{const canvas=document.createElement('canvas');canvas.width=Math.round(out.width*scale);canvas.height=Math.round(out.height*scale);
+        const ctx=canvas.getContext('2d');ctx.scale(scale,scale);ctx.drawImage(img,0,0,out.width,out.height);
+        canvas.toBlob(blob=>{if(blob)downloadBlob(blob,mapFileName('png'));else status.textContent='The PNG could not be created; download the SVG instead.';},'image/png');};
+      img.onerror=()=>{status.textContent='The PNG could not be created; download the SVG instead.';};
+      img.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(out.text);};
     function schedule(){clearTimeout(timer);timer=setTimeout(()=>draw().catch(error=>{status.textContent=error.message;}),250);}
     async function draw(){
       const mine=++request;
       const r=await getJSON(logPath('process-map',{activities:String(Number(acts.node.value)/100),paths:String(Number(paths.node.value)/100)}));
       if(mine!==request||generation!==state.generation)return;
       const c=r.coverage;
+      lastCaption=(document.querySelector('#owgEventLogPick option:checked')?.textContent||'Event log')+' · activities '+acts.node.value+'%, paths '+paths.node.value+'%'+(r.activity_mapping?' · grouped by '+r.activity_mapping.name:'')+
+        '\nShowing '+c.activities_shown+' activities ('+pct(c.event_share_shown)+' of events) and '+c.transition_types_shown+' of '+c.transition_types_total+' paths. Derived from the supplied log; not a verified business workflow.';
       status.textContent='Showing '+c.activities_shown+' activities ('+pct(c.event_share_shown)+' of events) and '+c.transition_types_shown+' of '+c.transition_types_total+' paths ('+pct(c.transition_share_shown)+' of transitions).'+(c.activity_limit_reached?' The map shows at most 64 activities.':'');
       const draw=window.owgProcessGraph&&window.owgProcessGraph.drawObserved;
       graphHost.replaceChildren();player.reset();
