@@ -96,3 +96,87 @@ def test_inbox_reports_scheduled_checks_and_ui_is_wired():
     root = Path(__file__).resolve().parents[1]
     assert 'id="pvScheduleAdd"' in (root / "dashboard" / "basic_mode.js").read_text(encoding="utf-8")
     assert "local_scheduler.start()" in (root / "server" / "enterprise_runner.py").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("edit", ["pause", "resume", "interval", "quiet_hours"])
+def test_completion_preserves_controls_changed_during_run(edit):
+    item = _make()
+    sid = item["schedule_id"]
+    data = scheduler._read()
+    data["schedules"][sid]["consecutive_failures"] = 4
+    scheduler._write(data)
+    edited = {}
+
+    def runner(kind, target):
+        changes = {
+            "pause": {"enabled": False},
+            "resume": {"enabled": True},
+            "interval": {"interval_minutes": 60},
+            "quiet_hours": {"quiet_hours": {"timezone": "UTC", "start": "21:00", "end": "06:00"}},
+        }
+        scheduler.update(sid, **changes[edit])
+        edited.update(scheduler._read()["schedules"][sid])
+        return "failed:provider_unavailable", 0.0
+
+    scheduler.run_due(now=10 ** 10, runner=runner)
+    live = scheduler._read()["schedules"][sid]
+    for key in ("enabled", "interval_minutes", "next_run_epoch", "consecutive_failures", "paused_reason", "configuration_revision", "quiet_hours"):
+        assert live.get(key) == edited.get(key), key
+    assert live["last_result"] == "failed:provider_unavailable"
+    assert len(live["history"]) == 1
+
+
+@pytest.mark.parametrize("outcome,retry", [("succeeded", 0), ("failed:rate_limited", 7200)])
+def test_interval_and_provider_backoff_start_after_job_finishes(monkeypatch, outcome, retry):
+    monkeypatch.setattr(scheduler.time, "time", lambda: 1000.0)
+    item = _make()
+    monkeypatch.setattr(scheduler.time, "time", lambda: 1900.0)
+
+    def runner(kind, target):
+        monkeypatch.setattr(scheduler.time, "time", lambda: 5500.0)
+        return outcome, retry
+
+    scheduler.run_due(runner=runner)
+    live = scheduler._read()["schedules"][item["schedule_id"]]
+    assert live["last_run_epoch"] == 1900
+    assert live["next_run_epoch"] == 5500 + max(900, retry)
+    assert scheduler.run_due(runner=runner) == []
+
+
+def test_pre_revision_schedule_can_run_and_be_edited():
+    item = _make()
+    sid = item["schedule_id"]
+    data = scheduler._read()
+    del data["schedules"][sid]["configuration_revision"]
+    scheduler._write(data)
+    assert scheduler.run_due(now=10 ** 10, runner=lambda k, t: ("succeeded", 0))
+    scheduler.update(sid, enabled=False)
+    assert scheduler._read()["schedules"][sid]["configuration_revision"] == 1
+
+
+def test_deleted_running_schedule_is_not_recreated():
+    item = _make()
+
+    def runner(kind, target):
+        scheduler.delete(item["schedule_id"])
+        return "succeeded", 0
+
+    scheduler.run_due(now=10 ** 10, runner=runner)
+    assert scheduler.status()["schedules"] == []
+
+
+def test_resume_during_rate_limited_run_preserves_provider_cooldown(monkeypatch):
+    monkeypatch.setattr(scheduler.time, "time", lambda: 1000.0)
+    item = _make()
+    monkeypatch.setattr(scheduler.time, "time", lambda: 1900.0)
+
+    def runner(kind, target):
+        scheduler.update(item["schedule_id"], enabled=True)
+        monkeypatch.setattr(scheduler.time, "time", lambda: 2000.0)
+        return "failed:rate_limited", 7200
+
+    scheduler.run_due(runner=runner)
+    live = scheduler._read()["schedules"][item["schedule_id"]]
+    assert live["enabled"] is True
+    assert live["consecutive_failures"] == 0
+    assert live["next_run_epoch"] == 9200

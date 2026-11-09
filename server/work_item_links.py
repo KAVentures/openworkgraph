@@ -34,6 +34,7 @@ import math
 import re
 from typing import Any
 
+from .interaction_detail_events import is_interaction_detail
 from .record_case_lanes import _EVENT_ID, _RESOURCE, _identity, _stamp, _token
 from .reconstruction_segments import observed_activity_segments
 from .reconstruction_record_path import observed_record_path, record_path_index
@@ -375,7 +376,63 @@ def _observations(events: list[dict[str, Any]]) -> tuple[
 
 
 def link_observations(events: list[dict[str, Any]]) -> dict[str, Any]:
-    """Internal membership (event ids per item) plus typed links and candidates."""
+    """Internal membership (event ids per item) plus typed links and candidates.
+
+    Opt-in interaction detail (hover, drag, pointer samples) never establishes
+    membership. Items are built from the other observations only; a detail event
+    then joins the single item that holds its exact record, when that item already
+    has at least two observations, and otherwise stays a singleton (unassigned).
+    """
+    detail_ids = {event.get("event_id") for event in events if is_interaction_detail(event)}
+    if not detail_ids:
+        return _link_structural(events)
+    core = _link_structural([event for event in events if not is_interaction_detail(event)])
+    # Validate detail rows exactly as any observation (identity, scope, timestamp).
+    all_rows = _observations(events)[0]
+    core_ids = {row["event_id"] for row in core["rows"]}
+    core_root = core["root"]
+    ref_roots: dict[str, set[str]] = defaultdict(set)
+    for row in core["rows"]:
+        if row["ref"]:
+            ref_roots[row["ref"]].add(core_root(row["event_id"]))
+    members: dict[str, list[str]] = defaultdict(list)
+    for item_root, ids in core["members"].items():
+        members[item_root] = list(ids)
+    attached: dict[str, str] = {}
+    unassigned: set[str] = set()
+    for row in all_rows:
+        event_id = row["event_id"]
+        if event_id not in detail_ids or event_id in core_ids:
+            continue
+        roots = ref_roots.get(row["ref"]) if row["ref"] else None
+        if roots and len(roots) == 1:
+            target = next(iter(roots))
+            if len(core["members"].get(target, ())) >= 2:
+                attached[event_id] = target
+                members[target].append(event_id)
+                continue
+        unassigned.add(event_id)
+        members[event_id] = [event_id]
+    position = {row["event_id"]: index for index, row in enumerate(all_rows)}
+    for ids in members.values():
+        ids.sort(key=lambda event_id: position.get(event_id, len(position)))
+    rows = [row for row in all_rows if row["event_id"] in core_ids or row["event_id"] in attached
+            or row["event_id"] in unassigned]
+
+    def root(event_id: str) -> str:
+        if event_id in attached:
+            return attached[event_id]
+        if event_id in unassigned:
+            return event_id
+        return core_root(event_id)
+
+    return {**core, "rows": rows, "members": members, "root": root,
+            "interaction_detail_events_attached": len(attached),
+            "interaction_detail_events_unassigned": len(unassigned)}
+
+
+def _link_structural(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """Membership from structural observations (see :func:`link_observations`)."""
     rows, conflicts, tainted_transfers, tainted_tabs = _observations(events)
     union = _Union()
     for row in rows:

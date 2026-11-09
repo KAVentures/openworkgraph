@@ -118,6 +118,13 @@ def friction_report(hours: int = 24) -> dict[str, Any]:
             "counts": dict(Counter(c["kind"] for c in candidates)), **CLAIMS}
 
 
+def _storage() -> dict[str, Any] | None:
+    try:
+        return capture_depth.high_fidelity_storage()
+    except Exception:
+        return None
+
+
 def coverage_manifest(hours: int = 168) -> dict[str, Any]:
     """Which capture modalities were available, off or unsupported, with counts of high-fidelity events."""
     from . import main as core
@@ -160,6 +167,7 @@ def coverage_manifest(hours: int = 168) -> dict[str, Any]:
             },
             "high_fidelity_event_counts": {t: counts.get(t, 0) for t in HIGH_FIDELITY_TYPES},
             "parameters": depth["parameters"],
+            "high_fidelity_storage": _storage(),
             "missing_is_not_absence": True, "sharing_unchanged_by_capture_depth": True}
 
 
