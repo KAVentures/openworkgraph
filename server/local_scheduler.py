@@ -195,6 +195,7 @@ def create(kind: str, target_id: str, *, interval_minutes: int, confirm_schedule
         schedule_id = "sch_" + secrets.token_hex(8)
         item = {"schedule_id": schedule_id, "kind": kind, "target_id": target_id,
                 "interval_minutes": interval_minutes, "enabled": True, "created_at": _iso(now),
+                "configuration_revision": 1,
                 "next_run_epoch": now + interval_minutes * 60, "last_run_epoch": None,
                 **({"quiet_hours": quiet} if quiet is not None else {}),
                 "last_result": None, "consecutive_failures": 0, "paused_reason": None, "history": [],
@@ -230,6 +231,7 @@ def update(schedule_id: str, *, enabled: bool | None = None, interval_minutes: i
             if enabled:
                 item.update(consecutive_failures=0, paused_reason=None,
                             next_run_epoch=time.time() + item["interval_minutes"] * 60)
+        item["configuration_revision"] = item.get("configuration_revision", 0) + 1
         _write(data)
         return _public(item)
 
@@ -375,10 +377,26 @@ def run_due(now: float | None = None, runner: Runner | None = None) -> list[dict
                     outcome, retry_after = runner(item["kind"], item["target_id"])
                 except Exception as exc:  # never let one job stop the scheduler
                     outcome, retry_after = "failed:" + type(exc).__name__.lower()[:60], 0.0
+            finished = max(started, time.time()) if now is None else now
             with _LOCK:
                 data = _read()
                 live = data["schedules"].get(item["schedule_id"])
                 if live is None:
+                    continue
+                # Completion is evidence of the dispatched run, not authority to
+                # overwrite controls changed while that run was in flight. Old
+                # files have revision zero until their first explicit edit.
+                changed = live.get("configuration_revision", 0) != item.get("configuration_revision", 0)
+                live.update(last_run_epoch=started, last_result=outcome)
+                live["history"] = (live.get("history", []) + [
+                    {"at": _iso(started), "outcome": outcome}])[-MAX_HISTORY:]
+                if changed:
+                    # Configuration edits cannot waive a provider cooldown.
+                    if outcome.startswith("failed") and retry_after > 0:
+                        live["next_run_epoch"] = max(
+                            live.get("next_run_epoch") or 0, finished + retry_after)
+                    _write(data)
+                    ran.append({"schedule_id": live["schedule_id"], "outcome": outcome})
                     continue
                 failed = outcome.startswith("failed")
                 live["consecutive_failures"] = live["consecutive_failures"] + 1 if failed else 0
@@ -387,11 +405,9 @@ def run_due(now: float | None = None, runner: Runner | None = None) -> list[dict
                 if failed:
                     delay = min(MAX_BACKOFF_SECONDS, interval * 2 ** (live["consecutive_failures"] - 1))
                     delay = max(delay, retry_after)
-                live.update(last_run_epoch=started, last_result=outcome, next_run_epoch=started + delay)
+                live["next_run_epoch"] = finished + delay
                 if live["consecutive_failures"] >= MAX_FAILURES:
                     live.update(enabled=False, paused_reason="paused_after_repeated_failures")
-                live["history"] = (live.get("history", []) + [
-                    {"at": _iso(started), "outcome": outcome}])[-MAX_HISTORY:]
                 _write(data)
                 ran.append({"schedule_id": live["schedule_id"], "outcome": outcome})
     finally:
