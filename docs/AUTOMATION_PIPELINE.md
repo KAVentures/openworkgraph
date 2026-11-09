@@ -55,11 +55,32 @@ calculator ([PROCESS_OPPORTUNITY_REVIEW.md](PROCESS_OPPORTUNITY_REVIEW.md)).
 - The CSV export prefixes cells that start with `=`, `+`, `-` or `@`, so spreadsheets do not
   run them as formulas.
 
+## Planning and portfolio
+
+Each idea can carry planning, saved with its revision (stale edits are refused) and
+recorded in its history:
+
+- **Owner** and **team**: labels the reviewer types. They are not verified people and grant
+  no access.
+- **Budget**: an amount, an ISO currency code and whether it is an *estimate* or an
+  *approved budget*. Budgets are never converted between currencies.
+- **Target quarter** (`YYYY-Qn`).
+- **Depends on**: up to 20 other ideas in this list. Unknown ideas, an idea depending on
+  itself and cycles are refused. An idea can be marked *implemented* only after every idea
+  it depends on is implemented, and an idea others depend on cannot be deleted until the
+  dependency is removed.
+
+*Show portfolio by team and owner* rolls the list up per team and per owner: ideas by state,
+budgets totalled per currency and basis (rejected ideas excluded), modeled hours, the open
+ideas waiting on a dependency, open ideas per target quarter and how many ideas have no
+planning yet. The CSV export includes the planning columns.
+
 ## API (dashboard session only)
 
 `GET /v1/automation-pipeline[?state=]`, `POST /v1/automation-pipeline`,
 `GET /v1/automation-pipeline/{id}`, `POST …/{id}/assess`, `POST …/{id}/transition`,
-`POST …/{id}/delete`, `GET /v1/automation-pipeline/export.csv`.
+`POST …/{id}/planning`, `POST …/{id}/delete`, `GET /v1/automation-pipeline/portfolio`,
+`GET /v1/automation-pipeline/export.csv`.
 
 ## Exact saved-process links
 
