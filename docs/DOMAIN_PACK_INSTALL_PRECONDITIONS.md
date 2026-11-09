@@ -1,4 +1,4 @@
-# Conditional domain-pack saves
+# Conditional domain-pack changes
 
 The dashboard now saves against the installation it loaded. If another editor
 reconfigures, removes or recreates that pack before the save, the request returns
@@ -24,14 +24,20 @@ unconditional save. A token does not grant access: owner-session authorization
 still applies and AI bearer tokens remain refused. The body remains strictly
 validated and ordinary input errors still return 422.
 
-This guards installation/reconfiguration. Uninstall remains on its existing
-unconditional contract. Older callers may omit the check, and no distributed
-multi-process transaction or business-policy approval is inferred. Local stale
+The dashboard also sends the current token as `expected_installation` on the
+existing uninstall DELETE query. A stale or deleted/recreated installation returns
+409 before deletion; malformed query tokens return 422. Omitting that query keeps
+the legacy unconditional uninstall contract. The token is an equality reference,
+not a secret or access credential.
+
+Older callers may omit the check, and no distributed multi-process transaction
+or business-policy approval is inferred. Local stale
 protection supplements, rather than replaces, atomic persistence and report
 snapshot invalidation in their separate changes.
 
 Acceptance covers absent/current/stale/deleted/recreated installations,
 same-definition reinstall, invalid tokens, legacy omission, concurrent first saves,
 actual authenticated HTTP 409 and AI refusal, and Chromium with a second editor
-saving before the first dashboard submits its stale basis. Source data and
+saving before the first dashboard submits its stale basis or tries to remove
+the newer installation. Source data and
 provider accounts are not used.

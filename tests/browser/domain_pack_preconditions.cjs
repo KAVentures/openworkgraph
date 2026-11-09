@@ -106,6 +106,28 @@ const path=require('node:path');
   await page.locator('#owgDomainPackInstall').click();
   await page.locator('#owgDomainPackStatus').filter({hasText:'Installation review is unavailable'}).waitFor();
   page.off('request',countPost);assert.equal(unexpectedPosts,0);
+  await page.locator('#owgDomainPackSetup').click();
+  await page.waitForFunction(()=>!document.querySelector('#owgDomainPackSetup').disabled);
+  const beforeRemove=await page.request.get(endpoint.slice(0,endpoint.lastIndexOf('/')),{headers:ownerHeaders});
+  const removeBasis=(await beforeRemove.json()).installs.find(p=>p.pack_id==='order_to_cash');
+  const changedAgain=await page.request.post(endpoint,{headers:ownerHeaders,data:{
+    version:'1.0.0',mapping,parameters:{payment_terms_days:22},expected_installation:removeBasis.installation_token}});
+  assert.equal(changedAgain.status(),200,await changedAgain.text());
+  const changedRecord=await changedAgain.json();
+  const [staleDelete]=await Promise.all([
+    page.waitForResponse(r=>r.url().startsWith(endpoint+'?')&&r.request().method()==='DELETE'),
+    page.locator('#owgDomainPackUninstall').click()]);
+  assert.equal(staleDelete.status(),409,await staleDelete.text());
+  await page.locator('#owgDomainPackStatus').filter({hasText:'reload setup before removing'}).waitFor();
+  await page.locator('#owgDomainPackSetup').click();
+  await page.waitForFunction(()=>document.querySelector('#owgDomainPackParam-payment_terms_days')?.value==='22');
+  const [removed]=await Promise.all([
+    page.waitForResponse(r=>r.url().startsWith(endpoint+'?')&&r.request().method()==='DELETE'),
+    page.locator('#owgDomainPackUninstall').click()]);
+  assert.equal(removed.status(),200,await removed.text());
+  assert.equal(new URL(removed.url()).searchParams.get('expected_installation'),changedRecord.installation_token);
+  await page.locator('#owgDomainPackStatus').filter({hasText:'Uninstalled 1.0.0;'}).waitFor();
+  assert.equal(await page.locator('#owgDomainPackRun').isDisabled(),true);
   await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
   const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgDomainPacks'),{
     runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
@@ -113,7 +135,7 @@ const path=require('node:path');
   await page.setViewportSize({width:390,height:900});
   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth+1));
   assert.deepEqual(errors,[]);
-  console.log('Conditional domain-pack save browser passed: stale editor refused, exact current state preserved, reload and deliberate save, axe/mobile.');
+  console.log('Conditional domain-pack save browser passed: stale saves/deletes refused, exact state preserved, reload/save/remove, missing metadata, axe/mobile.');
  }finally{
   if(browser)await browser.close();server.kill('SIGTERM');
   await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);

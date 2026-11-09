@@ -75,6 +75,7 @@ const path=require('node:path');
   assert.equal(await page.locator('#owgDomainPackRun').isDisabled(),true);
   // The sales pack is usable through the same mapped CSV workflow.
   const salesCsv='lead,activity,time\nL1,Lead created,2026-01-01T00:00:00Z\nL1,Reviewed,2026-01-01T00:30:00Z\nL1,Qualified,2026-01-01T01:00:00Z\nL1,Opportunity created,2026-01-01T03:00:00Z\nL2,Lead created,2026-01-01T00:00:00Z\nL2,Qualified,2026-01-04T00:00:00Z\nL2,Opportunity created,2026-01-06T00:00:00Z\n';
+  const beforeSales=await page.locator('#owgEventLogPick').inputValue();
   await page.locator('#owgEventLogFile').setInputFiles({name:'sales.csv',mimeType:'text/csv',buffer:Buffer.from(salesCsv)});
   await page.locator('#owgEventLogStatus').filter({hasText:'File mapping ready.'}).waitFor();
   await page.locator('#owgEventLogCase').selectOption('lead');
@@ -82,6 +83,10 @@ const path=require('node:path');
   await page.locator('#owgEventLogTime').selectOption('time');
   await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
   await page.locator('#owgEventLogStatus').filter({hasText:'Imported'}).waitFor();
+  await page.waitForFunction(previous=>{
+    const pick=document.querySelector('#owgEventLogPick'),type=document.querySelector('#owgEventLogCaseType');
+    return pick&&pick.value&&pick.value!==previous&&type&&type.options.length>0&&type.value;
+  },beforeSales);
   await page.locator('#owgEventLogAnalyze').click();
   await page.locator('#owgDomainPackSetup').click();
   await page.locator('#owgDomainPackChoice').selectOption('sales_lead_management');
@@ -98,6 +103,7 @@ const path=require('node:path');
   // not just a backend catalog constant. Import its cases and map required/optional roles.
   const onboardingFixture=JSON.parse(execFileSync(python,['-c','import json,sys;sys.path.insert(0,"tests");from test_event_log_domain_pack_customer_onboarding import CSV,MAPPING;print(json.dumps([CSV,MAPPING]))'],{encoding:'utf8'}));
   const [onboardingCsv,onboardingMapping]=onboardingFixture;
+  const beforeOnboarding=await page.locator('#owgEventLogPick').inputValue();
   await page.locator('#owgEventLogFile').setInputFiles({name:'onboarding.csv',mimeType:'text/csv',buffer:Buffer.from(onboardingCsv)});
   await page.locator('#owgEventLogStatus').filter({hasText:'File mapping ready.'}).waitFor();
   await page.locator('#owgEventLogCase').selectOption('case');
@@ -106,6 +112,10 @@ const path=require('node:path');
   await page.locator('#owgEventLogConsent').check();
   await page.locator('#owgEventLogImport').click();
   await page.locator('#owgEventLogStatus').filter({hasText:'Imported'}).waitFor();
+  await page.waitForFunction(previous=>{
+    const pick=document.querySelector('#owgEventLogPick'),type=document.querySelector('#owgEventLogCaseType');
+    return pick&&pick.value&&pick.value!==previous&&type&&type.options.length>0&&type.value;
+  },beforeOnboarding);
   await page.locator('#owgEventLogAnalyze').click();
   await page.locator('#owgDomainPackSetup').click();
   await page.locator('#owgDomainPackChoice').selectOption('customer_onboarding');

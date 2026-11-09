@@ -1063,7 +1063,9 @@
           remove.onclick=async()=>{
             const t2=++turn;remove.disabled=true;
             try{
-              const r=await (await api(base+'/'+pack.pack_id,{method:'DELETE'})).json();
+              const basis=installs.installs.find(i=>i.pack_id===pack.pack_id);
+              if(!basis||!/^[a-f0-9]{64}$/.test(basis.installation_token||''))throw new Error('Installation review is unavailable. Reload setup before removing.');
+              const r=await (await api(base+'/'+pack.pack_id+'?expected_installation='+encodeURIComponent(basis.installation_token),{method:'DELETE'})).json();
               if(!current(t2))return;
               installs.installs=installs.installs.filter(i=>i.pack_id!==pack.pack_id);
             run.disabled=true;out.replaceChildren();status.textContent='Uninstalled '+r.version+'; '+r.metrics_removed+' pack case metrics were removed.';

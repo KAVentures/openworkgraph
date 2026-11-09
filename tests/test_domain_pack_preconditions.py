@@ -116,9 +116,32 @@ with TestClient(app) as client:
     second=client.post(url,json=body,headers=owner)
     assert second.status_code==200 and second.headers['cache-control']=='no-store',second.text
     assert client.post(url,json=body,headers=owner).status_code==409
+    old=body['expected_installation']
+    assert client.delete(url+'?expected_installation='+old,headers=owner).status_code==409
+    assert client.delete(url+'?expected_installation=malformed',headers=owner).status_code==422
+    fresh=second.json()['installation_token']
+    assert client.delete(url+'?expected_installation='+fresh,headers=ai).status_code in (401,403)
+    assert client.delete(url+'?expected_installation='+fresh,headers=owner).status_code==200
+    assert client.delete(url+'?expected_installation='+fresh,headers=owner).status_code==409
 '''
     env={**os.environ,'WORKFLOW_OBSERVER_DATA':str(tmp_path/'data'),
          'WORKFLOW_OBSERVER_AUTH_DIR':str(tmp_path/'auth'), 'WORKFLOW_OBSERVER_CONFIG':str(tmp_path/'config.json')}
     result=subprocess.run([sys.executable,'-c',code],cwd=Path(__file__).resolve().parents[1],env=env,
                           capture_output=True,text=True,timeout=120)
     assert result.returncode==0,result.stdout+'\n'+result.stderr
+
+
+def test_stale_uninstall_cannot_remove_reconfigured_or_recreated_install(log_id):
+    first = install(log_id)
+    second = install(log_id)
+    before = state(log_id)
+    with pytest.raises(packs.DomainPackConflict):
+        packs.uninstall(log_id, 'order_to_cash', expected_installation=first['installation_token'])
+    assert state(log_id) == before
+    packs.uninstall(log_id, 'order_to_cash', expected_installation=second['installation_token'])
+    with pytest.raises(packs.DomainPackConflict):
+        packs.uninstall(log_id, 'order_to_cash', expected_installation=second['installation_token'])
+    third = install(log_id)
+    with pytest.raises(packs.DomainPackConflict):
+        packs.uninstall(log_id, 'order_to_cash', expected_installation=second['installation_token'])
+    assert packs.installed(log_id)['installs'][0]['installation_token'] == third['installation_token']

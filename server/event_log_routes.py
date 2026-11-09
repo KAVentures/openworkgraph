@@ -84,6 +84,8 @@ def _require_dashboard(request: Request) -> None:
 def _respond(operation: Callable[..., Any], *args: Any, **kwargs: Any) -> JSONResponse:
     try:
         return JSONResponse(operation(*args, **kwargs), headers={"Cache-Control": "no-store"})
+    except domain_packs.DomainPackConflict as exc:
+        raise HTTPException(409, str(exc)) from None
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
 
@@ -598,9 +600,10 @@ async def event_log_domain_pack_install(request: Request, log_id: str, pack_id: 
 
 
 @router.delete("/v1/event-logs/{log_id}/domain-packs/{pack_id}")
-def event_log_domain_pack_uninstall(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+def event_log_domain_pack_uninstall(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID),
+        expected_installation: str | None = Query(default=None, pattern=r"^[a-f0-9]{64}$", max_length=64)):
     _require_dashboard(request)
-    return _respond(domain_packs.uninstall, log_id, pack_id)
+    return _respond(domain_packs.uninstall, log_id, pack_id, expected_installation=expected_installation)
 
 
 @router.get("/v1/event-logs/{log_id}/domain-packs/{pack_id}/report")

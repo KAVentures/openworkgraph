@@ -858,12 +858,16 @@ def installed(log_id: str) -> dict[str, Any]:
             "names_truncated": len(types) > MAX_NAMES or len(activities) > MAX_NAMES}
 
 
-def uninstall(log_id: str, pack_id: str) -> dict[str, Any]:
+def uninstall(log_id: str, pack_id: str, *, expected_installation: str | None = None) -> dict[str, Any]:
     with workspace._LOCK:
         conn = workspace._connect()
         try:
             workspace._check_log(conn, log_id)
             previous = _record(conn, log_id, pack_id)
+            if expected_installation is not None:
+                current = _installation_token(previous) if previous is not None else None
+                if expected_installation != current:
+                    raise DomainPackConflict("domain pack installation changed; reload setup before removing")
             if previous is None:
                 raise workspace.EventLogWorkspaceError("this domain pack is not installed on the log")
             owned = set(previous["metric_ids"]) & {m for (m,) in conn.execute(
