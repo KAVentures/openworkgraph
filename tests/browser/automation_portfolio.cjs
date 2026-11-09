@@ -28,18 +28,35 @@ const path=require('node:path');
      await page.locator('#owgPipelineTitle').fill(title);await page.locator('#owgPipelineAdd').click();
      await page.getByRole('button',{name:'Open idea '+title}).waitFor();
    }
+   // Adding an idea re-renders the list and detail asynchronously; let that finish so a late
+   // re-render cannot replace the planning form while it is being filled in.
+   await page.waitForLoadState('networkidle');
    await page.getByRole('button',{name:'Open idea Auto-match invoices'}).click();
+   await page.locator('#owgPipelineDetail h3',{hasText:'Auto-match invoices'}).waitFor();
+   await page.waitForLoadState('networkidle');
    const planning=page.locator('#owgPipelinePlanning');await planning.waitFor();
-   await page.getByLabel('Owner').fill('Sam');await page.getByLabel('Team',{exact:true}).fill('Accounts payable');
-   await page.getByLabel('Target quarter').fill('2027-Q1');await page.getByLabel('Budget',{exact:true}).fill('12000');
-   await page.getByLabel('Currency (ISO code)').fill('eur');
+   await page.locator('#owgPlanOwner').fill('Sam');await page.locator('#owgPlanTeam').fill('Accounts payable');
+   await page.locator('#owgPlanQuarter').fill('2027-Q1');await page.locator('#owgPlanBudget').fill('12000');
+   await page.locator('#owgPlanCurrency').fill('eur');
    await planning.getByLabel(/Clean vendor master/).check();
+   // A re-render of the same idea (as after a list refresh) keeps unsaved planning edits.
+   const ideaId=await page.evaluate(async token=>{const r=await fetch('/v1/automation-pipeline',{headers:{Authorization:'OWG-Session '+token}});
+     return (await r.json()).ideas.find(i=>i.title==='Auto-match invoices').idea_id;},session);
+   await page.evaluate(()=>{window.__owgOldPlanning=document.querySelector('#owgPipelinePlanning');});
+   await page.evaluate(id=>window.dispatchEvent(new CustomEvent('owg-pipeline-open',{detail:{idea_id:id}})),ideaId);
+   await page.waitForFunction(()=>document.querySelector('#owgPipelinePlanning')&&document.querySelector('#owgPipelinePlanning')!==window.__owgOldPlanning);
+   await page.waitForLoadState('networkidle');
+   await page.waitForLoadState('networkidle');
+   assert.equal(await page.locator('#owgPlanOwner').inputValue(),'Sam','the form still holds what was typed before saving');
+   assert(await page.locator('#owgPipelinePlanning').getByLabel(/Clean vendor master/).isChecked());
    await page.locator('#owgPlanSave').click();
    await page.locator('#owgPlanStatus').filter({hasText:'Planning saved.'}).waitFor();
-   assert.equal(await page.getByLabel('Owner').inputValue(),'Sam');
+   assert.equal(await page.locator('#owgPlanOwner').inputValue(),'Sam');
    assert(await planning.getByLabel(/Clean vendor master/).isChecked());
    // A cycle is refused with the server's reason.
    await page.getByRole('button',{name:'Open idea Clean vendor master'}).click();
+   await page.locator('#owgPipelineDetail h3',{hasText:'Clean vendor master'}).waitFor();
+   await page.waitForLoadState('networkidle');
    await page.locator('#owgPipelinePlanning').getByLabel(/Auto-match invoices/).check();
    await page.locator('#owgPlanSave').click();
    await page.locator('#owgPlanStatus').filter({hasText:/cycle/}).waitFor();
