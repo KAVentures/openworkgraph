@@ -156,6 +156,10 @@
             for(const b of [saveDraft,approve,revoke])b.type='button';
             const reviewPath='/v1/review-choice-workbench/'+encodeURIComponent(id)+'/review';
             let reviewRevision=0;
+            // Async review state belongs to the inspected choice, not to a later selection.
+            const reviewGeneration=token;
+            const reviewStillSelected=()=>reviewGeneration===generation&&
+              input.value.trim()===id&&choice.value===projectId;
             const basis={project_id:projectId,project_set_sha256:snapshot.project_set_sha256,
               idea_revision:snapshot.idea.revision,idea_state:snapshot.idea.state,
               spec_sha256:selected.spec_sha256,archive_sha256:selected.archive_sha256,
@@ -166,11 +170,13 @@
               const response=await fetch(reviewPath+'/'+encodeURIComponent(projectId),{cache:'no-store'});
               if(!response.ok)throw new Error('Review state unavailable ('+response.status+').');
               const state=await response.json();
+              if(!reviewStillSelected())return;
               if(state.execution_authorized!==false||state.project_id!==projectId)throw new Error('Invalid review state');
               reviewRevision=state.revision;notes.value=state.reviewer_notes||'';
               reviewState.textContent='Saved review: '+state.decision+' (revision '+state.revision+'). No agent access granted.';
             }
             async function persistReview(decision){
+              if(!reviewStillSelected())return;
               for(const b of [saveDraft,approve,revoke])b.disabled=true;
               try{
                 const response=await fetch(reviewPath,{method:'POST',cache:'no-store',
@@ -178,6 +184,7 @@
                   body:JSON.stringify({basis,expected_review_revision:reviewRevision,decision,reviewer_notes:notes.value})});
                 if(!response.ok)throw new Error('Review save refused ('+response.status+'); re-inspect or reload.');
                 const state=await response.json();
+                if(!reviewStillSelected())return;
                 if(state.execution_authorized!==false||state.project_id!==projectId)throw new Error('Invalid saved review');
                 reviewRevision=state.revision;
                 reviewState.textContent='Saved '+decision+' at revision '+reviewRevision+'. This does not authorize execution.';
@@ -187,6 +194,7 @@
             saveDraft.onclick=()=>persistReview('draft');
             approve.onclick=()=>persistReview('approved');
             revoke.onclick=async()=>{
+              if(!reviewStillSelected()||reviewRevision<1)return;
               // Revocation must work when evidence has changed since approval.
               // Never depend on the stale-basis preflight for withdrawing consent.
               for(const b of [saveDraft,approve,revoke])b.disabled=true;
@@ -196,6 +204,7 @@
                   body:JSON.stringify({expected_review_revision:reviewRevision})});
                 if(!response.ok)throw new Error('Revocation refused ('+response.status+'); reload review state.');
                 const state=await response.json();
+                if(!reviewStillSelected())return;
                 if(state.decision!=='revoked'||state.execution_authorized!==false||
                    state.project_id!==projectId||state.revision!==reviewRevision+1)
                   throw new Error('Invalid revocation response');
@@ -205,7 +214,7 @@
               finally{for(const b of [saveDraft,approve,revoke])b.disabled=false;}
             };
             details.append(node('h3','Record human review'),notes,saveDraft,approve,revoke,reviewState);
-            refreshReview().catch(e=>{reviewState.textContent=e.message;});
+            refreshReview().catch(e=>{if(reviewStillSelected())reviewState.textContent=e.message;});
             details.append(continueReview);
             status.textContent='Current export basis confirmed by server. Continue to the existing opportunity decision; agent handoff still requires separate authorization.';
           }catch(e){if(token===generation){clear();status.textContent='Server preflight failed. Inspect again. '+e.message;}}
