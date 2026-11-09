@@ -2117,9 +2117,76 @@
         await journeyButton.onclick();
     }
 
+    // A later navigation invalidates every earlier asynchronous handoff attempt.
+    // Never let an obsolete response open a decision surface or overwrite status.
+    let handoffGeneration=0;
     window.addEventListener('owg-pipeline-open',event=>{
-      const id=event.detail?.idea_id;if(typeof id!=='string')return;
-      refresh().then(()=>show(id)).catch(e=>{status.textContent=e.message;});
+      const generation=++handoffGeneration;
+      const current=()=>generation===handoffGeneration;
+      const handoff=event.detail||{},id=handoff.idea_id;
+      if(typeof id!=='string')return;
+      // Carry the exact inspected export as a navigation hint, never as approval.
+      // Recheck it against the authenticated journey before opening the evidence UI.
+      // Clear any previous decision surface before an asynchronous verification.
+      // A rejected handoff must never leave an unrelated approval visible.
+      detail.replaceChildren();
+      refresh().then(async()=>{
+        if(!current())return;
+        if(!handoff.project_id){await show(id);return;}
+        const journeyResponse=await api('/v1/automation-pipeline/'+encodeURIComponent(id)+'/journey');
+        if(!journeyResponse.ok)throw new Error('Authenticated journey refused ('+journeyResponse.status+').');
+        const journey=await journeyResponse.json();
+        if(!current())return;
+        const matchingProjects=Array.isArray(journey.projects)
+          ? journey.projects.filter(p=>p.project_id===handoff.project_id) : [];
+        // Truncated or ambiguous project history cannot establish an exact handoff.
+        if(journey.projects_truncated||matchingProjects.length!==1){
+          status.textContent='Project evidence is incomplete or ambiguous. Inspect again.';
+          return;
+        }
+        const project=matchingProjects[0];
+        if(journey.idea?.revision!==handoff.idea_revision||
+           journey.idea?.state!==handoff.idea_state||
+           project.idea_revision!==handoff.idea_revision||
+           project.spec_sha256!==handoff.spec_sha256||project.archive_sha256!==handoff.archive_sha256){
+          status.textContent='Selected export changed. Return to the review workbench and inspect again.';
+          return;
+        }
+        // The destination independently revalidates the complete inspected basis.
+        // A browser-side preflight is not an authorization or a durable snapshot.
+        const basis=handoff.review_basis;
+        if(!basis||basis.project_id!==handoff.project_id||
+           basis.idea_revision!==handoff.idea_revision||basis.idea_state!==handoff.idea_state||
+           basis.spec_sha256!==handoff.spec_sha256||basis.archive_sha256!==handoff.archive_sha256||
+           !/^[a-f0-9]{64}$/i.test(basis.project_set_sha256||'')){
+          throw new Error('Complete inspected review basis missing. Inspect again.');
+        }
+        const verified=await api('/v1/review-choice-workbench/'+encodeURIComponent(id)+'/preflight',{
+          method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(basis)
+        });
+        if(!verified.ok)throw new Error('Destination review preflight refused ('+verified.status+').');
+        const attestation=await verified.json();
+        if(!current())return;
+        if(attestation.format!=='openworkgraph.review-preflight.v1'||
+           attestation.idea_id!==id||attestation.project_id!==handoff.project_id||
+           attestation.idea_revision!==handoff.idea_revision||
+           attestation.project_set_sha256!==basis.project_set_sha256||
+           attestation.spec_sha256!==handoff.spec_sha256||
+           attestation.archive_sha256!==handoff.archive_sha256||
+           attestation.execution_authorized!==false||attestation.review_required!==true||
+           attestation.source_read_authorized!==false||
+           attestation.verified_business_outcomes!==false||
+           JSON.stringify(attestation.blockers)!==JSON.stringify(basis.blockers)){
+          throw new Error('Destination review attestation inconsistent. Inspect again.');
+        }
+        // Only reveal the decision surface after authenticated exact-export checks.
+        await show(id);
+        if(!current())return;
+        const button=document.getElementById('owgPipelineJourney');
+        if(!button)throw new Error('Evidence journey control unavailable.');
+        await button.onclick();
+        if(current())status.textContent='Opened evidence journey for inspected project '+handoff.project_id+'. Review and approval remain separate.';
+      }).catch(e=>{if(current()){detail.replaceChildren();status.textContent='Unable to open reviewed evidence: '+e.message;}});
     });
 
     add.onclick=async()=>{try{
