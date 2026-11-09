@@ -155,9 +155,14 @@ class ReviewDecision(BaseModel):
 @router.get("/v1/review-choice-workbench/{idea_id}/review/{project_id}")
 def read_review(request: Request, idea_id: str, project_id: str):
     """Read local durable review state; never return an execution capability."""
-    choices(request, idea_id)  # Authenticate before accessing stored review records.
-    if len(project_id) > 128 or not project_id:
-        raise HTTPException(422, "Invalid project identifier")
+    # A revoked or stale project may no longer be inspectable through choices().
+    # Reading its saved revision must still work so the reviewer can revoke it.
+    # Authenticate directly, without requiring current opportunity provenance.
+    auth = str(request.headers.get("authorization") or "")
+    if not auth.lower().startswith("owg-session ") or not dashboard_session_valid(auth[len("owg-session "):].strip()):
+        raise HTTPException(403, "Local dashboard session required")
+    if not idea_id or len(idea_id) > 128 or not project_id or len(project_id) > 128:
+        raise HTTPException(422, "Invalid review identifier")
     with pipeline._LOCK, pipeline.closing(pipeline._connect()) as conn:
         conn.execute("""CREATE TABLE IF NOT EXISTS project_human_reviews (
             idea_id TEXT NOT NULL, project_id TEXT NOT NULL,
