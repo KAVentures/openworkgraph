@@ -438,6 +438,7 @@
     results.appendChild(overview);
     results.appendChild(qualitySection());
     results.appendChild(caseFilterSection(names));
+    results.appendChild(cohortMetricSection(names));
 
     const variantBox=section('Most common variants');
     variantBox.appendChild(table(['Path','Cases','Share','Median time','Evidence'],(variants.variants||[]).map(v=>{const open=button('Inspect cases','secondary');open.onclick=()=>inspection.path(v.path);return [v.path.join(' → '),Number(v.cases).toLocaleString(),pct(v.share),duration(v.median_duration_seconds),open];})));
@@ -471,6 +472,47 @@
     results.appendChild(complianceSection((activities.activities||[]).map(a=>a.activity)));
     results.appendChild(domainPackSection());
     status('');
+  }
+
+  // R9: read-only, bounded metrics for selected saved logs.
+  function cohortMetricSection(activityNames){
+    const box=section('Cohort metrics');box.id='owgCohortMetricSection';
+    box.appendChild(el('p','Calculate descriptive metrics across matching cases. Aggregate results only; maximum 1,000 cases.','muted'));
+    const metric=select('owgCohortMetricField',[
+      ['duration_seconds','Case duration (seconds)'],['event_count','Events per case'],
+      ['resource_count','Distinct resources per case'],['duration_hours','Case duration (hours)']
+    ]);
+    const filters=cohortFields('owgCohortMetricFilter','Choose matching cases',activityNames);
+    const run=button('Calculate cohort metric','secondary');run.id='owgCohortMetricRun';
+    const out=el('div');out.id='owgCohortMetricResult';out.setAttribute('role','status');out.setAttribute('aria-live','polite');
+    const controls=el('div',null,'row');controls.append(field('Metric',metric),run);
+    box.append(controls,filters.node,out);
+    let turn=0;
+    run.onclick=async()=>{
+      const t=++turn,generation=state.generation,logId=state.logId,caseType=state.caseType;
+      run.disabled=true;out.replaceChildren(el('div','Calculating…','muted'));
+      try{
+        const cohort=filters.read();
+        if(state.follows.length)cohort.follows=state.follows;
+        const expression=metric.value==='duration_hours'
+          ?{divide:[{field:'duration_seconds'},{literal:3600}]}
+          :{field:metric.value};
+        const url=new URL('/v1/event-logs/'+encodeURIComponent(logId)+'/cohort-metric',window.location.origin);
+        if(caseType)url.searchParams.set('case_type',caseType);
+        const response=await api(url.pathname+url.search,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({definition:{version:1,expression},cohort})});
+        const data=await response.json();
+        if(t!==turn||generation!==state.generation||logId!==state.logId||caseType!==state.caseType)return;
+        const m=data.metric||{};
+        out.replaceChildren(
+          el('div',String(m.rows??0)+' matching cases; '+String(m.null??0)+' missing values.','muted'),
+          table(['Average','Minimum','Maximum','Sum','Values'],[[m.mean??'—',m.min??'—',m.max??'—',m.sum??'—',String(m.non_null??0)]]),
+          el('div','Complete cohort: '+(data.complete_cohort?'yes':'no')+'. No raw cases returned.','muted')
+        );
+      }catch(error){
+        if(t===turn&&generation===state.generation)out.replaceChildren(el('div',error.message,'muted'));
+      }finally{if(t===turn)run.disabled=false;}
+    };
+    return box;
   }
 
   function caseInspector(activityNames,options={}){
