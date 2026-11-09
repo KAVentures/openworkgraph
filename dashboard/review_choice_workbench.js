@@ -205,8 +205,11 @@
                   }
                 }
               }finally{
-                // Never enable controls for a selection that changed while saving.
+                // A failed refresh keeps controls disabled; only a verified state
+                // may re-enable them. Do not resurrect a superseded selection.
                 if(!reviewStillSelected())for(const b of [saveDraft,approve,revoke])b.disabled=true;
+                else if(reviewState.textContent.startsWith('Saved ')||reviewState.textContent.startsWith('Review revoked'))
+                  for(const b of [saveDraft,approve,revoke])b.disabled=false;
               }
             }
             saveDraft.onclick=()=>persistReview('draft');
@@ -239,8 +242,11 @@
                   }
                 }
               }finally{
-                // Never enable controls for a selection that changed while saving.
+                // A failed refresh keeps controls disabled; only a verified state
+                // may re-enable them. Do not resurrect a superseded selection.
                 if(!reviewStillSelected())for(const b of [saveDraft,approve,revoke])b.disabled=true;
+                else if(reviewState.textContent.startsWith('Saved ')||reviewState.textContent.startsWith('Review revoked'))
+                  for(const b of [saveDraft,approve,revoke])b.disabled=false;
               }
             };
             details.append(node('h3','Record human review'),notes,saveDraft,approve,revoke,reviewState);
