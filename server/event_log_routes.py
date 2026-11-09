@@ -107,6 +107,19 @@ def _case_filter(started_from: str = Query(default="", max_length=64),
     return cohort
 
 
+@router.post("/v1/event-logs/{log_id}/costs")
+async def event_log_costs(request: Request, log_id: str):
+    """Process cost from a user-supplied cost model: per case, activity, variant and resource."""
+    from . import event_log_costs as cost_model
+    _require_dashboard(request)
+    spec = await _json_body(request, "cost model", strict=True, limit=131072)
+    try:
+        result = await run_in_threadpool(cost_model.costs, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/prepare-salesforce")
 async def prepare_salesforce_export(request: Request):
     """Prepare a selected offline export without retaining it as an event log."""

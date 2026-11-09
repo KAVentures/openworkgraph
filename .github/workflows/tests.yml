@@ -159,6 +159,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_workspace.cjs
       - name: Verify grouping activities for every analysis in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/activity_mappings.cjs
+      - name: Verify process cost from a dashboard cost model in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_costs.cjs
       - name: Verify supplied source-event IDs and key-preserving CSV round trips
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_source_identity.cjs
       - name: Verify prediction snapshots scored after newer events in Chromium

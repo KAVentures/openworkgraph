@@ -523,7 +523,54 @@
     results.appendChild(predictionSection((activities.activities||[]).map(a=>a.activity)));
     results.appendChild(complianceSection((activities.activities||[]).map(a=>a.activity)));
     results.appendChild(domainPackSection());
+    results.appendChild(costSection(names));
     status('');
+  }
+
+  // Process cost from the user's own cost model: a price per activity execution and an optional hourly cost per open case.
+  function costSection(activityNames){
+    const box=section('Process cost');box.id='owgEventLogCosts';
+    box.appendChild(el('div','Enter what one execution of each activity costs, and optionally what each hour a case stays open costs. The log does not record what work cost: these figures are your model applied to the observed events.','muted'));
+    const currency=input('owgCostCurrency','text');currency.value='EUR';currency.maxLength=3;currency.size=4;currency.autocomplete='off';
+    const hourly=input('owgCostHourly','number');hourly.min='0';hourly.step='any';hourly.value='0';
+    const fallback=input('owgCostDefault','number','none');fallback.min='0';fallback.step='any';
+    const controls=el('div',null,'row');controls.style.alignItems='end';
+    controls.append(field('Currency (ISO code)',currency),field('Cost per hour a case is open',hourly),field('Cost of activities left blank',fallback));
+    const shown=activityNames.slice(0,200);
+    const prices=shown.map((name,i)=>{const node=input('owgCostActivity'+i,'number');node.min='0';node.step='any';node.setAttribute('aria-label','Cost of one '+name);node.dataset.activity=name;node.style.width='8em';return node;});
+    const priceTable=table(['Activity','Cost per execution'],shown.map((name,i)=>[name,prices[i]]));
+    const run=button('Calculate cost','secondary');run.id='owgCostRun';
+    const out=el('div');out.id='owgCostResults';out.setAttribute('role','status');
+    box.append(controls,priceTable);
+    if(activityNames.length>shown.length)box.appendChild(el('div','Only the first '+shown.length+' activities are listed; give the rest a cost with “Cost of activities left blank”.','muted'));
+    box.append(run,out);
+    const generation=state.generation;
+    run.onclick=async()=>{
+      run.disabled=true;
+      try{
+        const activity_costs={};
+        for(const node of prices){if(node.value.trim()==='')continue;const v=Number(node.value);if(!(v>=0))throw new Error('Costs must be zero or more ('+node.dataset.activity+').');activity_costs[node.dataset.activity]=v;}
+        const spec={currency:currency.value.trim().toUpperCase(),activity_costs,hourly_open_case_cost:Number(hourly.value||0)};
+        if(fallback.value.trim()!=='')spec.default_activity_cost=Number(fallback.value);
+        if(state.caseType)spec.case_type=state.caseType;
+        if(state.follows.length)spec.cohort={follows:state.follows};
+        const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/costs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        if(generation!==state.generation)return;
+        let money;try{money=new Intl.NumberFormat(undefined,{style:'currency',currency:r.currency});}catch(_){money={format:v=>r.currency+' '+Number(v).toFixed(2)};}
+        const m=v=>v===null||v===undefined?'—':money.format(v);
+        const cpc=r.cost_per_case;
+        const summary=table(['Total','Activities','Time cases are open','Repeated executions','Per case: mean','median','90th percentile'],
+          [[m(r.total_cost),m(r.activity_cost),m(r.holding_cost),m(r.repeated_execution_cost)+' ('+pct(r.repeated_execution_share)+')',m(cpc.mean),m(cpc.median),m(cpc.p90)]]);
+        const acts=table(['Activity','Executions','Unit cost','Cost','Share','Repeated executions','Their cost'],r.activities.map(a=>[a.activity,Number(a.events).toLocaleString(),a.unit_cost===null?'no price':m(a.unit_cost)+(a.price_source==='default'?' (default)':''),m(a.cost),pct(a.share_of_activity_cost),Number(a.repeated_executions).toLocaleString(),m(a.repeated_execution_cost)]));
+        const variants=table(['Variant','Cases','Cost per case','Total','Repeated executions per case'],r.costliest_variants.map(v=>[v.path.join(' → '),Number(v.cases).toLocaleString(),m(v.cost_per_case),m(v.total_cost),m(v.repeated_execution_cost_per_case)]));
+        const nodes=[el('div',Number(r.cases).toLocaleString()+' cases, '+Number(r.events).toLocaleString()+' events.','muted'),summary];
+        if(r.unpriced_events)nodes.push(el('div','No price for '+r.unpriced_activities.map(a=>a.activity).join(', ')+': '+Number(r.unpriced_events).toLocaleString()+' executions are left out of the totals.','muted'));
+        nodes.push(el('h4','Cost by activity'),acts,el('h4','Costliest variants'),variants,el('div',r.interpretation,'muted'));
+        out.replaceChildren(...nodes);
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      finally{run.disabled=false;}
+    };
+    return box;
   }
 
   // R9: read-only, bounded metrics for selected saved logs.
