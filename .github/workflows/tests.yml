@@ -147,6 +147,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_parallel.cjs
       - name: Verify content-free recorder reports in the company admin console
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/fleet_status.cjs
+      - name: Verify the local time-allocation report in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/time_allocation.cjs
       - name: Verify scoped identity provisioning and credential lifecycle in the admin console
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/scim_provisioning.cjs
       - name: Verify content-free device sync health in the company admin console
