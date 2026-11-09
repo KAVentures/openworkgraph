@@ -341,6 +341,19 @@ def event_log_object_attributes(request: Request, log_id: str,
     return _respond(object_attributes.attribute_changes, log_id, object_type, object_id)
 
 
+@router.post("/v1/event-logs/{log_id}/stuck-cases")
+async def event_log_stuck_cases(request: Request, log_id: str):
+    """Open cases idle much longer than usual after their latest activity."""
+    from . import event_log_stuck as stuck
+    _require_dashboard(request)
+    spec = await _json_body(request, "stuck-case settings", strict=True, limit=16384)
+    try:
+        result = await run_in_threadpool(stuck.stuck_cases, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/v1/event-logs/{log_id}/variants")
 def event_log_variants(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                        limit: int = Query(default=20, ge=1, le=200), cohort: dict[str, Any] = Depends(_case_filter)):
