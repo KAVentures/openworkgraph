@@ -87,3 +87,55 @@ def test_revocation_recovery_when_opportunity_is_no_longer_inspectable(monkeypat
     assert revoked.status_code == 200
     assert revoked.json()["decision"] == "revoked"
     assert client.get(root, headers=headers).json()["revision"] == 5
+
+
+def test_reviewed_handoff_requires_matching_approved_revision_and_revocation(monkeypatch, tmp_path):
+    """Actual authenticated navigation gate rejects drafts, stale bases and revocation."""
+    import hashlib
+    import json
+    from fastapi.responses import JSONResponse
+
+    monkeypatch.setattr(routes.pipeline, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(routes, "dashboard_session_valid", lambda token: token == "valid")
+    basis = {"project_id": "p1", "project_set_sha256": "c"*64,
+             "idea_revision": 2, "idea_state": "approved", "spec_sha256": "a"*64,
+             "archive_sha256": "b"*64, "process_status": "current",
+             "process_reference": {}, "dataset_origins": [],
+             "dataset_origin_check_available": True, "blockers": []}
+    snapshot = {
+        "idea": {"idea_id": "idea", "revision": 2, "state": "approved"},
+        "process_status": "current", "process_reference": {},
+        "dataset_origins": [], "dataset_origin_check_available": True,
+        "project_set_sha256": "c"*64, "projects_truncated": False,
+        "projects": [{"project_id": "p1", "idea_revision": 2,
+                      "spec_sha256": "a"*64, "archive_sha256": "b"*64,
+                      "blockers": []}],
+    }
+    monkeypatch.setattr(routes, "choices", lambda request, idea_id: JSONResponse(snapshot))
+    app = FastAPI()
+    app.include_router(routes.router)
+    client = TestClient(app)
+    root = "/v1/review-choice-workbench/idea"
+    headers = {"Authorization": "OWG-Session valid"}
+    gate = root + "/reviewed-handoff-preflight"
+    assert client.post(gate, json=basis).status_code == 403
+    assert client.post(gate, json=basis, headers=headers).status_code == 409
+    draft = client.post(root+"/review", json={
+        "basis": basis, "expected_review_revision": 0,
+        "decision": "draft"}, headers=headers)
+    assert draft.status_code == 200
+    assert client.post(gate, json=basis, headers=headers).status_code == 409
+    approved = client.post(root+"/review", json={
+        "basis": basis, "expected_review_revision": 1,
+        "decision": "approved"}, headers=headers)
+    assert approved.status_code == 200
+    passed = client.post(gate, json=basis, headers=headers)
+    assert passed.status_code == 200
+    assert passed.json()["human_review_approved"] is True
+    assert passed.json()["execution_authorized"] is False
+    changed = dict(basis, project_set_sha256="d"*64)
+    assert client.post(gate, json=changed, headers=headers).status_code == 409
+    revoked = client.post(root+"/review/p1/revoke", json={
+        "expected_review_revision": 2}, headers=headers)
+    assert revoked.status_code == 200
+    assert client.post(gate, json=basis, headers=headers).status_code == 409
