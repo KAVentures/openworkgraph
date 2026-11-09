@@ -201,6 +201,15 @@ behaviour.
   with sampled browser pointer movement from the last 7 days, then shows where the samples fell
   on the chosen page as a 20 × 20 grid of counts. Only the counts reach the dashboard,
   never the points. It is not a measure of attention, effort or performance.
+- **Replay a visit.** *Replay a visit* replays one visit to a page, chosen from the pages
+  with pointer movement: the pointer path (as fractions of the viewport) and, in order,
+  each hover, drag and click with the kind of control only (tag and role, never a label,
+  text or value). Events more than five minutes apart start a new visit; the latest is
+  shown first. Play, pause and a time slider scrub through it, and a numbered step list
+  describes it for screen readers (with reduced motion, *Play* jumps to the end). Unlike
+  the heatmap this returns the recorded points to the local dashboard, so it needs the
+  dashboard session. Timing is approximate, since a pointer batch is stored when it is
+  flushed. It is not a measure of attention, effort or performance.
 
 ## Performance
 
@@ -256,4 +265,5 @@ corpus with and without added detail (see `evals/reconstruction/README.md`).
 | `GET /v1/capture-coverage` | Coverage manifest |
 | `GET /v1/capture-coverage/friction?hours=` | Friction candidates; dashboard session only |
 | `GET /v1/capture-coverage/heatmap?hostname=&pathname=&hours=` | Pages with pointer samples or one page's grid of counts; dashboard session only |
+| `GET /v1/capture-coverage/playback?hostname=&pathname=&hours=&visit=` | One visit to a page replayed in order (control kinds and the pointer path only); dashboard session only |
 | `POST /v1/capture-depth/delete` | Delete recorded high-fidelity events now; dashboard session only, needs `confirm: true` |
