@@ -53,6 +53,13 @@ def test_signature_is_standard_hmac_and_verification_codes():
     assert signing.verify("00" * 32, "1000", "4", h["X-OWG-Report-Signature"], body, now=1000) == "bad_signature"
     assert signing.verify("00" * 32, "1000", "3", h["X-OWG-Report-Signature"], body, now=2000) == "stale_timestamp"
     assert signing.verify("00" * 32, "x", "3", "v1=00", body) == "malformed_headers"
+    too_large = signing.MAX_SEQUENCE + 1
+    signed_large = signing.headers("00" * 32, too_large, body, timestamp=1000)
+    assert signing.verify("00" * 32, "1000", str(too_large),
+                          signed_large["X-OWG-Report-Signature"], body, now=1000) == "malformed_headers"
+    boundary = signing.headers("00" * 32, signing.MAX_SEQUENCE, body, timestamp=1000)
+    assert signing.verify("00" * 32, "1000", str(signing.MAX_SEQUENCE),
+                          boundary["X-OWG-Report-Signature"], body, now=1000) is None
 
 
 def test_secret_is_shown_once_and_one_live_channel_per_deployment(setup, tmp_path):
@@ -114,6 +121,31 @@ def test_gaps_are_lost_reports_until_they_arrive(setup):
     assert channels.listing()["channels"][0]["missing_sequences"] == [3]
 
 
+def test_large_signed_sequence_jump_keeps_only_bounded_gap_ids(setup):
+    dep, cid, secret = setup
+    send(cid, secret, 1, envelope(report(["r1"])))
+    big = 100_000_000
+    accepted = send(cid, secret, big, envelope(report(["r_big"])))
+    assert accepted["outcome"] == "imported"
+    assert accepted["new_missing_sequences"] == big - 2
+    channel = channels.listing()["channels"][0]
+    assert channel["highest_sequence"] == big
+    assert channel["missing_count"] == channels.MAX_MISSING
+    assert channel["missing_truncated"] is True
+    assert channel["missing_sequences"] == list(
+        range(big - channels.MAX_MISSING, big - channels.MAX_MISSING + 50))
+    lost = next(i for i in incidents.listing()["incidents"] if i["kind"] == "lost_reports")
+    assert lost["occurrences"] == big - 2, "inferred gap count, not retained IDs"
+
+    # Late arrival recovers an explicitly retained gap without clearing the
+    # warning that much older missing IDs were necessarily discarded.
+    late = send(cid, secret, big - 1, envelope(report(["r_late"])))
+    assert late["outcome"] == "imported"
+    after = channels.listing()["channels"][0]
+    assert after["missing_count"] == channels.MAX_MISSING - 1
+    assert after["missing_truncated"] is True
+
+
 def test_a_different_spec_is_version_drift_not_a_silent_rebind(setup):
     dep, cid, secret = setup
     body = envelope(report(["r1"], spec="b" * 64), label="v2.0.0")
@@ -137,10 +169,10 @@ def test_failures_group_into_incidents_with_a_review_lifecycle(setup):
     assert failure["fingerprint"] == "step:Charge card" and failure["occurrences"] == 2
     assert set(failure["sample_refs"]) == {"f1", "f2"} and by_kind["run_handoffs"]["fingerprint"] == "step:Approve refund"
     with pytest.raises(incidents.IncidentError):
-        incidents.triage(failure["incident_id"], {"status": "resolved", "expected_last_seen": "stale"})
-    incidents.triage(failure["incident_id"], {"status": "acknowledged", "note": "Card processor outage"})
+        incidents.triage(failure["incident_id"], {"status": "resolved", "expected_last_seen": "stale", "expected_review_revision": 0})
+    incidents.triage(failure["incident_id"], {"status": "acknowledged", "note": "Card processor outage", "expected_review_revision": 0, "expected_last_seen": failure["last_seen"]})
     done = incidents.triage(failure["incident_id"], {"status": "resolved", "note": "Processor recovered",
-                                                     "expected_last_seen": failure["last_seen"]})
+                                                     "expected_last_seen": failure["last_seen"], "expected_review_revision": 1})
     assert done["status"] == "resolved" and len(done["notes"]) == 2 and done["automation_rerun"] is False
     send(cid, secret, 3, envelope(report(["f3"], status="failed")))
     reopened = next(i for i in incidents.listing()["incidents"] if i["incident_id"] == failure["incident_id"])
@@ -189,7 +221,7 @@ with TestClient(app) as client:
     listed = client.get("/v1/automation-monitoring/incidents", headers=owner).json()
     failure = next(i for i in listed["incidents"] if i["kind"] == "run_failures")
     triaged = client.post(f"/v1/automation-monitoring/incidents/{failure['incident_id']}/triage", headers=owner,
-                          json={"status": "acknowledged", "note": "Looking"})
+                          json={"status": "acknowledged", "note": "Looking", "expected_review_revision": failure["review_revision"], "expected_last_seen": failure["last_seen"]})
     assert triaged.status_code == 200 and triaged.json()["status"] == "acknowledged"
     gone = client.post(f"/v1/automation-monitoring/deployments/{dep}/delete", headers=owner).json()
     assert gone["report_channels_deleted"] == 1 and gone["incidents_deleted"] >= 2

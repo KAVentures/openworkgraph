@@ -245,15 +245,30 @@
 
       <div class="card" id="pvSchedules">
         <h2>Scheduled jobs</h2>
-        <div class="muted">Off unless you add one. A schedule repeats a job you could run by hand: refresh a retained Jira profile (its own read consent and account checks still apply) or re-check an event log's saved signals. At least every 15 minutes; failures back off and pause after five in a row. Pausing recording also pauses scheduled source reads. Nothing is sent anywhere.</div>
+        <div class="muted">Off unless you add one. A schedule repeats a job you could run by hand: refresh a retained Jira profile, re-check saved event-log signals, or create a verified local backup. Source reads keep their own consent and pause with recording. Backups require separate acknowledgement, exclude credentials, are NOT encrypted, run at most daily and rotate only scheduled backups (up to 14). Optional per-job quiet hours defer due jobs without counting a run; daylight saving follows the chosen timezone. Failures back off and pause after five in a row. Nothing is sent anywhere.</div>
         <div class="pv-delete">
-          <select id="pvScheduleKind" aria-label="Job"><option value="retained_jira_profile">Retained Jira profile</option><option value="event_log_signals">Event log signals</option></select>
+          <select id="pvScheduleKind" aria-label="Job"><option value="retained_jira_profile">Retained Jira profile</option><option value="event_log_signals">Event log signals</option><option value="local_backup">Local backup (unencrypted)</option></select>
           <input type="text" id="pvScheduleTarget" placeholder="Profile or event log ID" aria-label="Profile or event log ID" spellcheck="false">
           <input type="number" id="pvScheduleInterval" min="15" value="60" aria-label="Interval in minutes">
           <button type="button" class="secondary" id="pvScheduleAdd">Add schedule</button>
         </div>
+        <label class="muted" for="pvScheduleQuietEnabled">
+          <input type="checkbox" id="pvScheduleQuietEnabled"> Only run outside quiet hours (optional, per schedule)
+        </label>
+        <div class="pv-delete" id="pvScheduleQuietFields" hidden>
+          <label for="pvScheduleQuietStart">Quiet from</label>
+          <input type="time" id="pvScheduleQuietStart" value="22:00" step="60">
+          <label for="pvScheduleQuietEnd">Quiet until</label>
+          <input type="time" id="pvScheduleQuietEnd" value="07:00" step="60">
+          <label for="pvScheduleQuietTimezone">Timezone</label>
+          <input type="text" id="pvScheduleQuietTimezone" placeholder="Europe/Stockholm" maxlength="64" spellcheck="false">
+        </div>
+        <div class="muted">For an existing job, set the window above and choose Apply quiet hours on that job, or clear its current window. Pausing or removing a job remains separate.</div>
+        <label class="muted" id="pvScheduleBackupAckRow" hidden>
+          <input type="checkbox" id="pvScheduleBackupAck"> I understand recurring backups save unencrypted copies of locally recorded activity outside OWG's data folder, without credentials; only automatically created backups are rotated. I will keep the backup folder private.
+        </label>
         <div class="muted" id="pvScheduleStatus" role="status" aria-live="polite"></div>
-        <div id="pvScheduleList" aria-label="Scheduled jobs"></div>
+        <div id="pvScheduleList" role="region" aria-label="Scheduled jobs"></div>
       </div>
       <div class="card" id="pvSemantic">
         <h2>AI help with grouping work</h2>
@@ -337,6 +352,17 @@
           <div class="pv-control">
             <button type="button" class="secondary" id="pvBackupRefresh">Refresh list</button>
             <button type="button" class="secondary" id="pvBackupInspect" disabled>Inspect restore safety</button>
+          </div>
+        </div>
+        <div class="pv-row" id="pvBackupHealthPanel" style="margin-top:12px">
+          <div>
+            <h3>Check saved backup integrity</h3>
+            <div class="muted">Explicitly verify up to five listed plaintext archives, checking every stored file against its manifest hashes. This may read large local backups. Encrypted or oversize files require offline checks. A healthy archive is not a completed restore test.</div>
+            <div class="muted" id="pvBackupHealthStatus" role="status" aria-live="polite">No integrity inventory checked yet.</div>
+            <div id="pvBackupHealthRows" role="region" aria-label="Saved backup integrity results"></div>
+          </div>
+          <div class="pv-control">
+            <button type="button" class="secondary" id="pvBackupHealthRun" disabled>Verify first 5 listed backups</button>
           </div>
         </div>
       </div>
@@ -890,9 +916,16 @@
     const backupRefresh = panel.querySelector('#pvBackupRefresh');
     const backupInspect = panel.querySelector('#pvBackupInspect');
     const backupPlan = panel.querySelector('#pvBackupPlan');
-    let listedBackups = [], backupEpoch = 0;
+    const healthRun = panel.querySelector('#pvBackupHealthRun');
+    const healthStatus = panel.querySelector('#pvBackupHealthStatus');
+    const healthRows = panel.querySelector('#pvBackupHealthRows');
+    let listedBackups = [], backupEpoch = 0, healthEpoch = 0;
     async function refreshBackupList(preferred = '') {
       const epoch = ++backupEpoch;
+      healthEpoch++;
+      healthRows.replaceChildren();
+      healthRun.disabled = true;
+      healthStatus.textContent = 'Backup listing refreshed; previous integrity results no longer apply.';
       backupRefresh.disabled = true;
       backupInspect.disabled = true;
       backupPlan.textContent = 'Reading saved backups on this computer…';
@@ -914,6 +947,7 @@
         }
         if (listedBackups.some(item => item.name === previous)) backupChoice.value = previous;
         backupInspect.disabled = !backupChoice.value;
+        healthRun.disabled = listedBackups.length === 0;
         backupPlan.textContent = listedBackups.length
           ? 'Choose a backup and inspect its integrity and restore blockers. No data will be changed.'
           : 'No backups found in the configured local backup folder.';
@@ -962,6 +996,55 @@
         if (epoch === backupEpoch) backupInspect.disabled = !backupChoice.value;
       }
     };
+    healthRun.onclick = async () => {
+      const chosen = listedBackups.slice(0, 5).map(item => item.name);
+      if (!chosen.length) { healthStatus.textContent = 'No saved local backups to verify.'; return; }
+      if (!window.confirm('Read and verify up to five already-listed local backups now? No archive will be modified, restored or uploaded. Large archives may require the offline CLI.')) return;
+      const epoch = ++healthEpoch;
+      healthRun.disabled = true;
+      healthRows.replaceChildren();
+      healthStatus.textContent = 'Verifying local archive contents (read only)…';
+      try {
+        const result = await api('/v1/local-backups/health', send('POST', {
+          names: chosen, confirm_local_verification: true
+        }));
+        if (epoch !== healthEpoch) return;
+        const labels = {
+          verified: 'Verified intact at this check',
+          integrity_check_failed: 'Integrity check failed; do not rely on this archive',
+          unavailable_or_not_regular: 'Unavailable or not a regular file',
+          encrypted_requires_offline_cli: 'Encrypted; verify using offline CLI',
+          exceeds_dashboard_archive_limit: 'Too large for dashboard check; use offline CLI',
+          exceeds_dashboard_uncompressed_limit: 'Uncompressed data exceeds the dashboard limit; use offline CLI',
+          exceeds_dashboard_request_budget: 'Check budget reached; use offline CLI',
+          requires_offline_inspection: 'Requires offline inspection',
+          changed_during_check: 'File changed during check; verify again offline'
+        };
+        for (const item of result.items || []) {
+          const row = document.createElement('div');
+          row.className = 'muted';
+          // A saved filename is only ever inserted as text, never as markup.
+          row.textContent = item.name + ' — ' +
+            (labels[item.status] || 'Not verified') +
+            (item.verified ? ' · ' + String(item.file_count) + ' stored files, OWG ' + String(item.owg_version || 'unknown') : '');
+          healthRows.appendChild(row);
+        }
+        healthStatus.textContent = String(result.verified) + ' of ' +
+          String(result.requested) + ' listed backup archives verified at ' +
+          String(result.checked_at) + '. ' + String(result.not_verified) +
+          ' not verified. ' + (listedBackups.length > chosen.length
+            ? String(listedBackups.length - chosen.length) + ' additional listed backups were not inspected. ' : '') +
+          'No restore or write occurred. A passing checksum does not prove recoverability.';
+      } catch (error) {
+        if (epoch === healthEpoch) {
+          healthRows.replaceChildren();
+          healthStatus.textContent = (error.message || 'Could not check archive integrity.') +
+            ' No restore was attempted.';
+        }
+      } finally {
+        if (epoch === healthEpoch) healthRun.disabled = listedBackups.length === 0;
+      }
+    };
     panel.querySelector('#pvBackupCreate').onclick = async () => {
       const status = panel.querySelector('#pvBackupStatus');
       const pass = panel.querySelector('#pvBackupPass');
@@ -995,6 +1078,27 @@
     };
     const scheduleList = panel.querySelector('#pvScheduleList');
     const scheduleStatus = panel.querySelector('#pvScheduleStatus');
+    const quietEnabled = panel.querySelector('#pvScheduleQuietEnabled');
+    const quietFields = panel.querySelector('#pvScheduleQuietFields');
+    const quietStart = panel.querySelector('#pvScheduleQuietStart');
+    const quietEnd = panel.querySelector('#pvScheduleQuietEnd');
+    const quietTimezone = panel.querySelector('#pvScheduleQuietTimezone');
+    quietTimezone.value = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    quietEnabled.onchange = () => {
+      quietFields.hidden = !quietEnabled.checked;
+      // A flex author rule can override the UA [hidden] rule; keep the
+      // optional inputs truly absent from visual and keyboard layouts.
+      quietFields.style.display = quietEnabled.checked ? 'flex' : 'none';
+    };
+    quietEnabled.onchange();
+    const readQuietWindow = () => {
+      const windowSpec = {timezone: quietTimezone.value.trim(), start: quietStart.value, end: quietEnd.value};
+      if (!windowSpec.timezone || !/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(windowSpec.start) ||
+          !/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(windowSpec.end) ||
+          windowSpec.start === windowSpec.end)
+        throw new Error('Enter a timezone and two different valid 24-hour quiet-hour times.');
+      return windowSpec;
+    };
     const refreshSchedules = async () => {
       const state = await api('/v1/schedules').catch(() => null);
       if (!scheduleList || !state) return;
@@ -1003,26 +1107,92 @@
         const line = document.createElement('div');
         line.className = 'pv-row pv-sub';
         const text = document.createElement('span');
-        text.textContent = (item.kind === 'retained_jira_profile' ? 'Jira profile ' : 'Signals for ') + item.target_id +
+        text.textContent = (item.kind === 'local_backup' ? 'Unencrypted local backup'
+          : (item.kind === 'retained_jira_profile' ? 'Jira profile ' : 'Signals for ') + item.target_id) +
           ' · every ' + item.interval_minutes + ' min · ' + (item.enabled ? 'next ' + String(item.next_run_at || '').slice(0, 16).replace('T', ' ')
-          : (item.paused_reason ? 'paused after repeated failures' : 'paused')) + (item.last_result ? ' · last: ' + item.last_result : '');
+          : (item.paused_reason ? 'paused after repeated failures' : 'paused')) +
+          (item.quiet_hours ? ' · quiet ' + item.quiet_hours.start + '–' + item.quiet_hours.end +
+            ' ' + item.quiet_hours.timezone + (item.quiet_hours_active ? ' (now)' : '') : '') +
+          (item.last_deferred_until ? ' · last quiet deferral until ' + String(item.last_deferred_until).slice(0, 16).replace('T',' ') + ' UTC' : '') +
+          (item.last_result ? ' · last: ' + item.last_result : '');
         const toggle = document.createElement('button');
         toggle.type = 'button'; toggle.className = 'secondary'; toggle.textContent = item.enabled ? 'Pause' : 'Resume';
         toggle.onclick = async () => { await api('/v1/schedules/update', send('POST', {schedule_id: item.schedule_id, enabled: !item.enabled})).catch(() => null); refreshSchedules(); };
         const remove = document.createElement('button');
         remove.type = 'button'; remove.className = 'secondary'; remove.textContent = 'Remove';
         remove.onclick = async () => { await api('/v1/schedules/delete', send('POST', {schedule_id: item.schedule_id})).catch(() => null); refreshSchedules(); };
-        line.append(text, toggle, remove);
+        const setQuiet = document.createElement('button');
+        setQuiet.type = 'button'; setQuiet.className = 'secondary';
+        setQuiet.textContent = item.quiet_hours ? 'Update quiet hours' : 'Apply quiet hours';
+        setQuiet.setAttribute('aria-label', setQuiet.textContent + ' for ' + item.kind + ' ' + item.target_id);
+        setQuiet.onclick = async () => {
+          if (!quietEnabled.checked) {
+            if (scheduleStatus) scheduleStatus.textContent = 'Tick the optional quiet-hours checkbox and choose the window first.';
+            return;
+          }
+          try {
+            await api('/v1/schedules/update', send('POST', {schedule_id: item.schedule_id,
+              quiet_hours: readQuietWindow()}));
+            if (scheduleStatus) scheduleStatus.textContent = 'Quiet hours saved for this job; missed runs are not backfilled.';
+          } catch (error) {
+            if (scheduleStatus) scheduleStatus.textContent = error.message || 'Could not save quiet hours.';
+          }
+          refreshSchedules();
+        };
+        line.append(text, toggle, remove, setQuiet);
+        if (item.quiet_hours) {
+          const clear = document.createElement('button');
+          clear.type = 'button'; clear.className = 'secondary'; clear.textContent = 'Clear quiet hours';
+          clear.setAttribute('aria-label', 'Clear quiet hours for ' + item.kind + ' ' + item.target_id);
+          clear.onclick = async () => {
+            try {
+              await api('/v1/schedules/update', send('POST', {schedule_id: item.schedule_id,
+                quiet_hours: null}));
+              if (scheduleStatus) scheduleStatus.textContent = 'Quiet hours cleared for this job.';
+            } catch (error) { if (scheduleStatus) scheduleStatus.textContent = error.message || 'Could not clear quiet hours.'; }
+            refreshSchedules();
+          };
+          line.append(clear);
+        }
         scheduleList.append(line);
       }
     };
+    const scheduleKind = panel.querySelector('#pvScheduleKind');
+    const scheduleTarget = panel.querySelector('#pvScheduleTarget');
+    const scheduleInterval = panel.querySelector('#pvScheduleInterval');
+    const scheduleBackupAck = panel.querySelector('#pvScheduleBackupAck');
+    const scheduleBackupAckRow = panel.querySelector('#pvScheduleBackupAckRow');
+    const refreshScheduleKind = () => {
+      const local = scheduleKind.value === 'local_backup';
+      scheduleTarget.disabled = local;
+      scheduleTarget.value = local ? 'local' : '';
+      scheduleTarget.placeholder = local ? 'This computer' : 'Profile or event log ID';
+      scheduleInterval.min = local ? '1440' : '15';
+      scheduleInterval.value = local ? '1440' : '60';
+      scheduleBackupAckRow.hidden = !local;
+      scheduleBackupAck.checked = false;
+    };
+    scheduleKind.onchange = refreshScheduleKind;
+    refreshScheduleKind();
     panel.querySelector('#pvScheduleAdd').onclick = async () => {
-      const kind = panel.querySelector('#pvScheduleKind').value;
-      if (!confirm('Run this job automatically on a schedule? You can pause or remove it at any time.')) return;
+      const kind = scheduleKind.value;
+      const isBackup = kind === 'local_backup';
+      if (isBackup && !scheduleBackupAck.checked) {
+        if (scheduleStatus) scheduleStatus.textContent = 'Acknowledge that scheduled backups are unencrypted and may contain private work activity.';
+        return;
+      }
+      if (!confirm(isBackup
+          ? 'Schedule an unencrypted local backup every day or longer? Copies stay on this computer and can contain private captured work. This does not include credentials or send data to cloud services.'
+          : 'Run this job automatically on a schedule? You can pause or remove it at any time.')) return;
       try {
-        await api('/v1/schedules', send('POST', {kind, target_id: panel.querySelector('#pvScheduleTarget').value.trim(),
-          interval_minutes: Number(panel.querySelector('#pvScheduleInterval').value), confirm_scheduled_runs: true}));
+        await api('/v1/schedules', send('POST', {
+          kind, target_id: isBackup ? 'local' : scheduleTarget.value.trim(),
+          interval_minutes: Number(scheduleInterval.value), confirm_scheduled_runs: true,
+          confirm_unencrypted_local_backup: isBackup && scheduleBackupAck.checked,
+          quiet_hours: quietEnabled.checked ? readQuietWindow() : null
+        }));
         if (scheduleStatus) scheduleStatus.textContent = 'Schedule added.';
+        scheduleBackupAck.checked = false;
       } catch (error) { if (scheduleStatus) scheduleStatus.textContent = error.message || 'Could not add the schedule.'; }
       refreshSchedules();
     };
