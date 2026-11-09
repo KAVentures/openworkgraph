@@ -38,9 +38,13 @@ PROFILES: dict[str, dict[str, bool]] = {
     "enhanced": {"hover_dwell": True, "drag_drop": True, "friction_candidates": True, "pointer_trajectory": False},
     "full": {"hover_dwell": True, "drag_drop": True, "friction_candidates": True, "pointer_trajectory": True},
 }
-DEFAULT_PARAMETERS = {"hover_dwell_ms": 750, "trajectory_hz": 4, "max_events_per_minute": 60, "retention_days": 30}
+DEFAULT_PARAMETERS = {"hover_dwell_ms": 750, "trajectory_hz": 4, "max_events_per_minute": 60, "retention_days": 30,
+                      "storage_mb": 200}
 PARAMETER_BOUNDS = {"hover_dwell_ms": (300, 5000), "trajectory_hz": (1, 20), "max_events_per_minute": (10, 600),
-                    "retention_days": (1, 365)}
+                    "retention_days": (1, 365), "storage_mb": (10, 10000)}
+# When stored interaction detail exceeds its quota, the oldest is deleted down to this share of it.
+QUOTA_TRIM_TO = 0.9
+_MB = 1024 * 1024
 # Which stored browser actions each signal produces. Actions not listed are existing structural signals.
 SIGNAL_ACTIONS = {"hover_dwell": {"control_hover_dwell"},
                   "drag_drop": {"drag_start", "drag_drop", "drag_end"},
@@ -206,21 +210,74 @@ def delete_high_fidelity(*, older_than_days: int | None = None) -> dict[str, Any
         cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).isoformat()
         where += " AND julianday(observed_at) < julianday(?)"
         params.append(cutoff)
-    deleted = {}
     with _LOCK, connect() as conn:
         ids = [r[0] for r in conn.execute(f"SELECT event_id FROM events WHERE {where}", params).fetchall()]
-        for table in ("context_events", "normalized_events", "events"):
-            removed = 0
-            for offset in range(0, len(ids), 500):
-                chunk = ids[offset:offset + 500]
-                removed += conn.execute(f"DELETE FROM {table} WHERE event_id IN ({','.join('?' for _ in chunk)})",
-                                        chunk).rowcount or 0
-            deleted[table] = removed
-        orphaned = conn.execute("DELETE FROM pointer_trajectory_points WHERE event_id NOT IN "
-                                "(SELECT event_id FROM events)").rowcount or 0
-    return {"deleted_events": deleted["events"], "deleted_derived_rows": deleted["context_events"] + deleted["normalized_events"],
-            "orphaned_point_sets_removed": orphaned, "older_than_days": older_than_days,
-            "structural_evidence_kept": True}
+        result = _delete_events(conn, ids)
+    return {**result, "older_than_days": older_than_days, "structural_evidence_kept": True}
+
+
+def _delete_events(conn, ids: list[str]) -> dict[str, int]:
+    deleted = {}
+    for table in ("context_events", "normalized_events", "events"):
+        removed = 0
+        for offset in range(0, len(ids), 500):
+            chunk = ids[offset:offset + 500]
+            removed += conn.execute(f"DELETE FROM {table} WHERE event_id IN ({','.join('?' for _ in chunk)})",
+                                    chunk).rowcount or 0
+        deleted[table] = removed
+    orphaned = conn.execute("DELETE FROM pointer_trajectory_points WHERE event_id NOT IN "
+                            "(SELECT event_id FROM events)").rowcount or 0
+    return {"deleted_events": deleted["events"],
+            "deleted_derived_rows": deleted["context_events"] + deleted["normalized_events"],
+            "orphaned_point_sets_removed": orphaned}
+
+
+def high_fidelity_storage() -> dict[str, Any]:
+    """Estimated bytes held by stored interaction detail: event metadata plus pointer points."""
+    from .db import connect
+    placeholders = ",".join("?" for _ in HIGH_FIDELITY_EVENT_TYPES)
+    with connect() as conn:
+        events, meta_bytes = conn.execute(
+            f"SELECT count(*), coalesce(sum(length(metadata_json)), 0) FROM events WHERE event_type IN ({placeholders})",
+            HIGH_FIDELITY_EVENT_TYPES).fetchone()
+        point_bytes = conn.execute("SELECT coalesce(sum(length(points_json)), 0) FROM pointer_trajectory_points").fetchone()[0]
+    limit = load()["parameters"]["storage_mb"] * _MB
+    used = int(meta_bytes) + int(point_bytes)
+    return {"events": int(events), "bytes_estimate": used, "limit_bytes": limit,
+            "share_of_limit": round(used / limit, 4) if limit else None,
+            "estimate_basis": "stored event metadata and pointer points; database overhead not included",
+            "last_trim": dict(_LAST_TRIM) if _LAST_TRIM else None}
+
+
+_LAST_TRIM: dict[str, Any] = {}
+
+
+def enforce_storage_quota() -> dict[str, Any] | None:
+    """Delete the oldest interaction detail when it exceeds the storage quota. Structural evidence is kept."""
+    from .db import connect
+    usage = high_fidelity_storage()
+    if usage["bytes_estimate"] <= usage["limit_bytes"]:
+        return None
+    target = int(usage["limit_bytes"] * QUOTA_TRIM_TO)
+    excess = usage["bytes_estimate"] - target
+    placeholders = ",".join("?" for _ in HIGH_FIDELITY_EVENT_TYPES)
+    with _LOCK, connect() as conn:
+        rows = conn.execute(f"""SELECT e.event_id, length(e.metadata_json) + coalesce(length(p.points_json), 0)
+            FROM events e LEFT JOIN pointer_trajectory_points p ON p.event_id = e.event_id
+            WHERE e.event_type IN ({placeholders}) ORDER BY e.observed_at, e.event_id""",
+                            HIGH_FIDELITY_EVENT_TYPES).fetchall()
+        ids, freed = [], 0
+        for event_id, size in rows:
+            if freed >= excess:
+                break
+            ids.append(event_id)
+            freed += int(size or 0)
+        result = _delete_events(conn, ids)
+    _LAST_TRIM.clear()
+    _LAST_TRIM.update(at=datetime.now(timezone.utc).isoformat(timespec="seconds"), deleted_events=result["deleted_events"],
+                      bytes_before=usage["bytes_estimate"], limit_bytes=usage["limit_bytes"])
+    return {**result, "reason": "storage_quota", "bytes_before": usage["bytes_estimate"],
+            "bytes_freed_estimate": freed, "limit_bytes": usage["limit_bytes"], "structural_evidence_kept": True}
 
 
 def apply_retention(force: bool = False) -> dict[str, Any] | None:
@@ -232,9 +289,14 @@ def apply_retention(force: bool = False) -> dict[str, Any] | None:
         return None
     _LAST_PURGE["at"] = now
     try:
-        return delete_high_fidelity(older_than_days=load()["parameters"]["retention_days"])
+        result = delete_high_fidelity(older_than_days=load()["parameters"]["retention_days"])
     except Exception:
         return None
+    try:
+        result["storage_quota"] = enforce_storage_quota()
+    except Exception:
+        result["storage_quota"] = None
+    return result
 
 
 def pointer_heatmap(*, hostname: str | None = None, pathname: str | None = None, hours: int = 168) -> dict[str, Any]:
@@ -414,5 +476,5 @@ def _frame(metadata: dict[str, Any]) -> dict[str, Any]:
 
 
 __all__ = ["CaptureDepthError", "FULL_ACK_VERSION", "HIGH_FIDELITY_EVENT_TYPES", "PROFILES", "SIGNALS", "action_allowed",
-           "action_allowed_on_excluded", "apply_retention", "bound_metadata", "bound_target", "delete_high_fidelity",
+           "action_allowed_on_excluded", "apply_retention", "bound_metadata", "enforce_storage_quota", "high_fidelity_storage", "bound_target", "delete_high_fidelity",
            "filter_desktop_events", "for_extension", "load", "pointer_heatmap", "public", "save"]

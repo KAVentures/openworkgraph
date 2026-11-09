@@ -313,6 +313,7 @@
           <label for="pvDepthDwell">Hover counts after (ms)</label><input type="number" id="pvDepthDwell" min="300" max="5000">
           <label for="pvDepthHz">Pointer samples per second</label><input type="number" id="pvDepthHz" min="1" max="20">
           <label for="pvDepthRetention">Keep interaction detail (days)</label><input type="number" id="pvDepthRetention" min="1" max="365">
+          <label for="pvDepthStorage">Store at most (MB)</label><input type="number" id="pvDepthStorage" min="10" max="10000">
           <label for="pvDepthDuration">Record extra detail for</label><select id="pvDepthDuration"><option value="1">1 day</option><option value="7" selected>7 days</option><option value="30">30 days</option><option value="90">90 days</option></select>
         </div>
         <label class="pv-delete"><input type="checkbox" id="pvDepthAck"> <span id="pvDepthAckText"></span></label>
@@ -830,6 +831,7 @@
       depthBox('pvDepthDwell').value = state.parameters.hover_dwell_ms;
       depthBox('pvDepthHz').value = state.parameters.trajectory_hz;
       depthBox('pvDepthRetention').value = state.parameters.retention_days;
+      depthBox('pvDepthStorage').value = state.parameters.storage_mb;
       depthBox('pvDepthAckText').textContent = state.full_acknowledgement;
       depthBox('pvDepthAck').checked = !!state.full_acknowledged_version;
       depthBox('pvDepthStatus').textContent = 'Current: ' + ({standard: 'Standard', enhanced: 'Enhanced', full: 'Full fidelity'}[state.profile] || 'Custom') + '.' +
@@ -843,7 +845,7 @@
     }));
     depthBox('pvDepthSave').onclick = async () => {
       const signals = Object.fromEntries(Object.entries(depthSignals).map(([key, id]) => [key, depthBox(id).checked]));
-      const payload = {signals, parameters: {hover_dwell_ms: Number(depthBox('pvDepthDwell').value), trajectory_hz: Number(depthBox('pvDepthHz').value), retention_days: Number(depthBox('pvDepthRetention').value)}, duration_days: Number(depthBox('pvDepthDuration').value)};
+      const payload = {signals, parameters: {hover_dwell_ms: Number(depthBox('pvDepthDwell').value), trajectory_hz: Number(depthBox('pvDepthHz').value), retention_days: Number(depthBox('pvDepthRetention').value), storage_mb: Number(depthBox('pvDepthStorage').value)}, duration_days: Number(depthBox('pvDepthDuration').value)};
       if (signals.pointer_trajectory) {
         if (!depthBox('pvDepthAck').checked) { depthBox('pvDepthStatus').textContent = 'Tick the acknowledgement to record pointer movement.'; return; }
         payload.acknowledgement_version = depth.state?.full_acknowledgement_version;
@@ -858,7 +860,8 @@
       try {
         const m = await api('/v1/capture-coverage');
         depthBox('pvDepthResult').replaceChildren(depthTable([...Object.entries(m.modalities).map(([k, v]) => [k.replace(/_/g, ' '), String(v).replace(/_/g, ' ')]),
-          ...Object.entries(m.high_fidelity_event_counts).map(([k, v]) => [k.replace(/^browser_/, '').replace(/_/g, ' ') + ' events (7 days)', String(v)])]));
+          ...Object.entries(m.high_fidelity_event_counts).map(([k, v]) => [k.replace(/^browser_/, '').replace(/_/g, ' ') + ' events (7 days)', String(v)]),
+          ...(m.high_fidelity_storage ? [['interaction detail stored', (m.high_fidelity_storage.bytes_estimate / 1048576).toFixed(1) + ' of ' + (m.high_fidelity_storage.limit_bytes / 1048576).toFixed(0) + ' MB (' + m.high_fidelity_storage.events + ' events)' + (m.high_fidelity_storage.last_trim ? '; oldest trimmed ' + m.high_fidelity_storage.last_trim.at : '')]] : [])]));
       } catch (error) { depthBox('pvDepthStatus').textContent = error.message || 'Could not load capture coverage.'; }
     };
     depthBox('pvDepthFrictionShow').onclick = async () => {

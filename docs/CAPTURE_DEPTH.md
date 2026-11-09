@@ -193,6 +193,12 @@ behaviour.
   days (1–365, default 30). Older ones are deleted, along with their derived rows and
   stored pointer points, when new events arrive (at most once an hour). Clicks, pages
   and other structural activity follow the ordinary history retention instead.
+- **Storage quota.** *Store at most (MB)* (10–10,000, default 200) caps the stored hover,
+  drag and pointer detail, estimated from its stored metadata and pointer points (database
+  overhead not included). When retention runs, at most once an hour as events arrive, detail
+  over the quota is trimmed oldest first to 90% of it. Structural activity is never trimmed.
+  The coverage manifest (`high_fidelity_storage`) and *Show capture coverage* report current
+  use, the limit and the last trim.
 - **Delete now.** *Delete interaction detail now* removes every recorded hover, drag and
   pointer event from this computer and keeps all other activity
   (`POST /v1/capture-depth/delete` with `{"confirm": true}`, optionally
