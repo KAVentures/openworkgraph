@@ -380,6 +380,9 @@ def delete(idea_id: str) -> dict[str, Any]:
         conn.execute("DELETE FROM project_report_links WHERE project_id IN "
                      "(SELECT project_id FROM idea_projects WHERE idea_id = ?)", [str(idea_id)])
         conn.execute("DELETE FROM idea_projects WHERE idea_id = ?", [str(idea_id)])
+        conn.execute("CREATE TABLE IF NOT EXISTS idea_measurements (measurement_id TEXT PRIMARY KEY, "
+                     "idea_id TEXT NOT NULL, created_at TEXT NOT NULL, body TEXT NOT NULL)")
+        conn.execute("DELETE FROM idea_measurements WHERE idea_id = ?", [str(idea_id)])
         conn.execute("DELETE FROM ideas WHERE idea_id = ?", [str(idea_id)])
     return {"deleted": True, "idea_id": idea_id}
 
