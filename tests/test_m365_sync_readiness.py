@@ -903,3 +903,31 @@ def test_operator_rejects_unsafe_audit_storage_before_mutation(monkeypatch, caps
             assert json.loads(capsys.readouterr().out)["status"] == "refused"
         append.assert_not_called()
         commit.assert_not_called()
+
+
+def test_operator_requires_durable_audit_directory_for_both_mutations(monkeypatch, capsys):
+    """No append or checkpoint commit can proceed without durable audit evidence."""
+    from server.m365_outlook_sync_readiness import main
+    monkeypatch.setenv("OWG_DASHBOARD_SESSION", "private-session")
+    with (patch("server.m365_outlook_sync_readiness.append_after_review") as append,
+          patch("server.m365_outlook_sync_readiness.commit_after_review") as commit):
+        for action in ("append", "commit"):
+            args = _cli_commit_args()
+            if action == "append":
+                args.remove("--commit-after-review")
+                args.remove("--confirm-events-appended")
+                args.remove("--confirm-checkpoint-commit")
+                pos = args.index("--expected-previous-candidate-sha256")
+                del args[pos:pos + 2]
+                for key in ("--receipt-file", "--journal-dir", "--handoff-dir",
+                            "--successor-label"):
+                    pos = args.index(key)
+                    del args[pos:pos + 2]
+                args.extend(["--append-after-review", "--consent-local-append"])
+            assert "--audit-dir" not in args
+            assert main(args) == 2
+            result = json.loads(capsys.readouterr().out)
+            assert result["status"] == "refused"
+            assert result["automatic_retry_allowed"] is False
+        append.assert_not_called()
+        commit.assert_not_called()
