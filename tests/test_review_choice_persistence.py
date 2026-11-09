@@ -52,3 +52,38 @@ def test_review_lifecycle_conflict_stale_and_denial(monkeypatch, tmp_path):
     body["expected_review_revision"] = 2
     assert client.post(root+"/review", json=body, headers=headers).status_code == 409
     assert client.get(root+"/review/p1").status_code == 403
+
+
+def test_revocation_recovery_when_opportunity_is_no_longer_inspectable(monkeypatch, tmp_path):
+    """Stored review revisions remain accessible after the source disappears."""
+    monkeypatch.setattr(routes.pipeline, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(routes, "dashboard_session_valid", lambda token: token == "valid")
+    def unavailable(_idea_id):
+        raise routes.pipeline.PipelineError("unknown idea")
+    monkeypatch.setattr(routes.opportunity_journey, "journey", unavailable)
+    app = FastAPI()
+    app.include_router(routes.router)
+    client = TestClient(app)
+    root = "/v1/review-choice-workbench/removed/review/p1"
+    headers = {"Authorization": "OWG-Session valid"}
+    with routes.pipeline._LOCK, routes.pipeline.closing(routes.pipeline._connect()) as conn:
+        conn.execute("""CREATE TABLE IF NOT EXISTS project_human_reviews (
+            idea_id TEXT NOT NULL, project_id TEXT NOT NULL,
+            revision INTEGER NOT NULL, decision TEXT NOT NULL,
+            basis_sha256 TEXT NOT NULL, reviewer_notes TEXT NOT NULL,
+            updated_at TEXT NOT NULL, PRIMARY KEY(idea_id, project_id))""")
+        conn.execute(
+            "INSERT INTO project_human_reviews VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("removed", "p1", 4, "approved", "a"*64, "previous approval", "2026-11-09T00:00:00Z"))
+        conn.commit()
+    assert client.get(root).status_code == 403
+    record = client.get(root, headers=headers)
+    assert record.status_code == 200
+    assert record.json()["revision"] == 4
+    assert record.json()["decision"] == "approved"
+    assert client.get("/v1/review-choice-workbench/removed", headers=headers).status_code == 404
+    assert client.post(root+"/revoke", json={"expected_review_revision": 4}).status_code == 403
+    revoked = client.post(root+"/revoke", json={"expected_review_revision": 4}, headers=headers)
+    assert revoked.status_code == 200
+    assert revoked.json()["decision"] == "revoked"
+    assert client.get(root, headers=headers).json()["revision"] == 5
