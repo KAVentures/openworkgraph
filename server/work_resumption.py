@@ -179,6 +179,8 @@ def resumption_candidates(
         "observed_case_groups_truncated": False,
         "observed_group_continuity": [],
         "observed_group_continuity_truncated": False,
+        "observed_pair_event_assignments": [],
+        "observed_pair_event_assignments_truncated": False,
         "saved_history_access": mode,
         "history_access_limited": mode != "all_saved",
         "session_gap_minutes": gap_minutes,
@@ -197,6 +199,7 @@ def resumption_candidates(
             "resource_local_assignment_requires_correlated_observations": True,
             "observed_case_groups_are_not_confirmed_tasks": True,
             "group_continuity_requires_shared_observed_pair": True,
+            "pair_event_assignments_require_same_event": True,
         },
         "derived": True,
         "authoritative": False,
@@ -301,6 +304,46 @@ def resumption_candidates(
                 "proves_same_case": False,
                 "requires_review": True,
             })
+    # Exact event-to-pair assignments are narrower than transitive component
+    # membership. A resource event without BOTH identities remains unassigned.
+    # This is an observed co-reference, never a task or case assertion.
+    pair_assignments: list[dict[str, Any]] = []
+    for pair in sorted(current["coobserved"]):
+        current_right_observations = set(current["tracks"][pair[1]]["observations"])
+        current_events = sorted({
+            event_id for instant, event_id in current["tracks"][pair[0]]["observations"]
+            if event_id and (instant, event_id) in current_right_observations
+        })
+        earlier_matches: list[dict[str, Any]] = []
+        for earlier_index in range(current_index - 1, -1, -1):
+            earlier = by_session[earlier_index]
+            if pair not in earlier["coobserved"]:
+                continue
+            earlier_right_observations = set(earlier["tracks"][pair[1]]["observations"])
+            earlier_events = sorted({
+                event_id for instant, event_id in earlier["tracks"][pair[0]]["observations"]
+                if event_id and (instant, event_id) in earlier_right_observations
+            })
+            earlier_matches.append({
+                "session_started_at": _iso(sessions[earlier_index][0]),
+                "evidence_event_ids": earlier_events[:8],
+                "evidence_truncated": len(earlier_events) > 8,
+            })
+        if not earlier_matches:
+            # Without an earlier authorised session that saw the same pair there is
+            # nothing to corroborate; history that is off or out of scope stays silent.
+            continue
+        pair_assignments.append({
+            "resource_pointers": [current["refs"][node] for node in pair],
+            "current_evidence_event_ids": current_events[:8],
+            "current_evidence_truncated": len(current_events) > 8,
+            "earlier_corroborations": earlier_matches[:8],
+            "earlier_sessions_truncated": len(earlier_matches) > 8,
+            "assignment_status": "observed_same_event_pair",
+            "proves_same_case": False,
+        })
+    result["observed_pair_event_assignments"] = pair_assignments[:24]
+    result["observed_pair_event_assignments_truncated"] = len(pair_assignments) > 24
     result["observed_group_continuity"] = group_matches[:24]
     result["observed_group_continuity_truncated"] = len(group_matches) > 24
     if not current["refs"]:

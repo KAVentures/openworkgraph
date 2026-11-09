@@ -28,3 +28,10 @@ Behavior:
 API (dashboard session): `GET /v1/schedules`, `POST /v1/schedules`,
 `POST /v1/schedules/update` `{schedule_id, enabled?, interval_minutes?}` and
 `POST /v1/schedules/delete` `{schedule_id}`.
+
+Intervals and failure backoff begin when a run finishes, so long-running jobs
+cannot immediately repeat or shorten a provider's retry delay. Pausing or editing
+a schedule does not cancel a job already running. Its completion still appears
+in history, but cannot overwrite controls changed during that run or count an
+old failure toward a newly resumed schedule. Deleting a running schedule prevents
+its completion from recreating it.

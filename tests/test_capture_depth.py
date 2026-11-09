@@ -474,3 +474,57 @@ assert trace["interaction_intent_or_attention_inferred"] is False and trace["int
                 "WORKFLOW_OBSERVER_CONFIG": str(tmp_path / "config.json")})
     result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+
+def test_local_interaction_playback(tmp_path):
+    code = r'''
+from datetime import datetime, timedelta, timezone
+from fastapi.testclient import TestClient
+from server.secure_app import app
+from server import local_auth, capture_depth, main
+from server.db import init_db
+from server.main import BrowserEvent
+import server.basic_mode_routes  # registers the capture-depth routes
+owner = {"Authorization": "OWG-Session " + local_auth.create_dashboard_session()}
+bearer = {"Authorization": "Bearer " + local_auth.ensure_api_token()}
+with TestClient(app) as client:
+    init_db()
+    capture_depth.save({"profile": "full", "acknowledgement_version": capture_depth.FULL_ACK_VERSION})
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    page = {"origin": "https://work.example", "hostname": "work.example", "pathname": "/inbox", "title": "Inbox"}
+    other = {"origin": "https://work.example", "hostname": "work.example", "pathname": "/other", "title": "Other"}
+    def send(action, when, metadata=None, target=None, p=page):
+        return main.browser_event(BrowserEvent(observed_at=when.isoformat(), action=action, page=p,
+                                               target=target or {}, metadata=metadata or {}))["inserted"]
+    first = now - timedelta(hours=2)
+    send("control_hover_dwell", first, {"duration_ms": 900, "ended_by": "pointer_left"}, {"tag": "button", "role": "menuitem"})
+    later = now - timedelta(minutes=1)
+    send("pointer_trajectory", later, {"points": [[0, 0.1, 0.2], [500, 0.4, 0.5], [1000, 0.8, 0.9]]})
+    send("control_hover_dwell", later + timedelta(seconds=2), {"duration_ms": 1200, "ended_by": "activated"},
+         {"tag": "button", "role": "button", "label": "Send invoice to Ada"})
+    send("click", later + timedelta(seconds=3), {}, {"tag": "button", "role": "button", "label": "Send invoice to Ada"})
+    send("pointer_trajectory", later, {"points": [[0, 0.9, 0.9]]}, p=other)
+    path = "/v1/capture-coverage/playback?hostname=work.example&pathname=/inbox"
+    assert client.get(path, headers=bearer).status_code == 403
+    r = client.get(path, headers=owner)
+    assert r.status_code == 200, r.text
+    r = r.json()
+    assert [v["items"] for v in r["visits"]] == [1, 3] and r["visit"] == 1
+    assert [i["kind"] for i in r["items"]] == ["hover", "click"]
+    assert r["items"][0]["target"] == {"tag": "button", "role": "button"} and r["items"][0]["duration_ms"] == 1200
+    # The pointer batch is stored when flushed: it began 1 s before its stored time.
+    assert r["path"] == [[0, 0.1, 0.2], [500, 0.4, 0.5], [1000, 0.8, 0.9]], r["path"]
+    assert [i["t_ms"] for i in r["items"]] == [3000, 4000] and r["duration_ms"] == 4000
+    assert "Ada" not in str(r) and "invoice" not in str(r)
+    assert r["counts"] == {"click": 1, "hover": 1}
+    old = client.get(path + "&visit=0", headers=owner).json()
+    assert [i["kind"] for i in old["items"]] == ["hover"] and old["items"][0]["target"]["role"] == "menuitem"
+    assert client.get(path + "&visit=9", headers=owner).status_code == 404
+    none = client.get("/v1/capture-coverage/playback?hostname=nowhere.example", headers=owner).json()
+    assert none["visit"] is None and none["items"] == [] and none["visits"] == []
+'''
+    env = os.environ.copy()
+    env.update({"WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"), "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth"),
+                "WORKFLOW_OBSERVER_CONFIG": str(tmp_path / "config.json")})
+    result = subprocess.run([sys.executable, "-c", code], cwd=ROOT, env=env, capture_output=True, text=True, timeout=180)
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"

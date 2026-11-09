@@ -18,6 +18,7 @@ import time
 
 SCHEME = "v1"
 MAX_SKEW_SECONDS = 300
+MAX_SEQUENCE = (1 << 53) - 1  # exact integer range in browser clients and JSON consumers
 
 
 def signature(secret_hex: str, timestamp: int, sequence: int, body: bytes) -> str:
@@ -37,7 +38,7 @@ def verify(secret_hex: str, timestamp: str, sequence: str, provided: str, body: 
         stamp, number = int(timestamp), int(sequence)
     except (TypeError, ValueError):
         return "malformed_headers"
-    if number < 1 or not isinstance(provided, str) or not provided.startswith(SCHEME + "="):
+    if number < 1 or number > MAX_SEQUENCE or not isinstance(provided, str) or not provided.startswith(SCHEME + "="):
         return "malformed_headers"
     if abs((time.time() if now is None else now) - stamp) > MAX_SKEW_SECONDS:
         return "stale_timestamp"
@@ -46,4 +47,4 @@ def verify(secret_hex: str, timestamp: str, sequence: str, provided: str, body: 
     return None
 
 
-__all__ = ["MAX_SKEW_SECONDS", "headers", "signature", "verify"]
+__all__ = ["MAX_SEQUENCE", "MAX_SKEW_SECONDS", "headers", "signature", "verify"]
