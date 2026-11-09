@@ -313,6 +313,7 @@
           <label for="pvDepthDwell">Hover counts after (ms)</label><input type="number" id="pvDepthDwell" min="300" max="5000">
           <label for="pvDepthHz">Pointer samples per second</label><input type="number" id="pvDepthHz" min="1" max="20">
           <label for="pvDepthRetention">Keep interaction detail (days)</label><input type="number" id="pvDepthRetention" min="1" max="365">
+          <label for="pvDepthStorage">Store at most (MB)</label><input type="number" id="pvDepthStorage" min="10" max="10000">
           <label for="pvDepthDuration">Record extra detail for</label><select id="pvDepthDuration"><option value="1">1 day</option><option value="7" selected>7 days</option><option value="30">30 days</option><option value="90">90 days</option></select>
         </div>
         <label class="pv-delete"><input type="checkbox" id="pvDepthAck"> <span id="pvDepthAckText"></span></label>
@@ -321,6 +322,7 @@
           <button type="button" class="secondary" id="pvDepthCoverage">Show capture coverage</button>
           <button type="button" class="secondary" id="pvDepthFrictionShow">Show friction candidates</button>
           <button type="button" class="secondary" id="pvDepthHeatmap">Show pointer heatmap</button>
+          <button type="button" class="secondary" id="pvDepthPlayback">Replay a visit</button>
           <button type="button" class="danger-quiet" id="pvDepthDelete">Delete interaction detail now</button>
         </div>
         <div class="muted" id="pvDepthStatus" role="status" aria-live="polite"></div>
@@ -830,6 +832,7 @@
       depthBox('pvDepthDwell').value = state.parameters.hover_dwell_ms;
       depthBox('pvDepthHz').value = state.parameters.trajectory_hz;
       depthBox('pvDepthRetention').value = state.parameters.retention_days;
+      depthBox('pvDepthStorage').value = state.parameters.storage_mb;
       depthBox('pvDepthAckText').textContent = state.full_acknowledgement;
       depthBox('pvDepthAck').checked = !!state.full_acknowledged_version;
       depthBox('pvDepthStatus').textContent = 'Current: ' + ({standard: 'Standard', enhanced: 'Enhanced', full: 'Full fidelity'}[state.profile] || 'Custom') + '.' +
@@ -843,7 +846,7 @@
     }));
     depthBox('pvDepthSave').onclick = async () => {
       const signals = Object.fromEntries(Object.entries(depthSignals).map(([key, id]) => [key, depthBox(id).checked]));
-      const payload = {signals, parameters: {hover_dwell_ms: Number(depthBox('pvDepthDwell').value), trajectory_hz: Number(depthBox('pvDepthHz').value), retention_days: Number(depthBox('pvDepthRetention').value)}, duration_days: Number(depthBox('pvDepthDuration').value)};
+      const payload = {signals, parameters: {hover_dwell_ms: Number(depthBox('pvDepthDwell').value), trajectory_hz: Number(depthBox('pvDepthHz').value), retention_days: Number(depthBox('pvDepthRetention').value), storage_mb: Number(depthBox('pvDepthStorage').value)}, duration_days: Number(depthBox('pvDepthDuration').value)};
       if (signals.pointer_trajectory) {
         if (!depthBox('pvDepthAck').checked) { depthBox('pvDepthStatus').textContent = 'Tick the acknowledgement to record pointer movement.'; return; }
         payload.acknowledgement_version = depth.state?.full_acknowledgement_version;
@@ -858,7 +861,8 @@
       try {
         const m = await api('/v1/capture-coverage');
         depthBox('pvDepthResult').replaceChildren(depthTable([...Object.entries(m.modalities).map(([k, v]) => [k.replace(/_/g, ' '), String(v).replace(/_/g, ' ')]),
-          ...Object.entries(m.high_fidelity_event_counts).map(([k, v]) => [k.replace(/^browser_/, '').replace(/_/g, ' ') + ' events (7 days)', String(v)])]));
+          ...Object.entries(m.high_fidelity_event_counts).map(([k, v]) => [k.replace(/^browser_/, '').replace(/_/g, ' ') + ' events (7 days)', String(v)]),
+          ...(m.high_fidelity_storage ? [['interaction detail stored', (m.high_fidelity_storage.bytes_estimate / 1048576).toFixed(1) + ' of ' + (m.high_fidelity_storage.limit_bytes / 1048576).toFixed(0) + ' MB (' + m.high_fidelity_storage.events + ' events)' + (m.high_fidelity_storage.last_trim ? '; oldest trimmed ' + m.high_fidelity_storage.last_trim.at : '')]] : [])]));
       } catch (error) { depthBox('pvDepthStatus').textContent = error.message || 'Could not load capture coverage.'; }
     };
     depthBox('pvDepthFrictionShow').onclick = async () => {
@@ -900,6 +904,88 @@
         depthBox('pvDepthResult').replaceChildren(depthNote('A local review aid: only cell counts are shown, never the recorded points.'), pick, out);
         await show();
       } catch (error) { depthBox('pvDepthStatus').textContent = error.message || 'Could not load the heatmap.'; }
+    };
+    const playbackNames = {hover: 'Rested on', click: 'Clicked', drag_start: 'Started dragging', drop: 'Dropped on', drag_end: 'Drag ended'};
+    const drawPlayback = (r) => {
+      const ns = 'http://www.w3.org/2000/svg';
+      const wrap = document.createElement('div'); wrap.id = 'pvDepthPlaybackView';
+      const svg = document.createElementNS(ns, 'svg');
+      svg.setAttribute('viewBox', '0 0 160 100'); svg.setAttribute('role', 'img');
+      svg.setAttribute('aria-label', 'Pointer path on ' + r.page.hostname + (r.page.pathname || '') + ' during this visit: ' + r.path.length + ' points and ' + r.items.length + ' interactions. The step list below describes it.');
+      svg.style.cssText = 'width:min(100%,420px);aspect-ratio:16/10;border:1px solid currentColor;display:block;';
+      const line = document.createElementNS(ns, 'polyline');
+      line.setAttribute('fill', 'none'); line.setAttribute('stroke', 'rgb(37,99,235)'); line.setAttribute('stroke-width', '0.8');
+      const dot = document.createElementNS(ns, 'circle'); dot.setAttribute('r', '2'); dot.setAttribute('fill', 'rgb(220,38,38)');
+      svg.append(line, dot);
+      const at = p => (p[1] * 160).toFixed(1) + ',' + (p[2] * 100).toFixed(1);
+      const duration = Math.max(1, r.duration_ms || 0);
+      const slider = Object.assign(document.createElement('input'), {type: 'range', min: '0', max: String(duration), value: String(duration), id: 'pvDepthPlaybackTime'});
+      slider.setAttribute('aria-label', 'Position in the visit, in milliseconds');
+      const now = depthNote('');
+      now.id = 'pvDepthPlaybackNow'; now.setAttribute('aria-live', 'off');
+      const render = (t) => {
+        const shown = r.path.filter(p => p[0] <= t);
+        line.setAttribute('points', shown.map(at).join(' '));
+        const last = shown[shown.length - 1];
+        dot.style.display = last ? '' : 'none';
+        if (last) { dot.setAttribute('cx', (last[1] * 160).toFixed(1)); dot.setAttribute('cy', (last[2] * 100).toFixed(1)); }
+        const done = r.items.filter(i => i.t_ms <= t);
+        now.textContent = (t / 1000).toFixed(1) + ' s of ' + (duration / 1000).toFixed(1) + ' s · ' + done.length + ' of ' + r.items.length + ' interactions';
+      };
+      slider.oninput = () => render(Number(slider.value));
+      const play = Object.assign(document.createElement('button'), {type: 'button', className: 'secondary', id: 'pvDepthPlaybackPlay', textContent: 'Play'});
+      let timer = null;
+      const stop = () => { if (timer) clearInterval(timer); timer = null; play.textContent = 'Play'; };
+      play.onclick = () => {
+        if (timer) { stop(); return; }
+        const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        if (reduce) { slider.value = String(duration); render(duration); return; }
+        let t = Number(slider.value) >= duration ? 0 : Number(slider.value);
+        const tick = Math.max(50, Math.round(duration / 200));
+        play.textContent = 'Pause';
+        timer = setInterval(() => { t = Math.min(duration, t + tick); slider.value = String(t); render(t); if (t >= duration) stop(); }, 50);
+      };
+      const steps = document.createElement('ol'); steps.id = 'pvDepthPlaybackSteps';
+      r.items.forEach(i => {
+        const li = document.createElement('li');
+        const what = [i.target && i.target.role, i.target && i.target.tag].filter(Boolean)[0] || 'control';
+        li.textContent = (i.t_ms / 1000).toFixed(1) + ' s · ' + (playbackNames[i.kind] || i.kind) + ' a ' + what + (i.duration_ms ? ' for ' + (i.duration_ms / 1000).toFixed(1) + ' s' : '');
+        steps.appendChild(li);
+      });
+      render(duration);
+      wrap.append(svg, play, slider, now, steps,
+        depthNote((r.path_downsampled ? 'The pointer path is thinned for display. ' : '') + 'Timing is approximate. ' + r.interpretation));
+      return wrap;
+    };
+    depthBox('pvDepthPlayback').onclick = async () => {
+      try {
+        const r = await api('/v1/capture-coverage/heatmap');
+        if (!r.pages.length) { depthBox('pvDepthResult').replaceChildren(depthNote('No recorded pointer movement in the last 7 days. Replays need Full fidelity.')); return; }
+        const pick = document.createElement('select'); pick.id = 'pvDepthPlaybackPage'; pick.setAttribute('aria-label', 'Page to replay');
+        r.pages.forEach(p => pick.appendChild(Object.assign(document.createElement('option'), {value: p.page, textContent: p.page})));
+        const visits = document.createElement('select'); visits.id = 'pvDepthPlaybackVisit'; visits.setAttribute('aria-label', 'Visit to replay');
+        const out = document.createElement('div');
+        const query = (extra) => {
+          const chosen = pick.value, slash = chosen.indexOf('/');
+          const q = new URLSearchParams({hostname: slash < 0 ? chosen : chosen.slice(0, slash)});
+          if (slash >= 0) q.set('pathname', chosen.slice(slash));
+          Object.entries(extra || {}).forEach(([k, v]) => q.set(k, v));
+          return '/v1/capture-coverage/playback?' + q;
+        };
+        const show = async (visit) => {
+          const p = await api(query(visit === undefined ? {} : {visit: String(visit)}));
+          if (visit === undefined) {
+            visits.replaceChildren(...p.visits.map(v => Object.assign(document.createElement('option'), {value: String(v.visit), textContent: v.started_at.slice(0, 16).replace('T', ' ') + ' (' + v.items + ' events)'})));
+            if (p.visit !== null) visits.value = String(p.visit);
+          }
+          out.replaceChildren(p.visit === null ? depthNote('No recorded interaction detail on this page.') : drawPlayback(p));
+        };
+        const fail = error => { depthBox('pvDepthStatus').textContent = error.message || 'Could not load the replay.'; };
+        pick.onchange = () => show().catch(fail);
+        visits.onchange = () => show(Number(visits.value)).catch(fail);
+        depthBox('pvDepthResult').replaceChildren(depthNote('A local replay of one visit: control kinds and the pointer path only, never labels, text or values.'), pick, visits, out);
+        await show();
+      } catch (error) { depthBox('pvDepthStatus').textContent = error.message || 'Could not load the replay.'; }
     };
     depthBox('pvDepthDelete').onclick = async () => {
       if (!window.confirm('Delete all recorded hover, drag and pointer detail from this computer? Clicks, pages and other activity are kept. This cannot be undone.')) return;

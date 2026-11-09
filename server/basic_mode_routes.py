@@ -194,6 +194,17 @@ def get_pointer_heatmap(request: Request, hostname: str | None = None, pathname:
                                          hours=max(1, min(int(hours), 24 * 365)))
 
 
+def get_interaction_playback(request: Request, hostname: str, pathname: str | None = None,
+                             hours: int = 168, visit: int | None = None) -> dict[str, Any]:
+    from . import capture_depth
+    _require_dashboard_session(request)
+    try:
+        return capture_depth.interaction_playback(hostname=hostname[:253], pathname=pathname[:2048] if pathname else None,
+                                                  hours=max(1, min(int(hours), 24 * 365)), visit=visit)
+    except capture_depth.CaptureDepthError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
+
+
 def get_capture_coverage(hours: int = 168) -> dict[str, Any]:
     from .interaction_evidence import coverage_manifest
     return coverage_manifest(max(1, min(int(hours), 24 * 90)))
@@ -247,6 +258,7 @@ if not getattr(app.state, "owg_basic_mode_installed", False):
     app.add_api_route("/v1/capture-coverage", get_capture_coverage, methods=["GET"])
     app.add_api_route("/v1/capture-coverage/friction", get_friction_candidates, methods=["GET"])
     app.add_api_route("/v1/capture-coverage/heatmap", get_pointer_heatmap, methods=["GET"])
+    app.add_api_route("/v1/capture-coverage/playback", get_interaction_playback, methods=["GET"])
     app.add_api_route("/v1/capture-depth/delete", delete_capture_detail, methods=["POST"])
     app.add_api_route("/basic-mode.js", basic_mode_script, methods=["GET"])
     app.add_api_route("/v1/update-status", update_status, methods=["GET"])
