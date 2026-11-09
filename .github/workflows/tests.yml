@@ -125,6 +125,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_logs.cjs
       - name: Verify explicitly minimized participant/team labels and complete-case cohorts
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_participants.cjs
+      - name: Verify when-work-happens time patterns in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_time_patterns.cjs
       - name: Verify reviewed shared case-key imports and per-event source provenance
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_shared_cases.cjs
       - name: Verify reviewed grouping corrections preserve canonical histories
