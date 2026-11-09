@@ -195,8 +195,19 @@
                 if(state.execution_authorized!==false||state.project_id!==projectId)throw new Error('Invalid saved review');
                 reviewRevision=state.revision;
                 reviewState.textContent='Saved '+decision+' at revision '+reviewRevision+'. This does not authorize execution.';
-              }catch(e){reviewState.textContent=e.message;}
-              finally{for(const b of [saveDraft,approve,revoke])b.disabled=false;}
+              }catch(e){
+                if(reviewStillSelected()){
+                  reviewState.textContent=e.message+' Reloading authoritative review revision…';
+                  try{await refreshReview();}
+                  catch(refreshError){
+                    reviewState.textContent='Review state uncertain. Inspect again before editing: '+refreshError.message;
+                    for(const b of [saveDraft,approve,revoke])b.disabled=true;
+                  }
+                }
+              }finally{
+                // Never enable controls for a selection that changed while saving.
+                if(!reviewStillSelected())for(const b of [saveDraft,approve,revoke])b.disabled=true;
+              }
             }
             saveDraft.onclick=()=>persistReview('draft');
             approve.onclick=()=>persistReview('approved');
@@ -218,8 +229,19 @@
                   throw new Error('Invalid revocation response');
                 reviewRevision=state.revision;
                 reviewState.textContent='Review revoked at revision '+reviewRevision+'. No agent access granted.';
-              }catch(e){reviewState.textContent=e.message;}
-              finally{for(const b of [saveDraft,approve,revoke])b.disabled=false;}
+              }catch(e){
+                if(reviewStillSelected()){
+                  reviewState.textContent=e.message+' Reloading authoritative review revision…';
+                  try{await refreshReview();}
+                  catch(refreshError){
+                    reviewState.textContent='Review state uncertain. Inspect again before editing: '+refreshError.message;
+                    for(const b of [saveDraft,approve,revoke])b.disabled=true;
+                  }
+                }
+              }finally{
+                // Never enable controls for a selection that changed while saving.
+                if(!reviewStillSelected())for(const b of [saveDraft,approve,revoke])b.disabled=true;
+              }
             };
             details.append(node('h3','Record human review'),notes,saveDraft,approve,revoke,reviewState);
             refreshReview().catch(e=>{if(reviewStillSelected()){reviewState.textContent=e.message;for(const b of [saveDraft,approve,revoke])b.disabled=true;}});
