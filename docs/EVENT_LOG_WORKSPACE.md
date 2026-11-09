@@ -192,6 +192,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-logs/{log_id}/root-cause?outcome=...` | Case features associated with an outcome, with confidence intervals. |
 | `GET /v1/event-logs/{log_id}/export?format=csv\|xes\|ocel\|ocelxml` | Download the log. |
 | `GET /v1/event-logs/{log_id}/report.html?sla_seconds=&variants=` | Download a self-contained HTML report (below). |
+| `GET`/`POST /v1/event-logs/{log_id}/saved-reports`, `GET .../saved-reports/{name}` | Copies of the report saved on this computer (below). |
 
 Analysis routes take an optional `case_type` for OCEL logs. Every response is
 `Cache-Control: no-store` and is marked descriptive: it reports what the log
@@ -224,6 +225,18 @@ HTML-escaped. Every figure is descriptive and the report carries the same
 caveat as the dashboard: durations are observed elapsed time, and repeated
 activities are not verified rework. The route requires the local dashboard
 session.
+
+**Saved copies.** **Saved copies**, next to **Download report**, lists copies
+of the whole-log report that were saved on this computer, newest first, and
+lets you download them. It also offers **Save a copy now** (the same as
+`POST /v1/event-logs/{log_id}/saved-reports`).
+
+To save copies regularly, for example to compare this week's report with last
+week's, add an **Event log report copy** job under *Scheduled jobs* with the
+log's ID. The job is local and runs at least every 15 minutes, at most every 7
+days. The newest 10 copies per log are kept in the data folder under
+`event_log_reports/<log_id>/`. Deleting the log deletes its copies and its
+report and signal schedules. Copies are never sent anywhere.
 
 ## Analytics
 

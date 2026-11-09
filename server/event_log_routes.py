@@ -477,6 +477,35 @@ def event_log_kpis(request: Request, log_id: str, case_type: str | None = Query(
     return _respond(analytics.kpis, log_id, case_type, sla_seconds, resources, cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/saved-reports")
+def event_log_saved_reports(request: Request, log_id: str):
+    """Copies of the HTML report saved on this computer, newest first."""
+    from . import event_log_saved_reports as saved_reports
+    _require_dashboard(request)
+    return _respond(saved_reports.listing, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/saved-reports")
+def event_log_save_report(request: Request, log_id: str):
+    """Save a copy of the HTML report now (a schedule can do the same)."""
+    from . import event_log_saved_reports as saved_reports
+    _require_dashboard(request)
+    return _respond(saved_reports.save, log_id)
+
+
+@router.get("/v1/event-logs/{log_id}/saved-reports/{name}")
+def event_log_saved_report_file(request: Request, log_id: str, name: str):
+    from . import event_log_saved_reports as saved_reports
+    _require_dashboard(request)
+    try:
+        target = saved_reports.path(log_id, name)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(404, str(exc)) from None
+    return FileResponse(target, media_type="text/html", filename=f"{log_id}-{name}", headers={
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"})
+
+
 @router.get("/v1/event-logs/{log_id}/report.html")
 def event_log_report(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                      sla_seconds: int | None = Query(default=None, ge=1, le=10 ** 9),

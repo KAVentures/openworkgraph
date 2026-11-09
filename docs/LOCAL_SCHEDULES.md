@@ -7,6 +7,7 @@ default.
 |---|---|
 | `retained_jira_profile` | Runs an existing retained Jira profile, exactly like **Run** in the dashboard. The profile's own read/retention consent, site-grant check and same-account check apply on every run. |
 | `event_log_signals` | Re-evaluates the saved signal rules of an event log, so the signal inbox reflects current data (`scheduled_checks_enabled: true` in the inbox). |
+| `event_log_report` | Saves a copy of an event log's self-contained HTML report in the local data folder (`event_log_reports/<log_id>/`), keeping the newest 10. Deleting the log deletes the copies and the schedule. |
 
 Behavior:
 

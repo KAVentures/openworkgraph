@@ -697,6 +697,11 @@ def delete_log(log_id: str) -> dict[str, Any]:
             conn.execute("CHECKPOINT")
             from .event_log_prediction_snapshots import erase_log as erase_snapshots
             erase_snapshots(log_id)
+            from .event_log_saved_reports import erase as erase_saved_reports
+            erase_saved_reports(log_id)
+            from .local_scheduler import forget_target
+            for kind in ("event_log_signals", "event_log_report"):
+                forget_target(kind, log_id)
             # Cover a submission racing with the first erasure while deletion waited for this lock.
             jobs.erase_log(log_id)
             return {"deleted": True, "log_id": log_id}

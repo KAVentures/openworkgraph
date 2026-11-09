@@ -135,7 +135,9 @@
     const remove=button('Delete log','secondary');remove.id='owgEventLogDelete';
     const manage=el('div',null,'row');manage.id='owgEventLogManage';manage.style.cssText='align-items:end;margin-top:12px';show(manage,false);
     const reportButton=button('Download report','secondary');reportButton.id='owgEventLogReport';reportButton.title='A self-contained HTML report: overview, KPIs, top variants and activities';
-    manage.append(field('Stored log',pick),field('Case notion',caseType),analyze,field('Export as',exportFormat),exportButton,reportButton,remove);
+    const savedButton=button('Saved copies','secondary');savedButton.id='owgEventLogSavedReports';savedButton.setAttribute('aria-expanded','false');savedButton.setAttribute('aria-controls','owgEventLogSavedList');
+    manage.append(field('Stored log',pick),field('Case notion',caseType),analyze,field('Export as',exportFormat),exportButton,reportButton,savedButton,remove);
+    const savedList=el('div');savedList.id='owgEventLogSavedList';savedList.setAttribute('role','region');savedList.setAttribute('aria-label','Saved report copies');show(savedList,false);
     const results=el('div');results.id='owgEventLogResults';
     let salesforceStagedFile=null;
     const unstageSalesforce=()=>{
@@ -145,7 +147,7 @@
       }
       salesforceStagedFile=null;
     };
-    card.append(manage,results,salesforceSourceSection((csv,namespace,isCurrent)=>{
+    card.append(manage,savedList,results,salesforceSourceSection((csv,namespace,isCurrent)=>{
       if(!isCurrent())return;
       // Invalidate any in-flight column read for the previous import file.
       columnReadSequence++;readingColumns=false;columnsReady=true;
@@ -266,6 +268,23 @@
         status('Export ready.'+relationshipExportNote());
       }catch(error){status(error.message);}
     };
+    // Copies of the report saved on this computer, by hand or by a local schedule (Basic mode › Scheduled jobs).
+    const savedBase=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/saved-reports';
+    async function showSaved(note){
+      const r=await getJSON(savedBase());
+      const saveNow=button('Save a copy now','secondary');saveNow.id='owgEventLogSaveCopy';
+      saveNow.onclick=async()=>{saveNow.disabled=true;try{const s2=await (await api(savedBase(),{method:'POST'})).json();await showSaved('Saved '+s2.saved.name+'.');}catch(error){status(error.message);saveNow.disabled=false;}};
+      const rows=r.reports.map(c=>{const get=button('Download','secondary');get.setAttribute('aria-label','Download saved report '+c.name);
+        get.onclick=async()=>{try{const response=await api(savedBase()+'/'+encodeURIComponent(c.name));const url=URL.createObjectURL(await response.blob());const link=el('a');link.href=url;link.download=state.logId+'-'+c.name;document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(error){status(error.message);}};
+        return [String(c.saved_at).replace('T',' ').replace('Z',' UTC'),Math.max(1,Math.round(c.bytes/1024))+' KB',get];});
+      savedList.replaceChildren(el('h3','Saved report copies'),
+        el('div','The newest '+r.keep+' copies of this log’s report are kept on this computer. To save one regularly, add an “Event log report copy” job under Scheduled jobs with this log’s ID: '+state.logId+'.','muted'),
+        ...(note?[el('div',note)]:[]),
+        rows.length?table(['Saved','Size',''],rows):el('div','No saved copies yet.','muted'),saveNow);
+      show(savedList,true);savedButton.setAttribute('aria-expanded','true');
+    }
+    savedButton.onclick=()=>{if(savedButton.getAttribute('aria-expanded')==='true'){show(savedList,false);savedButton.setAttribute('aria-expanded','false');return;}
+      showSaved().catch(error=>status(error.message));};
     reportButton.onclick=async()=>{
       if(!state.logId)return;
       try{
@@ -456,6 +475,7 @@
   }
 
   async function selectLog(logId){
+    const savedPanel=document.getElementById('owgEventLogSavedList');if(savedPanel){show(savedPanel,false);document.getElementById('owgEventLogSavedReports')?.setAttribute('aria-expanded','false');}
     const generation=++state.generation;state.logId=logId;state.caseType='';state.follows=[];state.objectTypes=[];
     document.getElementById('owgEventLogResults').replaceChildren();
     const types=await getJSON('/v1/event-logs/'+encodeURIComponent(logId)+'/object-types');
