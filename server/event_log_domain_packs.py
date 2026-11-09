@@ -23,6 +23,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import secrets
 from datetime import datetime, timezone
 from typing import Annotated, Any
 
@@ -858,6 +859,19 @@ def _record(conn, log_id: str, pack_id: str) -> dict[str, Any] | None:
     return json.loads(row[0]) if row else None
 
 
+def _insert_pack_metric(conn, log_id: str, metric: dict[str, Any], now: datetime) -> str:
+    """Use the metric library's schema, but write inside the pack transaction."""
+    try:
+        validated = query.SavedMetric.model_validate({"metric": metric}).metric
+    except ValidationError:
+        raise workspace.EventLogWorkspaceError("domain pack contains an invalid case metric") from None
+    metric_id = "met_" + secrets.token_hex(8)
+    definition = {"format": query.METRIC_FORMAT, "metric": validated.model_dump()}
+    conn.execute("INSERT INTO metric_definitions VALUES (?, ?, ?, ?)",
+                 [log_id, metric_id, now, json.dumps(definition, sort_keys=True)])
+    return metric_id
+
+
 def install(log_id: str, pack_id: str, spec: Any) -> dict[str, Any]:
     pack, parsed, params = _parse_install(pack_id, spec)
     mapping = parsed.mapping.model_dump()
@@ -866,34 +880,39 @@ def install(log_id: str, pack_id: str, spec: Any) -> dict[str, Any]:
     with workspace._LOCK:
         conn = workspace._connect()
         try:
+            conn.execute("BEGIN TRANSACTION")
             workspace._check_log(conn, log_id)
             _check_names(conn, log_id, parsed.mapping)
             previous = _record(conn, log_id, pack_id)
             saved = {json.loads(d)["metric"]["name"]: m for m, d in conn.execute(
                 "SELECT metric_id, definition FROM metric_definitions WHERE log_id = ?", [log_id]).fetchall()}
-        finally:
-            conn.close()
-        if previous and _version_key(parsed.version) < _version_key(previous["version"]):
-            raise workspace.EventLogWorkspaceError(
-                f"version {previous['version']} is installed; downgrading to {parsed.version} is refused")
-        owned = set(previous["metric_ids"]) if previous else set()
-        clash = [n for n, m in saved.items() if m not in owned and any(d["metric"]["name"] == n for d in definitions["metrics"])]
-        if clash:
-            raise workspace.EventLogWorkspaceError(f"a saved case metric named {clash[0]} exists and is not this pack's")
-        for metric_id in owned & set(saved.values()):
-            query.delete_metric(log_id, metric_id)
-        metric_ids = [query.save_metric(log_id, {"metric": d["metric"]})["metric_id"] for d in definitions["metrics"]]
-        change = ("installed" if not previous else "upgraded" if parsed.version != previous["version"] else "reconfigured")
-        history = ([*previous["history"], {k: previous[k] for k in ("version", "installed_at", "definitions_sha256")}]
-                   if previous else [])[-MAX_HISTORY:]
-        record = {"format": INSTALL_FORMAT, "pack_id": pack_id, "version": parsed.version,
-                  "installed_at": now.isoformat() + "Z", "mapping": mapping, "parameters": params,
-                  "definitions_sha256": _digest(definitions), "metric_ids": metric_ids, "history": history}
-        conn = workspace._connect()
-        try:
+            if previous and _version_key(parsed.version) < _version_key(previous["version"]):
+                raise workspace.EventLogWorkspaceError(
+                    f"version {previous['version']} is installed; downgrading to {parsed.version} is refused")
+            owned = set(previous["metric_ids"]) if previous else set()
+            clash = [n for n, m in saved.items() if m not in owned
+                     and any(d["metric"]["name"] == n for d in definitions["metrics"])]
+            if clash:
+                raise workspace.EventLogWorkspaceError(f"a saved case metric named {clash[0]} exists and is not this pack's")
+            if len(saved) - len(owned & set(saved.values())) + len(definitions["metrics"]) > query.MAX_SAVED:
+                raise workspace.EventLogWorkspaceError(
+                    f"a log can hold at most {query.MAX_SAVED} saved case metrics")
+            for metric_id in owned & set(saved.values()):
+                conn.execute("DELETE FROM metric_definitions WHERE log_id = ? AND metric_id = ?", [log_id, metric_id])
+            metric_ids = [_insert_pack_metric(conn, log_id, d["metric"], now) for d in definitions["metrics"]]
+            change = ("installed" if not previous else "upgraded" if parsed.version != previous["version"] else "reconfigured")
+            history = ([*previous["history"], {k: previous[k] for k in ("version", "installed_at", "definitions_sha256")}]
+                       if previous else [])[-MAX_HISTORY:]
+            record = {"format": INSTALL_FORMAT, "pack_id": pack_id, "version": parsed.version,
+                      "installed_at": now.isoformat() + "Z", "mapping": mapping, "parameters": params,
+                      "definitions_sha256": _digest(definitions), "metric_ids": metric_ids, "history": history}
             conn.execute("DELETE FROM domain_pack_installs WHERE log_id = ? AND pack_id = ?", [log_id, pack_id])
             conn.execute("INSERT INTO domain_pack_installs VALUES (?, ?, ?, ?)",
                          [log_id, pack_id, now, json.dumps(record, sort_keys=True)])
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
         finally:
             conn.close()
     return {**record, "change": change, "previous_version": previous["version"] if previous else None,
@@ -927,6 +946,7 @@ def uninstall(log_id: str, pack_id: str) -> dict[str, Any]:
     with workspace._LOCK:
         conn = workspace._connect()
         try:
+            conn.execute("BEGIN TRANSACTION")
             workspace._check_log(conn, log_id)
             previous = _record(conn, log_id, pack_id)
             if previous is None:
@@ -934,10 +954,14 @@ def uninstall(log_id: str, pack_id: str) -> dict[str, Any]:
             owned = set(previous["metric_ids"]) & {m for (m,) in conn.execute(
                 "SELECT metric_id FROM metric_definitions WHERE log_id = ?", [log_id]).fetchall()}
             conn.execute("DELETE FROM domain_pack_installs WHERE log_id = ? AND pack_id = ?", [log_id, pack_id])
+            for metric_id in owned:
+                conn.execute("DELETE FROM metric_definitions WHERE log_id = ? AND metric_id = ?", [log_id, metric_id])
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
         finally:
             conn.close()
-        for metric_id in owned:
-            query.delete_metric(log_id, metric_id)
     return {"uninstalled": True, "pack_id": pack_id, "version": previous["version"], "metrics_removed": len(owned)}
 
 
