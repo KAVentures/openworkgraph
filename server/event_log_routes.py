@@ -643,6 +643,19 @@ async def event_log_prediction_monitoring(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/batching")
+async def event_log_batching(request: Request, log_id: str):
+    """Batch processing inferred from timestamps and resources, with simulation proposals (R14)."""
+    from . import event_log_batching as batch_detection
+    _require_dashboard(request)
+    spec = await _json_body(request, "batch settings", strict=True, limit=8192)
+    try:
+        result = await run_in_threadpool(batch_detection.batching, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/{log_id}/linked-attribute-analysis")
 async def event_log_linked_attribute_analysis(request: Request, log_id: str):
     """Read-only cardinality-aware joined object attribute breakdown (R9)."""
