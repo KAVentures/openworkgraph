@@ -8,6 +8,7 @@ on:
       - 'server/event_log_workspace.py'
       - 'server/event_log_routes.py'
       - 'tests/test_event_log_signal_inbox.py'
+      - 'tests/test_signal_bulk_review.py'
       - '.github/workflows/signal-inbox-fast.yml'
   workflow_dispatch:
 
@@ -36,6 +37,7 @@ jobs:
         run: |
           python -m pytest -q \
             tests/test_event_log_signal_inbox.py \
+            tests/test_signal_bulk_review.py \
             tests/test_event_log_signals.py \
             tests/test_event_log_signal_evidence.py \
             tests/test_event_log_workspace.py

@@ -21,6 +21,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import json
 import os
+import re
 import tempfile
 import threading
 from typing import Any
@@ -37,9 +38,13 @@ PROFILES: dict[str, dict[str, bool]] = {
     "enhanced": {"hover_dwell": True, "drag_drop": True, "friction_candidates": True, "pointer_trajectory": False},
     "full": {"hover_dwell": True, "drag_drop": True, "friction_candidates": True, "pointer_trajectory": True},
 }
-DEFAULT_PARAMETERS = {"hover_dwell_ms": 750, "trajectory_hz": 4, "max_events_per_minute": 60, "retention_days": 30}
+DEFAULT_PARAMETERS = {"hover_dwell_ms": 750, "trajectory_hz": 4, "max_events_per_minute": 60, "retention_days": 30,
+                      "storage_mb": 200}
 PARAMETER_BOUNDS = {"hover_dwell_ms": (300, 5000), "trajectory_hz": (1, 20), "max_events_per_minute": (10, 600),
-                    "retention_days": (1, 365)}
+                    "retention_days": (1, 365), "storage_mb": (10, 10000)}
+# When stored interaction detail exceeds its quota, the oldest is deleted down to this share of it.
+QUOTA_TRIM_TO = 0.9
+_MB = 1024 * 1024
 # Which stored browser actions each signal produces. Actions not listed are existing structural signals.
 SIGNAL_ACTIONS = {"hover_dwell": {"control_hover_dwell"},
                   "drag_drop": {"drag_start", "drag_drop", "drag_end"},
@@ -49,6 +54,12 @@ DEFAULT_DURATION_DAYS = 7
 MAX_DURATION_DAYS = 90
 # Metadata keys that only high-fidelity events may carry; they are dropped from every other action.
 RESERVED_METADATA_KEYS = ("points", "trajectory", "pointer_points", "sample_hz", "viewport_bucket", "coordinates")
+# Page/automation accessibility attributes are untrusted text, including role,
+# type and even custom tag names. Only known structural values may be retained.
+_TARGET_TAGS = frozenset("a button div input label li option select span summary textarea other".split())
+_TARGET_ROLES = frozenset("button link tab menuitem menu menubar option checkbox radio switch combobox treeitem region list listitem row cell gridcell textbox searchbox slider".split())
+_TARGET_TYPES = frozenset("button checkbox color date datetime-local email file hidden image month number radio range reset search submit tel text time url week secure".split())
+_DESKTOP_ROLES = frozenset({"AXButton", "AXLink", "AXCheckBox", "AXRadioButton", "AXMenu", "AXMenuItem", "AXPopUpButton", "AXTab", "AXTextField", "AXTextArea", "AXList", "AXRow", "AXCell", "AXOutline", "AXSlider", "AXComboBox", "AXImage", "AXGroup", "AXStaticText", "Button", "Hyperlink", "Menu", "MenuItem", "CheckBox", "RadioButton", "Tab", "TabItem", "Edit", "List", "ListItem", "DataItem", "TreeItem", "ComboBox", "Slider", "Text", "Pane", "Group", "button", "link", "list item", "list", "menu item", "menu", "tab", "check box", "radio button", "text", "edit", "slider", "combo box"})
 # Stored event types of the high-fidelity signals, browser and desktop.
 HIGH_FIDELITY_EVENT_TYPES = ("browser_control_hover_dwell", "browser_drag_start", "browser_drag_drop", "browser_drag_end",
                              "browser_pointer_trajectory", "screen_hover_dwell", "screen_drag", "screen_pointer_trajectory")
@@ -199,21 +210,74 @@ def delete_high_fidelity(*, older_than_days: int | None = None) -> dict[str, Any
         cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).isoformat()
         where += " AND julianday(observed_at) < julianday(?)"
         params.append(cutoff)
-    deleted = {}
     with _LOCK, connect() as conn:
         ids = [r[0] for r in conn.execute(f"SELECT event_id FROM events WHERE {where}", params).fetchall()]
-        for table in ("context_events", "normalized_events", "events"):
-            removed = 0
-            for offset in range(0, len(ids), 500):
-                chunk = ids[offset:offset + 500]
-                removed += conn.execute(f"DELETE FROM {table} WHERE event_id IN ({','.join('?' for _ in chunk)})",
-                                        chunk).rowcount or 0
-            deleted[table] = removed
-        orphaned = conn.execute("DELETE FROM pointer_trajectory_points WHERE event_id NOT IN "
-                                "(SELECT event_id FROM events)").rowcount or 0
-    return {"deleted_events": deleted["events"], "deleted_derived_rows": deleted["context_events"] + deleted["normalized_events"],
-            "orphaned_point_sets_removed": orphaned, "older_than_days": older_than_days,
-            "structural_evidence_kept": True}
+        result = _delete_events(conn, ids)
+    return {**result, "older_than_days": older_than_days, "structural_evidence_kept": True}
+
+
+def _delete_events(conn, ids: list[str]) -> dict[str, int]:
+    deleted = {}
+    for table in ("context_events", "normalized_events", "events"):
+        removed = 0
+        for offset in range(0, len(ids), 500):
+            chunk = ids[offset:offset + 500]
+            removed += conn.execute(f"DELETE FROM {table} WHERE event_id IN ({','.join('?' for _ in chunk)})",
+                                    chunk).rowcount or 0
+        deleted[table] = removed
+    orphaned = conn.execute("DELETE FROM pointer_trajectory_points WHERE event_id NOT IN "
+                            "(SELECT event_id FROM events)").rowcount or 0
+    return {"deleted_events": deleted["events"],
+            "deleted_derived_rows": deleted["context_events"] + deleted["normalized_events"],
+            "orphaned_point_sets_removed": orphaned}
+
+
+def high_fidelity_storage() -> dict[str, Any]:
+    """Estimated bytes held by stored interaction detail: event metadata plus pointer points."""
+    from .db import connect
+    placeholders = ",".join("?" for _ in HIGH_FIDELITY_EVENT_TYPES)
+    with connect() as conn:
+        events, meta_bytes = conn.execute(
+            f"SELECT count(*), coalesce(sum(length(metadata_json)), 0) FROM events WHERE event_type IN ({placeholders})",
+            HIGH_FIDELITY_EVENT_TYPES).fetchone()
+        point_bytes = conn.execute("SELECT coalesce(sum(length(points_json)), 0) FROM pointer_trajectory_points").fetchone()[0]
+    limit = load()["parameters"]["storage_mb"] * _MB
+    used = int(meta_bytes) + int(point_bytes)
+    return {"events": int(events), "bytes_estimate": used, "limit_bytes": limit,
+            "share_of_limit": round(used / limit, 4) if limit else None,
+            "estimate_basis": "stored event metadata and pointer points; database overhead not included",
+            "last_trim": dict(_LAST_TRIM) if _LAST_TRIM else None}
+
+
+_LAST_TRIM: dict[str, Any] = {}
+
+
+def enforce_storage_quota() -> dict[str, Any] | None:
+    """Delete the oldest interaction detail when it exceeds the storage quota. Structural evidence is kept."""
+    from .db import connect
+    usage = high_fidelity_storage()
+    if usage["bytes_estimate"] <= usage["limit_bytes"]:
+        return None
+    target = int(usage["limit_bytes"] * QUOTA_TRIM_TO)
+    excess = usage["bytes_estimate"] - target
+    placeholders = ",".join("?" for _ in HIGH_FIDELITY_EVENT_TYPES)
+    with _LOCK, connect() as conn:
+        rows = conn.execute(f"""SELECT e.event_id, length(e.metadata_json) + coalesce(length(p.points_json), 0)
+            FROM events e LEFT JOIN pointer_trajectory_points p ON p.event_id = e.event_id
+            WHERE e.event_type IN ({placeholders}) ORDER BY e.observed_at, e.event_id""",
+                            HIGH_FIDELITY_EVENT_TYPES).fetchall()
+        ids, freed = [], 0
+        for event_id, size in rows:
+            if freed >= excess:
+                break
+            ids.append(event_id)
+            freed += int(size or 0)
+        result = _delete_events(conn, ids)
+    _LAST_TRIM.clear()
+    _LAST_TRIM.update(at=datetime.now(timezone.utc).isoformat(timespec="seconds"), deleted_events=result["deleted_events"],
+                      bytes_before=usage["bytes_estimate"], limit_bytes=usage["limit_bytes"])
+    return {**result, "reason": "storage_quota", "bytes_before": usage["bytes_estimate"],
+            "bytes_freed_estimate": freed, "limit_bytes": usage["limit_bytes"], "structural_evidence_kept": True}
 
 
 def apply_retention(force: bool = False) -> dict[str, Any] | None:
@@ -225,9 +289,14 @@ def apply_retention(force: bool = False) -> dict[str, Any] | None:
         return None
     _LAST_PURGE["at"] = now
     try:
-        return delete_high_fidelity(older_than_days=load()["parameters"]["retention_days"])
+        result = delete_high_fidelity(older_than_days=load()["parameters"]["retention_days"])
     except Exception:
         return None
+    try:
+        result["storage_quota"] = enforce_storage_quota()
+    except Exception:
+        result["storage_quota"] = None
+    return result
 
 
 def pointer_heatmap(*, hostname: str | None = None, pathname: str | None = None, hours: int = 168) -> dict[str, Any]:
@@ -275,6 +344,114 @@ def pointer_heatmap(*, hostname: str | None = None, pathname: str | None = None,
     return out
 
 
+PLAYBACK_VISIT_GAP_SECONDS = 300
+PLAYBACK_MAX_ITEMS = 600
+PLAYBACK_MAX_POINTS = 3000
+_PLAYBACK_TYPES = HIGH_FIDELITY_EVENT_TYPES[:5] + ("browser_click",)
+_PLAYBACK_KINDS = {"browser_control_hover_dwell": "hover", "browser_drag_start": "drag_start",
+                   "browser_drag_drop": "drop", "browser_drag_end": "drag_end",
+                   "browser_pointer_trajectory": "pointer", "browser_click": "click"}
+
+
+def interaction_playback(*, hostname: str, pathname: str | None = None, hours: int = 168,
+                         visit: int | None = None) -> dict[str, Any]:
+    """A local review aid: one visit to a page replayed in order.
+
+    Hover dwells, drags, clicks and sampled pointer movement on the chosen page are
+    grouped into visits (gaps over five minutes start a new one). The chosen visit,
+    the latest by default, is returned as a time-ordered list of items with
+    structural targets only (tag, role) and the pointer path as viewport fractions.
+    No labels, text, values or URLs beyond the chosen page are returned. Timing is
+    approximate: a pointer batch is stored when it is flushed. This is not an
+    attention, effort or performance measure.
+    """
+    from .db import connect
+    since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    placeholders = ",".join("?" for _ in _PLAYBACK_TYPES)
+    with connect() as conn:
+        rows = conn.execute(f"""SELECT e.event_id, e.event_type, e.observed_at, e.metadata_json, p.points_json
+            FROM events e LEFT JOIN pointer_trajectory_points p ON p.event_id = e.event_id
+            WHERE e.event_type IN ({placeholders}) AND julianday(e.observed_at) >= julianday(?)
+            ORDER BY e.observed_at DESC, e.event_id DESC LIMIT 20000""", (*_PLAYBACK_TYPES, since)).fetchall()
+    events = []
+    for event_id, event_type, observed_at, meta_json, points_json in rows:
+        try:
+            meta = json.loads(meta_json or "{}")
+            at = datetime.fromisoformat(str(observed_at).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        page = meta.get("page") if isinstance(meta.get("page"), dict) else {}
+        if str(page.get("hostname") or "") != hostname or (pathname is not None and str(page.get("pathname") or "") != pathname):
+            continue
+        if at.tzinfo is None:
+            at = at.replace(tzinfo=timezone.utc)
+        events.append((at, str(event_id), event_type, meta, points_json))
+    events.sort(key=lambda e: (e[0], e[1]))
+    visits: list[list[tuple]] = []
+    for event in events:
+        if visits and (event[0] - visits[-1][-1][0]).total_seconds() <= PLAYBACK_VISIT_GAP_SECONDS:
+            visits[-1].append(event)
+        else:
+            visits.append([event])
+    summary = [{"visit": index, "started_at": v[0][0].isoformat(), "ended_at": v[-1][0].isoformat(),
+                "items": len(v)} for index, v in enumerate(visits)]
+    out: dict[str, Any] = {"page": {"hostname": hostname, "pathname": pathname}, "hours": hours,
+                           "visits": summary[-50:], "visits_truncated": len(summary) > 50,
+                           "local_review_only": True, "timing": "approximate",
+                           "coordinates": "viewport_fraction",
+                           "interpretation": ("A replay of recorded interaction detail on this page. It shows where the "
+                                              "pointer went and which kinds of control were used, not attention, effort, "
+                                              "intent or performance.")}
+    if not visits:
+        return {**out, "visit": None, "items": [], "path": []}
+    chosen = len(visits) - 1 if visit is None else visit
+    if not 0 <= chosen < len(visits):
+        raise CaptureDepthError("unknown visit")
+    selected = visits[chosen]
+
+    def _batch_points(meta: dict[str, Any], points_json: Any) -> list[list[float]]:
+        try:
+            points = json.loads(points_json or "null")
+        except ValueError:
+            points = None
+        if not isinstance(points, list):
+            points = meta.get("points") if isinstance(meta.get("points"), list) else []
+        return [p for p in points if isinstance(p, list) and len(p) == 3
+                and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in p)]
+
+    # A pointer batch is stored when flushed, so it began before its stored time.
+    start = min([selected[0][0]] + [at - timedelta(milliseconds=pts[-1][0]) for at, _i, kind, meta, pj in selected
+                                     if kind == "browser_pointer_trajectory" for pts in [_batch_points(meta, pj)] if pts])
+    items: list[dict[str, Any]] = []
+    path: list[list[float]] = []
+    for at, _event_id, event_type, meta, points_json in selected:
+        offset = int((at - start).total_seconds() * 1000)
+        if event_type == "browser_pointer_trajectory":
+            clean = _batch_points(meta, points_json)
+            if not clean:
+                continue
+            last = clean[-1][0]
+            for t, x, y in clean:
+                path.append([max(0, offset - int(last - t)), round(min(1.0, max(0.0, float(x))), 3),
+                             round(min(1.0, max(0.0, float(y))), 3)])
+            continue
+        target = meta.get("target") if isinstance(meta.get("target"), dict) else {}
+        item: dict[str, Any] = {"t_ms": offset, "kind": _PLAYBACK_KINDS[event_type],
+                                "target": _structural_target(target)}
+        for key in ("duration_ms", "ended_by", "outcome"):
+            value = meta.get(key)
+            if isinstance(value, (int, float, str)) and not isinstance(value, bool):
+                item[key] = value if not isinstance(value, str) else value[:40]
+        items.append(item)
+    path.sort(key=lambda p: p[0])
+    step = max(1, -(-len(path) // PLAYBACK_MAX_POINTS))
+    duration = max([i["t_ms"] for i in items] + [p[0] for p in path] + [0])
+    return {**out, "visit": chosen, "started_at": start.isoformat(), "duration_ms": duration,
+            "items": items[:PLAYBACK_MAX_ITEMS], "items_truncated": len(items) > PLAYBACK_MAX_ITEMS,
+            "path": path[::step], "path_points_recorded": len(path), "path_downsampled": step > 1,
+            "counts": {kind: sum(1 for i in items if i["kind"] == kind) for kind in sorted({i["kind"] for i in items})}}
+
+
 def for_extension() -> dict[str, Any]:
     """The subset the paired extension needs to decide what to emit."""
     state = load()
@@ -294,12 +471,22 @@ def action_allowed_on_excluded(action: str) -> bool:
     return not any(action in actions for actions in SIGNAL_ACTIONS.values())
 
 
+def _structural_target(target: dict[str, Any], *, desktop: bool = False) -> dict[str, str]:
+    out = {}
+    for key, allowed in (("tag", _TARGET_TAGS), ("role", _TARGET_ROLES | (_DESKTOP_ROLES if desktop else frozenset())),
+                         ("type", _TARGET_TYPES), ("localized_role", _DESKTOP_ROLES if desktop else frozenset())):
+        value = target.get(key)
+        if isinstance(value, str) and value in allowed:
+            out[key] = value
+    return out
+
+
 def bound_target(action: str, target: dict[str, Any]) -> dict[str, Any]:
     """High-fidelity events keep structural target fields only (tag, role, type), never a label or name."""
     if not any(action in actions for actions in SIGNAL_ACTIONS.values()):
         return target
     # No label at all: aria-label, title, placeholder and label text can all be set from what the user typed.
-    return {k: str(target[k])[:160] for k in ("tag", "role", "type") if target.get(k)}
+    return _structural_target(target)
 
 
 def bound_metadata(action: str, metadata: dict[str, Any]) -> dict[str, Any] | None:
@@ -317,8 +504,9 @@ def bound_metadata(action: str, metadata: dict[str, Any]) -> dict[str, Any] | No
             if not (0 <= t <= 120000 and 0 <= x <= 1 and 0 <= y <= 1):
                 return None
             clean.append([int(t), round(float(x), 3), round(float(y), 3)])
-        return {"points": clean, "sample_hz": metadata.get("sample_hz") if isinstance(metadata.get("sample_hz"), int) else None,
-                "viewport_bucket": str(metadata.get("viewport_bucket") or "")[:16],
+        viewport = metadata.get("viewport_bucket")
+        return {"points": clean, "sample_hz": metadata.get("sample_hz") if type(metadata.get("sample_hz")) is int else None,
+                "viewport_bucket": viewport if isinstance(viewport, str) and re.fullmatch(r"[0-9]{1,5}x[0-9]{1,5}", viewport) else "",
                 "coordinates": "viewport_fraction", **_frame(metadata)}
     if action == "control_hover_dwell":
         duration = metadata.get("duration_ms")
@@ -334,11 +522,13 @@ def bound_metadata(action: str, metadata: dict[str, Any]) -> dict[str, Any] | No
             if isinstance(kinds, list) else []
         completion = metadata.get("completion") if metadata.get("completion") in ("complete", "incomplete", "unknown") \
             else "unknown"
-        out = {"payload_kinds": kinds, "completion": completion, "drag_id": str(metadata.get("drag_id") or "")[:32],
+        drag_id = metadata.get("drag_id")
+        out = {"payload_kinds": kinds, "completion": completion,
+               "drag_id": drag_id if isinstance(drag_id, str) and re.fullmatch(r"(?:[a-z0-9]{1,12}|external)", drag_id) else "",
                **_frame(metadata)}
         if isinstance(metadata.get("source_target"), dict):
             source = metadata["source_target"]
-            out["source_target"] = {k: str(v)[:160] for k, v in source.items() if k in ("tag", "role", "type") and v}
+            out["source_target"] = _structural_target(source)
         return out
     # Ordinary actions keep their metadata, minus the keys only high-fidelity events may carry.
     return {k: v for k, v in metadata.items() if k not in RESERVED_METADATA_KEYS}
@@ -369,8 +559,7 @@ def filter_desktop_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             # Like browser hover and drag: structural fields only, never an accessibility name or label.
             for key in ("target", "source_target", "destination_target"):
                 if isinstance(meta.get(key), dict):
-                    meta = {**meta, key: {k: str(v)[:80] for k, v in meta[key].items()
-                                          if k in ("role", "localized_role", "tag", "type") and v not in (None, "")}}
+                    meta = {**meta, key: _structural_target(meta[key], desktop=True)}
             event = {**event, "metadata": meta}
         if signal == "pointer_trajectory":
             points = meta.get("points")
@@ -383,9 +572,17 @@ def filter_desktop_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _frame(metadata: dict[str, Any]) -> dict[str, Any]:
-    return {k: metadata[k] for k in ("top_frame", "frame_kind", "tab_id", "window_id") if k in metadata}
+    out = {}
+    if type(metadata.get("top_frame")) is bool:
+        out["top_frame"] = metadata["top_frame"]
+    if metadata.get("frame_kind") in ("top", "subframe"):
+        out["frame_kind"] = metadata["frame_kind"]
+    for key in ("tab_id", "window_id"):
+        if type(metadata.get(key)) is int and 0 <= metadata[key] <= 2**53 - 1:
+            out[key] = metadata[key]
+    return out
 
 
-__all__ = ["CaptureDepthError", "FULL_ACK_VERSION", "HIGH_FIDELITY_EVENT_TYPES", "PROFILES", "SIGNALS", "action_allowed",
+__all__ = ["CaptureDepthError", "FULL_ACK_VERSION", "HIGH_FIDELITY_EVENT_TYPES", "PROFILES", "interaction_playback", "SIGNALS", "action_allowed",
            "action_allowed_on_excluded", "apply_retention", "bound_metadata", "bound_target", "delete_high_fidelity",
            "filter_desktop_events", "for_extension", "load", "pointer_heatmap", "public", "save"]

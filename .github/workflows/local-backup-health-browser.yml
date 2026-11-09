@@ -1,0 +1,48 @@
+name: local-backup-health-browser
+
+on:
+  pull_request:
+    paths:
+      - "server/local_backup_health.py"
+      - "server/basic_mode_routes.py"
+      - "dashboard/basic_mode.js"
+      - "tests/test_local_backup_health.py"
+      - "tests/browser/backup_health.cjs"
+      - ".github/workflows/local-backup-health-browser.yml"
+  push:
+    branches: ["main"]
+    paths:
+      - "server/local_backup_health.py"
+      - "server/basic_mode_routes.py"
+      - "dashboard/basic_mode.js"
+      - "tests/test_local_backup_health.py"
+      - "tests/browser/backup_health.cjs"
+      - ".github/workflows/local-backup-health-browser.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  backup-health-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install local app and tests
+        run: python -m pip install -e ".[dev,gateway]"
+      - name: Verify normal/damaged/encrypted/symlink backup and local-only ASGI authorization
+        run: python -m pytest -q tests/test_local_backup_health.py
+      - name: Install isolated Chromium and axe
+        run: |
+          npm install --prefix "$RUNNER_TEMP/owg-browser" playwright@1.64.1 axe-core@4.10.3
+          node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install --with-deps chromium
+      - name: Check real browser acceptance syntax
+        run: node --check tests/browser/backup_health.cjs
+      - name: Run authenticated Privacy local backup integrity journey
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/backup_health.cjs
