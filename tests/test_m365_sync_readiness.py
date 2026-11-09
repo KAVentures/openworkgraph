@@ -429,12 +429,22 @@ def _cli_commit_args():
     return args
 
 
-def test_cli_commit_requires_separate_approval_and_dashboard_session(monkeypatch, capsys):
+@pytest.fixture
+def _private_audit_stub(monkeypatch):
+    """Mutating CLI actions now require private audit storage; these tests cover the
+    approval and reconciliation contract, so audit storage itself is stubbed here and
+    exercised by the dedicated audit tests below."""
+    monkeypatch.setattr("server.m365_outlook_sync_readiness._preflight_audit_directory", lambda d: None)
+    monkeypatch.setattr("server.m365_outlook_sync_readiness._audit_operator_result",
+                        lambda d, **kw: "audit-receipt.json")
+
+
+def test_cli_commit_requires_separate_approval_and_dashboard_session(monkeypatch, capsys, _private_audit_stub):
     from server.m365_outlook_sync_readiness import main
     monkeypatch.setenv("OWG_DASHBOARD_SESSION", "private-session")
     with patch("server.m365_outlook_sync_readiness.commit_after_review",
                return_value={"status": "checkpoint_committed", "committed_generation": 3}) as commit:
-        assert main(_cli_commit_args()) == 0
+        assert main(_cli_commit_args() + ["--audit-dir", "audit"]) == 0
         assert commit.call_args.kwargs["session"] == "private-session"
         assert commit.call_args.kwargs["confirm_events_appended"] is True
         assert commit.call_args.kwargs["expected_previous_candidate_sha256"] == "a" * 64
@@ -654,7 +664,7 @@ def test_operator_two_round_review_append_commit_incremental_contract():
     ("commit", "possible_checkpoint_commit", "inspect_durable_ledger"),
     ("append", "possible_local_append", "inspect_owg_inventory_and_checkpoint"),
 ])
-def test_operator_uncertain_write_identifies_correct_reconciliation(monkeypatch, capsys,
+def test_operator_uncertain_write_identifies_correct_reconciliation(monkeypatch, capsys, _private_audit_stub,
                                                                     action, expected_key, recovery):
     """Do not mislabel an uncertain checkpoint write as an OWG append."""
     from server.m365_outlook_sync_readiness import main
@@ -676,6 +686,7 @@ def test_operator_uncertain_write_identifies_correct_reconciliation(monkeypatch,
             del args[pos:pos + 2]
         args.extend(["--append-after-review", "--consent-local-append"])
         target = "server.m365_outlook_sync_readiness.append_after_review"
+    args.extend(["--audit-dir", "audit"])
     with patch(target, side_effect=UncertainReceipt("private provider response")):
         assert main(args) == 3
     output = capsys.readouterr().out
