@@ -1133,6 +1133,8 @@
       {
         const p=idea.planning||{};
         const section=el('section');section.id='owgPipelinePlanning';section.setAttribute('aria-label','Planning');
+        section.dataset.ideaId=idea.idea_id;section.dataset.revision=String(idea.revision);
+        section.addEventListener('input',()=>{section.dataset.dirty='true';});section.addEventListener('change',()=>{section.dataset.dirty='true';});
         section.appendChild(el('h4','Planning'));
         const owner=input('owgPlanOwner','text','Who looks after it');owner.maxLength=80;owner.value=p.owner||'';
         const team=input('owgPlanTeam','text','Team');team.maxLength=80;team.value=p.team||'';
@@ -2092,6 +2094,17 @@
       const remove=button('Delete idea','secondary');remove.id='owgPipelineDelete';
       remove.onclick=async()=>{if(!window.confirm('Delete the idea "'+idea.title+'"? This cannot be undone.'))return;try{await api('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/delete',{method:'POST'});detail.replaceChildren();await refresh();status.textContent='Idea deleted.';}catch(e){status.textContent=e.message;}};
       box.append(el('h4','History'),history,remove);
+      // A re-render of the same idea at the same revision (for example after a list refresh)
+      // must not throw away planning the person is still typing.
+      const previous=detail.querySelector('#owgPipelinePlanning');
+      const fresh=box.querySelector('#owgPipelinePlanning');
+      if(previous&&fresh&&previous.dataset.dirty==='true'&&previous.dataset.ideaId===idea.idea_id&&previous.dataset.revision===String(idea.revision)){
+        previous.querySelectorAll('input,select').forEach(node=>{
+          const twin=node.id?fresh.querySelector('#'+CSS.escape(node.id)):null;if(!twin)return;
+          if(node.type==='checkbox')twin.checked=node.checked;else twin.value=node.value;
+        });
+        fresh.dataset.dirty='true';
+      }
       detail.replaceChildren(box);
       if(resume&&resume.valid()&&generation===detailGeneration)
         await journeyButton.onclick();
