@@ -185,6 +185,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-logs/{log_id}/drift?window=month\|week\|cases&window_cases=&min_cases=` | Change points in how cases run over time (below). |
 | `GET /v1/event-logs/{log_id}/playback?activities=&max_cases=` | Per-case event offsets for animating cases along the process map (below). |
 | `GET`/`POST /v1/event-logs/{log_id}/filter-sets`, `POST .../filter-sets/{set_id}/delete` | Saved, reusable case filters (below). |
+| `GET`/`POST /v1/event-logs/{log_id}/case-tags`, `POST .../case-tags/remove` | Analyst tags on cases (below). |
 | `GET /v1/event-logs/{log_id}/root-cause?outcome=...` | Case features associated with an outcome, with confidence intervals. |
 | `GET /v1/event-logs/{log_id}/export?format=csv\|xes\|ocel\|ocelxml` | Download the log. |
 
@@ -696,6 +697,35 @@ text formatting would change a label or routing probability. Small observed
 weights retain their precision; a zero-weight route may be disabled when
 another route has positive weight. Activity labels are data keys, including
 names that also occur on JavaScript object prototypes.
+
+## Case tags
+
+While investigating, tag cases such as "checked", "root cause: missing PO" or
+"exclude: test data", and come back to them. A tag is a label of 1–60
+characters with an optional note (up to 500 characters). Tags are stored on this
+computer next to the log. They are the analyst's judgement, not source data,
+and the log's events are never changed.
+
+* **Adding tags:** `POST /v1/event-logs/{log_id}/case-tags` with either:
+  * `{"tag": "checked", "note": "…", "case_ids": ["c1", "c2"]}`, for up to
+    1,000 IDs. IDs that are not cases of the log are counted in
+    `unknown_case_ids` and skipped; or
+  * `{"tag": "escalated", "cohort": {"activity": "Escalate"}}`, for up to
+    100,000 matching cases.
+
+  Tagging a case again replaces its note.
+* **Removing tags:** `POST /v1/event-logs/{log_id}/case-tags/remove` with
+  `{"tag": "checked", "case_ids": ["c1"]}`. Leave out `case_ids` to remove the
+  tag everywhere.
+* **Listing tags:** `GET /v1/event-logs/{log_id}/case-tags` lists the tags with
+  their case counts. Add `?tag=checked` to also get the tagged cases and their
+  notes (`limit` 1–1000).
+* **Filtering by tag:** the `tag` key of the case filter (`?tag=` on GET
+  analyses, `"tag"` in `cohort` bodies, and **Tagged** in the dashboard)
+  selects tagged cases in every analysis.
+
+A log keeps at most 100 tags and 200,000 tagged cases. Deleting the log deletes
+its tags. A log saved from matching cases does not copy them.
 
 ## Organizational mining (handovers)
 
