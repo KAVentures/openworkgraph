@@ -169,6 +169,18 @@ async def assess_idea(request: Request, idea_id: str):
     return _respond(pipeline.assess, idea_id, await _json(request))
 
 
+@router.post("/v1/automation-pipeline/{idea_id}/transition")
+async def move_idea(request: Request, idea_id: str):
+    _require_dashboard(request)
+    return _respond(pipeline.transition, idea_id, await _json(request))
+
+
+@router.post("/v1/automation-pipeline/{idea_id}/delete")
+def delete_idea(request: Request, idea_id: str):
+    _require_dashboard(request)
+    return _respond(pipeline.delete, idea_id)
+
+
 def _benefit(operation: Callable[..., Any], *args: Any) -> JSONResponse:
     from . import automation_benefits
     try:
@@ -196,15 +208,3 @@ def delete_measurement(request: Request, idea_id: str, measurement_id: str):
     from . import automation_benefits
     _require_dashboard(request)
     return _benefit(automation_benefits.delete, idea_id, measurement_id)
-
-
-@router.post("/v1/automation-pipeline/{idea_id}/transition")
-async def move_idea(request: Request, idea_id: str):
-    _require_dashboard(request)
-    return _respond(pipeline.transition, idea_id, await _json(request))
-
-
-@router.post("/v1/automation-pipeline/{idea_id}/delete")
-def delete_idea(request: Request, idea_id: str):
-    _require_dashboard(request)
-    return _respond(pipeline.delete, idea_id)
