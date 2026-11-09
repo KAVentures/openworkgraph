@@ -348,3 +348,41 @@ def test_matching_customer_report_change_invalidates_review_basis(monkeypatch):
     payload['project_set_sha256'] = second['project_set_sha256']
     assert client.post(path+'/preflight', json=payload, headers=headers).status_code == 200
     assert client.post(path+'/preflight', json=payload).status_code == 403
+
+
+def test_emergency_review_revocation_survives_stale_evidence(monkeypatch, tmp_path):
+    """A user must be able to withdraw approval after provenance disappears."""
+    import sqlite3
+    app = FastAPI()
+    app.include_router(routes.router)
+    client = TestClient(app)
+    db = tmp_path / "review.sqlite3"
+    monkeypatch.setattr(routes.pipeline, "_connect", lambda: sqlite3.connect(db))
+    monkeypatch.setattr(routes, "dashboard_session_valid", lambda token: token == "test-session")
+    with sqlite3.connect(db) as conn:
+        conn.execute("""CREATE TABLE project_human_reviews (
+            idea_id TEXT NOT NULL, project_id TEXT NOT NULL,
+            revision INTEGER NOT NULL, decision TEXT NOT NULL,
+            basis_sha256 TEXT NOT NULL, reviewer_notes TEXT NOT NULL,
+            updated_at TEXT NOT NULL, PRIMARY KEY(idea_id, project_id))""")
+        conn.execute("INSERT INTO project_human_reviews VALUES (?, ?, ?, ?, ?, ?, ?)",
+                     ("idea-1", "p1", 4, "approved", "a"*64, "review notes", "now"))
+    def stale(_):
+        raise routes.pipeline.PipelineError("unknown idea")
+    monkeypatch.setattr(routes.opportunity_journey, "journey", stale)
+    path = "/v1/review-choice-workbench/idea-1/review/p1/revoke"
+    headers = {"Authorization": "OWG-Session test-session"}
+    assert client.post(path, json={"expected_review_revision": 4}).status_code == 403
+    assert client.post(path, json={"expected_review_revision": 3}, headers=headers).status_code == 409
+    response = client.post(path, json={"expected_review_revision": 4}, headers=headers)
+    assert response.status_code == 200
+    assert response.json()["decision"] == "revoked"
+    assert response.json()["execution_authorized"] is False
+    assert response.json()["revision"] == 5
+    assert client.post(path, json={"expected_review_revision": 4}, headers=headers).status_code == 409
+    assert client.post(path, json={"expected_review_revision": 5}, headers=headers).status_code == 409
+    assert client.post(path.replace("/p1/", "/missing/"),
+                       json={"expected_review_revision": 1}, headers=headers).status_code == 404
+    with sqlite3.connect(db) as conn:
+        row = conn.execute("SELECT decision, revision, reviewer_notes FROM project_human_reviews").fetchone()
+    assert row == ("revoked", 5, "review notes")
