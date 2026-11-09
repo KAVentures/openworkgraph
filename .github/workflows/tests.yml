@@ -175,6 +175,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_costs.cjs
       - name: Verify supplied source-event IDs and key-preserving CSV round trips
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_source_identity.cjs
+      - name: Verify case filters on event attributes kept from a CSV import
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_attribute_filter.cjs
       - name: Verify prediction snapshots scored after newer events in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/prediction_snapshots.cjs
       - name: Verify cancellable local analysis jobs in Chromium

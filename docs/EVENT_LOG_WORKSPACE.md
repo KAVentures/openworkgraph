@@ -238,7 +238,11 @@ descriptive: cases with a value can differ from the rest in many other ways.
 KPIs can be limited to a cohort with the query parameters `started_from` and
 `started_before` (timezone-qualified ISO times; a case belongs to the period
 its first event falls in), `resource` (a resource took part), `activity` (the
-case contains it) and `attribute` (`name=value` on the case object). The
+case contains it), `attribute` (`name=value` on the case object) and
+`event_attribute` (`name=value` on at least one event of the case, which is
+where columns kept from a CSV import live; values are compared as stored text).
+`event_attribute` is accepted wherever a case filter is: query parameters,
+`cohort` bodies and saved filter sets. The
 dashboard downloads the result as JSON or CSV; CSV cells that could be read as
 spreadsheet formulas are prefixed with `'`.
 
