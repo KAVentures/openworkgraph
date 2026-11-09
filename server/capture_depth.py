@@ -282,6 +282,114 @@ def pointer_heatmap(*, hostname: str | None = None, pathname: str | None = None,
     return out
 
 
+PLAYBACK_VISIT_GAP_SECONDS = 300
+PLAYBACK_MAX_ITEMS = 600
+PLAYBACK_MAX_POINTS = 3000
+_PLAYBACK_TYPES = HIGH_FIDELITY_EVENT_TYPES[:5] + ("browser_click",)
+_PLAYBACK_KINDS = {"browser_control_hover_dwell": "hover", "browser_drag_start": "drag_start",
+                   "browser_drag_drop": "drop", "browser_drag_end": "drag_end",
+                   "browser_pointer_trajectory": "pointer", "browser_click": "click"}
+
+
+def interaction_playback(*, hostname: str, pathname: str | None = None, hours: int = 168,
+                         visit: int | None = None) -> dict[str, Any]:
+    """A local review aid: one visit to a page replayed in order.
+
+    Hover dwells, drags, clicks and sampled pointer movement on the chosen page are
+    grouped into visits (gaps over five minutes start a new one). The chosen visit,
+    the latest by default, is returned as a time-ordered list of items with
+    structural targets only (tag, role) and the pointer path as viewport fractions.
+    No labels, text, values or URLs beyond the chosen page are returned. Timing is
+    approximate: a pointer batch is stored when it is flushed. This is not an
+    attention, effort or performance measure.
+    """
+    from .db import connect
+    since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    placeholders = ",".join("?" for _ in _PLAYBACK_TYPES)
+    with connect() as conn:
+        rows = conn.execute(f"""SELECT e.event_id, e.event_type, e.observed_at, e.metadata_json, p.points_json
+            FROM events e LEFT JOIN pointer_trajectory_points p ON p.event_id = e.event_id
+            WHERE e.event_type IN ({placeholders}) AND julianday(e.observed_at) >= julianday(?)
+            ORDER BY e.observed_at DESC, e.event_id DESC LIMIT 20000""", (*_PLAYBACK_TYPES, since)).fetchall()
+    events = []
+    for event_id, event_type, observed_at, meta_json, points_json in rows:
+        try:
+            meta = json.loads(meta_json or "{}")
+            at = datetime.fromisoformat(str(observed_at).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        page = meta.get("page") if isinstance(meta.get("page"), dict) else {}
+        if str(page.get("hostname") or "") != hostname or (pathname is not None and str(page.get("pathname") or "") != pathname):
+            continue
+        if at.tzinfo is None:
+            at = at.replace(tzinfo=timezone.utc)
+        events.append((at, str(event_id), event_type, meta, points_json))
+    events.sort(key=lambda e: (e[0], e[1]))
+    visits: list[list[tuple]] = []
+    for event in events:
+        if visits and (event[0] - visits[-1][-1][0]).total_seconds() <= PLAYBACK_VISIT_GAP_SECONDS:
+            visits[-1].append(event)
+        else:
+            visits.append([event])
+    summary = [{"visit": index, "started_at": v[0][0].isoformat(), "ended_at": v[-1][0].isoformat(),
+                "items": len(v)} for index, v in enumerate(visits)]
+    out: dict[str, Any] = {"page": {"hostname": hostname, "pathname": pathname}, "hours": hours,
+                           "visits": summary[-50:], "visits_truncated": len(summary) > 50,
+                           "local_review_only": True, "timing": "approximate",
+                           "coordinates": "viewport_fraction",
+                           "interpretation": ("A replay of recorded interaction detail on this page. It shows where the "
+                                              "pointer went and which kinds of control were used, not attention, effort, "
+                                              "intent or performance.")}
+    if not visits:
+        return {**out, "visit": None, "items": [], "path": []}
+    chosen = len(visits) - 1 if visit is None else visit
+    if not 0 <= chosen < len(visits):
+        raise CaptureDepthError("unknown visit")
+    selected = visits[chosen]
+
+    def _batch_points(meta: dict[str, Any], points_json: Any) -> list[list[float]]:
+        try:
+            points = json.loads(points_json or "null")
+        except ValueError:
+            points = None
+        if not isinstance(points, list):
+            points = meta.get("points") if isinstance(meta.get("points"), list) else []
+        return [p for p in points if isinstance(p, list) and len(p) == 3
+                and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in p)]
+
+    # A pointer batch is stored when flushed, so it began before its stored time.
+    start = min([selected[0][0]] + [at - timedelta(milliseconds=pts[-1][0]) for at, _i, kind, meta, pj in selected
+                                     if kind == "browser_pointer_trajectory" for pts in [_batch_points(meta, pj)] if pts])
+    items: list[dict[str, Any]] = []
+    path: list[list[float]] = []
+    for at, _event_id, event_type, meta, points_json in selected:
+        offset = int((at - start).total_seconds() * 1000)
+        if event_type == "browser_pointer_trajectory":
+            clean = _batch_points(meta, points_json)
+            if not clean:
+                continue
+            last = clean[-1][0]
+            for t, x, y in clean:
+                path.append([max(0, offset - int(last - t)), round(min(1.0, max(0.0, float(x))), 3),
+                             round(min(1.0, max(0.0, float(y))), 3)])
+            continue
+        target = meta.get("target") if isinstance(meta.get("target"), dict) else {}
+        item: dict[str, Any] = {"t_ms": offset, "kind": _PLAYBACK_KINDS[event_type],
+                                "target": _structural_target(target)}
+        for key in ("duration_ms", "ended_by", "outcome"):
+            value = meta.get(key)
+            if isinstance(value, (int, float, str)) and not isinstance(value, bool):
+                item[key] = value if not isinstance(value, str) else value[:40]
+        items.append(item)
+    path.sort(key=lambda p: p[0])
+    step = max(1, -(-len(path) // PLAYBACK_MAX_POINTS))
+    duration = max([i["t_ms"] for i in items] + [p[0] for p in path] + [0])
+    return {**out, "visit": chosen, "started_at": start.isoformat(), "duration_ms": duration,
+            "items": items[:PLAYBACK_MAX_ITEMS], "items_truncated": len(items) > PLAYBACK_MAX_ITEMS,
+            "path": path[::step], "path_points_recorded": len(path), "path_downsampled": step > 1,
+            "counts": {kind: sum(1 for i in items if i["kind"] == kind) for kind in sorted({i["kind"] for i in items})}}
+
+
 def for_extension() -> dict[str, Any]:
     """The subset the paired extension needs to decide what to emit."""
     state = load()
@@ -413,6 +521,6 @@ def _frame(metadata: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-__all__ = ["CaptureDepthError", "FULL_ACK_VERSION", "HIGH_FIDELITY_EVENT_TYPES", "PROFILES", "SIGNALS", "action_allowed",
+__all__ = ["CaptureDepthError", "FULL_ACK_VERSION", "HIGH_FIDELITY_EVENT_TYPES", "PROFILES", "interaction_playback", "SIGNALS", "action_allowed",
            "action_allowed_on_excluded", "apply_retention", "bound_metadata", "bound_target", "delete_high_fidelity",
            "filter_desktop_events", "for_extension", "load", "pointer_heatmap", "public", "save"]
