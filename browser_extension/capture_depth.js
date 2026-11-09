@@ -51,8 +51,16 @@ const OWG_TARGET_TAGS = new Set(["a", "button", "div", "input", "label", "li", "
 const OWG_TARGET_ROLES = new Set([...OWG_HOVER_ROLES, "region", "list", "listitem", "row", "cell", "gridcell", "textbox", "searchbox", "slider"]);
 const OWG_TARGET_TYPES = new Set(["button", "checkbox", "color", "date", "datetime-local", "email", "file", "hidden", "image", "month", "number", "radio", "range", "reset", "search", "submit", "tel", "text", "time", "url", "week"]);
 
+const OWG_MAX_EVENT_ANCESTORS = 128;
+function owgDepthPath(event) {
+  try {
+    const path = event.composedPath();
+    if (!Array.isArray(path) || path.length > OWG_MAX_EVENT_ANCESTORS) return null;
+    return path.filter(el => el instanceof Element);
+  } catch (_) { return null; }
+}
 function owgInteractiveElement(event) {
-  for (const el of pathElements(event)) {
+  for (const el of owgDepthPath(event) || []) {
     const tag = String(el.tagName || "").toLowerCase();
     const role = String(el.getAttribute?.("role") || "").toLowerCase();
     if (OWG_HOVER_TAGS.has(tag) || OWG_HOVER_ROLES.has(role)) return el;
@@ -63,7 +71,9 @@ function owgInteractiveElement(event) {
 // Hover and drag targets are structural only: tag, role and type. No label is recorded at all, because
 // element text, aria-label, title, placeholder and <label> text can all hold or be set from the user's content.
 function owgEditable(el) {
+  let visited = 0;
   for (let node = el; node instanceof Element; node = node.parentElement) {
+    if (++visited > OWG_MAX_EVENT_ANCESTORS) return true;
     const tag = String(node.tagName || "").toLowerCase();
     if (node.isContentEditable === true || node.getAttribute?.("contenteditable") === "true" ||
         ["input", "textarea", "select"].includes(tag)) return true;
@@ -73,7 +83,10 @@ function owgEditable(el) {
 
 // A control is secure if it, or any element around it, is a secure field or widget.
 function owgInSecureContext(el) {
-  for (let node = el; node instanceof Element; node = node.parentElement) if (isSensitiveControl(node)) return true;
+  let visited = 0;
+  for (let node = el; node instanceof Element; node = node.parentElement) {
+    if (++visited > OWG_MAX_EVENT_ANCESTORS || isSensitiveControl(node)) return true;
+  }
   return false;
 }
 
@@ -82,13 +95,33 @@ function owgInSecureContext(el) {
 const OWG_SECURE_SCAN_MAX_ELEMENTS = 10000;
 const OWG_SECURE_SCAN_MAX_SHADOW_ROOTS = 64;
 const OWG_SECURE_SCAN_MAX_MS = 25;
+// One shared budget across pointer, hover and drag signals prevents a page
+// from causing an expensive whole-document scan for every synthetic event.
+// A small burst allows a real hover/drag/drop sequence; missed probes suppress
+// the event rather than reusing an earlier security decision.
+const OWG_SECURE_PROBE_CAPACITY = 16;
+const OWG_SECURE_PROBE_REFILL_MS = 50;
+let owgSecureProbeTokens = OWG_SECURE_PROBE_CAPACITY;
+let owgSecureProbeRefillAt = performance.now();
+
+function owgTakeSecureProbe() {
+  const now = performance.now();
+  if (!Number.isFinite(now) || now < owgSecureProbeRefillAt) return false;
+  owgSecureProbeTokens = Math.min(OWG_SECURE_PROBE_CAPACITY,
+    owgSecureProbeTokens + (now - owgSecureProbeRefillAt) / OWG_SECURE_PROBE_REFILL_MS);
+  owgSecureProbeRefillAt = now;
+  if (owgSecureProbeTokens < 1) return false;
+  owgSecureProbeTokens -= 1;
+  return true;
+}
 
 // Secure if any element on the event path or geometrically under the pointer
 // is a secure field/widget. elementsFromPoint alone is insufficient: it omits
 // elements with pointer-events:none, including covered password fields.
 function owgSecureAt(event) {
-  if (pathElements(event).some(el => isSensitiveControl(el))) return true;
   try {
+    const path = owgDepthPath(event);
+    if (!path || path.some(el => isSensitiveControl(el))) return true;
     // Page-level event paths hide closed-shadow descendants. Extension DOM API
     // exposes both open and closed roots; without it we cannot establish that
     // a hit is safe, so suppress high-detail signals rather than guess.
@@ -108,11 +141,21 @@ function owgSecureAt(event) {
     };
     while (queue.length) {
       const {root, secure: inheritedSecure} = queue.pop();
-      if (typeof root.querySelectorAll !== "function") return true;
-      for (const el of root.querySelectorAll("*")) {
+      // Walk incrementally, including non-elements, so a page cannot make
+      // querySelectorAll materialize an unbounded DOM before limits apply.
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_ALL);
+      let node;
+      while ((node = walker.nextNode()) !== null) {
         if (++count > OWG_SECURE_SCAN_MAX_ELEMENTS || performance.now() - started > OWG_SECURE_SCAN_MAX_MS) return true;
+        if (!(node instanceof Element)) continue;
+        const el = node;
         const secure = inheritedSecure || (el.parentElement && secureAncestors.has(el.parentElement)) || isSensitiveControl(el);
         if (secure) secureAncestors.add(el);
+        // A secure display:contents wrapper has no box of its own. In a
+        // shadow tree its slots can render light-DOM descendants whose parent
+        // chain does not pass through the wrapper. Their geometry cannot be
+        // attributed reliably here, so suppress detailed signals for the page.
+        if (secure && getComputedStyle(el).display === "contents") return true;
         const opaqueFrame = ["iframe", "frame", "object", "embed"].includes(String(el.tagName || "").toLowerCase());
         if ((secure || opaqueFrame) && coversPoint(el)) return true;
         if (!(el instanceof HTMLElement)) continue;
@@ -131,7 +174,9 @@ function owgSecureAt(event) {
 function owgSafeTarget(start) {
   const el = start instanceof Element ? start : (pathElements(start)[0] || null);
   if (!(el instanceof Element)) return {};
+  let visited = 0;
   for (let node = el; node instanceof Element; node = node.parentElement) {
+    if (++visited > OWG_MAX_EVENT_ANCESTORS) return {};
     const tag = String(node.tagName || "").toLowerCase();
     const rawRole = String(node.getAttribute?.("role") || "").trim().toLowerCase();
     if (OWG_HOVER_TAGS.has(tag) || OWG_HOVER_ROLES.has(rawRole) || node.getAttribute?.("draggable") === "true") {
@@ -165,6 +210,7 @@ function owgEndHover(endedBy) {
 
 addEventListener("pointerover", (e) => {
   if (!owgDepth.signals.hover_dwell || e.pointerType === "touch") return;
+  if (!owgTakeSecureProbe() || owgSecureAt(e)) { owgHover = null; return; }
   const el = owgInteractiveElement(e);
   // A single-page app can re-render the control under a resting pointer: when the hovered element
   // has left the document and an equivalent one (same tag, role and type) takes its place, the
@@ -178,7 +224,7 @@ addEventListener("pointerover", (e) => {
   // arriving anywhere outside the current control also ends its hover.
   if (owgHover && owgHover.el !== el && !(e.target instanceof Node && owgHover.el.contains(e.target))) owgEndHover("pointer_left");
   if (!el || (owgHover && owgHover.el === el)) return;
-  if (owgInSecureContext(el) || owgSecureAt(e) || el.disabled === true || el.getAttribute?.("aria-disabled") === "true") return;
+  if (el.disabled === true || el.getAttribute?.("aria-disabled") === "true" || owgInSecureContext(el)) return;
   const target = owgSafeTarget(el);
   owgHover = {el, target, start: performance.now()};
 }, true);
@@ -210,14 +256,16 @@ function owgPayloadKinds(dataTransfer) {
 
 addEventListener("dragstart", (e) => {
   if (!owgDepth.signals.drag_drop) return;
-  if (owgInSecureContext(e.target instanceof Element ? e.target : null) || owgSecureAt(e)) { owgDrag = null; return; }
+  if (!owgTakeSecureProbe() || owgSecureAt(e) || owgInSecureContext(e.target instanceof Element ? e.target : null)) { owgDrag = null; return; }
   const source = owgSafeTarget(e.target);
   owgDrag = {id: Math.random().toString(36).slice(2, 12), source, dropped: false};
   if (owgDepthAllowed()) send("drag_start", source, {drag_id: owgDrag.id, payload_kinds: owgPayloadKinds(e.dataTransfer), completion: "unknown"});
 }, true);
 addEventListener("drop", (e) => {
   if (!owgDepth.signals.drag_drop) return;
-  if (owgInSecureContext(e.target instanceof Element ? e.target : null) || owgSecureAt(e)) return;
+  // A skipped security check cannot finish a previously started drag; do not
+  // join a later dragend to a drop whose safety was never established.
+  if (!owgTakeSecureProbe() || owgSecureAt(e) || owgInSecureContext(e.target instanceof Element ? e.target : null)) { owgDrag = null; return; }
   const destination = owgSafeTarget(e.target);
   const kinds = owgPayloadKinds(e.dataTransfer);
   // A drop with no drag in this page came from elsewhere (another window or the desktop).
@@ -252,7 +300,7 @@ addEventListener("pointermove", (e) => {
   if (!owgDepth.signals.pointer_trajectory || e.pointerType === "touch") return;
   const now = performance.now();
   if (now - owgTrajectory.lastSample < 1000 / owgDepth.parameters.trajectory_hz) return;
-  if (owgSecureAt(e)) {
+  if (!owgTakeSecureProbe() || owgSecureAt(e)) {
     // Never sample over a secure field, even one under an overlay: end the batch here and skip until it is left.
     owgFlushTrajectory();
     // Keep the sampler's throttle even while suppressing, otherwise every

@@ -55,11 +55,32 @@ calculator ([PROCESS_OPPORTUNITY_REVIEW.md](PROCESS_OPPORTUNITY_REVIEW.md)).
 - The CSV export prefixes cells that start with `=`, `+`, `-` or `@`, so spreadsheets do not
   run them as formulas.
 
+## Planning and portfolio
+
+Each idea can carry planning, saved with its revision (stale edits are refused) and
+recorded in its history:
+
+- **Owner** and **team**: labels the reviewer types. They are not verified people and grant
+  no access.
+- **Budget**: an amount, an ISO currency code and whether it is an *estimate* or an
+  *approved budget*. Budgets are never converted between currencies.
+- **Target quarter** (`YYYY-Qn`).
+- **Depends on**: up to 20 other ideas in this list. Unknown ideas, an idea depending on
+  itself and cycles are refused. An idea can be marked *implemented* only after every idea
+  it depends on is implemented, and an idea others depend on cannot be deleted until the
+  dependency is removed.
+
+*Show portfolio by team and owner* rolls the list up per team and per owner: ideas by state,
+budgets totalled per currency and basis (rejected ideas excluded), modeled hours, the open
+ideas waiting on a dependency, open ideas per target quarter and how many ideas have no
+planning yet. The CSV export includes the planning columns.
+
 ## API (dashboard session only)
 
 `GET /v1/automation-pipeline[?state=]`, `POST /v1/automation-pipeline`,
 `GET /v1/automation-pipeline/{id}`, `POST …/{id}/assess`, `POST …/{id}/transition`,
-`POST …/{id}/delete`, `GET /v1/automation-pipeline/export.csv`.
+`POST …/{id}/planning`, `POST …/{id}/delete`, `GET /v1/automation-pipeline/portfolio`,
+`GET /v1/automation-pipeline/export.csv`.
 
 ## Exact saved-process links
 
@@ -245,3 +266,28 @@ A reported specification match
 does not prove artifact execution, individual run/case attribution, agent
 causality or business outcomes. This view connects the existing local segments;
 it does not fill those evidence gaps or create a second evidence store.
+
+## Realized value
+
+Approved and implemented ideas have a *Realized value* section. Record measurement periods:
+a **baseline** that ends before the idea was implemented, and **after** periods that start on
+or after the implementation date (an idea must be implemented first). Each period gives its
+dates (at most 366 days, never in the future), the cases handled and either minutes per case
+or total hours, plus where the numbers came from (entered, time tracking, a system report or
+an event log, with an optional reference). At most 48 measurements per idea; deleting the idea
+deletes them.
+
+The report normalizes each period to a 30.44-day month and compares baseline with after:
+
+- **minutes per case** before and after, and what that difference is worth in hours a month
+  at the after volume, next to the hours the assessment modeled (with their ratio);
+- **total hours a month** and **case volume** before and after, with a range when there are
+  several periods.
+
+Per-case effort separates an effort change from a volume change: total hours can rise because
+more cases arrived even when each case got quicker. An observed difference between periods is
+not proof that the automation caused it (`causal_effect_claimed: false`); volume, staffing and
+seasonality can contribute. No money is estimated and ideas are never added together.
+
+`GET …/{id}/realized-value`, `POST …/{id}/measurements`,
+`POST …/{id}/measurements/{measurement_id}/delete` (dashboard session only).
