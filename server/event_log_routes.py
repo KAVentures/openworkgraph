@@ -95,16 +95,30 @@ def _case_filter(started_from: str = Query(default="", max_length=64),
                  resource: str = Query(default="", max_length=200),
                  activity: str = Query(default="", max_length=200),
                  attribute: str = Query(default="", max_length=200),
+                 event_attribute: str = Query(default="", max_length=200),
                  follows: str = Query(default="", max_length=4000)) -> dict[str, Any]:
     """The case filter shared by analysis views; ``follows`` is a JSON list of follower rules."""
     cohort: dict[str, Any] = {"started_from": started_from, "started_before": started_before, "resource": resource,
-                              "activity": activity, "attribute": attribute}
+                              "activity": activity, "attribute": attribute, "event_attribute": event_attribute}
     if follows:
         try:
             cohort["follows"] = json.loads(follows)
         except ValueError:
             raise HTTPException(422, "follows must be a JSON list of rules") from None
     return cohort
+
+
+@router.post("/v1/event-logs/{log_id}/costs")
+async def event_log_costs(request: Request, log_id: str):
+    """Process cost from a user-supplied cost model: per case, activity, variant and resource."""
+    from . import event_log_costs as cost_model
+    _require_dashboard(request)
+    spec = await _json_body(request, "cost model", strict=True, limit=131072)
+    try:
+        result = await run_in_threadpool(cost_model.costs, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 @router.post("/v1/event-logs/prepare-salesforce")
@@ -143,6 +157,19 @@ async def prepare_salesforce_export(request: Request):
         raise HTTPException(422, "Check the selected CaseHistory export, case IDs and account namespace") from None
     finally:
         raw.clear()
+
+
+@router.post("/v1/event-logs/comparison")
+async def compare_event_logs(request: Request):
+    """Compare two saved logs (or one log under two filters): KPIs, activities, paths and variants."""
+    from . import event_log_log_comparison as log_comparison
+    _require_dashboard(request)
+    spec = await _json_body(request, "log comparison", strict=True, limit=32768)
+    try:
+        result = await run_in_threadpool(log_comparison.compare, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 @router.get("/event-log-workspace.js")
@@ -249,6 +276,19 @@ def event_log_quality(request: Request, log_id: str):
     return _respond(quality.quality, log_id)
 
 
+@router.post("/v1/event-logs/{log_id}/derive")
+async def derive_event_log(request: Request, log_id: str):
+    """Save the cases matching a filter as a new event log; the source log is unchanged."""
+    from . import event_log_derive as derived_logs
+    _require_dashboard(request)
+    spec = await _json_body(request, "derived log settings", strict=True, limit=32768)
+    try:
+        result = await run_in_threadpool(derived_logs.derive, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/v1/event-logs/{log_id}/quarantine")
 def event_log_quarantine(request: Request, log_id: str, batch: int | None = Query(default=None, ge=0),
                          after: int = Query(default=0, ge=0), limit: int = Query(default=50, ge=1, le=100)):
@@ -297,11 +337,37 @@ def delete_event_log(request: Request, log_id: str):
     return _respond(workspace.delete_log, log_id)
 
 
+@router.post("/v1/event-logs/{log_id}/time-patterns")
+async def event_log_time_patterns(request: Request, log_id: str):
+    """Events and case arrivals by local weekday and hour."""
+    from . import event_log_time_patterns as time_patterns
+    _require_dashboard(request)
+    spec = await _json_body(request, "time-pattern settings", strict=True, limit=16384)
+    try:
+        result = await run_in_threadpool(time_patterns.time_patterns, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/v1/event-logs/{log_id}/summary")
 def event_log_summary(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                       cohort: dict[str, Any] = Depends(_case_filter)):
     _require_dashboard(request)
     return _respond(workspace.summary, log_id, case_type, cohort=cohort)
+
+
+@router.post("/v1/event-logs/{log_id}/attribute-profile")
+async def event_log_attribute_profile(request: Request, log_id: str):
+    """Coverage, type, level and frequent values of every event attribute."""
+    from . import event_log_attribute_profile as attribute_profile
+    _require_dashboard(request)
+    spec = await _json_body(request, "attribute profile settings", strict=True, limit=16384)
+    try:
+        result = await run_in_threadpool(attribute_profile.profile, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 @router.get("/v1/event-logs/{log_id}/object-types")
@@ -639,6 +705,19 @@ async def event_log_map_comparison(request: Request, log_id: str,
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/rework")
+async def event_log_rework(request: Request, log_id: str):
+    """Repeated activities, loop patterns and how cases with rework compare."""
+    from . import event_log_rework as rework_analysis
+    _require_dashboard(request)
+    spec = await _json_body(request, "rework settings", strict=True, limit=16384)
+    try:
+        result = await run_in_threadpool(rework_analysis.rework, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/{log_id}/predictions")
 async def event_log_predictions(request: Request, log_id: str):
     _require_dashboard(request)
@@ -657,6 +736,19 @@ async def event_log_take_prediction_snapshot(request: Request, log_id: str):
     spec = await _json_body(request, "prediction settings")
     try:
         result = await run_in_threadpool(prediction_snapshots.take, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/next-activity")
+async def event_log_next_activity(request: Request, log_id: str):
+    """What usually happens next in open cases, learned from completed cases and backtested."""
+    from . import event_log_next_activity as next_activity
+    _require_dashboard(request)
+    spec = await _json_body(request, "next-activity settings", strict=True, limit=32768)
+    try:
+        result = await run_in_threadpool(next_activity.next_activity, log_id, spec)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
@@ -726,6 +818,19 @@ async def event_log_linked_attribute_analysis(request: Request, log_id: str):
     spec = await _json_body(request, "linked attribute analysis", strict=True, limit=8192)
     try:
         result = await run_in_threadpool(linked_attribute_analysis.analyze, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/work-in-progress")
+async def event_log_work_in_progress(request: Request, log_id: str):
+    """Arrivals, completions and open cases per day or week, with a Little's law check."""
+    from . import event_log_wip as wip
+    _require_dashboard(request)
+    spec = await _json_body(request, "work-in-progress settings", strict=True, limit=16384)
+    try:
+        result = await run_in_threadpool(wip.work_in_progress, log_id, spec)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})

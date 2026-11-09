@@ -410,6 +410,39 @@
     if(next){pick.value=next;await selectLog(next);}else{state.logId='';state.objectTypes=[];}
   }
 
+  // Save the cases matching a filter as a new saved log, to analyse or compare a slice on its own.
+  function deriveSection(activityNames){
+    const box=section('Save matching cases as a new log');box.id='owgEventLogDerive';
+    box.appendChild(el('div','Copy every event of the cases that match into a new log. The current log is not changed. The new log starts without this log’s activity mapping, saved filters, signals and quality reports.','muted'));
+    const filter=cohortFields('owgDeriveCohort','Cases to copy',activityNames);
+    const name=input('owgDeriveName','text');name.maxLength=120;name.autocomplete='off';
+    const current=state.logs.find(l=>l.log_id===state.logId);name.value=((current&&current.name)||'Log')+' (subset)';
+    const run=button('Save as new log','secondary');run.id='owgDeriveRun';
+    const out=el('div');out.id='owgDeriveResult';out.setAttribute('role','status');
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('New log name',name),run);
+    box.append(filter.node,row,out);
+    const generation=state.generation;
+    run.onclick=async()=>{
+      run.disabled=true;
+      try{
+        const cohort=filter.read();delete cohort.label;
+        if(state.follows.length)cohort.follows=state.follows;
+        if(!Object.keys(cohort).length)throw new Error('Choose which cases to copy.');
+        const spec={name:name.value.trim(),cohort};if(state.caseType)spec.case_type=state.caseType;
+        const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/derive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        if(generation!==state.generation)return;
+        // Add the new log to the picker without leaving the current analysis.
+        const data=await getJSON('/v1/event-logs');state.logs=Array.isArray(data.logs)?data.logs:state.logs;
+        const pick=document.getElementById('owgEventLogPick');setOptions(pick,state.logs.map(l=>[l.log_id,l.name+' · '+Number(l.events).toLocaleString()+' events']));pick.value=state.logId;
+        const open=button('Open '+r.log.name,'secondary');open.id='owgDeriveOpen';
+        open.onclick=()=>refreshLogs(r.log.log_id).then(()=>status('Opened '+r.log.name+'. Select Analyse to explore it.')).catch(error=>status(error.message));
+        out.replaceChildren(el('div','Saved '+r.log.name+': '+Number(r.derived_from.cases_matched).toLocaleString()+' of '+Number(r.derived_from.cases_in_source).toLocaleString()+' cases, '+Number(r.copied.events).toLocaleString()+' events.'),open);
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      finally{run.disabled=false;}
+    };
+    return box;
+  }
+
   async function selectLog(logId){
     const generation=++state.generation;state.logId=logId;state.caseType='';state.follows=[];state.objectTypes=[];
     document.getElementById('owgEventLogResults').replaceChildren();
@@ -488,6 +521,7 @@
     results.appendChild(overview);
     results.appendChild(activityMappingSection());
     results.appendChild(qualitySection());
+    results.appendChild(attributeProfileSection());
     results.appendChild(caseFilterSection(names));
     results.appendChild(cohortMetricSection(names));
 
@@ -496,6 +530,7 @@
     variantBox.appendChild(el('div',Number(variants.distinct_variants).toLocaleString()+' distinct variants.','muted'));
     results.appendChild(variantBox);
     results.appendChild(variantCoverageSection(names));
+    results.appendChild(reworkSection());
     results.appendChild(objectMapSection());
     if(summary.log&&summary.log.object_relationships)results.appendChild(objectRelationshipSection());
     results.appendChild(processMapSection());
@@ -504,9 +539,11 @@
     activityBox.appendChild(table(['Activity','Events','Cases','Cases repeating activity','Evidence'],(activities.activities||[]).map(a=>{const open=button('Inspect cases','secondary');open.setAttribute('aria-label','Inspect cases containing '+a.activity);open.onclick=()=>inspection.activity(a.activity);return [a.activity,a.events,a.cases,a.repeated_in_cases,open];})));
     results.append(activityBox,inspection.node);
     results.appendChild(kpiSection(names));
+    results.appendChild(workInProgressSection());
     results.appendChild(durationDistributionSection());
     results.appendChild(batchingSection());
     results.appendChild(benchmarkSection(names));
+    results.appendChild(timePatternSection(names));
     results.appendChild(impactSection(names));
     results.appendChild(stuckSection());
     results.appendChild(savedGraphSection(names,inspection));
@@ -515,16 +552,66 @@
     results.appendChild(clusterSection());
     results.appendChild(discoverySection());
     results.appendChild(driftSection());
+    results.appendChild(deriveSection(names));
     results.appendChild(dottedSection());
     results.appendChild(waitingSection());
     results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity)));
     results.appendChild(organizationSection());
+    results.appendChild(logComparisonSection());
     results.appendChild(analysisSection(names));
     results.appendChild(signalSection((activities.activities||[]).map(a=>a.activity)));
     results.appendChild(predictionSection((activities.activities||[]).map(a=>a.activity)));
+    results.appendChild(nextActivitySection((activities.activities||[]).map(a=>a.activity)));
     results.appendChild(complianceSection((activities.activities||[]).map(a=>a.activity)));
     results.appendChild(domainPackSection());
+    results.appendChild(costSection(names));
     status('');
+  }
+
+  // Process cost from the user's own cost model: a price per activity execution and an optional hourly cost per open case.
+  function costSection(activityNames){
+    const box=section('Process cost');box.id='owgEventLogCosts';
+    box.appendChild(el('div','Enter what one execution of each activity costs, and optionally what each hour a case stays open costs. The log does not record what work cost: these figures are your model applied to the observed events.','muted'));
+    const currency=input('owgCostCurrency','text');currency.value='EUR';currency.maxLength=3;currency.size=4;currency.autocomplete='off';
+    const hourly=input('owgCostHourly','number');hourly.min='0';hourly.step='any';hourly.value='0';
+    const fallback=input('owgCostDefault','number','none');fallback.min='0';fallback.step='any';
+    const controls=el('div',null,'row');controls.style.alignItems='end';
+    controls.append(field('Currency (ISO code)',currency),field('Cost per hour a case is open',hourly),field('Cost of activities left blank',fallback));
+    const shown=activityNames.slice(0,200);
+    const prices=shown.map((name,i)=>{const node=input('owgCostActivity'+i,'number');node.min='0';node.step='any';node.setAttribute('aria-label','Cost of one '+name);node.dataset.activity=name;node.style.width='8em';return node;});
+    const priceTable=table(['Activity','Cost per execution'],shown.map((name,i)=>[name,prices[i]]));
+    const run=button('Calculate cost','secondary');run.id='owgCostRun';
+    const out=el('div');out.id='owgCostResults';out.setAttribute('role','status');
+    box.append(controls,priceTable);
+    if(activityNames.length>shown.length)box.appendChild(el('div','Only the first '+shown.length+' activities are listed; give the rest a cost with “Cost of activities left blank”.','muted'));
+    box.append(run,out);
+    const generation=state.generation;
+    run.onclick=async()=>{
+      run.disabled=true;
+      try{
+        const activity_costs={};
+        for(const node of prices){if(node.value.trim()==='')continue;const v=Number(node.value);if(!(v>=0))throw new Error('Costs must be zero or more ('+node.dataset.activity+').');activity_costs[node.dataset.activity]=v;}
+        const spec={currency:currency.value.trim().toUpperCase(),activity_costs,hourly_open_case_cost:Number(hourly.value||0)};
+        if(fallback.value.trim()!=='')spec.default_activity_cost=Number(fallback.value);
+        if(state.caseType)spec.case_type=state.caseType;
+        if(state.follows.length)spec.cohort={follows:state.follows};
+        const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/costs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        if(generation!==state.generation)return;
+        let money;try{money=new Intl.NumberFormat(undefined,{style:'currency',currency:r.currency});}catch(_){money={format:v=>r.currency+' '+Number(v).toFixed(2)};}
+        const m=v=>v===null||v===undefined?'—':money.format(v);
+        const cpc=r.cost_per_case;
+        const summary=table(['Total','Activities','Time cases are open','Repeated executions','Per case: mean','median','90th percentile'],
+          [[m(r.total_cost),m(r.activity_cost),m(r.holding_cost),m(r.repeated_execution_cost)+' ('+pct(r.repeated_execution_share)+')',m(cpc.mean),m(cpc.median),m(cpc.p90)]]);
+        const acts=table(['Activity','Executions','Unit cost','Cost','Share','Repeated executions','Their cost'],r.activities.map(a=>[a.activity,Number(a.events).toLocaleString(),a.unit_cost===null?'no price':m(a.unit_cost)+(a.price_source==='default'?' (default)':''),m(a.cost),pct(a.share_of_activity_cost),Number(a.repeated_executions).toLocaleString(),m(a.repeated_execution_cost)]));
+        const variants=table(['Variant','Cases','Cost per case','Total','Repeated executions per case'],r.costliest_variants.map(v=>[v.path.join(' → '),Number(v.cases).toLocaleString(),m(v.cost_per_case),m(v.total_cost),m(v.repeated_execution_cost_per_case)]));
+        const nodes=[el('div',Number(r.cases).toLocaleString()+' cases, '+Number(r.events).toLocaleString()+' events.','muted'),summary];
+        if(r.unpriced_events)nodes.push(el('div','No price for '+r.unpriced_activities.map(a=>a.activity).join(', ')+': '+Number(r.unpriced_events).toLocaleString()+' executions are left out of the totals.','muted'));
+        nodes.push(el('h4','Cost by activity'),acts,el('h4','Costliest variants'),variants,el('div',r.interpretation,'muted'));
+        out.replaceChildren(...nodes);
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      finally{run.disabled=false;}
+    };
+    return box;
   }
 
   // R9: read-only, bounded metrics for selected saved logs.
@@ -745,6 +832,7 @@
     if(from&&before&&from>=before)throw new Error('The cohort period is empty.');
     for(const key of ['resource','activity'])if(values[key]&&values[key].trim())spec[key]=values[key];
     if(values.attribute&&values.attribute.trim()){if(!/^[^=]+=.*/.test(values.attribute.trim()))throw new Error('Attribute must look like name=value.');spec.attribute=values.attribute.trim();}
+    if(values.eventAttribute&&values.eventAttribute.trim()){if(!/^[^=]+=.*/.test(values.eventAttribute.trim()))throw new Error('Event attribute must look like name=value.');spec.event_attribute=values.eventAttribute.trim();}
     return spec;
   }
   function cohortFields(prefix,legend,activityNames){
@@ -755,10 +843,11 @@
     const resource=input(prefix+'Resource','text','any');
     const activity=select(prefix+'Activity',[['','any'],...activityNames.slice(0,500).map(a=>[a,a])]);
     const attribute=input(prefix+'Attribute','text','name=value');
+    const eventAttribute=input(prefix+'EventAttribute','text','name=value');eventAttribute.title='Cases with at least one event carrying this value, such as a column kept from a CSV import';
     const row=el('div',null,'row');row.style.alignItems='end';
-    row.append(field('Name',label),field('Started from (UTC)',from),field('Started before (UTC)',before),field('Resource',resource),field('Contains activity',activity),field('Case attribute',attribute));
+    row.append(field('Name',label),field('Started from (UTC)',from),field('Started before (UTC)',before),field('Resource',resource),field('Contains activity',activity),field('Case attribute',attribute),field('Event attribute',eventAttribute));
     box.appendChild(row);
-    return {node:box,read:()=>cohortSpec({label:label.value,from:from.value,before:before.value,resource:resource.value,activity:activity.value,attribute:attribute.value})};
+    return {node:box,read:()=>cohortSpec({label:label.value,from:from.value,before:before.value,resource:resource.value,activity:activity.value,attribute:attribute.value,eventAttribute:eventAttribute.value})};
   }
   function variantCoverageSection(activityNames){
     const box=section('Variant coverage');
@@ -1399,6 +1488,42 @@
     return box;
   }
 
+  function workInProgressSection(){
+    const box=section('Work in progress over time');box.id='owgEventLogWip';
+    box.appendChild(el('div','Cases arriving, completing and still open per day or week. A case completes at its last event when that is an end activity (or, with none given, at its last event).','muted'));
+    const ends=input('owgWipEnds','text','Close, Cancel');
+    const bucket=select('owgWipBucket',[['day','Per day'],['week','Per week']]);
+    const run=button('Show work in progress','secondary');run.id='owgWipRun';
+    const out=el('div');out.id='owgWipResults';out.setAttribute('role','status');
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities that end a case',ends),field('Buckets',bucket),run);
+    box.append(row,out);
+    const generation=state.generation;
+    run.onclick=async()=>{
+      run.disabled=true;
+      try{
+        const spec={bucket:bucket.value,end_activities:ends.value.split(',').map(x=>x.trim()).filter(Boolean)};
+        if(state.caseType)spec.case_type=state.caseType;
+        const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/work-in-progress',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        if(generation!==state.generation)return;
+        const b=r.buckets,ns='http://www.w3.org/2000/svg',W=600,H=160,max=Math.max(1,...b.map(x=>Math.max(x.open_at_end,x.arrivals,x.completions)));
+        const svg=document.createElementNS(ns,'svg');svg.setAttribute('viewBox','0 0 '+W+' '+(H+20));svg.setAttribute('role','img');
+        svg.setAttribute('aria-label','Open cases per '+spec.bucket+': from '+(b[0]?b[0].open_at_end:0)+' to '+(b.length?b[b.length-1].open_at_end:0)+', peak '+Math.max(0,...b.map(x=>x.open_at_end))+'. The table below lists every '+spec.bucket+'.');
+        svg.style.cssText='width:100%;max-width:640px;height:auto;display:block';
+        const x=i=>b.length<2?W/2:i*(W-10)/(b.length-1)+5,y=v=>H-v/max*(H-10);
+        [['open_at_end','#2563eb'],['arrivals','#16a34a'],['completions','#9333ea']].forEach(([k,c])=>{const p=document.createElementNS(ns,'polyline');
+          p.setAttribute('points',b.map((v,i)=>x(i).toFixed(1)+','+y(v[k]).toFixed(1)).join(' '));p.setAttribute('fill','none');p.setAttribute('stroke',c);p.setAttribute('stroke-width',k==='open_at_end'?'2.5':'1.5');svg.appendChild(p);});
+        const legend=el('div','Blue: open at the end of each '+spec.bucket+' · green: arrivals · purple: completions.','muted');
+        const law=r.littles_law;
+        out.replaceChildren(svg,legend,
+          el('div',Number(r.cases).toLocaleString()+' cases; '+Number(r.never_completed_cases).toLocaleString()+' never reached an end activity. Average open: '+law.average_open_cases+'; arrival rate × mean cycle time: '+(law.arrival_rate_times_cycle_time===null?'—':law.arrival_rate_times_cycle_time)+(law.ratio===null?'':' (ratio '+law.ratio+')')+'. '+law.note,'muted'),
+          table(['Starting','Arrivals','Completions','Open at end'],b.map(v=>[v.start.slice(0,10),v.arrivals,v.completions,v.open_at_end])),
+          el('div',r.interpretation,'muted'));
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      finally{run.disabled=false;}
+    };
+    return box;
+  }
+
   function kpiSection(activityNames){
     const box=section('KPIs');
     const sla=input('owgEventLogSla','number','e.g. 48');sla.min='0';sla.step='any';
@@ -1433,6 +1558,31 @@
   }
 
   // Exact, non-overlapping bands of observed first-to-last event duration.
+  function reworkSection(){
+    const box=section('Rework and loops');box.id='owgEventLogRework';
+    box.appendChild(el('div','Activities that happen again in the same case, the loops they form, and how cases with rework compare with cases without.','muted'));
+    const run=button('Find rework','secondary');run.id='owgReworkRun';
+    const out=el('div');out.id='owgReworkResults';out.setAttribute('role','status');
+    box.append(run,out);
+    const generation=state.generation;
+    run.onclick=async()=>{
+      run.disabled=true;
+      try{
+        const spec={};if(state.caseType)spec.case_type=state.caseType;
+        const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/rework',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        if(generation!==state.generation)return;
+        const k=r.loop_kinds,c=r.comparison;
+        const parts=[el('div',pct(r.rework_rate)+' of '+Number(r.cases).toLocaleString()+' cases repeat at least one activity: '+k.self_loop+' with an immediate repeat, '+k.short_loop+' with a short loop (one step in between), '+k.longer_loop+' with a longer return.')];
+        if(r.activities.length)parts.push(table(['Activity','Cases repeating it','Share of its cases','Extra occurrences'],r.activities.map(a=>[a.activity,Number(a.cases_repeating).toLocaleString(),pct(a.repeat_share_of_cases_with_activity),Number(a.extra_occurrences).toLocaleString()])));
+        if(r.loop_patterns.length)parts.push(el('h4','Most common loops'),table(['Loop','Cases'],r.loop_patterns.map(p=>[p.pattern.join(' → '),Number(p.cases).toLocaleString()])));
+        if(c)parts.push(el('div','Median throughput '+duration(c.median_throughput_with_rework_seconds)+' with rework vs '+duration(c.median_throughput_without_rework_seconds)+' without'+(c.median_difference_ci95_seconds?' (difference 95% interval '+duration(c.median_difference_ci95_seconds[0])+' to '+duration(c.median_difference_ci95_seconds[1])+')':'')+'; '+c.mean_events_with_rework+' vs '+c.mean_events_without_rework+' events per case.'));
+        parts.push(el('div',r.interpretation,'muted'));out.replaceChildren(...parts);
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      finally{run.disabled=false;}
+    };
+    return box;
+  }
+
   function durationDistributionSection(){
     const box=section('Case duration distribution');
     const bounds=input('owgDurationBounds','text','1, 4, 24, 72');bounds.value='1, 4, 24, 72';bounds.maxLength=110;
@@ -1479,6 +1629,44 @@
           table(['Observed duration','Cases','Share of selected cases'],rows),el('p',r.interpretation,'muted'),exports.node);
       }catch(error){if(generation===state.generation&&ticket===version&&box.isConnected)out.replaceChildren(el('div',error.message,'muted'));}
       finally{if(box.isConnected)run.disabled=false;}
+    };
+    return box;
+  }
+
+  function timePatternSection(activityNames){
+    const box=section('When work happens');box.id='owgEventLogTimePatterns';
+    box.appendChild(el('div','Events and new cases by weekday and hour in your time zone, and the share of events outside working hours. Recorded time is not proof of when people worked.','muted'));
+    const zone=input('owgPatternZone','text');zone.maxLength=64;
+    try{zone.value=Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC';}catch(_){zone.value='UTC';}
+    const act=select('owgPatternActivity',[['','All activities'],...activityNames.slice(0,500).map(a=>[a,a])]);
+    const startH=input('owgPatternStart','number');startH.min='0';startH.max='23';startH.value='8';
+    const endH=input('owgPatternEnd','number');endH.min='1';endH.max='24';endH.value='18';
+    const run=button('Show when work happens','secondary');run.id='owgPatternRun';
+    const out=el('div');out.id='owgPatternResults';out.setAttribute('role','status');
+    const row=el('div',null,'row');row.style.alignItems='end';
+    row.append(field('Time zone',zone),field('Activity',act),field('Working hours from',startH),field('to',endH),run);
+    box.append(row,out);
+    const generation=state.generation;
+    run.onclick=async()=>{
+      run.disabled=true;
+      try{
+        const spec={time_zone:zone.value.trim()||'UTC',work_start_hour:Number(startH.value),work_end_hour:Number(endH.value)};
+        if(act.value)spec.activity=act.value;if(state.caseType)spec.case_type=state.caseType;
+        const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/time-patterns',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        if(generation!==state.generation)return;
+        const max=Math.max(1,...r.events.flat());
+        const wrap=el('div',null,'table-wrap'),t=el('table'),head=el('tr');t.id='owgPatternGrid';
+        const corner=el('th','Weekday');corner.scope='col';head.appendChild(corner);
+        for(let h=0;h<24;h++){const th=el('th',String(h).padStart(2,'0'));th.scope='col';head.appendChild(th);}
+        const thead=el('thead');thead.appendChild(head);const body=el('tbody');
+        r.events.forEach((rowCounts,d)=>{const tr=el('tr');const th=el('th',r.weekdays[d].slice(0,3));th.scope='row';tr.appendChild(th);
+          rowCounts.forEach(n=>{const td=el('td',n?String(n):'');td.style.background=n?'rgba(37,99,235,'+(0.12+0.6*n/max).toFixed(3)+')':'';td.style.textAlign='center';tr.appendChild(td);});body.appendChild(tr);});
+        t.append(thead,body);wrap.appendChild(t);
+        const busy=r.busiest.map(b=>b.weekday+' '+String(b.hour).padStart(2,'0')+':00 ('+b.events+')').join(', ');
+        out.replaceChildren(el('div',Number(r.total_events).toLocaleString()+' events and '+Number(r.total_case_arrivals).toLocaleString()+' new cases in '+r.settings.time_zone+'. '+(r.outside_working_hours_share===null?'':pct(r.outside_working_hours_share)+' of events fell outside '+String(r.settings.work_start_hour).padStart(2,'0')+':00–'+String(r.settings.work_end_hour).padStart(2,'0')+':00 on working days.')),
+          wrap,el('div',busy?'Busiest: '+busy+'.':'No events.','muted'),el('div',r.interpretation,'muted'));
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      finally{run.disabled=false;}
     };
     return box;
   }
@@ -2406,6 +2594,52 @@
       };
     }).catch(()=>{});
     return wrap;
+  }
+
+  // Compare this log with another saved log: KPIs, activities and paths present in only one, and case-share differences.
+  function logComparisonSection(){
+    const box=section('Compare with another log');box.id='owgLogComparison';
+    box.appendChild(el('div','Compare this log with another saved log, for example another region or the same process before a system change. Activities are matched by exact name after each log’s activity mapping.','muted'));
+    const others=state.logs.filter(l=>l.log_id!==state.logId);
+    if(!others.length){box.appendChild(el('div','Import a second log to compare with.','muted'));return box;}
+    const other=select('owgLogCompareOther',others.map(l=>[l.log_id,l.name+' · '+Number(l.events).toLocaleString()+' events']));
+    const run=button('Compare logs','secondary');run.id='owgLogCompareRun';
+    const out=el('div');out.id='owgLogCompareResults';out.setAttribute('role','status');
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Other log',other),run);
+    box.append(row,out);
+    const generation=state.generation,baseId=state.logId;
+    const shareCell=r=>r.share_difference===null?'—':(r.share_difference>0?'+':'')+(r.share_difference*100).toFixed(1)+' pts'+(r.interval_excludes_zero?' *':'');
+    const signed=(v,f)=>v===null||v===undefined?'—':(v>0?'+':v<0?'−':'')+f(Math.abs(v));
+    run.onclick=async()=>{
+      run.disabled=true;out.replaceChildren(el('div','Comparing…','muted'));
+      try{
+        const spec={baseline:{log_id:baseId},comparison:{log_id:other.value},limit:15};
+        if(state.caseType)spec.baseline.case_type=state.caseType;
+        const r=await (await api('/v1/event-logs/comparison',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        if(generation!==state.generation)return;
+        const b=r.kpis.baseline,c=r.kpis.comparison,d=r.kpis.difference;
+        const kpiTable=table(['Measure',r.baseline.name+' (this log)',r.comparison.name,'Difference'],[
+          ['Cases',Number(b.cases).toLocaleString(),Number(c.cases).toLocaleString(),signed(d.cases,v=>Number(v).toLocaleString())],
+          ['Median case time',duration(b.duration_seconds.median),duration(c.duration_seconds.median),signed(d.median_duration_seconds,duration)],
+          ['90th percentile case time',duration(b.duration_seconds.p90),duration(c.duration_seconds.p90),signed(d.p90_duration_seconds,duration)],
+          ['Events per case',String(b.events_per_case),String(c.events_per_case),signed(d.events_per_case,v=>v.toFixed(2))],
+          ['Cases repeating an activity',pct(b.repeat_rate),pct(c.repeat_rate),signed(d.repeat_rate,v=>(v*100).toFixed(1)+' pts')],
+          ['Distinct variants',Number(b.distinct_variants).toLocaleString(),Number(c.distinct_variants).toLocaleString(),'']]);
+        const longer=r.duration.probability_comparison_case_takes_longer;
+        const only=(label,list)=>list.length?el('div',label+': '+list.slice(0,20).join(', ')+(list.length>20?' and '+(list.length-20)+' more':'')+'.'):null;
+        const actRows=r.activities.largest_share_differences.map(a=>[a.activity,pct(a.baseline_share),pct(a.comparison_share),shareCell(a)]);
+        const pathRows=r.paths.largest_share_differences.map(e=>[e.from+' → '+e.to,pct(e.baseline_share),pct(e.comparison_share),shareCell(e)]);
+        out.replaceChildren(kpiTable,
+          el('div','A random case in '+r.comparison.name+' takes longer than a random case in '+r.baseline.name+' '+pct(longer)+' of the time (50% means no shift).','muted'),
+          ...[only('Only in '+r.baseline.name,r.activities.only_baseline),only('Only in '+r.comparison.name,r.activities.only_comparison)].filter(Boolean),
+          el('h4','Activities: share of cases'),table(['Activity',r.baseline.name,r.comparison.name,'Difference'],actRows),
+          el('h4','Paths: share of cases'),table(['Path',r.baseline.name,r.comparison.name,'Difference'],pathRows),
+          el('div',r.variants.shared_variants.toLocaleString()+' variants occur in both logs; they cover '+pct(r.variants.baseline_cases_in_shared_variants)+' of '+r.baseline.name+' cases and '+pct(r.variants.comparison_cases_in_shared_variants)+' of '+r.comparison.name+' cases.','muted'),
+          el('div','* the 95% interval of the difference excludes zero. '+r.interpretation,'muted'));
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      finally{run.disabled=false;}
+    };
+    return box;
   }
 
   function organizationSection(){
@@ -3685,6 +3919,39 @@
     return box;
   }
 
+  // Which event attributes the log carries: coverage, type, case- or event-level, frequent values.
+  function attributeProfileSection(){
+    const box=section('Attributes');box.id='owgAttributeProfile';
+    box.appendChild(el('div','See which attributes the events carry, how often, whether each stays fixed within a case, and the most frequent values with the median duration of their cases. Use it to choose filters and comparisons.','muted'));
+    const run=button('Profile attributes','secondary');run.id='owgAttributeProfileRun';
+    const out=el('div');out.id='owgAttributeProfileResults';out.setAttribute('role','status');
+    box.append(run,out);
+    const generation=state.generation;
+    const num=v=>v===null||v===undefined?'—':Number(v).toLocaleString(undefined,{maximumFractionDigits:2});
+    run.onclick=async()=>{
+      run.disabled=true;
+      try{
+        const spec={top_values:5};
+        if(state.caseType)spec.case_type=state.caseType;
+        if(state.follows.length)spec.cohort={follows:state.follows};
+        const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/attribute-profile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        if(generation!==state.generation)return;
+        if(!r.attributes.length){out.replaceChildren(el('div','The events carry no attributes. Keep extra columns as attributes when importing a CSV.','muted'));return;}
+        const rows=r.attributes.map(a=>[a.attribute,pct(a.case_coverage)+' of cases',
+          a.kind==='numeric'?'number':'text',a.level==='case'?'fixed per case':'changes within '+Number(a.cases_where_value_changes).toLocaleString()+' cases',
+          Number(a.distinct_values).toLocaleString()+(a.unique_per_event?' (unique per event)':''),
+          a.numeric?num(a.numeric.min)+' – '+num(a.numeric.max)+', median '+num(a.numeric.median):a.unique_per_event?'—':a.top_values.map(v=>v.value+' ('+pct(v.case_share)+', '+duration(v.median_case_duration_seconds)+')').join('; ')]);
+        out.replaceChildren(
+          el('div',Number(r.cases).toLocaleString()+' cases; median case time '+duration(r.median_case_duration_seconds)+'. Frequent values show the share of cases and their median case time.','muted'),
+          table(['Attribute','Present in','Type','Level','Distinct values','Range or frequent values'],rows),
+          ...(r.attributes_truncated?[el('div','Only the 100 most common attributes are shown.','muted')]:[]),
+          el('div',r.interpretation,'muted'));
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      finally{run.disabled=false;}
+    };
+    return box;
+  }
+
   function predictionSpec(values){
     const ends=String(values.ends||'').split(',').map(x=>x.trim()).filter(Boolean);
     if(!ends.length)throw new Error('List the activities that end a case.');
@@ -3694,6 +3961,45 @@
     if(values.estimator==='survival')spec.estimator='survival';
     else if(values.estimator&&values.estimator!=='completed_cases')throw new Error('Choose what to learn from.');
     return spec;
+  }
+
+  // What usually happens next in open cases, learned from completed cases and checked by a temporal backtest.
+  function nextActivitySection(activityNames){
+    const box=section('Next activity in open cases');box.id='owgNextActivity';
+    box.appendChild(el('div','Estimate what usually comes next in each open case, from completed cases that had the same recent activities. Check the backtest before relying on it.','muted'));
+    const ends=input('owgNextEnds','text','for example Pay, Close');ends.maxLength=2000;
+    const listId='owgNextEndsList';const list=document.createElement('datalist');list.id=listId;activityNames.slice(0,500).forEach(a=>{const o=document.createElement('option');o.value=a;list.appendChild(o);});ends.setAttribute('list',listId);
+    const history=select('owgNextHistory',[['1','1 activity'],['2','2 activities'],['3','3 activities']]);history.value='2';
+    const run=button('Predict next activities','secondary');run.id='owgNextRun';
+    const out=el('div');out.id='owgNextResults';out.setAttribute('role','status');
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities that end a case (comma-separated)',ends),field('Recent history to match',history),run);
+    box.append(row,list,out);
+    const generation=state.generation;
+    const name=n=>n.case_ends?'(case ends)':n.activity;
+    run.onclick=async()=>{
+      run.disabled=true;
+      try{
+        const endList=ends.value.split(',').map(x=>x.trim()).filter(Boolean);
+        if(!endList.length)throw new Error('List the activities that end a case.');
+        const spec={end_activities:endList,history:Number(history.value),limit:50};
+        if(state.caseType)spec.case_type=state.caseType;
+        if(state.follows.length)spec.cohort={follows:state.follows};
+        const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/next-activity',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        if(generation!==state.generation)return;
+        const b=r.backtest;
+        const quality=b.available?'Backtest on '+Number(b.test_cases).toLocaleString()+' cases that ended after '+String(b.cutoff_case_ended_at).slice(0,10)+': the first guess was right '+pct(b.top1_accuracy)+' of the time and one of the top three '+pct(b.top3_accuracy)+', against '+pct(b.baseline_current_activity_only)+' when looking at the current activity only and '+pct(b.baseline_most_frequent_next)+' when always guessing the most common step.':'No backtest: '+b.reason+'.';
+        const rows=r.predictions.map(p=>[p.case_id,p.last_activity,p.next.map(n=>name(n)+' '+pct(n.probability)).join(', '),p.history_used?'last '+p.history_used+' '+(p.history_used===1?'activity':'activities'):'all completed cases',Number(p.support).toLocaleString()]);
+        const expected=r.expected_next_across_open_cases.map(e=>[name(e),e.expected_cases.toLocaleString()]);
+        out.replaceChildren(
+          el('div',Number(r.open_cases).toLocaleString()+' open and '+Number(r.completed_cases).toLocaleString()+' completed cases. '+quality),
+          el('h4','Expected next steps across open cases'),table(['Next step','Expected cases'],expected),
+          el('h4','Most recently active open cases'),
+          rows.length?table(['Case','Last activity','Likely next','Matched on','Completed-case steps behind it'],rows):el('div','No open cases.','muted'),
+          el('div',r.interpretation,'muted'));
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      finally{run.disabled=false;}
+    };
+    return box;
   }
 
   // Remaining-time cell: from the last event, or (censoring-aware) from the end of the log; a withheld estimate shows its lower bound.

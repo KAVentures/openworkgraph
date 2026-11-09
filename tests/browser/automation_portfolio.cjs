@@ -35,6 +35,20 @@ const path=require('node:path');
    await page.locator('#owgPipelineDetail h3',{hasText:'Auto-match invoices'}).waitFor();
    await page.waitForLoadState('networkidle');
    const planning=page.locator('#owgPipelinePlanning');await planning.waitFor();
+   // Record what happens to the planning form so a failure explains itself: every replacement of the
+   // form and every input/change event, with the element's value and whether it was still attached.
+   await page.evaluate(()=>{
+     const log=window.__owgPlanTrace=[];let seen=document.querySelector('#owgPipelinePlanning');
+     new MutationObserver(()=>{const now=document.querySelector('#owgPipelinePlanning');if(now!==seen){seen=now;
+       log.push({t:Math.round(performance.now()),replaced:true,heading:document.querySelector('#owgPipelineDetail h3')?.textContent,
+         owner:now?.querySelector('#owgPlanOwner')?.value,revision:now?.dataset.revision,dirty:now?.dataset.dirty});}})
+       .observe(document.body,{subtree:true,childList:true});
+     for(const type of ['input','change'])document.addEventListener(type,e=>{const n=e.target;if(n.closest&&n.closest('#owgPipelinePlanning')||!n.isConnected)
+       log.push({t:Math.round(performance.now()),type,id:n.id,value:n.type==='checkbox'?n.checked:n.value,connected:n.isConnected});},true);
+   });
+   // Let any render still in flight from adding or opening the idea finish before typing.
+   await page.waitForFunction(()=>{const p=document.querySelector('#owgPipelinePlanning');const w=window;
+     if(w.__owgStable!==p){w.__owgStable=p;w.__owgStableAt=performance.now();return false;}return performance.now()-w.__owgStableAt>750;},null,{polling:100});
    await page.locator('#owgPlanOwner').fill('Sam');await page.locator('#owgPlanTeam').fill('Accounts payable');
    await page.locator('#owgPlanQuarter').fill('2027-Q1');await page.locator('#owgPlanBudget').fill('12000');
    await page.locator('#owgPlanCurrency').fill('eur');
@@ -47,7 +61,20 @@ const path=require('node:path');
    await page.waitForFunction(()=>document.querySelector('#owgPipelinePlanning')&&document.querySelector('#owgPipelinePlanning')!==window.__owgOldPlanning);
    await page.waitForLoadState('networkidle');
    await page.waitForLoadState('networkidle');
-   assert.equal(await page.locator('#owgPlanOwner').inputValue(),'Sam','the form still holds what was typed before saving');
+   const kept=await page.locator('#owgPlanOwner').inputValue();
+   if(kept!=='Sam')console.error('Planning trace:',JSON.stringify(await page.evaluate(()=>window.__owgPlanTrace)));
+   if(kept!=='Sam')console.error('Planning lost on re-render:',JSON.stringify(await page.evaluate(()=>{const p=document.querySelector('#owgPipelinePlanning');
+     return {dataset:{...(p?p.dataset:{})},heading:document.querySelector('#owgPipelineDetail h3')?.textContent,status:document.querySelector('#owgPipelineStatus')?.textContent};})),'page errors:',errors);
+   assert.equal(kept,'Sam','the form still holds what was typed before saving');
+   assert(await page.locator('#owgPipelinePlanning').getByLabel(/Clean vendor master/).isChecked());
+   // Opening another idea and coming back also keeps the unsaved planning (it is held per idea, not in the page).
+   await page.getByRole('button',{name:'Open idea Clean vendor master'}).click();
+   await page.locator('#owgPipelineDetail h3',{hasText:'Clean vendor master'}).waitFor();
+   assert.equal(await page.locator('#owgPlanOwner').inputValue(),'','another idea shows its own planning');
+   await page.getByRole('button',{name:'Open idea Auto-match invoices'}).click();
+   await page.locator('#owgPipelineDetail h3',{hasText:'Auto-match invoices'}).waitFor();
+   assert.equal(await page.locator('#owgPlanOwner').inputValue(),'Sam');
+   assert.equal(await page.locator('#owgPlanCurrency').inputValue(),'eur');
    assert(await page.locator('#owgPipelinePlanning').getByLabel(/Clean vendor master/).isChecked());
    await page.locator('#owgPlanSave').click();
    await page.locator('#owgPlanStatus').filter({hasText:'Planning saved.'}).waitFor();

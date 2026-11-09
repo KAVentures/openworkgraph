@@ -1121,6 +1121,9 @@
     }
 
     let detailGeneration=0;
+    // Unsaved planning per idea, kept in memory so any re-render of the same idea at the same revision
+    // (a list refresh, another Open click, a late response) restores what the person is still typing.
+    const planningDrafts=new Map();
     async function show(ideaId,resume=null){
       if(!resume)resumeGeneration++;
       const generation=++detailGeneration;
@@ -1134,7 +1137,10 @@
         const p=idea.planning||{};
         const section=el('section');section.id='owgPipelinePlanning';section.setAttribute('aria-label','Planning');
         section.dataset.ideaId=idea.idea_id;section.dataset.revision=String(idea.revision);
-        section.addEventListener('input',()=>{section.dataset.dirty='true';});section.addEventListener('change',()=>{section.dataset.dirty='true';});
+        const remember=()=>{section.dataset.dirty='true';const values={};
+          section.querySelectorAll('input,select').forEach(node=>{if(node.id)values[node.id]=node.type==='checkbox'?node.checked:node.value;});
+          planningDrafts.set(idea.idea_id,{revision:idea.revision,values});};
+        section.addEventListener('input',remember);section.addEventListener('change',remember);
         section.appendChild(el('h4','Planning'));
         const owner=input('owgPlanOwner','text','Who looks after it');owner.maxLength=80;owner.value=p.owner||'';
         const team=input('owgPlanTeam','text','Team');team.maxLength=80;team.value=p.team||'';
@@ -1156,7 +1162,7 @@
             depends_on:[...deps.querySelectorAll('input:checked')].map(i=>i.value)};
           if(amount.value!=='')body.budget={amount:Number(amount.value),currency:currency.value.trim().toUpperCase(),basis:basis.value};
           save.disabled=true;
-          try{await post('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/planning',body);await refresh();await show(idea.idea_id);
+          try{await post('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/planning',body);planningDrafts.delete(idea.idea_id);await refresh();await show(idea.idea_id);
             document.getElementById('owgPlanStatus').textContent='Planning saved. Owners and teams are labels; they grant no access.';}
           catch(e){planStatus.textContent=e.message;save.disabled=false;}
         };
@@ -2096,13 +2102,14 @@
       box.append(el('h4','History'),history,remove);
       // A re-render of the same idea at the same revision (for example after a list refresh)
       // must not throw away planning the person is still typing.
-      const previous=detail.querySelector('#owgPipelinePlanning');
       const fresh=box.querySelector('#owgPipelinePlanning');
-      if(previous&&fresh&&previous.dataset.dirty==='true'&&previous.dataset.ideaId===idea.idea_id&&previous.dataset.revision===String(idea.revision)){
-        previous.querySelectorAll('input,select').forEach(node=>{
-          const twin=node.id?fresh.querySelector('#'+CSS.escape(node.id)):null;if(!twin)return;
-          if(node.type==='checkbox')twin.checked=node.checked;else twin.value=node.value;
-        });
+      const draft=planningDrafts.get(idea.idea_id);
+      if(draft&&draft.revision!==idea.revision)planningDrafts.delete(idea.idea_id);  // saved elsewhere: the server's values win
+      else if(draft&&fresh){
+        for(const [id,value] of Object.entries(draft.values)){
+          const twin=fresh.querySelector('#'+CSS.escape(id));if(!twin)continue;
+          if(twin.type==='checkbox')twin.checked=Boolean(value);else twin.value=String(value);
+        }
         fresh.dataset.dirty='true';
       }
       detail.replaceChildren(box);

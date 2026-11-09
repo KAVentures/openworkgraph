@@ -17,7 +17,8 @@ from .event_log_analytics import risk_difference
 from .event_log_workspace import EventLogWorkspaceError
 
 _SEP = workspace._SEP
-_KEYS = {"label", "started_from", "started_before", "resource", "activity", "attribute", "follows", "variants"}
+_KEYS = {"label", "started_from", "started_before", "resource", "activity", "attribute", "event_attribute", "follows",
+         "variants"}
 MAX_FOLLOW_RULES = 5
 MAX_COHORT_VARIANTS = 500
 MAX_VARIANT_LENGTH = 1000
@@ -37,7 +38,8 @@ def parse_cohort(spec: Any) -> dict[str, Any]:
         return {}
     if not isinstance(spec, dict) or set(spec) - _KEYS:
         raise EventLogWorkspaceError(
-            "cohort accepts label, started_from, started_before, resource, activity, attribute, follows, variants")
+            "cohort accepts label, started_from, started_before, resource, activity, attribute, event_attribute, "
+            "follows, variants")
     cohort: dict[str, Any] = {}
     if spec.get("label") not in (None, ""):
         cohort["label"] = _short(spec["label"], "label")[:80]
@@ -50,12 +52,15 @@ def parse_cohort(spec: Any) -> dict[str, Any]:
     for key in ("resource", "activity"):
         if spec.get(key) not in (None, ""):
             cohort[key] = _short(spec[key], key)
-    if spec.get("attribute") not in (None, ""):
-        raw = _short(spec["attribute"], "attribute")
-        name, sep, value = raw.partition("=")
-        if not sep or not name.strip():
-            raise EventLogWorkspaceError("cohort attribute must look like name=value")
-        cohort["attribute"] = (name.strip(), value.strip())
+    # ``attribute`` matches the case object; ``event_attribute`` matches any event of the case,
+    # which is where columns kept from a CSV import live.
+    for key, what in (("attribute", "attribute"), ("event_attribute", "event attribute")):
+        if spec.get(key) not in (None, ""):
+            raw = _short(spec[key], key)
+            name, sep, value = raw.partition("=")
+            if not sep or not name.strip():
+                raise EventLogWorkspaceError(f"cohort {what} must look like name=value")
+            cohort[key] = (name.strip(), value.strip())
     if spec.get("follows") not in (None, [], ""):
         cohort["follows"] = _parse_follows(spec["follows"])
     if spec.get("variants") not in (None, []):
@@ -98,7 +103,7 @@ def describe(cohort: dict[str, Any]) -> dict[str, Any]:
     for key, value in cohort.items():
         if key in ("started_from", "started_before"):
             out[key] = value.isoformat() + "Z"
-        elif key == "attribute":
+        elif key in ("attribute", "event_attribute"):
             out[key] = f"{value[0]}={value[1]}"
         else:
             out[key] = value
@@ -123,6 +128,11 @@ def _predicate(cohort: dict[str, Any], log_id: str) -> tuple[str, list[Any]]:
         clauses.append("""case_id IN (SELECT object_id FROM objects WHERE log_id = ?
             AND list_contains(map_extract(json_transform(attributes, '"MAP(VARCHAR, VARCHAR)"'), ?), ?))""")
         params += [log_id, *cohort["attribute"]]
+    if "event_attribute" in cohort:
+        # Values are compared as the stored text (imports keep attribute values as text).
+        clauses.append("""case_id IN (SELECT case_id FROM ce, json_each(ce.attributes) j
+            WHERE j.key = ? AND (CASE WHEN j.type = 'VARCHAR' THEN j.value->>'$' ELSE j.value::VARCHAR END) = ?)""")
+        params += list(cohort["event_attribute"])
     for rule in cohort.get("follows", []):
         # Order within a case is time, then event identifier, as everywhere in the workspace.
         if rule["mode"] == "direct":
