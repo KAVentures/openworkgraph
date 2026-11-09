@@ -400,3 +400,19 @@ def test_saved_review_recovery_ui_uses_authenticated_revision_checked_revocation
     assert "recoveryIdea.addEventListener('input',resetRecovery)" in script
     assert "recoveryProject.addEventListener('input',resetRecovery)" in script
     assert "recoveryRevoke.disabled=state.revision===0||state.decision==='revoked'" in script
+
+
+def test_review_load_does_not_race_with_save_or_revocation():
+    """The browser must not enable writes before loading the persisted revision.
+
+    A late initial read must not replace the newer revision returned by a
+    mutation, and a failed initial read must leave mutation controls disabled.
+    """
+    script = (Path(__file__).resolve().parents[1] /
+              'dashboard/review_choice_workbench.js').read_text()
+    assert 'let reviewRequestGeneration=0;' in script
+    assert 'for(const b of [saveDraft,approve,revoke])b.disabled=true;' in script
+    assert 'const requestGeneration=++reviewRequestGeneration;' in script
+    assert 'requestGeneration!==reviewRequestGeneration' in script
+    assert script.count('++reviewRequestGeneration;') >= 3
+    assert "refreshReview().catch(e=>{if(reviewStillSelected()){reviewState.textContent=e.message;for(const b of [saveDraft,approve,revoke])b.disabled=true;}});" in script
