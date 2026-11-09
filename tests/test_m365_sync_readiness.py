@@ -838,3 +838,30 @@ def test_operator_cli_extraction_kwargs_match_real_entrypoint(monkeypatch):
         assert main(_cli_extract_args()) == 0
     signature(extract_after_readiness).bind(**delegate.call_args.kwargs)
     assert "consent_local_append" not in delegate.call_args.kwargs
+
+
+def test_operator_rejects_unsafe_audit_storage_before_mutation(monkeypatch, capsys, tmp_path):
+    """Invalid private storage must block both writers before any side effect."""
+    from server.m365_outlook_sync_readiness import main
+    monkeypatch.setenv("OWG_DASHBOARD_SESSION", "private-session")
+    missing = tmp_path / "missing-audit"
+    with (patch("server.m365_outlook_sync_readiness.append_after_review") as append,
+          patch("server.m365_outlook_sync_readiness.commit_after_review") as commit):
+        for action in ("append", "commit"):
+            args = _cli_commit_args()
+            if action == "append":
+                args.remove("--commit-after-review")
+                args.remove("--confirm-events-appended")
+                args.remove("--confirm-checkpoint-commit")
+                pos = args.index("--expected-previous-candidate-sha256")
+                del args[pos:pos + 2]
+                for key in ("--receipt-file", "--journal-dir", "--handoff-dir",
+                            "--successor-label"):
+                    pos = args.index(key)
+                    del args[pos:pos + 2]
+                args.extend(["--append-after-review", "--consent-local-append"])
+            args.extend(["--audit-dir", str(missing)])
+            assert main(args) == 2
+            assert json.loads(capsys.readouterr().out)["status"] == "refused"
+        append.assert_not_called()
+        commit.assert_not_called()
