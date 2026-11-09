@@ -217,7 +217,70 @@
       }catch(e){if(current===generation){clear();status.textContent='Review failed. Inspect current records again before choosing. '+e.message;}}
       finally{if(current===generation&&snapshot&&choice.value===projectId)review.disabled=false;}
     };
-    card.append(heading,intro,label,input,load,status,results,details);panel.append(card);
+    // Recovery must remain reachable when the original opportunity or project
+    // cannot be inspected. It only reads/revokes a previously saved decision.
+    const recovery=node('section');recovery.setAttribute('aria-label','Recover saved human review');
+    const recoveryHeading=node('h3','Recover or revoke a saved review');
+    const recoveryHelp=node('p','If source evidence disappeared, enter the saved opportunity and project IDs to retrieve its review revision and withdraw approval. No source access or execution is granted.');
+    const recoveryIdeaLabel=node('label','Saved opportunity ID');
+    const recoveryIdea=node('input');recoveryIdea.maxLength=128;recoveryIdeaLabel.append(recoveryIdea);
+    const recoveryProjectLabel=node('label','Saved project ID');
+    const recoveryProject=node('input');recoveryProject.maxLength=128;recoveryProjectLabel.append(recoveryProject);
+    const recoveryLoad=node('button','Load saved review');recoveryLoad.type='button';
+    const recoveryRevoke=node('button','Revoke saved review');recoveryRevoke.type='button';recoveryRevoke.disabled=true;
+    const recoveryStatus=node('p','No saved review loaded.');recoveryStatus.setAttribute('role','status');recoveryStatus.setAttribute('aria-live','polite');
+    let recoveryGeneration=0,recoveryRevision=null,recoveryIdentity=null;
+    function resetRecovery(){
+      recoveryGeneration++;recoveryRevision=null;recoveryIdentity=null;
+      recoveryRevoke.disabled=true;recoveryStatus.textContent='IDs changed. Load the saved review again.';
+    }
+    recoveryIdea.addEventListener('input',resetRecovery);
+    recoveryProject.addEventListener('input',resetRecovery);
+    const recoveryPath=(idea,project)=>'/v1/review-choice-workbench/'+encodeURIComponent(idea)+'/review/'+encodeURIComponent(project);
+    recoveryLoad.onclick=async()=>{
+      const idea=recoveryIdea.value.trim(),project=recoveryProject.value.trim();
+      const generation=++recoveryGeneration;
+      recoveryRevision=null;recoveryIdentity=null;recoveryRevoke.disabled=true;
+      if(!idea||!project){recoveryStatus.textContent='Both saved IDs are required.';return;}
+      recoveryLoad.disabled=true;recoveryStatus.textContent='Reading authenticated saved review…';
+      try{
+        const state=await request(recoveryPath(idea,project));
+        if(generation!==recoveryGeneration)return;
+        if(state.format!=='openworkgraph.human-review.v1'||state.idea_id!==idea||
+           state.project_id!==project||state.execution_authorized!==false||
+           !Number.isSafeInteger(state.revision)||state.revision<0)
+          throw new Error('Invalid saved review state.');
+        recoveryRevision=state.revision;recoveryIdentity={idea,project};
+        recoveryRevoke.disabled=state.revision===0||state.decision==='revoked';
+        recoveryStatus.textContent='Saved decision: '+state.decision+' (revision '+state.revision+'). No execution access granted.';
+      }catch(e){if(generation===recoveryGeneration)recoveryStatus.textContent=e.message;}
+      finally{if(generation===recoveryGeneration)recoveryLoad.disabled=false;}
+    };
+    recoveryRevoke.onclick=async()=>{
+      if(!recoveryIdentity||recoveryRevision===null)return;
+      const {idea,project}=recoveryIdentity,revision=recoveryRevision,generation=++recoveryGeneration;
+      recoveryRevoke.disabled=true;recoveryLoad.disabled=true;
+      recoveryStatus.textContent='Withdrawing saved review…';
+      try{
+        await window.__owgAuthReady;
+        const response=await fetch(recoveryPath(idea,project)+'/revoke',{
+          method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({expected_review_revision:revision})
+        });
+        if(generation!==recoveryGeneration)return;
+        if(!response.ok)throw new Error('Revocation refused ('+response.status+'). Reload the saved revision.');
+        const state=await response.json();
+        if(state.idea_id!==idea||state.project_id!==project||state.decision!=='revoked'||
+           state.execution_authorized!==false||state.revision!==revision+1)
+          throw new Error('Inconsistent revocation response; reload the saved review.');
+        recoveryRevision=state.revision;
+        recoveryStatus.textContent='Review revoked (revision '+state.revision+'). No execution access granted.';
+      }catch(e){if(generation===recoveryGeneration)recoveryStatus.textContent=e.message;}
+      finally{if(generation===recoveryGeneration)recoveryLoad.disabled=false;}
+    };
+    recovery.append(recoveryHeading,recoveryHelp,recoveryIdeaLabel,recoveryProjectLabel,
+      recoveryLoad,recoveryRevoke,recoveryStatus);
+    card.append(heading,intro,label,input,load,status,results,details,recovery);panel.append(card);
   }
   document.addEventListener('DOMContentLoaded',mount);
 })();
