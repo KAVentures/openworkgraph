@@ -122,7 +122,7 @@
               status.textContent='Rechecking current evidence before opening the decision…';
               try{
                 await window.__owgAuthReady;
-                const response=await fetch('/v1/review-choice-workbench/'+encodeURIComponent(id)+'/preflight',{
+                const response=await fetch('/v1/review-choice-workbench/'+encodeURIComponent(id)+'/reviewed-handoff-preflight',{
                   method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},
                   body:JSON.stringify({project_id:projectId,project_set_sha256:snapshot.project_set_sha256,idea_revision:snapshot.idea.revision,idea_state:snapshot.idea.state,
                     spec_sha256:selected.spec_sha256,archive_sha256:selected.archive_sha256,
@@ -134,17 +134,15 @@
                 if(token!==generation||choice.value!==projectId||input.value.trim()!==id)return;
                 if(!response.ok)throw new Error('Decision preflight refused ('+response.status+').');
                 const result=await response.json();
-                if(result.format!=='openworkgraph.review-preflight.v1'||result.idea_id!==id||
-                   result.idea_revision!==snapshot.idea.revision||result.project_id!==projectId||
-               result.project_set_sha256!==snapshot.project_set_sha256||
-                   result.spec_sha256!==selected.spec_sha256||result.archive_sha256!==selected.archive_sha256||
-                   result.review_required!==true||result.execution_authorized!==false||
-                   result.source_read_authorized!==false||result.verified_business_outcomes!==false||
-                   JSON.stringify(result.blockers)!==JSON.stringify(selected.blockers))
+                if(result.format!=='openworkgraph.reviewed-handoff-preflight.v1'||
+                   result.idea_id!==id||result.project_id!==projectId||
+                   result.project_set_sha256!==snapshot.project_set_sha256||
+                   result.human_review_approved!==true||result.execution_authorized!==false||
+                   result.source_read_authorized!==false)
                   throw new Error('Decision evidence changed.');
                 window.dispatchEvent(new CustomEvent('owg-pipeline-open',{detail:{idea_id:id,project_id:projectId,idea_revision:snapshot.idea.revision,idea_state:snapshot.idea.state,spec_sha256:selected.spec_sha256,archive_sha256:selected.archive_sha256,review_basis:{project_id:projectId,project_set_sha256:snapshot.project_set_sha256,idea_revision:snapshot.idea.revision,idea_state:snapshot.idea.state,spec_sha256:selected.spec_sha256,archive_sha256:selected.archive_sha256,process_status:snapshot.process_status,process_reference:snapshot.process_reference,dataset_origins:snapshot.dataset_origins,dataset_origin_check_available:snapshot.dataset_origin_check_available,blockers:selected.blockers}}}));
                 pipelineCard.scrollIntoView({block:'start',behavior:'auto'});
-                status.textContent='Opened current opportunity decision; no agent access was granted.';
+                status.textContent='Opened reviewed opportunity decision. Human approval verified; no agent execution access was granted.';
               }catch(e){
                 if(token===generation){clear();status.textContent='Decision review expired. Inspect again. '+e.message;}
               }finally{continueReview.disabled=false;}
