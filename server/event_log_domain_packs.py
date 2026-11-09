@@ -777,15 +777,15 @@ def _check_names(conn, log_id: str, mapping: Mapping) -> None:
             raise workspace.EventLogWorkspaceError(f"{role} is mapped to {name!r}, which is not an activity of this log")
 
 
+def _installation_token(record: dict[str, Any]) -> str:
+    """Opaque equality token for the complete stored installation, including owned IDs."""
+    return _digest(record)
+
+
 def _record(conn, log_id: str, pack_id: str) -> dict[str, Any] | None:
     row = conn.execute("SELECT definition FROM domain_pack_installs WHERE log_id = ? AND pack_id = ?",
                        [log_id, pack_id]).fetchone()
     return json.loads(row[0]) if row else None
-
-
-def _installation_token(record: dict[str, Any]) -> str:
-    """Opaque equality token for the complete stored installation, including owned IDs."""
-    return _digest(record)
 
 
 def install(log_id: str, pack_id: str, spec: Any) -> dict[str, Any]:
