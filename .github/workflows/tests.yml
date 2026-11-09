@@ -117,6 +117,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/shared_case_queries.cjs
       - name: Verify linked roster offboarding across company portals
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/roster_offboarding.cjs
+      - name: Verify the local focus and switching report in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/focus_report.cjs
       - name: Verify company sign-in and process-only browser sessions
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_signin.cjs
       - name: Verify company sign-in and analysis-only browser sessions
@@ -147,6 +149,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_parallel.cjs
       - name: Verify content-free recorder reports in the company admin console
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/fleet_status.cjs
+      - name: Verify the local time-allocation report in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/time_allocation.cjs
       - name: Verify scoped identity provisioning and credential lifecycle in the admin console
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/scim_provisioning.cjs
       - name: Verify content-free device sync health in the company admin console
@@ -185,6 +189,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/sap_o2c.cjs
       - name: Verify communications review examples and learned intents in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/communications_review.cjs
+      - name: Verify stuck open-case detection in Chromium
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_stuck.cjs
       - name: Verify PDD packages burn screenshot masks into pixels and store nothing
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_pdd.cjs
       - name: Verify process map SVG and PNG downloads in Chromium

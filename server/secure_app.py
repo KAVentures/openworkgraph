@@ -757,12 +757,16 @@ from .automation_monitoring_routes import router as _automation_monitoring_route
 app.include_router(_automation_monitoring_router)
 from .communications_routes import router as _communications_router  # noqa: E402
 app.include_router(_communications_router)
+from .focus_report_routes import router as _focus_report_router  # noqa: E402
+app.include_router(_focus_report_router)
 from .process_pdd_routes import router as _process_pdd_router  # noqa: E402
 app.include_router(_process_pdd_router)
 from .automation_pipeline_routes import router as _automation_pipeline_router  # noqa: E402
 app.include_router(_automation_pipeline_router)
 from .review_choice_routes import router as _review_choice_router  # noqa: E402
 app.include_router(_review_choice_router)
+from .time_allocation_routes import router as _time_allocation_router  # noqa: E402
+app.include_router(_time_allocation_router)
 
 # AI context detail (Redacted/Full) for MCP requests. Imported last so its
 # middleware wraps every route registered above.
