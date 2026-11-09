@@ -95,10 +95,11 @@ def _case_filter(started_from: str = Query(default="", max_length=64),
                  resource: str = Query(default="", max_length=200),
                  activity: str = Query(default="", max_length=200),
                  attribute: str = Query(default="", max_length=200),
+                 event_attribute: str = Query(default="", max_length=200),
                  follows: str = Query(default="", max_length=4000)) -> dict[str, Any]:
     """The case filter shared by analysis views; ``follows`` is a JSON list of follower rules."""
     cohort: dict[str, Any] = {"started_from": started_from, "started_before": started_before, "resource": resource,
-                              "activity": activity, "attribute": attribute}
+                              "activity": activity, "attribute": attribute, "event_attribute": event_attribute}
     if follows:
         try:
             cohort["follows"] = json.loads(follows)
