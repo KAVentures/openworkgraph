@@ -3570,8 +3570,50 @@
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities that end a case',ends),field('Also predict',outcome),f.hours,f.activity,field('Learn from',estimator),run,watch);
     const out=el('div');out.id='owgPredictResults';out.setAttribute('role','status');
     const monitorOut=el('div');monitorOut.id='owgPredictMonitoring';monitorOut.setAttribute('role','status');
-    box.append(row,out,monitorOut);
+    const snapButton=button('Save a snapshot to score later','secondary');snapButton.id='owgPredictSnapshot';
+    const snapOut=el('div');snapOut.id='owgPredictSnapshots';
+    const snapStatus=el('div',null,'muted');snapStatus.id='owgPredictSnapshotStatus';snapStatus.setAttribute('role','status');snapStatus.setAttribute('aria-live','polite');
+    box.append(row,out,monitorOut,el('h4','Prediction snapshots'),
+      el('div','A snapshot freezes today\u2019s estimates for every open case (completed-cases learning). After you append newer events, score it to see how the estimates held up against what actually happened.','muted'),
+      snapButton,snapStatus,snapOut);
     const generation=state.generation;
+    const snapBase=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/prediction-snapshots';
+    const listSnapshots=async()=>{
+      const r=await (await api(snapBase())).json();
+      if(generation!==state.generation)return;
+      if(!r.snapshots.length){snapOut.replaceChildren(el('div','No snapshots yet.','muted'));return;}
+      const list=el('ul');
+      r.snapshots.forEach(sn=>{
+        const li=el('li',(sn.as_of||'').slice(0,16).replace('T',' ')+' · '+Number(sn.predicted_cases).toLocaleString()+' open cases frozen ');
+        const score=button('Score now','secondary');score.setAttribute('aria-label','Score snapshot from '+(sn.as_of||''));
+        const remove=button('Delete','secondary');remove.setAttribute('aria-label','Delete snapshot from '+(sn.as_of||''));
+        const result=el('div');result.className='owgSnapshotScore';
+        score.onclick=async()=>{
+          try{
+            const e=await (await api(snapBase()+'/'+encodeURIComponent(sn.snapshot_id)+'/evaluation')).json();
+            const parts=[el('div',Number(e.finished_cases).toLocaleString()+' finished, '+Number(e.still_open_cases).toLocaleString()+' still open'+(e.cases_no_longer_in_log?', '+e.cases_no_longer_in_log+' no longer in the log':'')+'; '+duration(e.seconds_since_snapshot)+' of newer events.')];
+            const t=e.remaining_time;
+            if(t)parts.push(el('div','Typical error '+duration(t.mean_absolute_error_seconds)+' (median '+duration(t.median_absolute_error_seconds)+') vs '+(t.naive_mean_absolute_error_seconds===null?'—':duration(t.naive_mean_absolute_error_seconds))+' for one estimate for every case. Range covered '+pct(t.coverage_10_90)+' ['+pct(t.coverage_10_90_ci95[0])+', '+pct(t.coverage_10_90_ci95[1])+'] against 80% nominal. '+t.still_open_known_misses+' still-open cases are already past their range.'));
+            else parts.push(el('div','No frozen case has finished yet; append newer events and score again.','muted'));
+            if(e.outcome)parts.push(el('div','Outcome: Brier '+Number(e.outcome.brier_score).toFixed(3)+(e.outcome.base_rate_brier_score===null?'':' vs '+Number(e.outcome.base_rate_brier_score).toFixed(3)+' for the base rate')+'; happened in '+pct(e.outcome.observed_rate)+' against '+pct(e.outcome.mean_predicted)+' predicted.'));
+            parts.push(el('div',e.interpretation,'muted'));result.replaceChildren(...parts);
+          }catch(error){result.replaceChildren(el('div',error.message,'muted'));}
+        };
+        remove.onclick=async()=>{try{await api(snapBase()+'/'+encodeURIComponent(sn.snapshot_id)+'/delete',{method:'POST'});await listSnapshots();}catch(error){snapStatus.textContent=error.message;}};
+        li.append(score,remove,result);list.appendChild(li);
+      });
+      snapOut.replaceChildren(list);
+    };
+    snapButton.onclick=async()=>{
+      try{
+        const spec={...predictionSpec({ends:ends.value,outcome:outcome.value,hours:hours.value,activity:activity.value,estimator:'completed_cases'})};
+        delete spec.limit;if(state.caseType)spec.case_type=state.caseType;
+        const sn=await (await api(snapBase(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        snapStatus.textContent='Saved a snapshot of '+Number(sn.predicted_cases).toLocaleString()+' open cases'+(sn.unsupported_open_cases?' ('+sn.unsupported_open_cases+' without enough comparable history)':'')+'.';
+        await listSnapshots();
+      }catch(error){snapStatus.textContent=error.message;}
+    };
+    listSnapshots().catch(()=>{});
     run.onclick=async()=>{
       try{
         const spec=predictionSpec({ends:ends.value,outcome:outcome.value,hours:hours.value,activity:activity.value,estimator:estimator.value});
