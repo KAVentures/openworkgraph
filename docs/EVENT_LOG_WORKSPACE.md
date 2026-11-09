@@ -157,6 +157,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-logs` | List stored logs. |
 | `POST /v1/event-logs/import?format=csv\|xes\|ocel\|ocelxml&name=...` | Import the request body. Requires `X-OWG-Local-Storage-Confirmed: true`. CSV also takes `case_column`, `activity_column`, `timestamp_column`, `resource_column`, `delimiter` (`t` for tab) and repeated `attribute_column` for up to 32 extra columns to keep as event attributes (nothing else is stored). |
 | `POST /v1/event-logs/{log_id}/delete` | Delete the log and every row that belongs to it. |
+| `POST /v1/event-logs/{log_id}/derive` | Save the cases matching a filter as a new log (below). |
 | `GET /v1/event-logs/{log_id}/quality` | Stored quality and mapping reports per import and append, plus current whole-log diagnostics (below). |
 | `GET /v1/event-logs/{log_id}/summary` | Events, cases, activities, time span and case-duration median/p90/mean. |
 | `GET /v1/event-logs/{log_id}/object-types` | Object types, objects per type and shared events between types. |
@@ -906,6 +907,28 @@ forward/cyclic references and incompatible addition units, and disclose zero/mis
 coverage. Units are never converted. Saved arithmetic library entries are symbolic templates;
 save a complete analysis to retain their dependency definitions. JSON exports retain the spec,
 units and coverage; CSV exports remain numeric tables.
+
+## Saving matching cases as a new log
+
+**Save matching cases as a new log** (after **Analyse**), or
+`POST /v1/event-logs/{log_id}/derive` with
+`{"name": "Escalated orders", "cohort": {"activity": "Escalate"}, "case_type": null}`,
+copies the cases that match a case filter into a new saved log. `cohort` takes
+the same keys as other analyses and must filter something. It is evaluated
+under the chosen case notion and the source's activity mapping.
+
+* **What is copied:** every event of each matching case, with its attributes,
+  so a case keeps its full history. The objects those events are linked to are
+  copied too, with their links and timed attribute values. In an
+  object-centric log, an event linked to a matching case also brings its other
+  objects, which keep only the copied events.
+* **What is not copied:** activity mapping, saved filters and analyses,
+  signals, domain packs, source-identity keys, object-to-object relationships
+  and quality reports. The new log starts without them.
+* **The source log:** unchanged.
+* **The new log:** counts against the 50-log limit. It can be analysed,
+  exported, compared with the source (see *Comparing two logs*) or deleted like
+  any other log.
 
 ## Appending newer exports
 
