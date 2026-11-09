@@ -561,6 +561,7 @@
     results.appendChild(analysisSection(names));
     results.appendChild(signalSection((activities.activities||[]).map(a=>a.activity)));
     results.appendChild(predictionSection((activities.activities||[]).map(a=>a.activity)));
+    results.appendChild(nextActivitySection((activities.activities||[]).map(a=>a.activity)));
     results.appendChild(complianceSection((activities.activities||[]).map(a=>a.activity)));
     results.appendChild(domainPackSection());
     results.appendChild(costSection(names));
@@ -3960,6 +3961,45 @@
     if(values.estimator==='survival')spec.estimator='survival';
     else if(values.estimator&&values.estimator!=='completed_cases')throw new Error('Choose what to learn from.');
     return spec;
+  }
+
+  // What usually happens next in open cases, learned from completed cases and checked by a temporal backtest.
+  function nextActivitySection(activityNames){
+    const box=section('Next activity in open cases');box.id='owgNextActivity';
+    box.appendChild(el('div','Estimate what usually comes next in each open case, from completed cases that had the same recent activities. Check the backtest before relying on it.','muted'));
+    const ends=input('owgNextEnds','text','for example Pay, Close');ends.maxLength=2000;
+    const listId='owgNextEndsList';const list=document.createElement('datalist');list.id=listId;activityNames.slice(0,500).forEach(a=>{const o=document.createElement('option');o.value=a;list.appendChild(o);});ends.setAttribute('list',listId);
+    const history=select('owgNextHistory',[['1','1 activity'],['2','2 activities'],['3','3 activities']]);history.value='2';
+    const run=button('Predict next activities','secondary');run.id='owgNextRun';
+    const out=el('div');out.id='owgNextResults';out.setAttribute('role','status');
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Activities that end a case (comma-separated)',ends),field('Recent history to match',history),run);
+    box.append(row,list,out);
+    const generation=state.generation;
+    const name=n=>n.case_ends?'(case ends)':n.activity;
+    run.onclick=async()=>{
+      run.disabled=true;
+      try{
+        const endList=ends.value.split(',').map(x=>x.trim()).filter(Boolean);
+        if(!endList.length)throw new Error('List the activities that end a case.');
+        const spec={end_activities:endList,history:Number(history.value),limit:50};
+        if(state.caseType)spec.case_type=state.caseType;
+        if(state.follows.length)spec.cohort={follows:state.follows};
+        const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/next-activity',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        if(generation!==state.generation)return;
+        const b=r.backtest;
+        const quality=b.available?'Backtest on '+Number(b.test_cases).toLocaleString()+' cases that ended after '+String(b.cutoff_case_ended_at).slice(0,10)+': the first guess was right '+pct(b.top1_accuracy)+' of the time and one of the top three '+pct(b.top3_accuracy)+', against '+pct(b.baseline_current_activity_only)+' when looking at the current activity only and '+pct(b.baseline_most_frequent_next)+' when always guessing the most common step.':'No backtest: '+b.reason+'.';
+        const rows=r.predictions.map(p=>[p.case_id,p.last_activity,p.next.map(n=>name(n)+' '+pct(n.probability)).join(', '),p.history_used?'last '+p.history_used+' '+(p.history_used===1?'activity':'activities'):'all completed cases',Number(p.support).toLocaleString()]);
+        const expected=r.expected_next_across_open_cases.map(e=>[name(e),e.expected_cases.toLocaleString()]);
+        out.replaceChildren(
+          el('div',Number(r.open_cases).toLocaleString()+' open and '+Number(r.completed_cases).toLocaleString()+' completed cases. '+quality),
+          el('h4','Expected next steps across open cases'),table(['Next step','Expected cases'],expected),
+          el('h4','Most recently active open cases'),
+          rows.length?table(['Case','Last activity','Likely next','Matched on','Completed-case steps behind it'],rows):el('div','No open cases.','muted'),
+          el('div',r.interpretation,'muted'));
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      finally{run.disabled=false;}
+    };
+    return box;
   }
 
   // Remaining-time cell: from the last event, or (censoring-aware) from the end of the log; a withheld estimate shows its lower bound.

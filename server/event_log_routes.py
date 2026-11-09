@@ -741,6 +741,19 @@ async def event_log_take_prediction_snapshot(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/next-activity")
+async def event_log_next_activity(request: Request, log_id: str):
+    """What usually happens next in open cases, learned from completed cases and backtested."""
+    from . import event_log_next_activity as next_activity
+    _require_dashboard(request)
+    spec = await _json_body(request, "next-activity settings", strict=True, limit=32768)
+    try:
+        result = await run_in_threadpool(next_activity.next_activity, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/v1/event-logs/{log_id}/prediction-snapshots")
 async def event_log_list_prediction_snapshots(request: Request, log_id: str):
     from . import event_log_prediction_snapshots as prediction_snapshots
