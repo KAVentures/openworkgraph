@@ -25,6 +25,7 @@ class Element {
     this.value = '';
     this.textContent = '';
     this.disabled = false;
+    this.style = {};
   }
   append(...nodes) { this.children.push(...nodes); }
   appendChild(node) { this.children.push(node); return node; }

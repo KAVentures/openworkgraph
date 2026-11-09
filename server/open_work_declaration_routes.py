@@ -2901,8 +2901,9 @@ async def get_local_durable_reviewed_dependencies(request: Request, response: Re
     # A query may not silently override scope or review semantics. Reject
     # duplicates and unexpected parameters rather than choosing a first value.
     # Do this before opening the source scope or durable storage.
-    if (len(request.query_params) != len(set(request.query_params)) or
-        any(key != "work_item_ref" for key in request.query_params)):
+    # ``len(query_params)`` counts distinct keys, so repeated keys need ``multi_items``.
+    items = request.query_params.multi_items()
+    if len(items) != len({key for key, _ in items}) or any(key != "work_item_ref" for key, _ in items):
         raise HTTPException(422, "exact durable dependency query fields required")
     ref = request.query_params.get("work_item_ref")
     if ref is not None and not re.fullmatch(r"owg:w:[0-9a-f]{32}", ref):
