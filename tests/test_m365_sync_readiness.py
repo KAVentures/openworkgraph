@@ -776,6 +776,39 @@ def test_operator_audit_missing_directory_refuses_before_append(monkeypatch, cap
     assert "possible_local_append" not in receipt
 
 
+@pytest.mark.skipif(__import__("os").name != "posix", reason="POSIX audit storage")
+def test_operator_audit_failure_after_verified_append_is_uncertain(monkeypatch, capsys, tmp_path):
+    """Once a POST may have succeeded, audit failure requires reconciliation."""
+    from server.m365_outlook_sync_readiness import main
+    monkeypatch.setenv("OWG_DASHBOARD_SESSION", "private-session")
+    private = tmp_path / "audit"
+    private.mkdir(mode=0o700)
+    args = _cli_commit_args()
+    args.remove("--commit-after-review")
+    args.remove("--confirm-events-appended")
+    args.remove("--confirm-checkpoint-commit")
+    pos = args.index("--expected-previous-candidate-sha256")
+    del args[pos:pos + 2]
+    for key in ("--receipt-file", "--journal-dir", "--handoff-dir",
+                "--successor-label"):
+        pos = args.index(key)
+        del args[pos:pos + 2]
+    args.extend(["--append-after-review", "--consent-local-append",
+                 "--audit-dir", str(private)])
+    with (patch("server.m365_outlook_sync_readiness.append_after_review",
+                return_value={"status": "append_review_verified",
+                              "checkpoint_advanced": False}) as append,
+          patch("server.m365_outlook_sync_readiness._audit_operator_result",
+                side_effect=OSError("private storage failure"))):
+        assert main(args) == 3
+        append.assert_called_once()
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["status"] == "unverified"
+    assert receipt["possible_local_append"] is True
+    assert receipt["recovery_action"] == "inspect_owg_inventory_and_checkpoint"
+    assert receipt["automatic_retry_allowed"] is False
+
+
 @pytest.mark.skipif(__import__("os").name != "posix", reason="POSIX dirfd security contract")
 def test_operator_audit_rejects_directory_replacement_between_checks(tmp_path, monkeypatch):
     """Replacing a checked private path must not redirect a receipt to an unsafe directory."""
