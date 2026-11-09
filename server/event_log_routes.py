@@ -632,6 +632,51 @@ async def event_log_predictions(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/prediction-snapshots")
+async def event_log_take_prediction_snapshot(request: Request, log_id: str):
+    from . import event_log_prediction_snapshots as prediction_snapshots
+    _require_dashboard(request)
+    spec = await _json_body(request, "prediction settings")
+    try:
+        result = await run_in_threadpool(prediction_snapshots.take, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/v1/event-logs/{log_id}/prediction-snapshots")
+async def event_log_list_prediction_snapshots(request: Request, log_id: str):
+    from . import event_log_prediction_snapshots as prediction_snapshots
+    _require_dashboard(request)
+    try:
+        result = await run_in_threadpool(prediction_snapshots.listing, log_id)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(404, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/v1/event-logs/{log_id}/prediction-snapshots/{snapshot_id}/evaluation")
+async def event_log_evaluate_prediction_snapshot(request: Request, log_id: str, snapshot_id: str):
+    from . import event_log_prediction_snapshots as prediction_snapshots
+    _require_dashboard(request)
+    try:
+        result = await run_in_threadpool(prediction_snapshots.evaluate, log_id, snapshot_id)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(404 if "unknown" in str(exc) else 422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/prediction-snapshots/{snapshot_id}/delete")
+async def event_log_delete_prediction_snapshot(request: Request, log_id: str, snapshot_id: str):
+    from . import event_log_prediction_snapshots as prediction_snapshots
+    _require_dashboard(request)
+    try:
+        result = await run_in_threadpool(prediction_snapshots.delete, log_id, snapshot_id)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(404, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/{log_id}/predictions/monitoring")
 async def event_log_prediction_monitoring(request: Request, log_id: str):
     _require_dashboard(request)

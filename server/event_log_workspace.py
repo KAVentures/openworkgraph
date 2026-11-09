@@ -693,6 +693,8 @@ def delete_log(log_id: str) -> dict[str, Any]:
                 conn.execute("ROLLBACK")
                 raise
             conn.execute("CHECKPOINT")
+            from .event_log_prediction_snapshots import erase_log as erase_snapshots
+            erase_snapshots(log_id)
             # Cover a submission racing with the first erasure while deletion waited for this lock.
             jobs.erase_log(log_id)
             return {"deleted": True, "log_id": log_id}
