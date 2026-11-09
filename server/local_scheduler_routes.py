@@ -45,15 +45,21 @@ async def create_schedule(request: Request):
     data = await _body(request)
     return await _run(scheduler.create, data.get("kind"), data.get("target_id"),
                       interval_minutes=data.get("interval_minutes"),
-                      confirm_scheduled_runs=data.get("confirm_scheduled_runs"))
+                      confirm_scheduled_runs=data.get("confirm_scheduled_runs"),
+                      confirm_unencrypted_local_backup=data.get("confirm_unencrypted_local_backup"),
+                      quiet_hours=data.get("quiet_hours"))
 
 
 @router.post("/v1/schedules/update")
 async def update_schedule(request: Request):
     _require_dashboard(request)
     data = await _body(request)
-    return await _run(scheduler.update, data.get("schedule_id"), enabled=data.get("enabled"),
-                      interval_minutes=data.get("interval_minutes"))
+    params = {"enabled": data.get("enabled"), "interval_minutes": data.get("interval_minutes")}
+    if "quiet_hours" in data:
+        # Omitting quiet_hours preserves the current window; explicit JSON null
+        # clears it. A false/string value must never silently disable consent.
+        params["quiet_hours"] = data["quiet_hours"]
+    return await _run(scheduler.update, data.get("schedule_id"), **params)
 
 
 @router.post("/v1/schedules/delete")

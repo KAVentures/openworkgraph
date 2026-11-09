@@ -114,11 +114,41 @@ async def post_local_backup_preflight(request: Request) -> Response:
         raw.clear()
 
 
+async def post_local_backup_health(request: Request) -> Response:
+    """Explicit, bounded, owner-only integrity scan of already-listed local ZIPs."""
+    from . import local_backup_health
+    from fastapi.responses import JSONResponse
+    import json
+
+    _require_dashboard_session(request)
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+        raise HTTPException(415, "JSON selection required")
+    raw = bytearray()
+    try:
+        async for chunk in request.stream():
+            if len(raw) + len(chunk) > 1600:
+                raise HTTPException(413, "Backup health selection is too large")
+            raw.extend(chunk)
+        try:
+            payload = json.loads(raw)
+        except (ValueError, UnicodeError):
+            raise HTTPException(422, "Invalid local backup health selection") from None
+        try:
+            result = await run_in_threadpool(local_backup_health.check, payload)
+        except local_backup_health.BackupHealthError as exc:
+            raise HTTPException(422, str(exc)) from None
+        except OSError:
+            raise HTTPException(503, "Local backups are unavailable") from None
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
+    finally:
+        raw.clear()
+
+
 def _require_dashboard_session(request: Request) -> None:
     from .local_auth import dashboard_session_valid
     auth = str(request.headers.get("authorization") or "")
     if not auth.lower().startswith("owg-session ") or not dashboard_session_valid(auth[len("owg-session "):].strip()):
-        raise HTTPException(status_code=403, detail="Local dashboard session required to change capture depth")
+        raise HTTPException(status_code=403, detail="Local dashboard session required")
 
 
 def get_capture_depth() -> dict[str, Any]:
@@ -162,6 +192,17 @@ def get_pointer_heatmap(request: Request, hostname: str | None = None, pathname:
     return capture_depth.pointer_heatmap(hostname=hostname[:253] if hostname else None,
                                          pathname=pathname[:2048] if pathname else None,
                                          hours=max(1, min(int(hours), 24 * 365)))
+
+
+def get_interaction_playback(request: Request, hostname: str, pathname: str | None = None,
+                             hours: int = 168, visit: int | None = None) -> dict[str, Any]:
+    from . import capture_depth
+    _require_dashboard_session(request)
+    try:
+        return capture_depth.interaction_playback(hostname=hostname[:253], pathname=pathname[:2048] if pathname else None,
+                                                  hours=max(1, min(int(hours), 24 * 365)), visit=visit)
+    except capture_depth.CaptureDepthError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from None
 
 
 def get_capture_coverage(hours: int = 168) -> dict[str, Any]:
@@ -211,11 +252,13 @@ if not getattr(app.state, "owg_basic_mode_installed", False):
     app.add_api_route("/v1/local-backups", get_local_backups, methods=["GET"])
     app.add_api_route("/v1/local-backups", post_local_backup, methods=["POST"])
     app.add_api_route("/v1/local-backups/preflight", post_local_backup_preflight, methods=["POST"])
+    app.add_api_route("/v1/local-backups/health", post_local_backup_health, methods=["POST"])
     app.add_api_route("/v1/capture-depth", get_capture_depth, methods=["GET"])
     app.add_api_route("/v1/capture-depth", put_capture_depth, methods=["PUT"])
     app.add_api_route("/v1/capture-coverage", get_capture_coverage, methods=["GET"])
     app.add_api_route("/v1/capture-coverage/friction", get_friction_candidates, methods=["GET"])
     app.add_api_route("/v1/capture-coverage/heatmap", get_pointer_heatmap, methods=["GET"])
+    app.add_api_route("/v1/capture-coverage/playback", get_interaction_playback, methods=["GET"])
     app.add_api_route("/v1/capture-depth/delete", delete_capture_detail, methods=["POST"])
     app.add_api_route("/basic-mode.js", basic_mode_script, methods=["GET"])
     app.add_api_route("/v1/update-status", update_status, methods=["GET"])

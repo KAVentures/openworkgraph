@@ -695,7 +695,32 @@
     auditSection.append(el('h3','Human handoff review inbox'),
       el('p','Review approved or implemented opportunities in explicit pages of up to 12. Each page is a fresh, point-in-time local read; other pages are not certified, approved or executed.','muted'),
       auditNavigation,auditButton,auditStatus,auditHost,auditCumulative,auditCombinedDownload,auditTriageSection);
-    card.append(row,resumeSection,auditSection,tools,status,counts,viewCount,list,comparison,detail);
+    const portfolioButton=button('Show portfolio by team and owner','secondary');portfolioButton.id='owgPipelinePortfolio';
+    const portfolioHost=el('div');portfolioHost.id='owgPipelinePortfolioResult';
+    portfolioButton.onclick=async()=>{
+      portfolioButton.disabled=true;
+      try{
+        const r=await (await api('/v1/automation-pipeline/portfolio')).json();
+        const money=b=>Object.entries(b).map(([k,v])=>{const [cur,basis]=k.split(':');return v.toLocaleString()+' '+cur+(basis==='approved_budget'?' approved':' estimated');}).join('; ')||'—';
+        const table=(key,label,rows)=>{
+          const wrap=el('div',null,'table-wrap'),t=el('table'),head=el('tr');t.id='owgPipelinePortfolio_'+key;
+          [label,'Ideas','Open','Approved','Implemented','Budgets (per currency)','Modeled hours / month'].forEach(h=>{const th=el('th',h);th.scope='col';head.appendChild(th);});
+          const thead=el('thead');thead.appendChild(head);const body=el('tbody');
+          rows.forEach(row=>{const tr=el('tr');const th=el('th',row[key]||'Not set');th.scope='row';tr.appendChild(th);
+            const s=row.states;[row.ideas,s.idea+s.assessing+s.on_hold,s.approved,s.implemented,money(row.budgets),row.modeled_hours_per_month].forEach(v=>tr.appendChild(el('td',String(v))));body.appendChild(tr);});
+          t.append(thead,body);wrap.appendChild(t);return wrap;
+        };
+        const blocked=el('ul');blocked.id='owgPipelineBlocked';
+        r.blocked.forEach(b=>blocked.appendChild(el('li',b.title+' waits on '+b.waiting_on.map(w=>(w.title||w.idea_id)+' ('+(STATE_LABELS[w.state]||w.state)+')').join(', '))));
+        const quarters=Object.entries(r.open_ideas_by_target_quarter).map(([q,n])=>q+': '+n).join(' · ');
+        portfolioHost.replaceChildren(el('h4','Portfolio'),el('h5','By team'),table('team','Team',r.by_team),el('h5','By owner'),table('owner','Owner',r.by_owner),
+          el('h5','Waiting on dependencies'),r.blocked.length?blocked:el('div','No open idea waits on another.','muted'),
+          el('div',(quarters?'Open ideas by target quarter: '+quarters+'. ':'')+r.unplanned_ideas+' ideas have no planning yet.','muted'),
+          el('p',r.interpretation,'muted'));
+      }catch(e){status.textContent=e.message;}
+      finally{portfolioButton.disabled=false;}
+    };
+    card.append(row,resumeSection,auditSection,tools,status,counts,portfolioButton,portfolioHost,viewCount,list,comparison,detail);
     panel.appendChild(card);
 
     let latestIdeas=[],refreshGeneration=0,resumeGeneration=0,auditGeneration=0,auditPageIndex=0,auditAbort=null;
@@ -1105,6 +1130,39 @@
       box.appendChild(el('h3',idea.title));
       if(idea.description)box.appendChild(el('div',idea.description));
       box.appendChild(el('div','State: '+STATE_LABELS[idea.state]+' · revision '+idea.revision+(idea.source.reference?' · from '+idea.source.reference:''),'muted'));
+      {
+        const p=idea.planning||{};
+        const section=el('section');section.id='owgPipelinePlanning';section.setAttribute('aria-label','Planning');
+        section.appendChild(el('h4','Planning'));
+        const owner=input('owgPlanOwner','text','Who looks after it');owner.maxLength=80;owner.value=p.owner||'';
+        const team=input('owgPlanTeam','text','Team');team.maxLength=80;team.value=p.team||'';
+        const quarter=input('owgPlanQuarter','text','2027-Q1');quarter.value=p.target_quarter||'';quarter.pattern='\\d{4}-Q[1-4]';
+        const amount=input('owgPlanBudget','number','Amount');amount.min='0';amount.step='any';amount.value=p.budget?String(p.budget.amount):'';
+        const currency=input('owgPlanCurrency','text','EUR');currency.maxLength=3;currency.value=p.budget?p.budget.currency:'';
+        const basis=select('owgPlanBasis',[['estimate','Estimate'],['approved_budget','Approved budget']]);basis.value=p.budget?p.budget.basis:'estimate';
+        const deps=el('fieldset');deps.id='owgPlanDepends';deps.appendChild(el('legend','Depends on'));
+        const others=latestIdeas.filter(i=>i.idea_id!==idea.idea_id);
+        others.forEach(o=>{const box2=input('owgPlanDep_'+o.idea_id,'checkbox');box2.value=o.idea_id;box2.checked=(p.depends_on||[]).includes(o.idea_id);
+          const label=el('label',' '+o.title+' ('+STATE_LABELS[o.state]+')');label.htmlFor=box2.id;const line=el('div');line.append(box2,label);deps.appendChild(line);});
+        (p.depends_on||[]).filter(d=>!others.some(o=>o.idea_id===d)).forEach(d=>{const box2=input('owgPlanDep_'+d,'checkbox');box2.value=d;box2.checked=true;
+          const label=el('label',' '+d+' (not in this list view)');label.htmlFor=box2.id;const line=el('div');line.append(box2,label);deps.appendChild(line);});
+        if(!deps.querySelector('input'))deps.appendChild(el('div','No other ideas to depend on.','muted'));
+        const save=button('Save planning','secondary');save.id='owgPlanSave';
+        const planStatus=el('div',null,'muted');planStatus.id='owgPlanStatus';planStatus.setAttribute('role','status');planStatus.setAttribute('aria-live','polite');
+        save.onclick=async()=>{
+          const body={owner:owner.value,team:team.value,target_quarter:quarter.value.trim(),expected_revision:idea.revision,
+            depends_on:[...deps.querySelectorAll('input:checked')].map(i=>i.value)};
+          if(amount.value!=='')body.budget={amount:Number(amount.value),currency:currency.value.trim().toUpperCase(),basis:basis.value};
+          save.disabled=true;
+          try{await post('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/planning',body);await refresh();await show(idea.idea_id);
+            document.getElementById('owgPlanStatus').textContent='Planning saved. Owners and teams are labels; they grant no access.';}
+          catch(e){planStatus.textContent=e.message;save.disabled=false;}
+        };
+        const grid=el('div',null,'row');grid.style.alignItems='end';
+        grid.append(field('Owner',owner),field('Team',team),field('Target quarter',quarter),field('Budget',amount),field('Currency (ISO code)',currency),field('Budget basis',basis));
+        section.append(grid,deps,save,planStatus,el('div','Budgets keep their currency and are never converted. An idea can be marked implemented only after the ideas it depends on.','muted'));
+        box.appendChild(section);
+      }
       if(idea.process_reference){
         const ref=idea.process_reference;
         const source=el('div');source.id='owgPipelineProcessStatus';
@@ -1131,6 +1189,54 @@
         check.onclick=()=>update();source.append(check,open);box.appendChild(source);update();
       }else if(idea.source.kind==='process_catalog'){
         box.appendChild(el('div','This source is a descriptive reference only; no saved process revision is linked.','muted'));
+      }
+      if(['approved','implemented'].includes(idea.state)){
+        const value=el('section');value.id='owgPipelineRealized';value.setAttribute('aria-label','Realized value');
+        value.appendChild(el('h4','Realized value'));
+        const host=el('div');host.id='owgRealizedReport';
+        const kind=select('owgMeasPeriod',[['baseline','Baseline (before)'],['after','After implementation']]);
+        const start=input('owgMeasStart','date'),end=input('owgMeasEnd','date');
+        const cases=input('owgMeasCases','number','Cases');cases.min='0';cases.step='1';
+        const minutes=input('owgMeasMinutes','number','Minutes per case');minutes.min='0';minutes.step='any';
+        const source=select('owgMeasSource',[['entered','Entered by hand'],['time_tracking','Time tracking'],['system_report','System report'],['event_log','Event log']]);
+        const ref=input('owgMeasRef','text','Optional reference');ref.maxLength=200;
+        const addMeasure=button('Record measurement','secondary');addMeasure.id='owgMeasAdd';
+        const measStatus=el('div',null,'muted');measStatus.id='owgMeasStatus';measStatus.setAttribute('role','status');measStatus.setAttribute('aria-live','polite');
+        const fmt=v=>v===null||v===undefined?'—':String(v);
+        const draw=r=>{
+          const parts=[];
+          if(r.measurements.length){
+            const wrap=el('div',null,'table-wrap'),t=el('table'),head=el('tr');t.id='owgRealizedTable';
+            ['Period','Dates','Cases','Hours','Hours / month','Minutes / case','Source',''].forEach(h=>{const th=el('th',h);th.scope='col';head.appendChild(th);});
+            const thead=el('thead');thead.appendChild(head);const body=el('tbody');
+            r.measurements.forEach(m=>{const tr=el('tr');
+              [m.period==='after'?'After':'Baseline',m.start+' – '+m.end,m.cases,m.hours,m.hours_per_month,fmt(m.minutes_per_case_observed),m.source.replace('_',' ')+(m.source_reference?' · '+m.source_reference:'')].forEach(v=>tr.appendChild(el('td',String(v))));
+              const del=button('Remove','secondary');del.setAttribute('aria-label','Remove '+m.period+' measurement from '+m.start);
+              del.onclick=async()=>{try{draw(await post('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/measurements/'+encodeURIComponent(m.measurement_id)+'/delete',{}));}catch(e){measStatus.textContent=e.message;}};
+              const cell=el('td');cell.appendChild(del);tr.appendChild(cell);body.appendChild(tr);});
+            t.append(thead,body);wrap.appendChild(t);parts.push(wrap);
+          }else parts.push(el('div','No measurements yet. Record a baseline from before the change, then periods after it.','muted'));
+          const c=r.comparison;
+          if(c){
+            const list=el('ul');list.id='owgRealizedComparison';
+            list.append(el('li','Minutes per case: '+fmt(c.minutes_per_case_change)+' fewer after (baseline '+fmt(r.baseline.minutes_per_case)+', after '+fmt(r.after.minutes_per_case)+').'),
+              el('li','At the after volume that is '+fmt(c.hours_per_month_from_per_case_change_at_after_volume)+' hours a month; the assessment modeled '+fmt(c.modeled_hours_per_month)+(c.observed_vs_modeled_ratio!==null?' (ratio '+c.observed_vs_modeled_ratio+').':'.')),
+              el('li','Total hours a month changed by '+fmt(c.observed_hours_per_month_change)+' (range '+c.observed_change_range.join(' to ')+'); case volume changed by '+fmt(c.case_volume_change_per_month)+' a month.'));
+            parts.push(list);
+            if(c.single_period_each)parts.push(el('div','Only one baseline and one after period: no range of variation yet.','muted'));
+          }else if(r.measurements.length)parts.push(el('div','Record at least one baseline and one after period to compare.','muted'));
+          parts.push(el('p',r.interpretation,'muted'));host.replaceChildren(...parts);
+        };
+        addMeasure.onclick=async()=>{
+          const body={period:kind.value,start:start.value,end:end.value,cases:Number(cases.value),minutes_per_case:Number(minutes.value),source:source.value,source_reference:ref.value};
+          addMeasure.disabled=true;
+          try{draw(await post('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/measurements',body));measStatus.textContent='Measurement recorded.';}
+          catch(e){measStatus.textContent=e.message;}finally{addMeasure.disabled=false;}
+        };
+        const grid=el('div',null,'row');grid.style.alignItems='end';
+        grid.append(field('Period',kind),field('From',start),field('To',end),field('Cases handled',cases),field('Minutes per case',minutes),field('Source',source),field('Reference',ref),addMeasure);
+        value.append(grid,measStatus,host);box.appendChild(value);
+        api('/v1/automation-pipeline/'+encodeURIComponent(idea.idea_id)+'/realized-value').then(r=>r.json()).then(r=>{if(generation===detailGeneration)draw(r);}).catch(e=>{measStatus.textContent=e.message;});
       }
       // These selections are navigation hints only, never an authorization or a source read.
       let preferredReportProjectId=null,preferredSourceProjectId=null;

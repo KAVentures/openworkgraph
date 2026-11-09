@@ -64,8 +64,9 @@
     const anchor=document.getElementById('owgPddCard')||document.getElementById('owgCommsCard')||document.getElementById('owgEventLogCard');
     if(anchor)anchor.insertAdjacentElement('afterend',card);else panel.appendChild(card);
 
-    let deployments=[],renderVersion=0,loadVersion=0;
-    const clearResults=()=>{renderVersion++;results.replaceChildren();channelHost.replaceChildren();incidentHost.replaceChildren();};
+    let deployments=[],renderVersion=0,loadVersion=0,incidentVersion=0;
+    let incidentScope='selected',incidentStatus='',incidentSearch='';
+    const clearResults=()=>{renderVersion++;incidentVersion++;incidentScope='selected';incidentStatus='';incidentSearch='';results.replaceChildren();channelHost.replaceChildren();incidentHost.replaceChildren();};
     const refresh=()=>{importButton.disabled=!(file.files&&file.files[0]&&consent.checked);};
     file.onchange=refresh;consent.onchange=refresh;
     async function load(select){
@@ -119,7 +120,8 @@
       }else{
         parts.push(el('div','Endpoint: POST /v1/automation-monitoring/channels/'+live.channel_id+'/reports · body format openworkgraph.signed-run-report.v1 · clock skew up to '+data.max_clock_skew_seconds+' s.','muted'));
         if(shown)parts.push(...secretBox(shown));
-        parts.push(table(['Accepted','Refused','Highest sequence','Missing'],[[String(live.accepted_reports),String(live.refused_reports),String(live.highest_sequence),live.missing_count?live.missing_sequences.join(', ')+(live.missing_count>live.missing_sequences.length?' …':''):'none']]));
+        parts.push(table(['Accepted','Refused','Highest sequence','Missing (retained)'],[[String(live.accepted_reports),String(live.refused_reports),String(live.highest_sequence),live.missing_count?live.missing_sequences.join(', ')+(live.missing_count>live.missing_sequences.length?' …':''):'none']]));
+        if(live.missing_truncated)parts.push(el('p','Earlier missing sequence numbers were truncated from the 1,000-ID recovery window. The retained list cannot prove that all reports arrived, even when empty.','note'));
         if(live.versions.length)parts.push(el('h4','Versions seen'),table(['Version','Workflow spec','First seen','Last seen','Reports','Runs'],live.versions.map(v=>[v.version_label||'(none)',v.workflow_spec_sha256?v.workflow_spec_sha256.slice(0,12)+'…':'(none)',v.first_seen,v.last_seen,String(v.reports),String(v.runs)])));
         const rotate=button('Rotate secret','secondary');rotate.id='owgMonitorChannelRotate';
         rotate.onclick=async()=>{if(!window.confirm('Replace the channel secret? The old one stops working immediately.'))return;try{const r=await api('/v1/automation-monitoring/channels/'+encodeURIComponent(live.channel_id)+'/rotate',{method:'POST'});await renderChannel(r.secret);}catch(error){status.textContent=error.message;}};
@@ -132,26 +134,54 @@
     const KIND={run_failures:'Failed runs',run_handoffs:'Runs handed to a person',signature_rejected:'Rejected signatures',replay_conflict:'Reused sequence numbers',lost_reports:'Lost reports',version_drift:'Version drift'};
     async function renderIncidents(){
       const selected=pick.value;if(!selected)return;
-      const data=await api('/v1/automation-monitoring/incidents?deployment_id='+encodeURIComponent(selected));
-      if(pick.value!==selected)return;
+      const version=++incidentVersion,requestedScope=incidentScope;
+      const suffix=requestedScope==='all'?'':'?deployment_id='+encodeURIComponent(selected);
+      let data;
+      try{data=await api('/v1/automation-monitoring/incidents'+suffix);}
+      catch(error){if(version===incidentVersion&&pick.value===selected)status.textContent=error.message;return;}
+      if(version!==incidentVersion||pick.value!==selected||incidentScope!==requestedScope)return;
+      const scope=document.createElement('select');scope.id='owgMonitorIncidentScope';
+      setOptions(scope,[['selected','Selected deployment'],['all','All local deployments']]);scope.value=incidentScope;
+      const filter=document.createElement('select');filter.id='owgMonitorIncidentStatus';
+      setOptions(filter,[['','All statuses'],['open','Open'],['acknowledged','Acknowledged'],['resolved','Resolved']]);filter.value=incidentStatus;
+      const search=input('owgMonitorIncidentSearch','search','Deployment, kind or step');search.value=incidentSearch;
+      const controls=el('div',null,'row');controls.style.alignItems='end';
+      controls.append(field('Incident scope',scope),field('Incident status',filter),field('Search incidents',search));
+      const refreshList=()=>renderIncidents();
+      scope.onchange=()=>{incidentScope=scope.value;draw();refreshList();};
+      filter.onchange=()=>{incidentStatus=filter.value;draw();};
+      search.oninput=()=>{incidentSearch=search.value;draw();};
+      const body=el('div');
+      function draw(){
+      if(incidentScope!==requestedScope){body.replaceChildren(el('div','Loading incidents for the selected scope…','muted'));return;}
+      const query=search.value.trim().toLocaleLowerCase();
+      const visible=data.incidents.filter(i=>{
+        const deployment=deployments.find(d=>d.deployment_id===i.deployment_id);
+        const text=[deployment?.name||'',KIND[i.kind]||i.kind,i.fingerprint].join(' ').toLocaleLowerCase();
+        return (!filter.value||i.status===filter.value)&&(!query||text.includes(query));
+      });
       const list=el('div');
-      data.incidents.forEach(i=>{
+      visible.forEach(i=>{
         const box=el('fieldset');box.appendChild(el('legend',(KIND[i.kind]||i.kind)+' · '+i.status));
-        box.appendChild(el('div',i.fingerprint.replace(/^step:/,'Step: ')+' · '+i.occurrences+' occurrences · first '+i.first_seen+' · last '+i.last_seen+(i.reopened_count?' · reopened '+i.reopened_count+'×':'')+(i.sample_refs.length?' · runs '+i.sample_refs.join(', '):''),'muted'));
+        if(scope.value==='all'){const deployment=deployments.find(d=>d.deployment_id===i.deployment_id);box.appendChild(el('div','Deployment: '+(deployment?deployment.name:'Unavailable deployment'),'muted'));}
+        box.appendChild(el('div',i.fingerprint.replace(/^step:/,'Step: ')+' · '+i.occurrences+(i.count_basis==='distinct_retained_run_ids'?' distinct retained runs':' occurrences')+' · first '+i.first_seen+' · last '+i.last_seen+(i.reopened_count?' · reopened '+i.reopened_count+'×':'')+(i.sample_refs.length?' · runs '+i.sample_refs.join(', '):''),'muted'));
         i.notes.forEach(n=>box.appendChild(el('div',n.at+' · '+n.status+' · '+n.note)));
         const note=input('owgMonitorIncidentNote_'+i.incident_id,'text','Note (optional)');note.maxLength=500;note.setAttribute('aria-label','Note for incident '+i.incident_id);box.appendChild(note);
         for(const [to,label] of [['acknowledged','Acknowledge'],['resolved','Resolve'],['open','Reopen']]){
           if(to===i.status)continue;
           const b=button(label,'secondary');b.setAttribute('aria-label',label+' incident '+i.incident_id);
-          b.onclick=async()=>{try{await api('/v1/automation-monitoring/incidents/'+encodeURIComponent(i.incident_id)+'/triage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:to,note:note.value,expected_last_seen:i.last_seen})});await renderIncidents();}catch(error){status.textContent=error.message;}};
+          b.onclick=async()=>{b.disabled=true;try{await api('/v1/automation-monitoring/incidents/'+encodeURIComponent(i.incident_id)+'/triage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:to,note:note.value,expected_last_seen:i.last_seen,expected_review_revision:i.review_revision})});if(version===incidentVersion&&pick.value===selected)await renderIncidents();}catch(error){if(version===incidentVersion&&pick.value===selected)status.textContent=error.message;b.disabled=false;}};
           box.appendChild(b);
         }
         list.appendChild(box);
       });
-      incidentHost.replaceChildren(el('h3','Incidents'),el('div',data.counts.open+' open · '+data.counts.acknowledged+' acknowledged · '+data.counts.resolved+' resolved. Triage records your decision only; nothing is re-run or replayed.','muted'),data.incidents.length?list:el('div','No incidents for this deployment.','muted'));
+      body.replaceChildren(el('div','Showing '+visible.length+' of '+data.incidents.length+' incidents in scope · '+data.counts.open+' open · '+data.counts.acknowledged+' acknowledged · '+data.counts.resolved+' resolved. Counts reflect the selected scope before filters. Triage is version-checked; nothing is re-run or replayed.','muted'),visible.length?list:el('div','No incidents match these filters.','muted'));
+      }
+      const reload=button('Refresh incidents','secondary');reload.id='owgMonitorIncidentRefresh';reload.onclick=refreshList;
+      incidentHost.replaceChildren(el('h3','Incidents'),controls,reload,body);draw();
     }
     channelButton.onclick=()=>renderChannel().catch(error=>{status.textContent=error.message;});
-    incidentButton.onclick=()=>renderIncidents().catch(error=>{status.textContent=error.message;});
+    incidentButton.onclick=()=>{incidentScope='selected';incidentStatus='';incidentSearch='';renderIncidents();};
     pick.onchange=clearResults;recent.oninput=clearResults;baseline.oninput=clearResults;
     toLog.onclick=async()=>{
       if(!window.confirm('Store this deployment\'s reported steps as an event log on this computer?'))return;

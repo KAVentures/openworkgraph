@@ -245,15 +245,30 @@
 
       <div class="card" id="pvSchedules">
         <h2>Scheduled jobs</h2>
-        <div class="muted">Off unless you add one. A schedule repeats a job you could run by hand: refresh a retained Jira profile (its own read consent and account checks still apply) or re-check an event log's saved signals. At least every 15 minutes; failures back off and pause after five in a row. Pausing recording also pauses scheduled source reads. Nothing is sent anywhere.</div>
+        <div class="muted">Off unless you add one. A schedule repeats a job you could run by hand: refresh a retained Jira profile, re-check saved event-log signals, or create a verified local backup. Source reads keep their own consent and pause with recording. Backups require separate acknowledgement, exclude credentials, are NOT encrypted, run at most daily and rotate only scheduled backups (up to 14). Optional per-job quiet hours defer due jobs without counting a run; daylight saving follows the chosen timezone. Failures back off and pause after five in a row. Nothing is sent anywhere.</div>
         <div class="pv-delete">
-          <select id="pvScheduleKind" aria-label="Job"><option value="retained_jira_profile">Retained Jira profile</option><option value="event_log_signals">Event log signals</option></select>
+          <select id="pvScheduleKind" aria-label="Job"><option value="retained_jira_profile">Retained Jira profile</option><option value="event_log_signals">Event log signals</option><option value="local_backup">Local backup (unencrypted)</option></select>
           <input type="text" id="pvScheduleTarget" placeholder="Profile or event log ID" aria-label="Profile or event log ID" spellcheck="false">
           <input type="number" id="pvScheduleInterval" min="15" value="60" aria-label="Interval in minutes">
           <button type="button" class="secondary" id="pvScheduleAdd">Add schedule</button>
         </div>
+        <label class="muted" for="pvScheduleQuietEnabled">
+          <input type="checkbox" id="pvScheduleQuietEnabled"> Only run outside quiet hours (optional, per schedule)
+        </label>
+        <div class="pv-delete" id="pvScheduleQuietFields" hidden>
+          <label for="pvScheduleQuietStart">Quiet from</label>
+          <input type="time" id="pvScheduleQuietStart" value="22:00" step="60">
+          <label for="pvScheduleQuietEnd">Quiet until</label>
+          <input type="time" id="pvScheduleQuietEnd" value="07:00" step="60">
+          <label for="pvScheduleQuietTimezone">Timezone</label>
+          <input type="text" id="pvScheduleQuietTimezone" placeholder="Europe/Stockholm" maxlength="64" spellcheck="false">
+        </div>
+        <div class="muted">For an existing job, set the window above and choose Apply quiet hours on that job, or clear its current window. Pausing or removing a job remains separate.</div>
+        <label class="muted" id="pvScheduleBackupAckRow" hidden>
+          <input type="checkbox" id="pvScheduleBackupAck"> I understand recurring backups save unencrypted copies of locally recorded activity outside OWG's data folder, without credentials; only automatically created backups are rotated. I will keep the backup folder private.
+        </label>
         <div class="muted" id="pvScheduleStatus" role="status" aria-live="polite"></div>
-        <div id="pvScheduleList" aria-label="Scheduled jobs"></div>
+        <div id="pvScheduleList" role="region" aria-label="Scheduled jobs"></div>
       </div>
       <div class="card" id="pvSemantic">
         <h2>AI help with grouping work</h2>
@@ -298,6 +313,7 @@
           <label for="pvDepthDwell">Hover counts after (ms)</label><input type="number" id="pvDepthDwell" min="300" max="5000">
           <label for="pvDepthHz">Pointer samples per second</label><input type="number" id="pvDepthHz" min="1" max="20">
           <label for="pvDepthRetention">Keep interaction detail (days)</label><input type="number" id="pvDepthRetention" min="1" max="365">
+          <label for="pvDepthStorage">Store at most (MB)</label><input type="number" id="pvDepthStorage" min="10" max="10000">
           <label for="pvDepthDuration">Record extra detail for</label><select id="pvDepthDuration"><option value="1">1 day</option><option value="7" selected>7 days</option><option value="30">30 days</option><option value="90">90 days</option></select>
         </div>
         <label class="pv-delete"><input type="checkbox" id="pvDepthAck"> <span id="pvDepthAckText"></span></label>
@@ -306,6 +322,7 @@
           <button type="button" class="secondary" id="pvDepthCoverage">Show capture coverage</button>
           <button type="button" class="secondary" id="pvDepthFrictionShow">Show friction candidates</button>
           <button type="button" class="secondary" id="pvDepthHeatmap">Show pointer heatmap</button>
+          <button type="button" class="secondary" id="pvDepthPlayback">Replay a visit</button>
           <button type="button" class="danger-quiet" id="pvDepthDelete">Delete interaction detail now</button>
         </div>
         <div class="muted" id="pvDepthStatus" role="status" aria-live="polite"></div>
@@ -337,6 +354,17 @@
           <div class="pv-control">
             <button type="button" class="secondary" id="pvBackupRefresh">Refresh list</button>
             <button type="button" class="secondary" id="pvBackupInspect" disabled>Inspect restore safety</button>
+          </div>
+        </div>
+        <div class="pv-row" id="pvBackupHealthPanel" style="margin-top:12px">
+          <div>
+            <h3>Check saved backup integrity</h3>
+            <div class="muted">Explicitly verify up to five listed plaintext archives, checking every stored file against its manifest hashes. This may read large local backups. Encrypted or oversize files require offline checks. A healthy archive is not a completed restore test.</div>
+            <div class="muted" id="pvBackupHealthStatus" role="status" aria-live="polite">No integrity inventory checked yet.</div>
+            <div id="pvBackupHealthRows" role="region" aria-label="Saved backup integrity results"></div>
+          </div>
+          <div class="pv-control">
+            <button type="button" class="secondary" id="pvBackupHealthRun" disabled>Verify first 5 listed backups</button>
           </div>
         </div>
       </div>
@@ -804,6 +832,7 @@
       depthBox('pvDepthDwell').value = state.parameters.hover_dwell_ms;
       depthBox('pvDepthHz').value = state.parameters.trajectory_hz;
       depthBox('pvDepthRetention').value = state.parameters.retention_days;
+      depthBox('pvDepthStorage').value = state.parameters.storage_mb;
       depthBox('pvDepthAckText').textContent = state.full_acknowledgement;
       depthBox('pvDepthAck').checked = !!state.full_acknowledged_version;
       depthBox('pvDepthStatus').textContent = 'Current: ' + ({standard: 'Standard', enhanced: 'Enhanced', full: 'Full fidelity'}[state.profile] || 'Custom') + '.' +
@@ -817,7 +846,7 @@
     }));
     depthBox('pvDepthSave').onclick = async () => {
       const signals = Object.fromEntries(Object.entries(depthSignals).map(([key, id]) => [key, depthBox(id).checked]));
-      const payload = {signals, parameters: {hover_dwell_ms: Number(depthBox('pvDepthDwell').value), trajectory_hz: Number(depthBox('pvDepthHz').value), retention_days: Number(depthBox('pvDepthRetention').value)}, duration_days: Number(depthBox('pvDepthDuration').value)};
+      const payload = {signals, parameters: {hover_dwell_ms: Number(depthBox('pvDepthDwell').value), trajectory_hz: Number(depthBox('pvDepthHz').value), retention_days: Number(depthBox('pvDepthRetention').value), storage_mb: Number(depthBox('pvDepthStorage').value)}, duration_days: Number(depthBox('pvDepthDuration').value)};
       if (signals.pointer_trajectory) {
         if (!depthBox('pvDepthAck').checked) { depthBox('pvDepthStatus').textContent = 'Tick the acknowledgement to record pointer movement.'; return; }
         payload.acknowledgement_version = depth.state?.full_acknowledgement_version;
@@ -832,7 +861,8 @@
       try {
         const m = await api('/v1/capture-coverage');
         depthBox('pvDepthResult').replaceChildren(depthTable([...Object.entries(m.modalities).map(([k, v]) => [k.replace(/_/g, ' '), String(v).replace(/_/g, ' ')]),
-          ...Object.entries(m.high_fidelity_event_counts).map(([k, v]) => [k.replace(/^browser_/, '').replace(/_/g, ' ') + ' events (7 days)', String(v)])]));
+          ...Object.entries(m.high_fidelity_event_counts).map(([k, v]) => [k.replace(/^browser_/, '').replace(/_/g, ' ') + ' events (7 days)', String(v)]),
+          ...(m.high_fidelity_storage ? [['interaction detail stored', (m.high_fidelity_storage.bytes_estimate / 1048576).toFixed(1) + ' of ' + (m.high_fidelity_storage.limit_bytes / 1048576).toFixed(0) + ' MB (' + m.high_fidelity_storage.events + ' events)' + (m.high_fidelity_storage.last_trim ? '; oldest trimmed ' + m.high_fidelity_storage.last_trim.at : '')]] : [])]));
       } catch (error) { depthBox('pvDepthStatus').textContent = error.message || 'Could not load capture coverage.'; }
     };
     depthBox('pvDepthFrictionShow').onclick = async () => {
@@ -875,6 +905,88 @@
         await show();
       } catch (error) { depthBox('pvDepthStatus').textContent = error.message || 'Could not load the heatmap.'; }
     };
+    const playbackNames = {hover: 'Rested on', click: 'Clicked', drag_start: 'Started dragging', drop: 'Dropped on', drag_end: 'Drag ended'};
+    const drawPlayback = (r) => {
+      const ns = 'http://www.w3.org/2000/svg';
+      const wrap = document.createElement('div'); wrap.id = 'pvDepthPlaybackView';
+      const svg = document.createElementNS(ns, 'svg');
+      svg.setAttribute('viewBox', '0 0 160 100'); svg.setAttribute('role', 'img');
+      svg.setAttribute('aria-label', 'Pointer path on ' + r.page.hostname + (r.page.pathname || '') + ' during this visit: ' + r.path.length + ' points and ' + r.items.length + ' interactions. The step list below describes it.');
+      svg.style.cssText = 'width:min(100%,420px);aspect-ratio:16/10;border:1px solid currentColor;display:block;';
+      const line = document.createElementNS(ns, 'polyline');
+      line.setAttribute('fill', 'none'); line.setAttribute('stroke', 'rgb(37,99,235)'); line.setAttribute('stroke-width', '0.8');
+      const dot = document.createElementNS(ns, 'circle'); dot.setAttribute('r', '2'); dot.setAttribute('fill', 'rgb(220,38,38)');
+      svg.append(line, dot);
+      const at = p => (p[1] * 160).toFixed(1) + ',' + (p[2] * 100).toFixed(1);
+      const duration = Math.max(1, r.duration_ms || 0);
+      const slider = Object.assign(document.createElement('input'), {type: 'range', min: '0', max: String(duration), value: String(duration), id: 'pvDepthPlaybackTime'});
+      slider.setAttribute('aria-label', 'Position in the visit, in milliseconds');
+      const now = depthNote('');
+      now.id = 'pvDepthPlaybackNow'; now.setAttribute('aria-live', 'off');
+      const render = (t) => {
+        const shown = r.path.filter(p => p[0] <= t);
+        line.setAttribute('points', shown.map(at).join(' '));
+        const last = shown[shown.length - 1];
+        dot.style.display = last ? '' : 'none';
+        if (last) { dot.setAttribute('cx', (last[1] * 160).toFixed(1)); dot.setAttribute('cy', (last[2] * 100).toFixed(1)); }
+        const done = r.items.filter(i => i.t_ms <= t);
+        now.textContent = (t / 1000).toFixed(1) + ' s of ' + (duration / 1000).toFixed(1) + ' s · ' + done.length + ' of ' + r.items.length + ' interactions';
+      };
+      slider.oninput = () => render(Number(slider.value));
+      const play = Object.assign(document.createElement('button'), {type: 'button', className: 'secondary', id: 'pvDepthPlaybackPlay', textContent: 'Play'});
+      let timer = null;
+      const stop = () => { if (timer) clearInterval(timer); timer = null; play.textContent = 'Play'; };
+      play.onclick = () => {
+        if (timer) { stop(); return; }
+        const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        if (reduce) { slider.value = String(duration); render(duration); return; }
+        let t = Number(slider.value) >= duration ? 0 : Number(slider.value);
+        const tick = Math.max(50, Math.round(duration / 200));
+        play.textContent = 'Pause';
+        timer = setInterval(() => { t = Math.min(duration, t + tick); slider.value = String(t); render(t); if (t >= duration) stop(); }, 50);
+      };
+      const steps = document.createElement('ol'); steps.id = 'pvDepthPlaybackSteps';
+      r.items.forEach(i => {
+        const li = document.createElement('li');
+        const what = [i.target && i.target.role, i.target && i.target.tag].filter(Boolean)[0] || 'control';
+        li.textContent = (i.t_ms / 1000).toFixed(1) + ' s · ' + (playbackNames[i.kind] || i.kind) + ' a ' + what + (i.duration_ms ? ' for ' + (i.duration_ms / 1000).toFixed(1) + ' s' : '');
+        steps.appendChild(li);
+      });
+      render(duration);
+      wrap.append(svg, play, slider, now, steps,
+        depthNote((r.path_downsampled ? 'The pointer path is thinned for display. ' : '') + 'Timing is approximate. ' + r.interpretation));
+      return wrap;
+    };
+    depthBox('pvDepthPlayback').onclick = async () => {
+      try {
+        const r = await api('/v1/capture-coverage/heatmap');
+        if (!r.pages.length) { depthBox('pvDepthResult').replaceChildren(depthNote('No recorded pointer movement in the last 7 days. Replays need Full fidelity.')); return; }
+        const pick = document.createElement('select'); pick.id = 'pvDepthPlaybackPage'; pick.setAttribute('aria-label', 'Page to replay');
+        r.pages.forEach(p => pick.appendChild(Object.assign(document.createElement('option'), {value: p.page, textContent: p.page})));
+        const visits = document.createElement('select'); visits.id = 'pvDepthPlaybackVisit'; visits.setAttribute('aria-label', 'Visit to replay');
+        const out = document.createElement('div');
+        const query = (extra) => {
+          const chosen = pick.value, slash = chosen.indexOf('/');
+          const q = new URLSearchParams({hostname: slash < 0 ? chosen : chosen.slice(0, slash)});
+          if (slash >= 0) q.set('pathname', chosen.slice(slash));
+          Object.entries(extra || {}).forEach(([k, v]) => q.set(k, v));
+          return '/v1/capture-coverage/playback?' + q;
+        };
+        const show = async (visit) => {
+          const p = await api(query(visit === undefined ? {} : {visit: String(visit)}));
+          if (visit === undefined) {
+            visits.replaceChildren(...p.visits.map(v => Object.assign(document.createElement('option'), {value: String(v.visit), textContent: v.started_at.slice(0, 16).replace('T', ' ') + ' (' + v.items + ' events)'})));
+            if (p.visit !== null) visits.value = String(p.visit);
+          }
+          out.replaceChildren(p.visit === null ? depthNote('No recorded interaction detail on this page.') : drawPlayback(p));
+        };
+        const fail = error => { depthBox('pvDepthStatus').textContent = error.message || 'Could not load the replay.'; };
+        pick.onchange = () => show().catch(fail);
+        visits.onchange = () => show(Number(visits.value)).catch(fail);
+        depthBox('pvDepthResult').replaceChildren(depthNote('A local replay of one visit: control kinds and the pointer path only, never labels, text or values.'), pick, visits, out);
+        await show();
+      } catch (error) { depthBox('pvDepthStatus').textContent = error.message || 'Could not load the replay.'; }
+    };
     depthBox('pvDepthDelete').onclick = async () => {
       if (!window.confirm('Delete all recorded hover, drag and pointer detail from this computer? Clicks, pages and other activity are kept. This cannot be undone.')) return;
       try {
@@ -890,9 +1002,16 @@
     const backupRefresh = panel.querySelector('#pvBackupRefresh');
     const backupInspect = panel.querySelector('#pvBackupInspect');
     const backupPlan = panel.querySelector('#pvBackupPlan');
-    let listedBackups = [], backupEpoch = 0;
+    const healthRun = panel.querySelector('#pvBackupHealthRun');
+    const healthStatus = panel.querySelector('#pvBackupHealthStatus');
+    const healthRows = panel.querySelector('#pvBackupHealthRows');
+    let listedBackups = [], backupEpoch = 0, healthEpoch = 0;
     async function refreshBackupList(preferred = '') {
       const epoch = ++backupEpoch;
+      healthEpoch++;
+      healthRows.replaceChildren();
+      healthRun.disabled = true;
+      healthStatus.textContent = 'Backup listing refreshed; previous integrity results no longer apply.';
       backupRefresh.disabled = true;
       backupInspect.disabled = true;
       backupPlan.textContent = 'Reading saved backups on this computer…';
@@ -914,6 +1033,7 @@
         }
         if (listedBackups.some(item => item.name === previous)) backupChoice.value = previous;
         backupInspect.disabled = !backupChoice.value;
+        healthRun.disabled = listedBackups.length === 0;
         backupPlan.textContent = listedBackups.length
           ? 'Choose a backup and inspect its integrity and restore blockers. No data will be changed.'
           : 'No backups found in the configured local backup folder.';
@@ -962,6 +1082,55 @@
         if (epoch === backupEpoch) backupInspect.disabled = !backupChoice.value;
       }
     };
+    healthRun.onclick = async () => {
+      const chosen = listedBackups.slice(0, 5).map(item => item.name);
+      if (!chosen.length) { healthStatus.textContent = 'No saved local backups to verify.'; return; }
+      if (!window.confirm('Read and verify up to five already-listed local backups now? No archive will be modified, restored or uploaded. Large archives may require the offline CLI.')) return;
+      const epoch = ++healthEpoch;
+      healthRun.disabled = true;
+      healthRows.replaceChildren();
+      healthStatus.textContent = 'Verifying local archive contents (read only)…';
+      try {
+        const result = await api('/v1/local-backups/health', send('POST', {
+          names: chosen, confirm_local_verification: true
+        }));
+        if (epoch !== healthEpoch) return;
+        const labels = {
+          verified: 'Verified intact at this check',
+          integrity_check_failed: 'Integrity check failed; do not rely on this archive',
+          unavailable_or_not_regular: 'Unavailable or not a regular file',
+          encrypted_requires_offline_cli: 'Encrypted; verify using offline CLI',
+          exceeds_dashboard_archive_limit: 'Too large for dashboard check; use offline CLI',
+          exceeds_dashboard_uncompressed_limit: 'Uncompressed data exceeds the dashboard limit; use offline CLI',
+          exceeds_dashboard_request_budget: 'Check budget reached; use offline CLI',
+          requires_offline_inspection: 'Requires offline inspection',
+          changed_during_check: 'File changed during check; verify again offline'
+        };
+        for (const item of result.items || []) {
+          const row = document.createElement('div');
+          row.className = 'muted';
+          // A saved filename is only ever inserted as text, never as markup.
+          row.textContent = item.name + ' — ' +
+            (labels[item.status] || 'Not verified') +
+            (item.verified ? ' · ' + String(item.file_count) + ' stored files, OWG ' + String(item.owg_version || 'unknown') : '');
+          healthRows.appendChild(row);
+        }
+        healthStatus.textContent = String(result.verified) + ' of ' +
+          String(result.requested) + ' listed backup archives verified at ' +
+          String(result.checked_at) + '. ' + String(result.not_verified) +
+          ' not verified. ' + (listedBackups.length > chosen.length
+            ? String(listedBackups.length - chosen.length) + ' additional listed backups were not inspected. ' : '') +
+          'No restore or write occurred. A passing checksum does not prove recoverability.';
+      } catch (error) {
+        if (epoch === healthEpoch) {
+          healthRows.replaceChildren();
+          healthStatus.textContent = (error.message || 'Could not check archive integrity.') +
+            ' No restore was attempted.';
+        }
+      } finally {
+        if (epoch === healthEpoch) healthRun.disabled = listedBackups.length === 0;
+      }
+    };
     panel.querySelector('#pvBackupCreate').onclick = async () => {
       const status = panel.querySelector('#pvBackupStatus');
       const pass = panel.querySelector('#pvBackupPass');
@@ -995,6 +1164,27 @@
     };
     const scheduleList = panel.querySelector('#pvScheduleList');
     const scheduleStatus = panel.querySelector('#pvScheduleStatus');
+    const quietEnabled = panel.querySelector('#pvScheduleQuietEnabled');
+    const quietFields = panel.querySelector('#pvScheduleQuietFields');
+    const quietStart = panel.querySelector('#pvScheduleQuietStart');
+    const quietEnd = panel.querySelector('#pvScheduleQuietEnd');
+    const quietTimezone = panel.querySelector('#pvScheduleQuietTimezone');
+    quietTimezone.value = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    quietEnabled.onchange = () => {
+      quietFields.hidden = !quietEnabled.checked;
+      // A flex author rule can override the UA [hidden] rule; keep the
+      // optional inputs truly absent from visual and keyboard layouts.
+      quietFields.style.display = quietEnabled.checked ? 'flex' : 'none';
+    };
+    quietEnabled.onchange();
+    const readQuietWindow = () => {
+      const windowSpec = {timezone: quietTimezone.value.trim(), start: quietStart.value, end: quietEnd.value};
+      if (!windowSpec.timezone || !/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(windowSpec.start) ||
+          !/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(windowSpec.end) ||
+          windowSpec.start === windowSpec.end)
+        throw new Error('Enter a timezone and two different valid 24-hour quiet-hour times.');
+      return windowSpec;
+    };
     const refreshSchedules = async () => {
       const state = await api('/v1/schedules').catch(() => null);
       if (!scheduleList || !state) return;
@@ -1003,26 +1193,92 @@
         const line = document.createElement('div');
         line.className = 'pv-row pv-sub';
         const text = document.createElement('span');
-        text.textContent = (item.kind === 'retained_jira_profile' ? 'Jira profile ' : 'Signals for ') + item.target_id +
+        text.textContent = (item.kind === 'local_backup' ? 'Unencrypted local backup'
+          : (item.kind === 'retained_jira_profile' ? 'Jira profile ' : 'Signals for ') + item.target_id) +
           ' · every ' + item.interval_minutes + ' min · ' + (item.enabled ? 'next ' + String(item.next_run_at || '').slice(0, 16).replace('T', ' ')
-          : (item.paused_reason ? 'paused after repeated failures' : 'paused')) + (item.last_result ? ' · last: ' + item.last_result : '');
+          : (item.paused_reason ? 'paused after repeated failures' : 'paused')) +
+          (item.quiet_hours ? ' · quiet ' + item.quiet_hours.start + '–' + item.quiet_hours.end +
+            ' ' + item.quiet_hours.timezone + (item.quiet_hours_active ? ' (now)' : '') : '') +
+          (item.last_deferred_until ? ' · last quiet deferral until ' + String(item.last_deferred_until).slice(0, 16).replace('T',' ') + ' UTC' : '') +
+          (item.last_result ? ' · last: ' + item.last_result : '');
         const toggle = document.createElement('button');
         toggle.type = 'button'; toggle.className = 'secondary'; toggle.textContent = item.enabled ? 'Pause' : 'Resume';
         toggle.onclick = async () => { await api('/v1/schedules/update', send('POST', {schedule_id: item.schedule_id, enabled: !item.enabled})).catch(() => null); refreshSchedules(); };
         const remove = document.createElement('button');
         remove.type = 'button'; remove.className = 'secondary'; remove.textContent = 'Remove';
         remove.onclick = async () => { await api('/v1/schedules/delete', send('POST', {schedule_id: item.schedule_id})).catch(() => null); refreshSchedules(); };
-        line.append(text, toggle, remove);
+        const setQuiet = document.createElement('button');
+        setQuiet.type = 'button'; setQuiet.className = 'secondary';
+        setQuiet.textContent = item.quiet_hours ? 'Update quiet hours' : 'Apply quiet hours';
+        setQuiet.setAttribute('aria-label', setQuiet.textContent + ' for ' + item.kind + ' ' + item.target_id);
+        setQuiet.onclick = async () => {
+          if (!quietEnabled.checked) {
+            if (scheduleStatus) scheduleStatus.textContent = 'Tick the optional quiet-hours checkbox and choose the window first.';
+            return;
+          }
+          try {
+            await api('/v1/schedules/update', send('POST', {schedule_id: item.schedule_id,
+              quiet_hours: readQuietWindow()}));
+            if (scheduleStatus) scheduleStatus.textContent = 'Quiet hours saved for this job; missed runs are not backfilled.';
+          } catch (error) {
+            if (scheduleStatus) scheduleStatus.textContent = error.message || 'Could not save quiet hours.';
+          }
+          refreshSchedules();
+        };
+        line.append(text, toggle, remove, setQuiet);
+        if (item.quiet_hours) {
+          const clear = document.createElement('button');
+          clear.type = 'button'; clear.className = 'secondary'; clear.textContent = 'Clear quiet hours';
+          clear.setAttribute('aria-label', 'Clear quiet hours for ' + item.kind + ' ' + item.target_id);
+          clear.onclick = async () => {
+            try {
+              await api('/v1/schedules/update', send('POST', {schedule_id: item.schedule_id,
+                quiet_hours: null}));
+              if (scheduleStatus) scheduleStatus.textContent = 'Quiet hours cleared for this job.';
+            } catch (error) { if (scheduleStatus) scheduleStatus.textContent = error.message || 'Could not clear quiet hours.'; }
+            refreshSchedules();
+          };
+          line.append(clear);
+        }
         scheduleList.append(line);
       }
     };
+    const scheduleKind = panel.querySelector('#pvScheduleKind');
+    const scheduleTarget = panel.querySelector('#pvScheduleTarget');
+    const scheduleInterval = panel.querySelector('#pvScheduleInterval');
+    const scheduleBackupAck = panel.querySelector('#pvScheduleBackupAck');
+    const scheduleBackupAckRow = panel.querySelector('#pvScheduleBackupAckRow');
+    const refreshScheduleKind = () => {
+      const local = scheduleKind.value === 'local_backup';
+      scheduleTarget.disabled = local;
+      scheduleTarget.value = local ? 'local' : '';
+      scheduleTarget.placeholder = local ? 'This computer' : 'Profile or event log ID';
+      scheduleInterval.min = local ? '1440' : '15';
+      scheduleInterval.value = local ? '1440' : '60';
+      scheduleBackupAckRow.hidden = !local;
+      scheduleBackupAck.checked = false;
+    };
+    scheduleKind.onchange = refreshScheduleKind;
+    refreshScheduleKind();
     panel.querySelector('#pvScheduleAdd').onclick = async () => {
-      const kind = panel.querySelector('#pvScheduleKind').value;
-      if (!confirm('Run this job automatically on a schedule? You can pause or remove it at any time.')) return;
+      const kind = scheduleKind.value;
+      const isBackup = kind === 'local_backup';
+      if (isBackup && !scheduleBackupAck.checked) {
+        if (scheduleStatus) scheduleStatus.textContent = 'Acknowledge that scheduled backups are unencrypted and may contain private work activity.';
+        return;
+      }
+      if (!confirm(isBackup
+          ? 'Schedule an unencrypted local backup every day or longer? Copies stay on this computer and can contain private captured work. This does not include credentials or send data to cloud services.'
+          : 'Run this job automatically on a schedule? You can pause or remove it at any time.')) return;
       try {
-        await api('/v1/schedules', send('POST', {kind, target_id: panel.querySelector('#pvScheduleTarget').value.trim(),
-          interval_minutes: Number(panel.querySelector('#pvScheduleInterval').value), confirm_scheduled_runs: true}));
+        await api('/v1/schedules', send('POST', {
+          kind, target_id: isBackup ? 'local' : scheduleTarget.value.trim(),
+          interval_minutes: Number(scheduleInterval.value), confirm_scheduled_runs: true,
+          confirm_unencrypted_local_backup: isBackup && scheduleBackupAck.checked,
+          quiet_hours: quietEnabled.checked ? readQuietWindow() : null
+        }));
         if (scheduleStatus) scheduleStatus.textContent = 'Schedule added.';
+        scheduleBackupAck.checked = false;
       } catch (error) { if (scheduleStatus) scheduleStatus.textContent = error.message || 'Could not add the schedule.'; }
       refreshSchedules();
     };
