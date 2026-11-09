@@ -111,7 +111,7 @@
             // Continue into the existing authenticated pipeline decision UI, not a
             // second approval implementation. Preflight is non-authorizing; the
             // pipeline requires its own current-revision check on any decision.
-            const continueReview=node('button','Open opportunity decision and handoff');continueReview.type='button';
+            const continueReview=node('button','Open opportunity decision and handoff');continueReview.type='button';continueReview.disabled=true;
             continueReview.onclick=async()=>{
               if(token!==generation||choice.value!==projectId||input.value.trim()!==id)return;
               const pipelineCard=document.getElementById('owgPipelineCard');
@@ -156,6 +156,10 @@
             for(const b of [saveDraft,approve,revoke])b.type='button';
             const reviewPath='/v1/review-choice-workbench/'+encodeURIComponent(id)+'/review';
             let reviewRevision=0;
+            // The next step is only actionable for a current approved review.
+            // The server independently rechecks approval and provenance.
+            let currentDecision='unreviewed';
+            const updateContinue=()=>{continueReview.disabled=currentDecision!=='approved';};
             // A pending read must never overwrite a later save/revoke result.
             // Disable mutation until the authoritative revision has loaded.
             let reviewRequestGeneration=0;
@@ -177,13 +181,14 @@
               const state=await response.json();
               if(!reviewStillSelected()||requestGeneration!==reviewRequestGeneration)return;
               if(state.execution_authorized!==false||state.project_id!==projectId)throw new Error('Invalid review state');
-              reviewRevision=state.revision;notes.value=state.reviewer_notes||'';
+              reviewRevision=state.revision;currentDecision=state.decision;updateContinue();notes.value=state.reviewer_notes||'';
               reviewState.textContent='Saved review: '+state.decision+' (revision '+state.revision+'). No agent access granted.';
               for(const b of [saveDraft,approve,revoke])b.disabled=false;
             }
             async function persistReview(decision){
               if(!reviewStillSelected())return;
               ++reviewRequestGeneration;
+              continueReview.disabled=true;
               for(const b of [saveDraft,approve,revoke])b.disabled=true;
               try{
                 const response=await fetch(reviewPath,{method:'POST',cache:'no-store',
@@ -193,13 +198,14 @@
                 const state=await response.json();
                 if(!reviewStillSelected())return;
                 if(state.execution_authorized!==false||state.project_id!==projectId)throw new Error('Invalid saved review');
-                reviewRevision=state.revision;
+                reviewRevision=state.revision;currentDecision=state.decision;updateContinue();
                 reviewState.textContent='Saved '+decision+' at revision '+reviewRevision+'. This does not authorize execution.';
               }catch(e){
                 if(reviewStillSelected()){
                   reviewState.textContent=e.message+' Reloading authoritative review revision…';
                   try{await refreshReview();}
                   catch(refreshError){
+                    currentDecision='unknown';updateContinue();
                     reviewState.textContent='Review state uncertain. Inspect again before editing: '+refreshError.message;
                     for(const b of [saveDraft,approve,revoke])b.disabled=true;
                   }
@@ -217,6 +223,7 @@
             revoke.onclick=async()=>{
               if(!reviewStillSelected()||reviewRevision<1)return;
               ++reviewRequestGeneration;
+              continueReview.disabled=true;
               // Revocation must work when evidence has changed since approval.
               // Never depend on the stale-basis preflight for withdrawing consent.
               for(const b of [saveDraft,approve,revoke])b.disabled=true;
@@ -230,13 +237,14 @@
                 if(state.decision!=='revoked'||state.execution_authorized!==false||
                    state.project_id!==projectId||state.revision!==reviewRevision+1)
                   throw new Error('Invalid revocation response');
-                reviewRevision=state.revision;
+                reviewRevision=state.revision;currentDecision='revoked';updateContinue();
                 reviewState.textContent='Review revoked at revision '+reviewRevision+'. No agent access granted.';
               }catch(e){
                 if(reviewStillSelected()){
                   reviewState.textContent=e.message+' Reloading authoritative review revision…';
                   try{await refreshReview();}
                   catch(refreshError){
+                    currentDecision='unknown';updateContinue();
                     reviewState.textContent='Review state uncertain. Inspect again before editing: '+refreshError.message;
                     for(const b of [saveDraft,approve,revoke])b.disabled=true;
                   }
