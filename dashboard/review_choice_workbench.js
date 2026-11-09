@@ -188,7 +188,24 @@
             }
             saveDraft.onclick=()=>persistReview('draft');
             approve.onclick=()=>persistReview('approved');
-            revoke.onclick=()=>persistReview('revoked');
+            revoke.onclick=async()=>{
+              // Revocation must work when evidence has changed since approval.
+              // Never depend on the stale-basis preflight for withdrawing consent.
+              for(const b of [saveDraft,approve,revoke])b.disabled=true;
+              try{
+                const response=await fetch(reviewPath+'/'+encodeURIComponent(projectId)+'/revoke',{
+                  method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},
+                  body:JSON.stringify({expected_review_revision:reviewRevision})});
+                if(!response.ok)throw new Error('Revocation refused ('+response.status+'); reload review state.');
+                const state=await response.json();
+                if(state.decision!=='revoked'||state.execution_authorized!==false||
+                   state.project_id!==projectId||state.revision!==reviewRevision+1)
+                  throw new Error('Invalid revocation response');
+                reviewRevision=state.revision;
+                reviewState.textContent='Review revoked at revision '+reviewRevision+'. No agent access granted.';
+              }catch(e){reviewState.textContent=e.message;}
+              finally{for(const b of [saveDraft,approve,revoke])b.disabled=false;}
+            };
             details.append(node('h3','Record human review'),notes,saveDraft,approve,revoke,reviewState);
             refreshReview().catch(e=>{reviewState.textContent=e.message;});
             details.append(continueReview);
