@@ -45,6 +45,7 @@
         <h3>Review event-to-case evidence</h3>
         <p class="muted">Read-only reconstruction. Requires a separately enabled, unexpired all-saved AI history grant; dashboard sign-in alone is insufficient. No event is a confirmed business case.</p>
         <button class="secondary" type="button" id="loadReconstructionReview">Inspect permitted event assignments</button>
+        <button class="ghost" type="button" id="clearReconstructionReview">Clear review evidence</button>
         <div id="reconstructionReviewResults" role="status" aria-live="polite" style="margin-top:10px"></div>
       </div>
       <div id="workflowEvidenceCandidates" style="margin-top:10px"><div class="muted">Loading observed examples…</div></div>
@@ -55,6 +56,7 @@
       </div>`;
     host.querySelector('#refreshWorkflowEvidence').onclick=()=>refresh();
     host.querySelector('#loadReconstructionReview').onclick=()=>loadReconstructionReview();
+    host.querySelector('#clearReconstructionReview').onclick=()=>{host.querySelector('#reconstructionReviewResults').replaceChildren();};
     const patternList=parent.querySelector('#patternList');
     if(patternList) patternList.insertAdjacentElement("afterend",host); else parent.appendChild(host);
     return host;
@@ -489,6 +491,8 @@
   async function refresh(){
     ensureCard();
     removeOldPlaceholderActions();
+    // Refresh must discard prior sensitive review evidence, including after consent changes.
+    ensureCard()?.querySelector('#reconstructionReviewResults')?.replaceChildren();
     const active=document.querySelector('[role="tab"][aria-selected="true"]')?.dataset.tab;
     if(active!=='overview'||loading) return;
     loading=true;
