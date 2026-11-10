@@ -191,3 +191,46 @@ def test_capture_coverage_distinguishes_paused_browser_from_disabled_signals(mon
     resumed = interaction_evidence.coverage_manifest(hours=24)
     assert resumed["browser_capture_paused"] is False
     assert resumed["modalities"]["browser_hover_dwell"] == "on"
+
+
+
+def test_paused_browser_heartbeat_erases_last_page_and_blocks_desktop_relabel(monkeypatch):
+    """A content-free paused heartbeat must not resurrect the last tab."""
+    from datetime import datetime, timezone
+    from server import main
+    from server.main import BrowserHeartbeat
+
+    now = datetime.now(timezone.utc).isoformat()
+    previous = {
+        "status": "connected", "browser_session_id": "browser-a",
+        "work_session_id": "work-a",
+        "hostname": "private.example", "pathname": "/record",
+        "page_title": "Confidential case",
+        "work_surface": "Private records", "observed_at": now,
+    }
+    monkeypatch.setattr(main, "BROWSER_STATUS", dict(previous))
+    paused = BrowserHeartbeat(
+        observed_at=now, status="paused", browser_session_id="browser-a",
+        work_session_id="", sensor_id="browser:test", page={},
+    )
+    assert main.browser_heartbeat(paused) == {"status": "ok"}
+    assert main.BROWSER_STATUS["status"] == "paused"
+    assert main.BROWSER_STATUS["work_session_id"] == ""
+    for key in ("hostname", "pathname", "page_title", "work_surface"):
+        assert key not in main.BROWSER_STATUS
+
+    evidence = {"recent_evidence": [
+        {"source": "desktop", "observed_at": now, "app": "Google Chrome", "work_surface": ""},
+    ]}
+    main._apply_live_browser_surface(evidence)
+    assert evidence["recent_evidence"][0]["work_surface"] == ""
+
+    # The ordinary connected heartbeat still preserves context on a transient
+    # tabs.query failure, not on a deliberate paused/omitted-page heartbeat.
+    monkeypatch.setattr(main, "BROWSER_STATUS", dict(previous))
+    connected = BrowserHeartbeat(
+        observed_at=now, status="connected", browser_session_id="browser-a",
+        work_session_id="work-a", sensor_id="browser:test", page={},
+    )
+    assert main.browser_heartbeat(connected) == {"status": "ok"}
+    assert main.BROWSER_STATUS["hostname"] == "private.example"
