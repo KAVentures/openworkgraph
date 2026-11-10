@@ -1,6 +1,39 @@
 const API = "http://127.0.0.1:8787";
 const ext = globalThis.browser ?? globalThis.chrome;
 const SECRET_KEY = "openworkgraph_browser_pairing_secret";
+let capturePaused = null;
+
+async function refreshCaptureState() {
+  const status = document.querySelector("#capture-state");
+  const toggle = document.querySelector("#toggle-capture");
+  toggle.disabled = true;
+  try {
+    const reply = await ext.runtime.sendMessage({type: "owg_browser_pause_state"});
+    if (reply?.ok !== true || typeof reply.paused !== "boolean") throw new Error("state unavailable");
+    capturePaused = reply.paused;
+    status.textContent = capturePaused ? "Paused in this browser" : "Recording in this browser (subject to OWG privacy settings)";
+    toggle.textContent = capturePaused ? "Resume browser recording" : "Pause browser recording";
+    toggle.className = capturePaused ? "" : "secondary";
+    toggle.disabled = false;
+  } catch (_) {
+    status.textContent = "Could not read browser recording status. Reopen the extension.";
+    toggle.textContent = "Unavailable";
+  }
+}
+
+async function toggleCapture() {
+  if (typeof capturePaused !== "boolean") return;
+  const toggle = document.querySelector("#toggle-capture");
+  toggle.disabled = true;
+  try {
+    const reply = await ext.runtime.sendMessage({type: "owg_browser_pause_set", paused: !capturePaused});
+    if (reply?.ok !== true) throw new Error("Could not update browser recording");
+    await refreshCaptureState();
+  } catch (_) {
+    document.querySelector("#capture-state").textContent = "Could not change browser recording state.";
+    toggle.disabled = false;
+  }
+}
 
 async function currentSecret() {
   try {
@@ -89,4 +122,6 @@ async function pair() {
 
 document.querySelector('#connect').addEventListener('click', oneClickPair);
 document.querySelector('#pair').addEventListener('click', pair);
+document.querySelector('#toggle-capture').addEventListener('click', toggleCapture);
 refreshStatus();
+refreshCaptureState();

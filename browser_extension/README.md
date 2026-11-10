@@ -20,3 +20,7 @@ Unpacked development builds can also receive a generated local `pairing.json` fr
 ## Enterprise distribution
 
 GitHub Releases build a store-ready ZIP of this directory. Publish that ZIP through the organization-owned Chrome Web Store / Edge Add-ons account, then use the policy templates in `enterprise/browser/` to force-install the real extension ID. Store publication itself requires external publisher credentials and review and is not faked by the open-source build.
+
+## Browser-only pause
+
+The popup provides **Pause browser recording** and **Resume browser recording**. This per-browser-profile setting survives extension/background restarts and does not change desktop recording or any sharing permissions. While paused the extension blocks structural events, optional page/draft text and enhanced interaction signals; buffered local evidence and unsent queued browser events are discarded. Already-delivered events are not deleted. A content-free `paused` heartbeat continues so the dashboard can distinguish a paused browser from a disconnected sensor. Existing OWG exclusions and separate capture-depth/work-text consent remain in force after resuming.

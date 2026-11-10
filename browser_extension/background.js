@@ -6,10 +6,26 @@ const BROWSER_RUNTIME_ID = globalThis.crypto?.randomUUID?.() || `runtime-${Date.
 const IDENTITY_KEY = "openworkgraph_sensor_id";
 const QUEUE_KEY = "openworkgraph_pending_browser_events";
 const WORK_CONTEXT_KEY = "openworkgraph_work_context";
+const BROWSER_PAUSE_KEY = "openworkgraph_browser_paused_v1";
 const recentNav = new Map();
 let storageLock = Promise.resolve();
 let cachedWorkContext = null;
 let cachedWorkContextAt = 0;
+// Browser-only pause is separate from desktop capture and sharing choices.
+// Fail closed until the persisted state has loaded, including worker restarts.
+let browserPaused = true;
+const evidencePosts = new Set();
+const browserPauseReady = ext.storage.local.get(BROWSER_PAUSE_KEY)
+  .then(saved => { browserPaused = saved?.[BROWSER_PAUSE_KEY] === true; })
+  .catch(() => { browserPaused = true; });
+async function updatePauseBadge() {
+  const badge = ext.action ?? ext.browserAction;
+  try {
+    await badge?.setBadgeText?.({text: browserPaused ? "II" : ""});
+    if (browserPaused) await badge?.setBadgeBackgroundColor?.({color: "#a33d2b"});
+  } catch (_) {}
+}
+browserPauseReady.then(updatePauseBadge);
 
 function uuid() {
   return globalThis.crypto?.randomUUID?.() || `evt-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -99,6 +115,16 @@ async function postDirect(path, body) {
   }
 }
 
+// Pause waits for already-started evidence requests before reporting completion.
+async function evidencePost(path, body) {
+  await browserPauseReady;
+  if (browserPaused) return false;
+  const request = postDirect(path, body);
+  evidencePosts.add(request);
+  try { return await request; }
+  finally { evidencePosts.delete(request); }
+}
+
 async function getJson(path) {
   try {
     const response = await fetch(`${API}${path}`, {method: "GET", cache: "no-store"});
@@ -161,12 +187,37 @@ function serializedStorage(fn) {
   return next;
 }
 
+let pauseMutation = Promise.resolve();
+function setBrowserPaused(nextPaused) {
+  const change = pauseMutation.then(async () => {
+    await browserPauseReady;
+    if (nextPaused) {
+      browserPaused = true; // Gate new evidence before touching storage.
+      await ext.storage.local.set({[BROWSER_PAUSE_KEY]: true});
+      await Promise.allSettled([...evidencePosts]);
+      await serializedStorage(async () => {
+        await ext.storage.local.set({[QUEUE_KEY]: []});
+      });
+      recentNav.clear();
+    } else {
+      await ext.storage.local.set({[BROWSER_PAUSE_KEY]: false});
+      browserPaused = false;
+    }
+    await updatePauseBadge();
+    heartbeat(browserPaused ? "paused" : "connected").catch(() => {});
+    return {ok: true, paused: browserPaused};
+  });
+  pauseMutation = change.catch(() => {});
+  return change;
+}
+
 async function sanitizePendingBrowserQueue() {
+  await browserPauseReady;
   return serializedStorage(async () => {
     try {
       const stored = await ext.storage.local.get(QUEUE_KEY);
       const queue = Array.isArray(stored?.[QUEUE_KEY]) ? stored[QUEUE_KEY] : [];
-      const sanitized = queue.map(sanitizeBrowserEvent).slice(-5000);
+      const sanitized = browserPaused ? [] : queue.map(sanitizeBrowserEvent).slice(-5000);
       await ext.storage.local.set({[QUEUE_KEY]: sanitized});
       return sanitized.length;
     } catch (_) {
@@ -176,7 +227,9 @@ async function sanitizePendingBrowserQueue() {
 }
 
 async function enqueueBrowserEvent(body) {
+  await browserPauseReady;
   return serializedStorage(async () => {
+    if (browserPaused) return;
     try {
       const stored = await ext.storage.local.get(QUEUE_KEY);
       const queue = Array.isArray(stored?.[QUEUE_KEY]) ? stored[QUEUE_KEY].map(sanitizeBrowserEvent) : [];
@@ -189,7 +242,9 @@ async function enqueueBrowserEvent(body) {
 }
 
 async function flushBrowserQueue() {
+  await browserPauseReady;
   return serializedStorage(async () => {
+    if (browserPaused) return 0;
     try {
       const stored = await ext.storage.local.get(QUEUE_KEY);
       const queue = Array.isArray(stored?.[QUEUE_KEY]) ? stored[QUEUE_KEY].map(sanitizeBrowserEvent) : [];
@@ -197,11 +252,12 @@ async function flushBrowserQueue() {
       const remaining = [];
       let delivered = 0;
       for (const item of queue.slice(0, 200)) {
-        if (await postDirect("/v1/browser-events", item)) delivered += 1;
+        if (browserPaused) break;
+        if (await evidencePost("/v1/browser-events", item)) delivered += 1;
         else remaining.push(item);
       }
       remaining.push(...queue.slice(200));
-      await ext.storage.local.set({[QUEUE_KEY]: remaining.map(sanitizeBrowserEvent)});
+      await ext.storage.local.set({[QUEUE_KEY]: browserPaused ? [] : remaining.map(sanitizeBrowserEvent)});
       return delivered;
     } catch (_) {
       return 0;
@@ -210,7 +266,10 @@ async function flushBrowserQueue() {
 }
 
 async function sendBrowserEvent(body) {
+  await browserPauseReady;
+  if (browserPaused) return false;
   const work = await captureWorkContext();
+  if (browserPaused) return false;
   const enriched = sanitizeBrowserEvent({
     ...body,
     event_id: body.event_id || uuid(),
@@ -222,31 +281,32 @@ async function sendBrowserEvent(body) {
     device_id: body.device_id ?? work.device_id ?? "",
     work_session_id: body.work_session_id ?? work.work_session_id ?? "",
   });
-  if (await postDirect("/v1/browser-events", enriched)) {
+  if (await evidencePost("/v1/browser-events", enriched)) {
     flushBrowserQueue();
     return true;
   }
-  await enqueueBrowserEvent(enriched);
+  if (!browserPaused) await enqueueBrowserEvent(enriched);
   return false;
 }
 
 async function heartbeat(status = "connected") {
+  await browserPauseReady;
   const id = await sensorId();
-  const work = await refreshWorkContext();
+  const work = browserPaused ? null : await refreshWorkContext();
   let page = {};
   try {
-    const tabs = await ext.tabs.query({active: true, lastFocusedWindow: true});
+    const tabs = browserPaused ? [] : await ext.tabs.query({active: true, lastFocusedWindow: true});
     const tab = Array.isArray(tabs) ? tabs[0] : null;
     const safe = safeUrl(tab?.url || "");
     if (safe) page = {...safe, title: String(tab?.title || "").slice(0, 240)};
   } catch (_) {}
   await postDirect("/v1/browser-heartbeat", {
     observed_at: new Date().toISOString(),
-    status,
+    status: browserPaused ? "paused" : status,
     sensor_id: id,
     sensor_version: SENSOR_VERSION,
     browser_session_id: BROWSER_RUNTIME_ID,
-    work_session_id: String(work?.work_session_id || cachedWorkContext?.work_session_id || ""),
+    work_session_id: browserPaused ? "" : String(work?.work_session_id || cachedWorkContext?.work_session_id || ""),
     page,
   });
 }
@@ -300,7 +360,8 @@ function workTextAllowedByLiveContext(fresh, page, title) {
 // A distinct non-queued channel for optional work text; structural telemetry
 // never transports page bodies or draft values. The server rechecks consent.
 async function deliverWorkTextSnapshot(message, sender) {
-  if (sender?.frameId !== 0 || !sender?.tab?.active) return;
+  await browserPauseReady;
+  if (browserPaused || sender?.frameId !== 0 || !sender?.tab?.active) return;
   const source = safeUrl(sender.tab.url || "");
   if (!source || source.hostname !== String(message.hostname || "").toLowerCase()) return;
   if (sanitizePathname(String(message.pathname || "")) !== source.pathname) return;
@@ -315,7 +376,7 @@ async function deliverWorkTextSnapshot(message, sender) {
       titles: Array.isArray(fresh?.excluded_title_patterns) ? fresh.excluded_title_patterns.slice(0,100) : []
     }
   }); } catch (_) {}
-  if (!on) return;
+  if (!on || browserPaused) return;
   // A keyed page identity keeps same-host documents distinct without sending
   // their URL, query, fragment or provider locator to cloud storage.
   const parsed = globalThis.OpenWorkGraphResourceReferences?.parse?.(sender.tab.url || '');
@@ -327,7 +388,7 @@ async function deliverWorkTextSnapshot(message, sender) {
     {name: 'HMAC', hash: 'SHA-256'}, false, ['sign']);
   const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(identity));
   const pageIdentity = Array.from(new Uint8Array(signature)).map(x => x.toString(16).padStart(2, '0')).join('');
-  await postDirect("/v1/work-text/ingest", {
+  await evidencePost("/v1/work-text/ingest", {
     hostname: source.hostname,
     pathname: source.pathname,
     title: String(sender.tab.title || "").slice(0, 240),
@@ -341,7 +402,21 @@ async function deliverWorkTextSnapshot(message, sender) {
   });
 }
 
-ext.runtime.onMessage.addListener((message, sender) => {
+ext.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "owg_browser_pause_state" || message?.type === "owg_browser_pause_set") {
+    // Content scripts and webpages cannot mutate the popup's pause control.
+    if (sender?.url !== ext.runtime.getURL("popup.html")) {
+      sendResponse({ok: false, error: "popup_only"});
+      return;
+    }
+    const result = message.type === "owg_browser_pause_state"
+      ? browserPauseReady.then(() => ({ok: true, paused: browserPaused}))
+      : (typeof message.paused === "boolean"
+          ? setBrowserPaused(message.paused)
+          : Promise.reject(new Error("invalid pause value")));
+    result.then(sendResponse, () => sendResponse({ok: false, error: "pause_state_unavailable"}));
+    return true; // Keep the callback channel open in Chromium and Firefox.
+  }
   if (message?.type === "owg_work_text_snapshot") {
     deliverWorkTextSnapshot(message, sender).catch(() => {});
     return;

@@ -12,6 +12,12 @@
   <p id="intro">Checking local pairing…</p>
   <button id="connect">Connect to OpenWorkGraph</button>
   <div class="status" id="status">Keep OpenWorkGraph running on this computer.</div>
+  <section class="status" aria-labelledby="capture-heading">
+    <h2 id="capture-heading" style="font-size:14px;margin:0 0 4px">Browser recording</h2>
+    <p id="capture-state" role="status">Checking browser recording state…</p>
+    <button id="toggle-capture" class="secondary" disabled>Checking…</button>
+    <p style="font-size:12px;margin-top:8px">Pausing stops this browser extension from recording and sending browser evidence. Unsent events are discarded. Desktop recording is controlled separately in OpenWorkGraph.</p>
+  </section>
   <div class="fallback">
     <details>
       <summary>Pair with a code instead</summary>

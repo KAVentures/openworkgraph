@@ -6,6 +6,9 @@
   const ext = globalThis.browser ?? globalThis.chrome;
   const KEY = "openworkgraph_work_text_capture_v1";
   const EXCLUSIONS_KEY = "openworkgraph_work_text_exclusions_v1";
+  const PAUSE_KEY = "openworkgraph_browser_paused_v1";
+  let consentEnabled = false;
+  let browserPaused = true;
   let exclusions = {hosts: [], titles: []};
   let enabled = false;
   let pageTimer = null;
@@ -198,13 +201,15 @@
   }
 
   if (!isTop()) return;
-  ext.storage.local.get([KEY, EXCLUSIONS_KEY]).then(result => {
+  ext.storage.local.get([KEY, EXCLUSIONS_KEY, PAUSE_KEY]).then(result => {
     const value = result?.[EXCLUSIONS_KEY] || {};
     exclusions = {
       hosts: Array.isArray(value.hosts) ? value.hosts : [],
       titles: Array.isArray(value.titles) ? value.titles : []
     };
-    setEnabled(result?.[KEY] === true);
+    consentEnabled = result?.[KEY] === true;
+    browserPaused = result?.[PAUSE_KEY] === true;
+    setEnabled(consentEnabled && !browserPaused);
   }).catch(() => setEnabled(false));
   ext.storage.onChanged?.addListener((changes, area) => {
     if (area !== 'local') return;
@@ -215,7 +220,9 @@
         titles: Array.isArray(value.titles) ? value.titles : []
       };
     }
-    if (changes?.[KEY]) setEnabled(changes[KEY].newValue === true);
+    if (changes?.[KEY]) consentEnabled = changes[KEY].newValue === true;
+    if (changes?.[PAUSE_KEY]) browserPaused = changes[PAUSE_KEY].newValue === true;
+    if (changes?.[KEY] || changes?.[PAUSE_KEY]) setEnabled(consentEnabled && !browserPaused);
   });
   addEventListener('DOMContentLoaded', schedulePage);
   addEventListener('pageshow', schedulePage);
