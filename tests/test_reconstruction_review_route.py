@@ -193,3 +193,26 @@ def test_review_denies_retention_generation_change_after_query(monkeypatch):
     with pytest.raises(HTTPException) as error:
         history_routes.get_reconstruction_review()
     assert error.value.status_code == 403
+
+
+def test_review_denies_revocation_during_json_serialization(monkeypatch):
+    """Consent revoked while encoding the response must deny disclosure."""
+    access = {"mode": "all_saved", "granted_at": "fixed"}
+    monkeypatch.setattr(history_routes, "active_ai_history_access", lambda: dict(access))
+    monkeypatch.setattr(history_policy, "history_generation", lambda: 7)
+    monkeypatch.setattr(history_routes, "connect", lambda: sqlite3.connect(":memory:"))
+    monkeypatch.setattr(work_resumption, "resumption_candidates", lambda *_args, **_kwargs: {
+        "derived": True, "authoritative": False, "saved_history_access": "all_saved",
+        "observed_pair_event_assignments": [], "coverage": {},
+    })
+    original_dumps = json.dumps
+
+    def revoke_during_encoding(*args, **kwargs):
+        encoded = original_dumps(*args, **kwargs)
+        access["mode"] = "off"
+        return encoded
+
+    monkeypatch.setattr(history_routes.json, "dumps", revoke_during_encoding)
+    with pytest.raises(HTTPException) as error:
+        history_routes.get_reconstruction_review()
+    assert error.value.status_code == 403
