@@ -45,3 +45,20 @@ def test_review_empty_granted_response_remains_non_authoritative(monkeypatch):
     assert body["authoritative"] is False
     assert body["review"]["event_reviews"] == []
     assert body["review"]["no_case_identity_inferred"] is True
+
+
+def test_review_denies_grant_replacement_even_if_still_all_saved(monkeypatch):
+    # Regranting while a query is running must invalidate the original lease.
+    before = {"mode": "all_saved", "granted_at": "2026-11-10T01:00:00+00:00"}
+    after = {"mode": "all_saved", "granted_at": "2026-11-10T01:01:00+00:00"}
+    calls = iter((before, after))
+    monkeypatch.setattr(history_routes, "active_ai_history_access", lambda: next(calls))
+    monkeypatch.setattr(history_policy, "history_generation", lambda: 1)
+    monkeypatch.setattr(history_routes, "connect", lambda: sqlite3.connect(":memory:"))
+    monkeypatch.setattr(work_resumption, "resumption_candidates", lambda *_args, **_kwargs: {
+        "derived": True, "authoritative": False, "saved_history_access": "all_saved",
+        "observed_pair_event_assignments": [], "coverage": {},
+    })
+    with pytest.raises(HTTPException) as error:
+        history_routes.get_reconstruction_review()
+    assert error.value.status_code == 403
