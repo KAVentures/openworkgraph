@@ -210,10 +210,11 @@
               ++reviewRequestGeneration;
               continueReview.disabled=true;
               for(const b of [saveDraft,approve,revoke])b.disabled=true;
+              const submittedNotes=notes.value;
               try{
                 const response=await fetch(reviewPath,{method:'POST',cache:'no-store',
                   headers:{'Content-Type':'application/json'},
-                  body:JSON.stringify({basis,expected_review_revision:reviewRevision,decision,reviewer_notes:notes.value})});
+                  body:JSON.stringify({basis,expected_review_revision:reviewRevision,decision,reviewer_notes:submittedNotes})});
                 if(!response.ok)throw new Error('Review save refused ('+response.status+'); re-inspect or reload.');
                 const state=await response.json();
                 if(!reviewStillSelected())return;
@@ -221,7 +222,7 @@
                    state.idea_id!==id||state.project_id!==projectId||state.decision!==decision||
                    !Number.isSafeInteger(state.revision)||state.revision!==reviewRevision+1)
                   throw new Error('Invalid saved review response');
-                reviewRevision=state.revision;currentDecision=state.decision;savedNotes=notes.value;updateContinue();
+                reviewRevision=state.revision;currentDecision=state.decision;savedNotes=submittedNotes;updateContinue();
                 reviewState.textContent='Saved '+decision+' at revision '+reviewRevision+'. This does not authorize execution.';
               }catch(e){
                 if(reviewStillSelected()){
