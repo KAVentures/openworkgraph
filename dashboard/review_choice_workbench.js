@@ -258,8 +258,12 @@
                 if(!response.ok)throw new Error('Revocation refused ('+response.status+'); reload review state.');
                 const state=await response.json();
                 if(!reviewStillSelected())return;
-                if(state.decision!=='revoked'||state.execution_authorized!==false||
-                   state.project_id!==projectId||state.revision!==reviewRevision+1)
+                if(state.format!=='openworkgraph.human-review.v1'||state.decision!=='revoked'||
+                   state.execution_authorized!==false||state.idea_id!==id||
+                   state.project_id!==projectId||!Number.isSafeInteger(state.revision)||
+                   state.revision!==reviewRevision+1||
+                   !/^[a-f0-9]{64}$/i.test(state.basis_sha256||'')||
+                   typeof state.reviewer_notes!=='string'||state.reviewer_notes.length>2000)
                   throw new Error('Invalid revocation response');
                 reviewRevision=state.revision;currentDecision='revoked';updateContinue();
                 reviewState.textContent='Review revoked at revision '+reviewRevision+'. No agent access granted.';
