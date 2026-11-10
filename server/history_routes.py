@@ -204,7 +204,7 @@ def get_reconstruction_review() -> Response:
     generation = history_generation()
     with connect() as connection:
         result = resumption_candidates(connection, lease=grant)
-    if active_ai_history_access().get("mode") != "all_saved" or history_generation() != generation:
+    if active_ai_history_access() != grant or history_generation() != generation:
         raise HTTPException(status_code=403, detail="History access changed during review")
     queue = build_review_queue(result)
     return Response(
