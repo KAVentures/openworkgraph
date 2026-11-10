@@ -129,3 +129,67 @@ def test_review_route_preserves_competing_event_provenance_without_confirming_ca
                 ("github", "issue", "case-A"), ("github", "issue", "case-B")}
     assert body["authoritative"] is False
     assert response.headers["cache-control"] == "no-store"
+
+
+def test_review_isolates_interleaved_cases_with_reused_event_ids(monkeypatch):
+    """An earlier session's event ID must not contaminate a current case."""
+    monkeypatch.setattr(history_routes, "active_ai_history_access",
+                        lambda: {"mode": "all_saved", "granted_at": "fixed"})
+    monkeypatch.setattr(history_policy, "history_generation", lambda: 7)
+    monkeypatch.setattr(history_routes, "connect", lambda: sqlite3.connect(":memory:"))
+
+    def pair(issue, current, earlier):
+        return {
+            "resource_pointers": [
+                {"provider": "github", "resource_kind": "issue", "resource_ref": issue},
+                {"provider": "local_file", "resource_kind": "file", "resource_ref": "file-" + issue},
+            ],
+            "assignment_status": "observed_same_event_pair",
+            "proves_same_case": False,
+            "current_evidence_event_ids": current,
+            "earlier_corroborations": [{
+                "session_started_at": "2026-11-09T10:00:00Z",
+                "evidence_event_ids": earlier,
+            }] if earlier else [],
+        }
+
+    monkeypatch.setattr(work_resumption, "resumption_candidates",
+                        lambda *_args, **_kwargs: {
+                            "derived": True, "authoritative": False,
+                            "saved_history_access": "all_saved",
+                            "observed_pair_event_assignments": [
+                                pair("A", ["reused", "interleave"], []),
+                                pair("B", ["interleave"], ["reused"]),
+                            ],
+                            "coverage": {"scan_truncated": False},
+                        })
+    body = json.loads(history_routes.get_reconstruction_review().body)
+    rows = body["review"]["event_reviews"]
+    assert len(rows) == 3
+    by_window = {(row["window"], row["event_id"]): row for row in rows}
+    earlier = by_window[("earlier:2026-11-09T10:00:00Z", "reused")]
+    current = by_window[("current", "reused")]
+    interleaved = by_window[("current", "interleave")]
+    assert earlier["candidate_resource_pairs"] != current["candidate_resource_pairs"]
+    assert len(earlier["candidate_resource_pairs"]) == 1
+    assert len(current["candidate_resource_pairs"]) == 1
+    assert len(interleaved["candidate_resource_pairs"]) == 2
+    assert interleaved["review_status"] == "ambiguous_multiple_pairs"
+    assert all(row["confirmed_case"] is False for row in rows)
+
+
+def test_review_denies_retention_generation_change_after_query(monkeypatch):
+    monkeypatch.setattr(history_routes, "active_ai_history_access",
+                        lambda: {"mode": "all_saved", "granted_at": "fixed"})
+    generations = iter((7, 8))
+    monkeypatch.setattr(history_policy, "history_generation", lambda: next(generations))
+    monkeypatch.setattr(history_routes, "connect", lambda: sqlite3.connect(":memory:"))
+    monkeypatch.setattr(work_resumption, "resumption_candidates",
+                        lambda *_args, **_kwargs: {
+                            "derived": True, "authoritative": False,
+                            "saved_history_access": "all_saved",
+                            "observed_pair_event_assignments": [], "coverage": {},
+                        })
+    with pytest.raises(HTTPException) as error:
+        history_routes.get_reconstruction_review()
+    assert error.value.status_code == 403
