@@ -122,3 +122,15 @@ def test_capture_control_failure_is_unknown_not_recording(coverage, monkeypatch)
     assert manifest["desktop_sensor"]["connection"] == "unknown"
     assert manifest["modalities"]["desktop_clicks_and_scrolls"] == "desktop_capture_state_unknown"
     assert manifest["modalities"]["desktop_hover_dwell"] == "on_but_desktop_capture_state_unknown"
+
+
+def test_clock_in_future_does_not_claim_a_live_sensor(coverage):
+    main, module = coverage
+    future = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+    main.BROWSER_STATUS.update({"status": "connected", "received_at": future})
+    main.COLLECTOR_STATUS.update({"status": "recording", "received_at": future})
+    result = module.coverage_manifest()
+    assert result["browser_sensor"]["connection"] == "stale"
+    assert result["desktop_sensor"]["connection"] == "stale"
+    assert result["modalities"]["browser_structural_events"] == "browser_extension_stale"
+    assert result["modalities"]["desktop_clicks_and_scrolls"] == "desktop_collector_stale"
