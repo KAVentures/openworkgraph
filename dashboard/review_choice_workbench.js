@@ -220,7 +220,9 @@
                 if(!reviewStillSelected())return;
                 if(state.format!=='openworkgraph.human-review.v1'||state.execution_authorized!==false||
                    state.idea_id!==id||state.project_id!==projectId||state.decision!==decision||
-                   !Number.isSafeInteger(state.revision)||state.revision!==reviewRevision+1)
+                   !Number.isSafeInteger(state.revision)||state.revision!==reviewRevision+1||
+                   !/^[a-f0-9]{64}$/i.test(state.basis_sha256||'')||
+                   typeof state.reviewer_notes!=='string'||state.reviewer_notes!==submittedNotes)
                   throw new Error('Invalid saved review response');
                 reviewRevision=state.revision;currentDecision=state.decision;savedNotes=submittedNotes;updateContinue();
                 reviewState.textContent='Saved '+decision+' at revision '+reviewRevision+'. This does not authorize execution.';
