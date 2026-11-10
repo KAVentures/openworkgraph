@@ -33,7 +33,8 @@ test('work text is off by default and only enabled from explicit local settings'
 
 test('work text bypasses structural event queue and remote Gateway', () => {
   assert.match(background, /async function deliverWorkTextSnapshot/);
-  assert.match(background, /postDirect\("\/v1\/work-text\/ingest"/);
+  assert.match(background, /evidencePost\("\/v1\/work-text\/ingest"/);
+  assert.match(background, /if \(!on \|\| browserPaused\) return/);
   assert.ok(!workText.includes('workflow_observer_event'));
   assert.ok(!workText.includes('chrome.storage.local.set('));
   assert.ok(!workText.includes('openworkgraph_pending_browser_events'));
