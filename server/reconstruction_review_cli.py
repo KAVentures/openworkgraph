@@ -98,7 +98,7 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
                      "confirmed_case": False})
     return {"event_reviews": rows, "event_reviews_count": len(rows),
             "coverage_incomplete": incomplete,
-            "unlisted_events_are_unassigned": True,
+            "unlisted_events_are_unassigned": not incomplete,
             "no_case_identity_inferred": True, "requires_human_review": True}
 
 
