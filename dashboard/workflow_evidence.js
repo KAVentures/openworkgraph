@@ -41,6 +41,12 @@
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="ghost" type="button" id="refreshWorkflowEvidence">Refresh examples</button><span class="badge">Evidence → external AI</span></div>
       </div>
+      <div style="border-top:1px solid #eceee8;padding-top:13px;margin-top:13px">
+        <h3>Review event-to-case evidence</h3>
+        <p class="muted">Read-only reconstruction. Requires a separately enabled, unexpired all-saved AI history grant; dashboard sign-in alone is insufficient. No event is a confirmed business case.</p>
+        <button class="secondary" type="button" id="loadReconstructionReview">Inspect permitted event assignments</button>
+        <div id="reconstructionReviewResults" role="status" aria-live="polite" style="margin-top:10px"></div>
+      </div>
       <div id="workflowEvidenceCandidates" style="margin-top:10px"><div class="muted">Loading observed examples…</div></div>
       <div style="border-top:1px solid #eceee8;padding-top:13px;margin-top:13px">
         <h3>Record-linked observations</h3>
@@ -48,6 +54,7 @@
         <div id="workflowRecordCaseLanes" style="margin-top:10px"></div>
       </div>`;
     host.querySelector('#refreshWorkflowEvidence').onclick=()=>refresh();
+    host.querySelector('#loadReconstructionReview').onclick=()=>loadReconstructionReview();
     const patternList=parent.querySelector('#patternList');
     if(patternList) patternList.insertAdjacentElement("afterend",host); else parent.appendChild(host);
     return host;
@@ -438,6 +445,41 @@
       if(confirm('Export the stored privacy-hardened representation? Redacted is safer for sharing outside your intended context.')) downloadEvidence(index,'stored');
     };
     updateSelectionActions(index);
+  }
+
+  async function loadReconstructionReview(){
+    const host=ensureCard()?.querySelector('#reconstructionReviewResults');
+    const button=ensureCard()?.querySelector('#loadReconstructionReview');
+    if(!host||!button)return;
+    button.disabled=true;
+    host.textContent='Checking saved-history permission and reading bounded evidence…';
+    try{
+      await window.__owgAuthReady;
+      const response=await fetch('/v1/history/reconstruction-review',{cache:'no-store'});
+      if(response.status===403){
+        host.textContent='Access denied or grant expired. Enable all-saved AI history access explicitly in History settings, then retry.';
+        return;
+      }
+      if(!response.ok)throw new Error('Reconstruction review unavailable ('+response.status+').');
+      const data=await response.json();
+      const review=data.review||{};
+      if(data.derived!==true||data.authoritative!==false||review.no_case_identity_inferred!==true)
+        throw new Error('Unexpected review contract');
+      const rows=Array.isArray(review.event_reviews)?review.event_reviews:[];
+      const warning=review.coverage_incomplete?'Evidence scan incomplete; missing events cannot be treated as unassigned.':'Unlisted events are not assigned to a case.';
+      host.innerHTML='<p class="muted">'+esc(rows.length)+' event observations for review. '+esc(warning)+'</p>'+
+        rows.slice(0,100).map(row=>{
+          const pairs=Array.isArray(row.candidate_resource_pairs)?row.candidate_resource_pairs:[];
+          const candidates=pairs.map(pair=>Array.isArray(pair)?pair.map(ref=>
+            esc((ref.provider||'source')+' / '+(ref.resource_kind||'resource')+' / '+(ref.resource_ref||'opaque'))).join(' + '):'').join(' OR ');
+          return '<details style="padding:8px 0;border-top:1px solid #eceee8"><summary>'+
+            esc(row.window||'')+' · '+esc(row.event_id||'')+' · '+
+            esc(row.review_status==='ambiguous_multiple_pairs'?'Ambiguous: multiple candidates':'Observed pair, unconfirmed')+
+            '</summary><p class="muted">Candidate observations (not verified cases): '+candidates+'</p></details>';
+        }).join('')+(rows.length>100?'<p class="muted">Only first 100 review rows shown. Narrow evidence in source tools for deeper inspection.</p>':'');
+    }catch(error){
+      host.textContent=String(error.message||'Reconstruction review unavailable.');
+    }finally{button.disabled=false;}
   }
 
   async function refresh(){
