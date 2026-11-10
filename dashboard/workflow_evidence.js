@@ -470,8 +470,12 @@
       host.innerHTML='<p class="muted">'+esc(rows.length)+' event observations for review. '+esc(warning)+'</p>'+
         rows.slice(0,100).map(row=>{
           const pairs=Array.isArray(row.candidate_resource_pairs)?row.candidate_resource_pairs:[];
+          // Review queue encodes each pointer as [provider, resource_kind, resource_ref].
+          // Do not treat these tuples as objects: that hides the actual provenance.
           const candidates=pairs.map(pair=>Array.isArray(pair)?pair.map(ref=>
-            esc((ref.provider||'source')+' / '+(ref.resource_kind||'resource')+' / '+(ref.resource_ref||'opaque'))).join(' + '):'').join(' OR ');
+            Array.isArray(ref)&&ref.length===3
+              ? esc(ref.map(part=>String(part)).join(' / '))
+              : '[invalid provenance]').join(' + '):'[invalid candidate]').join(' OR ');
           return '<details style="padding:8px 0;border-top:1px solid #eceee8"><summary>'+
             esc(row.window||'')+' · '+esc(row.event_id||'')+' · '+
             esc(row.review_status==='ambiguous_multiple_pairs'?'Ambiguous: multiple candidates':'Observed pair, unconfirmed')+
