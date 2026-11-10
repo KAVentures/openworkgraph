@@ -207,7 +207,9 @@
             }
             async function persistReview(decision){
               if(!reviewStillSelected())return;
-              ++reviewRequestGeneration;
+              const mutationGeneration=++reviewRequestGeneration;
+              // A second mutation or refresh supersedes this response. Never let
+              // an older save resurrect approval after a later revoke.
               continueReview.disabled=true;
               for(const b of [saveDraft,approve,revoke])b.disabled=true;
               const submittedNotes=notes.value;
@@ -217,7 +219,7 @@
                   body:JSON.stringify({basis,expected_review_revision:reviewRevision,decision,reviewer_notes:submittedNotes})});
                 if(!response.ok)throw new Error('Review save refused ('+response.status+'); re-inspect or reload.');
                 const state=await response.json();
-                if(!reviewStillSelected())return;
+                if(!reviewStillSelected()||mutationGeneration!==reviewRequestGeneration)return;
                 if(state.format!=='openworkgraph.human-review.v1'||state.execution_authorized!==false||
                    state.idea_id!==id||state.project_id!==projectId||state.decision!==decision||
                    !Number.isSafeInteger(state.revision)||state.revision!==reviewRevision+1||
