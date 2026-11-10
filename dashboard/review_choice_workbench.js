@@ -142,6 +142,9 @@
                   throw new Error('Decision evidence changed.');
                 window.dispatchEvent(new CustomEvent('owg-pipeline-open',{detail:{idea_id:id,project_id:projectId,idea_revision:snapshot.idea.revision,idea_state:snapshot.idea.state,spec_sha256:selected.spec_sha256,archive_sha256:selected.archive_sha256,review_basis:{project_id:projectId,project_set_sha256:snapshot.project_set_sha256,idea_revision:snapshot.idea.revision,idea_state:snapshot.idea.state,spec_sha256:selected.spec_sha256,archive_sha256:selected.archive_sha256,process_status:snapshot.process_status,process_reference:snapshot.process_reference,dataset_origins:snapshot.dataset_origins,dataset_origin_check_available:snapshot.dataset_origin_check_available,blockers:selected.blockers}}}));
                 pipelineCard.scrollIntoView({block:'start',behavior:'auto'});
+                // A reviewed navigation is single-use. Re-inspect before another handoff;
+                // the pipeline itself still requires independent authorization.
+                currentDecision='handoff-completed';
                 status.textContent='Opened reviewed opportunity decision. Human approval verified; no agent execution access was granted.';
               }catch(e){
                 if(token===generation){currentDecision='unknown';clear();status.textContent='Decision review expired. Inspect again. '+e.message;}
@@ -201,7 +204,10 @@
                 if(!response.ok)throw new Error('Review save refused ('+response.status+'); re-inspect or reload.');
                 const state=await response.json();
                 if(!reviewStillSelected())return;
-                if(state.execution_authorized!==false||state.project_id!==projectId)throw new Error('Invalid saved review');
+                if(state.format!=='openworkgraph.human-review.v1'||state.execution_authorized!==false||
+                   state.idea_id!==id||state.project_id!==projectId||state.decision!==decision||
+                   !Number.isSafeInteger(state.revision)||state.revision!==reviewRevision+1)
+                  throw new Error('Invalid saved review response');
                 reviewRevision=state.revision;currentDecision=state.decision;updateContinue();
                 reviewState.textContent='Saved '+decision+' at revision '+reviewRevision+'. This does not authorize execution.';
               }catch(e){
