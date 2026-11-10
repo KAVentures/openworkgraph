@@ -572,3 +572,22 @@ def test_one_million_events_report_within_budget():
                                          "timestamp_column": "time", "resource_column": "who"})
     assert time.perf_counter() - started < 60
     assert made["quality"]["events_sharing_a_timestamp_in_a_case"] == 200_000 * 4
+
+
+def test_streamed_set_digest_matches_legacy_bucket_contract():
+    """Streaming must preserve every historical provenance digest byte-for-byte."""
+    conn = workspace._connect()
+    try:
+        for n in (0, 1, 4097, 12000):
+            sql = f"SELECT sha256(CAST(i % 31 AS VARCHAR)) AS h FROM range({n}) t(i)"
+            legacy = conn.execute(f"""WITH r AS ({sql})
+                SELECT left(h, 2) AS b, count(*),
+                       sha256(string_agg(h, '' ORDER BY h))
+                FROM r GROUP BY b ORDER BY b""").fetchall()
+            import hashlib
+            expected = hashlib.sha256()
+            for bucket, count, digest in legacy:
+                expected.update(f"{bucket}:{count}:{digest};".encode())
+            assert quality._set_digest(conn, sql, []) == expected.hexdigest()
+    finally:
+        conn.close()
