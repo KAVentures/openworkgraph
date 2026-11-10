@@ -205,20 +205,20 @@ def get_reconstruction_review() -> Response:
     with connect() as connection:
         result = resumption_candidates(connection, lease=grant)
     queue = build_review_queue(result)
-    # Queue construction can take time on large bounded evidence sets. Recheck
-    # the *same* grant and retention generation immediately before disclosure,
-    # not merely before transforming the evidence.
+    # Encode before the final authorization check: revocation during JSON
+    # serialization must fail closed, not return already-stale evidence.
+    payload = json.dumps({
+        "review": queue,
+        "coverage": result.get("coverage", {}),
+        "identity_timelines": result.get("identity_timelines", [])[:12],
+        "notice": result.get("notice"),
+        "derived": True,
+        "authoritative": False,
+    })
     if active_ai_history_access() != grant or history_generation() != generation:
         raise HTTPException(status_code=403, detail="History access changed during review")
     return Response(
-        content=json.dumps({
-            "review": queue,
-            "coverage": result.get("coverage", {}),
-            "identity_timelines": result.get("identity_timelines", [])[:12],
-            "notice": result.get("notice"),
-            "derived": True,
-            "authoritative": False,
-        }),
+        content=payload,
         media_type="application/json",
         headers={"Cache-Control": "no-store"},
     )
