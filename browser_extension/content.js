@@ -5,7 +5,11 @@ let lastPointer = {at: 0, key: ""};
 let lastFocus = {at: 0, key: ""};
 const OWG_BROWSER_PAUSE_KEY = "openworkgraph_browser_paused_v1";
 let owgBrowserPaused = true;
-ext.storage.local.get(OWG_BROWSER_PAUSE_KEY).then(saved => {
+function owgBrowserNeverRecord() {
+  return globalThis.OWGBrowserExclusions?.isExcluded?.(location.hostname, document.title) === true;
+}
+ext.storage.local.get(OWG_BROWSER_PAUSE_KEY).then(async saved => {
+  await globalThis.OWGBrowserExclusions?.ready;
   owgBrowserPaused = saved?.[OWG_BROWSER_PAUSE_KEY] === true;
   if (!owgBrowserPaused) sendNavigation("capture_ready");
 }).catch(() => { owgBrowserPaused = true; });
@@ -147,7 +151,7 @@ function targetKey(target) {
 }
 
 function send(action, target = {}, metadata = {}) {
-  if (owgBrowserPaused) return;
+  if (owgBrowserPaused || owgBrowserNeverRecord()) return;
   try {
     const topFrame = isTopFrame();
     const maybePromise = ext.runtime.sendMessage({
