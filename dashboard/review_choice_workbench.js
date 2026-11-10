@@ -113,7 +113,7 @@
             // pipeline requires its own current-revision check on any decision.
             const continueReview=node('button','Open opportunity decision and handoff');continueReview.type='button';continueReview.disabled=true;
             continueReview.onclick=async()=>{
-              if(token!==generation||choice.value!==projectId||input.value.trim()!==id)return;
+              if(token!==generation||choice.value!==projectId||input.value.trim()!==id||!notesMatchSaved())return;
               const pipelineCard=document.getElementById('owgPipelineCard');
               if(!pipelineCard){status.textContent='Automation pipeline unavailable. Reopen the dashboard and inspect again.';return;}
               // The opportunity can change after the first preflight. Revalidate
@@ -153,7 +153,7 @@
               }finally{
                 // A failed or superseded preflight must never resurrect navigation.
                 // A new authoritative inspection is required after clear().
-                continueReview.disabled=!reviewStillSelected()||currentDecision!=='approved';
+                continueReview.disabled=!reviewStillSelected()||currentDecision!=='approved'||!notesMatchSaved();
               }
             };
             // Durable human review is a separate, non-executing decision.
@@ -168,7 +168,11 @@
             // The next step is only actionable for a current approved review.
             // The server independently rechecks approval and provenance.
             let currentDecision='unreviewed';
-            const updateContinue=()=>{continueReview.disabled=currentDecision!=='approved';};
+            let savedNotes='';
+            // Unsaved edits must not appear to be part of the approved handoff.
+            const notesMatchSaved=()=>notes.value===savedNotes;
+            notes.addEventListener('input',()=>{continueReview.disabled=true;updateContinue();});
+            const updateContinue=()=>{continueReview.disabled=currentDecision!=='approved'||!notesMatchSaved();};
             // A pending read must never overwrite a later save/revoke result.
             // Disable mutation until the authoritative revision has loaded.
             let reviewRequestGeneration=0;
@@ -197,7 +201,7 @@
                  (state.revision>0&&!/^[a-f0-9]{64}$/i.test(state.basis_sha256||''))||
                  typeof state.reviewer_notes!=='string'||state.reviewer_notes.length>2000)
                 throw new Error('Invalid review state');
-              reviewRevision=state.revision;currentDecision=state.decision;updateContinue();notes.value=state.reviewer_notes||'';
+              reviewRevision=state.revision;currentDecision=state.decision;notes.value=state.reviewer_notes||'';savedNotes=notes.value;updateContinue();
               reviewState.textContent='Saved review: '+state.decision+' (revision '+state.revision+'). No agent access granted.';
               for(const b of [saveDraft,approve,revoke])b.disabled=false;
             }
@@ -217,7 +221,7 @@
                    state.idea_id!==id||state.project_id!==projectId||state.decision!==decision||
                    !Number.isSafeInteger(state.revision)||state.revision!==reviewRevision+1)
                   throw new Error('Invalid saved review response');
-                reviewRevision=state.revision;currentDecision=state.decision;updateContinue();
+                reviewRevision=state.revision;currentDecision=state.decision;savedNotes=notes.value;updateContinue();
                 reviewState.textContent='Saved '+decision+' at revision '+reviewRevision+'. This does not authorize execution.';
               }catch(e){
                 if(reviewStillSelected()){
