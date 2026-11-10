@@ -24,3 +24,7 @@ GitHub Releases build a store-ready ZIP of this directory. Publish that ZIP thro
 ## Browser-only pause
 
 The popup provides **Pause browser recording** and **Resume browser recording**. This per-browser-profile setting survives extension/background restarts and does not change desktop recording or any sharing permissions. While paused the extension blocks structural events, optional page/draft text and enhanced interaction signals; buffered local evidence and unsent queued browser events are discarded. Already-delivered events are not deleted. A content-free `paused` heartbeat continues so the dashboard can distinguish a paused browser from a disconnected sensor. Existing OWG exclusions and separate capture-depth/work-text consent remain in force after resuming.
+
+## Earlier Never record exclusion enforcement
+
+The browser extension applies the dashboard's locally cached excluded host/domain and window-title lists **before** recording or queuing structural browser evidence. High-fidelity hover/drag/trajectory signals are suppressed before their expensive page probes. Excluded page details are also omitted from browser heartbeats. A changed exclusion list purges the matching unsent browser event backlog. The server continues to recheck exclusions independently at ingest, including when the extension has been offline; already-delivered records follow the existing deletion/retention process.

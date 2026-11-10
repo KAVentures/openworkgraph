@@ -122,7 +122,13 @@
       metadata:{agent_provider:provider.key,agent_run_id:runId,state_source:String(source||'semantic_state').slice(0,40),top_frame:true}
     };
   }
+  function excludedAgentPage() {
+    return globalThis.OWGBrowserExclusions?.isExcluded?.(
+      location.hostname, typeof document !== 'undefined' ? document.title : ''
+    ) === true;
+  }
   function sendLifecycle(provider,action,runId,source){
+    if(excludedAgentPage()) return;
     // No DOM text or user/model content is included in this message.
     const message=structuralPayload(provider,action,runId,source);
     try{
@@ -135,10 +141,11 @@
     if(!doc||typeof location==='undefined')return;
     const provider=providerForHost(location.hostname);if(!provider)return;
     let runId='',wasBusy=false,errorSent=false,approvalSent=false,finishTimer=null;
-    const begin=source=>{if(runId)return;runId=safeRunId();wasBusy=false;errorSent=false;approvalSent=false;sendLifecycle(provider,'agent_run_started',runId,source);};
+    const begin=source=>{if(runId||excludedAgentPage())return;runId=safeRunId();wasBusy=false;errorSent=false;approvalSent=false;sendLifecycle(provider,'agent_run_started',runId,source);};
     const reset=()=>{runId='';wasBusy=false;errorSent=false;approvalSent=false;if(finishTimer){clearTimeout(finishTimer);finishTimer=null;}};
     const finish=(action='agent_run_finished',source='busy_cleared')=>{if(!runId)return;sendLifecycle(provider,action,runId,source);reset();};
     const sample=()=>{
+      if (excludedAgentPage()) {reset(); return;}
       const busy=hasBusyState(doc);
       if(busy&&!runId)begin('busy_state');
       if(runId){

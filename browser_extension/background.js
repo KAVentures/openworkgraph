@@ -7,6 +7,10 @@ const IDENTITY_KEY = "openworkgraph_sensor_id";
 const QUEUE_KEY = "openworkgraph_pending_browser_events";
 const WORK_CONTEXT_KEY = "openworkgraph_work_context";
 const BROWSER_PAUSE_KEY = "openworkgraph_browser_paused_v1";
+const EXCLUSIONS_KEY = "openworkgraph_work_text_exclusions_v1";
+function excludedBrowserPage(page) {
+  return globalThis.OWGBrowserExclusions?.isExcluded?.(page?.hostname, page?.title) === true;
+}
 const recentNav = new Map();
 let storageLock = Promise.resolve();
 let cachedWorkContext = null;
@@ -141,16 +145,19 @@ async function refreshWorkContext() {
     try { await ext.storage.local.set({openworkgraph_work_text_capture_v1: false, openworkgraph_capture_depth_v1: null}); } catch (_) {}
     return null;
   }
+  // Refresh extension-side Never record filters before admitting another event.
+  const exclusions = {
+    hosts: Array.isArray(fresh.excluded_browser_host_patterns) ? fresh.excluded_browser_host_patterns.slice(0, 100) : [],
+    titles: Array.isArray(fresh.excluded_title_patterns) ? fresh.excluded_title_patterns.slice(0, 100) : []
+  };
+  globalThis.OWGBrowserExclusions?.setPolicy?.(exclusions);
   // Capture depth (#634): only what the local server currently allows; missing means Standard.
   try { await ext.storage.local.set({openworkgraph_capture_depth_v1: fresh.capture_depth && typeof fresh.capture_depth === "object" ? fresh.capture_depth : null}); } catch (_) {}
   // Never persist rich text in browser storage; only the server's live opt-in flag.
   try {
     await ext.storage.local.set({
       openworkgraph_work_text_capture_v1: fresh.work_text_capture === true,
-      openworkgraph_work_text_exclusions_v1: {
-        hosts: Array.isArray(fresh.excluded_browser_host_patterns) ? fresh.excluded_browser_host_patterns.slice(0, 100) : [],
-        titles: Array.isArray(fresh.excluded_title_patterns) ? fresh.excluded_title_patterns.slice(0, 100) : []
-      }
+      [EXCLUSIONS_KEY]: exclusions
     });
   } catch (_) {}
   const context = {
@@ -213,11 +220,13 @@ function setBrowserPaused(nextPaused) {
 
 async function sanitizePendingBrowserQueue() {
   await browserPauseReady;
+  await globalThis.OWGBrowserExclusions?.ready;
   return serializedStorage(async () => {
     try {
       const stored = await ext.storage.local.get(QUEUE_KEY);
       const queue = Array.isArray(stored?.[QUEUE_KEY]) ? stored[QUEUE_KEY] : [];
-      const sanitized = browserPaused ? [] : queue.map(sanitizeBrowserEvent).slice(-5000);
+      const sanitized = browserPaused ? [] : queue.map(sanitizeBrowserEvent)
+        .filter(item => !excludedBrowserPage(item.page)).slice(-5000);
       await ext.storage.local.set({[QUEUE_KEY]: sanitized});
       return sanitized.length;
     } catch (_) {
@@ -234,6 +243,7 @@ async function enqueueBrowserEvent(body) {
       const stored = await ext.storage.local.get(QUEUE_KEY);
       const queue = Array.isArray(stored?.[QUEUE_KEY]) ? stored[QUEUE_KEY].map(sanitizeBrowserEvent) : [];
       const safeBody = sanitizeBrowserEvent(body);
+      if (excludedBrowserPage(safeBody.page)) return;
       if (!queue.some(x => x?.event_id === safeBody.event_id)) queue.push(safeBody);
       const bounded = queue.slice(-5000);
       await ext.storage.local.set({[QUEUE_KEY]: bounded});
@@ -243,16 +253,23 @@ async function enqueueBrowserEvent(body) {
 
 async function flushBrowserQueue() {
   await browserPauseReady;
+  // Unsent evidence must not replay before the Never record policy is loaded.
+  await globalThis.OWGBrowserExclusions?.ready;
   return serializedStorage(async () => {
     if (browserPaused) return 0;
     try {
       const stored = await ext.storage.local.get(QUEUE_KEY);
-      const queue = Array.isArray(stored?.[QUEUE_KEY]) ? stored[QUEUE_KEY].map(sanitizeBrowserEvent) : [];
-      if (!queue.length) return 0;
+      const queue = Array.isArray(stored?.[QUEUE_KEY]) ? stored[QUEUE_KEY].map(sanitizeBrowserEvent)
+        .filter(item => !excludedBrowserPage(item.page)) : [];
+      if (!queue.length) {
+        await ext.storage.local.set({[QUEUE_KEY]: []});
+        return 0;
+      }
       const remaining = [];
       let delivered = 0;
       for (const item of queue.slice(0, 200)) {
         if (browserPaused) break;
+        if (excludedBrowserPage(item.page)) continue;
         if (await evidencePost("/v1/browser-events", item)) delivered += 1;
         else remaining.push(item);
       }
@@ -267,9 +284,10 @@ async function flushBrowserQueue() {
 
 async function sendBrowserEvent(body) {
   await browserPauseReady;
-  if (browserPaused) return false;
+  await globalThis.OWGBrowserExclusions?.ready;
+  if (browserPaused || excludedBrowserPage(body.page)) return false;
   const work = await captureWorkContext();
-  if (browserPaused) return false;
+  if (browserPaused || excludedBrowserPage(body.page)) return false;
   const enriched = sanitizeBrowserEvent({
     ...body,
     event_id: body.event_id || uuid(),
@@ -298,7 +316,8 @@ async function heartbeat(status = "connected") {
     const tabs = browserPaused ? [] : await ext.tabs.query({active: true, lastFocusedWindow: true});
     const tab = Array.isArray(tabs) ? tabs[0] : null;
     const safe = safeUrl(tab?.url || "");
-    if (safe) page = {...safe, title: String(tab?.title || "").slice(0, 240)};
+    if (safe && !excludedBrowserPage({...safe, title: String(tab?.title || "").slice(0, 240)}))
+      page = {...safe, title: String(tab?.title || "").slice(0, 240)};
   } catch (_) {}
   await postDirect("/v1/browser-heartbeat", {
     observed_at: new Date().toISOString(),
@@ -401,6 +420,11 @@ async function deliverWorkTextSnapshot(message, sender) {
     } : {}),
   });
 }
+
+// A changed Never record list also scrubs previously queued, unsent evidence.
+ext.storage.onChanged?.addListener((changes, area) => {
+  if (area === "local" && changes?.[EXCLUSIONS_KEY]) sanitizePendingBrowserQueue().catch(() => {});
+});
 
 ext.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "owg_browser_pause_state" || message?.type === "owg_browser_pause_set") {
