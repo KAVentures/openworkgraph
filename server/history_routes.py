@@ -184,3 +184,38 @@ async def inject_history_retention(request:Request,call_next):
     return HTMLResponse(text,status_code=response.status_code,headers=headers)
 
 __all__=["get_history","get_history_policy"]
+
+
+@app.get("/v1/history/reconstruction-review")
+def get_reconstruction_review() -> Response:
+    """Local, read-only event attribution under an explicit saved-history AI grant.
+
+    Secure-app authentication applies to this route. An all-saved grant is
+    additionally required: a dashboard session alone is not disclosure consent.
+    Never persist the response; recheck revocation after the bounded query.
+    """
+    from shared.history_policy import history_generation
+    from .work_resumption import resumption_candidates
+    from .reconstruction_review_cli import build_review_queue
+
+    grant = active_ai_history_access()
+    if grant.get("mode") != "all_saved":
+        raise HTTPException(status_code=403, detail="Explicit all-saved history access required")
+    generation = history_generation()
+    with connect() as connection:
+        result = resumption_candidates(connection, lease=grant)
+    if active_ai_history_access().get("mode") != "all_saved" or history_generation() != generation:
+        raise HTTPException(status_code=403, detail="History access changed during review")
+    queue = build_review_queue(result)
+    return Response(
+        content=json.dumps({
+            "review": queue,
+            "coverage": result.get("coverage", {}),
+            "identity_timelines": result.get("identity_timelines", [])[:12],
+            "notice": result.get("notice"),
+            "derived": True,
+            "authoritative": False,
+        }),
+        media_type="application/json",
+        headers={"Cache-Control": "no-store"},
+    )
