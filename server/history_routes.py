@@ -204,9 +204,12 @@ def get_reconstruction_review() -> Response:
     generation = history_generation()
     with connect() as connection:
         result = resumption_candidates(connection, lease=grant)
+    queue = build_review_queue(result)
+    # Queue construction can take time on large bounded evidence sets. Recheck
+    # the *same* grant and retention generation immediately before disclosure,
+    # not merely before transforming the evidence.
     if active_ai_history_access() != grant or history_generation() != generation:
         raise HTTPException(status_code=403, detail="History access changed during review")
-    queue = build_review_queue(result)
     return Response(
         content=json.dumps({
             "review": queue,
