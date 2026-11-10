@@ -144,7 +144,7 @@
                 pipelineCard.scrollIntoView({block:'start',behavior:'auto'});
                 status.textContent='Opened reviewed opportunity decision. Human approval verified; no agent execution access was granted.';
               }catch(e){
-                if(token===generation){clear();status.textContent='Decision review expired. Inspect again. '+e.message;}
+                if(token===generation){currentDecision='unknown';clear();status.textContent='Decision review expired. Inspect again. '+e.message;}
               }finally{
                 // A failed or superseded preflight must never resurrect navigation.
                 // A new authoritative inspection is required after clear().
