@@ -37,7 +37,7 @@ class ReviewQueueTests(unittest.TestCase):
         out = build_review_queue(payload([pair("A", "F", ["a1"], [
             {"session_started_at": "2026-11-01T09:00:00Z", "evidence_event_ids": ["a0"]}])]))
         self.assertEqual([x["event_id"] for x in out["event_reviews"]], ["a0", "a1"])
-        self.assertTrue(out["unlisted_events_are_unassigned"])
+        self.assertFalse(out["unlisted_events_are_unassigned"])
         self.assertTrue(all(not x["confirmed_case"] for x in out["event_reviews"]))
 
     def test_multi_pair_event_is_ambiguous_not_forced_to_first(self):
@@ -109,7 +109,7 @@ class ReviewQueueTests(unittest.TestCase):
         self.assertEqual(review["event_reviews_count"], 2)
         self.assertEqual({r["event_id"] for r in review["event_reviews"]}, {"old-pair", "new-pair"})
         self.assertTrue(all(not r["confirmed_case"] for r in review["event_reviews"]))
-        self.assertTrue(review["unlisted_events_are_unassigned"])
+        self.assertFalse(review["unlisted_events_are_unassigned"])
         self.assertFalse(review["coverage_incomplete"])
 
     def test_interleaved_two_cases_and_interruptions_keep_exact_event_provenance(self):
@@ -143,7 +143,7 @@ class ReviewQueueTests(unittest.TestCase):
             identities = row["candidate_resource_pairs"][0]
             self.assertTrue(all(pointer[2].endswith(expected * 32) for pointer in identities))
             self.assertFalse(row["confirmed_case"])
-        self.assertTrue(review["unlisted_events_are_unassigned"])
+        self.assertFalse(review["unlisted_events_are_unassigned"])
         self.assertFalse(review["coverage_incomplete"])
 
 
@@ -168,7 +168,7 @@ class ReviewQueueTests(unittest.TestCase):
         review = resumption_candidates(db, lease={"mode": "all_saved"})["event_assignment_review"]
         self.assertEqual({row["event_id"] for row in review["event_reviews"]},
                          {"old-real", "new-real"})
-        self.assertTrue(review["unlisted_events_are_unassigned"])
+        self.assertFalse(review["unlisted_events_are_unassigned"])
 
 
     def test_duplicate_label_on_distinct_real_pairs_is_not_a_multi_case_event(self):
