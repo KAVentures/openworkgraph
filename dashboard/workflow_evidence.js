@@ -7,6 +7,8 @@
   let recordLanes=[];
   let recordLaneCoverageLimited=false;
   let loading=false;
+  // Invalidate in-flight sensitive reads when an operator clears or refreshes evidence.
+  let reconstructionReviewGeneration=0;
 
   function repeatedCard(){
     return [...document.querySelectorAll('#panel-overview .card')].find(card =>
@@ -56,7 +58,7 @@
       </div>`;
     host.querySelector('#refreshWorkflowEvidence').onclick=()=>refresh();
     host.querySelector('#loadReconstructionReview').onclick=()=>loadReconstructionReview();
-    host.querySelector('#clearReconstructionReview').onclick=()=>{host.querySelector('#reconstructionReviewResults').replaceChildren();};
+    host.querySelector('#clearReconstructionReview').onclick=()=>{reconstructionReviewGeneration++;host.querySelector('#reconstructionReviewResults').replaceChildren();};
     const patternList=parent.querySelector('#patternList');
     if(patternList) patternList.insertAdjacentElement("afterend",host); else parent.appendChild(host);
     return host;
@@ -453,17 +455,21 @@
     const host=ensureCard()?.querySelector('#reconstructionReviewResults');
     const button=ensureCard()?.querySelector('#loadReconstructionReview');
     if(!host||!button)return;
+    const generation=++reconstructionReviewGeneration;
     button.disabled=true;
     host.textContent='Checking saved-history permission and reading bounded evidence…';
     try{
       await window.__owgAuthReady;
+      if(generation!==reconstructionReviewGeneration)return;
       const response=await fetch('/v1/history/reconstruction-review',{cache:'no-store'});
+      if(generation!==reconstructionReviewGeneration)return;
       if(response.status===403){
         host.textContent='Access denied or grant expired. Enable all-saved AI history access explicitly in History settings, then retry.';
         return;
       }
       if(!response.ok)throw new Error('Reconstruction review unavailable ('+response.status+').');
       const data=await response.json();
+      if(generation!==reconstructionReviewGeneration)return;
       const review=data.review||{};
       if(data.derived!==true||data.authoritative!==false||review.no_case_identity_inferred!==true)
         throw new Error('Unexpected review contract');
@@ -484,6 +490,7 @@
             '</summary><p class="muted">Candidate observations (not verified cases): '+candidates+'</p></details>';
         }).join('')+(rows.length>100?'<p class="muted">Only first 100 review rows shown. Narrow evidence in source tools for deeper inspection.</p>':'');
     }catch(error){
+      if(generation!==reconstructionReviewGeneration)return;
       host.textContent=String(error.message||'Reconstruction review unavailable.');
     }finally{button.disabled=false;}
   }
@@ -491,7 +498,8 @@
   async function refresh(){
     ensureCard();
     removeOldPlaceholderActions();
-    // Refresh must discard prior sensitive review evidence, including after consent changes.
+    // Refresh invalidates pending responses too, not only currently rendered evidence.
+    reconstructionReviewGeneration++;
     ensureCard()?.querySelector('#reconstructionReviewResults')?.replaceChildren();
     const active=document.querySelector('[role="tab"][aria-selected="true"]')?.dataset.tab;
     if(active!=='overview'||loading) return;
