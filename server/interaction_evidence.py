@@ -97,7 +97,8 @@ def friction_candidates(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _recent(hours: int) -> list[dict[str, Any]]:
     from .db import rows
-    since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    now = datetime.now(timezone.utc)
+    since = (now - timedelta(hours=hours)).isoformat()
     return rows("SELECT * FROM events WHERE event_type LIKE 'browser_%' AND julianday(observed_at) >= julianday(?) "
                 "ORDER BY julianday(observed_at) DESC LIMIT ?", (since, MAX_EVENTS))
 
@@ -125,12 +126,44 @@ def _storage() -> dict[str, Any] | None:
         return None
 
 
+# Browser alarms are scheduled once per minute; the desktop collector heartbeats
+# more often. Accept brief sleep/network delays but never claim a disconnected
+# sensor produced complete evidence based only on an old in-memory status.
+BROWSER_HEARTBEAT_MAX_AGE_SECONDS = 180
+DESKTOP_HEARTBEAT_MAX_AGE_SECONDS = 90
+
+
+def _sensor_age_seconds(status: dict[str, Any], now: datetime) -> int | None:
+    """Age of a server-received heartbeat/event; never trust device observed_at."""
+    value = status.get("received_at")
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        received = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (ValueError, OverflowError):
+        return None
+    if received.tzinfo is None:
+        return None
+    return int((now - received).total_seconds())
+
+
+def _sensor_connection(status: dict[str, Any], now: datetime, max_age: int) -> tuple[str, int | None]:
+    if not status:
+        return "not_seen", None
+    age = _sensor_age_seconds(status, now)
+    # Missing, future or very old timestamps are unknown, not evidence of capture.
+    if age is None or age < -30 or age > max_age:
+        return "stale", age
+    return "connected", age
+
+
 def coverage_manifest(hours: int = 168) -> dict[str, Any]:
     """Which capture modalities were available, off or unsupported, with counts of high-fidelity events."""
     from . import main as core
     from .db import rows
     depth = capture_depth.load()
-    since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    now = datetime.now(timezone.utc)
+    since = (now - timedelta(hours=hours)).isoformat()
     placeholders = ",".join("?" for _ in HIGH_FIDELITY_TYPES)
     counts = {r["event_type"]: r["n"] for r in rows(
         f"SELECT event_type, count(*) AS n FROM events WHERE event_type IN ({placeholders}) "
@@ -146,30 +179,67 @@ def coverage_manifest(hours: int = 168) -> dict[str, Any]:
     except Exception:
         work_text = None
     signals = depth["signals"]
-    browser_seen = bool(core.BROWSER_STATUS)
-    browser_paused = str(core.BROWSER_STATUS.get("status") or "").lower() == "paused"
-    def state(enabled: bool) -> str:
+    browser_state, browser_age = _sensor_connection(core.BROWSER_STATUS, now, BROWSER_HEARTBEAT_MAX_AGE_SECONDS)
+    desktop_state, desktop_age = _sensor_connection(core.COLLECTOR_STATUS, now, DESKTOP_HEARTBEAT_MAX_AGE_SECONDS)
+    # A fresh heartbeat means the desktop collector is reachable, not that it
+    # is actively recording. The local capture-control switch is authoritative.
+    try:
+        from shared.capture_control import read_state
+        desktop_capture_control = str(read_state().get("state") or "unknown")
+    except Exception:
+        desktop_capture_control = "unknown"
+    if desktop_state == "connected" and desktop_capture_control != "recording":
+        desktop_state = desktop_capture_control if desktop_capture_control in {"paused", "stopped"} else "unknown"
+    browser_paused = browser_state == "connected" and str(core.BROWSER_STATUS.get("status") or "").lower() == "paused"
+    if browser_paused:
+        browser_state = "paused"
+
+    def browser_mode(enabled: bool) -> str:
         if not enabled:
             return "off"
-        if browser_paused:
+        if browser_state == "paused":
             return "browser_paused"
-        return "on" if browser_seen else "on_but_browser_extension_not_seen"
+        if browser_state == "connected":
+            return "on"
+        return "on_but_browser_extension_stale" if browser_state == "stale" else "on_but_browser_extension_not_seen"
+
+    def desktop_mode(enabled: bool) -> str:
+        if not enabled:
+            return "off"
+        if desktop_state == "connected":
+            return "on"
+        if desktop_state in {"paused", "stopped"}:
+            return "desktop_" + desktop_state
+        if desktop_state == "unknown":
+            return "on_but_desktop_capture_state_unknown"
+        return "on_but_desktop_collector_stale" if desktop_state == "stale" else "on_but_desktop_collector_not_seen"
+
     return {"format": "openworkgraph.capture-coverage.v1", "window_hours": hours, "capture_profile": depth["profile"],
             "browser_capture_paused": browser_paused,
+            "browser_sensor": {"connection": browser_state, "last_seen_age_seconds": browser_age,
+                               "freshness_threshold_seconds": BROWSER_HEARTBEAT_MAX_AGE_SECONDS},
+            "desktop_sensor": {"connection": desktop_state, "last_seen_age_seconds": desktop_age,
+                               "capture_control": desktop_capture_control,
+                               "freshness_threshold_seconds": DESKTOP_HEARTBEAT_MAX_AGE_SECONDS},
             "modalities": {
-                "browser_structural_events": ("browser_paused" if browser_paused else
-                                              "on" if browser_seen else "browser_extension_not_seen"),
-                "browser_hover_dwell": state(signals["hover_dwell"]),
-                "browser_drag_drop": state(signals["drag_drop"]),
-                "browser_pointer_trajectory": state(signals["pointer_trajectory"]),
+                "browser_structural_events": ("browser_paused" if browser_state == "paused" else "on" if
+                                              browser_state == "connected" else "browser_extension_stale" if
+                                              browser_state == "stale" else "browser_extension_not_seen"),
+                "browser_hover_dwell": browser_mode(signals["hover_dwell"]),
+                "browser_drag_drop": browser_mode(signals["drag_drop"]),
+                "browser_pointer_trajectory": browser_mode(signals["pointer_trajectory"]),
                 "friction_candidates": "on" if signals["friction_candidates"] else "off",
-                "desktop_clicks_and_scrolls": "on" if core.COLLECTOR_STATUS else "desktop_collector_not_seen",
-                "desktop_hover_dwell": ("on" if core.COLLECTOR_STATUS else "on_but_desktop_collector_not_seen") if signals["hover_dwell"] else "off",
-                "desktop_drag_drop": ("on" if core.COLLECTOR_STATUS else "on_but_desktop_collector_not_seen") if signals["drag_drop"] else "off",
-                "desktop_pointer_trajectory": ("on" if core.COLLECTOR_STATUS else "on_but_desktop_collector_not_seen") if signals["pointer_trajectory"] else "off",
+                "desktop_clicks_and_scrolls": ("on" if desktop_state == "connected" else
+                                              "desktop_" + desktop_state if desktop_state in {"paused", "stopped"} else
+                                              "desktop_capture_state_unknown" if desktop_state == "unknown" else
+                                              "desktop_collector_stale" if desktop_state == "stale" else
+                                              "desktop_collector_not_seen"),
+                "desktop_hover_dwell": desktop_mode(signals["hover_dwell"]),
+                "desktop_drag_drop": desktop_mode(signals["drag_drop"]),
+                "desktop_pointer_trajectory": desktop_mode(signals["pointer_trajectory"]),
                 "screenshots": screen_mode,
-                "work_text": ("browser_paused" if browser_paused else "on") if work_text else
-                             ("off" if work_text is False else "unknown"),
+                "work_text": (browser_mode(True) if work_text else
+                              "off" if work_text is False else "unknown"),
             },
             "high_fidelity_event_counts": {t: counts.get(t, 0) for t in HIGH_FIDELITY_TYPES},
             "parameters": depth["parameters"],
