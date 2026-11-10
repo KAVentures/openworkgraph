@@ -156,3 +156,38 @@ const evidence = () => sent.filter(x => x.path === '/v1/browser-events');
         ["node", "-e", script], cwd=ROOT, capture_output=True, text=True, timeout=40
     )
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+
+
+def test_capture_coverage_distinguishes_paused_browser_from_disabled_signals(monkeypatch):
+    """A paused browser is missing evidence, not proof of zero activity."""
+    from server import capture_depth, interaction_evidence, main, work_text_capture
+    from server import db
+
+    monkeypatch.setattr(main, "BROWSER_STATUS", {"status": "paused"})
+    monkeypatch.setattr(main, "COLLECTOR_STATUS", {"status": "recording"})
+    monkeypatch.setattr(db, "rows", lambda *args, **kwargs: [])
+    monkeypatch.setattr(interaction_evidence, "_storage", lambda: {})
+    monkeypatch.setattr(work_text_capture, "get_policy", lambda: {"capture_enabled": True})
+    monkeypatch.setattr(capture_depth, "load", lambda: {
+        "profile": "custom",
+        "signals": {"hover_dwell": True, "drag_drop": True,
+                    "pointer_trajectory": False, "friction_candidates": True},
+        "parameters": {},
+    })
+
+    report = interaction_evidence.coverage_manifest(hours=24)
+    modes = report["modalities"]
+    assert report["browser_capture_paused"] is True
+    assert modes["browser_structural_events"] == "browser_paused"
+    assert modes["browser_hover_dwell"] == "browser_paused"
+    assert modes["browser_drag_drop"] == "browser_paused"
+    assert modes["browser_pointer_trajectory"] == "off"
+    assert modes["work_text"] == "browser_paused"
+    assert modes["desktop_clicks_and_scrolls"] == "on"
+    assert modes["desktop_hover_dwell"] == "on"
+
+    # Resuming restores the normal capture coverage, not sharing permissions.
+    monkeypatch.setattr(main, "BROWSER_STATUS", {"status": "connected"})
+    resumed = interaction_evidence.coverage_manifest(hours=24)
+    assert resumed["browser_capture_paused"] is False
+    assert resumed["modalities"]["browser_hover_dwell"] == "on"
