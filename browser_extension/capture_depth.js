@@ -6,6 +6,11 @@
  */
 const owgDepthExt = globalThis.browser ?? globalThis.chrome;
 const OWG_DEPTH_KEY = "openworkgraph_capture_depth_v1";
+const OWG_DEPTH_PAUSE_KEY = "openworkgraph_browser_paused_v1";
+let owgDepthPaused = true;
+owgDepthExt.storage.local.get(OWG_DEPTH_PAUSE_KEY)
+  .then(saved => { owgDepthPaused = saved?.[OWG_DEPTH_PAUSE_KEY] === true; })
+  .catch(() => { owgDepthPaused = true; });
 const OWG_DEPTH_OFF = {signals: {hover_dwell: false, drag_drop: false, pointer_trajectory: false},
   parameters: {hover_dwell_ms: 750, trajectory_hz: 4, max_events_per_minute: 60}};
 let owgDepth = OWG_DEPTH_OFF;
@@ -31,11 +36,21 @@ async function owgLoadDepth() {
 if (owgDepthExt?.storage?.onChanged) {
   owgDepthExt.storage.onChanged.addListener((changes, area) => {
     if (area === "local" && changes?.[OWG_DEPTH_KEY]) { owgDepth = owgNormalizeDepth(changes[OWG_DEPTH_KEY].newValue); owgFlushTrajectory("settings_changed"); }
+    if (area === "local" && changes?.[OWG_DEPTH_PAUSE_KEY]) {
+      owgDepthPaused = changes[OWG_DEPTH_PAUSE_KEY].newValue === true;
+      if (owgDepthPaused) {
+        // Discard buffered interaction detail; do not flush it after pausing.
+        owgHover = null;
+        owgDrag = null;
+        owgTrajectory = {start: 0, points: [], lastSample: 0};
+      }
+    }
   });
 }
 owgLoadDepth();
 
 function owgDepthAllowed() {
+  if (owgDepthPaused) return false;
   const now = Date.now();
   if (owgDepth.expiresAt && now >= owgDepth.expiresAt) { owgDepth = OWG_DEPTH_OFF; return false; }
   if (now - owgDepthWindow.start > 60000) owgDepthWindow = {start: now, count: 0};
@@ -209,7 +224,7 @@ function owgEndHover(endedBy) {
 }
 
 addEventListener("pointerover", (e) => {
-  if (!owgDepth.signals.hover_dwell || e.pointerType === "touch") return;
+  if (owgDepthPaused || !owgDepth.signals.hover_dwell || e.pointerType === "touch") return;
   if (!owgTakeSecureProbe() || owgSecureAt(e)) { owgHover = null; return; }
   const el = owgInteractiveElement(e);
   // A single-page app can re-render the control under a resting pointer: when the hovered element
@@ -255,14 +270,14 @@ function owgPayloadKinds(dataTransfer) {
 }
 
 addEventListener("dragstart", (e) => {
-  if (!owgDepth.signals.drag_drop) return;
+  if (owgDepthPaused || !owgDepth.signals.drag_drop) return;
   if (!owgTakeSecureProbe() || owgSecureAt(e) || owgInSecureContext(e.target instanceof Element ? e.target : null)) { owgDrag = null; return; }
   const source = owgSafeTarget(e.target);
   owgDrag = {id: Math.random().toString(36).slice(2, 12), source, dropped: false};
   if (owgDepthAllowed()) send("drag_start", source, {drag_id: owgDrag.id, payload_kinds: owgPayloadKinds(e.dataTransfer), completion: "unknown"});
 }, true);
 addEventListener("drop", (e) => {
-  if (!owgDepth.signals.drag_drop) return;
+  if (owgDepthPaused || !owgDepth.signals.drag_drop) return;
   // A skipped security check cannot finish a previously started drag; do not
   // join a later dragend to a drop whose safety was never established.
   if (!owgTakeSecureProbe() || owgSecureAt(e) || owgInSecureContext(e.target instanceof Element ? e.target : null)) { owgDrag = null; return; }
@@ -275,7 +290,7 @@ addEventListener("drop", (e) => {
     completion: "complete", source_target: owgDrag ? owgDrag.source : {}});
 }, true);
 addEventListener("dragend", (e) => {
-  if (!owgDepth.signals.drag_drop || !owgDrag) return;
+  if (owgDepthPaused || !owgDepth.signals.drag_drop || !owgDrag) return;
   const finished = owgDrag;
   owgDrag = null;
   const effect = String(e.dataTransfer?.dropEffect || "");
@@ -289,7 +304,7 @@ let owgTrajectory = {start: 0, points: [], lastSample: 0};
 function owgFlushTrajectory() {
   const batch = owgTrajectory;
   owgTrajectory = {start: 0, points: [], lastSample: 0};
-  if (!batch.points.length || !owgDepth.signals.pointer_trajectory) return;
+  if (!batch.points.length || owgDepthPaused || !owgDepth.signals.pointer_trajectory) return;
   if (!owgDepthAllowed()) return;
   const w = Math.max(1, innerWidth), h = Math.max(1, innerHeight);
   send("pointer_trajectory", {}, {points: batch.points, sample_hz: owgDepth.parameters.trajectory_hz,
@@ -297,7 +312,7 @@ function owgFlushTrajectory() {
 }
 
 addEventListener("pointermove", (e) => {
-  if (!owgDepth.signals.pointer_trajectory || e.pointerType === "touch") return;
+  if (owgDepthPaused || !owgDepth.signals.pointer_trajectory || e.pointerType === "touch") return;
   const now = performance.now();
   if (now - owgTrajectory.lastSample < 1000 / owgDepth.parameters.trajectory_hz) return;
   if (!owgTakeSecureProbe() || owgSecureAt(e)) {

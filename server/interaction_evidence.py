@@ -147,13 +147,18 @@ def coverage_manifest(hours: int = 168) -> dict[str, Any]:
         work_text = None
     signals = depth["signals"]
     browser_seen = bool(core.BROWSER_STATUS)
+    browser_paused = str(core.BROWSER_STATUS.get("status") or "").lower() == "paused"
     def state(enabled: bool) -> str:
         if not enabled:
             return "off"
+        if browser_paused:
+            return "browser_paused"
         return "on" if browser_seen else "on_but_browser_extension_not_seen"
     return {"format": "openworkgraph.capture-coverage.v1", "window_hours": hours, "capture_profile": depth["profile"],
+            "browser_capture_paused": browser_paused,
             "modalities": {
-                "browser_structural_events": "on" if browser_seen else "browser_extension_not_seen",
+                "browser_structural_events": ("browser_paused" if browser_paused else
+                                              "on" if browser_seen else "browser_extension_not_seen"),
                 "browser_hover_dwell": state(signals["hover_dwell"]),
                 "browser_drag_drop": state(signals["drag_drop"]),
                 "browser_pointer_trajectory": state(signals["pointer_trajectory"]),
@@ -163,7 +168,8 @@ def coverage_manifest(hours: int = 168) -> dict[str, Any]:
                 "desktop_drag_drop": ("on" if core.COLLECTOR_STATUS else "on_but_desktop_collector_not_seen") if signals["drag_drop"] else "off",
                 "desktop_pointer_trajectory": ("on" if core.COLLECTOR_STATUS else "on_but_desktop_collector_not_seen") if signals["pointer_trajectory"] else "off",
                 "screenshots": screen_mode,
-                "work_text": "on" if work_text else ("off" if work_text is False else "unknown"),
+                "work_text": ("browser_paused" if browser_paused else "on") if work_text else
+                             ("off" if work_text is False else "unknown"),
             },
             "high_fidelity_event_counts": {t: counts.get(t, 0) for t in HIGH_FIDELITY_TYPES},
             "parameters": depth["parameters"],
