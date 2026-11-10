@@ -187,7 +187,14 @@
               if(!response.ok)throw new Error('Review state unavailable ('+response.status+').');
               const state=await response.json();
               if(!reviewStillSelected()||requestGeneration!==reviewRequestGeneration)return;
-              if(state.execution_authorized!==false||state.project_id!==projectId)throw new Error('Invalid review state');
+              if(state.format!=='openworkgraph.human-review.v1'||state.execution_authorized!==false||
+                 state.idea_id!==id||state.project_id!==projectId||
+                 !Number.isSafeInteger(state.revision)||state.revision<0||
+                 !['unreviewed','draft','approved','revoked'].includes(state.decision)||
+                 (state.revision===0)!==(state.decision==='unreviewed')||
+                 (state.revision>0&&!/^[a-f0-9]{64}$/i.test(state.basis_sha256||''))||
+                 typeof state.reviewer_notes!=='string'||state.reviewer_notes.length>2000)
+                throw new Error('Invalid review state');
               reviewRevision=state.revision;currentDecision=state.decision;updateContinue();notes.value=state.reviewer_notes||'';
               reviewState.textContent='Saved review: '+state.decision+' (revision '+state.revision+'). No agent access granted.';
               for(const b of [saveDraft,approve,revoke])b.disabled=false;
