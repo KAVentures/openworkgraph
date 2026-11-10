@@ -311,6 +311,15 @@
     recoveryIdea.addEventListener('input',resetRecovery);
     recoveryProject.addEventListener('input',resetRecovery);
     const recoveryPath=(idea,project)=>'/v1/review-choice-workbench/'+encodeURIComponent(idea)+'/review/'+encodeURIComponent(project);
+    // Recovery is deliberately independent of missing source evidence, but
+    // only a recognized, revisioned persisted decision can be revoked.
+    const validRecoveryState=(state,idea,project)=>state?.format==='openworkgraph.human-review.v1'&&
+      state.idea_id===idea&&state.project_id===project&&state.execution_authorized===false&&
+      Number.isSafeInteger(state.revision)&&state.revision>=0&&
+      ['unreviewed','draft','approved','revoked'].includes(state.decision)&&
+      (state.revision===0)===(state.decision==='unreviewed')&&
+      (state.revision===0||/^[a-f0-9]{64}$/i.test(state.basis_sha256||''))&&
+      typeof state.reviewer_notes==='string'&&state.reviewer_notes.length<=2000;
     recoveryLoad.onclick=async()=>{
       const idea=recoveryIdea.value.trim(),project=recoveryProject.value.trim();
       const generation=++recoveryGeneration;
@@ -320,9 +329,7 @@
       try{
         const state=await request(recoveryPath(idea,project));
         if(generation!==recoveryGeneration)return;
-        if(state.format!=='openworkgraph.human-review.v1'||state.idea_id!==idea||
-           state.project_id!==project||state.execution_authorized!==false||
-           !Number.isSafeInteger(state.revision)||state.revision<0)
+        if(!validRecoveryState(state,idea,project))
           throw new Error('Invalid saved review state.');
         recoveryRevision=state.revision;recoveryIdentity={idea,project};
         recoveryRevoke.disabled=state.revision===0||state.decision==='revoked';
@@ -344,8 +351,8 @@
         if(generation!==recoveryGeneration)return;
         if(!response.ok)throw new Error('Revocation refused ('+response.status+'). Reload the saved revision.');
         const state=await response.json();
-        if(state.idea_id!==idea||state.project_id!==project||state.decision!=='revoked'||
-           state.execution_authorized!==false||state.revision!==revision+1)
+        if(!validRecoveryState(state,idea,project)||state.decision!=='revoked'||
+           state.revision!==revision+1)
           throw new Error('Inconsistent revocation response; reload the saved review.');
         recoveryRevision=state.revision;
         recoveryStatus.textContent='Review revoked (revision '+state.revision+'). No execution access granted.';
