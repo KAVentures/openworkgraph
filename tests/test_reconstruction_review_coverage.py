@@ -21,10 +21,10 @@ def _response(*, truncated=False):
     }
 
 
-def test_complete_review_can_identify_unlisted_events_as_unassigned():
+def test_complete_pair_scan_does_not_claim_unlisted_events_are_unassigned():
     result = build_review_queue(_response())
     assert result["coverage_incomplete"] is False
-    assert result["unlisted_events_are_unassigned"] is True
+    assert result["unlisted_events_are_unassigned"] is False
     assert result["event_reviews_count"] == 1
 
 
