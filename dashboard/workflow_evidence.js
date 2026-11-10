@@ -58,7 +58,7 @@
       </div>`;
     host.querySelector('#refreshWorkflowEvidence').onclick=()=>refresh();
     host.querySelector('#loadReconstructionReview').onclick=()=>loadReconstructionReview();
-    host.querySelector('#clearReconstructionReview').onclick=()=>{reconstructionReviewGeneration++;host.querySelector('#reconstructionReviewResults').replaceChildren();};
+    host.querySelector('#clearReconstructionReview').onclick=()=>{reconstructionReviewGeneration++;host.querySelector('#reconstructionReviewResults').replaceChildren();host.querySelector('#loadReconstructionReview').disabled=false;};
     const patternList=parent.querySelector('#patternList');
     if(patternList) patternList.insertAdjacentElement("afterend",host); else parent.appendChild(host);
     return host;
@@ -504,6 +504,8 @@
     // Refresh invalidates pending responses too, not only currently rendered evidence.
     reconstructionReviewGeneration++;
     ensureCard()?.querySelector('#reconstructionReviewResults')?.replaceChildren();
+    const inspectButton=ensureCard()?.querySelector('#loadReconstructionReview');
+    if(inspectButton)inspectButton.disabled=false;
     const active=document.querySelector('[role="tab"][aria-selected="true"]')?.dataset.tab;
     if(active!=='overview'||loading) return;
     loading=true;
