@@ -474,7 +474,7 @@
       if(data.derived!==true||data.authoritative!==false||review.no_case_identity_inferred!==true)
         throw new Error('Unexpected review contract');
       const rows=Array.isArray(review.event_reviews)?review.event_reviews:[];
-      const warning=review.coverage_incomplete?'Evidence scan incomplete; missing events cannot be treated as unassigned.':'Unlisted events are not assigned to a case.';
+      const warning=review.coverage_incomplete?'Evidence scan incomplete; unlisted events have unknown assignments.':'Unlisted events have unknown assignments; absence from this review is not proof of no case.';
       host.innerHTML='<p class="muted">'+esc(rows.length)+' event observations for review. '+esc(warning)+'</p>'+
         rows.slice(0,100).map(row=>{
           const pairs=Array.isArray(row.candidate_resource_pairs)?row.candidate_resource_pairs:[];
@@ -492,7 +492,10 @@
     }catch(error){
       if(generation!==reconstructionReviewGeneration)return;
       host.textContent=String(error.message||'Reconstruction review unavailable.');
-    }finally{button.disabled=false;}
+    }finally{
+      // Stale responses cannot alter controls belonging to a newer request.
+      if(generation===reconstructionReviewGeneration)button.disabled=false;
+    }
   }
 
   async function refresh(){
