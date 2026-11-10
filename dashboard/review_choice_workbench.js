@@ -145,7 +145,11 @@
                 status.textContent='Opened reviewed opportunity decision. Human approval verified; no agent execution access was granted.';
               }catch(e){
                 if(token===generation){clear();status.textContent='Decision review expired. Inspect again. '+e.message;}
-              }finally{continueReview.disabled=false;}
+              }finally{
+                // A failed or superseded preflight must never resurrect navigation.
+                // A new authoritative inspection is required after clear().
+                continueReview.disabled=!reviewStillSelected()||currentDecision!=='approved';
+              }
             };
             // Durable human review is a separate, non-executing decision.
             const notes=node('textarea');notes.maxLength=2000;notes.setAttribute('aria-label','Human review notes');
