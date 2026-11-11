@@ -110,7 +110,10 @@ calls=[]
 def fake_classifier(names, *, require_holdout_language=None):
     calls.append(require_holdout_language)
     if require_holdout_language is not None:
-        gate.normalize_language(require_holdout_language)
+        try:
+            gate.normalize_language(require_holdout_language)
+        except gate.QualityGateError as exc:
+            raise review.ReviewError(str(exc)) from None
         if require_holdout_language=="sv":
             raise review.ReviewError("Language-specific held-out quality gate refused learned classification")
     return lambda text: {"Refund request": .8}, {"model_sha256": "a"*64}
