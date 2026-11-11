@@ -188,3 +188,101 @@ test('new extension installations preserve default title exclusions', async () =
   assert.equal(matcher.isExcluded('ordinary.example.com','Password entry'),true);
   assert.equal(matcher.isExcluded('ordinary.example.com','Public project discussion'),false);
 });
+
+
+test('browser-local Never record hosts survive server refresh and scrub the offline queue',async()=>{
+  const LOCAL='openworkgraph_browser_site_exclusions_v1';
+  const SERVER='openworkgraph_work_text_exclusions_v1';
+  const QUEUE='openworkgraph_pending_browser_events';
+  const fixture=extensionHarness({
+    openworkgraph_browser_paused_v1:false,
+    [LOCAL]:{hosts:['private.example.com']},
+    [SERVER]:{hosts:[],titles:[]},
+    [QUEUE]:[
+      {event_id:'local-blocked',action:'click',page:{hostname:'private.example.com',pathname:'/a',title:'Work'}},
+      {event_id:'local-safe',action:'click',page:{hostname:'public.example.com',pathname:'/a',title:'Work'}}
+    ]
+  });
+  const posts=[];
+  const context=vm.createContext({
+    browser:fixture.ext,URL,Date,Math,Promise,crypto:webcrypto,console,setTimeout,clearTimeout,
+    fetch:async(url,options={})=>{
+      if(options.method!=='POST')return {ok:true,json:async()=>({
+        excluded_browser_host_patterns:[],excluded_title_patterns:[],
+        work_text_capture:false
+      })};
+      posts.push({path:new URL(url).pathname,body:JSON.parse(options.body)});
+      return {ok:true};
+    }
+  });
+  context.globalThis=context;
+  vm.runInContext(exclusions,context);
+  vm.runInContext(read('browser_extension/background.js'),context);
+  await delay(100);
+  const events=()=>posts.filter(p=>p.path==='/v1/browser-events');
+  assert(!events().some(p=>p.body.event_id==='local-blocked'));
+  assert(events().some(p=>p.body.event_id==='local-safe'));
+  assert.equal(context.OWGBrowserExclusions.isExcluded('private.example.com','Work'),true,
+    'fetching server exclusions must not clear browser-only exclusions');
+  assert.deepEqual(Array.from(fixture.stored[LOCAL].hosts),['private.example.com']);
+  fixture.stored[QUEUE]=[
+    {event_id:'pending-local',action:'click',page:{hostname:'public.example.com',pathname:'/a',title:'Work'}}
+  ];
+  await fixture.ext.storage.local.set({[LOCAL]:{hosts:['private.example.com','public.example.com']}});
+  await delay(40);
+  assert.deepEqual(fixture.stored[QUEUE],[]);
+  assert.equal(context.OWGBrowserExclusions.isExcluded('public.example.com','Work'),true);
+});
+
+
+test('browser-only Never record also blocks optional page/draft text delivery after server opt-in',async()=>{
+  const LOCAL='openworkgraph_browser_site_exclusions_v1';
+  const SERVER='openworkgraph_work_text_exclusions_v1';
+  const fixture=extensionHarness({
+    openworkgraph_browser_paused_v1:false,
+    [LOCAL]:{hosts:['private.example.com']},
+    [SERVER]:{hosts:[],titles:[]}
+  });
+  const posts=[];
+  const context=vm.createContext({
+    browser:fixture.ext,URL,Date,Math,Promise,crypto:webcrypto,console,
+    setTimeout,clearTimeout,TextEncoder,Uint8Array,
+    fetch:async(url,options={})=>{
+      if(options.method!=='POST')return {ok:true,json:async()=>({
+        work_text_capture:true,excluded_browser_host_patterns:[],
+        excluded_title_patterns:[],signal_settings:{business_object_references:false}
+      })};
+      posts.push({path:new URL(url).pathname,body:JSON.parse(options.body)});
+      return {ok:true};
+    },
+    OWGBrowserAuth:{pairingSecret:async()=> 'test-local-only-pair-key'}
+  });
+  context.globalThis=context;
+  vm.runInContext(exclusions,context);
+  vm.runInContext(read('browser_extension/background.js'),context);
+  const sender={
+    frameId:0,tab:{id:7,active:true,
+      url:'https://private.example.com/work',title:'Ordinary work'}
+  };
+  const message={
+    type:'owg_work_text_snapshot',kind:'page',text:'Sensitive local draft',
+    hostname:'private.example.com',pathname:'/work',title:'Ordinary work'
+  };
+  const send=()=>fixture.listeners.message(message,sender,()=>{});
+  await delay(35);
+  send();
+  await delay(40);
+  assert.equal(posts.filter(p=>p.path==='/v1/work-text/ingest').length,0,
+    'work text cannot escape a browser-only exclusion even if the server allows it');
+  // Remove the browser-local block: normal opt-in behavior can resume.
+  await fixture.ext.storage.local.set({[LOCAL]:{hosts:[]}});
+  send();
+  await delay(65);
+  assert.equal(posts.filter(p=>p.path==='/v1/work-text/ingest').length,1,
+    'server opt-in and a non-excluded page may reach paired local ingest');
+  await fixture.ext.storage.local.set({[LOCAL]:{hosts:['private.example.com']}});
+  send();
+  await delay(50);
+  assert.equal(posts.filter(p=>p.path==='/v1/work-text/ingest').length,1,
+    'restoring browser-only block immediately prevents subsequent text ingest');
+});
