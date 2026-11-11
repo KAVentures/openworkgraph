@@ -149,6 +149,75 @@ def _summary(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
             "minutes_per_case": round(sum(r["_hours"] for r in rows) * 60 / total_cases, 3) if total_cases else None}
 
 
+
+def _coverage_adjusted(rows: list[dict[str, Any]], modeled: float | None) -> dict[str, Any]:
+    """Pool reported case exposure across non-overlapping calendar intervals.
+
+    The legacy per-period mean is unchanged. An adjusted comparison must fail
+    closed on shared calendar days or missing case denominators; a claimed
+    source type is not independent verification of the inputs.
+    """
+    cohorts = {p: sorted((r for r in rows if r["period"] == p),
+                         key=lambda r: (r["start"], r["end"], r["measurement_id"]))
+               for p in ("baseline", "after")}
+    coverage, overlap_pairs = {}, []
+    for kind, group in cohorts.items():
+        coverage[kind] = {
+            "periods": len(group),
+            "calendar_days_reported": sum(r["days"] for r in group),
+            "cases_reported": sum(r["cases"] for r in group),
+            "hours_reported": round(sum(r["_hours"] for r in group), 3),
+        }
+        # There are at most 48 measurements. Compare every overlapping pair,
+        # including nested intervals, rather than just the preceding row.
+        for i, first in enumerate(group):
+            for second in group[i + 1:]:
+                if second["start"] > first["end"]:
+                    break
+                overlap_pairs.append({"period": kind, "first_id": first["measurement_id"],
+                                      "second_id": second["measurement_id"]})
+    report = {
+        "status": "missing_periods", "coverage": coverage, "comparison": None,
+        "overlap_pairs": overlap_pairs,
+        "period_weighting": "pooled_hours_and_cases_over_nonoverlapping_calendar_days",
+        "measurement_sources_independently_verified": False,
+        "causal_effect_verified": False,
+        "realized_savings_verified": False,
+        "interpretation": ("Periods and source labels are user-supplied, not source-verified. "
+                           "An observed before/after difference cannot establish causal savings."),
+    }
+    if not cohorts["baseline"] or not cohorts["after"]:
+        return report
+    if overlap_pairs:
+        return {**report, "status": "overlapping_periods"}
+    if any(r["cases"] == 0 for group in cohorts.values() for r in group):
+        return {**report, "status": "zero_case_period"}
+    b, a = cohorts["baseline"], cohorts["after"]
+    b_days, a_days = sum(r["days"] for r in b), sum(r["days"] for r in a)
+    b_cases, a_cases = sum(r["cases"] for r in b), sum(r["cases"] for r in a)
+    b_hours, a_hours = sum(r["_hours"] for r in b), sum(r["_hours"] for r in a)
+    b_minutes, a_minutes = b_hours * 60 / b_cases, a_hours * 60 / a_cases
+    b_month, a_month = b_hours * DAYS_PER_MONTH / b_days, a_hours * DAYS_PER_MONTH / a_days
+    after_volume = a_cases * DAYS_PER_MONTH / a_days
+    at_after_volume = (b_minutes - a_minutes) * after_volume / 60
+    comparison = {
+        "baseline_hours_per_month": round(b_month, 3),
+        "after_hours_per_month": round(a_month, 3),
+        "observed_hours_per_month_change": round(b_month - a_month, 3),
+        "baseline_cases_per_month": round(b_cases * DAYS_PER_MONTH / b_days, 2),
+        "after_cases_per_month": round(after_volume, 2),
+        "case_volume_change_per_month": round(after_volume - b_cases * DAYS_PER_MONTH / b_days, 2),
+        "baseline_minutes_per_case": round(b_minutes, 3),
+        "after_minutes_per_case": round(a_minutes, 3),
+        "minutes_per_case_change": round(b_minutes - a_minutes, 3),
+        "hours_per_month_from_per_case_change_at_after_volume": round(at_after_volume, 3),
+        "modeled_hours_per_month": modeled,
+        "observed_vs_modeled_ratio": round(at_after_volume / modeled, 3) if modeled else None,
+        "uncertainty_interval_available": False,
+    }
+    return {**report, "status": "ready", "comparison": comparison}
+
+
 def report(idea_id: str) -> dict[str, Any]:
     try:
         idea = pipeline.get(idea_id)
@@ -180,6 +249,7 @@ def report(idea_id: str) -> dict[str, Any]:
                                           if at_after_volume is not None and modeled else None),
             "single_period_each": b["periods"] == 1 and a["periods"] == 1,
         }
+    coverage_adjusted = _coverage_adjusted(rows, modeled)
     for summary in (baseline, after):
         for key in [k for k in (summary or {}) if k.startswith("_")]:
             summary.pop(key)
@@ -190,6 +260,7 @@ def report(idea_id: str) -> dict[str, Any]:
     return {"format": "openworkgraph.automation-realized-value.v1", "idea_id": idea_id, "title": idea["title"],
             "state": idea["state"], "implemented_on": implemented.isoformat() if implemented else None,
             "measurements": rows, "baseline": baseline, "after": after, "comparison": comparison,
+            "coverage_adjusted": coverage_adjusted,
             "max_measurements": MAX_MEASUREMENTS_PER_IDEA, "month_days": DAYS_PER_MONTH,
             "causal_effect_claimed": False, "savings_claimed": False, "money_estimated": False,
             "interpretation": ("Observed change between the entered baseline and after periods. It is not proof "
