@@ -270,8 +270,32 @@
     };
     // Copies of the report saved on this computer, by hand or by a local schedule (Basic mode › Scheduled jobs).
     const savedBase=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/saved-reports';
+    function savedChanges(c){
+      if(!c||!c.available)return el('div','Save two copies to see what changed between them.','muted');
+      const f=c.figures,sign=v=>v>0?'+':v<0?'−':'';
+      const fmt={cases:v=>Number(v).toLocaleString(),events:v=>Number(v).toLocaleString(),activities:v=>Number(v).toLocaleString(),distinct_variants:v=>Number(v).toLocaleString(),
+        median_case_seconds:duration,p90_case_seconds:duration,events_per_case:v=>Number(v).toFixed(2),repeat_rate:v=>(v*100).toFixed(1)+'%'};
+      const label={cases:'Cases',events:'Events',activities:'Activities',distinct_variants:'Variants',median_case_seconds:'Median case time',p90_case_seconds:'90th percentile case time',events_per_case:'Events per case',repeat_rate:'Cases repeating an activity'};
+      const rows=Object.keys(label).filter(k=>f[k]).map(k=>{const x=f[k],d=x.change;
+        const change=d===null?'—':d===0?'no change':sign(d)+(k==='repeat_rate'?(Math.abs(d)*100).toFixed(1)+' pts':fmt[k](Math.abs(d)));
+        return [label[k],x.older===null?'—':fmt[k](x.older),x.newer===null?'—':fmt[k](x.newer),change];});
+      if(c.cost){const d=c.cost.change;rows.push(['Total cost ('+c.cost.currency+')',Number(c.cost.older).toLocaleString(undefined,{maximumFractionDigits:2}),Number(c.cost.newer).toLocaleString(undefined,{maximumFractionDigits:2}),d===0?'no change':sign(d)+Math.abs(d).toLocaleString(undefined,{maximumFractionDigits:2})]);}
+      const box=el('div');box.id='owgEventLogSavedChanges';
+      box.append(el('h4','Changes since the previous copy'),
+        el('div','From '+String(c.older.generated_at).replace('T',' ').replace('Z',' UTC')+' to '+String(c.newer.generated_at).replace('T',' ').replace('Z',' UTC')+'.','muted'),
+        table(['Figure','Previous','Newest','Change'],rows));
+      const notes=[];
+      if(c.activities_added.length)notes.push('New activities: '+c.activities_added.slice(0,10).join(', ')+'.');
+      if(c.activities_gone.length)notes.push('No longer seen: '+c.activities_gone.slice(0,10).join(', ')+'.');
+      if(!c.top_variant.same_path&&c.top_variant.newer)notes.push('The most common variant is now '+c.top_variant.newer.path.join(' → ')+'.');
+      if(c.largest_activity_changes.length)notes.push('Largest changes in cases per activity: '+c.largest_activity_changes.slice(0,5).map(a=>a.activity+' '+sign(a.change)+Math.abs(a.change)).join(', ')+'.');
+      notes.forEach(n=>box.appendChild(el('div',n)));
+      box.appendChild(el('div',c.interpretation,'muted'));
+      return box;
+    }
     async function showSaved(note){
       const r=await getJSON(savedBase());
+      let changes=null;try{changes=await getJSON('/v1/event-logs/'+encodeURIComponent(state.logId)+'/saved-report-changes');}catch(_){}
       const saveNow=button('Save a copy now','secondary');saveNow.id='owgEventLogSaveCopy';
       saveNow.onclick=async()=>{saveNow.disabled=true;try{const s2=await (await api(savedBase(),{method:'POST'})).json();await showSaved('Saved '+s2.saved.name+'.');}catch(error){status(error.message);saveNow.disabled=false;}};
       const rows=r.reports.map(c=>{const get=button('Download','secondary');get.setAttribute('aria-label','Download saved report '+c.name);
@@ -280,7 +304,7 @@
       savedList.replaceChildren(el('h3','Saved report copies'),
         el('div','The newest '+r.keep+' copies of this log’s report are kept on this computer. To save one regularly, add an “Event log report copy” job under Scheduled jobs with this log’s ID: '+state.logId+'.','muted'),
         ...(note?[el('div',note)]:[]),
-        rows.length?table(['Saved','Size',''],rows):el('div','No saved copies yet.','muted'),saveNow);
+        rows.length?table(['Saved','Size',''],rows):el('div','No saved copies yet.','muted'),saveNow,savedChanges(changes));
       show(savedList,true);savedButton.setAttribute('aria-expanded','true');
     }
     savedButton.onclick=()=>{if(savedButton.getAttribute('aria-expanded')==='true'){show(savedList,false);savedButton.setAttribute('aria-expanded','false');return;}
@@ -617,8 +641,37 @@
     const out=el('div');out.id='owgCostResults';out.setAttribute('role','status');
     box.append(controls,priceTable);
     if(activityNames.length>shown.length)box.appendChild(el('div','Only the first '+shown.length+' activities are listed; give the rest a cost with “Cost of activities left blank”.','muted'));
-    box.append(run,out);
+    const saveModel=button('Save prices','secondary');saveModel.id='owgCostSaveModel';saveModel.title='Keep these prices with the log; the HTML report then includes a cost section';
+    const forget=button('Forget saved prices','secondary');forget.id='owgCostForgetModel';forget.disabled=true;
+    const modelStatus=el('div',null,'muted');modelStatus.id='owgCostModelStatus';modelStatus.setAttribute('role','status');
+    const actions=el('div',null,'row');actions.append(run,saveModel,forget);
+    box.append(actions,modelStatus,out);
     const generation=state.generation;
+    const modelPath=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/cost-model';
+    const readModel=()=>{
+      const activity_costs={};
+      for(const node of prices){if(node.value.trim()==='')continue;const v=Number(node.value);if(!(v>=0))throw new Error('Costs must be zero or more ('+node.dataset.activity+').');activity_costs[node.dataset.activity]=v;}
+      const model={currency:currency.value.trim().toUpperCase(),activity_costs,hourly_open_case_cost:Number(hourly.value||0)};
+      if(fallback.value.trim()!=='')model.default_activity_cost=Number(fallback.value);
+      return model;
+    };
+    getJSON(modelPath()).then(r=>{
+      if(generation!==state.generation||!r.saved)return;
+      const m=r.saved.model;currency.value=m.currency;hourly.value=String(m.hourly_open_case_cost||0);
+      fallback.value=m.default_activity_cost===null||m.default_activity_cost===undefined?'':String(m.default_activity_cost);
+      for(const node of prices){const v=m.activity_costs[node.dataset.activity];node.value=v===undefined?'':String(v);}
+      forget.disabled=false;modelStatus.textContent='Prices saved '+String(r.saved.saved_at).slice(0,16).replace('T',' ')+' UTC are filled in. The HTML report includes a cost section.';
+    }).catch(()=>{});
+    saveModel.onclick=async()=>{
+      saveModel.disabled=true;
+      try{const r=await (await api(modelPath(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(readModel())})).json();
+        forget.disabled=false;modelStatus.textContent='Prices saved. The HTML report and its saved copies now include a cost section.';}
+      catch(error){modelStatus.textContent=error.message;}finally{saveModel.disabled=false;}
+    };
+    forget.onclick=async()=>{
+      try{await api(modelPath()+'/delete',{method:'POST'});forget.disabled=true;modelStatus.textContent='Saved prices forgotten. The report no longer includes a cost section.';}
+      catch(error){modelStatus.textContent=error.message;}
+    };
     run.onclick=async()=>{
       run.disabled=true;
       try{
@@ -1389,7 +1442,7 @@
   }
 
   function objectMapSection(){
-    const box=section('Object-centric map');
+    const box=section('Object-centric map');box.id='owgObjectCentricMap';
     const generation=state.generation;
     const current=()=>box.isConnected&&generation===state.generation;
     box.appendChild(el('div','Each object type has its own map: every object (an order, an item, a ticket…) is one lifecycle. Links count objects that share events; they are not verified relationships.','muted'));
@@ -3773,6 +3826,12 @@
     const reviewNote=el('p','Acknowledge a specific triggered result locally, or reopen it. Snooze a result for one hour or one day; it returns on refresh after expiry. Reviews never send notifications, approve actions, or imply business outcomes. Stale results require a fresh Check signals.','muted');
     const inbox=el('div');inbox.id='owgSignalInbox';
     const reviewRefresh=button('Refresh review inbox','secondary');reviewRefresh.id='owgSignalReviewRefresh';
+    const transitionHeading=el('h4','Signal state changes');
+    const transitionNote=el('p','Locally recorded triggered and cleared transitions from explicit or scheduled evaluations. Repeated unchanged results do not create alerts. This is not live source monitoring or a notification feed. Up to 5,000 transitions are retained per log.','muted');
+    const transitionRefresh=button('Refresh signal changes','secondary');transitionRefresh.id='owgSignalTransitionRefresh';
+    const transitionStatus=el('div','Refresh to inspect saved signal changes.','muted');
+    transitionStatus.id='owgSignalTransitionStatus';transitionStatus.setAttribute('role','status');transitionStatus.setAttribute('aria-live','polite');
+    const transitionResults=el('div');transitionResults.id='owgSignalTransitions';
     const allHeading=el('h4','Across all saved logs');
     const allNote=el('p','One local overview of saved signal review states across every imported dataset. This does not re-evaluate rules, read source accounts, send alerts or execute work. Open the corresponding log for the existing state-pinned review controls.','muted');
     const allFilter=select('owgSignalAllFilter',[
@@ -3786,11 +3845,39 @@
     const allResults=el('div');allResults.id='owgSignalAllResults';
     const allControls=el('div',null,'actions');allControls.append(allFilter,allRefresh);
     box.append(row,message,rules,evaluate,out,reviewHeading,reviewNote,reviewRefresh,inbox,
+      transitionHeading,transitionNote,transitionRefresh,transitionStatus,transitionResults,
       allHeading,allNote,allControls,allStatus,allResults);
     const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/signals';
     const selectedLogId=state.logId;
     const inboxBase=()=>'/v1/event-logs/'+encodeURIComponent(selectedLogId)+'/signal-inbox';
+    const transitionBase=()=>'/v1/event-logs/'+encodeURIComponent(selectedLogId)+'/signal-history';
     const generation=state.generation;
+    let transitionRequestId=0;
+    async function refreshHistory(){
+      const requestId=++transitionRequestId;
+      transitionRefresh.disabled=true;
+      transitionStatus.textContent='Loading locally recorded signal changes…';
+      try{
+        const r=await getJSON(transitionBase()+'?limit=100');
+        if(generation!==state.generation||requestId!==transitionRequestId)return;
+        const events=r.items||[];
+        transitionStatus.textContent=Number(r.retained_total||0)+' saved transitions in this log; showing '+
+          events.length+(r.truncated?' (limited to recent results)':'')+
+          '. Evaluations only; no notifications or automated actions.';
+        transitionResults.replaceChildren(events.length
+          ?table(['Evaluated (UTC)','Signal','Change'],events.map(x=>[
+            x.evaluated_at||'—',x.name,x.transition==='triggered'?'Triggered':'Cleared']))
+          :el('div','No triggered/cleared changes recorded for this dataset yet.','muted'));
+      }catch(error){
+        if(generation===state.generation&&requestId===transitionRequestId){
+          transitionStatus.textContent=error.message||'Signal change history unavailable.';
+          transitionResults.replaceChildren();
+        }
+      }finally{
+        if(generation===state.generation&&requestId===transitionRequestId)transitionRefresh.disabled=false;
+      }
+    }
+    transitionRefresh.onclick=()=>refreshHistory();
     let inboxRefreshId=0;
     async function refreshInbox(){
       const requestId=++inboxRefreshId;
@@ -3936,6 +4023,7 @@
       evaluate.disabled=!r.rules.length;
       await refreshInbox();
       await refreshAllSignals();
+      await refreshHistory();
     }
     add.onclick=async()=>{
       try{
@@ -4182,6 +4270,26 @@
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/predictions/monitoring',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
         if(generation!==state.generation||t!==watchTurn)return;
         const v=monitoringRows(r);
+        const caseQuality=r.outcome_case_reliability;
+        const caseDetail=!spec.outcome?[]:caseQuality?[
+          el('h4','Outcome calibration by independent completed cases'),
+          el('p','Latest supported window #'+caseQuality.window+'. Each completed case is counted once, with its scored probabilities averaged before assigning a risk band. '+
+            caseQuality.total_distinct_scored_cases+' independent completed cases, compared with '+
+            caseQuality.total_scored_prediction_points+' prediction points. At least '+
+            caseQuality.minimum_distinct_completed_cases_per_displayed_bin+' independent cases are needed per displayed band; '+
+            caseQuality.withheld_low_support_bins+' low-support band(s) withheld. No case or resource identities are shown.','muted'),
+          caseQuality.bins.length?table(
+            ['Predicted risk band','Completed cases','Prediction points','Predicted risk','Outcome observed (95% case interval)','Brier loss per case'],
+            caseQuality.bins.map(b=>[
+              pct(b.predicted_from)+'–'+pct(b.predicted_to_exclusive===null?b.predicted_to_inclusive:b.predicted_to_exclusive),
+              Number(b.completed_cases).toLocaleString(),Number(b.scored_prediction_points).toLocaleString(),
+              pct(b.mean_case_averaged_predicted_risk),
+              pct(b.observed_outcome_share)+' ['+pct(b.observed_outcome_ci95[0])+', '+pct(b.observed_outcome_ci95[1])+']',
+              Number(b.case_averaged_brier_score).toFixed(3)
+            ]))
+          :el('p','Every nonempty risk band has fewer than the minimum independent completed cases. No case-level calibration table is shown.','muted'),
+          el('p',caseQuality.interpretation+' Outcomes come from the selected event log, not independently verified source receipts. No risk model is recalibrated automatically.','muted')
+        ]:[el('p','No window has enough labeled completed cases for outcome calibration.','muted')];
         const activityQuality=r.activity_quality;
         const activityDetail=activityQuality?[
           el('h4','Where prediction errors occur'),
@@ -4201,6 +4309,7 @@
         monitorOut.replaceChildren(el('h4','Prediction quality over time'),el('div',v.summary,'note'),
           table(['Window','Cases scored','Typical error','Naive error','Range held the time',...(spec.outcome?['Brier score']:[])],v.rows.map(row=>spec.outcome?row:row.slice(0,5))),
           ...activityDetail,
+          ...caseDetail,
           ...(v.proposal?[el('div',v.proposal,'muted')]:[]),el('div',r.interpretation,'muted'));
       }catch(error){if(t===watchTurn)monitorOut.replaceChildren(el('div',error.message,'muted'));}
       finally{if(t===watchTurn)watch.disabled=false;}

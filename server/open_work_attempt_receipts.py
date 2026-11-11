@@ -27,10 +27,36 @@ def _connect(path: str):
     if target.is_symlink():
         raise ValueError("journal symlink refused")
     target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # Never chmod an existing inode: a hard link could change another file's
+    # permissions, and an attacker-controlled path must not be opened as SQLite.
+    import stat
+    try:
+        info = target.lstat()
+    except FileNotFoundError:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(target, flags, 0o600)
+        except FileExistsError:
+            pass  # Concurrent creator; validate the resulting inode below.
+        else:
+            os.close(fd)
+        info = target.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or target.is_symlink():
+        raise ValueError("unsafe receipt journal path")
+    if os.name == "posix" and info.st_mode & 0o077:
+        raise ValueError("receipt journal permissions too broad")
+    # Do not adopt pre-existing WAL/SHM files from an untrusted filesystem.
+    # The receipt journal deliberately uses rollback journaling so revocation
+    # and retention do not leave a second persistent SQLite data store.
+    for suffix in ("-wal", "-shm"):
+        sidecar = Path(str(target) + suffix)
+        if sidecar.exists() or sidecar.is_symlink():
+            raise ValueError("unsupported receipt journal sidecar")
     db = sqlite3.connect(str(target), timeout=5)
-    if os.name == "posix":
-        os.chmod(target, 0o600)
     db.execute("PRAGMA busy_timeout=5000")
+    if db.execute("PRAGMA journal_mode").fetchone()[0].lower() != "delete":
+        db.close()
+        raise ValueError("unsupported receipt journal mode")
     db.execute("""CREATE TABLE IF NOT EXISTS attempt_receipts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         tenant TEXT NOT NULL, actor TEXT NOT NULL, attempt TEXT NOT NULL,

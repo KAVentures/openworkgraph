@@ -54,7 +54,8 @@ async def create_schedule(request: Request):
 async def update_schedule(request: Request):
     _require_dashboard(request)
     data = await _body(request)
-    params = {"enabled": data.get("enabled"), "interval_minutes": data.get("interval_minutes")}
+    params = {"enabled": data.get("enabled"), "interval_minutes": data.get("interval_minutes"),
+              "confirm_current_signal_rules": data.get("confirm_current_signal_rules", False)}
     if "quiet_hours" in data:
         # Omitting quiet_hours preserves the current window; explicit JSON null
         # clears it. A false/string value must never silently disable consent.

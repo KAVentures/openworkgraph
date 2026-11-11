@@ -84,7 +84,12 @@ jobs:
       - name: Install isolated Chromium test runtime
         run: |
           npm install --prefix "$RUNNER_TEMP/owg-browser" playwright@1.64.1 bpmn-js@18.31.0 axe-core@4.10.3
-          node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install --with-deps chromium
+          node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install --with-deps chromium || {
+            # The runner image already has Chromium's libraries; --with-deps only adds fonts and
+            # extras. When the apt mirror is unreachable, install the browser without them.
+            echo "::warning::apt packages unavailable; installing Chromium without --with-deps"
+            node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install chromium
+          }
       - name: Verify linked business-attribute analysis in authenticated Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_linked_attributes.cjs
       - name: Verify the event attribute profile in Chromium

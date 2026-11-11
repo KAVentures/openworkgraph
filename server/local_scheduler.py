@@ -25,6 +25,7 @@ business writes.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import secrets
@@ -167,6 +168,49 @@ def status() -> dict[str, Any]:
             "business_writes": False, "delivers_to_third_parties": False}
 
 
+def _signal_rule_set_pin(log_id: str) -> dict[str, Any]:
+    """Stable fingerprint of the immutable *definitions*, never their results.
+
+    Excludes last_evaluated_at to allow new log data and repeated evaluations;
+    includes each rule ID and all declarative fields so a changed schedule
+    cannot silently begin monitoring rules the owner did not approve.
+    """
+    from . import event_log_signals as signals
+    try:
+        rules = signals.list_rules(log_id)["rules"]
+    except Exception:
+        raise ScheduleError("current signal rules are unavailable") from None
+    if not isinstance(rules, list):
+        raise ScheduleError("current signal rules are unavailable")
+    snapshot = sorted(
+        ({k: value for k, value in rule.items() if k != "last_evaluated_at"}
+         for rule in rules if isinstance(rule, dict)),
+        key=lambda rule: str(rule.get("rule_id", "")),
+    )
+    if len(snapshot) != len(rules):
+        raise ScheduleError("current signal rules are invalid")
+    encoded = json.dumps(snapshot, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return {
+        "fingerprint": hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+        "count": len(snapshot),
+    }
+
+
+def _run_pinned_signal_job(item: dict[str, Any]) -> tuple[str, float]:
+    """Compare and evaluate under the SAME event-log lock: no TOCTOU gap."""
+    from . import event_log_workspace as workspace
+    from . import event_log_signals as signals
+    try:
+        with workspace._LOCK:
+            pin = _signal_rule_set_pin(item["target_id"])
+            if pin["fingerprint"] != item.get("signal_rules_fingerprint"):
+                return "paused:signal_rules_changed", 0.0
+            result = signals.evaluate(item["target_id"])
+    except Exception:
+        return "failed:signal_rules_unavailable", 0.0
+    return f"succeeded:{len(result.get('signals', []))}_signals", 0.0
+
+
 def create(kind: str, target_id: str, *, interval_minutes: int, confirm_scheduled_runs: bool,
            confirm_unencrypted_local_backup: bool = False,
            quiet_hours: dict[str, str] | None = None) -> dict[str, Any]:
@@ -187,6 +231,11 @@ def create(kind: str, target_id: str, *, interval_minutes: int, confirm_schedule
     _check_target(kind, target_id)
     if kind == "local_backup":
         _check_backup_location()
+    # Explicit creation pins today's immutable signal-rule definitions.
+    # New/removed rules must be reviewed before the schedule can use them.
+    signal_pin = _signal_rule_set_pin(target_id) if kind == "event_log_signals" else None
+    if signal_pin is not None and signal_pin["count"] == 0:
+        raise ScheduleError("save at least one signal rule before scheduling")
     now = time.time()
     with _LOCK:
         data = _read()
@@ -201,19 +250,48 @@ def create(kind: str, target_id: str, *, interval_minutes: int, confirm_schedule
                 "next_run_epoch": now + interval_minutes * 60, "last_run_epoch": None,
                 **({"quiet_hours": quiet} if quiet is not None else {}),
                 "last_result": None, "consecutive_failures": 0, "paused_reason": None, "history": [],
-                **({"unencrypted_local_backup_acknowledged": True} if kind == "local_backup" else {})}
+                **({"unencrypted_local_backup_acknowledged": True} if kind == "local_backup" else {}),
+                **({"signal_rules_fingerprint": signal_pin["fingerprint"],
+                    "signal_rules_count": signal_pin["count"]} if signal_pin is not None else {})}
         data["schedules"][schedule_id] = item
         _write(data)
     return _public(item)
 
 
 def update(schedule_id: str, *, enabled: bool | None = None, interval_minutes: int | None = None,
-           quiet_hours: Any = _QUIET_UNSET) -> dict[str, Any]:
+           quiet_hours: Any = _QUIET_UNSET,
+           confirm_current_signal_rules: bool = False) -> dict[str, Any]:
+    if type(confirm_current_signal_rules) is not bool:
+        raise ScheduleError("confirm_current_signal_rules must be true or false")
+    # Snapshot schedule identity without holding the schedule lock during
+    # a DuckDB read: log deletion uses the opposite lock order.
+    reapproved_pin = None
+    if confirm_current_signal_rules:
+        with _LOCK:
+            current = _read()["schedules"].get(str(schedule_id))
+            if not current:
+                raise ScheduleError("unknown schedule")
+            if current["kind"] != "event_log_signals":
+                raise ScheduleError("only signal schedules can approve changed rules")
+            expected_revision = current.get("configuration_revision", 0)
+            target_id = current["target_id"]
+        reapproved_pin = _signal_rule_set_pin(target_id)
+        if reapproved_pin["count"] == 0:
+            raise ScheduleError("save at least one signal rule before scheduling")
     with _LOCK:
         data = _read()
         item = data["schedules"].get(str(schedule_id))
         if item is None:
             raise ScheduleError("unknown schedule")
+        if reapproved_pin is not None:
+            if item.get("configuration_revision", 0) != expected_revision:
+                raise ScheduleError("schedule changed during rule review; retry")
+            item["signal_rules_fingerprint"] = reapproved_pin["fingerprint"]
+            item["signal_rules_count"] = reapproved_pin["count"]
+            if item.get("paused_reason") == "signal_rules_changed_requires_reapproval":
+                item["paused_reason"] = None
+        elif item.get("paused_reason") == "signal_rules_changed_requires_reapproval" and enabled is True:
+            raise ScheduleError("review and explicitly reapprove current signal rules first")
         if interval_minutes is not None:
             if type(interval_minutes) is not int or not MIN_INTERVAL_MINUTES <= interval_minutes <= MAX_INTERVAL_MINUTES:
                 raise ScheduleError(f"interval must be {MIN_INTERVAL_MINUTES}-{MAX_INTERVAL_MINUTES} minutes")
@@ -384,7 +462,10 @@ def run_due(now: float | None = None, runner: Runner | None = None) -> list[dict
                             _write(data)
                     continue
                 try:
-                    outcome, retry_after = runner(item["kind"], item["target_id"])
+                    if runner is _run_job and item["kind"] == "event_log_signals":
+                        outcome, retry_after = _run_pinned_signal_job(item)
+                    else:
+                        outcome, retry_after = runner(item["kind"], item["target_id"])
                 except Exception as exc:  # never let one job stop the scheduler
                     outcome, retry_after = "failed:" + type(exc).__name__.lower()[:60], 0.0
             finished = max(started, time.time()) if now is None else now
@@ -405,6 +486,15 @@ def run_due(now: float | None = None, runner: Runner | None = None) -> list[dict
                     if outcome.startswith("failed") and retry_after > 0:
                         live["next_run_epoch"] = max(
                             live.get("next_run_epoch") or 0, finished + retry_after)
+                    _write(data)
+                    ran.append({"schedule_id": live["schedule_id"], "outcome": outcome})
+                    continue
+                if outcome == "paused:signal_rules_changed":
+                    # No newly created or removed signal rule is implicitly
+                    # authorized by an older recurring schedule.
+                    live.update(enabled=False,
+                                paused_reason="signal_rules_changed_requires_reapproval",
+                                next_run_epoch=None)
                     _write(data)
                     ran.append({"schedule_id": live["schedule_id"], "outcome": outcome})
                     continue

@@ -150,6 +150,7 @@ async def analyze_export(
     save_event_log: bool = Query(default=False),
     name: str = Query(default="Communications", max_length=120),
     classifier: str = Query(default="keyword", pattern="^(keyword|learned)$"),
+    quality_gate_language: str | None = Query(default=None, max_length=12),
     review_sample: int = Query(default=0, ge=0, le=review.MAX_BATCH),
 ):
     _require_dashboard(request)
@@ -159,10 +160,13 @@ async def analyze_export(
         raise HTTPException(403, "Explicit confirmation to store the intent event log on this computer is required")
     if review_sample and request.headers.get("x-owg-review-examples-confirmed") != "true":
         raise HTTPException(403, "Explicit confirmation to keep redacted review examples is required")
+    if quality_gate_language is not None and classifier != "learned":
+        raise HTTPException(422, "Holdout quality gate applies only to learned classification")
     learned = None
     if classifier == "learned":
         try:
-            learned = review.learned_classifier(_intent_names())
+            learned = review.learned_classifier(_intent_names(),
+                require_holdout_language=quality_gate_language)
         except review.ReviewError as exc:
             raise HTTPException(409, str(exc)) from None
         if learned is None:

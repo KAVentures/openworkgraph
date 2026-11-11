@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Object binding continuity · OpenWorkGraph</title>
+<style>
+:root{color-scheme:light;--text:#203029;--muted:#4f6055;--line:#cbd6cc;--back:#f3f6f3;--panel:#fff;--action:#255e48}
+*{box-sizing:border-box}
+body{margin:0;background:var(--back);color:var(--text);font:16px/1.5 system-ui,sans-serif}
+header{padding:20px clamp(16px,4vw,44px);background:#e8f1eb;border-bottom:1px solid var(--line)}
+main{max-width:1200px;margin:20px auto 60px;padding:0 16px}
+h1{font-size:clamp(1.5rem,3vw,2.2rem);margin:5px 0}
+h2{font-size:1.2rem;margin:0 0 13px}
+h3{font-size:1.1rem}
+p{max-width:90ch}
+.muted{color:var(--muted)}
+section{background:var(--panel);border:1px solid var(--line);padding:18px;border-radius:12px;margin-bottom:16px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr));gap:14px}
+label{font-weight:650;display:block}
+input,select{display:block;margin-top:6px;width:100%;padding:9px;border:1px solid #94a99a;border-radius:7px;font:inherit;background:var(--panel);color:var(--text);min-width:0}
+button{padding:10px 16px;min-height:42px;border:1px solid var(--action);border-radius:7px;background:var(--action);color:#fff;font:inherit;font-weight:650;cursor:pointer}
+button:disabled{opacity:.55;cursor:not-allowed}
+button.secondary{background:transparent;color:var(--action)}
+a{color:var(--action)}
+a:focus-visible,button:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid #2357a5;outline-offset:3px}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:16px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:9px}
+.stat{border:1px solid var(--line);border-radius:8px;padding:12px;min-width:0}
+.stat strong{display:block;font-size:1.35rem;overflow-wrap:anywhere}.stat span{font-size:.9rem;color:var(--muted)}
+.callout{padding:13px;border-left:4px solid #5b7993;background:#f1f6f9}
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;min-width:800px;width:100%}
+th,td{text-align:left;padding:10px;border-bottom:1px solid var(--line);vertical-align:top;overflow-wrap:anywhere;max-width:280px}
+th{background:#eff4ef;font-size:.9rem}
+[hidden]{display:none!important}
+@media(prefers-color-scheme:dark){:root{color-scheme:dark;--text:#e9efe8;--muted:#c6d1c4;--line:#45604d;--back:#17251c;--panel:#24372a;--action:#b7ebc6}
+header{background:#203427}button{background:#2b6548;border-color:#b7ebc6;color:white}button.secondary{color:#b7ebc6}.callout{background:#2a3e45}th{background:#2c4935}}
+</style>
+<script src="/object-binding-continuity.js" defer></script>
+</head>
+<body>
+<header>
+<a href="/">Back to OpenWorkGraph</a>
+<h1>Object-centric event binding continuity</h1>
+<p class="muted">Inspect whether the same two related objects actually appear together at two process activities. Local, descriptive OCEL evidence only; not full object-centric Petri-net conformance.</p>
+</header>
+<main>
+<section aria-labelledby="select-title">
+<h2 id="select-title">Select a locally retained OCEL log</h2>
+<div class="grid">
+<label for="logSelect">Imported OCEL log
+<select id="logSelect" disabled><option value="">Open from an authenticated OWG dashboard</option></select></label>
+<label for="relationship">Supplied directed relationship
+<select id="relationship" disabled><option value="">Choose a log first</option></select></label>
+</div>
+<p id="coverage" class="muted"></p>
+<div class="row"><button type="button" class="secondary" id="reload">Refresh imported logs</button></div>
+</section>
+<section aria-labelledby="query-title">
+<h2 id="query-title">Choose joint-event evidence</h2>
+<p class="muted">An activity is only counted if its original event is associated with <strong>both</strong> the source and target objects of the same supplied pair.</p>
+<form id="query">
+<div class="grid">
+<label for="sourceType">Source object type<input id="sourceType" list="objectTypes" maxlength="200" required autocomplete="off"></label>
+<label for="targetType">Target object type<input id="targetType" list="objectTypes" maxlength="200" required autocomplete="off"></label>
+<label for="firstActivity">First jointly attended activity<input id="firstActivity" list="knownActivities" maxlength="200" required autocomplete="off"></label>
+<label for="thenActivity">Then jointly attended activity<input id="thenActivity" list="knownActivities" maxlength="200" required autocomplete="off"></label>
+<label for="qualifierMode">Relationship qualifier
+<select id="qualifierMode"><option value="all">All qualifiers</option><option value="empty">Only the empty qualifier</option><option value="literal">Exact qualifier</option></select></label>
+<label for="qualifier" id="qualifierLabel" hidden>Exact qualifier<input id="qualifier" maxlength="80" list="knownQualifiers" autocomplete="off"></label>
+<label for="samples">Examples (0–50)<input id="samples" type="number" min="0" max="50" value="20" step="1" required></label>
+</div>
+<datalist id="objectTypes"></datalist><datalist id="knownActivities"></datalist><datalist id="knownQualifiers"></datalist>
+<div class="row"><button id="analyze" type="submit">Check binding continuity</button><button class="secondary" type="button" id="clear">Clear results</button></div>
+</form>
+<p id="status" role="status" aria-live="polite">Open from the same authenticated local dashboard tab.</p>
+</section>
+<section id="results" hidden aria-labelledby="results-title">
+<h2 id="results-title">Observed binding continuity</h2>
+<p id="basis" class="muted"></p>
+<div id="metrics" class="stats" role="group" aria-label="Binding continuity counts"></div>
+<p class="callout" id="caveats"></p>
+<h3>Related pair examples</h3>
+<p id="sampleStatus" class="muted"></p>
+<div class="tablewrap"><table><thead><tr><th scope="col">Source object</th><th scope="col">Target object</th><th scope="col">Evidence status</th><th scope="col">First joint event (UTC)</th><th scope="col">Next joint event (UTC)</th><th scope="col">Forward elapsed</th></tr></thead><tbody id="rows"></tbody></table></div>
+<details><summary>Full provenance</summary><pre id="provenance" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre></details>
+</section>
+</main>
+</body>
+</html>

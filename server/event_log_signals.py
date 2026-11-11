@@ -23,6 +23,7 @@ from . import event_log_cohorts as cohorts
 from . import event_log_compliance as compliance
 from . import event_log_workspace as workspace
 from . import event_log_signal_inbox as signal_inbox
+from . import event_log_signal_transitions as signal_transitions
 
 MAX_RULES = 50
 MAX_EVIDENCE_CASES = 50
@@ -143,6 +144,7 @@ def delete_rule(log_id: str, rule_id: str) -> dict[str, Any]:
                 raise workspace.EventLogWorkspaceError("unknown signal rule")
             conn.execute("DELETE FROM signal_snoozes WHERE log_id = ? AND rule_id = ?", [log_id, str(rule_id)])
             conn.execute("DELETE FROM signal_reviews WHERE log_id = ? AND rule_id = ?", [log_id, str(rule_id)])
+            conn.execute("DELETE FROM signal_transitions WHERE log_id = ? AND rule_id = ?", [log_id, str(rule_id)])
             conn.execute("DELETE FROM signal_rules WHERE log_id = ? AND rule_id = ?", [log_id, str(rule_id)])
         finally:
             conn.close()
@@ -226,6 +228,8 @@ def evaluate(log_id: str) -> dict[str, Any]:
             now = datetime.now(timezone.utc).replace(tzinfo=None)
             log_basis = signal_inbox.log_basis(conn, log_id)
             signals = []
+            recorded_transitions = False
+            conn.execute("BEGIN")
             for rule_id, created, definition, last_state in rows:
                 rule = SignalRule.model_validate_json(definition)
                 previous = json.loads(last_state) if last_state else None
@@ -271,7 +275,20 @@ def evaluate(log_id: str) -> dict[str, Any]:
                     conn.execute("DELETE FROM signal_reviews WHERE log_id=? AND rule_id=?", [log_id, rule_id])
                 conn.execute("UPDATE signal_rules SET last_evaluated_at = ?, last_state = ? WHERE log_id = ? AND rule_id = ?",
                              [now, json.dumps(state), log_id, rule_id])
+                if signal_transitions.append(conn, log_id, rule_id, previous, state, now):
+                    recorded_transitions = True
                 signals.append(result)
+            if recorded_transitions:
+                signal_transitions.trim(conn, log_id)
+            conn.execute("COMMIT")
+        except Exception:
+            # A failed evaluation must not leave half-updated rule states or
+            # transition receipts, including the case of a failed later rule.
+            try:
+                conn.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise
         finally:
             conn.close()
     return {

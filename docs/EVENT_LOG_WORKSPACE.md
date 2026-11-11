@@ -176,6 +176,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-logs/{log_id}/kpis?sla_seconds=&automation_resources=` | Throughput p50/p90/p95, rework rate, SLA breach rate, automation rate and weekly completions. |
 | `POST /v1/event-logs/{log_id}/benchmark` | Compare two case cohorts (JSON body, below). |
 | `POST /v1/event-logs/{log_id}/costs` | Process cost from your cost model (below). |
+| `GET`/`POST /v1/event-logs/{log_id}/cost-model`, `POST .../cost-model/delete` | The log's saved prices (below). |
 | `POST /v1/event-logs/{log_id}/map-comparison` | Compare the process maps of two cohorts path by path (below). |
 | `POST /v1/event-logs/comparison` | Compare two saved logs, or one log under two filters (below). |
 | `POST /v1/event-logs/{log_id}/impact` | Before/after impact of an intervention on cycle time, rework, SLA breaches or an activity count, with bootstrap intervals, an optional control cohort and a placebo check. See [INTERVENTION_IMPACT.md](INTERVENTION_IMPACT.md). |
@@ -212,6 +213,10 @@ file to attach to an email or ticket. It holds:
 * the most frequent variants (15 by default; `variants` takes 1–50), with their
   share of cases and median duration;
 * activity frequencies;
+* the slowest transitions: the median and 90th-percentile time between one
+  activity and the next, for up to 10 transitions seen in at least 3 cases
+  (and 1% of cases). This is elapsed time between recorded events, not
+  measured work or verified waiting;
 * cases completed per week.
 
 The report applies the selected case notion, the applied activity mapping and
@@ -238,6 +243,22 @@ log's ID. The job is local and runs at least every 15 minutes, at most every 7
 days. The newest 10 copies per log are kept in the data folder under
 `event_log_reports/<log_id>/`. Deleting the log deletes its copies and its
 report and signal schedules. Copies are never sent anywhere.
+
+**What changed.** Each copy is saved with its headline figures in a JSON file
+next to the HTML. The panel then shows **Changes since the previous copy**:
+
+* cases, events, activities and variants;
+* median and 90th-percentile case time;
+* events per case and the share of cases repeating an activity;
+* the total cost, when both copies had saved prices in the same currency;
+* activities that are new or no longer seen;
+* whether the most common variant changed;
+* the largest changes in cases per activity.
+
+`GET /v1/event-logs/{log_id}/saved-report-changes` compares the two newest
+copies, or the two given as `older` and `newer`. A change can come from
+appended events, an applied activity mapping or edited prices as much as from
+the process itself.
 
 ## Analytics
 
@@ -322,6 +343,28 @@ The response gives:
 `cohort` takes the same keys as other analyses, so the cost of any filtered set
 of cases can be compared with the rest. Repeated executions are not verified
 rework.
+
+**Saved prices.** **Save prices** keeps the model (currency, activity prices,
+default price and hourly cost) with the log. Next time, the dashboard fills the
+prices in. The HTML report, and its saved and scheduled copies, then include a
+**Process cost** section, which shows:
+
+* the total cost;
+* the mean and median cost per case;
+* the share spent on repeated executions;
+* the ten costliest activities;
+* which activities have no price.
+
+The section uses the report's case filter. API:
+
+* `GET /v1/event-logs/{log_id}/cost-model` returns `{"saved": null}` or the
+  model and when it was saved;
+* `POST` with `{"currency", "activity_costs", "default_activity_cost",
+  "hourly_open_case_cost"}` replaces the model;
+* `POST .../cost-model/delete` forgets it.
+
+A log keeps one model. It is deleted with the log and not copied when matching
+cases are saved as a new log.
 
 ### Cohort benchmark
 

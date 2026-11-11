@@ -74,6 +74,15 @@
     const save=input('owgCommsSave','checkbox');const saveLabel=el('label');saveLabel.style.cssText='display:flex;gap:6px;align-items:center';
     saveLabel.append(save,document.createTextNode(' Also store an intent-only event log (thread, intent, time, direction) on this computer'));
     const classifier=select('owgCommsClassifier',[['keyword','Keyword taxonomy'],['learned','Learned model (from reviewed examples)']]);
+    const qualityGate=input('owgCommsQualityGate','checkbox');
+    const declaredLanguage=input('owgCommsGateLang','text','en, sv, de, pt-BR');declaredLanguage.maxLength=12;
+    const qualityLabel=el('label');qualityLabel.style.cssText='display:flex;gap:6px;align-items:center';
+    qualityLabel.append(qualityGate,document.createTextNode(' Require a strong reviewer-labelled holdout for this declared language (optional; may refuse analysis)'));
+    const qualityControls=el('div');qualityControls.id='owgCommsQualityControls';
+    const languageField=field('Declared language of the entire export (OWG does not detect it)',declaredLanguage);
+    qualityControls.append(qualityLabel,languageField);
+    const updateQuality=()=>{show(qualityControls,classifier.value==='learned');show(languageField,qualityGate.checked);};
+    classifier.onchange=updateQuality;qualityGate.onchange=updateQuality;updateQuality();
     const sample=input('owgCommsSample','checkbox');const sampleCount=input('owgCommsSampleCount','number');sampleCount.min='1';sampleCount.max='200';sampleCount.value='25';
     const sampleLabel=el('label');sampleLabel.style.cssText='display:flex;gap:6px;align-items:center';
     sampleLabel.append(sample,document.createTextNode(' Keep the least certain inbound messages, redacted, as review examples (needs review examples turned on below)'));
@@ -88,7 +97,7 @@
     const taxRow=el('div',null,'row');taxRow.append(saveTaxonomy,resetTaxonomy);
     taxonomyBox.append(el('div','One intent per line: "Name: term, term". A message gets the intent whose terms match best; ties are shown as ambiguous.','muted'),field('Intents and terms',taxonomy),taxRow,taxStatus);
     const review=el('details');review.id='owgCommsReview';review.appendChild(el('summary','Review examples and learned model'));
-    card.append(row,mapping,field('Intents from',classifier),consentLabel,saveLabel,sampleLabel,field('How many review examples',sampleCount),run,status,results,review,taxonomyBox);
+    card.append(row,mapping,field('Intents from',classifier),qualityControls,consentLabel,saveLabel,sampleLabel,field('How many review examples',sampleCount),run,status,results,review,taxonomyBox);
     const anchor=document.getElementById('owgEventLogCard')||document.getElementById('owgProcessCSV');
     if(anchor)anchor.insertAdjacentElement('afterend',card);else panel.appendChild(card);
 
@@ -116,6 +125,14 @@
       }else if(domains.value.trim())q.set('own_domains',domains.value);
       const headers={'Content-Type':'application/octet-stream','X-OWG-Local-Processing-Confirmed':'true'};
       q.set('classifier',classifier.value);
+      if(classifier.value==='learned'&&qualityGate.checked){
+        const code=declaredLanguage.value.trim();
+        if(!/^[a-z]{2,3}(?:-[a-z0-9]{2,8})?$/i.test(code)){
+          status.textContent='Declare one language for the whole export (for example en or sv), or turn off the optional holdout gate.';
+          return;
+        }
+        q.set('quality_gate_language',code.toLowerCase());
+      }
       if(sample.checked){q.set('review_sample',String(Math.max(1,Math.min(200,Number(sampleCount.value)||25))));headers['X-OWG-Review-Examples-Confirmed']='true';}
       if(save.checked){q.set('save_event_log','true');q.set('name',chosen.name.replace(/\.[^.]+$/,'').slice(0,100)+' intents');headers['X-OWG-Local-Storage-Confirmed']='true';}
       run.disabled=true;status.textContent='Analysing '+chosen.name+'…';results.replaceChildren();
@@ -149,8 +166,11 @@
         return;
       }
       const e=m.evaluation;const f=v=>v===null||v===undefined?'—':Number(v).toFixed(2);
+      const gateLines=Object.entries(m.holdout_language_gates||{}).map(([code,g])=>code+': '+(g.ready?'descriptive gate passes':'blocked for '+g.rejected_intents_total+' intent(s)'));
       model.replaceChildren(el('h3','Learned model'),el('div','Trained '+m.trained_at+' from '+m.training_example_count+' examples; expires '+m.expires_at+'. Holdout: '+e.holdout_examples+' reviewed examples in '+(e.languages.join(', ')||'no language')+'. Macro F1 '+f(e.macro_f1_supported_intents)+'. Estimates, not verified reasons for contact.','muted'),
         table(['Intent','F1','Precision','Recall','Calibration error','Uncertain','Support','By language (F1)'],e.intents.map(i=>[i.intent,f(i.f1),f(i.precision),f(i.recall),f(i.expected_calibration_error),pct(i.uncertain_rate),i.sufficient_support?String(i.positive_examples):i.positive_examples+' (too few)',Object.entries(i.by_language).map(([l,v])=>l+' '+f(v.f1)).join(', ')])),
+        el('p','Optional reviewer-labelled language gate: '+(gateLines.join('; ')||'no supported language reported')+
+          '. Each modelled intent needs at least five held-out positives and negatives, F1 at least 0.80, and at most 35% uncertain decisions. Passing is NOT external validation. OWG does not detect the language of an uploaded export.','muted'),
         ...(m.skipped_intents.length?[el('div','Not trained (fewer than 5 positive or negative examples): '+m.skipped_intents.map(x=>x.intent).join(', ')+'.','muted')]:[]));
     }
     function renderExamples(page){

@@ -38,10 +38,24 @@ def _db(create: bool):
         os.close(fd)
         info = path.lstat()
     if (not stat.S_ISREG(info.st_mode) or path.is_symlink()
-            or info.st_nlink != 1 or info.st_size > _BYTES):
+            or info.st_nlink != 1 or info.st_size > _BYTES
+            or (os.name == "posix" and info.st_mode & 0o077)):
         raise CaseDeclarationError("unsafe run receipt journal")
+    # SQLite WAL and shared-memory files can outlive a consent revocation or
+    # retention purge. This local evidence ledger supports DELETE mode only.
+    # Check dangling symlinks as well as existing sidecars before opening.
+    for suffix in ("-wal", "-shm"):
+        sidecar = path.with_name(path.name + suffix)
+        if sidecar.exists() or sidecar.is_symlink():
+            raise CaseDeclarationError("unsafe run receipt journal sidecar")
     db = sqlite3.connect(str(path), timeout=3)
-    db.execute("PRAGMA busy_timeout=3000")
+    try:
+        db.execute("PRAGMA busy_timeout=3000")
+        if db.execute("PRAGMA journal_mode").fetchone()[0].lower() != "delete":
+            raise CaseDeclarationError("unsupported run receipt journal mode")
+    except Exception:
+        db.close()
+        raise
     if create:
         db.execute("""CREATE TABLE IF NOT EXISTS receipts (
             id TEXT PRIMARY KEY, actor_key TEXT NOT NULL, scope TEXT NOT NULL,

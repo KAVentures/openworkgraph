@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import os
 import sqlite3
 
 import pytest
@@ -96,4 +97,55 @@ def test_symlink_denied(store):
     outside.write_text("not a database")
     (store / receipts._NAME).symlink_to(outside)
     with pytest.raises(CaseDeclarationError, match="unsafe"):
+        receipts.review(**args())
+
+
+def test_existing_permissive_receipt_ledger_rejected_without_chmod(store):
+    import os
+    if os.name != "posix":
+        pytest.skip("POSIX permissions only")
+    target = store / receipts._NAME
+    target.write_bytes(b"sentinel")
+    target.chmod(0o644)
+    with pytest.raises(CaseDeclarationError, match="unsafe"):
+        receipts.review(**args())
+    assert target.stat().st_mode & 0o777 == 0o644
+    assert target.read_bytes() == b"sentinel"
+
+
+def test_hardlinked_receipt_ledger_rejected_without_touching_target(store):
+    outside = store.parent / (store.name + "-hardlink")
+    outside.write_bytes(b"sentinel")
+    (store / receipts._NAME).hardlink_to(outside)
+    with pytest.raises(CaseDeclarationError, match="unsafe"):
+        receipts.review(**args())
+    assert outside.read_bytes() == b"sentinel"
+
+
+@pytest.mark.parametrize("suffix", ["-wal", "-shm"])
+@pytest.mark.parametrize("sidecar_type", ["regular", "dangling_symlink"])
+def test_run_receipt_sidecar_rejected_without_mutation(store, suffix, sidecar_type):
+    target = store / receipts._NAME
+    target.touch(mode=0o600)
+    sidecar = store / (receipts._NAME + suffix)
+    if sidecar_type == "regular":
+        sidecar.write_bytes(b"retained-evidence")
+    else:
+        sidecar.symlink_to(store / "missing-sidecar-target")
+    with pytest.raises(CaseDeclarationError, match="sidecar"):
+        receipts.review(**args())
+    if sidecar_type == "regular":
+        assert sidecar.read_bytes() == b"retained-evidence"
+    else:
+        assert sidecar.is_symlink()
+
+
+def test_run_receipt_wal_mode_refused(store):
+    target = store / receipts._NAME
+    with sqlite3.connect(str(target)) as db:
+        assert db.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+    # Owner-only like the real journal, so the refusal comes from the WAL mode rather than from
+    # the permission check (SQLite creates the file 0644 under a default umask, e.g. on macOS).
+    os.chmod(target, 0o600)
+    with pytest.raises(CaseDeclarationError, match="mode"):
         receipts.review(**args())

@@ -110,3 +110,19 @@ print("ok")
     done = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1], env=env,
                           capture_output=True, text=True, timeout=120)
     assert done.returncode == 0 and done.stdout.strip().endswith("ok"), f"stdout={done.stdout}\nstderr={done.stderr}"
+
+
+def test_slowest_transitions_need_enough_cases_and_honour_the_filter():
+    log = _log("plain")
+    # Receive → Approve and Approve → Pay occur in 8 cases with a 2 h median gap; the repeated
+    # Approve → Approve (2 cases) and Receive → Reject (1 case) are below the 3-case floor.
+    slow = report.slowest_transitions(log)
+    assert slow["minimum_cases"] == 3
+    assert [(t["from"], t["to"], t["cases"], t["median_gap_seconds"]) for t in slow["transitions"]] == [
+        ("Approve", "Pay", 8, 7200.0), ("Receive", "Approve", 8, 7200.0)]
+    assert slow["transitions"][0]["p90_gap_seconds"] == 7200.0
+    filtered = report.slowest_transitions(log, cohort={"activity": "Reject"})
+    assert filtered["transitions"] == [] and filtered["cases_before_filter"] == 9
+    html = report.report_html(log)
+    assert "<h2>Slowest transitions</h2>" in html and "Approve → Pay" in html
+    assert "not measured work or verified waiting" in html
