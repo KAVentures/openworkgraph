@@ -46,7 +46,9 @@ class Snapshot(Strict):
     non_finite_results_withheld: Count = 0
     metric_coverage: list[Coverage] = Field(default_factory=list, max_length=4)
     source_content_sha256: Annotated[str, Field(pattern=r'^[a-f0-9]{64}$')]
-    analysis_spec_sha256: Annotated[str, Field(pattern=r'^[a-f0-9]{64}    fingerprint_algorithm: Literal['openworkgraph.discovery-source.v1'] = 'openworkgraph.discovery-source.v1'
+    analysis_spec_sha256: Annotated[str, Field(pattern=r'^[a-f0-9]{64}$')]
+    metric_definition_sha256: list[Annotated[str, Field(pattern=r'^[a-f0-9]{64}$')]] = Field(default_factory=list, max_length=4)
+    fingerprint_algorithm: Literal['openworkgraph.discovery-source.v1'] = 'openworkgraph.discovery-source.v1'
     group_labels_included: Literal[False] = False
     source_independently_verified: Literal[False] = False
     execution_authorized: Literal[False] = False
