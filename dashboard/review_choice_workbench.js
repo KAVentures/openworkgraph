@@ -137,6 +137,9 @@
                 const result=await response.json();
                 if(result.format!=='openworkgraph.reviewed-handoff-preflight.v1'||
                    result.idea_id!==id||result.project_id!==projectId||
+                   result.idea_revision!==snapshot.idea.revision||
+                   result.spec_sha256!==selected.spec_sha256||
+                   result.archive_sha256!==selected.archive_sha256||
                    result.project_set_sha256!==snapshot.project_set_sha256||
                    result.human_review_approved!==true||result.execution_authorized!==false||
                    result.source_read_authorized!==false||
@@ -270,6 +273,8 @@
               // Never depend on the stale-basis preflight for withdrawing consent.
               for(const b of [saveDraft,approve,revoke])b.disabled=true;
               try{
+                await window.__owgAuthReady;
+                if(!reviewStillSelected()||mutationGeneration!==reviewRequestGeneration)return;
                 const response=await fetch(reviewPath+'/'+encodeURIComponent(projectId)+'/revoke',{
                   method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},
                   body:JSON.stringify({expected_review_revision:reviewRevision})});
