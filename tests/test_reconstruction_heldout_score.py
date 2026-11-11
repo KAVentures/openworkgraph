@@ -92,6 +92,25 @@ class ReconstructionHeldoutScoreTests(unittest.TestCase):
         self.assertIsNone(result["false_positive_unrelated_rate"])
         self.assertEqual(result["exact_match_rate"], 1)
 
+    def test_window_breakdown_exposes_masked_earlier_contamination(self):
+        labeled = {"events": [
+            {"window": "current", "event_id": "a", "case_id": "A"},
+            {"window": "earlier", "event_id": "b", "case_id": "B"},
+            {"window": "earlier", "event_id": "noise", "case_id": None},
+        ]}
+        proposals = {"events": [
+            {"window": "current", "event_id": "a", "candidate_case_ids": ["A"]},
+            {"window": "earlier", "event_id": "b", "candidate_case_ids": ["A"]},
+            {"window": "earlier", "event_id": "noise", "candidate_case_ids": []},
+        ]}
+        result = score(labeled, proposals)
+        self.assertEqual(set(result["by_window"]), {"current", "earlier"})
+        self.assertEqual(result["by_window"]["current"]["f1"], 1)
+        self.assertEqual(result["by_window"]["earlier"]["cross_case_contamination_events"], 1)
+        self.assertEqual(result["by_window"]["earlier"]["wrong_case_labeled_events"], 1)
+        self.assertEqual(result["cross_case_contamination_events"], 1)
+        self.assertNotIn("by_window", result["by_window"]["earlier"])
+
     def test_empty_gold_refused(self):
         with self.assertRaisesRegex(ValueError, "empty gold"):
             score(gold(), predicted())
