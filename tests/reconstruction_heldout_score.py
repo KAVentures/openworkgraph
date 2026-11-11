@@ -1,7 +1,9 @@
 """Strict held-out scoring for R1/R2 event-to-case candidate assignments.
 
-Inputs are JSON objects with `events` arrays. Gold: [{event_id, window, case_id}]
-where case_id may be null (unrelated). Predictions: [{event_id, window,
+Inputs are JSON objects with `events` arrays. Gold: [{event_id, window, case_id}] (null means unrelated), or
+[{event_id, window, case_ids: [...]}] for independently labeled multiple
+legitimate assignments. The two gold formats must not be mixed per row.
+Predictions: [{event_id, window,
 candidate_case_ids: [...] }]. Candidate IDs must be independently mapped to
 the gold case namespace BEFORE scoring. This script does not perform that
 mapping or claim a held-out dataset exists.
@@ -29,10 +31,22 @@ def _index(document, *, gold):
         if key in result:
             raise ValueError("duplicate event/window in evaluation data")
         if gold:
-            case_id = row.get("case_id")
-            if case_id is not None and (not isinstance(case_id, str) or not case_id):
-                raise ValueError("invalid gold case_id")
-            result[key] = {case_id} if case_id is not None else set()
+            if "case_ids" in row:
+                if "case_id" in row:
+                    raise ValueError("ambiguous gold case_id and case_ids fields")
+                case_ids = row["case_ids"]
+                if (not isinstance(case_ids, list) or
+                        any(not isinstance(v, str) or not v for v in case_ids) or
+                        len(set(case_ids)) != len(case_ids)):
+                    raise ValueError("invalid gold case_ids")
+                result[key] = set(case_ids)
+            else:
+                if "case_id" not in row:
+                    raise ValueError("missing gold case_id or case_ids")
+                case_id = row["case_id"]
+                if case_id is not None and (not isinstance(case_id, str) or not case_id):
+                    raise ValueError("invalid gold case_id")
+                result[key] = {case_id} if case_id is not None else set()
         else:
             candidates = row.get("candidate_case_ids")
             if not isinstance(candidates, list) or any(
