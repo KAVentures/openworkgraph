@@ -15,7 +15,8 @@ async function scenario(title,responses,check,withPipeline=false){
  let calls=0;
  const context={document:doc,CustomEvent:class {constructor(type,init){this.type=type;this.detail=init.detail;}},window:{__owgAuthReady:Promise.resolve(),dispatchEvent:e=>{opened++;lastEvent=e;}},fetch:async(url,options)=>{assert.equal(options.cache,'no-store');
    // The saved-review read is answered separately so scenarios keep counting their decision calls.
-   if(!options.method&&/\/review\/[^/]+$/.test(String(url)))return {ok:true,status:200,json:async()=>({project_id:'p1',revision:0,decision:'draft',reviewer_notes:'',execution_authorized:false})};
+   if(!options.method&&/\/review\/[^/]+$/.test(String(url)))return {ok:true,status:200,json:async()=>({format:'openworkgraph.human-review.v1',idea_id:'idea-1',project_id:'p1',revision:0,decision:'unreviewed',reviewer_notes:'',execution_authorized:false})};
+   if(options.method==='POST'&&/\/review$/.test(String(url))){const body=JSON.parse(options.body);return {ok:true,status:200,json:async()=>({format:'openworkgraph.human-review.v1',idea_id:'idea-1',project_id:'p1',revision:body.expected_review_revision+1,decision:body.decision,reviewer_notes:body.reviewer_notes,basis_sha256:'a'.repeat(64),execution_authorized:false})};}
    const x=responses[calls++];if(x instanceof Error)throw x;return {ok:x.ok!==false,status:x.status||200,json:async()=>x.data||x};}};
  vm.runInNewContext(fs.readFileSync(path.resolve(__dirname,'../../dashboard/review_choice_workbench.js'),'utf8'),context);
  doc.DOMContentLoaded();
@@ -52,6 +53,12 @@ const getControls=results=>[results.children.find(x=>x.tagName==='select'),resul
    async({results,details,opened,lastEvent,calls})=>{
      const [select,review]=getControls(results);select.value='p1';await review.onclick();
      await details.children.find(x=>x.textContent==='Revalidate review basis on server').onclick();
+     await Promise.resolve();await Promise.resolve();
+     const approval=details.children.find(x=>x.textContent==='Approve reviewed choice');
+     assert.ok(approval,'human review approval must be available');await approval.onclick();
+     const consent=details.children.find(x=>x.tagName==='label'&&x.children.some(c=>c.type==='checkbox')).children[0];
+     assert.equal(consent.checked,undefined,'acknowledgement is not prechecked');
+     consent.checked=true;consent.listeners.change();
      await details.children.find(x=>x.textContent==='Open opportunity decision and handoff').onclick();
      assert.equal(calls(),4);assert.equal(opened(),1);
      assert.equal(lastEvent().type,'owg-pipeline-open');
