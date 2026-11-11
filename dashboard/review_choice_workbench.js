@@ -140,7 +140,7 @@
                    result.human_review_approved!==true||result.execution_authorized!==false||
                    result.source_read_authorized!==false||
                    !Number.isSafeInteger(result.review_revision)||result.review_revision!==reviewRevision||
-                   currentDecision!=='approved'||!reviewStillSelected()||!notesMatchSaved())
+                   reviewMutationPending||currentDecision!=='approved'||!reviewStillSelected()||!notesMatchSaved())
                   throw new Error('Decision evidence changed.');
                 window.dispatchEvent(new CustomEvent('owg-pipeline-open',{detail:{idea_id:id,project_id:projectId,idea_revision:snapshot.idea.revision,idea_state:snapshot.idea.state,spec_sha256:selected.spec_sha256,archive_sha256:selected.archive_sha256,review_basis:{project_id:projectId,project_set_sha256:snapshot.project_set_sha256,idea_revision:snapshot.idea.revision,idea_state:snapshot.idea.state,spec_sha256:selected.spec_sha256,archive_sha256:selected.archive_sha256,process_status:snapshot.process_status,process_reference:snapshot.process_reference,dataset_origins:snapshot.dataset_origins,dataset_origin_check_available:snapshot.dataset_origin_check_available,blockers:selected.blockers}}}));
                 pipelineCard.scrollIntoView({block:'start',behavior:'auto'});
