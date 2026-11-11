@@ -111,6 +111,29 @@ class ReconstructionHeldoutScoreTests(unittest.TestCase):
         self.assertEqual(result["cross_case_contamination_events"], 1)
         self.assertNotIn("by_window", result["by_window"]["earlier"])
 
+    def test_macro_case_score_exposes_minority_case_failure(self):
+        labeled = gold(*[(f"a{i}", "A") for i in range(9)], ("b", "B"))
+        proposals = predicted(*[(f"a{i}", ("A",)) for i in range(9)], ("b", ()))
+        result = score(labeled, proposals)
+        self.assertAlmostEqual(result["f1"], 18 / 19)
+        self.assertEqual(result["per_case"]["A"]["f1"], 1)
+        self.assertEqual(result["per_case"]["B"]["f1"], 0)
+        self.assertEqual(result["macro_f1_labeled_cases"], 0.5)
+        self.assertEqual(result["per_case"]["B"]["support"], 1)
+
+    def test_case_false_positive_counts_on_unrelated_and_other_case(self):
+        result = score(gold(("a", "A"), ("b", "B"), ("noise", None)),
+                       predicted(("a", ("A", "B")), ("b", ("B",)),
+                                 ("noise", ("B",))))
+        self.assertEqual(result["per_case"]["B"]["false_positive"], 2)
+        self.assertEqual(result["per_case"]["B"]["true_positive"], 1)
+        self.assertAlmostEqual(result["per_case"]["B"]["precision"], 1 / 3)
+
+    def test_unrelated_only_has_undefined_macro_not_perfect_score(self):
+        result = score(gold(("noise", None)), predicted(("noise", ())))
+        self.assertIsNone(result["macro_f1_labeled_cases"])
+        self.assertEqual(result["per_case"], {})
+
     def test_empty_gold_refused(self):
         with self.assertRaisesRegex(ValueError, "empty gold"):
             score(gold(), predicted())
