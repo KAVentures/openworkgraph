@@ -51,6 +51,7 @@ from . import analysis_snapshot_export
 from . import event_log_signals as signals
 from . import event_log_signal_inbox as signal_inbox
 from . import event_log_signal_transitions as signal_transitions
+from . import event_log_signal_review_audit as signal_review_audit
 from . import event_log_signal_overview as signal_overview
 from . import event_log_simulation as simulation
 from . import event_log_trace_clusters as trace_clusters
@@ -1049,6 +1050,13 @@ def event_log_signal_history(request: Request, log_id: str,
                              limit: int = Query(default=50, ge=1, le=200)):
     _require_dashboard(request)
     return _respond(signal_transitions.list_history, log_id, limit=limit)
+
+
+@router.get("/v1/event-logs/{log_id}/signal-review-history")
+def event_log_signal_review_history(request: Request, log_id: str,
+                                    limit: int = Query(default=50, ge=1, le=200)):
+    _require_dashboard(request)
+    return _respond(signal_review_audit.list_actions, log_id, limit=limit)
 
 
 @router.post("/v1/event-logs/{log_id}/signal-inbox/acknowledge-batch")

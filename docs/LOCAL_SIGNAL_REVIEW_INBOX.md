@@ -88,3 +88,34 @@ happened at that time. Recording does not approve a business action,
 notify anyone, schedule a job, or grant AI/cloud access. Remaining R10
 work includes user-approved recipient delivery and enterprise incident
 escalation with independent permissions, retry, and revocation.
+
+
+## Explicit review-action audit trail (R10)
+
+Signal acknowledgements, reopenings, active snoozes, resume commands and
+batch acknowledgements now generate **local counts-only audit receipts** only
+when the exact evaluated state changes. A retried acknowledgement, an active
+identical snooze, or a duplicate resume creates no second receipt. Reviews
+and their receipts are committed in the **same local transaction**; if either
+write fails, the operation rolls back without half-updating the inbox.
+
+Receipts contain a random event identifier, owning log/rule identifiers, UTC
+timestamp, command type, the evaluated state SHA-256 fingerprint, and—for
+snoozes—duration in minutes. They contain **no case identifiers, evidence
+values, message text, recipients, or named-employee attribution**. They
+document local dashboard activity, *not* proof of who performed it; all
+entries identify the action source as
+`local_dashboard_session_unattributed`. They do not grant external delivery,
+AI sharing, or automated action authority.
+
+The authenticated local dashboard exposes a **Signal review decisions**
+timeline, refreshed manually or after a signal action, using:
+
+`GET /v1/event-logs/{log_id}/signal-review-history?limit=100`
+
+The last **3,000** review commands per dataset are retained; at most
+**200** entries can be requested. The response marks truncated pages and
+`historical_backfill=false`; earlier review commands cannot be reconstructed.
+Deleting a rule deletes its receipts, and deleting a dataset deletes all
+associated receipts. The endpoint refuses ordinary AI bearer-token access,
+matching the existing dashboard-session signal inbox.

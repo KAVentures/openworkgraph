@@ -118,6 +118,13 @@ CREATE TABLE IF NOT EXISTS signal_transitions (
   event_type VARCHAR NOT NULL, state_fingerprint VARCHAR NOT NULL
 );
 CREATE INDEX IF NOT EXISTS signal_transitions_by_log_time ON signal_transitions(log_id,occurred_at);
+CREATE TABLE IF NOT EXISTS signal_review_audit (
+  log_id VARCHAR NOT NULL, rule_id VARCHAR NOT NULL,
+  event_id VARCHAR PRIMARY KEY, recorded_at TIMESTAMP NOT NULL,
+  action VARCHAR NOT NULL, state_fingerprint VARCHAR NOT NULL,
+  snooze_minutes INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS signal_review_audit_by_log_time ON signal_review_audit(log_id,recorded_at);
 """
 
 _SCHEMA += source_identity.SCHEMA + object_relationships.SCHEMA
@@ -699,7 +706,7 @@ def delete_log(log_id: str) -> dict[str, Any]:
                 from .jira_retained_profiles import forget_dataset
                 forget_dataset(conn, log_id)
                 for table in ("object_relationships", "event_source_keys", "event_source_namespaces", "discovery_snapshots", "log_appends", "log_quality", "quarantine", "quarantine_decisions", "filter_sets",
-                              "domain_pack_installs", "metric_definitions", "saved_analyses", "signal_snoozes", "signal_reviews", "signal_transitions", "signal_rules", "case_tags", "event_objects", "events", "objects",
+                              "domain_pack_installs", "metric_definitions", "saved_analyses", "signal_snoozes", "signal_reviews", "signal_transitions", "signal_review_audit", "signal_rules", "case_tags", "event_objects", "events", "objects",
                               "object_attribute_values",
                               "logs"):
                     conn.execute(f"DELETE FROM {table} WHERE log_id = ?", [log_id])

@@ -3779,6 +3779,12 @@
     const transitionStatus=el('div','Refresh to inspect saved signal changes.','muted');
     transitionStatus.id='owgSignalTransitionStatus';transitionStatus.setAttribute('role','status');transitionStatus.setAttribute('aria-live','polite');
     const transitionResults=el('div');transitionResults.id='owgSignalTransitions';
+    const auditHeading=el('h4','Signal review decisions');
+    const auditNote=el('p','Local history of acknowledge, reopen, snooze and resume actions against exact evaluated states. This shows actions from this dashboard, not verified named people or business approvals. Only the most recent 3,000 entries per dataset are retained.','muted');
+    const auditRefresh=button('Refresh review history','secondary');auditRefresh.id='owgSignalAuditRefresh';
+    const auditStatus=el('div','Refresh to inspect signal review actions.','muted');
+    auditStatus.id='owgSignalAuditStatus';auditStatus.setAttribute('role','status');auditStatus.setAttribute('aria-live','polite');
+    const auditResults=el('div');auditResults.id='owgSignalAuditHistory';
     const allHeading=el('h4','Across all saved logs');
     const allNote=el('p','One local overview of saved signal review states across every imported dataset. This does not re-evaluate rules, read source accounts, send alerts or execute work. Open the corresponding log for the existing state-pinned review controls.','muted');
     const allFilter=select('owgSignalAllFilter',[
@@ -3793,12 +3799,41 @@
     const allControls=el('div',null,'actions');allControls.append(allFilter,allRefresh);
     box.append(row,message,rules,evaluate,out,reviewHeading,reviewNote,reviewRefresh,inbox,
       transitionHeading,transitionNote,transitionRefresh,transitionStatus,transitionResults,
+      auditHeading,auditNote,auditRefresh,auditStatus,auditResults,
       allHeading,allNote,allControls,allStatus,allResults);
     const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/signals';
     const selectedLogId=state.logId;
     const inboxBase=()=>'/v1/event-logs/'+encodeURIComponent(selectedLogId)+'/signal-inbox';
     const transitionBase=()=>'/v1/event-logs/'+encodeURIComponent(selectedLogId)+'/signal-history';
+    const auditBase=()=>'/v1/event-logs/'+encodeURIComponent(selectedLogId)+'/signal-review-history';
     const generation=state.generation;
+    let auditRequestId=0;
+    async function refreshAudit(){
+      const requestId=++auditRequestId;
+      auditRefresh.disabled=true;
+      auditStatus.textContent='Loading local signal review decisions…';
+      try{
+        const r=await getJSON(auditBase()+'?limit=100');
+        if(generation!==state.generation||requestId!==auditRequestId)return;
+        const entries=r.items||[];
+        auditStatus.textContent=Number(r.retained_total||0)+' saved review actions; showing '+
+          entries.length+(r.truncated?' (recent entries only)':'')+
+          '. Local dashboard actions only; no verified individual identity or execution approval.';
+        auditResults.replaceChildren(entries.length
+          ?table(['Reviewed (UTC)','Signal','Decision','Snooze'],entries.map(x=>[
+            x.recorded_at||'—',x.name,String(x.action||'').replace(/_/g,' '),
+            x.action==='snoozed'?String(x.snooze_minutes)+' min':'—']))
+          :el('div','No explicit signal review actions recorded yet.','muted'));
+      }catch(error){
+        if(generation===state.generation&&requestId===auditRequestId){
+          auditStatus.textContent=error.message||'Could not inspect local signal reviews.';
+          auditResults.replaceChildren();
+        }
+      }finally{
+        if(generation===state.generation&&requestId===auditRequestId)auditRefresh.disabled=false;
+      }
+    }
+    auditRefresh.onclick=()=>refreshAudit();
     let transitionRequestId=0;
     async function refreshHistory(){
       const requestId=++transitionRequestId;
@@ -3971,6 +4006,7 @@
       await refreshInbox();
       await refreshAllSignals();
       await refreshHistory();
+      await refreshAudit();
     }
     add.onclick=async()=>{
       try{
