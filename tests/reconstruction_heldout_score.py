@@ -57,7 +57,7 @@ def _index(document, *, gold):
     return result
 
 
-def score(gold_document, prediction_document):
+def score(gold_document, prediction_document, *, _include_windows=True):
     gold = _index(gold_document, gold=True)
     predictions = _index(prediction_document, gold=False)
     if not gold:
@@ -83,7 +83,7 @@ def score(gold_document, prediction_document):
     precision = tp / (tp + fp) if tp + fp else 0.0
     recall = tp / (tp + fn) if tp + fn else 0.0
     f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
-    return {
+    result = {
         "gold_events": len(gold),
         "true_positive": tp, "false_positive": fp, "false_negative": fn,
         "precision": precision, "recall": recall, "f1": f1,
@@ -99,6 +99,20 @@ def score(gold_document, prediction_document):
         "wrong_case_labeled_events": labeled_wrong_case_events,
         "evaluation_scope": "provided_labels_only",
     }
+    if _include_windows:
+        # Report each evidence window independently to reveal masked leakage.
+        result["by_window"] = {}
+        for window in sorted({w for w, _ in gold}):
+            gold_slice = {"events": [
+                {"window": w, "event_id": event, "case_ids": sorted(cases)}
+                for (w, event), cases in gold.items() if w == window]}
+            predicted_slice = {"events": [
+                {"window": w, "event_id": event,
+                 "candidate_case_ids": sorted(predictions[(w, event)])}
+                for (w, event) in gold if w == window]}
+            result["by_window"][window] = score(
+                gold_slice, predicted_slice, _include_windows=False)
+    return result
 
 
 def main():
