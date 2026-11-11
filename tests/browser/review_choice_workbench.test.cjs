@@ -17,7 +17,7 @@ async function scenario(title,responses,check,withPipeline=false){
    // The saved-review read is answered separately so scenarios keep counting their decision calls.
    if(!options.method&&/\/review\/[^/]+$/.test(String(url)))return {ok:true,status:200,json:async()=>({format:'openworkgraph.human-review.v1',idea_id:'idea-1',project_id:'p1',revision:0,decision:'unreviewed',reviewer_notes:'',execution_authorized:false})};
    if(options.method==='POST'&&/\/review$/.test(String(url))){const body=JSON.parse(options.body);return {ok:true,status:200,json:async()=>({format:'openworkgraph.human-review.v1',idea_id:'idea-1',project_id:'p1',revision:body.expected_review_revision+1,decision:body.decision,reviewer_notes:body.reviewer_notes,basis_sha256:'a'.repeat(64),execution_authorized:false})};}
-   const x=responses[calls++];if(x instanceof Error)throw x;return {ok:x.ok!==false,status:x.status||200,json:async()=>x.data||x};}};
+   const x=responses[calls++];if(x instanceof Error)throw x;return {ok:x.ok!==false,status:x.status||200,json:async()=>x.wait?await x.wait:(x.data||x)};}};
  vm.runInNewContext(fs.readFileSync(path.resolve(__dirname,'../../dashboard/review_choice_workbench.js'),'utf8'),context);
  doc.DOMContentLoaded();
  const card=panel.children[0];assert.equal(card.id,'owgReviewChoiceWorkbench');
@@ -75,6 +75,30 @@ const getControls=results=>[results.children.find(x=>x.tagName==='select'),resul
      assert.equal(lastEvent().detail.spec_sha256,'a'.repeat(64));
      assert.equal(lastEvent().detail.archive_sha256,'b'.repeat(64));
    },true);
+ // Withdrawing acknowledgement while the authoritative server preflight is pending
+ // must prevent navigation, even when the server returns an otherwise valid approval.
+ {
+   let finish;
+   const wait=new Promise(resolve=>{finish=resolve;});
+   const preflight={format:'openworkgraph.review-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),blockers:[],review_required:true,execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false};
+   const handoff={format:'openworkgraph.reviewed-handoff-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),review_revision:1,human_review_approved:true,execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false};
+   await scenario('withdrawn acknowledgement during handoff preflight denies navigation',
+     [basis(),basis(),preflight,{wait}],async({results,details,opened})=>{
+       const [select,review]=getControls(results);select.value='p1';await review.onclick();
+       await details.children.find(x=>x.textContent==='Revalidate review basis on server').onclick();
+       await Promise.resolve();await Promise.resolve();
+       await details.children.find(x=>x.textContent==='Approve reviewed choice').onclick();
+       const consent=details.children.find(x=>x.tagName==='label'&&x.children.some(c=>c.type==='checkbox')).children[0];
+       consent.checked=true;consent.listeners.change();
+       const proceed=details.children.find(x=>x.textContent==='Open opportunity decision and handoff');
+       const pending=proceed.onclick();
+       await Promise.resolve();await Promise.resolve();
+       consent.checked=false;consent.listeners.change();
+       finish(handoff);await pending;
+       assert.equal(opened(),0,'withdrawn acknowledgement must not open the pipeline');
+       assert.equal(proceed.disabled,true);
+     },true);
+ }
  // An in-flight inspection invalidated by editing the ID must not strand the load button.
  {
    const panel=new Node('section');
