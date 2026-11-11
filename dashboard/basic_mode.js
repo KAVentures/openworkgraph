@@ -1198,7 +1198,9 @@
           ' · every ' + item.interval_minutes + ' min · ' + (item.enabled ? 'next ' + String(item.next_run_at || '').slice(0, 16).replace('T', ' ')
           : (item.paused_reason === 'signal_rules_changed_requires_reapproval' ? 'paused: saved signal rules changed'
             : (item.paused_reason ? 'paused after repeated failures' : 'paused'))) +
-          (item.kind === 'event_log_signals' ? ' · pinned ' + Number(item.signal_rules_count || 0) + ' signal rules' : '') +
+          (item.kind === 'event_log_signals'
+            ? (item.signal_rules_fingerprint ? ' · pinned ' + Number(item.signal_rules_count || 0) + ' signal rules'
+              : ' · rule set not approved') : '') +
           (item.quiet_hours ? ' · quiet ' + item.quiet_hours.start + '–' + item.quiet_hours.end +
             ' ' + item.quiet_hours.timezone + (item.quiet_hours_active ? ' (now)' : '') : '') +
           (item.last_deferred_until ? ' · last quiet deferral until ' + String(item.last_deferred_until).slice(0, 16).replace('T',' ') + ' UTC' : '') +
