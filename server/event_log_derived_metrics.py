@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, localcontext
 from typing import Any, Mapping
 
 VERSION = 1
@@ -142,29 +142,35 @@ def summarize_rows(
     digest = validate(definition, allowed_fields)
     if not isinstance(rows, list) or len(rows) > MAX_BATCH_ROWS:
         raise MetricDefinitionError("row budget exceeded")
-    total = Decimal(0)
-    minimum: Decimal | None = None
-    maximum: Decimal | None = None
-    non_null = 0
-    for row in rows:
-        if not isinstance(row, Mapping):
-            raise MetricDefinitionError("row must be a mapping")
-        value = _evaluate(definition["expression"], row)
-        if value is None:
-            continue
-        non_null += 1
-        total += value
+    # Accumulate in a fixed, sufficiently wide context. Checking intermediate
+    # totals rejects valid cancelling cohorts and makes results order-dependent.
+    # Each bounded input has at most 24 digits and there are <= 1000 rows.
+    with localcontext() as context:
+        context.prec = 100
+        total = Decimal(0)
+        minimum: Decimal | None = None
+        maximum: Decimal | None = None
+        non_null = 0
+        for row in rows:
+            if not isinstance(row, Mapping):
+                raise MetricDefinitionError("row must be a mapping")
+            value = _evaluate(definition["expression"], row)
+            if value is None:
+                continue
+            non_null += 1
+            total += value
+            minimum = value if minimum is None else min(minimum, value)
+            maximum = value if maximum is None else max(maximum, value)
         if total and abs(total.adjusted()) > MAX_DECIMAL_MAGNITUDE:
             raise MetricDefinitionError("aggregate magnitude exceeds safe bound")
-        minimum = value if minimum is None else min(minimum, value)
-        maximum = value if maximum is None else max(maximum, value)
+        mean = str(total / non_null) if non_null else None
     return {
         "definition_sha256": digest,
         "rows": len(rows),
         "non_null": non_null,
         "null": len(rows) - non_null,
         "sum": str(total) if non_null else None,
-        "mean": str(total / non_null) if non_null else None,
+        "mean": mean,
         "min": str(minimum) if minimum is not None else None,
         "max": str(maximum) if maximum is not None else None,
     }
