@@ -50,9 +50,16 @@ def test_targets_are_optional_and_do_not_change_existing_summary_or_simulation()
     original = sim.simulate({**base, "priorities": priorities.parse(plain)})
     targets = sim.simulate({**base, "priorities": priorities.parse(TARGETS)})
     assert "priority_completion_targets" not in original
-    assert {key: value for key, value in targets.items() if key not in {
+    unchanged = {key: value for key, value in targets.items() if key not in {
         "priority_completion_targets", "completion_target_basis",
-        "completion_target_rates_are_bounds_not_certified_slas"}} == original
+        "completion_target_rates_are_bounds_not_certified_slas"}}
+    # The optional user-entered target is echoed in the targeted class's
+    # description; no legacy measurement or queue result may change.
+    unchanged["priority_classes"] = [
+        {key: value for key, value in item.items() if key != "completion_target_minutes"}
+        for item in unchanged["priority_classes"]
+    ]
+    assert unchanged == original
     assert sum(row["post_warmup_arrivals"] for row in targets["priority_completion_targets"]) == 270
     assert targets["completion_target_rates_are_bounds_not_certified_slas"] is True
 
