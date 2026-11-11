@@ -122,6 +122,28 @@ def score(gold_document, prediction_document, *, _include_windows=True):
     result["macro_f1_labeled_cases"] = (
         sum(item["f1"] for item in per_case.values()) / len(per_case)
         if per_case else None)
+    # Gold-only adversarial scenario strata make interruption/interleaving failures
+    # visible without allowing predictions to choose their own evaluation cohort.
+    if _include_windows:
+        rows = gold_document["events"]
+        has_scenarios = any("scenario" in row for row in rows)
+        if has_scenarios:
+            if any(not isinstance(row.get("scenario"), str) or not row["scenario"].strip()
+                   for row in rows):
+                raise ValueError("all gold events require a nonempty scenario when stratified")
+            result["by_scenario"] = {}
+            for scenario in sorted({row["scenario"] for row in rows}):
+                selected = {(row["window"], row["event_id"])
+                            for row in rows if row["scenario"] == scenario}
+                gold_slice = {"events": [
+                    {"window": w, "event_id": event, "case_ids": sorted(cases)}
+                    for (w, event), cases in gold.items() if (w, event) in selected]}
+                prediction_slice = {"events": [
+                    {"window": w, "event_id": event,
+                     "candidate_case_ids": sorted(predictions[(w, event)])}
+                    for w, event in selected]}
+                result["by_scenario"][scenario] = score(
+                    gold_slice, prediction_slice, _include_windows=False)
     if _include_windows:
         # Report each evidence window independently to reveal masked leakage.
         result["by_window"] = {}
