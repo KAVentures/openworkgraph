@@ -37,7 +37,7 @@ class ReviewQueueTests(unittest.TestCase):
         out = build_review_queue(payload([pair("A", "F", ["a1"], [
             {"session_started_at": "2026-11-01T09:00:00Z", "evidence_event_ids": ["a0"]}])]))
         self.assertEqual([x["event_id"] for x in out["event_reviews"]], ["a0", "a1"])
-        self.assertTrue(out["unlisted_events_are_unassigned"])
+        self.assertFalse(out["unlisted_events_are_unassigned"])
         self.assertTrue(all(not x["confirmed_case"] for x in out["event_reviews"]))
 
     def test_multi_pair_event_is_ambiguous_not_forced_to_first(self):
@@ -109,7 +109,7 @@ class ReviewQueueTests(unittest.TestCase):
         self.assertEqual(review["event_reviews_count"], 2)
         self.assertEqual({r["event_id"] for r in review["event_reviews"]}, {"old-pair", "new-pair"})
         self.assertTrue(all(not r["confirmed_case"] for r in review["event_reviews"]))
-        self.assertTrue(review["unlisted_events_are_unassigned"])
+        self.assertFalse(review["unlisted_events_are_unassigned"])
         self.assertFalse(review["coverage_incomplete"])
 
     def test_interleaved_two_cases_and_interruptions_keep_exact_event_provenance(self):
@@ -143,7 +143,7 @@ class ReviewQueueTests(unittest.TestCase):
             identities = row["candidate_resource_pairs"][0]
             self.assertTrue(all(pointer[2].endswith(expected * 32) for pointer in identities))
             self.assertFalse(row["confirmed_case"])
-        self.assertTrue(review["unlisted_events_are_unassigned"])
+        self.assertFalse(review["unlisted_events_are_unassigned"])
         self.assertFalse(review["coverage_incomplete"])
 
 
@@ -168,7 +168,7 @@ class ReviewQueueTests(unittest.TestCase):
         review = resumption_candidates(db, lease={"mode": "all_saved"})["event_assignment_review"]
         self.assertEqual({row["event_id"] for row in review["event_reviews"]},
                          {"old-real", "new-real"})
-        self.assertTrue(review["unlisted_events_are_unassigned"])
+        self.assertFalse(review["unlisted_events_are_unassigned"])
 
 
     def test_duplicate_label_on_distinct_real_pairs_is_not_a_multi_case_event(self):
@@ -271,6 +271,49 @@ class ReviewQueueTests(unittest.TestCase):
         self.assertEqual(denied["observed_pair_event_assignments"], [])
         self.assertNotIn("event_assignment_review", denied)
 
+
+    def test_adversarial_interleaving_permutations_do_not_leak_pair_evidence(self):
+        """Synthetic invariance gate, NOT independently labeled held-out F1."""
+        import itertools
+        import json
+        import sqlite3
+        from server.work_resumption import resumption_candidates
+
+        def metadata(letter):
+            return json.dumps({
+                "resource_reference": {
+                    "resource_ref": "owg:r:" + letter * 32,
+                    "provider": "github", "resource_kind": "issue"},
+                "file_reference": {"file_ref": "owg:f:" + letter * 32}})
+
+        # Each case has independent co-observed evidence in both windows.
+        # Other cases and an unpaired interruption must not enter its pair.
+        old = [(f"{c}-old", f"2026-10-12T09:0{i}:00Z", metadata(c))
+               for i, c in enumerate("abc")]
+        current = [(f"{c}-new", f"2026-10-14T10:0{i}:00Z", metadata(c))
+                   for i, c in enumerate("abc")]
+        interruption = ("interrupt", "2026-10-14T10:04:00Z",
+                        json.dumps({"unrelated": "no_resource_pair"}))
+        expected = {f"{c}-{window}" for c in "abc" for window in ("old", "new")}
+        # Vary ingestion order without changing observed timestamps.
+        for permutation in itertools.permutations(current):
+            db = sqlite3.connect(":memory:")
+            db.row_factory = sqlite3.Row
+            db.execute("CREATE TABLE events(event_id TEXT, observed_at TEXT, metadata_json TEXT)")
+            db.executemany("INSERT INTO events VALUES (?, ?, ?)",
+                           old + list(permutation) + [interruption])
+            review = resumption_candidates(db, lease={"mode": "all_saved"})[
+                "event_assignment_review"]
+            by_event = {row["event_id"]: row for row in review["event_reviews"]}
+            self.assertEqual(set(by_event), expected)
+            self.assertFalse(review["coverage_incomplete"])
+            for event_id, row in by_event.items():
+                letter = event_id[0]
+                self.assertEqual(len(row["candidate_resource_pairs"]), 1)
+                self.assertTrue(all(pointer[2].endswith(letter * 32)
+                                    for pointer in row["candidate_resource_pairs"][0]))
+                self.assertFalse(row["confirmed_case"])
+            db.close()
 
 if __name__ == "__main__":
     unittest.main()

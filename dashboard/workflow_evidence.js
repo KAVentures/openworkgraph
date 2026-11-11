@@ -7,6 +7,8 @@
   let recordLanes=[];
   let recordLaneCoverageLimited=false;
   let loading=false;
+  // Invalidate in-flight sensitive reads when an operator clears or refreshes evidence.
+  let reconstructionReviewGeneration=0;
 
   function repeatedCard(){
     return [...document.querySelectorAll('#panel-overview .card')].find(card =>
@@ -41,6 +43,13 @@
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="ghost" type="button" id="refreshWorkflowEvidence">Refresh examples</button><span class="badge">Evidence → external AI</span></div>
       </div>
+      <div style="border-top:1px solid #eceee8;padding-top:13px;margin-top:13px">
+        <h3>Review event-to-case evidence</h3>
+        <p class="muted">Read-only reconstruction. Requires a separately enabled, unexpired all-saved AI history grant; dashboard sign-in alone is insufficient. No event is a confirmed business case.</p>
+        <button class="secondary" type="button" id="loadReconstructionReview">Inspect permitted event assignments</button>
+        <button class="ghost" type="button" id="clearReconstructionReview">Clear review evidence</button>
+        <div id="reconstructionReviewResults" role="status" aria-live="polite" style="margin-top:10px"></div>
+      </div>
       <div id="workflowEvidenceCandidates" style="margin-top:10px"><div class="muted">Loading observed examples…</div></div>
       <div style="border-top:1px solid #eceee8;padding-top:13px;margin-top:13px">
         <h3>Record-linked observations</h3>
@@ -48,6 +57,8 @@
         <div id="workflowRecordCaseLanes" style="margin-top:10px"></div>
       </div>`;
     host.querySelector('#refreshWorkflowEvidence').onclick=()=>refresh();
+    host.querySelector('#loadReconstructionReview').onclick=()=>loadReconstructionReview();
+    host.querySelector('#clearReconstructionReview').onclick=()=>{reconstructionReviewGeneration++;host.querySelector('#reconstructionReviewResults').replaceChildren();host.querySelector('#loadReconstructionReview').disabled=false;};
     const patternList=parent.querySelector('#patternList');
     if(patternList) patternList.insertAdjacentElement("afterend",host); else parent.appendChild(host);
     return host;
@@ -440,9 +451,61 @@
     updateSelectionActions(index);
   }
 
+  async function loadReconstructionReview(){
+    const host=ensureCard()?.querySelector('#reconstructionReviewResults');
+    const button=ensureCard()?.querySelector('#loadReconstructionReview');
+    if(!host||!button)return;
+    const generation=++reconstructionReviewGeneration;
+    button.disabled=true;
+    host.textContent='Checking saved-history permission and reading bounded evidence…';
+    try{
+      await window.__owgAuthReady;
+      if(generation!==reconstructionReviewGeneration)return;
+      const response=await fetch('/v1/history/reconstruction-review',{cache:'no-store'});
+      if(generation!==reconstructionReviewGeneration)return;
+      if(response.status===403){
+        host.textContent='Access denied or grant expired. Enable all-saved AI history access explicitly in History settings, then retry.';
+        return;
+      }
+      if(!response.ok)throw new Error('Reconstruction review unavailable ('+response.status+').');
+      const data=await response.json();
+      if(generation!==reconstructionReviewGeneration)return;
+      const review=data.review||{};
+      if(data.derived!==true||data.authoritative!==false||review.no_case_identity_inferred!==true)
+        throw new Error('Unexpected review contract');
+      const rows=Array.isArray(review.event_reviews)?review.event_reviews:[];
+      const warning=review.coverage_incomplete?'Evidence scan incomplete; unlisted events have unknown assignments.':'Unlisted events have unknown assignments; absence from this review is not proof of no case.';
+      host.innerHTML='<p class="muted">'+esc(rows.length)+' event observations for review. '+esc(warning)+'</p>'+
+        rows.slice(0,100).map(row=>{
+          const pairs=Array.isArray(row.candidate_resource_pairs)?row.candidate_resource_pairs:[];
+          // Review queue encodes each pointer as [provider, resource_kind, resource_ref].
+          // Do not treat these tuples as objects: that hides the actual provenance.
+          const candidates=pairs.map(pair=>Array.isArray(pair)?pair.map(ref=>
+            Array.isArray(ref)&&ref.length===3
+              ? esc(ref.map(part=>String(part)).join(' / '))
+              : '[invalid provenance]').join(' + '):'[invalid candidate]').join(' OR ');
+          return '<details style="padding:8px 0;border-top:1px solid #eceee8"><summary>'+
+            esc(row.window||'')+' · '+esc(row.event_id||'')+' · '+
+            esc(row.review_status==='ambiguous_multiple_pairs'?'Ambiguous: multiple candidates':'Observed pair, unconfirmed')+
+            '</summary><p class="muted">Candidate observations (not verified cases): '+candidates+'</p></details>';
+        }).join('')+(rows.length>100?'<p class="muted">Only first 100 review rows shown. Narrow evidence in source tools for deeper inspection.</p>':'');
+    }catch(error){
+      if(generation!==reconstructionReviewGeneration)return;
+      host.textContent=String(error.message||'Reconstruction review unavailable.');
+    }finally{
+      // Stale responses cannot alter controls belonging to a newer request.
+      if(generation===reconstructionReviewGeneration)button.disabled=false;
+    }
+  }
+
   async function refresh(){
     ensureCard();
     removeOldPlaceholderActions();
+    // Refresh invalidates pending responses too, not only currently rendered evidence.
+    reconstructionReviewGeneration++;
+    ensureCard()?.querySelector('#reconstructionReviewResults')?.replaceChildren();
+    const inspectButton=ensureCard()?.querySelector('#loadReconstructionReview');
+    if(inspectButton)inspectButton.disabled=false;
     const active=document.querySelector('[role="tab"][aria-selected="true"]')?.dataset.tab;
     if(active!=='overview'||loading) return;
     loading=true;
