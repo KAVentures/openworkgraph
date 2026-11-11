@@ -9,6 +9,7 @@ from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from shared.process_model import ProcessModel
 from shared.process_parallel import parallel_regions, replay_node_ids
+from shared import process_agent_release as release_integrity
 from shared.process_agent_release import create_manifest
 
 _TEMPLATES = Path(__file__).parent / 'process_agent_templates'
@@ -403,7 +404,7 @@ def build_runtime_project(packet: dict) -> bytes:
         "Files added later by a customer (cases, credentials, bindings, journals)\n"
         "are not in this generated-file manifest and require separate review.\n"
     )
-    files['verify_release.py'] = (Path(__file__).parent / 'process_agent_release.py').read_text(encoding='utf-8')
+    files['verify_release.py'] = Path(release_integrity.__file__).read_text(encoding='utf-8')
     files['release-manifest.json'] = create_manifest(files, spec)
     memory = BytesIO()
     with ZipFile(memory, 'w', compression=ZIP_DEFLATED) as archive:
