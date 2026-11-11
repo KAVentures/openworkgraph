@@ -49,4 +49,6 @@ def export_snapshot(log_id, spec):
         matching_cases=result['matching']['cases'], matching_rows=result['matching']['rows'],
         rows_truncated=result['rows_truncated'], metric_coverage=coverage,
         non_finite_results_withheld=result['non_finite_results_withheld'], source_content_sha256=source_hash,
-        analysis_spec_sha256=content_digest(result['spec'])).model_dump(mode='json')
+        analysis_spec_sha256=content_digest(result['spec']),
+        metric_definition_sha256=[analysis._metric_lineage(metric.model_dump(mode='json'))['definition_sha256']
+                                  for metric in parsed.metrics if metric.name in needed]).model_dump(mode='json')
