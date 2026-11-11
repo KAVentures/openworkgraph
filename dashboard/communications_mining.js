@@ -166,8 +166,11 @@
         return;
       }
       const e=m.evaluation;const f=v=>v===null||v===undefined?'—':Number(v).toFixed(2);
+      const gateLines=Object.entries(m.holdout_language_gates||{}).map(([code,g])=>code+': '+(g.ready?'descriptive gate passes':'blocked for '+g.rejected_intents_total+' intent(s)'));
       model.replaceChildren(el('h3','Learned model'),el('div','Trained '+m.trained_at+' from '+m.training_example_count+' examples; expires '+m.expires_at+'. Holdout: '+e.holdout_examples+' reviewed examples in '+(e.languages.join(', ')||'no language')+'. Macro F1 '+f(e.macro_f1_supported_intents)+'. Estimates, not verified reasons for contact.','muted'),
         table(['Intent','F1','Precision','Recall','Calibration error','Uncertain','Support','By language (F1)'],e.intents.map(i=>[i.intent,f(i.f1),f(i.precision),f(i.recall),f(i.expected_calibration_error),pct(i.uncertain_rate),i.sufficient_support?String(i.positive_examples):i.positive_examples+' (too few)',Object.entries(i.by_language).map(([l,v])=>l+' '+f(v.f1)).join(', ')])),
+        el('p','Optional reviewer-labelled language gate: '+(gateLines.join('; ')||'no supported language reported')+
+          '. Each modelled intent needs at least five held-out positives and negatives, F1 at least 0.80, and at most 35% uncertain decisions. Passing is NOT external validation. OWG does not detect the language of an uploaded export.','muted'),
         ...(m.skipped_intents.length?[el('div','Not trained (fewer than 5 positive or negative examples): '+m.skipped_intents.map(x=>x.intent).join(', ')+'.','muted')]:[]));
     }
     function renderExamples(page){
