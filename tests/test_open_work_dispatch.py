@@ -154,6 +154,17 @@ with TestClient(app) as client:
     assert report.status_code == 200 and report.json()["status"] == "reported"
     assert client.post("/v1/open-work/dispatch/agent/claim", content=b"x" * 3000,
                        headers={**agent, "Content-Type": "application/json"}).status_code == 413
+    for invalid in (
+        b'{"work_item_ref":"one","work_item_ref":"two","agent":"a"}',
+        b'{"work_item_ref":"one","agent":NaN}',
+        b'{"work_item_ref":"one","agent":"a"} trailing',
+    ):
+        result = client.post("/v1/open-work/dispatch/agent/claim", content=invalid,
+                             headers={**agent, "Content-Type": "application/json"})
+        assert result.status_code == 422, result.text
+    assert client.post("/v1/open-work/dispatch/agent/claim", content=b'{}',
+                       headers={**agent, "Content-Type": "text/plain"}).status_code == 415
+
 '''
     env = os.environ.copy()
     env.update(WORKFLOW_OBSERVER_DATA=str(tmp_path / "data"), WORKFLOW_OBSERVER_AUTH_DIR=str(tmp_path / "auth"),
