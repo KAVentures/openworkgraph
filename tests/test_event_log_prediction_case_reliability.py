@@ -30,6 +30,9 @@ def test_cases_are_counted_once_even_when_they_have_many_prediction_points():
             rows += [(f"small{i}", "same_activity", 0.5, True)] * 100
         # Missing basis or label cannot silently enter the calibration.
         rows += [("unknown", None, 0.9, True), ("label_missing", "same_activity", 0.7, None)]
+        # Contradictory outcome labels for one case must not be summarized as a certainty.
+        rows += [("inconsistent", "same_activity", 0.5, True),
+                 ("inconsistent", "same_activity", 0.5, False)]
         conn.executemany("INSERT INTO pt_est VALUES (?, ?, ?, ?)", rows)
         result = monitoring._case_outcome_reliability(conn)
     finally:
