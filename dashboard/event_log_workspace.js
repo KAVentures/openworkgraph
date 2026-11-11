@@ -270,8 +270,32 @@
     };
     // Copies of the report saved on this computer, by hand or by a local schedule (Basic mode › Scheduled jobs).
     const savedBase=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/saved-reports';
+    function savedChanges(c){
+      if(!c||!c.available)return el('div','Save two copies to see what changed between them.','muted');
+      const f=c.figures,sign=v=>v>0?'+':v<0?'−':'';
+      const fmt={cases:v=>Number(v).toLocaleString(),events:v=>Number(v).toLocaleString(),activities:v=>Number(v).toLocaleString(),distinct_variants:v=>Number(v).toLocaleString(),
+        median_case_seconds:duration,p90_case_seconds:duration,events_per_case:v=>Number(v).toFixed(2),repeat_rate:v=>(v*100).toFixed(1)+'%'};
+      const label={cases:'Cases',events:'Events',activities:'Activities',distinct_variants:'Variants',median_case_seconds:'Median case time',p90_case_seconds:'90th percentile case time',events_per_case:'Events per case',repeat_rate:'Cases repeating an activity'};
+      const rows=Object.keys(label).filter(k=>f[k]).map(k=>{const x=f[k],d=x.change;
+        const change=d===null?'—':d===0?'no change':sign(d)+(k==='repeat_rate'?(Math.abs(d)*100).toFixed(1)+' pts':fmt[k](Math.abs(d)));
+        return [label[k],x.older===null?'—':fmt[k](x.older),x.newer===null?'—':fmt[k](x.newer),change];});
+      if(c.cost){const d=c.cost.change;rows.push(['Total cost ('+c.cost.currency+')',Number(c.cost.older).toLocaleString(undefined,{maximumFractionDigits:2}),Number(c.cost.newer).toLocaleString(undefined,{maximumFractionDigits:2}),d===0?'no change':sign(d)+Math.abs(d).toLocaleString(undefined,{maximumFractionDigits:2})]);}
+      const box=el('div');box.id='owgEventLogSavedChanges';
+      box.append(el('h4','Changes since the previous copy'),
+        el('div','From '+String(c.older.generated_at).replace('T',' ').replace('Z',' UTC')+' to '+String(c.newer.generated_at).replace('T',' ').replace('Z',' UTC')+'.','muted'),
+        table(['Figure','Previous','Newest','Change'],rows));
+      const notes=[];
+      if(c.activities_added.length)notes.push('New activities: '+c.activities_added.slice(0,10).join(', ')+'.');
+      if(c.activities_gone.length)notes.push('No longer seen: '+c.activities_gone.slice(0,10).join(', ')+'.');
+      if(!c.top_variant.same_path&&c.top_variant.newer)notes.push('The most common variant is now '+c.top_variant.newer.path.join(' → ')+'.');
+      if(c.largest_activity_changes.length)notes.push('Largest changes in cases per activity: '+c.largest_activity_changes.slice(0,5).map(a=>a.activity+' '+sign(a.change)+Math.abs(a.change)).join(', ')+'.');
+      notes.forEach(n=>box.appendChild(el('div',n)));
+      box.appendChild(el('div',c.interpretation,'muted'));
+      return box;
+    }
     async function showSaved(note){
       const r=await getJSON(savedBase());
+      let changes=null;try{changes=await getJSON('/v1/event-logs/'+encodeURIComponent(state.logId)+'/saved-report-changes');}catch(_){}
       const saveNow=button('Save a copy now','secondary');saveNow.id='owgEventLogSaveCopy';
       saveNow.onclick=async()=>{saveNow.disabled=true;try{const s2=await (await api(savedBase(),{method:'POST'})).json();await showSaved('Saved '+s2.saved.name+'.');}catch(error){status(error.message);saveNow.disabled=false;}};
       const rows=r.reports.map(c=>{const get=button('Download','secondary');get.setAttribute('aria-label','Download saved report '+c.name);
@@ -280,7 +304,7 @@
       savedList.replaceChildren(el('h3','Saved report copies'),
         el('div','The newest '+r.keep+' copies of this log’s report are kept on this computer. To save one regularly, add an “Event log report copy” job under Scheduled jobs with this log’s ID: '+state.logId+'.','muted'),
         ...(note?[el('div',note)]:[]),
-        rows.length?table(['Saved','Size',''],rows):el('div','No saved copies yet.','muted'),saveNow);
+        rows.length?table(['Saved','Size',''],rows):el('div','No saved copies yet.','muted'),saveNow,savedChanges(changes));
       show(savedList,true);savedButton.setAttribute('aria-expanded','true');
     }
     savedButton.onclick=()=>{if(savedButton.getAttribute('aria-expanded')==='true'){show(savedList,false);savedButton.setAttribute('aria-expanded','false');return;}
