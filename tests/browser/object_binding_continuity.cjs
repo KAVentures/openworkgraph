@@ -72,8 +72,12 @@ const path=require('node:path');
     assert.equal(importResult.status,200,importResult.body);
     await entry.click();
     await page.locator('#logSelect').waitFor();
-    await page.waitForFunction(()=>document.querySelector('#logSelect')?.options?.length>1);
-    assert.equal(await page.locator('#relationship').isDisabled(),false);
+    await page.waitForFunction(()=>{
+      const relations=document.querySelector('#relationship');
+      const activities=document.querySelector('#knownActivities');
+      return relations && !relations.disabled && relations.options.length>1 &&
+             activities && activities.options.length>=2;
+    });
     await page.locator('#firstActivity').fill('Pack');
     await page.locator('#thenActivity').fill('Ship');
     const [response]=await Promise.all([
