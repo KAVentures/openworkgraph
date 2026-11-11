@@ -12,6 +12,7 @@ from starlette.concurrency import run_in_threadpool
 
 from . import automation_incidents as incidents
 from . import automation_monitoring as monitoring
+from . import automation_release_inventory as release_inventory
 from . import automation_report_channels as channels
 from . import event_log_workspace as workspace
 from .local_auth import dashboard_session_valid
@@ -84,6 +85,48 @@ async def attach_design(request: Request, deployment_id: str):
     _require_dashboard(request)
     spec = await _json(request, 1024 * 1024)
     return await _respond(monitoring.attach_design, deployment_id, spec)
+
+
+def _strict_release_json(value: bytes) -> Any:
+    def unique(pairs):
+        out = {}
+        for key, item in pairs:
+            if key in out:
+                raise ValueError("duplicate key")
+            out[key] = item
+        return out
+
+    def invalid(_):
+        raise ValueError("nonfinite value")
+
+    try:
+        return json.loads(value, object_pairs_hook=unique, parse_constant=invalid)
+    except (ValueError, UnicodeError):
+        raise HTTPException(422, "Invalid release review JSON") from None
+
+
+@router.get("/v1/automation-monitoring/deployments/{deployment_id}/release")
+async def release_inventory(request: Request, deployment_id: str):
+    _require_dashboard(request)
+    return await _respond(release_inventory.detail, deployment_id)
+
+
+@router.post("/v1/automation-monitoring/deployments/{deployment_id}/release")
+async def save_release_inventory(request: Request, deployment_id: str):
+    _require_dashboard(request)
+    if request.headers.get("content-type", "").split(";")[0].strip().lower() != "application/json":
+        raise HTTPException(415, "application/json required")
+    body = await request.body()
+    if len(body) > 8192:
+        raise HTTPException(413, "Release review is larger than 8 KiB")
+    data = _strict_release_json(body)
+    try:
+        result = await run_in_threadpool(release_inventory.record, deployment_id, data)
+        return JSONResponse(result, headers={"Cache-Control": "no-store"})
+    except release_inventory.ReleaseReviewError as exc:
+        raise HTTPException(exc.status, str(exc)) from None
+    except monitoring.MonitoringError as exc:
+        raise HTTPException(422, str(exc)) from None
 
 
 @router.get("/v1/automation-monitoring/deployments/{deployment_id}/monitor")
