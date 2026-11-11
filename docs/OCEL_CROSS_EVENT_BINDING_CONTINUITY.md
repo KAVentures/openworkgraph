@@ -34,8 +34,10 @@ object-centric Petri-net (OCPN) binding replay.
 A related target item can occur in several supplied relationships; that
 rightly counts once per *pair*, not once per target. Multiple qualifiers
 for the same O2O relation or event-object association never inflate the
-number of pairs or their event counts. The UI exposes the two distinct-object
-counts to prevent interpreting pair-level metrics as independent items.
+number of pairs or their event counts. Self-referential O2O links cannot
+prove the co-attendance of two distinct objects and fail the entire selected
+cohort instead of counting the same object twice. The UI exposes the two
+distinct-object counts to prevent interpreting pair-level metrics as independent items.
 
 The query leaves saved data unchanged, uses the existing **local dashboard
 session** (not the generic MCP bearer), and supports only literal values
