@@ -339,8 +339,18 @@ def model_status(intent_names: list[str] | None = None) -> dict[str, Any]:
             return {"trained": False, "usable": False, "evaluation_current": False}
         fresh, reason = _freshness(model, data, intent_names)
     languages = model.get("evaluation", {}).get("languages", []) if fresh else []
-    gates = {code: quality_gate.assess(model["evaluation"], model["taxonomy_intents"], code)
-             for code in languages if isinstance(code, str) and code != "und"}
+    gates = {}
+    for code in languages:
+        if not isinstance(code, str) or code == "und":
+            continue
+        try:
+            gates[code] = quality_gate.assess(model["evaluation"], model["taxonomy_intents"], code)
+        except quality_gate.QualityGateError:
+            # Older review examples can hold non-standard language labels.
+            # Model-status must remain readable, but they cannot pass a gate.
+            gates[code] = {"ready": False, "rejected_intents_total": len(model["taxonomy_intents"]),
+                           "reason": "language_code_not_supported_for_quality_gate",
+                           "independent_external_quality_verified": False}
     return {"trained": True, "usable": fresh, "stale": not fresh,
             "stale_reason": reason, "evaluation_current": fresh,
             "trained_at": model["trained_at"], "expires_at": model["expires_at"],
