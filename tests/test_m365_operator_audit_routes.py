@@ -17,6 +17,7 @@ def _receipt(directory, name="m365-" + "a" * 32 + ".json"):
               "scope_sha256": "a" * 64, "log_id_sha256": "b" * 64,
               "expected_generation": 2, "event_snapshots": 3,
               "automatic_retry_allowed": False,
+              "checkpoint_advanced": False, "owg_append_performed": False,
               "secret": "never-expose"}
     p = directory / name
     p.write_text(json.dumps(record))
@@ -95,3 +96,34 @@ def test_dashboard_route_does_not_read_unconfigured_storage(monkeypatch):
         response = operator_audit(request)
     assert json.loads(response.body)["configured"] is False
     assert response.headers["cache-control"] == "no-store"
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX-only audit reader")
+@pytest.mark.parametrize("change", [
+    {"event_snapshots": -1},
+    {"event_snapshots": True},
+    {"checkpoint_advanced": True},
+    {"owg_append_performed": True},
+    {"checkpoint_advanced": "false"},
+    {"timestamp_utc": "2026-99-99T05:00:00+00:00"},
+])
+def test_refuses_forged_audit_evidence(tmp_path, change):
+    directory = tmp_path / "private"
+    directory.mkdir(mode=0o700)
+    receipt = _receipt(directory)
+    data = json.loads(receipt.read_text())
+    data.update(change)
+    receipt.write_text(json.dumps(data))
+    with pytest.raises(AuditEvidenceError):
+        read_operator_audit(directory)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX-only audit reader")
+def test_refuses_duplicate_json_fields(tmp_path):
+    directory = tmp_path / "private"
+    directory.mkdir(mode=0o700)
+    receipt = _receipt(directory)
+    original = receipt.read_text()
+    receipt.write_text(original.replace('"event_snapshots": 3',
+                                        '"event_snapshots": 3, "event_snapshots": 999'))
+    with pytest.raises(AuditEvidenceError):
+        read_operator_audit(directory)
