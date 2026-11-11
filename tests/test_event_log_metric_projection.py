@@ -113,3 +113,18 @@ def test_mean_uses_bounded_precision_independent_of_ambient_decimal_context():
         context.prec = 6
         result = summarize_projected(definition, rows, {"x"})
     assert result["mean"] == "0." + "3" * 100
+
+
+def test_projected_expression_precision_is_independent_of_ambient_context():
+    from decimal import localcontext
+
+    definition = {"version": 1, "expression": {"multiply": [{"field": "x"}, {"field": "x"}]}}
+    rows = [{"x": "1.000000000000000001"}]
+    with localcontext() as context:
+        context.prec = 6
+        low = summarize_projected(definition, rows, {"x"})
+    with localcontext() as context:
+        context.prec = 50
+        high = summarize_projected(definition, rows, {"x"})
+    assert low == high
+    assert low["sum"] == "1.000000000000000002000000000000000001"
