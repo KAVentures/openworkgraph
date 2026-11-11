@@ -75,6 +75,24 @@ const getControls=results=>[results.children.find(x=>x.tagName==='select'),resul
      assert.equal(lastEvent().detail.spec_sha256,'a'.repeat(64));
      assert.equal(lastEvent().detail.archive_sha256,'b'.repeat(64));
    },true);
+ await scenario('reviewed handoff rejects a changed server project digest',[basis(),basis(),
+   {format:'openworkgraph.review-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
+    spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),blockers:[],review_required:true,
+    execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false},
+   {format:'openworkgraph.reviewed-handoff-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
+    spec_sha256:'f'.repeat(64),archive_sha256:'b'.repeat(64),review_revision:1,human_review_approved:true,
+    execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false}],
+   async({results,details,opened,status})=>{
+     const [select,review]=getControls(results);select.value='p1';await review.onclick();
+     await details.children.find(x=>x.textContent==='Revalidate review basis on server').onclick();
+     await Promise.resolve();await Promise.resolve();
+     await details.children.find(x=>x.textContent==='Approve reviewed choice').onclick();
+     const consent=details.children.find(x=>x.tagName==='label'&&x.children.some(c=>c.type==='checkbox')).children[0];
+     consent.checked=true;consent.listeners.change();
+     await details.children.find(x=>x.textContent==='Open opportunity decision and handoff').onclick();
+     assert.equal(opened(),0,'server digest drift must not navigate to pipeline');
+     assert.match(status.textContent,/Decision review expired/);
+   },true);
  // Withdrawing acknowledgement while the authoritative server preflight is pending
  // must prevent navigation, even when the server returns an otherwise valid approval.
  {
