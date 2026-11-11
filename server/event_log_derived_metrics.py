@@ -122,7 +122,11 @@ def evaluate(
     validate(definition, allowed_fields)
     if not isinstance(row, Mapping):
         raise MetricDefinitionError("row must be a mapping")
-    value = _evaluate(definition["expression"], row)
+    # Match cohort evaluation precision even when the caller changes the
+    # ambient Decimal context (e.g. another request or test).
+    with localcontext() as context:
+        context.prec = 100
+        value = _evaluate(definition["expression"], row)
     return str(value) if value is not None else None
 
 
