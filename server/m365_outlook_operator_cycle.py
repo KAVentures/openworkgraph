@@ -19,6 +19,7 @@ from .m365_outlook_event_membership import reconcile as reconcile_membership
 from .m365_outlook_owg_receipt import ReceiptError, UncertainReceipt
 from .m365_outlook_delta import DeltaError
 from .m365_outlook_checkpoint import commit_checkpoint, inspect_checkpoint
+from .m365_operator_audit_writer import record_operator_phase, AuditWriteError
 
 FORMAT = "openworkgraph.m365-operator-cycle.v1"
 
@@ -218,6 +219,20 @@ def main(argv=None):
             result = membership(**args)
         else:
             result = handoff(**args)
+        audit_dir = os.environ.get("OWG_M365_AUDIT_DIR", "")
+        if audit_dir and phase in ("review", "extract", "append", "checkpoint-commit"):
+            try:
+                record_operator_phase(
+                    phase, result, directory=Path(audit_dir),
+                    tenant=args["tenant"], mailbox=args["mailbox"],
+                    folder=args["folder"], log_id=args.get("log_id"))
+            except AuditWriteError:
+                # The underlying operation may already have committed. Never
+                # encourage a retry when its audit outcome is uncertain.
+                print(json.dumps({"format": FORMAT, "phase": phase,
+                                  "status": "audit_uncertain",
+                                  "retry_allowed": False}, sort_keys=True))
+                return 3
         print(json.dumps(result, sort_keys=True))
         return 3 if phase in ("recover", "membership") and result["status"] == "manual_reconciliation_required" else 0
     except UncertainReceipt:
