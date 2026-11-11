@@ -89,7 +89,8 @@ def record_operator_phase(phase: str, result: dict, *, directory: Path,
                           "removal_markers_for_review"):
                 if field in result and type(result[field]) is int and result[field] >= 0:
                     receipt[field] = result[field]
-            if phase == "checkpoint-commit" and type(result.get("generation")) is int:
+            if (phase == "checkpoint-commit" and type(result.get("generation")) is int
+                    and result["generation"] >= 0):
                 receipt["committed_generation"] = result["generation"]
             receipt["checkpoint_advanced"] = phase == "checkpoint-commit"
             receipt["owg_append_performed"] = phase == "append"
