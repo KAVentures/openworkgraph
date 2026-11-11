@@ -245,7 +245,6 @@
                 // A failed refresh keeps controls disabled; only a verified state
                 // may re-enable them. Do not resurrect a superseded selection.
                 if(mutationGeneration===reviewRequestGeneration){reviewMutationPending=false;updateContinue();}
-                if(mutationGeneration===reviewRequestGeneration){reviewMutationPending=false;updateContinue();}
                 if(!reviewStillSelected())for(const b of [saveDraft,approve,revoke])b.disabled=true;
                 else if(reviewState.textContent.startsWith('Saved ')||reviewState.textContent.startsWith('Review revoked'))
                   for(const b of [saveDraft,approve,revoke])b.disabled=false;
@@ -288,6 +287,9 @@
                   }
                 }
               }finally{
+                // Revocation must release the mutation lock only for its own
+                // authoritative request; stale responses cannot unlock handoff.
+                if(mutationGeneration===reviewRequestGeneration){reviewMutationPending=false;updateContinue();}
                 // A failed refresh keeps controls disabled; only a verified state
                 // may re-enable them. Do not resurrect a superseded selection.
                 if(!reviewStillSelected())for(const b of [saveDraft,approve,revoke])b.disabled=true;
