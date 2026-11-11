@@ -107,6 +107,19 @@ class DerivedMetricTests(unittest.TestCase):
         with self.assertRaises(MetricDefinitionError):
             evaluate(expr, {"private": 2}, {"public"})
 
+    def test_expression_precision_is_independent_of_ambient_context(self):
+        from decimal import localcontext
+        definition = metric({"multiply": [{"field": "x"}, {"field": "x"}]})
+        row = {"x": "1.000000000000000001"}
+        with localcontext() as context:
+            context.prec = 6
+            low = evaluate(definition, row, {"x"})
+        with localcontext() as context:
+            context.prec = 50
+            high = evaluate(definition, row, {"x"})
+        self.assertEqual(low, high)
+        self.assertEqual(low, "1.000000000000000002000000000000000001")
+
 
 if __name__ == "__main__":
     unittest.main()
