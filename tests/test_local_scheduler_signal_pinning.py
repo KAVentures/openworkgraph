@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-import hashlib
 import json
+import os
+import subprocess
+import sys
 
 import pytest
 
@@ -164,3 +166,55 @@ def test_schedule_dashboard_exposes_explicit_reapproval_and_no_silent_resume():
     assert "signal_rules_changed_requires_reapproval" in source
     assert "signal_rules_fingerprint" in source
     assert "confirm_current_signal_rules" in routes
+
+
+def test_schedule_reapproval_http_is_local_dashboard_only_and_rejects_bad_confirmation(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    source = r"""
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from server import local_auth, local_scheduler as scheduler, local_scheduler_routes
+
+scheduler._check_target = lambda kind, target: None
+pin = {"fingerprint": "a" * 64, "count": 1}
+scheduler._signal_rule_set_pin = lambda log_id: dict(pin)
+app = FastAPI()
+app.include_router(local_scheduler_routes.router)
+auth = {"Authorization": "OWG-Session " + local_auth.create_dashboard_session()}
+with TestClient(app) as client:
+    made = client.post("/v1/schedules", headers=auth, json={
+      "kind": "event_log_signals", "target_id": "log_example",
+      "interval_minutes": 15, "confirm_scheduled_runs": True})
+    assert made.status_code == 200, made.text
+    item = made.json()
+    assert item["signal_rules_fingerprint"] == "a" * 64
+    pin["fingerprint"] = "b" * 64
+    due = scheduler.run_due(now=10 ** 10)
+    assert due[0]["outcome"] == "paused:signal_rules_changed"
+    update = "/v1/schedules/update"
+    normal = client.post(update, headers=auth,
+      json={"schedule_id": item["schedule_id"], "enabled": True})
+    assert normal.status_code == 409, normal.text
+    bad = client.post(update, headers=auth,
+      json={"schedule_id": item["schedule_id"], "enabled": True,
+            "confirm_current_signal_rules": "true"})
+    assert bad.status_code == 409, bad.text
+    assert client.post(update, headers={"Authorization": "Bearer synthetic-AI"},
+      json={"schedule_id": item["schedule_id"], "enabled": True,
+            "confirm_current_signal_rules": True}).status_code == 403
+    approved = client.post(update, headers=auth,
+      json={"schedule_id": item["schedule_id"], "enabled": True,
+            "confirm_current_signal_rules": True})
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["signal_rules_fingerprint"] == "b" * 64
+    assert approved.json()["enabled"] is True
+    assert approved.json()["paused_reason"] is None
+    assert scheduler._read()["schedules"][item["schedule_id"]]["signal_rules_count"] == 1
+"""
+    env = os.environ.copy()
+    env.update({"WORKFLOW_OBSERVER_DATA": str(tmp_path / "data"),
+                "WORKFLOW_OBSERVER_AUTH_DIR": str(tmp_path / "auth"),
+                "WORKFLOW_OBSERVER_CONFIG": str(tmp_path / "config.json")})
+    r = subprocess.run([sys.executable, "-c", source], cwd=root, env=env,
+                       capture_output=True, text=True, timeout=90)
+    assert r.returncode == 0, f"stdout={r.stdout}\\nstderr={r.stderr}"
