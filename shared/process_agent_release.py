@@ -122,6 +122,8 @@ def verify_directory(root: Path | str, expected_manifest_sha256: str | None = No
     try:
         manifest = json.loads(raw, object_pairs_hook=_unique,
                               parse_constant=lambda _: (_ for _ in ()).throw(ReleaseIntegrityError("Nonfinite JSON value")))
+    except ReleaseIntegrityError:
+        raise
     except (ValueError, UnicodeError):
         raise ReleaseIntegrityError("Invalid release manifest JSON") from None
     if not isinstance(manifest, dict) or set(manifest) != _EXACT_FIELDS or (
@@ -149,10 +151,14 @@ def verify_directory(root: Path | str, expected_manifest_sha256: str | None = No
             raise ReleaseIntegrityError("Generated file missing or changed: " + name)
     try:
         spec = json.loads((root / "workflow.spec.json").read_bytes(), object_pairs_hook=_unique)
+    except ReleaseIntegrityError:
+        raise
     except (ValueError, UnicodeError):
         raise ReleaseIntegrityError("Invalid exported workflow spec") from None
     if not isinstance(spec, dict) or (
-        spec.get("execution_authorization") is not False or spec.get("source_records_included") is not False
+        spec.get("format") != "openworkgraph.agent-runtime-project.v1"
+        or spec.get("execution_authorization") is not False
+        or spec.get("source_records_included") is not False
     ):
         raise ReleaseIntegrityError("The exported workflow has an invalid authorization boundary")
     reference = {name: spec.get(name) for name in ("workflow_id", "revision", "content_sha256")}
