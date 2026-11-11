@@ -1196,14 +1196,24 @@
         text.textContent = (item.kind === 'local_backup' ? 'Unencrypted local backup'
           : (item.kind === 'retained_jira_profile' ? 'Jira profile ' : 'Signals for ') + item.target_id) +
           ' · every ' + item.interval_minutes + ' min · ' + (item.enabled ? 'next ' + String(item.next_run_at || '').slice(0, 16).replace('T', ' ')
-          : (item.paused_reason ? 'paused after repeated failures' : 'paused')) +
+          : (item.paused_reason === 'signal_rules_changed_requires_reapproval' ? 'paused: saved signal rules changed'
+            : (item.paused_reason ? 'paused after repeated failures' : 'paused'))) +
+          (item.kind === 'event_log_signals' ? ' · pinned ' + Number(item.signal_rules_count || 0) + ' signal rules' : '') +
           (item.quiet_hours ? ' · quiet ' + item.quiet_hours.start + '–' + item.quiet_hours.end +
             ' ' + item.quiet_hours.timezone + (item.quiet_hours_active ? ' (now)' : '') : '') +
           (item.last_deferred_until ? ' · last quiet deferral until ' + String(item.last_deferred_until).slice(0, 16).replace('T',' ') + ' UTC' : '') +
           (item.last_result ? ' · last: ' + item.last_result : '');
         const toggle = document.createElement('button');
         toggle.type = 'button'; toggle.className = 'secondary'; toggle.textContent = item.enabled ? 'Pause' : 'Resume';
-        toggle.onclick = async () => { await api('/v1/schedules/update', send('POST', {schedule_id: item.schedule_id, enabled: !item.enabled})).catch(() => null); refreshSchedules(); };
+        const rulesNeedReview = item.kind === 'event_log_signals' &&
+          (!item.signal_rules_fingerprint || item.paused_reason === 'signal_rules_changed_requires_reapproval');
+        toggle.disabled = rulesNeedReview && !item.enabled;
+        toggle.onclick = async () => {
+          try {
+            await api('/v1/schedules/update', send('POST', {schedule_id: item.schedule_id, enabled: !item.enabled}));
+          } catch (error) { if (scheduleStatus) scheduleStatus.textContent = error.message || 'Could not update schedule.'; }
+          refreshSchedules();
+        };
         const remove = document.createElement('button');
         remove.type = 'button'; remove.className = 'secondary'; remove.textContent = 'Remove';
         remove.onclick = async () => { await api('/v1/schedules/delete', send('POST', {schedule_id: item.schedule_id})).catch(() => null); refreshSchedules(); };
@@ -1226,6 +1236,25 @@
           refreshSchedules();
         };
         line.append(text, toggle, remove, setQuiet);
+        if (rulesNeedReview) {
+          const reapprove = document.createElement('button');
+          reapprove.type = 'button'; reapprove.className = 'secondary';
+          reapprove.textContent = 'Review rules and resume';
+          reapprove.setAttribute('aria-label','Reapprove current saved signal rules for ' + item.target_id);
+          reapprove.onclick = async () => {
+            if (!confirm('Review the current saved rules in the Event Log workspace first. Reapprove this entire current rule set for future scheduled evaluation and resume this local job? No alerts will be sent outside OWG.')) return;
+            try {
+              await api('/v1/schedules/update', send('POST', {
+                schedule_id: item.schedule_id, enabled: true, confirm_current_signal_rules: true
+              }));
+              if (scheduleStatus) scheduleStatus.textContent = 'Current saved signal rules explicitly approved; schedule resumed.';
+            } catch (error) {
+              if (scheduleStatus) scheduleStatus.textContent = error.message || 'Could not approve current rules.';
+            }
+            refreshSchedules();
+          };
+          line.append(reapprove);
+        }
         if (item.quiet_hours) {
           const clear = document.createElement('button');
           clear.type = 'button'; clear.className = 'secondary'; clear.textContent = 'Clear quiet hours';
@@ -1269,7 +1298,9 @@
       }
       if (!confirm(isBackup
           ? 'Schedule an unencrypted local backup every day or longer? Copies stay on this computer and can contain private captured work. This does not include credentials or send data to cloud services.'
-          : 'Run this job automatically on a schedule? You can pause or remove it at any time.')) return;
+          : kind === 'event_log_signals'
+            ? 'Schedule recurring local checks for the CURRENT saved signal rules? New or removed rules will pause this schedule until you review and reapprove them. No external alerts or business actions.'
+            : 'Run this job automatically on a schedule? You can pause or remove it at any time.')) return;
       try {
         await api('/v1/schedules', send('POST', {
           kind, target_id: isBackup ? 'local' : scheduleTarget.value.trim(),
