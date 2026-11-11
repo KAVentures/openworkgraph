@@ -222,6 +222,9 @@
               if(!reviewStillSelected()||reviewMutationPending||handoffPreflightPending||reviewRevision<0)return;
               const mutationGeneration=++reviewRequestGeneration;
               reviewMutationPending=true;
+              // Any new saved decision requires a fresh, explicit human acknowledgement.
+              // Never carry consent from an earlier approved revision into this mutation.
+              consent.checked=false;
               // A second mutation or refresh supersedes this response. Never let
               // an older save resurrect approval after a later revoke.
               continueReview.disabled=true;
@@ -268,6 +271,7 @@
               if(!reviewStillSelected()||reviewMutationPending||handoffPreflightPending||reviewRevision<1)return;
               const mutationGeneration=++reviewRequestGeneration;
               reviewMutationPending=true;
+              consent.checked=false;
               currentDecision='unknown';continueReview.disabled=true;
               // Revocation must work when evidence has changed since approval.
               // Never depend on the stale-basis preflight for withdrawing consent.
