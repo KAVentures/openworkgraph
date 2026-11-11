@@ -155,6 +155,31 @@ def test_pair_link_and_attribute_work_budgets_refuse_partial_cohorts(monkeypatch
         milestones.analyze(log, _settings())
 
 
+def test_append_backdated_attribute_updates_asof_state_without_inventing_an_event():
+    log = _import()
+    before = milestones.analyze(log, _settings(sample_limit=50))
+    o2_before = next(x for x in before["sample_pairs"] if x["source_object_id"] == "o2")
+    assert o2_before["at_source_status"] == "attribute_recorded_only_later"
+    updated = _document()
+    for item in updated["objects"]:
+        if item["id"] == "i2":
+            item["attributes"].append(_value("pending", "2026-01-01T08:00:00Z"))
+    appended = workspace.append_log(log, BytesIO(json.dumps(updated).encode()), source_format="ocel")
+    assert appended["added_events"] == 0
+    assert appended["object_attribute_values"]["added"] == 1
+    after = milestones.analyze(log, _settings(sample_limit=50))
+    o2_after = next(x for x in after["sample_pairs"] if x["source_object_id"] == "o2")
+    assert o2_after["at_source_status"] == "known"
+    assert o2_after["target_value_at_source_activity"] == "pending"
+    assert o2_after["target_value_at_target_activity"] == "paid"
+    assert before["relationship_digest"] == after["relationship_digest"]
+    assert after["relationship_revision"] > before["relationship_revision"]
+    assert after["pairs"] == before["pairs"] == 9
+    assert after["known_at_source_pairs"] == before["known_at_source_pairs"] + 1
+    assert after["target_attribute_recorded_later_pairs"] == before["target_attribute_recorded_later_pairs"] - 1
+    assert after["different_known_values_across_milestones_pairs"] == before["different_known_values_across_milestones_pairs"] + 1
+
+
 def test_no_data_mutated_and_same_snapshot_digests_as_other_relationship_reports():
     from server import event_log_object_relationships as relationships
     log = _import()
