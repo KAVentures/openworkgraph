@@ -11,7 +11,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 function deferred(){let resolve;const promise=new Promise(r=>{resolve=r});return {promise,resolve};}
 function setup(){
   const controls=new Map();
-  const element=id=>({id,disabled:false,textContent:'',innerHTML:'',onclick:null,replaceChildren(){this.innerHTML='';this.textContent='';}});
+  const element=id=>{let html='',text='';return {id,disabled:false,onclick:null,get textContent(){return text;},set textContent(value){text=String(value);html='';},get innerHTML(){return html;},set innerHTML(value){html=String(value);text='';},replaceChildren(){html='';text='';}};};
   let host=null;
   const card={querySelector(sel){return sel==='h2'?{textContent:'Repeated workflows'}:sel==='#workflowEvidenceDrafting'?host:null;},appendChild(node){host=node;}};
   const parent={querySelector(sel){return sel==='#workflowEvidenceDrafting'?host:null;},appendChild(node){host=node;}};
