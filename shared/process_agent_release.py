@@ -115,7 +115,8 @@ def verify_directory(root: Path | str, expected_manifest_sha256: str | None = No
     manifest_path = root / MANIFEST_NAME
     if manifest_path.is_symlink() or not manifest_path.is_file():
         raise ReleaseIntegrityError("Release manifest is missing or is a symbolic link")
-    raw = manifest_path.read_bytes()
+    with manifest_path.open("rb") as source:
+        raw = source.read(MAX_MANIFEST_BYTES + 1)
     if len(raw) > MAX_MANIFEST_BYTES:
         raise ReleaseIntegrityError("Release manifest is too large")
     actual_manifest_sha256 = _hash(raw)
@@ -150,7 +151,11 @@ def verify_directory(root: Path | str, expected_manifest_sha256: str | None = No
             path = path / part
             if path.is_symlink():
                 raise ReleaseIntegrityError("Generated file inventory contains a symbolic link")
-        if not path.is_file() or path.stat().st_size > MAX_FILE_BYTES or _hash(path.read_bytes()) != digest:
+        if not path.is_file():
+            raise ReleaseIntegrityError("Generated file missing or changed: " + name)
+        with path.open("rb") as source:
+            data = source.read(MAX_FILE_BYTES + 1)
+        if len(data) > MAX_FILE_BYTES or _hash(data) != digest:
             raise ReleaseIntegrityError("Generated file missing or changed: " + name)
     try:
         spec = json.loads((root / "workflow.spec.json").read_bytes(), object_pairs_hook=_unique)
