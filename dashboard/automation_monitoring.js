@@ -10,6 +10,8 @@
   const show=(node,visible)=>{node.hidden=!visible;node.style.display=visible?'':'none';};
   function table(headers,rows){
     const wrap=el('div',null,'table-wrap');const t=el('table');const head=el('thead');const hr=el('tr');
+    // A scrollable table must be reachable by keyboard (WCAG 2.1.1).
+    wrap.tabIndex=0;wrap.setAttribute('role','region');wrap.setAttribute('aria-label','Table: '+headers.join(', ').slice(0,120));
     headers.forEach(h=>hr.appendChild(el('th',h)));head.appendChild(hr);
     const body=el('tbody');rows.forEach(r=>{const tr=el('tr');r.forEach(v=>tr.appendChild(el('td',v)));body.appendChild(tr);});
     t.append(head,body);wrap.appendChild(t);return wrap;
