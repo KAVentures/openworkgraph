@@ -45,7 +45,7 @@ def parse(spec: Any) -> list[dict[str, Any]] | None:
         target = item.get("completion_target_minutes")
         if "completion_target_minutes" in item:
             if (isinstance(target, bool) or not isinstance(target, (int, float))
-                    or not math.isfinite(target) or not 0 < target <= 525600):
+                    or not 0 < target <= 525600 or not math.isfinite(target)):
                 raise EventLogWorkspaceError(
                     "completion_target_minutes must be a finite number above 0 and at most 525600")
         names.add(name)
