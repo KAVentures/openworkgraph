@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import os
 import sqlite3
 
 import pytest
@@ -143,5 +144,8 @@ def test_run_receipt_wal_mode_refused(store):
     target = store / receipts._NAME
     with sqlite3.connect(str(target)) as db:
         assert db.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+    # Owner-only like the real journal, so the refusal comes from the WAL mode rather than from
+    # the permission check (SQLite creates the file 0644 under a default umask, e.g. on macOS).
+    os.chmod(target, 0o600)
     with pytest.raises(CaseDeclarationError, match="mode"):
         receipts.review(**args())
