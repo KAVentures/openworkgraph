@@ -35,3 +35,44 @@ def test_refuses_manufactured_customer_outcome_and_invalid_scope(tmp_path):
         append_receipt(path, tenant="org", actor="actor", attempt="run",
                        verdict={"status": "unknown", "provider_operation": "succeeded",
                                 "customer_outcome": "unknown"})
+
+
+def test_receipt_journal_rejects_hardlink_without_changing_permissions(tmp_path):
+    import os
+    import stat
+    source = tmp_path / "other.sqlite"
+    source.write_text("unrelated private data")
+    source.chmod(0o644)
+    linked = tmp_path / "receipts.sqlite"
+    os.link(source, linked)
+    with pytest.raises(ValueError, match="unsafe receipt journal"):
+        list_receipts(str(linked), tenant="org", actor="alice", attempt="run")
+    assert source.read_text() == "unrelated private data"
+    if os.name == "posix":
+        assert stat.S_IMODE(source.stat().st_mode) == 0o644
+
+
+def test_receipt_journal_refuses_existing_permissive_file(tmp_path):
+    import os
+    import stat
+    path = tmp_path / "receipts.sqlite"
+    path.touch()
+    path.chmod(0o644)
+    if os.name == "posix":
+        with pytest.raises(ValueError, match="permissions too broad"):
+            list_receipts(str(path), tenant="org", actor="alice", attempt="run")
+        assert stat.S_IMODE(path.stat().st_mode) == 0o644
+
+
+def test_receipt_journal_rejects_symlink_and_directory(tmp_path):
+    target = tmp_path / "target.sqlite"
+    target.write_text("not a journal")
+    link = tmp_path / "linked.sqlite"
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    with pytest.raises(ValueError):
+        list_receipts(str(link), tenant="org", actor="alice", attempt="run")
+    with pytest.raises(ValueError, match="unsafe receipt journal"):
+        list_receipts(str(tmp_path), tenant="org", actor="alice", attempt="run")

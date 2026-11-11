@@ -212,6 +212,10 @@ file to attach to an email or ticket. It holds:
 * the most frequent variants (15 by default; `variants` takes 1–50), with their
   share of cases and median duration;
 * activity frequencies;
+* the slowest transitions: the median and 90th-percentile time between one
+  activity and the next, for up to 10 transitions seen in at least 3 cases
+  (and 1% of cases). This is elapsed time between recorded events, not
+  measured work or verified waiting;
 * cases completed per week.
 
 The report applies the selected case notion, the applied activity mapping and
