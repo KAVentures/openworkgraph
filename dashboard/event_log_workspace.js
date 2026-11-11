@@ -3773,6 +3773,12 @@
     const reviewNote=el('p','Acknowledge a specific triggered result locally, or reopen it. Snooze a result for one hour or one day; it returns on refresh after expiry. Reviews never send notifications, approve actions, or imply business outcomes. Stale results require a fresh Check signals.','muted');
     const inbox=el('div');inbox.id='owgSignalInbox';
     const reviewRefresh=button('Refresh review inbox','secondary');reviewRefresh.id='owgSignalReviewRefresh';
+    const transitionHeading=el('h4','Signal state changes');
+    const transitionNote=el('p','Locally recorded triggered and cleared transitions from explicit or scheduled evaluations. Repeated unchanged results do not create alerts. This is not live source monitoring or a notification feed. Up to 5,000 transitions are retained per log.','muted');
+    const transitionRefresh=button('Refresh signal changes','secondary');transitionRefresh.id='owgSignalTransitionRefresh';
+    const transitionStatus=el('div','Refresh to inspect saved signal changes.','muted');
+    transitionStatus.id='owgSignalTransitionStatus';transitionStatus.setAttribute('role','status');transitionStatus.setAttribute('aria-live','polite');
+    const transitionResults=el('div');transitionResults.id='owgSignalTransitions';
     const allHeading=el('h4','Across all saved logs');
     const allNote=el('p','One local overview of saved signal review states across every imported dataset. This does not re-evaluate rules, read source accounts, send alerts or execute work. Open the corresponding log for the existing state-pinned review controls.','muted');
     const allFilter=select('owgSignalAllFilter',[
@@ -3786,11 +3792,39 @@
     const allResults=el('div');allResults.id='owgSignalAllResults';
     const allControls=el('div',null,'actions');allControls.append(allFilter,allRefresh);
     box.append(row,message,rules,evaluate,out,reviewHeading,reviewNote,reviewRefresh,inbox,
+      transitionHeading,transitionNote,transitionRefresh,transitionStatus,transitionResults,
       allHeading,allNote,allControls,allStatus,allResults);
     const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/signals';
     const selectedLogId=state.logId;
     const inboxBase=()=>'/v1/event-logs/'+encodeURIComponent(selectedLogId)+'/signal-inbox';
+    const transitionBase=()=>'/v1/event-logs/'+encodeURIComponent(selectedLogId)+'/signal-history';
     const generation=state.generation;
+    let transitionRequestId=0;
+    async function refreshHistory(){
+      const requestId=++transitionRequestId;
+      transitionRefresh.disabled=true;
+      transitionStatus.textContent='Loading locally recorded signal changes…';
+      try{
+        const r=await getJSON(transitionBase()+'?limit=100');
+        if(generation!==state.generation||requestId!==transitionRequestId)return;
+        const events=r.items||[];
+        transitionStatus.textContent=Number(r.retained_total||0)+' saved transitions in this log; showing '+
+          events.length+(r.truncated?' (limited to recent results)':'')+
+          '. Evaluations only; no notifications or automated actions.';
+        transitionResults.replaceChildren(events.length
+          ?table(['Evaluated (UTC)','Signal','Change'],events.map(x=>[
+            x.evaluated_at||'—',x.name,x.transition==='triggered'?'Triggered':'Cleared']))
+          :el('div','No triggered/cleared changes recorded for this dataset yet.','muted'));
+      }catch(error){
+        if(generation===state.generation&&requestId===transitionRequestId){
+          transitionStatus.textContent=error.message||'Signal change history unavailable.';
+          transitionResults.replaceChildren();
+        }
+      }finally{
+        if(generation===state.generation&&requestId===transitionRequestId)transitionRefresh.disabled=false;
+      }
+    }
+    transitionRefresh.onclick=()=>refreshHistory();
     let inboxRefreshId=0;
     async function refreshInbox(){
       const requestId=++inboxRefreshId;
@@ -3936,6 +3970,7 @@
       evaluate.disabled=!r.rules.length;
       await refreshInbox();
       await refreshAllSignals();
+      await refreshHistory();
     }
     add.onclick=async()=>{
       try{
