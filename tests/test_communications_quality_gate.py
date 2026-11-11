@@ -115,7 +115,7 @@ def fake_classifier(names, *, require_holdout_language=None):
             raise review.ReviewError("Language-specific held-out quality gate refused learned classification")
     return lambda text: {"Refund request": .8}, {"model_sha256": "a"*64}
 review.learned_classifier=fake_classifier
-data=b"ticket,text\\nC1,Please refund my order\\n"
+data=b"ticket,text\nC1,Please refund my order\n"
 with TestClient(app) as client:
     owner={"Authorization":"OWG-Session "+local_auth.create_dashboard_session(),
            "x-owg-local-processing-confirmed":"true"}
