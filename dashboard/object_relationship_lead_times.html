@@ -97,6 +97,26 @@
     </form>
     <p id="status" class="status" role="status" aria-live="polite">Open this page from the same tab as your authenticated OWG dashboard.</p>
   </section>
+  <section aria-labelledby="attribute-title">
+    <h2 id="attribute-title">Target attribute at each object's milestone</h2>
+    <p class="muted">Uses the exact source/target types, events and relationship qualifier selected above. This compares imported timed attributes of the related target object as of the source event, then as of its own target event. It never assumes that the static relationship was valid at either time.</p>
+    <label for="targetAttribute">Related target's timed attribute (exact imported name)
+      <input id="targetAttribute" maxlength="200" autocomplete="off" placeholder="e.g. status" required>
+    </label>
+    <div class="row" style="margin-top:14px"><button id="inspectAttribute" type="button" class="secondary">Inspect attribute at milestones</button></div>
+    <p id="attributeStatus" class="status" role="status" aria-live="polite"></p>
+  </section>
+  <section id="attributeResultSection" aria-labelledby="attribute-result-title" hidden>
+    <h2 id="attribute-result-title">Recorded target attribute state across related objects</h2>
+    <p id="attributeBasis" class="muted"></p>
+    <div id="attributeMetrics" class="stats" role="group" aria-label="Attribute state summary"></div>
+    <p id="attributeLimits" class="callout"></p>
+    <h2 style="margin-top:23px">Value distribution at the source milestone</h2>
+    <div class="tablewrap"><table><thead><tr><th scope="col">Known / unknown state</th><th scope="col">Recorded value (only when known)</th><th scope="col">Related pairs</th></tr></thead><tbody id="attributeGroups"></tbody></table></div>
+    <h2 style="margin-top:23px">Related pair examples</h2>
+    <p id="attributeSampleStatus" class="muted"></p>
+    <div class="tablewrap"><table><thead><tr><th scope="col">Source</th><th scope="col">Target</th><th scope="col">Value at source event</th><th scope="col">Value at target event</th><th scope="col">Source event (UTC)</th><th scope="col">Target event (UTC)</th></tr></thead><tbody id="attributeSamples"></tbody></table></div>
+  </section>
   <section id="resultSection" aria-labelledby="results-title" hidden>
     <h2 id="results-title">Observed relationship timing</h2>
     <p id="basis" class="muted"></p>
