@@ -17,7 +17,8 @@ from .m365_outlook_candidate_review import review as review_candidate
 from .m365_outlook_recovery_triage import triage as recovery_triage
 from .m365_outlook_event_membership import reconcile as reconcile_membership
 from .m365_outlook_owg_receipt import ReceiptError, UncertainReceipt
-from .m365_outlook_delta import DeltaError
+from .m365_outlook_delta import DeltaError, _private_read, MAX_CANDIDATE_BYTES
+from .m365_outlook_owg_receipt import _unique
 from .m365_outlook_checkpoint import commit_checkpoint, inspect_checkpoint
 from .m365_operator_audit_writer import (record_operator_phase, preflight_operator_audit, AuditWriteError)
 
@@ -26,12 +27,31 @@ FORMAT = "openworkgraph.m365-operator-cycle.v1"
 
 def extract(*, consent_local_read=False, consent_delta_read=False,
             consent_local_export=False, confirm_removals_reviewed=False,
-            require_event_membership=False, **kwargs):
+            require_event_membership=False, ledger_dir=None,
+            expected_generation=None, **kwargs):
     """Perform only the next bounded Graph GET and write review artifacts."""
     if not all((consent_local_read is True, consent_delta_read is True,
                 consent_local_export is True,
                 confirm_removals_reviewed is True)):
         raise ReceiptError("Explicit extraction and previous-removal review consent required")
+    # In checkpoint-bound mode, a committed scoped predecessor must match
+    # the prior candidate before any authenticated Graph GET.
+    if ledger_dir is not None or expected_generation is not None:
+        if ledger_dir is None or type(expected_generation) is not int or expected_generation < 1:
+            raise ReceiptError("Checkpoint-bound extraction requires a positive exact generation")
+        prior = inspect_checkpoint(
+            tenant=kwargs["tenant"], mailbox=kwargs["mailbox"],
+            folder=kwargs["folder"], ledger_dir=Path(ledger_dir),
+            grant_file=Path(kwargs["grant_file"]), consent_local_read=True)
+        if prior is None or prior["generation"] != expected_generation:
+            raise ReceiptError("Missing or stale committed checkpoint generation")
+        raw = json.loads(
+            _private_read(Path(kwargs["previous_candidate"]), MAX_CANDIDATE_BYTES),
+            object_pairs_hook=_unique)
+        if (type(raw) is not dict
+                or raw.get("csv_sha256") != prior["candidate_sha256"]
+                or prior["log_id"] != kwargs["log_id"]):
+            raise ReceiptError("Previous candidate does not match committed checkpoint")
     result = run_verified_next_round(
         consent_local_read=True, consent_delta_read=True,
         consent_local_export=True, confirm_removals_reviewed=True,
@@ -167,6 +187,10 @@ def main(argv=None):
                          "journal-dir", "handoff-dir", "output", "candidate"):
                 p.add_argument("--" + flag, type=Path, required=True)
             p.add_argument("--successor-label", required=True)
+            p.add_argument("--ledger-dir", type=Path,
+                           help="Require a committed predecessor before Graph GET")
+            p.add_argument("--expected-generation", type=int,
+                           help="Exact committed predecessor generation")
             p.add_argument("--require-event-membership", action="store_true",
                            help="Require fresh authenticated source-event membership before Graph GET")
             for flag in ("confirm-removals-reviewed", "consent-delta-read",
