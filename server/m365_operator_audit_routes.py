@@ -104,8 +104,8 @@ def read_operator_audit(directory: Path, *, limit: int = 50) -> dict:
                     for field in ("checkpoint_advanced", "owg_append_performed"):
                         if field in obj and type(obj[field]) is not bool:
                             raise AuditEvidenceError("Invalid audit phase flag")
-                    if (obj.get("checkpoint_advanced", False) != (obj["action"] == "commit")
-                            or obj.get("owg_append_performed", False) != (obj["action"] == "append")):
+                    if (("checkpoint_advanced" in obj and obj["checkpoint_advanced"] != (obj["action"] == "commit"))
+                            or ("owg_append_performed" in obj and obj["owg_append_performed"] != (obj["action"] == "append"))):
                         raise AuditEvidenceError("Contradictory audit phase flags")
                     # Never expose scope hashes or log hashes in browser JSON.
                     item = {key: obj[key] for key in (
