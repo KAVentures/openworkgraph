@@ -85,14 +85,14 @@ def test_state_at_other_object_milestone_is_not_the_stored_first_attribute():
     assert r["pairs"] == 9  # o1->i1 twice qualified, but still one pair
     assert r["distinct_source_objects"] == 9 and r["distinct_target_objects"] == 8
     assert r["known_at_source_pairs"] == 5
-    assert r["known_at_target_pairs"] == 5
+    assert r["known_at_target_pairs"] == 6
     assert r["missing_source_activity_pairs"] == 1
-    assert r["missing_target_activity_pairs"] == 2
+    assert r["missing_target_activity_pairs"] == 1
     assert r["target_attribute_never_recorded_pairs"] == 1
     assert r["target_attribute_recorded_later_pairs"] == 1
     assert r["ambiguous_same_timestamp_pairs"] == 1
     assert r["different_known_values_across_milestones_pairs"] == 1
-    assert r["same_known_values_across_milestones_pairs"] == 2
+    assert r["same_known_values_across_milestones_pairs"] == 3
     assert r["reversed_activity_order_pairs"] == 1
     assert r["initial_untimed_value_used_at_source_pairs"] == 1
     by_source = {row["source_object_id"]: row for row in r["sample_pairs"]}
@@ -106,6 +106,7 @@ def test_state_at_other_object_milestone_is_not_the_stored_first_attribute():
     assert by_source["o6"]["target_value_at_source_activity"] == "received"
     assert by_source["o8"]["target_value_at_source_activity"] == "confirmed"
     assert by_source["o9"]["target_value_at_source_activity"] == "approved"
+    assert by_source["o9"]["target_value_at_target_activity"] == "approved"  # shared i1 has t1 despite no separate t9
     assert r["unit"] == "distinct_directed_caller_supplied_object_pair"
     assert r["relationship_validity_at_event_time_verified"] is False
     assert r["causal_claims"] is False
