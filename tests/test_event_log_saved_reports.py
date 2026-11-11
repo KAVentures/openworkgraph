@@ -61,6 +61,10 @@ def test_deleting_the_log_removes_copies_and_its_schedules():
     log, other = _log("a"), _log("b")
     saved.save(log)
     scheduler.create("event_log_report", log, interval_minutes=60 * 24, confirm_scheduled_runs=True)
+    # Signal schedules need a saved rule to pin.
+    from server import event_log_signals as signals
+    signals.add_rule(log, {"name": "Many cases", "when": {"kind": "kpi", "metric": "case_count",
+                                                          "operator": "above", "threshold": 0}})
     scheduler.create("event_log_signals", log, interval_minutes=60, confirm_scheduled_runs=True)
     kept = scheduler.create("event_log_report", other, interval_minutes=60, confirm_scheduled_runs=True)
     workspace.delete_log(log)

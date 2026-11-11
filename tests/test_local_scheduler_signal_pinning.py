@@ -16,6 +16,8 @@ from test_event_log_signals import _log, _rule
 
 @pytest.fixture(autouse=True)
 def isolated(monkeypatch, tmp_path):
+    (tmp_path / "event_logs").mkdir()
+    (tmp_path / "schedules").mkdir()
     monkeypatch.setattr(workspace, "DATA_DIR", tmp_path / "event_logs")
     monkeypatch.setattr(scheduler, "DATA_DIR", tmp_path / "schedules")
 
