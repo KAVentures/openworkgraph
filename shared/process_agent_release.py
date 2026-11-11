@@ -26,7 +26,7 @@ REQUIRED_GENERATED_FILES = frozenset({
     "agent.py", "README.md", "AGENTS.md", "test_execution.py",
 })
 _HEX = re.compile(r"^[0-9a-f]{64}$")
-_FILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*(?:/[A-Za-z0-9][A-Za-z0-9_.-]*)*$")
+_FILE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*(?:/[A-Za-z0-9_][A-Za-z0-9_.-]*)*$")
 _EXACT_FIELDS = {
     "format", "source", "workflow_reference", "workflow_spec_sha256",
     "process_model_sha256", "files", "generated_files_verified_as_remote_deployment",
