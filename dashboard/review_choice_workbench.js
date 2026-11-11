@@ -113,12 +113,13 @@
             // pipeline requires its own current-revision check on any decision.
             const continueReview=node('button','Open opportunity decision and handoff');continueReview.type='button';continueReview.disabled=true;
             continueReview.onclick=async()=>{
-              if(token!==generation||choice.value!==projectId||input.value.trim()!==id||reviewMutationPending||!notesMatchSaved())return;
+              if(token!==generation||choice.value!==projectId||input.value.trim()!==id||reviewMutationPending||handoffPreflightPending||!notesMatchSaved())return;
               const pipelineCard=document.getElementById('owgPipelineCard');
               if(!pipelineCard){status.textContent='Automation pipeline unavailable. Reopen the dashboard and inspect again.';return;}
               // The opportunity can change after the first preflight. Revalidate
               // immediately before crossing into the decision surface, fail closed.
-              continueReview.disabled=true;
+              handoffPreflightPending=true;
+              updateContinue();
               status.textContent='Rechecking current evidence before opening the decision…';
               try{
                 await window.__owgAuthReady;
@@ -153,6 +154,7 @@
               }finally{
                 // A failed or superseded preflight must never resurrect navigation.
                 // A new authoritative inspection is required after clear().
+                handoffPreflightPending=false;
                 updateContinue();
               }
             };
@@ -171,10 +173,12 @@
             let savedNotes='';
             // Keep navigation closed throughout any in-flight review mutation.
             let reviewMutationPending=false;
+            // Only one authoritative reviewed-handoff preflight may run at a time.
+            let handoffPreflightPending=false;
             // Unsaved edits must not appear to be part of the approved handoff.
             const notesMatchSaved=()=>notes.value===savedNotes;
             notes.addEventListener('input',()=>{continueReview.disabled=true;updateContinue();});
-            const updateContinue=()=>{continueReview.disabled=reviewMutationPending||currentDecision!=='approved'||!notesMatchSaved();};
+            const updateContinue=()=>{continueReview.disabled=reviewMutationPending||handoffPreflightPending||currentDecision!=='approved'||!notesMatchSaved();};
             // A pending read must never overwrite a later save/revoke result.
             // Disable mutation until the authoritative revision has loaded.
             let reviewRequestGeneration=0;
