@@ -27,7 +27,7 @@ def _document():
     initial = "1970-01-01T00:00:00Z"
     when = lambda h: f"2026-01-01T{h}:00:00Z"
     histories = {
-        "i1": [_value("draft", initial), _value("approved", when("10")), _value("shipped", when("12"))],
+        "i1": [_value("shipped", when("12")), _value("draft", initial), _value("approved", when("10"))],
         "i2": [_value("paid", when("11"))],
         "i3": [_value("open", when("08")), _value("blocked", when("08"))],
         "i4": [],
