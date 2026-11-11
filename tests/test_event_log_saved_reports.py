@@ -100,7 +100,13 @@ with TestClient(app) as client:
     made = client.post(base, headers=owner)
     assert made.status_code == 200, made.text
     name = made.json()["saved"]["name"]
-    assert client.get(base, headers=owner).json()["reports"][0]["name"] == name
+    changes = f"/v1/event-logs/{imported.json()['log_id']}/saved-report-changes"
+    assert client.get(changes, headers=bearer).status_code == 403
+    assert client.get(changes, headers=owner).json()["available"] is False
+    assert client.post(base, headers=owner).status_code == 200
+    assert client.get(changes, headers=owner).json()["figures"]["cases"]["change"] == 0
+    assert client.get(changes + "?older=" + name, headers=owner).status_code == 422
+    assert name in [r["name"] for r in client.get(base, headers=owner).json()["reports"]]
     assert client.get(f"{base}/{name}", headers=bearer).status_code == 403
     got = client.get(f"{base}/{name}", headers=owner)
     assert got.status_code == 200 and got.text.startswith("<!doctype html>")
@@ -115,3 +121,43 @@ print("ok")
     done = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1], env=env,
                           capture_output=True, text=True, timeout=120)
     assert done.returncode == 0 and done.stdout.strip().endswith("ok"), f"stdout={done.stdout}\nstderr={done.stderr}"
+
+
+def test_changes_between_two_saved_copies():
+    log = _log()
+    assert saved.changes(log)["available"] is False
+    first = saved.save(log)["saved"]
+    assert first["has_figures"] is True
+    assert saved.changes(log)["available"] is False
+    # Newer events arrive: two more cases, one through a new Refund step.
+    rows = ["case,activity,time", "c5,Receive,2024-03-10T08:00:00Z", "c5,Pay,2024-03-10T09:00:00Z",
+            "c6,Receive,2024-03-11T08:00:00Z", "c6,Refund,2024-03-11T12:00:00Z"]
+    workspace.append_log(log, BytesIO("\n".join(rows).encode()), source_format="csv", mapping=MAPPING)
+    from server import event_log_costs as costs
+    costs.save_model(log, {"currency": "EUR", "activity_costs": {"Pay": 3}})
+    second = saved.save(log)["saved"]
+    c = saved.changes(log)
+    assert c["available"] and c["older"]["name"] == first["name"] and c["newer"]["name"] == second["name"]
+    assert c["figures"]["cases"] == {"older": 5, "newer": 7, "change": 2}
+    assert c["figures"]["events"]["change"] == 4 and c["figures"]["activities"]["change"] == 1
+    assert c["activities_added"] == ["Refund"] and c["activities_gone"] == []
+    assert c["largest_activity_changes"][0] == {"activity": "Receive", "older_cases": 5, "newer_cases": 7, "change": 2}
+    # The first copy had no saved prices, so there is no cost comparison yet.
+    assert c["cost"] is None and "appended events" in c["interpretation"]
+    third = saved.save(log)["saved"]
+    later = saved.changes(log)
+    assert later["cost"] == {"currency": "EUR", "older": 18.0, "newer": 18.0, "change": 0.0}
+    explicit = saved.changes(log, first["name"], third["name"])
+    assert explicit["figures"]["cases"]["change"] == 2
+    for bad in ((first["name"], None), ("report-20200101T000000Z.html", third["name"])):
+        with pytest.raises(workspace.EventLogWorkspaceError):
+            saved.changes(log, *bad)
+
+
+def test_pruning_removes_figures_too(monkeypatch):
+    log = _log()
+    monkeypatch.setattr(saved, "KEEP", 2)
+    for _ in range(4):
+        saved.save(log)
+    folder = workspace.DATA_DIR / "event_log_reports" / log
+    assert len(list(folder.glob("report-*.html"))) == 2 and len(list(folder.glob("report-*.json"))) == 2

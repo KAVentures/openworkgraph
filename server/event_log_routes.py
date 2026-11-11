@@ -558,6 +558,16 @@ def event_log_save_report(request: Request, log_id: str):
     return _respond(saved_reports.save, log_id)
 
 
+@router.get("/v1/event-logs/{log_id}/saved-report-changes")
+def event_log_saved_report_changes(request: Request, log_id: str,
+                                   older: str | None = Query(default=None, max_length=80),
+                                   newer: str | None = Query(default=None, max_length=80)):
+    """What changed between two saved report copies (by default the two newest)."""
+    from . import event_log_saved_reports as saved_reports
+    _require_dashboard(request)
+    return _respond(saved_reports.changes, log_id, older, newer)
+
+
 @router.get("/v1/event-logs/{log_id}/saved-reports/{name}")
 def event_log_saved_report_file(request: Request, log_id: str, name: str):
     from . import event_log_saved_reports as saved_reports
