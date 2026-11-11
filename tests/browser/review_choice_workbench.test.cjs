@@ -38,7 +38,10 @@ const getControls=results=>[results.children.find(x=>x.tagName==='select'),resul
    const confirm=details.children.find(x=>x.textContent==='Revalidate review basis on server');
    assert.ok(confirm);await confirm.onclick();
    const proceed=details.children.find(x=>x.textContent==='Open opportunity decision and handoff');
-   assert.ok(proceed);await proceed.onclick();
+   assert.ok(proceed);await Promise.resolve();await Promise.resolve();
+   const approval=details.children.find(x=>x.textContent==='Approve reviewed choice');await approval.onclick();
+   const consent=details.children.find(x=>x.tagName==='label'&&x.children.some(c=>c.type==='checkbox')).children[0];consent.checked=true;consent.listeners.change();
+   await proceed.onclick();
    assert.equal(calls(),4);assert.equal(opened(),0);
    assert.equal(results.children.length,0);assert.match(status.textContent,/Decision review expired/);
  },true);
@@ -48,7 +51,7 @@ const getControls=results=>[results.children.find(x=>x.tagName==='select'),resul
     execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false},
    // The decision handoff now requires a durable human approval (reviewed-handoff preflight).
    {format:'openworkgraph.reviewed-handoff-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
-    spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),human_review_approved:true,
+    spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),review_revision:1,human_review_approved:true,
     execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false}],
    async({results,details,opened,lastEvent,calls})=>{
      const [select,review]=getControls(results);select.value='p1';await review.onclick();
