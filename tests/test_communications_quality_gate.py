@@ -49,7 +49,7 @@ def test_missing_language_weak_f1_and_abstention_fail_closed():
     assert gate.assess(evaluation(), [], "en")["ready"] is False
 
 
-@pytest.mark.parametrize("language", ["", "eng-US", "en_US", "sv, en", "<script>", 123, None])
+@pytest.mark.parametrize("language", ["", "english-US", "en_US", "sv, en", "<script>", 123, None])
 def test_language_selection_is_strict_and_bounded(language):
     with pytest.raises(gate.QualityGateError):
         gate.normalize_language(language)
@@ -93,30 +93,45 @@ def test_learned_inference_is_optional_and_strict_mode_checks_saved_holdout(monk
     assert info["holdout_gate_is_optional"] is True
 
 
-def test_http_rejects_quality_gate_for_keyword_and_missing_language_quality(tmp_path, monkeypatch):
-    from fastapi.testclient import TestClient
-    from server.secure_app import app
-    from server import local_auth
+def test_http_rejects_quality_gate_before_upload_processing(tmp_path):
+    """Use an isolated server/auth directory; never mutate the real test runner's auth."""
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
 
-    called = []
-    def fake_classifier(names, *, require_holdout_language=None):
-        called.append(require_holdout_language)
-        if require_holdout_language == "sv":
+    code = r'''
+from fastapi.testclient import TestClient
+from server.secure_app import app
+from server import local_auth
+from server import communications_review as review
+from shared import communications_quality_gate as gate
+calls=[]
+def fake_classifier(names, *, require_holdout_language=None):
+    calls.append(require_holdout_language)
+    if require_holdout_language is not None:
+        gate.normalize_language(require_holdout_language)
+        if require_holdout_language=="sv":
             raise review.ReviewError("Language-specific held-out quality gate refused learned classification")
-        return lambda text: {"Refund request": .8}, {"model_sha256": "a" * 64}
-
-    monkeypatch.setattr(review, "learned_classifier", fake_classifier)
-    content = b"ticket,text\nC1,Please refund my order\n"
-    with TestClient(app) as client:
-        owner = {"Authorization": "OWG-Session " + local_auth.create_dashboard_session(),
-                 "x-owg-local-processing-confirmed": "true"}
-        prefix = "/v1/communications/analyze?format=csv&text_columns=text&thread_column=ticket"
-        r = client.post(prefix+"&quality_gate_language=sv", headers=owner, content=content)
-        assert r.status_code == 422
-        r = client.post(prefix+"&classifier=learned&quality_gate_language=sv", headers=owner, content=content)
-        assert r.status_code == 409
-        assert called == ["sv"]
-        r = client.post(prefix+"&classifier=learned&quality_gate_language=xx_bad",
-                        headers=owner, content=content)
-        assert r.status_code == 409
-        assert called[-1] == "xx_bad"
+    return lambda text: {"Refund request": .8}, {"model_sha256": "a"*64}
+review.learned_classifier=fake_classifier
+data=b"ticket,text\\nC1,Please refund my order\\n"
+with TestClient(app) as client:
+    owner={"Authorization":"OWG-Session "+local_auth.create_dashboard_session(),
+           "x-owg-local-processing-confirmed":"true"}
+    prefix="/v1/communications/analyze?format=csv&text_columns=text&thread_column=ticket"
+    assert client.post(prefix+"&quality_gate_language=sv",headers=owner,content=data).status_code==422
+    refused=client.post(prefix+"&classifier=learned&quality_gate_language=sv",headers=owner,content=data)
+    assert refused.status_code==409,refused.text
+    assert calls==["sv"]
+    refused=client.post(prefix+"&classifier=learned&quality_gate_language=xx_bad",headers=owner,content=data)
+    assert refused.status_code==409,refused.text
+    assert calls==["sv","xx_bad"]
+'''
+    env=os.environ.copy()
+    env.update({"WORKFLOW_OBSERVER_DATA":str(tmp_path/"data"),
+                "WORKFLOW_OBSERVER_AUTH_DIR":str(tmp_path/"auth"),
+                "WORKFLOW_OBSERVER_CONFIG":str(tmp_path/"config.json")})
+    result=subprocess.run([sys.executable,"-c",code],cwd=Path(__file__).resolve().parents[1],
+                          capture_output=True,text=True,env=env,timeout=120)
+    assert result.returncode==0,result.stdout+"\\n"+result.stderr
