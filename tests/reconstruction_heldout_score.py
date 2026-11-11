@@ -118,6 +118,14 @@ def score(gold_document, prediction_document, *, _include_windows=True):
             "false_negative": case_fn, "precision": case_precision,
             "recall": case_recall, "f1": case_f1,
         }
+    # Unsupported case IDs must remain visible even when labeled-case macro-F1
+    # is perfect; they are false-positive assignments, not confirmed cases.
+    predicted_cases = {case for proposed in predictions.values() for case in proposed}
+    result["predicted_only_cases"] = {
+        case: sum(case in proposed for proposed in predictions.values())
+        for case in sorted(predicted_cases - set(case_ids))
+    }
+    result["predicted_only_assignments"] = sum(result["predicted_only_cases"].values())
     result["per_case"] = per_case
     result["macro_f1_labeled_cases"] = (
         sum(item["f1"] for item in per_case.values()) / len(per_case)
