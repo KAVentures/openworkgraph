@@ -12,6 +12,7 @@ import json
 import re
 
 from . import event_log_workspace as workspace
+from . import event_log_signal_review_audit as audit
 
 _RULE_ID = re.compile(r"sig_[0-9a-f]{16}\Z")
 _FINGERPRINT = re.compile(r"[0-9a-f]{64}\Z")
@@ -154,6 +155,9 @@ def review(log_id: str, rule_id: str, body: dict, *, acknowledge: bool) -> dict:
                 existing = conn.execute(
                     "SELECT state_fingerprint,acknowledged_at FROM signal_reviews WHERE log_id=? AND rule_id=?",
                     [log_id, rule_id]).fetchone()
+                prior_snooze = conn.execute(
+                    "SELECT state_fingerprint,until_at FROM signal_snoozes WHERE log_id=? AND rule_id=?",
+                    [log_id, rule_id]).fetchone()
                 conn.execute("DELETE FROM signal_snoozes WHERE log_id=? AND rule_id=?", [log_id, rule_id])
                 if acknowledge and existing and existing[0] == current["state_fingerprint"]:
                     # Retrying an acknowledgement must not forge a new review
@@ -170,6 +174,11 @@ def review(log_id: str, rule_id: str, body: dict, *, acknowledge: bool) -> dict:
                         (log_id,rule_id,state_fingerprint,acknowledged_at)
                         VALUES (?,?,?,?)""", [log_id, rule_id, current["state_fingerprint"], now])
                     record = (current["state_fingerprint"], now)
+                    audit.record(conn, log_id, rule_id, current["state_fingerprint"], "acknowledged", now)
+                elif existing and existing[0] == current["state_fingerprint"]:
+                    audit.record(conn, log_id, rule_id, current["state_fingerprint"], "reopened", _now())
+                elif prior_snooze and prior_snooze[0] == current["state_fingerprint"] and prior_snooze[1] > _now():
+                    audit.record(conn, log_id, rule_id, current["state_fingerprint"], "resumed", _now())
                 conn.execute("COMMIT")
                 return _state(log_id, rule_id, raw["name"], when, state, record,
                               basis=basis)
@@ -208,9 +217,13 @@ def snooze(log_id: str, rule_id: str, body: dict) -> dict:
                 existing = conn.execute("SELECT state_fingerprint,until_at FROM signal_snoozes WHERE log_id=? AND rule_id=?", [log_id, rule_id]).fetchone()
                 if body["minutes"] == 0:
                     conn.execute("DELETE FROM signal_snoozes WHERE log_id=? AND rule_id=?", [log_id, rule_id])
+                    if existing and existing[0] == current["state_fingerprint"] and existing[1] > now:
+                        audit.record(conn, log_id, rule_id, current["state_fingerprint"], "resumed", now)
                 elif not (existing and existing[0] == current["state_fingerprint"] and existing[1] > now):
                     conn.execute("DELETE FROM signal_snoozes WHERE log_id=? AND rule_id=?", [log_id, rule_id])
                     conn.execute("INSERT INTO signal_snoozes VALUES (?,?,?,?)", [log_id, rule_id, current["state_fingerprint"], now + timedelta(minutes=body["minutes"])])
+                    audit.record(conn, log_id, rule_id, current["state_fingerprint"], "snoozed", now,
+                                 minutes=body["minutes"])
                 conn.execute("COMMIT")
             except Exception:
                 conn.execute("ROLLBACK")
@@ -283,6 +296,7 @@ def acknowledge_batch(log_id: str, body: dict) -> dict:
                         "INSERT INTO signal_reviews "
                         "(log_id,rule_id,state_fingerprint,acknowledged_at) VALUES (?,?,?,?)",
                         [log_id, rule_id, fingerprint, now])
+                    audit.record(conn, log_id, rule_id, fingerprint, "batch_acknowledged", now)
                 conn.execute("COMMIT")
             except Exception:
                 conn.execute("ROLLBACK")

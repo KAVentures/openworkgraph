@@ -145,6 +145,7 @@ def delete_rule(log_id: str, rule_id: str) -> dict[str, Any]:
             conn.execute("DELETE FROM signal_snoozes WHERE log_id = ? AND rule_id = ?", [log_id, str(rule_id)])
             conn.execute("DELETE FROM signal_reviews WHERE log_id = ? AND rule_id = ?", [log_id, str(rule_id)])
             conn.execute("DELETE FROM signal_transitions WHERE log_id = ? AND rule_id = ?", [log_id, str(rule_id)])
+            conn.execute("DELETE FROM signal_review_audit WHERE log_id = ? AND rule_id = ?", [log_id, str(rule_id)])
             conn.execute("DELETE FROM signal_rules WHERE log_id = ? AND rule_id = ?", [log_id, str(rule_id)])
         finally:
             conn.close()

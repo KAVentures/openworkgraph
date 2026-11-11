@@ -617,8 +617,37 @@
     const out=el('div');out.id='owgCostResults';out.setAttribute('role','status');
     box.append(controls,priceTable);
     if(activityNames.length>shown.length)box.appendChild(el('div','Only the first '+shown.length+' activities are listed; give the rest a cost with “Cost of activities left blank”.','muted'));
-    box.append(run,out);
+    const saveModel=button('Save prices','secondary');saveModel.id='owgCostSaveModel';saveModel.title='Keep these prices with the log; the HTML report then includes a cost section';
+    const forget=button('Forget saved prices','secondary');forget.id='owgCostForgetModel';forget.disabled=true;
+    const modelStatus=el('div',null,'muted');modelStatus.id='owgCostModelStatus';modelStatus.setAttribute('role','status');
+    const actions=el('div',null,'row');actions.append(run,saveModel,forget);
+    box.append(actions,modelStatus,out);
     const generation=state.generation;
+    const modelPath=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/cost-model';
+    const readModel=()=>{
+      const activity_costs={};
+      for(const node of prices){if(node.value.trim()==='')continue;const v=Number(node.value);if(!(v>=0))throw new Error('Costs must be zero or more ('+node.dataset.activity+').');activity_costs[node.dataset.activity]=v;}
+      const model={currency:currency.value.trim().toUpperCase(),activity_costs,hourly_open_case_cost:Number(hourly.value||0)};
+      if(fallback.value.trim()!=='')model.default_activity_cost=Number(fallback.value);
+      return model;
+    };
+    getJSON(modelPath()).then(r=>{
+      if(generation!==state.generation||!r.saved)return;
+      const m=r.saved.model;currency.value=m.currency;hourly.value=String(m.hourly_open_case_cost||0);
+      fallback.value=m.default_activity_cost===null||m.default_activity_cost===undefined?'':String(m.default_activity_cost);
+      for(const node of prices){const v=m.activity_costs[node.dataset.activity];node.value=v===undefined?'':String(v);}
+      forget.disabled=false;modelStatus.textContent='Prices saved '+String(r.saved.saved_at).slice(0,16).replace('T',' ')+' UTC are filled in. The HTML report includes a cost section.';
+    }).catch(()=>{});
+    saveModel.onclick=async()=>{
+      saveModel.disabled=true;
+      try{const r=await (await api(modelPath(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(readModel())})).json();
+        forget.disabled=false;modelStatus.textContent='Prices saved. The HTML report and its saved copies now include a cost section.';}
+      catch(error){modelStatus.textContent=error.message;}finally{saveModel.disabled=false;}
+    };
+    forget.onclick=async()=>{
+      try{await api(modelPath()+'/delete',{method:'POST'});forget.disabled=true;modelStatus.textContent='Saved prices forgotten. The report no longer includes a cost section.';}
+      catch(error){modelStatus.textContent=error.message;}
+    };
     run.onclick=async()=>{
       run.disabled=true;
       try{
@@ -1389,7 +1418,7 @@
   }
 
   function objectMapSection(){
-    const box=section('Object-centric map');
+    const box=section('Object-centric map');box.id='owgObjectCentricMap';
     const generation=state.generation;
     const current=()=>box.isConnected&&generation===state.generation;
     box.appendChild(el('div','Each object type has its own map: every object (an order, an item, a ticket…) is one lifecycle. Links count objects that share events; they are not verified relationships.','muted'));
@@ -3779,6 +3808,12 @@
     const transitionStatus=el('div','Refresh to inspect saved signal changes.','muted');
     transitionStatus.id='owgSignalTransitionStatus';transitionStatus.setAttribute('role','status');transitionStatus.setAttribute('aria-live','polite');
     const transitionResults=el('div');transitionResults.id='owgSignalTransitions';
+    const auditHeading=el('h4','Signal review decisions');
+    const auditNote=el('p','Local history of acknowledge, reopen, snooze and resume actions against exact evaluated states. This shows actions from this dashboard, not verified named people or business approvals. Only the most recent 3,000 entries per dataset are retained.','muted');
+    const auditRefresh=button('Refresh review history','secondary');auditRefresh.id='owgSignalAuditRefresh';
+    const auditStatus=el('div','Refresh to inspect signal review actions.','muted');
+    auditStatus.id='owgSignalAuditStatus';auditStatus.setAttribute('role','status');auditStatus.setAttribute('aria-live','polite');
+    const auditResults=el('div');auditResults.id='owgSignalAuditHistory';
     const allHeading=el('h4','Across all saved logs');
     const allNote=el('p','One local overview of saved signal review states across every imported dataset. This does not re-evaluate rules, read source accounts, send alerts or execute work. Open the corresponding log for the existing state-pinned review controls.','muted');
     const allFilter=select('owgSignalAllFilter',[
@@ -3793,12 +3828,41 @@
     const allControls=el('div',null,'actions');allControls.append(allFilter,allRefresh);
     box.append(row,message,rules,evaluate,out,reviewHeading,reviewNote,reviewRefresh,inbox,
       transitionHeading,transitionNote,transitionRefresh,transitionStatus,transitionResults,
+      auditHeading,auditNote,auditRefresh,auditStatus,auditResults,
       allHeading,allNote,allControls,allStatus,allResults);
     const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/signals';
     const selectedLogId=state.logId;
     const inboxBase=()=>'/v1/event-logs/'+encodeURIComponent(selectedLogId)+'/signal-inbox';
     const transitionBase=()=>'/v1/event-logs/'+encodeURIComponent(selectedLogId)+'/signal-history';
+    const auditBase=()=>'/v1/event-logs/'+encodeURIComponent(selectedLogId)+'/signal-review-history';
     const generation=state.generation;
+    let auditRequestId=0;
+    async function refreshAudit(){
+      const requestId=++auditRequestId;
+      auditRefresh.disabled=true;
+      auditStatus.textContent='Loading local signal review decisions…';
+      try{
+        const r=await getJSON(auditBase()+'?limit=100');
+        if(generation!==state.generation||requestId!==auditRequestId)return;
+        const entries=r.items||[];
+        auditStatus.textContent=Number(r.retained_total||0)+' saved review actions; showing '+
+          entries.length+(r.truncated?' (recent entries only)':'')+
+          '. Local dashboard actions only; no verified individual identity or execution approval.';
+        auditResults.replaceChildren(entries.length
+          ?table(['Reviewed (UTC)','Signal','Decision','Snooze'],entries.map(x=>[
+            x.recorded_at||'—',x.name,String(x.action||'').replace(/_/g,' '),
+            x.action==='snoozed'?String(x.snooze_minutes)+' min':'—']))
+          :el('div','No explicit signal review actions recorded yet.','muted'));
+      }catch(error){
+        if(generation===state.generation&&requestId===auditRequestId){
+          auditStatus.textContent=error.message||'Could not inspect local signal reviews.';
+          auditResults.replaceChildren();
+        }
+      }finally{
+        if(generation===state.generation&&requestId===auditRequestId)auditRefresh.disabled=false;
+      }
+    }
+    auditRefresh.onclick=()=>refreshAudit();
     let transitionRequestId=0;
     async function refreshHistory(){
       const requestId=++transitionRequestId;
@@ -3971,6 +4035,7 @@
       await refreshInbox();
       await refreshAllSignals();
       await refreshHistory();
+      await refreshAudit();
     }
     add.onclick=async()=>{
       try{
