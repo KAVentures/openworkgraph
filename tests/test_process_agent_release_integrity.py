@@ -102,6 +102,16 @@ def test_missing_file_replacement_and_malformed_manifest_are_refused(tmp_path):
         verify_directory(tmp_path)
 
 
+def test_unsigned_manifest_cannot_omit_required_generated_runtime_files(tmp_path):
+    _extract(tmp_path)
+    path = tmp_path / "release-manifest.json"
+    data = json.loads(path.read_text())
+    data["files"].pop("execute.py")
+    path.write_text(json.dumps(data))
+    with pytest.raises(ReleaseIntegrityError, match="Invalid release file inventory"):
+        verify_directory(tmp_path)
+
+
 def test_manifest_cannot_follow_parent_paths_or_untracked_symlinks(tmp_path):
     _extract(tmp_path)
     manifest = tmp_path / "release-manifest.json"
