@@ -67,6 +67,8 @@ def score(gold_document, prediction_document):
         extra = len(set(predictions) - set(gold))
         raise ValueError(f"event universe mismatch: missing={missing}, extra={extra}")
     tp = fp = fn = contamination_events = abstentions = 0
+    exact_match_events = unrelated_events = unrelated_false_positive_events = 0
+    labeled_wrong_case_events = 0
     for key, expected in gold.items():
         proposed = predictions[key]
         tp += len(expected & proposed)
@@ -74,6 +76,10 @@ def score(gold_document, prediction_document):
         fn += len(expected - proposed)
         contamination_events += bool(proposed - expected)
         abstentions += bool(expected and not proposed)
+        exact_match_events += (expected == proposed)
+        unrelated_events += not expected
+        unrelated_false_positive_events += bool(not expected and proposed)
+        labeled_wrong_case_events += bool(expected and (proposed - expected))
     precision = tp / (tp + fp) if tp + fp else 0.0
     recall = tp / (tp + fn) if tp + fn else 0.0
     f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
@@ -84,6 +90,13 @@ def score(gold_document, prediction_document):
         "cross_case_contamination_events": contamination_events,
         "cross_case_contamination_rate": contamination_events / len(gold),
         "abstentions_on_labeled_events": abstentions,
+        "exact_match_events": exact_match_events,
+        "exact_match_rate": exact_match_events / len(gold),
+        "unrelated_events": unrelated_events,
+        "false_positive_unrelated_events": unrelated_false_positive_events,
+        "false_positive_unrelated_rate": (unrelated_false_positive_events / unrelated_events
+                                          if unrelated_events else None),
+        "wrong_case_labeled_events": labeled_wrong_case_events,
         "evaluation_scope": "provided_labels_only",
     }
 
