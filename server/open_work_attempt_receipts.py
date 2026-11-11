@@ -45,8 +45,18 @@ def _connect(path: str):
         raise ValueError("unsafe receipt journal path")
     if os.name == "posix" and info.st_mode & 0o077:
         raise ValueError("receipt journal permissions too broad")
+    # Do not adopt pre-existing WAL/SHM files from an untrusted filesystem.
+    # The receipt journal deliberately uses rollback journaling so revocation
+    # and retention do not leave a second persistent SQLite data store.
+    for suffix in ("-wal", "-shm"):
+        sidecar = Path(str(target) + suffix)
+        if sidecar.exists() or sidecar.is_symlink():
+            raise ValueError("unsupported receipt journal sidecar")
     db = sqlite3.connect(str(target), timeout=5)
     db.execute("PRAGMA busy_timeout=5000")
+    if db.execute("PRAGMA journal_mode").fetchone()[0].lower() != "delete":
+        db.close()
+        raise ValueError("unsupported receipt journal mode")
     db.execute("""CREATE TABLE IF NOT EXISTS attempt_receipts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         tenant TEXT NOT NULL, actor TEXT NOT NULL, attempt TEXT NOT NULL,
