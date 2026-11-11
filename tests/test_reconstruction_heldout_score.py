@@ -134,6 +134,44 @@ class ReconstructionHeldoutScoreTests(unittest.TestCase):
         self.assertIsNone(result["macro_f1_labeled_cases"])
         self.assertEqual(result["per_case"], {})
 
+    def test_gold_scenarios_expose_masked_interleaving_contamination(self):
+        labeled = {"events": [
+            {"window": "current", "event_id": "clean", "case_id": "A",
+             "scenario": "single_case"},
+            {"window": "earlier", "event_id": "interleaved", "case_id": "B",
+             "scenario": "interleaving"},
+            {"window": "earlier", "event_id": "noise", "case_id": None,
+             "scenario": "interleaving"},
+        ]}
+        proposals = {"events": [
+            {"window": "current", "event_id": "clean", "candidate_case_ids": ["A"]},
+            {"window": "earlier", "event_id": "interleaved", "candidate_case_ids": ["A"]},
+            {"window": "earlier", "event_id": "noise", "candidate_case_ids": []},
+        ]}
+        result = score(labeled, proposals)
+        self.assertEqual(result["by_scenario"]["single_case"]["f1"], 1)
+        self.assertEqual(result["by_scenario"]["interleaving"]["cross_case_contamination_events"], 1)
+        self.assertEqual(result["by_scenario"]["interleaving"]["wrong_case_labeled_events"], 1)
+        self.assertNotIn("by_scenario", result["by_scenario"]["interleaving"])
+
+    def test_partial_or_invalid_gold_scenario_refused(self):
+        for invalid in (None, "", 42):
+            labeled = {"events": [
+                {"window": "current", "event_id": "a", "case_id": "A",
+                 "scenario": "interruption"},
+                {"window": "current", "event_id": "b", "case_id": "B",
+                 "scenario": invalid},
+            ]}
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                    ValueError, "scenario"):
+                score(labeled, predicted(("a", ("A",)), ("b", ("B",))))
+        with self.assertRaisesRegex(ValueError, "scenario"):
+            score({"events": [
+                {"window": "current", "event_id": "a", "case_id": "A",
+                 "scenario": "interruption"},
+                {"window": "current", "event_id": "b", "case_id": "B"},
+            ]}, predicted(("a", ("A",)), ("b", ("B",))))
+
     def test_empty_gold_refused(self):
         with self.assertRaisesRegex(ValueError, "empty gold"):
             score(gold(), predicted())
