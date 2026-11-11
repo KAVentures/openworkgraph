@@ -1224,8 +1224,44 @@
               const cell=el('td');cell.appendChild(del);tr.appendChild(cell);body.appendChild(tr);});
             t.append(thead,body);wrap.appendChild(t);parts.push(wrap);
           }else parts.push(el('div','No measurements yet. Record a baseline from before the change, then periods after it.','muted'));
+          const adjusted=r.coverage_adjusted;
+          if(adjusted){
+            const analysis=el('section');analysis.id='owgRealizedCoverageAdjusted';
+            analysis.setAttribute('aria-label','Coverage-aware benefit comparison');
+            analysis.appendChild(el('h5','Coverage-aware comparison'));
+            if(adjusted.status==='ready'&&adjusted.comparison){
+              const cc=adjusted.comparison,stats=el('ul');stats.id='owgRealizedWeightedComparison';
+              stats.append(
+                el('li','Pooled baseline: '+fmt(cc.baseline_minutes_per_case)+' min/case across '+
+                  fmt(adjusted.coverage.baseline.calendar_days_reported)+' days; after: '+
+                  fmt(cc.after_minutes_per_case)+' min/case across '+
+                  fmt(adjusted.coverage.after.calendar_days_reported)+' days.'),
+                el('li','Effort change at after-volume: '+
+                  fmt(cc.hours_per_month_from_per_case_change_at_after_volume)+
+                  ' hours/month (entered model: '+fmt(cc.modeled_hours_per_month)+').'),
+                el('li','Duration-weighted total hours/month: baseline '+fmt(cc.baseline_hours_per_month)+
+                  ', after '+fmt(cc.after_hours_per_month)+'; monthly case-volume change '+
+                  fmt(cc.case_volume_change_per_month)+'.')
+              );
+              analysis.appendChild(stats);
+            }else{
+              const reasons={
+                missing_periods:'Record both a baseline and an after period to compare.',
+                overlapping_periods:'Overlapping dates within one period type. Correct duplicate calendar coverage before interpreting adjusted results.',
+                zero_case_period:'At least one measurement has zero cases. Verify the case-exposure denominator before comparing.'
+              };
+              const warning=el('p',reasons[adjusted.status]||'Coverage-adjusted comparison unavailable.','muted');
+              warning.id='owgRealizedCoverageWarning';warning.setAttribute('role','status');
+              analysis.appendChild(warning);
+              if(adjusted.status==='overlapping_periods')analysis.appendChild(el('p',
+                fmt(adjusted.overlap_pairs.length)+' overlapping measurement pair(s); remove or replace conflicting rows.','muted'));
+            }
+            analysis.appendChild(el('p','Coverage-aware figures pool entered hours and cases across non-overlapping days. Source labels are not independently verified; this is not causal impact, certified savings or a confidence interval.','muted'));
+            parts.push(analysis);
+          }
           const c=r.comparison;
           if(c){
+            parts.push(el('h5','Legacy equal-weight-period comparison'));
             const list=el('ul');list.id='owgRealizedComparison';
             list.append(el('li','Minutes per case: '+fmt(c.minutes_per_case_change)+' fewer after (baseline '+fmt(r.baseline.minutes_per_case)+', after '+fmt(r.after.minutes_per_case)+').'),
               el('li','At the after volume that is '+fmt(c.hours_per_month_from_per_case_change_at_after_volume)+' hours a month; the assessment modeled '+fmt(c.modeled_hours_per_month)+(c.observed_vs_modeled_ratio!==null?' (ratio '+c.observed_vs_modeled_ratio+').':'.')),
