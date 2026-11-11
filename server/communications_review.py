@@ -21,6 +21,7 @@ import threading
 from typing import Any
 
 from shared import communications_learning as learning
+from shared import communications_quality_gate as quality_gate
 from shared import communications_mining as mining
 from shared.core.sensitive_identifiers import redact_sensitive_identifiers
 
@@ -337,12 +338,17 @@ def model_status(intent_names: list[str] | None = None) -> dict[str, Any]:
         if model is None:
             return {"trained": False, "usable": False, "evaluation_current": False}
         fresh, reason = _freshness(model, data, intent_names)
+    languages = model.get("evaluation", {}).get("languages", []) if fresh else []
+    gates = {code: quality_gate.assess(model["evaluation"], model["taxonomy_intents"], code)
+             for code in languages if isinstance(code, str) and code != "und"}
     return {"trained": True, "usable": fresh, "stale": not fresh,
             "stale_reason": reason, "evaluation_current": fresh,
             "trained_at": model["trained_at"], "expires_at": model["expires_at"],
             "model_sha256": model["model_sha256"], "intents": sorted(model["intents"]),
             "skipped_intents": model["skipped_intents"], "training_example_count": model["training_example_count"],
             "evaluation": model["evaluation"] if fresh else None, "thresholds": model["thresholds"],
+            "holdout_language_gates": gates, "holdout_gate_is_optional": True,
+            "holdout_language_inferred_from_upload": False,
             "estimates_not_verified_reasons_for_contact": True}
 
 
@@ -353,8 +359,9 @@ def delete_model() -> dict[str, Any]:
     return {"deleted": existed}
 
 
-def learned_classifier(intent_names: list[str] | None = None):
-    """Provide only a current trained classifier, never stale evaluation claims."""
+def learned_classifier(intent_names: list[str] | None = None, *,
+                       require_holdout_language: str | None = None):
+    """Provide only a fresh classifier; optionally refuse weak language holdout evidence."""
     with _LOCK:
         data = _load()
         model = _load_model()
@@ -363,8 +370,20 @@ def learned_classifier(intent_names: list[str] | None = None):
         fresh, _ = _freshness(model, data, intent_names)
         if not fresh:
             raise ReviewError("intent model is stale after review or taxonomy changes; retrain before use")
+        gate = None
+        if require_holdout_language is not None:
+            try:
+                gate = quality_gate.assess(model["evaluation"], model["taxonomy_intents"],
+                                           require_holdout_language)
+            except quality_gate.QualityGateError as exc:
+                raise ReviewError(str(exc)) from None
+            if not gate["ready"]:
+                raise ReviewError("Language-specific held-out quality gate refused learned classification; "
+                                  "review holdout support and quality in the model panel")
     return learning.predictor(model), {"model_sha256": model["model_sha256"], "trained_at": model["trained_at"],
-                                       "intents": sorted(model["intents"])}
+                                       "intents": sorted(model["intents"]),
+                                       "holdout_language_gate": gate,
+                                       "source_language_independently_verified": False}
 
 __all__ = ["ACK_VERSION", "ReviewError", "add_examples", "configure", "delete", "delete_model", "label",
            "learned_classifier", "listing", "model_status", "settings", "train_model"]
