@@ -51,6 +51,17 @@ const path=require('node:path');
    await page.locator('#owgCostDefault').fill('1');await page.locator('#owgCostRun').click();
    await out.filter({hasText:'$273.00'}).waitFor();
    assert.doesNotMatch(await out.innerText(),/No price for/);
+   // Save the prices with the log; analysing again fills them in, and they can be forgotten.
+   await page.locator('#owgCostSaveModel').click();
+   await page.locator('#owgCostModelStatus').filter({hasText:'Prices saved.'}).waitFor();
+   await page.locator('#owgEventLogAnalyze').click();
+   await page.locator('#owgCostModelStatus').filter({hasText:/Prices saved .* are filled in/}).waitFor();
+   assert.equal(await page.getByLabel('Cost of one Check').inputValue(),'10.5');
+   assert.equal(await page.locator('#owgCostCurrency').inputValue(),'USD');
+   assert.equal(await page.locator('#owgCostDefault').inputValue(),'1');
+   await page.locator('#owgCostForgetModel').click();
+   await page.locator('#owgCostModelStatus').filter({hasText:'Saved prices forgotten.'}).waitFor();
+   assert.equal(await page.locator('#owgCostForgetModel').isDisabled(),true);
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgEventLogCosts'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);

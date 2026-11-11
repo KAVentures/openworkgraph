@@ -617,8 +617,37 @@
     const out=el('div');out.id='owgCostResults';out.setAttribute('role','status');
     box.append(controls,priceTable);
     if(activityNames.length>shown.length)box.appendChild(el('div','Only the first '+shown.length+' activities are listed; give the rest a cost with “Cost of activities left blank”.','muted'));
-    box.append(run,out);
+    const saveModel=button('Save prices','secondary');saveModel.id='owgCostSaveModel';saveModel.title='Keep these prices with the log; the HTML report then includes a cost section';
+    const forget=button('Forget saved prices','secondary');forget.id='owgCostForgetModel';forget.disabled=true;
+    const modelStatus=el('div',null,'muted');modelStatus.id='owgCostModelStatus';modelStatus.setAttribute('role','status');
+    const actions=el('div',null,'row');actions.append(run,saveModel,forget);
+    box.append(actions,modelStatus,out);
     const generation=state.generation;
+    const modelPath=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/cost-model';
+    const readModel=()=>{
+      const activity_costs={};
+      for(const node of prices){if(node.value.trim()==='')continue;const v=Number(node.value);if(!(v>=0))throw new Error('Costs must be zero or more ('+node.dataset.activity+').');activity_costs[node.dataset.activity]=v;}
+      const model={currency:currency.value.trim().toUpperCase(),activity_costs,hourly_open_case_cost:Number(hourly.value||0)};
+      if(fallback.value.trim()!=='')model.default_activity_cost=Number(fallback.value);
+      return model;
+    };
+    getJSON(modelPath()).then(r=>{
+      if(generation!==state.generation||!r.saved)return;
+      const m=r.saved.model;currency.value=m.currency;hourly.value=String(m.hourly_open_case_cost||0);
+      fallback.value=m.default_activity_cost===null||m.default_activity_cost===undefined?'':String(m.default_activity_cost);
+      for(const node of prices){const v=m.activity_costs[node.dataset.activity];node.value=v===undefined?'':String(v);}
+      forget.disabled=false;modelStatus.textContent='Prices saved '+String(r.saved.saved_at).slice(0,16).replace('T',' ')+' UTC are filled in. The HTML report includes a cost section.';
+    }).catch(()=>{});
+    saveModel.onclick=async()=>{
+      saveModel.disabled=true;
+      try{const r=await (await api(modelPath(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(readModel())})).json();
+        forget.disabled=false;modelStatus.textContent='Prices saved. The HTML report and its saved copies now include a cost section.';}
+      catch(error){modelStatus.textContent=error.message;}finally{saveModel.disabled=false;}
+    };
+    forget.onclick=async()=>{
+      try{await api(modelPath()+'/delete',{method:'POST'});forget.disabled=true;modelStatus.textContent='Saved prices forgotten. The report no longer includes a cost section.';}
+      catch(error){modelStatus.textContent=error.message;}
+    };
     run.onclick=async()=>{
       run.disabled=true;
       try{
