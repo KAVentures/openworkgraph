@@ -76,6 +76,9 @@ def analyze(log_id: str, spec: Any) -> dict[str, Any]:
             JOIN objects t ON t.log_id=r.log_id AND t.object_id=r.target_object_id
             WHERE """ + where, args)
         n_pairs = int(conn.execute("SELECT count(*) FROM jbc_pairs").fetchone()[0])
+        if conn.execute("SELECT 1 FROM jbc_pairs WHERE source_id=target_id LIMIT 1").fetchone():
+            raise workspace.EventLogWorkspaceError(
+                "Self-referential OCEL assertions cannot prove a binding between two distinct objects; narrow the selected cohort")
         if n_pairs > MAX_PAIRS:
             raise workspace.EventLogWorkspaceError(
                 f"Binding continuity exceeds {MAX_PAIRS} distinct directed pairs; narrow the selected types or qualifier")
