@@ -112,6 +112,12 @@ CREATE TABLE IF NOT EXISTS signal_reviews (
   state_fingerprint VARCHAR NOT NULL, acknowledged_at TIMESTAMP NOT NULL,
   PRIMARY KEY(log_id, rule_id)
 );
+CREATE TABLE IF NOT EXISTS signal_transitions (
+  log_id VARCHAR NOT NULL, rule_id VARCHAR NOT NULL,
+  transition_id VARCHAR PRIMARY KEY, occurred_at TIMESTAMP NOT NULL,
+  event_type VARCHAR NOT NULL, state_fingerprint VARCHAR NOT NULL
+);
+CREATE INDEX IF NOT EXISTS signal_transitions_by_log_time ON signal_transitions(log_id,occurred_at);
 """
 
 _SCHEMA += source_identity.SCHEMA + object_relationships.SCHEMA
@@ -120,6 +126,12 @@ _SCHEMA += """
 CREATE TABLE IF NOT EXISTS case_tags (
   log_id VARCHAR NOT NULL, case_id VARCHAR NOT NULL, tag VARCHAR NOT NULL, note VARCHAR NOT NULL,
   tagged_at TIMESTAMP NOT NULL
+);
+"""
+# The saved cost model of a log (event_log_costs): at most one per log, the analyst's own prices.
+_SCHEMA += """
+CREATE TABLE IF NOT EXISTS cost_models (
+  log_id VARCHAR NOT NULL, model VARCHAR NOT NULL, saved_at TIMESTAMP NOT NULL
 );
 """
 
@@ -693,7 +705,7 @@ def delete_log(log_id: str) -> dict[str, Any]:
                 from .jira_retained_profiles import forget_dataset
                 forget_dataset(conn, log_id)
                 for table in ("object_relationships", "event_source_keys", "event_source_namespaces", "discovery_snapshots", "log_appends", "log_quality", "quarantine", "quarantine_decisions", "filter_sets",
-                              "domain_pack_installs", "metric_definitions", "saved_analyses", "signal_snoozes", "signal_reviews", "signal_rules", "case_tags", "event_objects", "events", "objects",
+                              "domain_pack_installs", "metric_definitions", "saved_analyses", "signal_snoozes", "signal_reviews", "signal_transitions", "signal_rules", "case_tags", "cost_models", "event_objects", "events", "objects",
                               "object_attribute_values",
                               "logs"):
                     conn.execute(f"DELETE FROM {table} WHERE log_id = ?", [log_id])

@@ -8,6 +8,7 @@ const QUEUE_KEY = "openworkgraph_pending_browser_events";
 const WORK_CONTEXT_KEY = "openworkgraph_work_context";
 const BROWSER_PAUSE_KEY = "openworkgraph_browser_paused_v1";
 const EXCLUSIONS_KEY = "openworkgraph_work_text_exclusions_v1";
+const LOCAL_SITE_EXCLUSIONS_KEY = "openworkgraph_browser_site_exclusions_v1";
 function excludedBrowserPage(page) {
   return globalThis.OWGBrowserExclusions?.isExcluded?.(page?.hostname, page?.title) === true;
 }
@@ -380,9 +381,11 @@ function workTextAllowedByLiveContext(fresh, page, title) {
 // never transports page bodies or draft values. The server rechecks consent.
 async function deliverWorkTextSnapshot(message, sender) {
   await browserPauseReady;
+  await globalThis.OWGBrowserExclusions?.ready;
   if (browserPaused || sender?.frameId !== 0 || !sender?.tab?.active) return;
   const source = safeUrl(sender.tab.url || "");
   if (!source || source.hostname !== String(message.hostname || "").toLowerCase()) return;
+  if (excludedBrowserPage({...source, title: sender.tab.title})) return;
   if (sanitizePathname(String(message.pathname || "")) !== source.pathname) return;
   if (!["page", "draft"].includes(message.kind) ||
       typeof message.text !== "string" || !message.text.length || message.text.length > 4000) return;
@@ -395,7 +398,7 @@ async function deliverWorkTextSnapshot(message, sender) {
       titles: Array.isArray(fresh?.excluded_title_patterns) ? fresh.excluded_title_patterns.slice(0,100) : []
     }
   }); } catch (_) {}
-  if (!on || browserPaused) return;
+  if (!on || browserPaused || excludedBrowserPage({...source, title: sender.tab.title})) return;
   // A keyed page identity keeps same-host documents distinct without sending
   // their URL, query, fragment or provider locator to cloud storage.
   const parsed = globalThis.OpenWorkGraphResourceReferences?.parse?.(sender.tab.url || '');
@@ -407,6 +410,7 @@ async function deliverWorkTextSnapshot(message, sender) {
     {name: 'HMAC', hash: 'SHA-256'}, false, ['sign']);
   const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(identity));
   const pageIdentity = Array.from(new Uint8Array(signature)).map(x => x.toString(16).padStart(2, '0')).join('');
+  if (browserPaused || excludedBrowserPage({...source, title: sender.tab.title})) return;
   await evidencePost("/v1/work-text/ingest", {
     hostname: source.hostname,
     pathname: source.pathname,
@@ -423,7 +427,8 @@ async function deliverWorkTextSnapshot(message, sender) {
 
 // A changed Never record list also scrubs previously queued, unsent evidence.
 ext.storage.onChanged?.addListener((changes, area) => {
-  if (area === "local" && changes?.[EXCLUSIONS_KEY]) sanitizePendingBrowserQueue().catch(() => {});
+  if (area === "local" && (changes?.[EXCLUSIONS_KEY] || changes?.[LOCAL_SITE_EXCLUSIONS_KEY]))
+    sanitizePendingBrowserQueue().catch(() => {});
 });
 
 ext.runtime.onMessage.addListener((message, sender, sendResponse) => {

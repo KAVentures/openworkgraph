@@ -214,3 +214,19 @@ operation with `--audit-dir` may already have written before this refusal; the
 CLI reports an uncertain write and requires authenticated inventory or ledger
 reconciliation. Do not assume that Windows audit persistence succeeded. An
 ACL-aware implementation and native Windows validation are still required.
+
+
+### Dashboard audit evidence (read-only)
+
+Set `OWG_M365_AUDIT_DIR` to the **absolute** owner-private POSIX directory
+containing receipts created with `--audit-dir` before launching OWG. The
+Connections panel offers **Microsoft 365 operator evidence → Refresh audit
+receipts**. The dashboard-session-only `GET /v1/m365/operator-audit` reads
+at most 1,000 directory entries and returns up to 50 newest validated
+receipts. It refuses symlinks, hardlinks, group/world-accessible files and
+directories, malformed receipts, and non-POSIX platforms. No client-selected
+path, bearer-token access, Graph calls, raw tenant identifiers, message content,
+credential material, or checkpoint writes are supported. A missing configured
+directory is shown as unconfigured, not as an empty successful audit.
+The timeline reflects **recorded local operator actions only** and cannot
+prove Microsoft tenant validation, import completeness, or revocation.

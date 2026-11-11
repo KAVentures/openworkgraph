@@ -28,3 +28,34 @@ The popup provides **Pause browser recording** and **Resume browser recording**.
 ## Earlier Never record exclusion enforcement
 
 The browser extension applies the dashboard's locally cached excluded host/domain and window-title lists **before** recording or queuing structural browser evidence. High-fidelity hover/drag/trajectory signals are suppressed before their expensive page probes. Excluded page details are also omitted from browser heartbeats. A changed exclusion list purges the matching unsent browser event backlog. The server continues to recheck exclusions independently at ingest, including when the extension has been offline; already-delivered records follow the existing deletion/retention process.
+
+## Exclude a website from the extension popup
+
+Open the browser sensor's popup while visiting an ordinary HTTP(S) website.
+Choose **Never record this site**. This adds the active website's **hostname
+only** to a separate browser-only excluded-host list. It is combined with,
+never overwritten by, the OWG-managed domain/title exclusion policy refreshed
+from the local server. It also excludes its
+subdomains, but does not collect or save the URL path, query, page text,
+or anything about the open page. Sites already covered by a parent-domain
+or wildcard exclusion cannot be added twice.
+
+Use **Remove** next to a browser-only domain to resume future eligible
+capture on that domain **only if OWG's separate managed exclusions also allow it**. Up to 100 domains may be saved. The popup displays a clear
+error if browser storage is unavailable and refuses to modify the policy
+rather than assuming exclusions can be discarded.
+
+The popup **never edits OWG-managed site or title exclusion patterns** and introduces no server calls, cloud permissions or capture-depth
+changes. It changes future browser recording only, not desktop capture or
+previously stored evidence; removing an exclusion does not bypass normal
+pause, consent, privacy or work-text settings. The shared capture gate applies the **union** to structural events,
+high-fidelity interaction signals, AI-agent lifecycle metadata, and separately
+opted-in page/draft work-text capture. Rich text collection waits for both
+policies to initialize, and its paired background delivery checks the local
+exclusion again before sending over loopback. A newly excluded domain also
+purges matching unsent structural evidence. Neither source's restrictions
+can be silently cleared by refreshing the other source.
+
+This is a convenient local
+control, not a claim that earlier captured data has been deleted. Use OWG's
+existing deletion controls separately if needed.
