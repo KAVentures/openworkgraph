@@ -19,7 +19,7 @@ from .m365_outlook_event_membership import reconcile as reconcile_membership
 from .m365_outlook_owg_receipt import ReceiptError, UncertainReceipt
 from .m365_outlook_delta import DeltaError
 from .m365_outlook_checkpoint import commit_checkpoint, inspect_checkpoint
-from .m365_operator_audit_writer import record_operator_phase, AuditWriteError
+from .m365_operator_audit_writer import (record_operator_phase, preflight_operator_audit, AuditWriteError)
 
 FORMAT = "openworkgraph.m365-operator-cycle.v1"
 
@@ -210,6 +210,11 @@ def main(argv=None):
                           "status": "refused", "retry_allowed": False}, sort_keys=True))
         return 2
     try:
+        # Validate the configured destination before Graph reads or local mutations.
+        # The writer revalidates it after execution; races remain uncertain.
+        if os.environ.get("OWG_M365_AUDIT_DIR") and phase in (
+                "review", "extract", "append", "checkpoint-commit"):
+            preflight_operator_audit(Path(os.environ["OWG_M365_AUDIT_DIR"]))
         if phase == "checkpoint-inspect":
             result = checkpoint_inspect(**args)
         elif phase == "checkpoint-commit":
@@ -247,7 +252,7 @@ def main(argv=None):
         print(json.dumps({"format": FORMAT, "phase": phase,
                           "status": "uncertain", "retry_allowed": False}, sort_keys=True))
         return 3
-    except (ReceiptError, DeltaError, ValueError, TypeError, OSError, KeyError):
+    except (ReceiptError, AuditWriteError, DeltaError, ValueError, TypeError, OSError, KeyError):
         print(json.dumps({"format": FORMAT, "phase": phase,
                           "status": "refused", "retry_allowed": False}, sort_keys=True))
         return 2

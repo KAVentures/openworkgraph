@@ -26,6 +26,31 @@ class AuditWriteError(RuntimeError):
     pass
 
 
+def preflight_operator_audit(directory: Path) -> None:
+    """Refuse an unavailable audit destination before any provider/OWG mutation.
+
+    The writer independently reopens and verifies the directory at write time.
+    A preflight cannot eliminate races; post-mutation failures remain uncertain.
+    """
+    if os.name != "posix":
+        raise AuditWriteError("Private audit writer requires POSIX permissions")
+    path = Path(directory)
+    if not path.is_absolute():
+        raise AuditWriteError("Audit directory must be absolute")
+    try:
+        if not stat.S_ISDIR(path.lstat().st_mode):
+            raise AuditWriteError("Audit directory is not a real directory")
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISDIR(st.st_mode) or st.st_mode & 0o077:
+                raise AuditWriteError("Audit directory is not private")
+        finally:
+            os.close(fd)
+    except (OSError, ValueError, TypeError) as exc:
+        raise AuditWriteError("Private audit directory unavailable") from exc
+
+
 def record_operator_phase(phase: str, result: dict, *, directory: Path,
                           tenant: str, mailbox: str, folder: str,
                           log_id: str | None = None) -> None:
