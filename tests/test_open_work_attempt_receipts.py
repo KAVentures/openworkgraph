@@ -76,3 +76,28 @@ def test_receipt_journal_rejects_symlink_and_directory(tmp_path):
         list_receipts(str(link), tenant="org", actor="alice", attempt="run")
     with pytest.raises(ValueError, match="unsafe receipt journal"):
         list_receipts(str(tmp_path), tenant="org", actor="alice", attempt="run")
+
+
+def test_receipt_journal_rejects_preexisting_sqlite_sidecars(tmp_path):
+    path = tmp_path / "receipts.sqlite"
+    path.touch(mode=0o600)
+    for suffix in ("-wal", "-shm"):
+        sidecar = tmp_path / ("receipts.sqlite" + suffix)
+        sidecar.write_bytes(b"untrusted data")
+        with pytest.raises(ValueError, match="unsupported receipt journal sidecar"):
+            list_receipts(str(path), tenant="org", actor="alice", attempt="run")
+        assert sidecar.read_bytes() == b"untrusted data"
+        sidecar.unlink()
+
+
+def test_receipt_journal_rejects_dangling_sidecar_symlink(tmp_path):
+    path = tmp_path / "receipts.sqlite"
+    path.touch(mode=0o600)
+    sidecar = tmp_path / "receipts.sqlite-wal"
+    try:
+        sidecar.symlink_to(tmp_path / "missing-target")
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    with pytest.raises(ValueError, match="unsupported receipt journal sidecar"):
+        list_receipts(str(path), tenant="org", actor="alice", attempt="run")
+    assert sidecar.is_symlink()

@@ -56,6 +56,26 @@ const path=require('node:path');
   assert.match(await out.textContent(),/At least 20 completed cases per activity/);
 
   assert.match(await out.textContent(),/Proposal, not applied: scale each range around its median by \d\.\d\d×/);
+  await page.locator('#owgPredictOutcome').selectOption('duration_over');
+  await page.locator('#owgPredictHours').fill('24');
+  const [outcomeChecked]=await Promise.all([
+    page.waitForResponse(r=>r.url().endsWith('/predictions/monitoring')),
+    page.locator('#owgPredictMonitor').click()
+  ]);
+  assert.equal(outcomeChecked.status(),200,await outcomeChecked.text());
+  const outcomeData=await outcomeChecked.json();
+  const caseQuality=outcomeData.outcome_case_reliability;
+  assert.ok(caseQuality&&caseQuality.total_distinct_scored_cases>20);
+  assert.ok(caseQuality.total_scored_prediction_points>caseQuality.total_distinct_scored_cases);
+  assert.equal(caseQuality.minimum_distinct_completed_cases_per_displayed_bin,20);
+  await out.getByText('Outcome calibration by independent completed cases').waitFor();
+  assert.match(await out.textContent(),/independent completed cases, compared with/);
+  assert.match(await out.textContent(),/No case or resource identities are shown/);
+  assert.match(await out.textContent(),/not independently verified source receipts/);
+  if(caseQuality.bins.length){
+    const byCases=out.locator('table').last();
+    assert.equal(await byCases.locator('tbody tr').count(),caseQuality.bins.length);
+  }else assert.match(await out.textContent(),/No case-level calibration table is shown/);
   await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
   const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgEventLogPredictions'),{
    runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
