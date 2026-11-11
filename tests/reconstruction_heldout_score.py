@@ -99,6 +99,29 @@ def score(gold_document, prediction_document, *, _include_windows=True):
         "wrong_case_labeled_events": labeled_wrong_case_events,
         "evaluation_scope": "provided_labels_only",
     }
+    # Macro per-case scores expose failures hidden by high-volume cases.
+    # A prediction for a case absent from gold remains a false positive in
+    # micro metrics; per-case evaluation is restricted to labeled cases.
+    case_ids = sorted({case for expected in gold.values() for case in expected})
+    per_case = {}
+    for case_id in case_ids:
+        case_tp = sum(case_id in gold[key] and case_id in predictions[key] for key in gold)
+        case_fp = sum(case_id not in gold[key] and case_id in predictions[key] for key in gold)
+        case_fn = sum(case_id in gold[key] and case_id not in predictions[key] for key in gold)
+        case_precision = case_tp / (case_tp + case_fp) if case_tp + case_fp else 0.0
+        case_recall = case_tp / (case_tp + case_fn) if case_tp + case_fn else 0.0
+        case_f1 = (2 * case_precision * case_recall / (case_precision + case_recall)
+                   if case_precision + case_recall else 0.0)
+        per_case[case_id] = {
+            "support": case_tp + case_fn,
+            "true_positive": case_tp, "false_positive": case_fp,
+            "false_negative": case_fn, "precision": case_precision,
+            "recall": case_recall, "f1": case_f1,
+        }
+    result["per_case"] = per_case
+    result["macro_f1_labeled_cases"] = (
+        sum(item["f1"] for item in per_case.values()) / len(per_case)
+        if per_case else None)
     if _include_windows:
         # Report each evidence window independently to reveal masked leakage.
         result["by_window"] = {}
