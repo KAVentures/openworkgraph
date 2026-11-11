@@ -6,6 +6,7 @@ paths, credentials or tenant identifiers from HTTP clients.
 from __future__ import annotations
 
 import json
+from datetime import datetime
 import os
 import re
 import stat
@@ -63,7 +64,14 @@ def read_operator_audit(directory: Path, *, limit: int = 50) -> dict:
                         raw = stream.read(_MAX_BYTES + 1)
                     if len(raw) > _MAX_BYTES:
                         raise AuditEvidenceError("Oversized operator audit receipt")
-                    obj = json.loads(raw)
+                    def unique_pairs(pairs):
+                        value = {}
+                        for key, item in pairs:
+                            if key in value:
+                                raise AuditEvidenceError("Duplicate audit receipt field")
+                            value[key] = item
+                        return value
+                    obj = json.loads(raw, object_pairs_hook=unique_pairs)
                     if (type(obj) is not dict
                             or obj.get("format") != "openworkgraph.m365-operator-audit.v1"
                             or obj.get("action") not in _ACTIONS
@@ -82,6 +90,23 @@ def read_operator_audit(directory: Path, *, limit: int = 50) -> dict:
                             or not re.fullmatch(r"[0-9a-f]{64}", obj["log_id_sha256"])
                             or obj.get("automatic_retry_allowed") is not False):
                         raise AuditEvidenceError("Invalid operator audit receipt")
+                    try:
+                        stamp = datetime.fromisoformat(obj["timestamp_utc"])
+                        if stamp.utcoffset().total_seconds() != 0:
+                            raise ValueError("Non-UTC timestamp")
+                    except (ValueError, OverflowError, TypeError, AttributeError):
+                        raise AuditEvidenceError("Invalid audit timestamp") from None
+                    for field in ("expected_generation", "committed_generation",
+                                  "committed_predecessor_generation", "event_snapshots",
+                                  "removal_markers_for_review"):
+                        if field in obj and (type(obj[field]) is not int or obj[field] < 0):
+                            raise AuditEvidenceError("Invalid audit count")
+                    for field in ("checkpoint_advanced", "owg_append_performed"):
+                        if field in obj and type(obj[field]) is not bool:
+                            raise AuditEvidenceError("Invalid audit phase flag")
+                    if (obj.get("checkpoint_advanced", False) != (obj["action"] == "commit")
+                            or obj.get("owg_append_performed", False) != (obj["action"] == "append")):
+                        raise AuditEvidenceError("Contradictory audit phase flags")
                     # Never expose scope hashes or log hashes in browser JSON.
                     item = {key: obj[key] for key in (
                         "timestamp_utc", "action", "status",
