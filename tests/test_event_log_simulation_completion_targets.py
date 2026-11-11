@@ -70,7 +70,7 @@ def test_optional_target_per_class_only_reports_declared_class():
     assert [row["name"] for row in rows] == ["urgent"]
 
 
-@pytest.mark.parametrize("value", [None, True, False, "5", 0, -1, 525601, float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize("value", [None, True, False, "5", 0, -1, 525601, 10 ** 500, float("nan"), float("inf"), float("-inf")])
 def test_invalid_completion_targets_rejected(value):
     bad = [{**TARGETS[0], "completion_target_minutes": value}, TARGETS[1]]
     with pytest.raises(workspace.EventLogWorkspaceError, match="completion_target_minutes"):
