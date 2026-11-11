@@ -112,6 +112,17 @@ def test_unsigned_manifest_cannot_omit_required_generated_runtime_files(tmp_path
         verify_directory(tmp_path)
 
 
+def test_bounded_verification_refuses_oversized_manifest_and_extracted_files(tmp_path):
+    _extract(tmp_path)
+    (tmp_path / "release-manifest.json").write_bytes(b" " * (256 * 1024 + 1))
+    with pytest.raises(ReleaseIntegrityError, match="manifest is too large"):
+        verify_directory(tmp_path)
+    _extract(tmp_path)
+    (tmp_path / "agent.py").write_bytes(b"x" * (4 * 1024 * 1024 + 1))
+    with pytest.raises(ReleaseIntegrityError, match="missing or changed"):
+        verify_directory(tmp_path)
+
+
 def test_manifest_cannot_follow_parent_paths_or_untracked_symlinks(tmp_path):
     _extract(tmp_path)
     manifest = tmp_path / "release-manifest.json"
