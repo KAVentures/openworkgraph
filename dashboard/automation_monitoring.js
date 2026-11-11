@@ -56,17 +56,19 @@
     mrow.append(field('Deployment',pick),field('Recent days',recent),field('Baseline days',baseline),view);
     const channelButton=button('Signed report channel','secondary');channelButton.id='owgMonitorChannel';
     const incidentButton=button('Show incidents','secondary');incidentButton.id='owgMonitorIncidents';
-    const arow=el('div',null,'row');arow.style.alignItems='end';arow.append(field('Attach reviewed design (workflow.spec.json)',design),toLog,channelButton,incidentButton,remove);
+    const releaseButton=button('Release inventory','secondary');releaseButton.id='owgMonitorRelease';
+    const arow=el('div',null,'row');arow.style.alignItems='end';arow.append(field('Attach reviewed design (workflow.spec.json)',design),toLog,channelButton,incidentButton,releaseButton,remove);
     const channelHost=el('div');channelHost.id='owgMonitorChannelPanel';const incidentHost=el('div');incidentHost.id='owgMonitorIncidentPanel';
-    manage.append(mrow,arow,channelHost,incidentHost);show(manage,false);
+    const releaseHost=el('div');releaseHost.id='owgMonitorReleasePanel';
+    manage.append(mrow,arow,channelHost,incidentHost,releaseHost);show(manage,false);
     const results=el('div');results.id='owgMonitorResults';
     card.append(row,consentLabel,importButton,status,manage,results);
     const anchor=document.getElementById('owgPddCard')||document.getElementById('owgCommsCard')||document.getElementById('owgEventLogCard');
     if(anchor)anchor.insertAdjacentElement('afterend',card);else panel.appendChild(card);
 
-    let deployments=[],renderVersion=0,loadVersion=0,incidentVersion=0;
+    let deployments=[],renderVersion=0,loadVersion=0,incidentVersion=0,releaseVersion=0;
     let incidentScope='selected',incidentStatus='',incidentSearch='';
-    const clearResults=()=>{renderVersion++;incidentVersion++;incidentScope='selected';incidentStatus='';incidentSearch='';results.replaceChildren();channelHost.replaceChildren();incidentHost.replaceChildren();};
+    const clearResults=()=>{renderVersion++;incidentVersion++;incidentScope='selected';incidentStatus='';incidentSearch='';results.replaceChildren();channelHost.replaceChildren();incidentHost.replaceChildren();releaseVersion++;releaseHost.replaceChildren();};
     const refresh=()=>{importButton.disabled=!(file.files&&file.files[0]&&consent.checked);};
     file.onchange=refresh;consent.onchange=refresh;
     async function load(select){
@@ -180,6 +182,65 @@
       const reload=button('Refresh incidents','secondary');reload.id='owgMonitorIncidentRefresh';reload.onclick=refreshList;
       incidentHost.replaceChildren(el('h3','Incidents'),controls,reload,body);draw();
     }
+    async function renderRelease(){
+      const selected=pick.value;if(!selected)return;
+      const version=++releaseVersion;
+      const data=await api('/v1/automation-monitoring/deployments/'+encodeURIComponent(selected)+'/release');
+      if(version!==releaseVersion||pick.value!==selected)return;
+      const parts=[el('h3','Deployment release inventory'),
+        el('div','Human-declared stages only: changes here do not activate, pause, retire or roll back any remote automation.','muted')];
+      parts.push(el('div',data.current?
+        'Latest declaration: '+data.current.stage+' · '+data.current.release_label+' · revision '+data.revision:
+        'No release review has been recorded.','muted'));
+      parts.push(el('div','Retained runs: '+data.runs.retained+'; runs claiming this pinned spec: '+
+        data.runs.declaring_pinned_spec+'. Neither a reported spec nor a declared stage verifies the executable artifact.','muted'));
+      const stage=document.createElement('select');stage.id='owgMonitorReleaseStage';
+      setOptions(stage,[['planned','Planned'],['shadow_reported','Shadow (declared)'],
+        ['pilot_reported','Pilot (declared)'],['production_reported','Production (declared)'],
+        ['paused_reported','Paused (declared only)'],['retired_reported','Retired (declared only)']]);
+      stage.value=data.current?.stage||'planned';
+      const label=input('owgMonitorReleaseLabel','text','v1.0.0');label.maxLength=64;label.value=data.current?.release_label||'v1';
+      const digest=input('owgMonitorReleaseArtifact','text','Artifact SHA-256');digest.maxLength=64;digest.value=data.current?.artifact_sha256||'';
+      const note=input('owgMonitorReleaseNote','text','No secrets');note.maxLength=500;
+      const confirmation=input('owgMonitorReleaseConfirm','checkbox');
+      const confirmLabel=el('label');confirmLabel.style.cssText='display:flex;gap:8px;align-items:center';
+      confirmLabel.append(confirmation,document.createTextNode(' I confirm this is an unverified operator declaration, not a remote deployment command'));
+      const save=button('Record release review','secondary');save.id='owgMonitorReleaseSave';save.disabled=true;
+      confirmation.onchange=()=>{save.disabled=!confirmation.checked;};
+      const feedback=el('p',null,'muted');feedback.id='owgMonitorReleaseFeedback';feedback.setAttribute('role','status');
+      const line=el('div',null,'row');line.style.alignItems='end';
+      line.append(field('Declared stage',stage),field('Release label',label),
+        field('Artifact SHA-256 (required for pilot/production)',digest),field('Reviewer note',note),save);
+      save.onclick=async()=>{
+        if(version!==releaseVersion||pick.value!==selected||!confirmation.checked)return;
+        save.disabled=true;
+        try{
+          await api('/v1/automation-monitoring/deployments/'+encodeURIComponent(selected)+'/release',{
+            method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({
+              expected_revision:data.revision,
+              expected_reported_spec_sha256:data.expected_reported_spec_sha256,
+              expected_design_sha256:data.expected_design_sha256,
+              stage:stage.value,release_label:label.value,artifact_sha256:digest.value||null,
+              reviewer_note:note.value,user_confirmed:true
+            })
+          });
+          if(version===releaseVersion&&pick.value===selected){
+            status.textContent='Release review saved locally.';await renderRelease();
+          }
+        }catch(error){
+          if(version===releaseVersion&&pick.value===selected){feedback.textContent=error.message;save.disabled=!confirmation.checked;}
+        }
+      };
+      parts.push(line,confirmLabel,feedback);
+      if(data.history.length)parts.push(el('h4','Immutable local history'),table(
+        ['Revision','Declared at','Stage','Label','Artifact SHA-256','Reported spec SHA-256','Note'],
+        data.history.map(row=>[String(row.revision),row.declared_at,row.stage,row.release_label,
+          row.artifact_sha256||'unknown',row.reported_spec_sha256||'unknown',row.reviewer_note||'—'])));
+      parts.push(el('p','An attached design or matching hash does not establish what executed or what a provider returned. Deleting the deployment also removes this inventory.','muted'));
+      releaseHost.replaceChildren(...parts);
+    }
+    releaseButton.onclick=()=>renderRelease().catch(error=>{status.textContent=error.message;});
     channelButton.onclick=()=>renderChannel().catch(error=>{status.textContent=error.message;});
     incidentButton.onclick=()=>{incidentScope='selected';incidentStatus='';incidentSearch='';renderIncidents();};
     pick.onchange=clearResults;recent.oninput=clearResults;baseline.oninput=clearResults;
