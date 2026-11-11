@@ -21,6 +21,10 @@ MANIFEST_NAME = "release-manifest.json"
 MAX_FILES = 100
 MAX_FILE_BYTES = 4 * 1024 * 1024
 MAX_MANIFEST_BYTES = 256 * 1024
+REQUIRED_GENERATED_FILES = frozenset({
+    "workflow.spec.json", "verify_release.py", "execute.py", "runtime.py",
+    "agent.py", "README.md", "AGENTS.md", "test_execution.py",
+})
 _HEX = re.compile(r"^[0-9a-f]{64}$")
 _FILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*(?:/[A-Za-z0-9][A-Za-z0-9_.-]*)*$")
 _EXACT_FIELDS = {
@@ -64,8 +68,8 @@ def create_manifest(files: dict[str, str], spec: dict) -> str:
         spec.get("execution_authorization") is not False or spec.get("source_records_included") is not False
     ):
         raise ReleaseIntegrityError("Only an unchanged non-authorizing runtime specification can be inventoried")
-    if "workflow.spec.json" not in files:
-        raise ReleaseIntegrityError("Runtime spec file is missing")
+    if not REQUIRED_GENERATED_FILES.issubset(files):
+        raise ReleaseIntegrityError("Required generated runtime files are missing")
     try:
         if json.loads(files["workflow.spec.json"]) != spec:
             raise ReleaseIntegrityError("Runtime spec content differs from the requested version")
@@ -136,8 +140,7 @@ def verify_directory(root: Path | str, expected_manifest_sha256: str | None = No
         raise ReleaseIntegrityError("The release manifest does not match the documented contract")
     hashes = manifest["files"]
     if (not isinstance(hashes, dict) or not 1 <= len(hashes) <= MAX_FILES
-        or "workflow.spec.json" not in hashes
-        or "verify_release.py" not in hashes):
+        or not REQUIRED_GENERATED_FILES.issubset(hashes)):
         raise ReleaseIntegrityError("Invalid release file inventory")
     for name, digest in hashes.items():
         if not _safe_name(name) or not isinstance(digest, str) or not _HEX.fullmatch(digest):
