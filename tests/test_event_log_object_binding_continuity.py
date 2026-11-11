@@ -121,6 +121,17 @@ def test_qualifier_filter_and_extra_relationship_annotations_do_not_multiply_pai
     assert all_pairs["forward_pairs"]==2
 
 
+def test_self_referential_o2o_link_cannot_masquerade_as_two_object_binding():
+    payload=document()
+    for obj in payload["objects"]:
+        if obj["id"] == "o1":
+            obj["relationships"].append({"objectId": "o1", "qualifier": "self"})
+            break
+    log=import_log(payload)
+    with pytest.raises(workspace.EventLogWorkspaceError,match="Self-referential"):
+        binding.analyze(log,settings(source_type="order",target_type="order",qualifier="self"))
+
+
 @pytest.mark.parametrize("bad", [
     {"source_type": ""}, {"target_type": " "}, {"first_activity": "Ship", "then_activity": "Ship"},
     {"first_activity": "Pack\nShip"}, {"then_activity": ""},
