@@ -113,7 +113,7 @@
             // pipeline requires its own current-revision check on any decision.
             const continueReview=node('button','Open opportunity decision and handoff');continueReview.type='button';continueReview.disabled=true;
             continueReview.onclick=async()=>{
-              if(token!==generation||choice.value!==projectId||input.value.trim()!==id||!notesMatchSaved())return;
+              if(token!==generation||choice.value!==projectId||input.value.trim()!==id||reviewMutationPending||!notesMatchSaved())return;
               const pipelineCard=document.getElementById('owgPipelineCard');
               if(!pipelineCard){status.textContent='Automation pipeline unavailable. Reopen the dashboard and inspect again.';return;}
               // The opportunity can change after the first preflight. Revalidate
@@ -153,7 +153,7 @@
               }finally{
                 // A failed or superseded preflight must never resurrect navigation.
                 // A new authoritative inspection is required after clear().
-                continueReview.disabled=!reviewStillSelected()||currentDecision!=='approved'||!notesMatchSaved();
+                updateContinue();
               }
             };
             // Durable human review is a separate, non-executing decision.
