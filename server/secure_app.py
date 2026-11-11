@@ -755,6 +755,9 @@ app.include_router(_m365_operator_audit_router)
 # R24 cross-object lead time analysis uses the same dashboard-only event-log guard.
 from .event_log_object_lead_time_routes import router as _object_lead_time_router  # noqa: E402
 app.include_router(_object_lead_time_router)
+# R24 same-pair co-attached events are a separate local-only session-scoped read.
+from .event_log_object_binding_routes import router as _object_binding_router  # noqa: E402
+app.include_router(_object_binding_router)
 from .automation_monitoring_routes import router as _automation_monitoring_router  # noqa: E402
 app.include_router(_automation_monitoring_router)
 from .communications_routes import router as _communications_router  # noqa: E402
