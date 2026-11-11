@@ -1,7 +1,14 @@
 """Metric-contract tests; synthetic examples are NOT held-out performance results."""
 import unittest
 
-from tests.reconstruction_heldout_score import score
+import importlib.util
+from pathlib import Path
+
+_spec = importlib.util.spec_from_file_location(
+    "reconstruction_heldout_score", Path(__file__).with_name("reconstruction_heldout_score.py"))
+_module = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_module)
+score = _module.score
 
 
 def gold(*rows):
