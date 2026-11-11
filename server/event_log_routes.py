@@ -111,6 +111,34 @@ def _case_filter(started_from: str = Query(default="", max_length=64),
     return cohort
 
 
+@router.get("/v1/event-logs/{log_id}/cost-model")
+def event_log_cost_model(request: Request, log_id: str):
+    """The log's saved cost model, or null when none is saved."""
+    from . import event_log_costs as cost_model
+    _require_dashboard(request)
+    return _respond(lambda: {"log_id": log_id, "saved": cost_model.saved_model(log_id)})
+
+
+@router.post("/v1/event-logs/{log_id}/cost-model")
+async def event_log_save_cost_model(request: Request, log_id: str):
+    """Keep the analyst's prices with the log; the report then includes a cost section."""
+    from . import event_log_costs as cost_model
+    _require_dashboard(request)
+    spec = await _json_body(request, "cost model", strict=True, limit=131072)
+    try:
+        result = await run_in_threadpool(cost_model.save_model, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/cost-model/delete")
+def event_log_delete_cost_model(request: Request, log_id: str):
+    from . import event_log_costs as cost_model
+    _require_dashboard(request)
+    return _respond(cost_model.delete_model, log_id)
+
+
 @router.post("/v1/event-logs/{log_id}/costs")
 async def event_log_costs(request: Request, log_id: str):
     """Process cost from a user-supplied cost model: per case, activity, variant and resource."""

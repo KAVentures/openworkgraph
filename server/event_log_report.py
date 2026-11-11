@@ -65,6 +65,18 @@ def _bar(share: float) -> str:
 MAX_SLOW_TRANSITIONS = 10
 
 
+def _costs(log_id: str, case_type: str | None, cohort: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The log's saved cost model applied to the report's cases, or None when no model is saved."""
+    from . import event_log_costs as costs
+    saved = costs.saved_model(log_id)
+    if saved is None:
+        return None
+    spec = {**saved["model"], "cohort": cohort or {}, "limit": 5}
+    if case_type:
+        spec["case_type"] = case_type
+    return {**costs.costs(log_id, spec), "model_saved_at": saved["saved_at"]}
+
+
 def slowest_transitions(log_id: str, case_type: str | None = None,
                         cohort: dict[str, Any] | None = None) -> dict[str, Any]:
     """Directly-follows transitions ranked by median gap, among those seen in enough cases to be stable.
@@ -109,8 +121,32 @@ def build(log_id: str, case_type: str | None = None, cohort: dict[str, Any] | No
         "variants": workspace.variants(log_id, case_type, variant_limit, cohort=cohort),
         "activities": workspace.activities(log_id, case_type, cohort),
         "slowest_transitions": slowest_transitions(log_id, case_type, cohort),
+        "costs": _costs(log_id, case_type, cohort),
         "interpretation": _CAVEAT,
     }
+
+
+def _cost_section(c: dict[str, Any] | None) -> str:
+    if not c:
+        return ""
+    money = lambda v: "–" if v is None else f"{escape(c['currency'])} {v:,.2f}"
+    per = c["cost_per_case"]
+    rows = [[escape(a["activity"]), _num(a["events"]),
+             "no price" if a["unit_cost"] is None else money(a["unit_cost"]) + (" (default)" if a["price_source"] == "default" else ""),
+             money(a["cost"]), _pct(a["share_of_activity_cost"])]
+            for a in c["activities"][:10]]
+    unpriced = ("" if not c["unpriced_events"] else
+                f'<p class="meta">No price for {escape(", ".join(a["activity"] for a in c["unpriced_activities"][:10]))}: '
+                f'{_num(c["unpriced_events"])} executions are left out of the totals.</p>')
+    return f"""<h2>Process cost</h2>
+<p class="meta">Your saved cost model (saved {escape(c["model_saved_at"])}) applied to these cases. The log does not record what work cost.</p>
+<div class="tiles"><div class="tile"><div class="v">{money(c["total_cost"])}</div><div class="k">Total</div></div>
+<div class="tile"><div class="v">{money(per["mean"])}</div><div class="k">Per case (mean)</div></div>
+<div class="tile"><div class="v">{money(per["median"])}</div><div class="k">Per case (median)</div></div>
+<div class="tile"><div class="v">{_pct(c["repeated_execution_share"])}</div><div class="k">Spent on repeated executions</div></div></div>
+{unpriced}
+<div class="scroll">{_table(["Activity", "Executions", "Unit cost", "Cost", "Share"], rows, {1, 2, 3, 4})}</div>
+"""
 
 
 def render(data: dict[str, Any]) -> str:
@@ -184,6 +220,7 @@ generated {escape(data["generated_at"])}</p>
 <div class="scroll">{_table(["#", "Path", "Cases", "Share", "Median duration"], variant_rows, {0, 2, 3, 4})}</div>
 <h2>Activities</h2>
 <div class="scroll">{_table(["Activity", "Events", "Cases", "Repeated in cases", "Resources"], activity_rows, {1, 2, 3, 4})}</div>
+{_cost_section(data.get("costs"))}
 <h2>Slowest transitions</h2>
 <p class="meta">Median time between one activity and the next, for transitions seen in at least {_num(slow["minimum_cases"])} cases. This is elapsed time between recorded events, not measured work or verified waiting.</p>
 <div class="scroll">{_table(["Transition", "Median gap", "90th percentile", "Cases"], slow_rows, {1, 2, 3})}</div>

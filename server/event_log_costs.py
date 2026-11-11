@@ -12,7 +12,9 @@ and repeated executions are not verified rework.
 """
 from __future__ import annotations
 
+import json
 import math
+from datetime import datetime, timezone
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, ValidationError, field_validator
@@ -171,3 +173,62 @@ def costs(log_id: str, spec: Any = None) -> dict[str, Any]:
                            "executions of an activity after its first in the same case and are not verified rework. "
                            "Activities without a price are left out of the totals and listed."),
     }
+
+
+# ---------------------------------------------------------------- saved cost model
+
+MODEL_KEYS = ("currency", "activity_costs", "default_activity_cost", "hourly_open_case_cost")
+
+
+def _model_only(spec: Any) -> dict[str, Any]:
+    if not isinstance(spec, dict):
+        raise workspace.EventLogWorkspaceError("a cost model is a JSON object")
+    extra = set(spec) - set(MODEL_KEYS)
+    if extra:
+        raise workspace.EventLogWorkspaceError("a saved cost model holds only " + ", ".join(MODEL_KEYS))
+    parsed = _parse(spec)
+    return {"currency": parsed.currency, "activity_costs": parsed.activity_costs,
+            "default_activity_cost": parsed.default_activity_cost, "hourly_open_case_cost": parsed.hourly_open_case_cost}
+
+
+def _with_conn(log_id: str, fn):
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            workspace._check_log(conn, log_id)
+            return fn(conn)
+        finally:
+            conn.close()
+
+
+def save_model(log_id: str, spec: Any) -> dict[str, Any]:
+    """Keep the analyst's prices with the log, replacing any earlier model."""
+    model = _model_only(spec)
+
+    def run(conn):
+        saved_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        conn.execute("BEGIN")
+        try:
+            conn.execute("DELETE FROM cost_models WHERE log_id = ?", [log_id])
+            conn.execute("INSERT INTO cost_models VALUES (?, ?, ?)", [log_id, json.dumps(model, sort_keys=True), saved_at])
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        return {"format": FORMAT, "log_id": log_id, "model": model, "saved_at": saved_at.isoformat() + "Z"}
+    return _with_conn(log_id, run)
+
+
+def saved_model(log_id: str) -> dict[str, Any] | None:
+    def run(conn):
+        row = conn.execute("SELECT model, saved_at FROM cost_models WHERE log_id = ?", [log_id]).fetchone()
+        return None if row is None else {"model": json.loads(row[0]), "saved_at": row[1].isoformat() + "Z"}
+    return _with_conn(log_id, run)
+
+
+def delete_model(log_id: str) -> dict[str, Any]:
+    def run(conn):
+        removed = conn.execute("SELECT count(*) FROM cost_models WHERE log_id = ?", [log_id]).fetchone()[0]
+        conn.execute("DELETE FROM cost_models WHERE log_id = ?", [log_id])
+        return {"format": FORMAT, "log_id": log_id, "deleted": bool(removed)}
+    return _with_conn(log_id, run)
