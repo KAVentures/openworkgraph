@@ -118,7 +118,7 @@ def test_stale_revision_and_spec_references_are_rejected_without_mutation():
     {"artifact_sha256": "bad"},
     {"expected_revision": True},
     {"expected_reported_spec_sha256": "x" * 64},
-    {"reviewer_note": "has\\nnewline"},
+    {"reviewer_note": "has\nnewline"},
     {"unexpected": True},
 ])
 def test_bad_or_unconfirmed_reviews_are_not_saved(change):
