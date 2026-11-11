@@ -21,7 +21,7 @@ def test_pause_switch_is_wired_to_all_capture_channels():
     assert 'if (browserPaused) return false;' in background
     assert 'if (owgBrowserPaused || owgBrowserNeverRecord()) return;' in content
     assert 'if (owgDepthPaused || owgDepthExcluded()) return false;' in depth
-    assert 'setEnabled(consentEnabled && !browserPaused)' in work_text
+    assert 'setEnabled(consentEnabled && !browserPaused && !sensitiveSurface())' in work_text
     assert 'id="toggle-capture"' in popup
     assert 'type: "owg_browser_pause_set"' in popup_js
 
