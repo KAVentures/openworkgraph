@@ -323,7 +323,8 @@
     let recoveryGeneration=0,recoveryRevision=null,recoveryIdentity=null;
     function resetRecovery(){
       recoveryGeneration++;recoveryRevision=null;recoveryIdentity=null;
-      recoveryRevoke.disabled=true;recoveryStatus.textContent='IDs changed. Load the saved review again.';
+      recoveryRevoke.disabled=true;recoveryLoad.disabled=false;
+      recoveryStatus.textContent='IDs changed. Load the saved review again.';
     }
     recoveryIdea.addEventListener('input',resetRecovery);
     recoveryProject.addEventListener('input',resetRecovery);
