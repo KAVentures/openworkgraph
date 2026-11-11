@@ -215,7 +215,7 @@
               for(const b of [saveDraft,approve,revoke])b.disabled=false;
             }
             async function persistReview(decision){
-              if(!reviewStillSelected())return;
+              if(!reviewStillSelected()||reviewMutationPending||handoffPreflightPending||reviewRevision<0)return;
               const mutationGeneration=++reviewRequestGeneration;
               reviewMutationPending=true;
               // A second mutation or refresh supersedes this response. Never let
@@ -260,7 +260,7 @@
             saveDraft.onclick=()=>persistReview('draft');
             approve.onclick=()=>persistReview('approved');
             revoke.onclick=async()=>{
-              if(!reviewStillSelected()||reviewRevision<1)return;
+              if(!reviewStillSelected()||reviewMutationPending||handoffPreflightPending||reviewRevision<1)return;
               const mutationGeneration=++reviewRequestGeneration;
               reviewMutationPending=true;
               currentDecision='unknown';continueReview.disabled=true;
