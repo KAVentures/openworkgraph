@@ -214,6 +214,9 @@
               // An authoritative refresh after a rejected mutation supersedes that mutation.
               // Release its pending lock only after the refreshed state validates.
               reviewMutationPending=false;
+              // A server refresh may replace the exact approved revision. An
+              // acknowledgement of the previous revision is never transferable.
+              consent.checked=false;
               reviewRevision=state.revision;currentDecision=state.decision;notes.value=state.reviewer_notes||'';savedNotes=notes.value;updateContinue();
               reviewState.textContent='Saved review: '+state.decision+' (revision '+state.revision+'). No agent access granted.';
               for(const b of [saveDraft,approve,revoke])b.disabled=false;
