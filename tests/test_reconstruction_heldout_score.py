@@ -74,6 +74,24 @@ class ReconstructionHeldoutScoreTests(unittest.TestCase):
             with self.subTest(row=row), self.assertRaisesRegex(ValueError, "gold"):
                 score({"events": [row]}, predicted(("a", ("A",))))
 
+    def test_contamination_breakdown_separates_unrelated_and_wrong_case(self):
+        result = score(
+            gold(("a", "A"), ("b", "B"), ("noise", None), ("quiet", None)),
+            predicted(("a", ("A", "B")), ("b", ("B",)),
+                      ("noise", ("A",)), ("quiet", ())))
+        self.assertEqual(result["cross_case_contamination_events"], 2)
+        self.assertEqual(result["wrong_case_labeled_events"], 1)
+        self.assertEqual(result["unrelated_events"], 2)
+        self.assertEqual(result["false_positive_unrelated_events"], 1)
+        self.assertEqual(result["false_positive_unrelated_rate"], 0.5)
+        self.assertEqual(result["exact_match_events"], 2)
+        self.assertEqual(result["exact_match_rate"], 0.5)
+
+    def test_no_unrelated_population_reports_undefined_rate_not_zero(self):
+        result = score(gold(("a", "A")), predicted(("a", ("A",))))
+        self.assertIsNone(result["false_positive_unrelated_rate"])
+        self.assertEqual(result["exact_match_rate"], 1)
+
     def test_empty_gold_refused(self):
         with self.assertRaisesRegex(ValueError, "empty gold"):
             score(gold(), predicted())
