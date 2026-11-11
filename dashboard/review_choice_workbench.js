@@ -195,7 +195,8 @@
               dataset_origin_check_available:snapshot.dataset_origin_check_available,blockers:selected.blockers};
             async function refreshReview(){
               const requestGeneration=++reviewRequestGeneration;
-              const response=await fetch(reviewPath+'/'+encodeURIComponent(projectId),{cache:'no-store'});
+              await window.__owgAuthReady;
+      const response=await fetch(reviewPath+'/'+encodeURIComponent(projectId),{cache:'no-store'});
               if(!response.ok)throw new Error('Review state unavailable ('+response.status+').');
               const state=await response.json();
               if(!reviewStillSelected()||requestGeneration!==reviewRequestGeneration)return;
@@ -224,6 +225,7 @@
               for(const b of [saveDraft,approve,revoke])b.disabled=true;
               const submittedNotes=notes.value;
               try{
+                await window.__owgAuthReady;
                 const response=await fetch(reviewPath,{method:'POST',cache:'no-store',
                   headers:{'Content-Type':'application/json'},
                   body:JSON.stringify({basis,expected_review_revision:reviewRevision,decision,reviewer_notes:submittedNotes})});
