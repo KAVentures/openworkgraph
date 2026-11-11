@@ -51,6 +51,29 @@ class ReconstructionHeldoutScoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "invalid prediction"):
             score(gold(("a", "A")), predicted(("a", ("A", "A"))))
 
+    def test_multiple_legitimate_gold_cases_do_not_count_as_contamination(self):
+        labeled = {"events": [
+            {"window": "current", "event_id": "shared", "case_ids": ["A", "B"]},
+            {"window": "current", "event_id": "noise", "case_ids": []},
+        ]}
+        correct = score(labeled, predicted(("shared", ("A", "B")), ("noise", ())))
+        self.assertEqual((correct["true_positive"], correct["false_positive"],
+                          correct["false_negative"]), (2, 0, 0))
+        self.assertEqual(correct["f1"], 1)
+        self.assertEqual(correct["cross_case_contamination_events"], 0)
+        missing = score(labeled, predicted(("shared", ("A",)), ("noise", ())))
+        self.assertEqual((missing["true_positive"], missing["false_positive"],
+                          missing["false_negative"]), (1, 0, 1))
+
+    def test_gold_multiple_case_labels_must_be_explicit_and_unique(self):
+        for row in (
+            {"event_id": "a", "window": "current", "case_ids": ["A", "A"]},
+            {"event_id": "a", "window": "current", "case_ids": ["A"], "case_id": "A"},
+            {"event_id": "a", "window": "current"},
+        ):
+            with self.subTest(row=row), self.assertRaisesRegex(ValueError, "gold"):
+                score({"events": [row]}, predicted(("a", ("A",))))
+
     def test_empty_gold_refused(self):
         with self.assertRaisesRegex(ValueError, "empty gold"):
             score(gold(), predicted())
