@@ -106,7 +106,7 @@ def _strict_release_json(value: bytes) -> Any:
 
 
 @router.get("/v1/automation-monitoring/deployments/{deployment_id}/release")
-async def release_inventory(request: Request, deployment_id: str):
+async def get_release_inventory(request: Request, deployment_id: str):
     _require_dashboard(request)
     return await _respond(release_inventory.detail, deployment_id)
 
