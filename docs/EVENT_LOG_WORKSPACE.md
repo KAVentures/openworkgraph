@@ -244,6 +244,22 @@ days. The newest 10 copies per log are kept in the data folder under
 `event_log_reports/<log_id>/`. Deleting the log deletes its copies and its
 report and signal schedules. Copies are never sent anywhere.
 
+**What changed.** Each copy is saved with its headline figures in a JSON file
+next to the HTML. The panel then shows **Changes since the previous copy**:
+
+* cases, events, activities and variants;
+* median and 90th-percentile case time;
+* events per case and the share of cases repeating an activity;
+* the total cost, when both copies had saved prices in the same currency;
+* activities that are new or no longer seen;
+* whether the most common variant changed;
+* the largest changes in cases per activity.
+
+`GET /v1/event-logs/{log_id}/saved-report-changes` compares the two newest
+copies, or the two given as `older` and `newer`. A change can come from
+appended events, an applied activity mapping or edited prices as much as from
+the process itself.
+
 ## Analytics
 
 The dashboard card **Large event logs** (Evidence tab) offers all of the

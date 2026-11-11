@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 from starlette.concurrency import run_in_threadpool
 
 from . import event_log_object_lead_times as lead_times
+from . import event_log_related_attribute_milestones as attribute_milestones
 from .event_log_routes import _json_body, _require_dashboard, _respond
 
 router = APIRouter()
@@ -39,6 +40,15 @@ async def object_relationship_lead_times(request: Request, log_id: str):
     spec = await _json_body(request, "object relationship lead-time settings",
                             strict=True, limit=16_384)
     return await run_in_threadpool(_respond, lead_times.analyze, log_id, spec)
+
+
+@router.post("/v1/event-logs/{log_id}/object-relationships/attribute-milestones")
+async def object_relationship_attribute_milestones(request: Request, log_id: str):
+    # Local-only data: this endpoint does not grant AI / bearer access.
+    _require_dashboard(request)
+    spec = await _json_body(request, "related object attribute milestone settings",
+                            strict=True, limit=16_384)
+    return await run_in_threadpool(_respond, attribute_milestones.analyze, log_id, spec)
 
 
 __all__ = ["router"]

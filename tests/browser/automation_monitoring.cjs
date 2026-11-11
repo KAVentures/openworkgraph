@@ -54,6 +54,18 @@ const path=require('node:path');
    await page.locator('#owgMonitorDesign').setInputFiles({name:'workflow.spec.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(spec))});
    await page.locator('#owgMonitorResults h3',{hasText:'Compared with the reviewed design'}).waitFor();
    assert.match(await page.locator('#owgMonitorResults').textContent(),/Completed every step in order/);
+   await page.locator('#owgMonitorRelease').click();
+   await page.locator('#owgMonitorReleasePanel h3',{hasText:'Deployment release inventory'}).waitFor();
+   assert.equal(await page.locator('#owgMonitorReleaseSave').isDisabled(),true);
+   await page.locator('#owgMonitorReleaseStage').selectOption('pilot_reported');
+   await page.locator('#owgMonitorReleaseConfirm').check();
+   await page.locator('#owgMonitorReleaseSave').click();
+   await page.locator('#owgMonitorReleaseFeedback').filter({hasText:'artifact SHA-256'}).waitFor();
+   await page.locator('#owgMonitorReleaseArtifact').fill('a'.repeat(64));
+   await page.locator('#owgMonitorReleaseSave').click();
+   await page.locator('#owgMonitorReleasePanel').getByText(/Latest declaration: pilot_reported/).waitFor();
+   assert.match(await page.locator('#owgMonitorReleasePanel').textContent(),/revision 1/);
+   assert.match(await page.locator('#owgMonitorReleasePanel').textContent(),/matching hash does not establish what executed/i);
 
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgMonitorCard'),{

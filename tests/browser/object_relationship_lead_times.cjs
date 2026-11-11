@@ -43,9 +43,14 @@ const path=require('node:path');
       objectTypes:[{name:'order',attributes:[]},{name:'delivery',attributes:[]}],eventTypes:[],
       objects:[
         {id:'o1',type:'order',attributes:[],relationships:[{objectId:'d1',qualifier:'ships'}]},
-        {id:'d1',type:'delivery',attributes:[],relationships:[]},
+        {id:'d1',type:'delivery',attributes:[
+          {name:'status',time:'1970-01-01T00:00:00Z',value:'planned'},
+          {name:'status',time:'2026-01-01T10:00:00Z',value:'delivered'}
+        ],relationships:[]},
         {id:'o2',type:'order',attributes:[],relationships:[{objectId:'d2',qualifier:'ships'}]},
-        {id:'d2',type:'delivery',attributes:[],relationships:[]},
+        {id:'d2',type:'delivery',attributes:[
+          {name:'status',time:'1970-01-01T00:00:00Z',value:'planned'}
+        ],relationships:[]},
       ],
       events:[
         {id:'a1',type:'Approve',time:'2026-01-01T08:00:00Z',attributes:[],relationships:[{objectId:'o1',qualifier:''}]},
@@ -89,12 +94,33 @@ const path=require('node:path');
     assert.equal(await page.locator('#sampleRows tr').count(),2);
     assert.ok(!(await page.locator('#resultSection').isHidden()));
 
+    // R24 counts distinct O2O pairs and states at each milestone, without assuming
+    // a validity interval for caller-supplied object relationships.
+    await page.locator('#targetAttribute').fill('status');
+    const [asofResponse]=await Promise.all([
+      page.waitForResponse(response=>response.url().includes('/object-relationships/attribute-milestones')),
+      page.locator('#inspectAttribute').click()
+    ]);
+    assert.equal(asofResponse.status(),200,await asofResponse.text());
+    const asof=await asofResponse.json();
+    assert.equal(asof.pairs,2);
+    assert.equal(asof.known_at_source_pairs,2);
+    assert.equal(asof.known_at_target_pairs,2);
+    assert.equal(asof.different_known_values_across_milestones_pairs,1);
+    assert.equal(asof.relationship_validity_at_event_time_verified,false);
+    await page.locator('#attributeResultSection:not([hidden])').waitFor();
+    assert.match(await page.locator('#attributeMetrics').textContent(),/2Distinct related pairs/);
+    assert.match(await page.locator('#attributeLimits').textContent(),/neither historical membership/);
+    assert.equal(await page.locator('#attributeSamples tr').count(),2);
+    assert.match(await page.locator('#attributeGroups').textContent(),/planned/);
+
     // Aggregate-only mode and literal empty-qualifier matching are independent.
     await page.locator('#sampleLimit').fill('0');
     await page.locator('#runQuery').click();
     await page.waitForFunction(()=>document.querySelector('#sampleStatus')?.textContent?.includes('No pair examples'));
     assert.equal(await page.locator('#sampleRows tr').count(),0);
     await page.locator('#qualifierMode').selectOption('empty');
+    assert.equal(await page.locator('#attributeResultSection').isHidden(),true,'changed filters invalidate as-of analysis');
     await page.locator('#runQuery').click();
     await page.waitForFunction(()=>document.querySelector('#status')?.textContent?.includes('complete'));
     assert.match(await page.locator('#metrics').textContent(),/0Distinct related pairs/);
