@@ -111,9 +111,9 @@
             // Continue into the existing authenticated pipeline decision UI, not a
             // second approval implementation. Preflight is non-authorizing; the
             // pipeline requires its own current-revision check on any decision.
-            const continueReview=node('button','Open opportunity decision and handoff');continueReview.type='button';continueReview.disabled=true;
+            const consentLabel=node('label');const consent=node('input');consent.type='checkbox';consent.setAttribute('aria-label','Confirm this reviewed project and current evidence before opening the decision');consentLabel.append(consent,node('span',' I inspected this exact project and understand that approval does not authorize execution.'));const continueReview=node('button','Open opportunity decision and handoff');continueReview.type='button';continueReview.disabled=true;
             continueReview.onclick=async()=>{
-              if(token!==generation||choice.value!==projectId||input.value.trim()!==id||reviewMutationPending||handoffPreflightPending||!notesMatchSaved())return;
+              if(token!==generation||choice.value!==projectId||input.value.trim()!==id||!consent.checked||reviewMutationPending||handoffPreflightPending||!notesMatchSaved())return;
               const pipelineCard=document.getElementById('owgPipelineCard');
               if(!pipelineCard){status.textContent='Automation pipeline unavailable. Reopen the dashboard and inspect again.';return;}
               // The opportunity can change after the first preflight. Revalidate
@@ -178,7 +178,7 @@
             // Unsaved edits must not appear to be part of the approved handoff.
             const notesMatchSaved=()=>notes.value===savedNotes;
             notes.addEventListener('input',()=>{continueReview.disabled=true;updateContinue();});
-            const updateContinue=()=>{continueReview.disabled=reviewMutationPending||handoffPreflightPending||currentDecision!=='approved'||!notesMatchSaved();};
+            const updateContinue=()=>{continueReview.disabled=!consent.checked||reviewMutationPending||handoffPreflightPending||currentDecision!=='approved'||!notesMatchSaved();};consent.addEventListener('change',updateContinue);
             // A pending read must never overwrite a later save/revoke result.
             // Disable mutation until the authoritative revision has loaded.
             let reviewRequestGeneration=0;
@@ -306,7 +306,7 @@
             };
             details.append(node('h3','Record human review'),notes,saveDraft,approve,revoke,reviewState);
             refreshReview().catch(e=>{if(reviewStillSelected()){reviewState.textContent=e.message;for(const b of [saveDraft,approve,revoke])b.disabled=true;}});
-            details.append(continueReview);
+            details.append(consentLabel,continueReview);
             status.textContent='Current export basis confirmed by server. Continue to the existing opportunity decision; agent handoff still requires separate authorization.';
           }catch(e){if(token===generation){clear();status.textContent='Server preflight failed. Inspect again. '+e.message;}}
         };
