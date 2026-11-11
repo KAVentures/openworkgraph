@@ -250,8 +250,8 @@
             approve.onclick=()=>persistReview('approved');
             revoke.onclick=async()=>{
               if(!reviewStillSelected()||reviewRevision<1)return;
-              ++reviewRequestGeneration;
-              continueReview.disabled=true;
+              const mutationGeneration=++reviewRequestGeneration;
+              currentDecision='unknown';continueReview.disabled=true;
               // Revocation must work when evidence has changed since approval.
               // Never depend on the stale-basis preflight for withdrawing consent.
               for(const b of [saveDraft,approve,revoke])b.disabled=true;
@@ -261,7 +261,7 @@
                   body:JSON.stringify({expected_review_revision:reviewRevision})});
                 if(!response.ok)throw new Error('Revocation refused ('+response.status+'); reload review state.');
                 const state=await response.json();
-                if(!reviewStillSelected())return;
+                if(!reviewStillSelected()||mutationGeneration!==reviewRequestGeneration)return;
                 if(state.format!=='openworkgraph.human-review.v1'||state.decision!=='revoked'||
                    state.execution_authorized!==false||state.idea_id!==id||
                    state.project_id!==projectId||!Number.isSafeInteger(state.revision)||
@@ -272,7 +272,7 @@
                 reviewRevision=state.revision;currentDecision='revoked';updateContinue();
                 reviewState.textContent='Review revoked at revision '+reviewRevision+'. No agent access granted.';
               }catch(e){
-                if(reviewStillSelected()){
+                if(reviewStillSelected()&&mutationGeneration===reviewRequestGeneration){
                   reviewState.textContent=e.message+' Reloading authoritative review revision…';
                   try{await refreshReview();}
                   catch(refreshError){
