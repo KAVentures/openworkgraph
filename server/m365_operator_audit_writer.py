@@ -15,10 +15,10 @@ import stat
 
 FORMAT = "openworkgraph.m365-operator-audit.v1"
 PHASES = {
-    "review": ("readiness", "operator_review_ready"),
-    "extract": ("extract", "review_required"),
-    "append": ("append", "append_review_verified"),
-    "checkpoint-commit": ("commit", "checkpoint_committed"),
+    "review": ("readiness", frozenset(("operator_review_ready", "review_ready"))),
+    "extract": ("extract", frozenset(("review_required",))),
+    "append": ("append", frozenset(("append_review_verified", "receipt_persisted"))),
+    "checkpoint-commit": ("commit", frozenset(("checkpoint_committed",))),
 }
 
 
@@ -32,6 +32,9 @@ def record_operator_phase(phase: str, result: dict, *, directory: Path,
     """Write a private, redacted audit receipt; never store tokens or cursors."""
     if phase not in PHASES:
         return
+    # Never manufacture a successful audit status from the phase name.
+    if type(result) is not dict or result.get("status") not in PHASES[phase][1]:
+        raise AuditWriteError("Operation result is not an auditable success")
     if os.name != "posix":
         raise AuditWriteError("Private audit writer requires POSIX permissions")
     path = Path(directory)
@@ -45,7 +48,8 @@ def record_operator_phase(phase: str, result: dict, *, directory: Path,
             st = os.fstat(fd)
             if not stat.S_ISDIR(st.st_mode) or st.st_mode & 0o077:
                 raise AuditWriteError("Audit directory is not private")
-            action, status = PHASES[phase]
+            action, _ = PHASES[phase]
+            status = result["status"]
             scope = json.dumps([tenant, mailbox, folder], separators=(",", ":"))
             receipt = {
                 "format": FORMAT,

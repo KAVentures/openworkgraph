@@ -201,6 +201,14 @@ def main(argv=None):
     phase = args.pop("phase")
     if phase not in ("review", "checkpoint-inspect"):
         args["session"] = os.environ.get("OWG_DASHBOARD_SESSION")
+    # Audit-enabled mutations must refuse on unsupported platforms BEFORE
+    # contacting Graph or writing OWG/checkpoint state, not after the mutation.
+    if (os.environ.get("OWG_M365_AUDIT_DIR")
+            and phase in ("extract", "append", "checkpoint-commit")
+            and os.name != "posix"):
+        print(json.dumps({"format": FORMAT, "phase": phase,
+                          "status": "refused", "retry_allowed": False}, sort_keys=True))
+        return 2
     try:
         if phase == "checkpoint-inspect":
             result = checkpoint_inspect(**args)
