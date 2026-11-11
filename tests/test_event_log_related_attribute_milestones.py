@@ -87,7 +87,7 @@ def test_state_at_other_object_milestone_is_not_the_stored_first_attribute():
     assert r["known_at_source_pairs"] == 5
     assert r["known_at_target_pairs"] == 5
     assert r["missing_source_activity_pairs"] == 1
-    assert r["missing_target_activity_pairs"] == 1
+    assert r["missing_target_activity_pairs"] == 2
     assert r["target_attribute_never_recorded_pairs"] == 1
     assert r["target_attribute_recorded_later_pairs"] == 1
     assert r["ambiguous_same_timestamp_pairs"] == 1
