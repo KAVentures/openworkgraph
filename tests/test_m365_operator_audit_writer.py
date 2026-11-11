@@ -61,6 +61,7 @@ def test_refuses_symlink_or_world_readable_directory(tmp_path):
                               tenant="t", mailbox="m", folder="f")
 
 
+@pytest.mark.skipif(os.name != "posix", reason="Post-append audit persistence is POSIX-only; Windows must refuse before mutation")
 def test_audit_failure_after_append_is_uncertain_not_retryable(capsys, monkeypatch):
     monkeypatch.setenv("OWG_M365_AUDIT_DIR", "/private/audit")
     args = ["append", "--tenant", "t", "--mailbox", "m", "--folder", "f",
