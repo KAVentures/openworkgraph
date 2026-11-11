@@ -203,7 +203,10 @@
                  (state.revision>0&&!/^[a-f0-9]{64}$/i.test(state.basis_sha256||''))||
                  typeof state.reviewer_notes!=='string'||state.reviewer_notes.length>2000)
                 throw new Error('Invalid review state');
-              // An authoritative refresh after a rejected mutation supersedes that mutation.\n              // Release its pending lock only after the refreshed state validates.\n              reviewMutationPending=false;\n              reviewRevision=state.revision;currentDecision=state.decision;notes.value=state.reviewer_notes||'';savedNotes=notes.value;updateContinue();
+              // An authoritative refresh after a rejected mutation supersedes that mutation.
+              // Release its pending lock only after the refreshed state validates.
+              reviewMutationPending=false;
+              reviewRevision=state.revision;currentDecision=state.decision;notes.value=state.reviewer_notes||'';savedNotes=notes.value;updateContinue();
               reviewState.textContent='Saved review: '+state.decision+' (revision '+state.revision+'). No agent access granted.';
               for(const b of [saveDraft,approve,revoke])b.disabled=false;
             }
