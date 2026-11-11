@@ -43,3 +43,25 @@ test('stale earlier response cannot overwrite newer permitted inspection',async(
   h.pending[0].resolve({ok:true,json:async()=>({...permitted,review:{...permitted.review,event_reviews:[{event_id:'stale-event'}]}})});await tick();
   assert.doesNotMatch(h.controls.get('reconstructionReviewResults').innerHTML,/stale-event/);
 });
+
+test('clear during delayed JSON decoding never displays revoked evidence',async()=>{
+  const h=setup();h.click('loadReconstructionReview');await tick();
+  const decoding=deferred();
+  h.pending[0].resolve({ok:true,json:()=>decoding.promise});await tick();
+  h.click('clearReconstructionReview');
+  decoding.resolve(permitted);await tick();
+  assert.equal(h.controls.get('reconstructionReviewResults').innerHTML,'');
+  assert.equal(h.controls.get('reconstructionReviewResults').textContent,'');
+  assert.equal(h.controls.get('loadReconstructionReview').disabled,false);
+});
+test('permission denial after an earlier successful inspection removes prior evidence',async()=>{
+  const h=setup();h.click('loadReconstructionReview');await tick();
+  h.pending[0].resolve({ok:true,json:async()=>permitted});await tick();
+  assert.match(h.controls.get('reconstructionReviewResults').innerHTML,/sensitive-event/);
+  h.click('loadReconstructionReview');await tick();
+  h.pending[1].resolve({ok:false,status:403});await tick();
+  const result=h.controls.get('reconstructionReviewResults');
+  assert.doesNotMatch(result.innerHTML,/sensitive-event/);
+  assert.match(result.textContent,/Access denied or grant expired/);
+  assert.equal(h.controls.get('loadReconstructionReview').disabled,false);
+});
