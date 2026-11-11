@@ -169,10 +169,12 @@
             // The server independently rechecks approval and provenance.
             let currentDecision='unreviewed';
             let savedNotes='';
+            // Keep navigation closed throughout any in-flight review mutation.
+            let reviewMutationPending=false;
             // Unsaved edits must not appear to be part of the approved handoff.
             const notesMatchSaved=()=>notes.value===savedNotes;
             notes.addEventListener('input',()=>{continueReview.disabled=true;updateContinue();});
-            const updateContinue=()=>{continueReview.disabled=currentDecision!=='approved'||!notesMatchSaved();};
+            const updateContinue=()=>{continueReview.disabled=reviewMutationPending||currentDecision!=='approved'||!notesMatchSaved();};
             // A pending read must never overwrite a later save/revoke result.
             // Disable mutation until the authoritative revision has loaded.
             let reviewRequestGeneration=0;
@@ -208,6 +210,7 @@
             async function persistReview(decision){
               if(!reviewStillSelected())return;
               const mutationGeneration=++reviewRequestGeneration;
+              reviewMutationPending=true;
               // A second mutation or refresh supersedes this response. Never let
               // an older save resurrect approval after a later revoke.
               continueReview.disabled=true;
@@ -241,6 +244,8 @@
               }finally{
                 // A failed refresh keeps controls disabled; only a verified state
                 // may re-enable them. Do not resurrect a superseded selection.
+                if(mutationGeneration===reviewRequestGeneration){reviewMutationPending=false;updateContinue();}
+                if(mutationGeneration===reviewRequestGeneration){reviewMutationPending=false;updateContinue();}
                 if(!reviewStillSelected())for(const b of [saveDraft,approve,revoke])b.disabled=true;
                 else if(reviewState.textContent.startsWith('Saved ')||reviewState.textContent.startsWith('Review revoked'))
                   for(const b of [saveDraft,approve,revoke])b.disabled=false;
@@ -251,6 +256,7 @@
             revoke.onclick=async()=>{
               if(!reviewStillSelected()||reviewRevision<1)return;
               const mutationGeneration=++reviewRequestGeneration;
+              reviewMutationPending=true;
               currentDecision='unknown';continueReview.disabled=true;
               // Revocation must work when evidence has changed since approval.
               // Never depend on the stale-basis preflight for withdrawing consent.
