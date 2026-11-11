@@ -18,8 +18,8 @@ from .local_auth import dashboard_session_valid
 router = APIRouter()
 _NAME = re.compile(r"m365-[0-9a-f]{32}\.json\Z")
 _ACTIONS = {"readiness", "extract", "append", "commit"}
-_STATUSES = {"operator_review_ready", "review_required",
-             "append_review_verified", "checkpoint_committed"}
+_STATUSES = {"operator_review_ready", "review_ready", "review_required",
+             "append_review_verified", "receipt_persisted", "checkpoint_committed"}
 _MAX_FILES = 1000
 _MAX_BYTES = 2048
 
@@ -68,6 +68,12 @@ def read_operator_audit(directory: Path, *, limit: int = 50) -> dict:
                             or obj.get("format") != "openworkgraph.m365-operator-audit.v1"
                             or obj.get("action") not in _ACTIONS
                             or obj.get("status") not in _STATUSES
+                            or obj.get("status") not in {
+                                "readiness": {"operator_review_ready", "review_ready"},
+                                "extract": {"review_required"},
+                                "append": {"append_review_verified", "receipt_persisted"},
+                                "commit": {"checkpoint_committed"},
+                            }.get(obj.get("action"), set())
                             or type(obj.get("timestamp_utc")) is not str
                             or not re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?\+00:00", obj["timestamp_utc"])
                             or type(obj.get("scope_sha256")) is not str
