@@ -129,6 +129,21 @@ class ReconstructionHeldoutScoreTests(unittest.TestCase):
         self.assertEqual(result["per_case"]["B"]["true_positive"], 1)
         self.assertAlmostEqual(result["per_case"]["B"]["precision"], 1 / 3)
 
+    def test_unsupported_case_assignments_exposed_despite_perfect_macro(self):
+        result = score(gold(("a", "A"), ("b", "B"), ("noise", None)),
+                       predicted(("a", ("A", "UNKNOWN")), ("b", ("B",)),
+                                 ("noise", ("UNKNOWN",))))
+        self.assertEqual(result["predicted_only_cases"], {"UNKNOWN": 2})
+        self.assertEqual(result["predicted_only_assignments"], 2)
+        self.assertEqual(result["false_positive"], 2)
+        self.assertEqual(result["macro_f1_labeled_cases"], 1)
+        self.assertEqual(result["cross_case_contamination_events"], 2)
+
+    def test_no_unsupported_case_assignments(self):
+        result = score(gold(("a", "A")), predicted(("a", ("A",))))
+        self.assertEqual(result["predicted_only_cases"], {})
+        self.assertEqual(result["predicted_only_assignments"], 0)
+
     def test_unrelated_only_has_undefined_macro_not_perfect_score(self):
         result = score(gold(("noise", None)), predicted(("noise", ())))
         self.assertIsNone(result["macro_f1_labeled_cases"])
