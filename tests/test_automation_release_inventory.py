@@ -161,6 +161,8 @@ from server.secure_app import app
 from server import local_auth
 from server import automation_monitoring as monitoring
 from server import automation_release_inventory as releases
+import sys
+sys.path.insert(0, "tests")
 from test_automation_release_inventory import deployment, review
 with TestClient(app) as client:
     dashboard={"Authorization":"OWG-Session "+local_auth.create_dashboard_session()}
