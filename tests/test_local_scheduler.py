@@ -12,6 +12,7 @@ from server import local_scheduler as scheduler
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(scheduler, "DATA_DIR", tmp_path)
     monkeypatch.setattr(scheduler, "_check_target", lambda kind, target: None)
+    monkeypatch.setattr(scheduler, "_signal_rule_set_pin", lambda log_id: {"fingerprint": "a" * 64, "count": 1})
 
 
 def _make(**kwargs):
