@@ -4217,6 +4217,26 @@
         const r=await (await api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/predictions/monitoring',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
         if(generation!==state.generation||t!==watchTurn)return;
         const v=monitoringRows(r);
+        const caseQuality=r.outcome_case_reliability;
+        const caseDetail=!spec.outcome?[]:caseQuality?[
+          el('h4','Outcome calibration by independent completed cases'),
+          el('p','Latest supported window #'+caseQuality.window+'. Each completed case is counted once, with its scored probabilities averaged before assigning a risk band. '+
+            caseQuality.total_distinct_scored_cases+' independent completed cases, compared with '+
+            caseQuality.total_scored_prediction_points+' prediction points. At least '+
+            caseQuality.minimum_distinct_completed_cases_per_displayed_bin+' independent cases are needed per displayed band; '+
+            caseQuality.withheld_low_support_bins+' low-support band(s) withheld. No case or resource identities are shown.','muted'),
+          caseQuality.bins.length?table(
+            ['Predicted risk band','Completed cases','Prediction points','Predicted risk','Outcome observed (95% case interval)','Brier loss per case'],
+            caseQuality.bins.map(b=>[
+              pct(b.predicted_from)+'–'+pct(b.predicted_to_exclusive===null?b.predicted_to_inclusive:b.predicted_to_exclusive),
+              Number(b.completed_cases).toLocaleString(),Number(b.scored_prediction_points).toLocaleString(),
+              pct(b.mean_case_averaged_predicted_risk),
+              pct(b.observed_outcome_share)+' ['+pct(b.observed_outcome_ci95[0])+', '+pct(b.observed_outcome_ci95[1])+']',
+              Number(b.case_averaged_brier_score).toFixed(3)
+            ]))
+          :el('p','Every nonempty risk band has fewer than the minimum independent completed cases. No case-level calibration table is shown.','muted'),
+          el('p',caseQuality.interpretation+' Outcomes come from the selected event log, not independently verified source receipts. No risk model is recalibrated automatically.','muted')
+        ]:[el('p','No window has enough labeled completed cases for outcome calibration.','muted')];
         const activityQuality=r.activity_quality;
         const activityDetail=activityQuality?[
           el('h4','Where prediction errors occur'),
@@ -4236,6 +4256,7 @@
         monitorOut.replaceChildren(el('h4','Prediction quality over time'),el('div',v.summary,'note'),
           table(['Window','Cases scored','Typical error','Naive error','Range held the time',...(spec.outcome?['Brier score']:[])],v.rows.map(row=>spec.outcome?row:row.slice(0,5))),
           ...activityDetail,
+          ...caseDetail,
           ...(v.proposal?[el('div',v.proposal,'muted')]:[]),el('div',r.interpretation,'muted'));
       }catch(error){if(t===watchTurn)monitorOut.replaceChildren(el('div',error.message,'muted'));}
       finally{if(t===watchTurn)watch.disabled=false;}
