@@ -101,7 +101,9 @@ def test_operator_cycle_receipt_status_is_preserved(tmp_path):
 
 def test_non_posix_audit_refuses_before_append(monkeypatch, capsys):
     monkeypatch.setenv("OWG_M365_AUDIT_DIR", "/private/audit")
-    with patch.object(cycle.os, "name", "nt"), patch.object(cycle, "append") as mutation:
+    from types import SimpleNamespace
+    with patch.object(cycle, "os", SimpleNamespace(name="nt", environ=os.environ)), \
+         patch.object(cycle, "append") as mutation:
         code = cycle.main(["append", "--tenant", "t", "--mailbox", "m",
                            "--folder", "f", "--grant-file", "grant",
                            "--log-id", "L", "--confirm-log-id", "L",
