@@ -142,6 +142,11 @@ def _public(item: dict) -> dict:
     }
 
 
+def any_enabled() -> bool:
+    with _LOCK:
+        return any(item["enabled"] for item in _read()["channels"].values())
+
+
 def status(log_id: str) -> dict:
     with _LOCK:
         item = _read()["channels"].get(log_id)
@@ -373,5 +378,5 @@ def deliver_due(*, now: float | None = None, transport=None) -> dict:
                 "case_data_included": False, "business_actions": False}
 
 
-__all__ = ["DeliveryError", "configure", "remove", "resume", "status", "queue_current",
+__all__ = ["DeliveryError", "configure", "remove", "resume", "status", "any_enabled", "queue_current",
            "deliver_due", "FORMAT", "PAYLOAD_FORMAT"]
