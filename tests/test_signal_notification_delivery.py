@@ -208,8 +208,8 @@ def test_real_pinned_scheduler_evaluation_enqueues_and_log_deletion_revokes(
     monkeypatch.setattr(scheduler, "scheduled", _REAL_SCHEDULED)
     monkeypatch.setattr(inbox, "list_inbox", _REAL_INBOX_LIST)
     log = workspace.import_log(BytesIO(
-        b"case,activity,time\\nC1,Open,2024-01-01T00:00:00Z\\n"
-        b"C1,Close,2024-01-01T01:00:00Z\\n"),
+        b"case,activity,time\nC1,Open,2024-01-01T00:00:00Z\n"
+        b"C1,Close,2024-01-01T01:00:00Z\n"),
         name="Synthetic notifications", source_format="csv",
         mapping={"case_column": "case", "activity_column": "activity",
                  "timestamp_column": "time"})["log_id"]
