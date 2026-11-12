@@ -20,7 +20,46 @@ from .m365_outlook_checkpoint import inspect_checkpoint
 FORMAT = "openworkgraph.m365-reviewed-transaction.v1"
 
 
-def execute(*, tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
+def preflight(*, tenant, mailbox, folder, log_id, confirm_log_id,
+              grant_file, candidate, ledger_dir, expected_review_csv_sha256,
+              expected_previous_candidate_sha256=None, consent_local_read=False):
+    """Read-only, grant-scoped review of the proposed checkpoint transition.
+
+    No Graph call, OWG append, handoff, checkpoint write or audit receipt.
+    The mutation path must revalidate everything; this is not a lock.
+    """
+    if consent_local_read is not True:
+        raise ReceiptError("Explicit local read consent required")
+    if not log_id or log_id != confirm_log_id:
+        raise ReceiptError("Destination log confirmation mismatch")
+    if (type(expected_review_csv_sha256) is not str
+            or len(expected_review_csv_sha256) != 64
+            or any(c not in "0123456789abcdef" for c in expected_review_csv_sha256)):
+        raise ReceiptError("Exact reviewed CSV SHA-256 required")
+    scope = dict(tenant=tenant, mailbox=mailbox, folder=folder,
+                 grant_file=Path(grant_file))
+    checked = cycle.review(candidate=Path(candidate), consent_local_read=True, **scope)
+    if checked.get("csv_sha256") != expected_review_csv_sha256:
+        raise ReceiptError("Candidate changed since explicit review")
+    predecessor = inspect_checkpoint(
+        **scope, ledger_dir=Path(ledger_dir), consent_local_read=True)
+    if predecessor is None:
+        if expected_previous_candidate_sha256 is not None:
+            raise ReceiptError("Missing predecessor checkpoint")
+        generation = 1
+    else:
+        if (type(expected_previous_candidate_sha256) is not str
+                or predecessor["candidate_sha256"] != expected_previous_candidate_sha256
+                or predecessor["log_id"] != log_id):
+            raise ReceiptError("Stale or different predecessor checkpoint")
+        generation = predecessor["generation"] + 1
+    return {"format": FORMAT, "status": "review_ready_for_explicit_commit",
+            "proposed_generation": generation, "provider_requests": 0,
+            "owg_writes": 0, "checkpoint_advanced": False,
+            "automatic_retry_allowed": False}
+
+
+def execute(*: tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
             candidate, csv_path, receipt_file, journal_dir, handoff_dir,
             ledger_dir, successor_label, expected_review_csv_sha256,
             expected_previous_candidate_sha256=None, port=8765, session=None,
@@ -116,6 +155,8 @@ def main(argv=None):
         p.add_argument("--" + name, type=Path, required=True)
     p.add_argument("--expected-previous-candidate-sha256")
     p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--preflight-only", action="store_true",
+                   help="Read-only candidate/checkpoint preflight; never append or commit")
     for name in ("consent-local-read", "consent-local-append",
                  "confirm-candidate-reviewed", "confirm-removals-reviewed",
                  "confirm-checkpoint-commit"):
@@ -123,7 +164,14 @@ def main(argv=None):
     args = vars(p.parse_args(argv))
     args["session"] = os.environ.get("OWG_DASHBOARD_SESSION")
     try:
-        result = execute(**args)
+        preflight_only = args.pop("preflight_only")
+        if preflight_only:
+            result = preflight(**{key: args[key] for key in (
+                "tenant", "mailbox", "folder", "log_id", "confirm_log_id",
+                "grant_file", "candidate", "ledger_dir", "expected_review_csv_sha256",
+                "expected_previous_candidate_sha256", "consent_local_read")})
+        else:
+            result = execute(**args)
         print(json.dumps(result, sort_keys=True))
         return 0
     except (ReceiptError, DeltaError, UncertainReceipt, AuditWriteError, OSError, ValueError,
