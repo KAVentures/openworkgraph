@@ -34,6 +34,7 @@ PAYLOAD_FORMAT = "openworkgraph.signal-attention.v1"
 MAX_CHANNELS = 20
 MAX_PENDING = 50
 MAX_SEEN = 2000
+MAX_AUDIT = 20
 MAX_STATES_PER_ALERT = 50
 MAX_FAILURES = 5
 MAX_BACKOFF_SECONDS = 3600
@@ -128,6 +129,13 @@ def _url(value: str) -> tuple[str, str, int, str]:
     return parsed.scheme, host, port or (443 if parsed.scheme == "https" else 80), parsed.path
 
 
+def _audit(item: dict, notification_id: str, outcome: str, at: float) -> None:
+    """Local bounded metadata only; no endpoint path, source or evidence."""
+    item["audit"] = (item.get("audit", []) + [{
+        "at": _now(at), "notification_id": notification_id, "outcome": outcome,
+    }])[-MAX_AUDIT:]
+
+
 def _public(item: dict) -> dict:
     return {
         "format": FORMAT, "configured": True,
@@ -137,6 +145,7 @@ def _public(item: dict) -> dict:
         "pending_notifications": len(item["pending"]),
         "delivered_notifications": item["delivered"],
         "last_delivered_at": item.get("last_delivered_at"),
+        "recent_delivery_attempts": list(item.get("audit", []))[-MAX_AUDIT:],
         "consecutive_failures": item["consecutive_failures"],
         "paused_reason": item.get("paused_reason"),
         "notification_secret_shown_again": False,
@@ -191,7 +200,7 @@ def configure(log_id: str, receiver_url: str, *,
             "channel_id": "ndl_" + secrets.token_hex(8), "log_id": log_id,
             "receiver_url": receiver_url, "signing_secret": secret,
             "enabled": True, "created_at": _now(),
-            "pending": [], "seen": [], "delivered": 0,
+            "pending": [], "seen": [], "audit": [], "delivered": 0,
             "last_delivered_at": None, "consecutive_failures": 0,
             "paused_reason": None,
         }
@@ -360,6 +369,7 @@ def deliver_due(*, now: float | None = None, transport=None) -> dict:
             if channel and channel["channel_id"] == channel_id:
                 channel["pending"] = [row for row in channel["pending"]
                                       if row["notification_id"] != entry["notification_id"]]
+                _audit(channel, entry["notification_id"], "suppressed_stale_or_reviewed", current)
                 _save(data)
         return {"attempted": 0, "sent": 0, "suppressed_stale_or_reviewed": True}
     payload = {
@@ -397,6 +407,7 @@ def deliver_due(*, now: float | None = None, transport=None) -> dict:
             if channel["consecutive_failures"] >= MAX_FAILURES:
                 channel["enabled"] = False
                 channel["paused_reason"] = "delivery_paused_after_five_failures"
+            _audit(channel, entry["notification_id"], "transport_unacknowledged", current)
             _save(data)
             return {"attempted": 1, "sent": 0, "retry_pending": True,
                     "delivery_paused": not channel["enabled"]}
@@ -405,6 +416,7 @@ def deliver_due(*, now: float | None = None, transport=None) -> dict:
         channel["delivered"] += 1
         channel["last_delivered_at"] = _now(current)
         channel["consecutive_failures"] = 0
+        _audit(channel, entry["notification_id"], "receiver_acknowledged", current)
         _save(data)
         return {"attempted": 1, "sent": 1, "unreviewed_signal_states": len(entry["states"]),
                 "case_data_included": False, "business_actions": False}
