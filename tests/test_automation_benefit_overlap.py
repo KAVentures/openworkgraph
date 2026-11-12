@@ -127,7 +127,7 @@ from server.secure_app import app
 from server import local_auth
 path='/v1/automation-pipeline/benefit-overlap'
 with TestClient(app) as client:
-    assert client.get(path).status_code == 403
+    assert client.get(path).status_code == 401
     token = local_auth.ensure_api_token()
     assert client.get(path,headers={'Authorization':'Bearer '+token}).status_code in (401,403)
     session = local_auth.create_dashboard_session()
