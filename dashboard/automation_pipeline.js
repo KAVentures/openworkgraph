@@ -2124,7 +2124,12 @@
       const generation=++handoffGeneration;
       const current=()=>generation===handoffGeneration;
       const handoff=event.detail||{},id=handoff.idea_id;
-      if(typeof id!=='string')return;
+      // A synthetic or incomplete navigation event must not open even a
+      // generic decision surface. Only the inspected, revision-bound reviewed
+      // choice may enter this path; the server remains authoritative.
+      if(typeof id!=='string'||!id||id.length>128||
+         typeof handoff.project_id!=='string'||!handoff.project_id||handoff.project_id.length>128||
+         !Number.isSafeInteger(handoff.review_revision)||handoff.review_revision<1)return;
       // Carry the exact inspected export as a navigation hint, never as approval.
       // Recheck it against the authenticated journey before opening the evidence UI.
       // Clear any previous decision surface before an asynchronous verification.
@@ -2132,7 +2137,6 @@
       detail.replaceChildren();
       refresh().then(async()=>{
         if(!current())return;
-        if(!handoff.project_id){await show(id);return;}
         const journeyResponse=await api('/v1/automation-pipeline/'+encodeURIComponent(id)+'/journey');
         if(!journeyResponse.ok)throw new Error('Authenticated journey refused ('+journeyResponse.status+').');
         const journey=await journeyResponse.json();
