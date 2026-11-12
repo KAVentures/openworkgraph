@@ -19,7 +19,7 @@ RETURNS_REFUNDS_1_0_0 = {
     ),
     "object_types": [
         {"role": "return_case", "label": "Return case", "required": True},
-        {"role": "refund", "label": "Refund record", "required": False},
+        {"role": "refund_record", "label": "Refund record", "required": False},
         {"role": "item", "label": "Returned item", "required": False},
     ],
     "activities": [
@@ -84,7 +84,7 @@ RETURNS_REFUNDS_1_0_0 = {
                 "@request", {"optional": "@receive"}, "@inspect",
                 {"optional": "@approve"}, {"optional": "@refund"},
                 {"optional": "@close"}]},
-            {"object_type": "@refund", "steps": ["@refund"]},
+            {"object_type": "@refund_record", "steps": ["@refund"]},
         ],
         "arcs": [
             {"activity": "@request", "object_type": "@return_case", "variable": False},
@@ -93,7 +93,7 @@ RETURNS_REFUNDS_1_0_0 = {
             {"activity": "@approve", "object_type": "@return_case", "variable": False},
             {"activity": "@refund", "object_type": "@return_case", "variable": False},
             {"activity": "@close", "object_type": "@return_case", "variable": False},
-            {"activity": "@refund", "object_type": "@refund", "variable": False},
+            {"activity": "@refund", "object_type": "@refund_record", "variable": False},
         ],
     },
     "assumptions": [
