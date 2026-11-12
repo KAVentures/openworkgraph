@@ -52,3 +52,33 @@ def export_snapshot(log_id, spec):
         analysis_spec_sha256=content_digest(result['spec']),
         metric_definition_sha256=[analysis._metric_lineage(metric.model_dump(mode='json'))['definition_sha256']
                                   for metric in parsed.metrics if metric.name in needed]).model_dump(mode='json')
+
+
+def check_snapshot_freshness(log_id, request):
+    """Recompute lineage under the same bounded local export path.
+
+    This is NOT proof that the supplied numeric rows were ever published or
+    independently verified. Never echo case values, source rows or group labels.
+    """
+    from pydantic import ValidationError
+    if not isinstance(request, dict) or set(request) != {"spec", "snapshot"}:
+        raise workspace.EventLogWorkspaceError("freshness request needs only spec and snapshot")
+    try:
+        prior = Snapshot.model_validate(request["snapshot"])
+    except (ValidationError, ValueError, TypeError):
+        raise workspace.EventLogWorkspaceError("invalid bounded analysis snapshot") from None
+    current = export_snapshot(log_id, request["spec"])
+    same_source = prior.source_content_sha256 == current["source_content_sha256"]
+    same_spec = prior.analysis_spec_sha256 == current["analysis_spec_sha256"]
+    same_metrics = prior.metric_definition_sha256 == current["metric_definition_sha256"]
+    return {
+        "format": "openworkgraph.analysis-snapshot-freshness.v1",
+        "source_unchanged": same_source,
+        "analysis_spec_unchanged": same_spec,
+        "metric_definitions_unchanged": same_metrics,
+        "lineage_current": same_source and same_spec and same_metrics,
+        "rows_authenticated": False,
+        "source_independently_verified": False,
+        "execution_authorized": False,
+        "warning": "Lineage comparison does not authenticate supplied snapshot rows or authorize decisions.",
+    }
