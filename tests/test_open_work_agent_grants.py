@@ -181,8 +181,9 @@ def test_granted_case_context_is_source_bound_reviewed_and_revocable(setup, monk
     from server import open_work_case_declarations as case_store
     scope = "owg:scope:" + "c" * 32
     monkeypatch.setattr(declarations, "_source_scope", lambda: scope)
-    approved = grants.issue(REF, "agent-a", 1, confirmed=True, source_scope=scope)
+    approved = grants.issue(REF, "agent-a", 1, confirmed=True, source_scope=scope, context_approved=True)
     legacy = grants.issue(REF, "agent-b", 1, confirmed=True)
+    no_context = grants.issue(REF, "agent-c", 1, confirmed=True, source_scope=scope)
     monkeypatch.setattr(case_store, "list_case_declarations", lambda current_scope: {
         "items": [{
             "work_item_ref": REF, "scope_ref": current_scope,
@@ -196,6 +197,7 @@ def test_granted_case_context_is_source_bound_reviewed_and_revocable(setup, monk
     with TestClient(app) as client:
         assert client.get(path).status_code == 401
         assert client.get(path, headers={"Authorization": "Bearer " + legacy["token"]}).status_code == 403
+        assert client.get(path, headers={"Authorization": "Bearer " + no_context["token"]}).status_code == 403
         headers = {"Authorization": "Bearer " + approved["token"]}
         result = client.get(path, headers=headers)
         assert result.status_code == 200, result.text
@@ -216,7 +218,7 @@ def test_granted_context_denies_missing_review_and_cross_case(setup, monkeypatch
     from server import open_work_case_declarations as case_store
     scope = "owg:scope:" + "c" * 32
     monkeypatch.setattr(declarations, "_source_scope", lambda: scope)
-    issued = grants.issue(REF, "agent-a", 1, confirmed=True, source_scope=scope)
+    issued = grants.issue(REF, "agent-a", 1, confirmed=True, source_scope=scope, context_approved=True)
     monkeypatch.setattr(case_store, "list_case_declarations", lambda current_scope: {
         "items": [{"work_item_ref": OTHER, "edit_token": "private"}]
     })
