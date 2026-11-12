@@ -13,6 +13,7 @@ from pathlib import Path
 
 from . import m365_outlook_operator_cycle as cycle
 from .m365_outlook_owg_receipt import ReceiptError, UncertainReceipt
+from .m365_operator_audit_writer import (preflight_operator_audit, record_operator_phase, AuditWriteError)
 from .m365_outlook_delta import DeltaError
 
 FORMAT = "openworkgraph.m365-reviewed-transaction.v1"
@@ -44,7 +45,18 @@ def execute(*, tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
         raise ReceiptError("Exact reviewed CSV SHA-256 required")
     scope = dict(tenant=tenant, mailbox=mailbox, folder=folder,
                  grant_file=Path(grant_file))
+    audit_dir = os.environ.get("OWG_M365_AUDIT_DIR")
+    if audit_dir:
+        if os.name != "posix":
+            raise ReceiptError("Audited mutation unsupported on this platform")
+        preflight_operator_audit(Path(audit_dir))
+    def audit(phase, result):
+        if audit_dir:
+            record_operator_phase(phase, result, directory=Path(audit_dir),
+                                  tenant=tenant, mailbox=mailbox,
+                                  folder=folder, log_id=log_id)
     checked = cycle.review(candidate=Path(candidate), consent_local_read=True, **scope)
+    audit("review", checked)
     if checked.get("csv_sha256") != expected_review_csv_sha256:
         raise ReceiptError("Candidate changed since explicit review")
     shared = dict(**scope, log_id=log_id, confirm_log_id=confirm_log_id,
@@ -55,6 +67,7 @@ def execute(*, tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
                             consent_local_append=True,
                             confirm_candidate_reviewed=True,
                             expected_review_csv_sha256=expected_review_csv_sha256)
+    audit("append", appended)
     if appended["status"] != "receipt_persisted":
         raise UncertainReceipt("Append outcome uncertain")
     handoff = cycle.handoff(**shared, journal_dir=Path(journal_dir),
@@ -70,6 +83,7 @@ def execute(*, tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
         expected_previous_candidate_sha256=expected_previous_candidate_sha256,
         consent_local_read=True, confirm_removals_reviewed=True,
         confirm_checkpoint_commit=True)
+    audit("checkpoint-commit", committed)
     return {"format": FORMAT, "status": "checkpoint_committed",
             "generation": committed["generation"],
             "idempotent_replay": committed.get("idempotent_replay", False),
@@ -96,7 +110,7 @@ def main(argv=None):
         result = execute(**{k.replace("-", "_"): v for k, v in args.items()})
         print(json.dumps(result, sort_keys=True))
         return 0
-    except (ReceiptError, DeltaError, UncertainReceipt, OSError, ValueError,
+    except (ReceiptError, DeltaError, UncertainReceipt, AuditWriteError, OSError, ValueError,
             TypeError, KeyError):
         # A failed post-append operation may already have written events.
         # Never suggest retrying this composite transaction.
