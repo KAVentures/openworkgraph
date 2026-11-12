@@ -4353,6 +4353,31 @@
           :el('p','Every nonempty risk band has fewer than the minimum independent completed cases. No case-level calibration table is shown.','muted'),
           el('p',caseQuality.interpretation+' Outcomes come from the selected event log, not independently verified source receipts. No risk model is recalibrated automatically.','muted')
         ]:[el('p','No window has enough labeled completed cases for outcome calibration.','muted')];
+        const openCoverage=r.open_case_coverage;
+        const openCoverageDetail=openCoverage?[
+          el('h4','Still-open cases excluded from monitoring'),
+          el('p',Number(openCoverage.still_open_cases_not_scored).toLocaleString()+
+            ' of '+Number(openCoverage.selected_cases_total).toLocaleString()+
+            ' cases ('+pct(openCoverage.still_open_share)+') in this selected cohort have not reached a selected end activity. '+
+            'They were not scored as completed cases. '+
+            Number(openCoverage.open_cases_with_exact_state_support).toLocaleString()+
+            ' have at least '+Number(openCoverage.minimum_completed_examples_for_exact_state).toLocaleString()+
+            ' completed examples matching their latest activity and step; '+
+            Number(openCoverage.open_cases_without_exact_state_support).toLocaleString()+
+            ' do not and require broader fallback or abstention. '+
+            Number(openCoverage.open_cases_with_no_exact_completed_prefix).toLocaleString()+
+            ' have no exact completed example.','muted'),
+          openCoverage.open_states.length?table(
+            ['Latest activity','Step','Still-open cases','Matching completed cases','Exact state supported'],
+            openCoverage.open_states.map(s=>[
+              s.latest_activity,String(s.step),Number(s.open_cases).toLocaleString(),
+              Number(s.exact_completed_prefix_cases).toLocaleString(),
+              s.exact_state_supported?'Yes':'No'
+            ]))
+            :el('p','No unfinished cases in this selected cohort.','muted'),
+          ...(openCoverage.states_truncated?[el('p','Showing only the eight largest open-case states; counts above include every state.','muted')]:[]),
+          el('p',openCoverage.interpretation,'muted')
+        ]:[];
         const activityQuality=r.activity_quality;
         const activityDetail=activityQuality?[
           el('h4','Where prediction errors occur'),
@@ -4372,6 +4397,7 @@
         monitorOut.replaceChildren(el('h4','Prediction quality over time'),el('div',v.summary,'note'),
           table(['Window','Cases scored','Typical error','Naive error','Range held the time',...(spec.outcome?['Brier score']:[])],v.rows.map(row=>spec.outcome?row:row.slice(0,5))),
           ...activityDetail,
+          ...openCoverageDetail,
           ...caseDetail,
           ...(v.proposal?[el('div',v.proposal,'muted')]:[]),el('div',r.interpretation,'muted'));
       }catch(error){if(t===watchTurn)monitorOut.replaceChildren(el('div',error.message,'muted'));}
