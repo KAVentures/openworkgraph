@@ -66,6 +66,10 @@ const path=require('node:path');
   assert.match(await page.locator('#owgObjectRelationDrawing').textContent(),/12 of 25 neighbor/);
   // The new trace traverses exact stored O2O assertions for two hops; it
   // never merges case histories, imports new data or interprets HTML labels.
+  // Both directions include two independently asserted reverse links.
+  await page.locator('#owgObjectRelationDirection').selectOption('both');
+  await page.locator('#owgObjectRelationRun').click();
+  await page.locator('#owgObjectRelationStatus').filter({hasText:'33 of 33'}).waitFor();
   await page.locator('#owgObjectRelationTraceHops').selectOption('2');
   const [traceReply]=await Promise.all([
     page.waitForResponse(response=>response.url().endsWith('/object-relationships/trace')&&
