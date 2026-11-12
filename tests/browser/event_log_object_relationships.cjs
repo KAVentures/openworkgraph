@@ -67,25 +67,24 @@ const path=require('node:path');
   // The new trace traverses exact stored O2O assertions for two hops; it
   // never merges case histories, imports new data or interprets HTML labels.
   await page.locator('#owgObjectRelationTraceHops').selectOption('2');
-  await page.locator('#owgObjectRelationTraceRun').click();
+  const [traceReply]=await Promise.all([
+    page.waitForResponse(response=>response.url().endsWith('/object-relationships/trace')&&
+      response.request().method()==='POST'),
+    page.locator('#owgObjectRelationTraceRun').click()
+  ]);
+  assert.equal(traceReply.status(),200,await traceReply.text());
+  const traceData=await traceReply.json();
   await page.locator('#owgObjectRelationTraceStatus').filter({hasText:'32 objects and 34 original relationship assertions through 2 hop(s)'}).waitFor();
   assert.equal(await page.locator('#owgObjectRelationTraceResult table').count(),2);
   assert.equal(await page.locator('#owgObjectRelationTraceResult table').first().locator('tbody tr').count(),32);
   assert.equal(await page.locator('#owgObjectRelationTraceResult table').last().locator('tbody tr').count(),34);
   assert.equal(await page.locator('#owgObjectRelationTraceResult img').count(),0);
   assert.equal(await page.evaluate(()=>window.o2oInjected),undefined);
-  const traceResponse=await page.evaluate(async()=>{
-    const response=await fetch('/v1/event-logs/'+document.querySelector('#owgEventLogPick').value+
-      '/object-relationships/trace',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({object_id:'order1',max_hops:2,direction:'both'})});
-    return {status:response.status,data:await response.json()};
-  });
-  assert.equal(traceResponse.status,200);
-  assert.equal(traceResponse.data.case_membership_inferred,false);
-  assert.equal(traceResponse.data.shared_event_correlation_performed,false);
-  assert.equal(traceResponse.data.execution_authorized,false);
-  assert.equal(traceResponse.data.truncated,false);
-  assert.equal(traceResponse.data.shown_edges,34);
+  assert.equal(traceData.case_membership_inferred,false);
+  assert.equal(traceData.shared_event_correlation_performed,false);
+  assert.equal(traceData.execution_authorized,false);
+  assert.equal(traceData.truncated,false);
+  assert.equal(traceData.shown_edges,34);
   assert.match(await page.locator('#owgObjectRelationTraceStatus').textContent(),/does not verify case membership or causality/);
 
   const node=page.locator('#owgObjectRelationDrawing [data-owg-object="item01"]');await node.focus();await page.keyboard.press('Enter');
