@@ -1,6 +1,9 @@
 """Safe contract checks for the reviewed M365 operator transaction."""
 import unittest
 import os
+import io
+import json
+from contextlib import redirect_stdout
 from unittest.mock import patch
 from server import m365_outlook_reviewed_transaction as tx
 from server.m365_outlook_owg_receipt import ReceiptError, UncertainReceipt
@@ -21,6 +24,47 @@ def inputs(**changes):
 
 
 class ReviewedTransactionTests(unittest.TestCase):
+    def test_cli_preflight_needs_no_append_only_arguments(self):
+        argv = ["--preflight-only", "--tenant", "t", "--mailbox", "m",
+                "--folder", "f", "--log-id", "log", "--confirm-log-id", "log",
+                "--grant-file", "grant", "--candidate", "candidate",
+                "--ledger-dir", "ledger", "--expected-review-csv-sha256",
+                DIGEST, "--consent-local-read"]
+        with patch.object(tx, "preflight", return_value={"status": "review_ready_for_explicit_commit"}) as preflight, \\
+             patch.object(tx, "execute") as execute:
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(tx.main(argv), 0)
+            self.assertEqual(json.loads(output.getvalue())["status"],
+                             "review_ready_for_explicit_commit")
+            self.assertEqual(preflight.call_args.kwargs["tenant"], "t")
+            execute.assert_not_called()
+
+    def test_cli_preflight_refusal_is_not_mutation_uncertainty(self):
+        argv = ["--preflight-only", "--tenant", "t", "--mailbox", "m",
+                "--folder", "f", "--log-id", "log", "--confirm-log-id", "log",
+                "--grant-file", "grant", "--candidate", "candidate",
+                "--ledger-dir", "ledger", "--expected-review-csv-sha256",
+                DIGEST, "--consent-local-read"]
+        with patch.object(tx, "preflight", side_effect=ReceiptError("revoked")), \\
+             patch.object(tx, "execute") as execute:
+            output = io.StringIO()
+            with redirect_stdout(output):
+                self.assertEqual(tx.main(argv), 3)
+            self.assertEqual(json.loads(output.getvalue())["status"], "preflight_rejected")
+            execute.assert_not_called()
+
+    def test_cli_commit_still_requires_all_mutation_arguments(self):
+        argv = ["--tenant", "t", "--mailbox", "m", "--folder", "f",
+                "--log-id", "log", "--confirm-log-id", "log",
+                "--grant-file", "grant", "--candidate", "candidate",
+                "--ledger-dir", "ledger", "--expected-review-csv-sha256", DIGEST]
+        with patch.object(tx, "execute") as execute:
+            with self.assertRaises(SystemExit) as failure:
+                tx.main(argv)
+            self.assertEqual(failure.exception.code, 2)
+            execute.assert_not_called()
+
     def test_read_only_preflight_requires_consent_before_any_read(self):
         with patch.object(tx.cycle, "review") as review:
             with self.assertRaisesRegex(ReceiptError, "read consent"):
