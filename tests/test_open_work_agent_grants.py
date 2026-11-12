@@ -98,3 +98,15 @@ with TestClient(app) as c:
     result = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1],
                             env=env, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_grant_loses_authority_when_offer_withdrawn_or_dispatch_disabled(setup):
+    issued = grants.issue(REF, "agent-a", 1, confirmed=True)
+    header = "Bearer " + issued["token"]
+    assert grants.authenticate(header) is not None
+    assert dispatch.withdraw(REF)
+    assert grants.authenticate(header) is None
+    dispatch.offer(REF)
+    assert grants.authenticate(header) is not None
+    dispatch.set_enabled(False)
+    assert grants.authenticate(header) is None
