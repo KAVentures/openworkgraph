@@ -139,7 +139,7 @@ from server import communications_review as review
 from server import communications_review_triage as triage
 route='/v1/communications/review/triage'
 with TestClient(app) as client:
-    assert client.get(route).status_code == 403
+    assert client.get(route).status_code == 401
     token=local_auth.ensure_api_token()
     assert client.get(route,headers={'Authorization':'Bearer '+token}).status_code in (401,403)
     session=local_auth.create_dashboard_session()
