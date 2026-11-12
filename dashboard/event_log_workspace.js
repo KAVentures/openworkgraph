@@ -3311,10 +3311,29 @@
     prepareShare.onclick=()=>prepareSharing();prepareCases.onclick=()=>prepareSharing(true);
     caseConsent.onchange=()=>{caseDownload.disabled=!caseConsent.checked||!casePacket;};
     caseDownload.onclick=()=>{if(!caseConsent.checked||!casePacket||generation!==state.generation)return;download('owg-analysis-case-dataset.json',JSON.stringify(casePacket),'application/json');caseConsent.checked=false;caseDownload.disabled=true;};
-    sharingDownload.onclick=()=>{
-      if(!sharingConsent.checked||!sharingSnapshot||freshnessStatus.dataset.stale==='true'||generation!==state.generation)return;
-      download('owg-analysis-snapshot.json',JSON.stringify(sharingSnapshot,null,2),'application/json');
-      sharingConsent.checked=false;sharingDownload.disabled=true;
+    sharingDownload.onclick=async()=>{
+      if(!sharingConsent.checked||!sharingSnapshot||!lastSpec||freshnessStatus.dataset.stale==='true'||generation!==state.generation||sharingDownload.disabled)return;
+      // The earlier preview/check is not a download authorization: a saved log
+      // can change between checking freshness and pressing Download.
+      const attempt=sharingAttempt,snapshot=sharingSnapshot,spec=lastSpec,selectedGeneration=state.generation;
+      sharingDownload.disabled=true;freshness.disabled=true;freshnessStatus.dataset.stale='true';
+      freshnessStatus.textContent='Revalidating the current saved log before download…';
+      try{
+        const result=await(await api(base()+'/analysis-sharing-freshness',{method:'POST',headers:{'Content-Type':'application/json','X-OWG-Analysis-Sharing-Preview':'true'},body:JSON.stringify({spec,snapshot})})).json();
+        if(attempt!==sharingAttempt||selectedGeneration!==state.generation||snapshot!==sharingSnapshot||!sharingConsent.checked)return;
+        if(result.format!=='openworkgraph.analysis-snapshot-freshness.v1'||result.lineage_current!==true||result.current_results_match!==true){
+          freshnessStatus.textContent='Source, metric lineage or values changed. Prepare and review a new snapshot.';
+          return;
+        }
+        // No local download is offered after failed/unknown server validation.
+        download('owg-analysis-snapshot.json',JSON.stringify(snapshot,null,2),'application/json');
+        sharingConsent.checked=false;
+        freshnessStatus.textContent='Download validated against the current saved log. Source changes after this check cannot be ruled out.';
+      }catch(error){
+        if(attempt===sharingAttempt&&selectedGeneration===state.generation){freshnessStatus.textContent=error.message+' Download refused; recheck the snapshot.';}
+      }finally{
+        if(attempt===sharingAttempt&&selectedGeneration===state.generation){sharingDownload.disabled=true;freshness.disabled=false;}
+      }
     };
     const exports=exportButtons('owgAnalysis',()=>last,r=>[r.columns,...r.rows]);
     box.append(field('Run as a cancellable local job',background),
