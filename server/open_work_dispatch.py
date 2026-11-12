@@ -340,6 +340,9 @@ def acknowledge(work_item_ref: str, *, reoffer: bool) -> dict[str, Any] | None:
             _write(state)
             return None
         item["status"], item["claim"] = "offered", None
+        # A re-offer is a new owner approval generation; old grants stay denied.
+        item["offered_at"] = now.isoformat()
+        item["last_report"] = None
         item["history"] = (item["history"] + [{"at": now.isoformat(), "event": "reoffered"}])[-_MAX_HISTORY:]
         _write(state)
         return _public(item, owner=True)
