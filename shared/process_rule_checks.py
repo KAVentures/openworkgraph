@@ -110,6 +110,11 @@ def check_case_rules(record,cases,as_of_date=None):
                      'manual_review_condition_count_on_proposed_route':sum(condition.activity_id in route
                         for condition in model.manual_review_conditions) if route_valid else None,
                      'manual_review_conditions_evaluated':False,'counts':dict(counts),'rules':rules,**({'decision_tables':tables} if model.decision_tables else {})})
+    # Independent synthetic checks complement, never replace, authorized real
+    # case-fact examples; absent tables preserve the legacy response exactly.
+    if model.decision_tables:
+        from .process_decision_boundary_probes import probe_tables
+        boundary_probes = probe_tables(model, as_of_date=as_of_date)
     table_summaries=[]
     for table in model.decision_tables:
         values=table_coverage[table.id]
@@ -142,7 +147,9 @@ def check_case_rules(record,cases,as_of_date=None):
         **({'decision_table_as_of_date':as_of_date,'decision_table_coverage':'supplied_cases_only_not_exhaustive'} if model.decision_tables else {}),
         'case_count':len(rows),'cases':rows,'rule_result_counts':dict(total),
         **({'decision_table_test_coverage':table_summaries,
-            'decision_table_test_coverage_basis':'caller_supplied_cases_only_not_exhaustive'}
+            'decision_table_test_coverage_basis':'caller_supplied_cases_only_not_exhaustive',
+            'decision_table_boundary_probes':boundary_probes,
+            'decision_table_boundary_probes_basis':'generated_synthetic_numeric_threshold_points_only'}
            if model.decision_tables else {}),
         'declared_manual_review_condition_count':len(model.manual_review_conditions),
         'case_association_basis':'caller_supplied_opaque_labels_and_optional_proposed_routes',
