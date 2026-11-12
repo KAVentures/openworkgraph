@@ -15,7 +15,7 @@ import sys
 
 from .m365_outlook_delta import (
     _candidate, _delta_private_parent, _grant, _private_read, _scope,
-    MAX_CANDIDATE_BYTES, _valid_link,
+    MAX_CANDIDATE_BYTES, DeltaError, _valid_link,
 )
 from .m365_outlook_event_membership import reconcile as reconcile_membership
 from .m365_outlook_owg_receipt import ReceiptError, _unique
@@ -65,7 +65,10 @@ def _entries(directory: Path, scope: str, folder: str):
             raise ReceiptError("Checkpoint ledger entry invalid")
         # A private ledger is not a trust boundary for provider destinations.
         # Validate the cursor before any future incremental Graph read can use it.
-        _valid_link(item["cursor_url"], folder, "delta")
+        try:
+            _valid_link(item["cursor_url"], folder, "delta")
+        except DeltaError:
+            raise ReceiptError("Checkpoint ledger cursor invalid") from None
         entries.append(item)
     entries.sort(key=lambda e: e["generation"])
     previous = None
