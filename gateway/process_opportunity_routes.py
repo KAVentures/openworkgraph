@@ -3,11 +3,13 @@ from fastapi import Depends, Path, Query, Request
 from fastapi.responses import Response
 from starlette.concurrency import run_in_threadpool
 from shared.process_opportunity_review import Save, Transition, Remove
+from shared.process_opportunity_portfolio import Preview
+from .process_opportunity_portfolio import SelectedOpportunityBudget
 from .process_opportunity_review import SharedOpportunityStore
 
 
 def add_routes(router,store,human,body,response):
-    opportunities=SharedOpportunityStore(store);base='/v1/human/processes/{workflow_id}/opportunity'
+    opportunities=SharedOpportunityStore(store);budgets=SelectedOpportunityBudget(store);base='/v1/human/processes/{workflow_id}/opportunity'
     ID=r'^[A-Za-z0-9_-]{1,80}$'
 
     @router.get('/process-opportunity-client.js',include_in_schema=False)
@@ -19,6 +21,14 @@ def add_routes(router,store,human,body,response):
     @router.get('/v1/human/process-opportunity-pipeline')
     def inventory(after:str=Query(default='',max_length=80),limit:int=Query(default=50,ge=1,le=100),p=Depends(human)):
         return response(opportunities.inventory,p,after,limit)
+
+    @router.post('/v1/human/process-opportunity-pipeline/preview')
+    async def preview(request:Request,p=Depends(human)):
+        # Check human read scope before processing the caller-selected budget
+        # document. No record write, no budget authorization or data sync.
+        await run_in_threadpool(store.require_scope,p,'org:process:read')
+        parsed=await body(request,Preview,maximum=16*1024)
+        return await run_in_threadpool(response,budgets.preview,p,parsed)
 
     @router.get(base)
     def detail(workflow_id:str=Path(pattern=ID),revision:int|None=Query(default=None,ge=1,le=50),p=Depends(human)):
