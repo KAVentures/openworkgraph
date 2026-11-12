@@ -74,6 +74,7 @@ const getControls=results=>[results.children.find(x=>x.tagName==='select'),resul
      assert.deepEqual(Array.from(lastEvent().detail.review_basis.blockers),[]);
      assert.equal(lastEvent().detail.spec_sha256,'a'.repeat(64));
      assert.equal(lastEvent().detail.archive_sha256,'b'.repeat(64));
+     assert.equal(lastEvent().detail.review_revision,1,'handoff must pin the approved durable review revision');
    },true);
  await scenario('reviewed handoff rejects a changed server project digest',[basis(),basis(),
    {format:'openworkgraph.review-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
