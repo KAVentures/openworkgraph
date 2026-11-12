@@ -3269,12 +3269,14 @@
     const sharingInfo=el('p',null,'muted');sharingInfo.style.overflowWrap='anywhere';
     const sharingConsent=input('owgAnalysisSharingConsent','checkbox');
     const sharingDownload=button('Download reviewed snapshot','secondary');sharingDownload.id='owgAnalysisSharingDownload';sharingDownload.disabled=true;
+    const freshness=button('Check snapshot freshness','secondary');freshness.id='owgAnalysisFreshness';freshness.disabled=true;
+    const freshnessStatus=el('p','Freshness not checked.','muted');freshnessStatus.id='owgAnalysisFreshnessStatus';freshnessStatus.setAttribute('role','status');
     sharing.append(el('p','This snapshot recomputes the analysis, replaces group labels with codes and omits raw events, case IDs, filter values and metric definitions. Declared units and numeric values may still be sensitive. Review every cell before sharing. Upload the downloaded file to your organization’s Shared analyses portal; downloading sends nothing to a Gateway.'),sharingTable,sharingInfo,
-      field('I reviewed this snapshot and intend to share it with my organization',sharingConsent),sharingDownload);
+      freshness,freshnessStatus,field('I reviewed this snapshot and intend to share it with my organization',sharingConsent),sharingDownload);
     const casePane=el('div');casePane.hidden=true;const caseTable=el('div');caseTable.style.overflowX='auto';
     const caseConsent=input('owgAnalysisCaseConsent','checkbox');const caseDownload=button('Download reviewed case dataset','secondary');caseDownload.id='owgAnalysisCaseDownload';caseDownload.disabled=true;
     casePane.append(el('p','This separate case file contains complete coded cases and within-case elapsed microseconds. Original case/activity/person labels, resources, attributes and absolute dates are omitted. Codes, topology and timings are still sensitive and are not anonymization. Codes apply only to this file; no group-row mapping or cross-case time order is disclosed. Review every timeline below. A separate case-read scope and explicit revision grant are required at the Gateway.'),caseTable,field('I reviewed the complete coded case timelines and intend this case-level disclosure',caseConsent),caseDownload);sharing.append(casePane);
-    function resetSharing(){casePacket=null;casePane.hidden=true;caseTable.replaceChildren();caseConsent.checked=false;caseDownload.disabled=true;sharingAttempt++;sharingSnapshot=null;sharing.hidden=true;sharingConsent.checked=false;sharingDownload.disabled=true;}
+    function resetSharing(){casePacket=null;casePane.hidden=true;caseTable.replaceChildren();caseConsent.checked=false;caseDownload.disabled=true;sharingAttempt++;sharingSnapshot=null;sharing.hidden=true;sharingConsent.checked=false;sharingDownload.disabled=true;freshness.disabled=true;freshnessStatus.textContent='Freshness not checked.';}
     sharingConsent.onchange=()=>{sharingDownload.disabled=!sharingConsent.checked||!sharingSnapshot;};
     async function prepareSharing(withCases=false){
       if(!lastSpec)return;
@@ -3283,13 +3285,28 @@
         const result=await(await api(base()+(withCases?'/case-sharing-preview':'/analysis-sharing-preview'),{method:'POST',headers:{'Content-Type':'application/json',...(withCases?{'X-OWG-Case-Sharing-Preview':'true'}:{'X-OWG-Analysis-Sharing-Preview':'true'})},body:JSON.stringify(lastSpec)})).json();
         const r=withCases?result.aggregate_snapshot:result;
         if(generation!==state.generation||attempt!==sharingAttempt)return;
-        sharingSnapshot=r;sharing.hidden=false;
+        sharingSnapshot=r;sharing.hidden=false;freshness.disabled=withCases;freshnessStatus.textContent='Freshness not checked. Lineage checks do not verify numeric rows.';
         if(withCases){casePacket=result.case_dataset;casePane.hidden=false;caseTable.replaceChildren(...casePacket.cases.map(c=>{const details=el('details'),summary=el('summary',c.code+' · '+c.events.length+' events'),list=el('ol');for(const e of c.events)list.append(el('li',e.activity+' · '+e.elapsed_microseconds/1000000+' seconds since case start'));details.append(summary,list);return details;}));}
         sharingTable.replaceChildren(table(r.columns.map(c=>c.heading+(c.aggregation?' · '+c.aggregation:'')+(c.value_basis?' · '+c.value_basis:'')+(c.metric_slot?' '+c.metric_slot:'')+(c.unit?' ('+c.unit+')':'')),r.rows),
           ...r.metric_coverage.map(c=>el('p','Metric '+c.slot+': '+c.with_value+' cases with a value; '+c.without_value+' without; '+c.missing_operand+' missing operand; '+c.zero_divisor+' zero divisor; '+c.non_finite+' nonfinite.')));
         sharingInfo.textContent=r.matching_cases+' selected cases; '+r.matching_rows+' selected '+r.level+' rows. '+(r.rows_truncated?'Only the bounded result rows are included. ':'')+r.non_finite_results_withheld+' output results withheld as nonfinite. Generated '+r.generated_at+'. Source fingerprint: '+r.source_content_sha256+'. Analysis fingerprint: '+r.analysis_spec_sha256+'. Group codes apply only within this snapshot; source freshness after export is unknown.';
       }catch(error){if(generation===state.generation&&attempt===sharingAttempt)message.textContent=error.message;}
       finally{if(generation===state.generation&&attempt===sharingAttempt){prepareShare.disabled=!lastSpec;prepareCases.disabled=!lastSpec;}}
+    };
+    freshness.onclick=async()=>{
+      if(!sharingSnapshot||!lastSpec||generation!==state.generation)return;
+      const attempt=sharingAttempt,snapshot=sharingSnapshot,spec=lastSpec;
+      freshness.disabled=true;freshnessStatus.textContent='Checking current source and metric lineage…';
+      try{
+        const response=await api(base()+'/analysis-sharing-freshness',{method:'POST',headers:{'Content-Type':'application/json','X-OWG-Analysis-Sharing-Preview':'true'},body:JSON.stringify({spec,snapshot})});
+        if(!response.ok)throw new Error('Freshness check failed ('+response.status+').');
+        const result=await response.json();
+        if(generation!==state.generation||attempt!==sharingAttempt||snapshot!==sharingSnapshot)return;
+        if(result.format!=='openworkgraph.analysis-snapshot-freshness.v1'||typeof result.lineage_current!=='boolean')throw new Error('Unexpected freshness response.');
+        freshnessStatus.textContent=result.lineage_current?'Source, analysis and metric lineage match now. Numeric rows are not authenticated.':'Snapshot lineage is stale. Prepare and review a new snapshot before sharing.';
+        sharingDownload.disabled=!result.lineage_current||!sharingConsent.checked;
+      }catch(error){if(generation===state.generation&&attempt===sharingAttempt){freshnessStatus.textContent=error.message+' Freshness unknown; prepare a new snapshot.';sharingDownload.disabled=true;}}
+      finally{if(generation===state.generation&&attempt===sharingAttempt)freshness.disabled=false;}
     };
     prepareShare.onclick=()=>prepareSharing();prepareCases.onclick=()=>prepareSharing(true);
     caseConsent.onchange=()=>{caseDownload.disabled=!caseConsent.checked||!casePacket;};
