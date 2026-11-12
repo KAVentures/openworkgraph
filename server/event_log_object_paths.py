@@ -106,15 +106,18 @@ def trace(log_id: str, spec: Any) -> dict[str, Any]:
                 if edge_key in seen_edges:
                     continue
                 first, last = ((source, source_type), (target, target_type))
-                for node_id, kind in (first, last):
-                    if node_id not in seen_nodes and len(seen_nodes) >= settings.max_nodes:
-                        truncated_reason = "max_nodes_reached"
-                        break
-                    if node_id not in seen_nodes:
-                        seen_nodes[node_id] = {"object_id": node_id, "object_type": kind, "hop": hop}
-                        next_frontier.append(node_id)
-                if truncated_reason:
+                missing = {
+                    node_id: kind for node_id, kind in (first, last)
+                    if node_id not in seen_nodes
+                }
+                if len(seen_nodes) + len(missing) > settings.max_nodes:
+                    # No orphan nodes: an edge and both of its endpoints are
+                    # either included together or omitted together.
+                    truncated_reason = "max_nodes_reached"
                     break
+                for node_id, kind in missing.items():
+                    seen_nodes[node_id] = {"object_id": node_id, "object_type": kind, "hop": hop}
+                    next_frontier.append(node_id)
                 seen_edges.add(edge_key)
                 edges.append({
                     "source_id": source, "target_id": target,
