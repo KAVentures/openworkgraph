@@ -25,7 +25,7 @@ URL = "https://example.com/hooks/owner-reviewed-alerts"
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
-    monkeypatch.setattr(notices, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(notices, "_path", lambda: tmp_path / "signal_delivery_channels.json")
     monkeypatch.setattr(scheduler, "scheduled", lambda kind, target: kind == "event_log_signals" and target == LOG)
     items = [{"rule_id": "sig_" + "1" * 16, "name": "private-diagnosis-label",
               "status": "unreviewed", "requires_review": True,
