@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """REST surface for owner-offered Open Work hand-off (see open_work_dispatch)."""
 import asyncio
+import json
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -20,17 +21,36 @@ def _require_dashboard(request: Request) -> None:
 
 
 async def _body(request: Request) -> dict[str, Any]:
-    raw = await request.body()
-    if len(raw) > _MAX_BODY:
-        raise HTTPException(status_code=413, detail="dispatch request too large")
+    if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+        raise HTTPException(status_code=415, detail="JSON dispatch request required")
+    raw = bytearray()
     try:
-        data = await request.json() if raw else {}
-    except ValueError:
-        raise HTTPException(status_code=422, detail="invalid JSON") from None
+        async for chunk in request.stream():
+            if len(raw) + len(chunk) > _MAX_BODY:
+                raise HTTPException(status_code=413, detail="dispatch request too large")
+            raw.extend(chunk)
+
+        def unique_pairs(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("duplicate JSON field")
+                result[key] = value
+            return result
+
+        def reject_constant(_value):
+            raise ValueError("nonstandard JSON number")
+
+        try:
+            # Preserve the existing empty-body contract; semantic validation stays in each route.
+            data = json.loads(raw, object_pairs_hook=unique_pairs, parse_constant=reject_constant) if raw else {}
+        except (ValueError, UnicodeError, RecursionError):
+            raise HTTPException(status_code=422, detail="invalid JSON") from None
+    finally:
+        raw.clear()
     if not isinstance(data, dict):
         raise HTTPException(status_code=422, detail="expected an object")
     return data
-
 
 async def _run(fn, *args, **kwargs):
     try:
