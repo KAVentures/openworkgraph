@@ -1,5 +1,6 @@
 """Persisted checkpoint cursor and schema fail-closed regression tests."""
 import json
+import os
 
 import pytest
 
@@ -32,9 +33,9 @@ def _write(tmp_path, **changes):
         "provider_requests": 0,
     }
     entry.update(changes)
-    (tmp_path / f"checkpoint-{scope}-00000001.json").write_text(
-        json.dumps(entry) + "\n", encoding="utf-8"
-    )
+    path = tmp_path / f"checkpoint-{scope}-00000001.json"
+    path.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+    os.chmod(path, 0o600)
     return scope
 
 
