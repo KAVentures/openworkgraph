@@ -15,7 +15,7 @@ from .process_hierarchy import Strict, ID, Digest
 from .process_benefits import Currency
 
 MAX_ITEMS = 100
-Money = Annotated[str, Field(strict=True, pattern=r"^(0|[1-9][0-9]{0,11})(\\.[0-9]{1,2})?$")]
+Money = Annotated[str, Field(strict=True, pattern=r"^(0|[1-9][0-9]{0,11})(\.[0-9]{1,2})?$")]
 
 
 class Selection(Strict):
