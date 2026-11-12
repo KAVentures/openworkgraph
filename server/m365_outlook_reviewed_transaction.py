@@ -90,6 +90,9 @@ def execute(*, tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
                             confirm_removals_reviewed=True)
     if handoff["status"] != "next_round_handoff_prepared":
         raise UncertainReceipt("Handoff outcome uncertain")
+    # Persist an independently verifiable handoff receipt before checkpoint
+    # advancement. Audit failure after append requires manual reconciliation.
+    audit("handoff", handoff)
     committed = cycle.checkpoint_commit(
         **shared, journal_dir=Path(journal_dir), handoff_dir=Path(handoff_dir),
         ledger_dir=Path(ledger_dir), successor_label=successor_label,
