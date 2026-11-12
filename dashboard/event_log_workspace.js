@@ -3276,8 +3276,8 @@
     const casePane=el('div');casePane.hidden=true;const caseTable=el('div');caseTable.style.overflowX='auto';
     const caseConsent=input('owgAnalysisCaseConsent','checkbox');const caseDownload=button('Download reviewed case dataset','secondary');caseDownload.id='owgAnalysisCaseDownload';caseDownload.disabled=true;
     casePane.append(el('p','This separate case file contains complete coded cases and within-case elapsed microseconds. Original case/activity/person labels, resources, attributes and absolute dates are omitted. Codes, topology and timings are still sensitive and are not anonymization. Codes apply only to this file; no group-row mapping or cross-case time order is disclosed. Review every timeline below. A separate case-read scope and explicit revision grant are required at the Gateway.'),caseTable,field('I reviewed the complete coded case timelines and intend this case-level disclosure',caseConsent),caseDownload);sharing.append(casePane);
-    function resetSharing(){casePacket=null;casePane.hidden=true;caseTable.replaceChildren();caseConsent.checked=false;caseDownload.disabled=true;sharingAttempt++;sharingSnapshot=null;sharing.hidden=true;sharingConsent.checked=false;sharingDownload.disabled=true;freshness.disabled=true;freshnessStatus.textContent='Freshness not checked.';}
-    sharingConsent.onchange=()=>{sharingDownload.disabled=!sharingConsent.checked||!sharingSnapshot;};
+    function resetSharing(){casePacket=null;casePane.hidden=true;caseTable.replaceChildren();caseConsent.checked=false;caseDownload.disabled=true;sharingAttempt++;sharingSnapshot=null;sharing.hidden=true;sharingConsent.checked=false;sharingDownload.disabled=true;freshness.disabled=true;freshnessStatus.textContent='Freshness not checked.';freshnessStatus.dataset.stale='false';}
+    sharingConsent.onchange=()=>{sharingDownload.disabled=!sharingConsent.checked||!sharingSnapshot||freshnessStatus.dataset.stale==='true';};
     async function prepareSharing(withCases=false){
       if(!lastSpec)return;
       resetSharing();const attempt=sharingAttempt;prepareShare.disabled=true;prepareCases.disabled=true;
@@ -3304,8 +3304,8 @@
         if(generation!==state.generation||attempt!==sharingAttempt||snapshot!==sharingSnapshot)return;
         if(result.format!=='openworkgraph.analysis-snapshot-freshness.v1'||typeof result.lineage_current!=='boolean')throw new Error('Unexpected freshness response.');
         freshnessStatus.textContent=result.lineage_current?'Source, analysis and metric lineage match now. Numeric rows are not authenticated.':'Snapshot lineage is stale. Prepare and review a new snapshot before sharing.';
-        sharingDownload.disabled=!result.lineage_current||!sharingConsent.checked;
-      }catch(error){if(generation===state.generation&&attempt===sharingAttempt){freshnessStatus.textContent=error.message+' Freshness unknown; prepare a new snapshot.';sharingDownload.disabled=true;}}
+        freshnessStatus.dataset.stale=String(!result.lineage_current);sharingDownload.disabled=!result.lineage_current||!sharingConsent.checked;
+      }catch(error){if(generation===state.generation&&attempt===sharingAttempt){freshnessStatus.textContent=error.message+' Freshness unknown; prepare a new snapshot.';freshnessStatus.dataset.stale='true';sharingDownload.disabled=true;}}
       finally{if(generation===state.generation&&attempt===sharingAttempt)freshness.disabled=false;}
     };
     prepareShare.onclick=()=>prepareSharing();prepareCases.onclick=()=>prepareSharing(true);
