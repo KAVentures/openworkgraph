@@ -564,6 +564,19 @@ async def local_capability_guard(request: Request, call_next):
         request._body = bytes(buffered)
         return await call_next(request)
 
+    # External agent grants are accepted only by these bounded dispatch routes.
+    # They never confer general API, dashboard or provider permissions.
+    if path in {
+        "/v1/open-work/dispatch/granted",
+        "/v1/open-work/dispatch/granted/claim",
+        "/v1/open-work/dispatch/granted/release",
+        "/v1/open-work/dispatch/granted/report",
+    }:
+        from .open_work_agent_grants import authenticate
+        if authenticate(request.headers.get("authorization")) is None:
+            return _json_error("active agent grant required", 401)
+        return await call_next(request)
+
     if path.startswith("/v1/"):
         if not _api_authenticated(request):
             return _json_error("authentication required", 401)
