@@ -27,7 +27,7 @@ def test_numeric_partition_hits_both_sides_and_exact_equality_without_fake_gaps(
     assert result["format"] == FORMAT
     assert result["table_id"] == "purchase"
     assert result["status"] == "sampled"
-    assert result["fact_path"] == "/amount"
+    assert "fact_path" not in result
     assert 3 <= result["sampled_numeric_points"] <= MAX_PROBES
     assert sum(result["status_counts"].values()) == result["sampled_numeric_points"]
     assert result["status_counts"].get("unique_match") == result["sampled_numeric_points"]
