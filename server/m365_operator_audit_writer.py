@@ -18,6 +18,7 @@ PHASES = {
     "review": ("readiness", frozenset(("operator_review_ready", "review_ready"))),
     "extract": ("extract", frozenset(("review_required",))),
     "append": ("append", frozenset(("append_review_verified", "receipt_persisted"))),
+    "handoff": ("handoff", frozenset(("next_round_handoff_prepared",))),
     "checkpoint-commit": ("commit", frozenset(("checkpoint_committed",))),
 }
 
