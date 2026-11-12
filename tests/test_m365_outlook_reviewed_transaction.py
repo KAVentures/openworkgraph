@@ -44,7 +44,7 @@ class ReviewedTransactionTests(unittest.TestCase):
         with patch.object(tx.cycle, "review", side_effect=step("review", {"csv_sha256": DIGEST})), \
              patch.object(tx.cycle, "append", side_effect=step("append", {"status": "receipt_persisted"})), \
              patch.object(tx.cycle, "handoff", side_effect=step("handoff", {"status": "next_round_handoff_prepared"})), \
-             patch.object(tx.cycle, "checkpoint_commit", side_effect=step("checkpoint", {"generation": 2})):
+             patch.object(tx.cycle, "checkpoint_commit", side_effect=step("checkpoint", {"status": "checkpoint_committed", "generation": 2})):
             result = tx.execute(**inputs())
         self.assertEqual(order, ["review", "append", "handoff", "checkpoint"])
         self.assertEqual(result["generation"], 2)
