@@ -721,6 +721,10 @@ def delete_log(log_id: str) -> dict[str, Any]:
             from .local_scheduler import forget_target
             for kind in ("event_log_signals", "event_log_report"):
                 forget_target(kind, log_id)
+            # Revocation follows the source log itself. Remove stored webhook
+            # credentials, pending notifications and delivered-state hashes.
+            from .signal_notification_delivery import remove as remove_signal_delivery
+            remove_signal_delivery(log_id)
             # Cover a submission racing with the first erasure while deletion waited for this lock.
             jobs.erase_log(log_id)
             return {"deleted": True, "log_id": log_id}
