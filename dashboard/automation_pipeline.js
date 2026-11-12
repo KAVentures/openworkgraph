@@ -2195,7 +2195,8 @@
            approval.spec_sha256!==handoff.spec_sha256||
            approval.archive_sha256!==handoff.archive_sha256||
            approval.human_review_approved!==true||
-           !Number.isSafeInteger(approval.review_revision)||approval.review_revision<1||
+           !Number.isSafeInteger(handoff.review_revision)||handoff.review_revision<1||
+           approval.review_revision!==handoff.review_revision||
            approval.execution_authorized!==false||approval.source_read_authorized!==false){
           throw new Error('Destination approval changed or is inconsistent. Inspect again.');
         }
