@@ -156,7 +156,8 @@ async def owner_issue_grant(request: Request):
     scope = await asyncio.to_thread(_source_scope)
     try:
         return await asyncio.to_thread(grants.issue, data.get("work_item_ref"),
-            data.get("agent"), data.get("hours"), confirmed=data.get("confirm_grant"), source_scope=scope)
+            data.get("agent"), data.get("hours"), confirmed=data.get("confirm_grant"), source_scope=scope,
+            context_approved=data.get("confirm_case_context") is True)
     except grants.GrantError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
 
@@ -219,7 +220,8 @@ async def granted_reviewed_case_context(request: Request, response: Response):
     # Legacy grants cannot acquire retrospective source access. A grant must
     # have been issued under this exact connected source scope.
     scope = await asyncio.to_thread(_source_scope)
-    if not scope or not identity.get("source_scope") or identity["source_scope"] != scope:
+    if (not identity.get("context_approved") or not scope or
+        not identity.get("source_scope") or identity["source_scope"] != scope):
         raise HTTPException(403, "current source-bound grant required")
     try:
         snapshot = await asyncio.to_thread(list_case_declarations, scope)
