@@ -146,7 +146,7 @@ def commit_checkpoint(*, tenant, mailbox, folder, log_id, confirm_log_id,
     if membership.get("status") != "all_candidate_events_present":
         raise ReceiptError("Authenticated event membership not established")
     _grant(Path(grant_file), tenant, mailbox, folder)
-    entries = _entries(ledger_dir, scope)
+    entries = _entries(ledger_dir, scope, folder)
     last = entries[-1] if entries else None
     if last and last["candidate_sha256"] == digest:
         if last["log_id"] != log_id or last["cursor_url"] != cursor:
