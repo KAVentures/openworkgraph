@@ -122,3 +122,15 @@ def test_grant_never_revives_after_dispatch_restart(setup):
     dispatch.offer(REF)
     assert grants.authenticate("Bearer " + old["token"]) is None
     assert grants.authenticate("Bearer " + grants.issue(REF, "agent-b", 1, confirmed=True)["token"]) is not None
+
+
+def test_owner_acknowledge_reoffer_requires_new_grant(setup):
+    issued = grants.issue(REF, "agent-a", 1, confirmed=True)
+    header = "Bearer " + issued["token"]
+    claim = dispatch.claim(REF, "agent-a")
+    dispatch.report(REF, claim["lease_token"], "attempted")
+    assert grants.authenticate(header) is None
+    dispatch.acknowledge(REF, reoffer=True)
+    assert grants.authenticate(header) is None
+    replacement = grants.issue(REF, "agent-a", 1, confirmed=True)
+    assert grants.authenticate("Bearer " + replacement["token"]) is not None
