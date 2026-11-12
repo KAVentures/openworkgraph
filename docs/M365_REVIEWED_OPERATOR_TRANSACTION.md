@@ -34,3 +34,5 @@ commands before any new write. A crash after append can leave events written
 without a checkpoint. An audit failure after a write likewise requires manual
 reconciliation. No removal is automatically applied. This is a CLI integration
 increment, **not** dashboard UX completion or real Microsoft tenant acceptance.
+
+**Pre-append generation guard:** Before any OWG append, the transaction now reads the current scoped private checkpoint under the live grant. For generation one, the ledger must be empty; for later generations, `--expected-previous-candidate-sha256` must exactly match the latest committed predecessor and its destination log. A missing, revoked or expired grant, stale generation, or different destination refuses before appending. This is an early safety check, **not** a transaction lock: the checkpoint commit still performs its authoritative exclusive-create generation check. If another operator advances the ledger after this preflight, append may already have happened when commit refuses; inspect membership and receipts and reconcile manually rather than rerunning blindly.
