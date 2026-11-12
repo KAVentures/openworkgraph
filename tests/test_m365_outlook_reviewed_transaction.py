@@ -42,7 +42,8 @@ class ReviewedTransactionTests(unittest.TestCase):
                 order.append(name)
                 return response
             return call
-        with patch.object(tx.cycle, "review", side_effect=step("review", {"csv_sha256": DIGEST})), \
+        with patch.object(tx, "inspect_checkpoint", return_value=None), \
+             patch.object(tx.cycle, "review", side_effect=step("review", {"csv_sha256": DIGEST})), \
              patch.object(tx.cycle, "append", side_effect=step("append", {"status": "receipt_persisted"})), \
              patch.object(tx.cycle, "handoff", side_effect=step("handoff", {"status": "next_round_handoff_prepared"})), \
              patch.object(tx.cycle, "checkpoint_commit", side_effect=step("checkpoint", {"status": "checkpoint_committed", "generation": 2})):
@@ -52,7 +53,8 @@ class ReviewedTransactionTests(unittest.TestCase):
         self.assertFalse(result["automatic_retry_allowed"])
 
     def test_uncertain_append_never_handoffs_or_commits(self):
-        with patch.object(tx.cycle, "review", return_value={"csv_sha256": DIGEST}), \
+        with patch.object(tx, "inspect_checkpoint", return_value=None), \
+             patch.object(tx.cycle, "review", return_value={"csv_sha256": DIGEST}), \
              patch.object(tx.cycle, "append", side_effect=UncertainReceipt("unknown")), \
              patch.object(tx.cycle, "handoff") as handoff, \
              patch.object(tx.cycle, "checkpoint_commit") as checkpoint:
@@ -60,6 +62,54 @@ class ReviewedTransactionTests(unittest.TestCase):
                 tx.execute(**inputs())
             handoff.assert_not_called()
             checkpoint.assert_not_called()
+
+    def test_stale_predecessor_refused_before_append(self):
+        with patch.object(tx.cycle, "review", return_value={"csv_sha256": DIGEST}), \
+             patch.object(tx, "inspect_checkpoint", return_value={
+                 "candidate_sha256": "b" * 64, "log_id": "log"}) as inspect, \
+             patch.object(tx.cycle, "append") as append:
+            with self.assertRaisesRegex(ReceiptError, "Stale"):
+                tx.execute(**inputs(expected_previous_candidate_sha256="c" * 64))
+            inspect.assert_called_once()
+            append.assert_not_called()
+
+    def test_wrong_destination_log_refused_before_append(self):
+        with patch.object(tx.cycle, "review", return_value={"csv_sha256": DIGEST}), \
+             patch.object(tx, "inspect_checkpoint", return_value={
+                 "candidate_sha256": "b" * 64, "log_id": "other"}), \
+             patch.object(tx.cycle, "append") as append:
+            with self.assertRaisesRegex(ReceiptError, "different predecessor"):
+                tx.execute(**inputs(expected_previous_candidate_sha256="b" * 64))
+            append.assert_not_called()
+
+    def test_initial_generation_requires_empty_ledger(self):
+        with patch.object(tx.cycle, "review", return_value={"csv_sha256": DIGEST}), \
+             patch.object(tx, "inspect_checkpoint", return_value={
+                 "candidate_sha256": "b" * 64, "log_id": "log"}), \
+             patch.object(tx.cycle, "append") as append:
+            with self.assertRaisesRegex(ReceiptError, "Stale"):
+                tx.execute(**inputs())
+            append.assert_not_called()
+
+    def test_missing_predecessor_refused_before_append(self):
+        with patch.object(tx.cycle, "review", return_value={"csv_sha256": DIGEST}), \
+             patch.object(tx, "inspect_checkpoint", return_value=None), \
+             patch.object(tx.cycle, "append") as append:
+            with self.assertRaisesRegex(ReceiptError, "Missing predecessor"):
+                tx.execute(**inputs(expected_previous_candidate_sha256="b" * 64))
+            append.assert_not_called()
+
+    def test_matching_predecessor_allows_transaction(self):
+        with patch.object(tx.cycle, "review", return_value={"csv_sha256": DIGEST}), \
+             patch.object(tx, "inspect_checkpoint", return_value={
+                 "candidate_sha256": "b" * 64, "log_id": "log"}), \
+             patch.object(tx.cycle, "append", return_value={"status": "receipt_persisted"}), \
+             patch.object(tx.cycle, "handoff", return_value={"status": "next_round_handoff_prepared"}), \
+             patch.object(tx.cycle, "checkpoint_commit", return_value={
+                 "status": "checkpoint_committed", "generation": 2}) as commit:
+            result = tx.execute(**inputs(expected_previous_candidate_sha256="b" * 64))
+            self.assertEqual(result["generation"], 2)
+            commit.assert_called_once()
 
     def test_audit_preflight_failure_prevents_any_mutation(self):
         with patch.dict("os.environ", {"OWG_M365_AUDIT_DIR": "/audit"}), \
