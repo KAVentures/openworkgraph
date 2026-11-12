@@ -687,6 +687,18 @@ const path=require('node:path');
    await page.locator('#owgAnalysisSharingConsent').check();
    assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),true);
    await page.unroute('**/analysis-sharing-freshness');
+   // A contradictory freshness response cannot authorize download: both lineage and values must match.
+   await page.route('**/analysis-sharing-freshness',route=>route.fulfill({
+     status:200,contentType:'application/json',
+     body:JSON.stringify({format:'openworkgraph.analysis-snapshot-freshness.v1',lineage_current:false,current_results_match:true})
+   }));
+   await page.locator('#owgAnalysisFreshness').click();
+   await page.getByText('Snapshot lineage is stale.',{exact:false}).waitFor();
+   assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),true);
+   await page.locator('#owgAnalysisSharingConsent').uncheck();
+   await page.locator('#owgAnalysisSharingConsent').check();
+   assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),true);
+   await page.unroute('**/analysis-sharing-freshness');
    const [pairResponse]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/case-sharing-preview')),page.locator('#owgAnalysisPrepareCases').click()]);
    const pair=await pairResponse.json();assert.equal(pairResponse.status(),200,JSON.stringify(pair));
    assert.equal(pair.case_dataset.cases.length,60);assert.equal(pair.case_dataset.source_content_sha256,pair.aggregate_snapshot.source_content_sha256);
