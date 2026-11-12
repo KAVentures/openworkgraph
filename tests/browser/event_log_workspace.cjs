@@ -670,6 +670,40 @@ const path=require('node:path');
    await page.locator('#owgAnalysisFreshness').click();
    await page.getByText('Current source, specification, metric lineage and minimized values match.',{exact:false}).waitFor();
    assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),false);
+   // A previously successful preview is not enough: download must recheck the saved log.
+   let rechecks=0;
+   await page.route('**/analysis-sharing-freshness',route=>{
+     rechecks++;
+     return route.fulfill({status:200,contentType:'application/json',
+       body:JSON.stringify({format:'openworkgraph.analysis-snapshot-freshness.v1',lineage_current:true,current_results_match:false})});
+   });
+   await page.locator('#owgAnalysisSharingDownload').click();
+   await page.getByText('Source, metric lineage or values changed.',{exact:false}).waitFor();
+   assert.equal(rechecks,1);
+   assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),true);
+   await page.unroute('**/analysis-sharing-freshness');
+   await page.locator('#owgAnalysisFreshness').click();
+   await page.getByText('Current source, specification, metric lineage and minimized values match.',{exact:false}).waitFor();
+   assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),false);
+   // Revoke consent while the authenticated recheck is in flight.
+   let releaseRecheck,seenRecheck;
+   const recheckStarted=new Promise(resolve=>seenRecheck=resolve);
+   await page.route('**/analysis-sharing-freshness',async route=>{
+     seenRecheck();
+     await new Promise(resolve=>releaseRecheck=resolve);
+     await route.fulfill({status:200,contentType:'application/json',
+       body:JSON.stringify({format:'openworkgraph.analysis-snapshot-freshness.v1',lineage_current:true,current_results_match:true})});
+   },{times:1});
+   await page.locator('#owgAnalysisSharingDownload').click();
+   await recheckStarted;
+   await page.locator('#owgAnalysisSharingConsent').uncheck();
+   releaseRecheck();
+   await page.getByText('Revalidating the current saved log before download…').waitFor({state:'detached'});
+   assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),true);
+   await page.unroute('**/analysis-sharing-freshness');
+   await page.locator('#owgAnalysisSharingConsent').check();
+   await page.locator('#owgAnalysisFreshness').click();
+   await page.getByText('Current source, specification, metric lineage and minimized values match.',{exact:false}).waitFor();
    const [sharingFile]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisSharingDownload').click()]);
    const sharingText=await fs.readFile(await sharingFile.path(),'utf8');assert.deepEqual(JSON.parse(sharingText),sharingDoc);
    if(process.env.OWG_ANALYSIS_SNAPSHOT_OUTPUT)await fs.writeFile(process.env.OWG_ANALYSIS_SNAPSHOT_OUTPUT,sharingText);
