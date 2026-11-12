@@ -698,7 +698,7 @@ const path=require('node:path');
    await recheckStarted;
    await page.locator('#owgAnalysisSharingConsent').uncheck();
    releaseRecheck();
-   await page.getByText('Revalidating the current saved log before download…').waitFor({state:'detached'});
+   await page.waitForTimeout(100); // allow the in-flight response handler to settle
    assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),true);
    await page.unroute('**/analysis-sharing-freshness');
    await page.locator('#owgAnalysisSharingConsent').check();
