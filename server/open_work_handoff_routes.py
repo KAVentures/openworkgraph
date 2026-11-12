@@ -137,3 +137,69 @@ async def agent_report(request: Request):
     data = await _body(request)
     return await _run(dispatch.report, data.get("work_item_ref"), data.get("lease_token"), data.get("outcome"),
                       note=data.get("note", ""), operation_receipt_ref=data.get("operation_receipt_ref"))
+
+
+# Independently authenticated, case-scoped external-agent capabilities.
+# The legacy /agent routes remain for local MCP compatibility only.
+from . import open_work_agent_grants as grants
+
+@router.get("/v1/open-work/dispatch/grants")
+async def owner_grants(request: Request):
+    _require_dashboard(request)
+    return {"grants": await asyncio.to_thread(grants.list_grants)}
+
+@router.post("/v1/open-work/dispatch/grants")
+async def owner_issue_grant(request: Request):
+    _require_dashboard(request)
+    data = await _body(request)
+    try:
+        return await asyncio.to_thread(grants.issue, data.get("work_item_ref"),
+            data.get("agent"), data.get("hours"), confirmed=data.get("confirm_grant"))
+    except grants.GrantError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+
+@router.post("/v1/open-work/dispatch/grants/revoke")
+async def owner_revoke_grant(request: Request):
+    _require_dashboard(request)
+    data = await _body(request)
+    try:
+        return {"revoked": await asyncio.to_thread(grants.revoke, data.get("grant_id"))}
+    except grants.GrantError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+def _grant(request: Request, ref: str | None = None) -> dict:
+    identity = grants.authenticate(request.headers.get("authorization"), ref)
+    if identity is None:
+        raise HTTPException(status_code=401, detail="active case-scoped agent grant required")
+    return identity
+
+@router.get("/v1/open-work/dispatch/granted")
+async def granted_offers(request: Request):
+    identity = _grant(request)
+    state = await _run(dispatch.status, owner=False)
+    state["offers"] = [item for item in state["offers"] if
+                       item["work_item_ref"] == identity["work_item_ref"] and item["status"] == "offered"]
+    return state
+
+@router.post("/v1/open-work/dispatch/granted/claim")
+async def granted_claim(request: Request):
+    identity = _grant(request)
+    data = await _body(request)
+    _grant(request, data.get("work_item_ref"))
+    return await _run(dispatch.claim, identity["work_item_ref"], identity["agent"])
+
+@router.post("/v1/open-work/dispatch/granted/release")
+async def granted_release(request: Request):
+    identity = _grant(request)
+    data = await _body(request)
+    _grant(request, data.get("work_item_ref"))
+    return await _run(dispatch.release, identity["work_item_ref"], data.get("lease_token"))
+
+@router.post("/v1/open-work/dispatch/granted/report")
+async def granted_report(request: Request):
+    identity = _grant(request)
+    data = await _body(request)
+    _grant(request, data.get("work_item_ref"))
+    return await _run(dispatch.report, identity["work_item_ref"], data.get("lease_token"),
+        data.get("outcome"), note=data.get("note", ""),
+        operation_receipt_ref=data.get("operation_receipt_ref"))
