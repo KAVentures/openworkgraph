@@ -82,6 +82,15 @@ def authenticate(header: str | None, work_item_ref: str | None = None) -> dict |
         return None
     if work_item_ref is not None and not hmac.compare_digest(row[1], str(work_item_ref)):
         return None
+    # A stored grant is not perpetual permission: withdrawing an offer, clearing
+    # its review intention, or switching dispatch off must immediately deny use.
+    from .open_work_dispatch import status
+    current = status(owner=True)
+    if not current["enabled"] or not any(
+        item["work_item_ref"] == row[1] and item["status"] in ("offered", "claimed")
+        for item in current["offers"]
+    ):
+        return None
     return {"grant_id": row[0], "work_item_ref": row[1], "agent": row[2], "expires_at": row[3]}
 
 def revoke(grant_id: str) -> bool:
