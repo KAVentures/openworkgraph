@@ -74,7 +74,7 @@
   inventory.append(el('h2','Shared opportunity review'),el('p','Per-process assessments and named decisions. Scores use declared scenario assumptions; stages do not authorize execution or spending. Filters cover this loaded page only.'),
    button('Load shared opportunity pipeline','opportunityInventory',()=>work(ok=>loadInventory(ok))),label('Filter loaded opportunities by title, team, owner or stage',filter),inventoryStatus,budgetField,list,next);inventoryHost.append(inventory);
   const host=el('div');detailHost.append(host);let form=null,status=null,confirm=null,save=null,exportButton=null,decisionForm=null;
-  const message=text=>{inventoryStatus.textContent=text;if(status)status.textContent=text;};
+  const message=text=>{inventoryStatus.textContent=text;budgetStatus.textContent=text;if(status)status.textContent=text;};
   async function work(fn){if(busy)return;const e=epoch;busy=true;if(form)form.disabled=true;if(decisionForm)decisionForm.disabled=true;
    try{await fn(()=>e===epoch);}catch(error){if(e!==epoch)return;if([401,403].includes(error.status)){clear();onDenied();return;}message(error.message||'Opportunity request failed.');}
    finally{if(e===epoch){busy=false;if(form)form.disabled=false;if(decisionForm)decisionForm.disabled=dirty;}}
