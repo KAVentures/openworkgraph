@@ -91,6 +91,11 @@ with TestClient(app) as c:
  assert current.headers['cache-control']=='no-store'
  assert current.json()['lineage_current'] is True
  assert current.json()['rows_authenticated'] is False
+ assert current.json()['current_results_match'] is True
+ forged=dict(snapshot);forged['rows']=[['G1_1',999]]
+ mismatch=c.post(freshness,json={'spec':spec,'snapshot':forged},headers={**h,'X-OWG-Analysis-Sharing-Preview':'true'})
+ assert mismatch.status_code==200 and mismatch.json()['lineage_current'] is True
+ assert mismatch.json()['current_results_match'] is False
  assert 'secret' not in current.text and 'private' not in current.text
  assert c.post(freshness,json={'spec':spec,'snapshot':snapshot},headers=bearer).status_code==403
  assert c.post(freshness,json={'spec':spec,'snapshot':snapshot,'extra':1},headers={**h,'X-OWG-Analysis-Sharing-Preview':'true'}).status_code==422
@@ -108,6 +113,7 @@ def test_freshness_checks_current_lineage_without_attesting_supplied_rows(log):
     result = sharing.check_snapshot_freshness(log, {"spec": definition, "snapshot": published})
     assert result["lineage_current"] is True
     assert result["rows_authenticated"] is False
+    assert result["current_results_match"] is True
     assert result["execution_authorized"] is False
     assert "rows" not in result and "source_content_sha256" not in result
 
@@ -118,11 +124,13 @@ def test_freshness_checks_current_lineage_without_attesting_supplied_rows(log):
     forged_result = sharing.check_snapshot_freshness(log, {"spec": definition, "snapshot": forged})
     assert forged_result["lineage_current"] is True
     assert forged_result["rows_authenticated"] is False
+    assert forged_result["current_results_match"] is False
 
     changed = sharing.check_snapshot_freshness(
         log, {"spec": spec(dimensions=[]), "snapshot": published})
     assert changed["analysis_spec_unchanged"] is False
     assert changed["lineage_current"] is False
+    assert changed["current_results_match"] is False
 
 
 def test_freshness_rejects_untrusted_snapshot_and_extra_request_fields(log):

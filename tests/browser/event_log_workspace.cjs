@@ -673,7 +673,7 @@ const path=require('node:path');
    // A stale freshness result must not be bypassed by toggling sharing consent.
    await page.route('**/analysis-sharing-freshness',route=>route.fulfill({
      status:200,contentType:'application/json',
-     body:JSON.stringify({format:'openworkgraph.analysis-snapshot-freshness.v1',lineage_current:false})
+     body:JSON.stringify({format:'openworkgraph.analysis-snapshot-freshness.v1',lineage_current:false,current_results_match:false})
    }));
    await page.locator('#owgAnalysisSharingConsent').check();
    await page.locator('#owgAnalysisFreshness').click();
