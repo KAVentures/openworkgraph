@@ -27,6 +27,7 @@ from typing import Any
 from pydantic import Field, StrictInt, ValidationError
 
 from . import event_log_predictions as predictions
+from . import event_log_prediction_censoring as censoring
 from .event_log_analytics import _wilson
 from . import event_log_workspace as workspace
 
@@ -301,6 +302,7 @@ def monitor(log_id: str, spec: Any) -> dict[str, Any]:
 
     def run(conn):
         predictions._prepare(conn, settings, log_id)
+        open_case_coverage = censoring.summarize(conn, min_support=settings.min_support)
         conn.execute("SET VARIABLE owg_support = ?", [settings.min_support])
         quantiles = [k / (settings.windows + 1) for k in range(1, settings.windows + 1)]
         cuts = conn.execute("SELECT quantile_disc(ended, ?), max(ended) FROM pc WHERE complete",
@@ -360,9 +362,11 @@ def monitor(log_id: str, spec: Any) -> dict[str, Any]:
             "windows": windows, "flags": flags, "recalibration_proposal": proposal,
             "activity_quality": activity_quality,
             "outcome_case_reliability": outcome_case_reliability,
+            "open_case_coverage": open_case_coverage,
             "settings": settings.model_dump(),
             "method": {"split": "completed cases by end time into consecutive windows",
                        "training": "cases that ended before each window", "nominal_coverage": NOMINAL_COVERAGE,
+                       "open_case_coverage": "descriptive census of still-open cases excluded from completed-case scoring",
                        "coverage_interval": "normal interval over cases, each case's share of covered prefixes",
                        "error_rise_threshold": ERROR_RISE,
                        "outcome_quality_method": "paired Brier excess averaged within case then across cases",
