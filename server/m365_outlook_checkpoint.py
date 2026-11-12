@@ -15,7 +15,7 @@ import sys
 
 from .m365_outlook_delta import (
     _candidate, _delta_private_parent, _grant, _private_read, _scope,
-    MAX_CANDIDATE_BYTES,
+    MAX_CANDIDATE_BYTES, _valid_link,
 )
 from .m365_outlook_event_membership import reconcile as reconcile_membership
 from .m365_outlook_owg_receipt import ReceiptError, _unique
@@ -26,7 +26,7 @@ FORMAT = "openworkgraph.m365-checkpoint.v1"
 HEX = re.compile(r"[0-9a-f]{64}\Z")
 
 
-def _entries(directory: Path, scope: str):
+def _entries(directory: Path, scope: str, folder: str):
     """Read a gap-free append-only ledger, refusing ambiguous/corrupt state."""
     prefix = "checkpoint-" + scope + "-"
     entries = []
@@ -57,8 +57,15 @@ def _entries(directory: Path, scope: str):
                 or item["event_membership_verified"] is not True
                 or item["removals_reviewed"] is not True
                 or item["checkpoint_advanced"] is not True
-                or item["provider_requests"] != 0):
+                or type(item["provider_requests"]) is not int
+                or item["provider_requests"] != 0
+                or type(item["event_membership_verified"]) is not bool
+                or type(item["removals_reviewed"]) is not bool
+                or type(item["checkpoint_advanced"]) is not bool):
             raise ReceiptError("Checkpoint ledger entry invalid")
+        # A private ledger is not a trust boundary for provider destinations.
+        # Validate the cursor before any future incremental Graph read can use it.
+        _valid_link(item["cursor_url"], folder, "delta")
         entries.append(item)
     entries.sort(key=lambda e: e["generation"])
     previous = None
@@ -80,7 +87,7 @@ def inspect_checkpoint(*, tenant, mailbox, folder, ledger_dir: Path,
     ledger_dir = Path(ledger_dir)
     _delta_private_parent(ledger_dir)
     _grant(Path(grant_file), tenant, mailbox, folder)
-    entries = _entries(ledger_dir, scope)
+    entries = _entries(ledger_dir, scope, folder)
     _grant(Path(grant_file), tenant, mailbox, folder)
     return entries[-1] if entries else None
 
