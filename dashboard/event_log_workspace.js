@@ -3296,7 +3296,7 @@
     freshness.onclick=async()=>{
       if(!sharingSnapshot||!lastSpec||generation!==state.generation)return;
       const attempt=sharingAttempt,snapshot=sharingSnapshot,spec=lastSpec;
-      freshness.disabled=true;freshnessStatus.textContent='Checking current source and metric lineage…';
+      freshness.disabled=true;freshnessStatus.dataset.stale='true';sharingDownload.disabled=true;freshnessStatus.textContent='Checking current source and metric lineage…';
       try{
         const response=await api(base()+'/analysis-sharing-freshness',{method:'POST',headers:{'Content-Type':'application/json','X-OWG-Analysis-Sharing-Preview':'true'},body:JSON.stringify({spec,snapshot})});
         if(!response.ok)throw new Error('Freshness check failed ('+response.status+').');
@@ -3312,7 +3312,7 @@
     caseConsent.onchange=()=>{caseDownload.disabled=!caseConsent.checked||!casePacket;};
     caseDownload.onclick=()=>{if(!caseConsent.checked||!casePacket||generation!==state.generation)return;download('owg-analysis-case-dataset.json',JSON.stringify(casePacket),'application/json');caseConsent.checked=false;caseDownload.disabled=true;};
     sharingDownload.onclick=()=>{
-      if(!sharingConsent.checked||!sharingSnapshot||generation!==state.generation)return;
+      if(!sharingConsent.checked||!sharingSnapshot||freshnessStatus.dataset.stale==='true'||generation!==state.generation)return;
       download('owg-analysis-snapshot.json',JSON.stringify(sharingSnapshot,null,2),'application/json');
       sharingConsent.checked=false;sharingDownload.disabled=true;
     };
