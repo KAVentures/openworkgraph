@@ -147,24 +147,32 @@ def execute(*, tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
-    for name in ("tenant", "mailbox", "folder", "log-id", "confirm-log-id",
-                 "successor-label", "expected-review-csv-sha256"):
-        p.add_argument("--" + name, required=True)
-    for name in ("grant-file", "candidate", "csv-path", "receipt-file",
-                 "journal-dir", "handoff-dir", "ledger-dir"):
-        p.add_argument("--" + name, type=Path, required=True)
-    p.add_argument("--expected-previous-candidate-sha256")
-    p.add_argument("--port", type=int, default=8765)
     p.add_argument("--preflight-only", action="store_true",
                    help="Read-only candidate/checkpoint preflight; never append or commit")
+    for name in ("tenant", "mailbox", "folder", "log-id", "confirm-log-id",
+                 "expected-review-csv-sha256", "successor-label"):
+        p.add_argument("--" + name)
+    for name in ("grant-file", "candidate", "ledger-dir", "csv-path",
+                 "receipt-file", "journal-dir", "handoff-dir"):
+        p.add_argument("--" + name, type=Path)
+    p.add_argument("--expected-previous-candidate-sha256")
+    p.add_argument("--port", type=int, default=8765)
     for name in ("consent-local-read", "consent-local-append",
                  "confirm-candidate-reviewed", "confirm-removals-reviewed",
                  "confirm-checkpoint-commit"):
         p.add_argument("--" + name, action="store_true")
     args = vars(p.parse_args(argv))
+    preflight_only = args.pop("preflight_only")
+    required = ("tenant", "mailbox", "folder", "log_id", "confirm_log_id",
+                "grant_file", "candidate", "ledger_dir", "expected_review_csv_sha256")
+    if not preflight_only:
+        required += ("successor_label", "csv_path", "receipt_file",
+                     "journal_dir", "handoff_dir")
+    missing = [key.replace("_", "-") for key in required if args[key] is None]
+    if missing:
+        p.error("required arguments: " + ", ".join("--" + key for key in missing))
     args["session"] = os.environ.get("OWG_DASHBOARD_SESSION")
     try:
-        preflight_only = args.pop("preflight_only")
         if preflight_only:
             result = preflight(**{key: args[key] for key in (
                 "tenant", "mailbox", "folder", "log_id", "confirm_log_id",
@@ -178,7 +186,9 @@ def main(argv=None):
             TypeError, KeyError):
         # A failed post-append operation may already have written events.
         # Never suggest retrying this composite transaction.
-        print(json.dumps({"format": FORMAT, "status": "manual_reconciliation_required",
+        print(json.dumps({"format": FORMAT,
+                          "status": ("preflight_rejected" if preflight_only
+                                     else "manual_reconciliation_required"),
                           "automatic_retry_allowed": False}, sort_keys=True))
         return 3
 

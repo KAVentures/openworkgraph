@@ -43,7 +43,22 @@ increment, **not** dashboard UX completion or real Microsoft tenant acceptance.
 `--preflight-only --consent-local-read` without append/commit approvals.
 It checks the scoped live grant, candidate CSV digest, destination log and
 checkpoint predecessor and reports the proposed next generation. It makes
-zero Graph requests, OWG writes or checkpoint changes. All normal required
-path and scope arguments still apply. This is a point-in-time review, not
+zero Graph requests, OWG writes or checkpoint changes. Only scope, grant, candidate, ledger and reviewed digest arguments are required\nfor this read-only mode; append receipt, journal, handoff and successor\narguments are required only for mutation. A rejected preflight reports\n`preflight_rejected` (not `manual_reconciliation_required`) because this\nmode cannot append or commit. This is a point-in-time review, not
 a lock or authorization to commit: the later mutation revalidates the grant,
 candidate and checkpoint and still requires all explicit approvals.
+
+
+Minimal read-only command (no append destination paths or mutation approvals):
+
+```sh
+python -m server.m365_outlook_reviewed_transaction \\
+  --preflight-only --consent-local-read \\
+  --tenant "$TENANT" --mailbox "$MAILBOX" --folder "$FOLDER" \\
+  --log-id "$LOG_ID" --confirm-log-id "$LOG_ID" \\
+  --grant-file "$GRANT" --candidate "$CANDIDATE" --ledger-dir "$LEDGER" \\
+  --expected-review-csv-sha256 "$REVIEWED_SHA256"
+```
+
+For later generations, add `--expected-previous-candidate-sha256`.
+This is still local reviewed-candidate preflight, **not** an authenticated
+Graph extraction, dashboard integration, or real-tenant validation.
