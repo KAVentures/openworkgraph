@@ -128,7 +128,6 @@ def probe_table(table, rules: dict, *, as_of_date: str | None) -> dict[str, Any]
         "format": FORMAT,
         "status": "not_evaluated",
         "reason": None,
-        "fact_path": None,
         "sampled_numeric_points": 0,
         "status_counts": {},
         "gap_witnesses": [],
