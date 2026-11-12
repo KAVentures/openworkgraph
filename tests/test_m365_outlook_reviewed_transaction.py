@@ -1,0 +1,75 @@
+"""Safe contract checks for the reviewed M365 operator transaction."""
+import unittest
+from unittest.mock import patch
+from server import m365_outlook_reviewed_transaction as tx
+from server.m365_outlook_owg_receipt import ReceiptError, UncertainReceipt
+
+DIGEST = "a" * 64
+
+
+def inputs(**changes):
+    value = dict(tenant="t", mailbox="m", folder="f", log_id="log",
+                 confirm_log_id="log", grant_file="grant", candidate="candidate",
+                 csv_path="csv", receipt_file="receipt", journal_dir="journal",
+                 handoff_dir="handoff", ledger_dir="ledger", successor_label="next",
+                 expected_review_csv_sha256=DIGEST, consent_local_read=True,
+                 consent_local_append=True, confirm_candidate_reviewed=True,
+                 confirm_removals_reviewed=True, confirm_checkpoint_commit=True)
+    value.update(changes)
+    return value
+
+
+class ReviewedTransactionTests(unittest.TestCase):
+    def test_missing_approval_refuses_without_read_or_write(self):
+        with patch.object(tx.cycle, "review") as review, patch.object(tx.cycle, "append") as append:
+            with self.assertRaises(ReceiptError):
+                tx.execute(**inputs(confirm_checkpoint_commit=False))
+            review.assert_not_called()
+            append.assert_not_called()
+
+    def test_review_digest_mismatch_refuses_before_append(self):
+        with patch.object(tx.cycle, "review", return_value={"csv_sha256": "b" * 64}), \
+             patch.object(tx.cycle, "append") as append:
+            with self.assertRaisesRegex(ReceiptError, "changed"):
+                tx.execute(**inputs())
+            append.assert_not_called()
+
+    def test_success_calls_real_phases_in_order(self):
+        order = []
+        def step(name, response):
+            def call(**kwargs):
+                order.append(name)
+                return response
+            return call
+        with patch.object(tx.cycle, "review", side_effect=step("review", {"csv_sha256": DIGEST})), \
+             patch.object(tx.cycle, "append", side_effect=step("append", {"status": "receipt_persisted"})), \
+             patch.object(tx.cycle, "handoff", side_effect=step("handoff", {"status": "next_round_handoff_prepared"})), \
+             patch.object(tx.cycle, "checkpoint_commit", side_effect=step("checkpoint", {"generation": 2})):
+            result = tx.execute(**inputs())
+        self.assertEqual(order, ["review", "append", "handoff", "checkpoint"])
+        self.assertEqual(result["generation"], 2)
+        self.assertFalse(result["automatic_retry_allowed"])
+
+    def test_uncertain_append_never_handoffs_or_commits(self):
+        with patch.object(tx.cycle, "review", return_value={"csv_sha256": DIGEST}), \
+             patch.object(tx.cycle, "append", side_effect=UncertainReceipt("unknown")), \
+             patch.object(tx.cycle, "handoff") as handoff, \
+             patch.object(tx.cycle, "checkpoint_commit") as checkpoint:
+            with self.assertRaises(UncertainReceipt):
+                tx.execute(**inputs())
+            handoff.assert_not_called()
+            checkpoint.assert_not_called()
+
+    def test_audit_preflight_failure_prevents_any_mutation(self):
+        with patch.dict("os.environ", {"OWG_M365_AUDIT_DIR": "/audit"}), \
+             patch.object(tx, "preflight_operator_audit", side_effect=OSError("unsafe")), \
+             patch.object(tx.cycle, "review") as review, \
+             patch.object(tx.cycle, "append") as append:
+            with self.assertRaises(OSError):
+                tx.execute(**inputs())
+            review.assert_not_called()
+            append.assert_not_called()
+
+
+if __name__ == "__main__":
+    unittest.main()
