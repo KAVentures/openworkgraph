@@ -41,7 +41,7 @@ def timeline(*, transition: str = "all", limit: int = 100) -> dict[str, Any]:
     A source log/rule removed from the workspace is never exposed as an orphan.
     This is a historical journal, not the current signal-inbox status.
     """
-    if transition not in FILTERS:
+    if type(transition) is not str or transition not in FILTERS:
         raise workspace.EventLogWorkspaceError("unknown signal transition filter")
     if type(limit) is not int or not 1 <= limit <= MAX_RETURNED:
         raise workspace.EventLogWorkspaceError("signal timeline limit must be 1 to 200")
