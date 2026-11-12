@@ -109,6 +109,17 @@ def test_pure_overlap_scan_handles_time_boundaries_and_truncation(monkeypatch):
     assert len(pairs) == 1 and truncated
 
 
+
+def test_twenty_thousand_sparse_periods_are_handled_without_quadratic_slicing():
+    from datetime import date
+    rows = [{"idea_id": f"idea_{i:08d}", "measurement_id": f"meas_{i:08d}",
+             "start": date.fromordinal(730000 + i), "end": date.fromordinal(730000 + i),
+             "source_key": ("event_log", "same_declared_source")}
+            for i in range(20_000)]
+    pairs, truncated = overlap._candidates(rows)
+    assert pairs == [] and truncated is False
+
+
 def test_real_http_route_requires_local_dashboard_session(tmp_path):
     code = r"""
 from fastapi.testclient import TestClient
