@@ -40,6 +40,7 @@ const path=require('node:path');
    // Off by default; turning on needs the acknowledgement checkbox and an explicit save.
    await page.locator('#owgCommsReview summary').click();
    await page.locator('#owgCommsReviewStatus').filter({hasText:'Review examples are off.'}).waitFor();
+   assert.equal(await page.locator('#owgCommsReviewTriage').isDisabled(),true,'active triage requires opt-in');
    await page.locator('#owgCommsReviewOn').check();await page.locator('#owgCommsReviewRetention').fill('7');
    await page.locator('#owgCommsReviewSave').click();
    await page.locator('#owgCommsReviewStatus').filter({hasText:'0 examples kept'}).waitFor();
@@ -52,6 +53,18 @@ const path=require('node:path');
    await page.locator('#owgCommsReviewStatus').filter({hasText:'10 examples kept'}).waitFor();
    const firstBox=page.locator('#owgCommsReviewExamples fieldset').first();
    assert(!(await firstBox.textContent()).includes('client.example'),'kept texts are redacted');
+   // Active review is a view over opt-in redacted training examples, never held-out examples.
+   await page.locator('#owgCommsReviewTriage').click();
+   await page.locator('#owgCommsReviewExamples h3').getByText('Human review suggestions').waitFor();
+   const queue=await page.evaluate(async()=>await (await fetch('/v1/communications/review/triage?limit=20')).json());
+   assert.equal(queue.selected_split,'train');
+   assert(queue.unlabelled_holdout_excluded>=0);
+   assert(queue.examples.every(x=>x.split==='train'&&x.labels===null));
+   assert.equal(queue.labels_auto_applied,false);
+   assert.equal(queue.learned_predictions_used,false,'keyword-only until model trained');
+   assert(!(await page.locator('#owgCommsReviewExamples').textContent()).includes('client.example'));
+   await page.locator('#owgCommsReviewNormal').click();
+   await page.locator('#owgCommsReviewExamples h3').getByText('Examples to label').waitFor();
    // Label one example in the UI, the rest through the same API.
    await firstBox.getByLabel('Account access').check();await firstBox.getByLabel('Language').fill('en');
    await firstBox.getByRole('button',{name:/Save labels/}).click();

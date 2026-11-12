@@ -248,6 +248,18 @@ def get_review_examples(request: Request, status: str = Query(default="all", pat
     return _review_call(review.listing, status, limit, offset)
 
 
+@router.get("/v1/communications/review/triage")
+def get_active_review_queue(request: Request, limit: int = Query(default=20, ge=1, le=50),
+                            offset: int = Query(default=0, ge=0, le=2000)):
+    """Human-only suggested review order; no labels, permissions or model changes."""
+    _require_dashboard(request)
+    from . import communications_review_triage
+    try:
+        return _no_store(communications_review_triage.queue(load_taxonomy(), limit=limit, offset=offset))
+    except review.ReviewError as exc:
+        raise HTTPException(409, str(exc)) from None
+
+
 @router.post("/v1/communications/review/examples")
 async def add_review_examples(request: Request):
     _require_dashboard(request)
