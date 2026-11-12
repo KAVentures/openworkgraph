@@ -34,6 +34,26 @@ const path=require('node:path');
   await page.locator('#opportunityComplianceAck').check();await decide('approved');
   assert.match(await page.locator('#opportunityDecision').textContent(),/current approved assessment: true/);
   await page.locator('#opportunityInventory').click();await page.locator('#opportunityInventoryStatus').filter({hasText:'1 opportunities in this page'}).waitFor();await page.locator('#opportunityFilter').fill('not a team');assert.equal(await page.locator('#opportunityPipeline').getByRole('button',{name:'Open opportunity '+root.workflow_id,exact:true}).count(),0);await page.locator('#opportunityFilter').fill('Service team');assert.equal(await page.locator('#opportunityPipeline').getByRole('button',{name:'Open opportunity '+root.workflow_id,exact:true}).count(),1);
+  // R15 selected budget preview: exact current revision, no spending authorization.
+  await page.locator('#opportunityBudgetSelect_'+root.workflow_id).check();
+  await page.locator('#opportunityBudgetPreviewCeiling').fill('1500.00');
+  await page.locator('#opportunityBudgetPreviewConfirm').check();
+  await page.locator('#opportunityBudgetPreview').click();
+  await page.locator('#opportunityBudgetStatus').filter({hasText:'Budget preview checked'}).waitFor();
+  assert.match(await page.locator('#opportunityBudgetResult').textContent(),/2000.00/);
+  assert.match(await page.locator('#opportunityBudgetResult').textContent(),/-500.00/);
+  assert.equal(await page.locator('#opportunityBudgetResult dt').filter({hasText:'spending authorized'}).evaluate(n=>n.nextElementSibling.textContent),'false');
+  const [portfolioDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#opportunityBudgetDownload').click()]);
+  const preview=JSON.parse(await fs.readFile(await portfolioDownload.path(),'utf8'));
+  assert.equal(preview.format,'openworkgraph.selected-opportunity-budget-preview.v1');
+  assert.equal(preview.totals.selected_budget_estimate,'2000.00');
+  assert.equal(preview.totals.envelope_headroom,'-500.00');
+  assert.equal(preview.spending_authorized,false);
+  assert.match(preview.selection_reference_digest,/^[a-f0-9]{64}$/);
+  assert.equal(preview.rows[0].pinned_content_sha256,(await api(baseURL+'/opportunity')).artifact.content_sha256);
+  await page.locator('#opportunityBudgetPreviewCeiling').fill('3500.00');
+  assert.equal(await page.locator('#opportunityBudgetResult').textContent(),'');
+  assert.equal(await page.locator('#opportunityBudgetPreviewConfirm').isChecked(),false);
   await page.locator('#disconnect').click();await login('alice');await selectRoot(1);
   await page.locator('#opportunityImplementation').check();await decide('implemented');assert.match(await page.locator('#opportunityDecision').textContent(),/Recorded stage: implemented/);assert.equal((await api(baseURL+'/opportunity')).business_outcomes_verified,false);
   // Metadata edits also reset approval; saved assessment remains immutable.
