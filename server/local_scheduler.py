@@ -162,10 +162,15 @@ def _public(item: dict[str, Any]) -> dict[str, Any]:
 def status() -> dict[str, Any]:
     with _LOCK:
         data = _read()
+    try:
+        from .signal_notification_delivery import any_enabled
+        external_notifications = any_enabled()
+    except Exception:
+        external_notifications = False
     return {"format": FORMAT, "schedules": [_public(s) for s in data["schedules"].values()],
             "scheduler_running": bool(_THREAD and _THREAD.is_alive()), "kinds": list(KINDS),
-            "min_interval_minutes": MIN_INTERVAL_MINUTES, "local_only": True,
-            "business_writes": False, "delivers_to_third_parties": False}
+            "min_interval_minutes": MIN_INTERVAL_MINUTES, "local_only": not external_notifications,
+            "business_writes": False, "delivers_to_third_parties": external_notifications}
 
 
 def _signal_rule_set_pin(log_id: str) -> dict[str, Any]:
@@ -206,9 +211,18 @@ def _run_pinned_signal_job(item: dict[str, Any]) -> tuple[str, float]:
             if pin["fingerprint"] != item.get("signal_rules_fingerprint"):
                 return "paused:signal_rules_changed", 0.0
             result = signals.evaluate(item["target_id"])
+            # Separate consent: evaluation alone never sends notifications.
+            # The outbox is local and its explicit HTTPS sender runs outside
+            # the DuckDB/workspace lock. Delivery failure never rewrites rules.
+            notification_code = ""
+            try:
+                from . import signal_notification_delivery as delivery
+                delivery.queue_current(item["target_id"])
+            except Exception:
+                notification_code = ":notification_queue_unavailable"
     except Exception:
         return "failed:signal_rules_unavailable", 0.0
-    return f"succeeded:{len(result.get('signals', []))}_signals", 0.0
+    return f"succeeded:{len(result.get('signals', []))}_signals{notification_code}", 0.0
 
 
 def create(kind: str, target_id: str, *, interval_minutes: int, confirm_scheduled_runs: bool,
@@ -519,6 +533,13 @@ def _loop() -> None:
     while not _STOP.wait(TICK_SECONDS):
         try:
             run_due()
+        except Exception:
+            pass
+        # Notification delivery has a distinct opt-in, never holds the
+        # event-log workspace lock during an outbound network request.
+        try:
+            from .signal_notification_delivery import deliver_due
+            deliver_due()
         except Exception:
             pass
 
