@@ -14,7 +14,7 @@
     if(type!=='textarea')node.type=type;
     node.id=id;node.value=value;return node;
   };
-  const dateValue=iso=>iso?String(iso).slice(0,16):'';
+  const dateValue=iso=>{if(!iso)return '';const d=new Date(iso);if(!Number.isFinite(d.getTime()))return '';return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16);};
   const dateText=local=>{
     if(!local)return '';
     // Explicit local offset avoids silently declaring unspecified UTC in saved evidence.
