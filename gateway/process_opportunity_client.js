@@ -59,7 +59,13 @@
       }
       budgetOutput.append(summary);
     } else budgetOutput.append(el('p','At least one chosen revision/source is unavailable or not eligible; no portfolio total is shown.'));
-    budgetOutput.append(el('p','Selected, human-entered planning estimates only. No business scope is independently deduplicated; approval stages are not spending permission. Not actual costs, causal impact or realized savings.'));
+    budgetOutput.append(el('p','Selected, human-entered planning estimates only. No business scope is independently deduplicated; approval stages are not spending permission. Not actual costs, causal impact or realized savings.'),
+      el('p','Checked at '+report.snapshot_checked_at+' · request fingerprint '+report.selection_reference_digest+' (not provider source authentication).'));
+    budgetOutput.append(button('Download this exact checked budget preview','opportunityBudgetDownload',()=>{
+      const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)+'\n'],{type:'application/json'}));
+      const link=el('a');link.href=url;link.download='owg-selected-opportunity-budget.json';link.click();
+      URL.revokeObjectURL(url);
+    }));
     budgetConfirm.checked=false;
     budgetStatus.textContent='Budget preview checked against currently accessible opportunity revisions.';
   }));
