@@ -1,5 +1,6 @@
 """Safe contract checks for the reviewed M365 operator transaction."""
 import unittest
+import os
 from unittest.mock import patch
 from server import m365_outlook_reviewed_transaction as tx
 from server.m365_outlook_owg_receipt import ReceiptError, UncertainReceipt
@@ -65,7 +66,7 @@ class ReviewedTransactionTests(unittest.TestCase):
              patch.object(tx, "preflight_operator_audit", side_effect=OSError("unsafe")), \
              patch.object(tx.cycle, "review") as review, \
              patch.object(tx.cycle, "append") as append:
-            with self.assertRaises(OSError):
+            with self.assertRaises(ReceiptError if os.name != "posix" else OSError):
                 tx.execute(**inputs())
             review.assert_not_called()
             append.assert_not_called()
