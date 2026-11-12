@@ -174,3 +174,58 @@ def test_legacy_local_dispatch_lease_contract_still_works(setup):
     assert dispatch.release(REF, lease)["status"] == "offered"
     lease = dispatch.claim(REF, "local-agent")["lease_token"]
     assert dispatch.report(REF, lease, "declined")["last_report"]["verified"] is False
+
+
+def test_granted_case_context_is_source_bound_reviewed_and_revocable(setup, monkeypatch):
+    from server import open_work_declaration_routes as declarations
+    from server import open_work_case_declarations as case_store
+    scope = "owg:scope:" + "c" * 32
+    monkeypatch.setattr(declarations, "_source_scope", lambda: scope)
+    approved = grants.issue(REF, "agent-a", 1, confirmed=True, source_scope=scope, context_approved=True)
+    legacy = grants.issue(REF, "agent-b", 1, confirmed=True)
+    no_context = grants.issue(REF, "agent-c", 1, confirmed=True, source_scope=scope)
+    monkeypatch.setattr(case_store, "list_case_declarations", lambda current_scope: {
+        "items": [{
+            "work_item_ref": REF, "scope_ref": current_scope,
+            "edit_token": "secret-owner-only", "goal_code": "verify_operation",
+            "depends_on_work_item_refs": [], "expected_outcome_verified": False,
+        }]
+    })
+    app = FastAPI()
+    app.include_router(router)
+    path = "/v1/open-work/dispatch/granted/case-context"
+    with TestClient(app) as client:
+        assert client.get(path).status_code == 401
+        assert client.get(path, headers={"Authorization": "Bearer " + legacy["token"]}).status_code == 403
+        assert client.get(path, headers={"Authorization": "Bearer " + no_context["token"]}).status_code == 403
+        headers = {"Authorization": "Bearer " + approved["token"]}
+        result = client.get(path, headers=headers)
+        assert result.status_code == 200, result.text
+        assert result.json()["case"]["work_item_ref"] == REF
+        assert "edit_token" not in result.text
+        assert "scope_ref" not in result.text
+        assert result.json()["customer_outcome_verified"] is False
+        assert result.json()["source_read_performed"] is False
+        monkeypatch.setattr(declarations, "_source_scope", lambda: "owg:scope:" + "d" * 32)
+        assert client.get(path, headers=headers).status_code == 403
+        monkeypatch.setattr(declarations, "_source_scope", lambda: scope)
+        assert grants.revoke(approved["grant_id"])
+        assert client.get(path, headers=headers).status_code == 401
+
+
+def test_granted_context_denies_missing_review_and_cross_case(setup, monkeypatch):
+    from server import open_work_declaration_routes as declarations
+    from server import open_work_case_declarations as case_store
+    scope = "owg:scope:" + "c" * 32
+    monkeypatch.setattr(declarations, "_source_scope", lambda: scope)
+    issued = grants.issue(REF, "agent-a", 1, confirmed=True, source_scope=scope, context_approved=True)
+    monkeypatch.setattr(case_store, "list_case_declarations", lambda current_scope: {
+        "items": [{"work_item_ref": OTHER, "edit_token": "private"}]
+    })
+    app = FastAPI()
+    app.include_router(router)
+    with TestClient(app) as client:
+        result = client.get("/v1/open-work/dispatch/granted/case-context",
+                            headers={"Authorization": "Bearer " + issued["token"]})
+        assert result.status_code == 404
+        assert OTHER not in result.text
