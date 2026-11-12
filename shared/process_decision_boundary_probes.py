@@ -135,6 +135,7 @@ def probe_table(table, rules: dict, *, as_of_date: str | None) -> dict[str, Any]
         "overlap_witnesses": [],
         "first_precedence_competition_witnesses": [],
         "unsampled_numeric_regions": 0,
+        "first_precedence_competition_count": 0,
         "source_case_facts_used": False,
         "actual_business_cases_evaluated": False,
         "source_basis_independently_verified": False,
@@ -171,7 +172,7 @@ def probe_table(table, rules: dict, *, as_of_date: str | None) -> dict[str, Any]
             out["overlap_witnesses"].append(witness)
         # FIRST may select the first row despite later competing matches.
         if table.hit_policy == "FIRST" and sum(row["status"] == "matched" for row in check["rows"]) > 1:
-            counts["first_multiple_matching_rows"] += 1
+            out["first_precedence_competition_count"] += 1
             if len(out["first_precedence_competition_witnesses"]) < MAX_WITNESSES:
                 out["first_precedence_competition_witnesses"].append(witness)
     out.update(
