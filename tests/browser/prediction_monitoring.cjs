@@ -60,7 +60,7 @@ const path=require('node:path');
   assert.equal(coverage.completed_cases_in_selected_cohort,1200);
   assert.equal(coverage.censoring_adjustment_applied,false);
   await out.getByText('Still-open cases excluded from monitoring').waitFor();
-  assert.match(await out.textContent(),/0 of 1,200 cases \(0%\)/);
+  assert.match(await out.textContent(),/0 of 1,200 cases \(0\.0%\)/);
   assert.match(await out.textContent(),/No unfinished cases in this selected cohort/);
 
 
