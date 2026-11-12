@@ -6,7 +6,9 @@ all caller-selected exact revisions and current root review permissions.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from decimal import Decimal
+from shared.analysis_snapshot import content_digest
 
 from shared.process_opportunity_portfolio import Preview, summarize
 from .process_collaboration import ProcessCollaborationError as Error
@@ -30,6 +32,7 @@ class SelectedOpportunityBudget:
                 row = {
                     "workflow_id": wid,
                     "pinned_revision": selection.revision,
+                    "pinned_content_sha256": selection.content_sha256,
                     "current_approved_assessment": False,
                     "implementation_budget": None,
                     "stage": None,
@@ -76,6 +79,13 @@ class SelectedOpportunityBudget:
                     row["current_approved_assessment"] = False
                 rows.append(row)
         result = summarize(rows, body.ceiling, body.currency)
+        result["snapshot_checked_at"] = datetime.now(timezone.utc).isoformat()
+        result["selection_reference_digest"] = content_digest({
+            "currency": body.currency,
+            "ceiling": body.ceiling,
+            "selections": [selection.model_dump(mode="json") for selection in body.selections],
+        })
+        result["reference_digest_is_not_source_authentication"] = True
         self.store.db.audit(
             organization_id=p.organization_id,
             principal_id=p.audit_id,
