@@ -107,7 +107,7 @@ def main(argv=None):
     args = vars(p.parse_args(argv))
     args["session"] = os.environ.get("OWG_DASHBOARD_SESSION")
     try:
-        result = execute(**{k.replace("-", "_"): v for k, v in args.items()})
+        result = execute(**args)
         print(json.dumps(result, sort_keys=True))
         return 0
     except (ReceiptError, DeltaError, UncertainReceipt, AuditWriteError, OSError, ValueError,
