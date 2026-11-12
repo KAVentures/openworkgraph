@@ -111,6 +111,45 @@ class ReviewedTransactionTests(unittest.TestCase):
             self.assertEqual(result["generation"], 2)
             commit.assert_called_once()
 
+    def test_audited_handoff_receipt_precedes_checkpoint_commit(self):
+        if os.name != "posix":
+            self.skipTest("Private audit writer is POSIX-only")
+        order = []
+        def phase(name, response):
+            def invoke(**kwargs):
+                order.append(name)
+                return response
+            return invoke
+        with patch.dict("os.environ", {"OWG_M365_AUDIT_DIR": "/audit"}), \
+             patch.object(tx, "preflight_operator_audit"), \
+             patch.object(tx, "record_operator_phase", side_effect=lambda name, result, **kw: order.append("audit:" + name)), \
+             patch.object(tx, "inspect_checkpoint", return_value=None), \
+             patch.object(tx.cycle, "review", side_effect=phase("review", {"csv_sha256": DIGEST})), \
+             patch.object(tx.cycle, "append", side_effect=phase("append", {"status": "receipt_persisted"})), \
+             patch.object(tx.cycle, "handoff", side_effect=phase("handoff", {"status": "next_round_handoff_prepared"})), \
+             patch.object(tx.cycle, "checkpoint_commit", side_effect=phase("checkpoint", {"status": "checkpoint_committed", "generation": 1})):
+            tx.execute(**inputs())
+        self.assertEqual(order, ["review", "audit:review", "append", "audit:append",
+                                 "handoff", "audit:handoff", "checkpoint", "audit:checkpoint-commit"])
+
+    def test_handoff_audit_failure_blocks_checkpoint_commit(self):
+        if os.name != "posix":
+            self.skipTest("Private audit writer is POSIX-only")
+        def audit(name, result, **kwargs):
+            if name == "handoff":
+                raise tx.AuditWriteError("audit unavailable")
+        with patch.dict("os.environ", {"OWG_M365_AUDIT_DIR": "/audit"}), \
+             patch.object(tx, "preflight_operator_audit"), \
+             patch.object(tx, "record_operator_phase", side_effect=audit), \
+             patch.object(tx, "inspect_checkpoint", return_value=None), \
+             patch.object(tx.cycle, "review", return_value={"csv_sha256": DIGEST}), \
+             patch.object(tx.cycle, "append", return_value={"status": "receipt_persisted"}), \
+             patch.object(tx.cycle, "handoff", return_value={"status": "next_round_handoff_prepared"}), \
+             patch.object(tx.cycle, "checkpoint_commit") as commit:
+            with self.assertRaises(tx.AuditWriteError):
+                tx.execute(**inputs())
+            commit.assert_not_called()
+
     def test_audit_preflight_failure_prevents_any_mutation(self):
         with patch.dict("os.environ", {"OWG_M365_AUDIT_DIR": "/audit"}), \
              patch.object(tx, "preflight_operator_audit", side_effect=OSError("unsafe")), \
