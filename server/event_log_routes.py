@@ -52,6 +52,7 @@ from . import event_log_signals as signals
 from . import event_log_signal_inbox as signal_inbox
 from . import event_log_signal_transitions as signal_transitions
 from . import event_log_signal_overview as signal_overview
+from . import event_log_signal_timeline as signal_timeline
 from . import event_log_simulation as simulation
 from . import event_log_trace_clusters as trace_clusters
 from . import event_log_waiting as waiting
@@ -223,6 +224,16 @@ def event_log_signal_overview(
     """Local dashboard-only, non-mutating review queue across saved logs."""
     _require_dashboard(request)
     return _respond(signal_overview.overview, status=status, limit=limit)
+
+
+@router.get("/v1/event-logs/signal-timeline")
+def event_log_signal_timeline(
+    request: Request, transition: str = Query(default="all", max_length=20),
+    limit: int = Query(default=100, ge=1, le=200),
+):
+    """Read-only cross-log transition journal; local dashboard session only."""
+    _require_dashboard(request)
+    return _respond(signal_timeline.timeline, transition=transition, limit=limit)
 
 
 @router.post("/v1/event-logs/import")

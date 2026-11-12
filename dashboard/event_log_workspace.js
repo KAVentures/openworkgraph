@@ -3843,10 +3843,21 @@
     const allStatus=el('div','Load saved signals across logs to review them here.','muted');
     allStatus.id='owgSignalAllStatus';allStatus.setAttribute('role','status');allStatus.setAttribute('aria-live','polite');
     const allResults=el('div');allResults.id='owgSignalAllResults';
+    const timelineHeading=el('h4','Across-log signal change timeline');
+    const timelineNote=el('p','Recent triggered and cleared changes from saved local evaluations, across every imported dataset. This is historical evidence, not current alert status. Reading it never contacts providers, sends notifications or authorizes actions.','muted');
+    const timelineFilter=select('owgSignalTimelineFilter',[
+      ['all','All changes'],['triggered','Triggered only'],['cleared','Cleared only']]);
+    timelineFilter.setAttribute('aria-label','Across-log signal change filter');
+    const timelineRefresh=button('Refresh all-log changes','secondary');timelineRefresh.id='owgSignalTimelineRefresh';
+    const timelineStatus=el('div','Load locally recorded changes across saved logs.','muted');
+    timelineStatus.id='owgSignalTimelineStatus';timelineStatus.setAttribute('role','status');timelineStatus.setAttribute('aria-live','polite');
+    const timelineResults=el('div');timelineResults.id='owgSignalTimelineResults';
+    const timelineControls=el('div',null,'actions');timelineControls.append(timelineFilter,timelineRefresh);
     const allControls=el('div',null,'actions');allControls.append(allFilter,allRefresh);
     box.append(row,message,rules,evaluate,out,reviewHeading,reviewNote,reviewRefresh,inbox,
       transitionHeading,transitionNote,transitionRefresh,transitionStatus,transitionResults,
-      allHeading,allNote,allControls,allStatus,allResults);
+      allHeading,allNote,allControls,allStatus,allResults,
+      timelineHeading,timelineNote,timelineControls,timelineStatus,timelineResults);
     const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/signals';
     const selectedLogId=state.logId;
     const inboxBase=()=>'/v1/event-logs/'+encodeURIComponent(selectedLogId)+'/signal-inbox';
@@ -4012,6 +4023,57 @@
     }
     allFilter.onchange=()=>refreshAllSignals();
     allRefresh.onclick=()=>refreshAllSignals();
+    // This journal describes state *changes*, not the current signal inbox.
+    // An old request cannot repaint a different dataset after navigation.
+    let timelineRequestId=0;
+    async function refreshTimeline(){
+      const requestId=++timelineRequestId;
+      timelineRefresh.disabled=true;
+      timelineStatus.textContent='Loading recorded signal changes across local logs…';
+      try{
+        const params=new URLSearchParams({transition:timelineFilter.value,limit:'100'});
+        const r=await getJSON('/v1/event-logs/signal-timeline?'+params);
+        if(generation!==state.generation||requestId!==timelineRequestId)return;
+        timelineStatus.textContent=Number(r.retained_total||0)+' retained changes ('+
+          Number(r.counts?.triggered||0)+' triggered, '+Number(r.counts?.cleared||0)+
+          ' cleared); showing '+Number(r.returned_transitions||0)+' of '+
+          Number(r.matched_transitions||0)+' matching'+
+          (r.truncated?' (recent results only)':'')+
+          '. This is not a live notification feed.';
+        const rows=(r.items||[]).map(item=>{
+          const open=button('Open log','secondary');
+          open.setAttribute('aria-label','Open dataset '+item.log_name+' for signal '+item.name);
+          open.onclick=async()=>{
+            if(generation!==state.generation)return;
+            if(!state.logs.some(log=>log.log_id===item.log_id)){
+              timelineStatus.textContent='Dataset selection is stale; refresh the saved logs list.';
+              return;
+            }
+            open.disabled=true;
+            try{
+              await refreshLogs(item.log_id);
+              if(state.logId!==item.log_id)return;
+              await analyse();
+              document.getElementById('owgEventLogSignals')?.scrollIntoView({block:'start'});
+            }catch(error){status(error.message||'Could not open the source dataset.');}
+          };
+          return [item.evaluated_at||'—',item.log_name,item.name,
+            item.transition==='triggered'?'Triggered':'Cleared',open];
+        });
+        timelineResults.replaceChildren(rows.length
+          ?table(['Evaluated (UTC)','Saved log','Signal','Change',''],rows)
+          :el('div','No saved signal changes match this filter.','muted'));
+      }catch(error){
+        if(generation===state.generation&&requestId===timelineRequestId){
+          timelineResults.replaceChildren();
+          timelineStatus.textContent=error.message||'Signal change timeline unavailable.';
+        }
+      }finally{
+        if(generation===state.generation&&requestId===timelineRequestId)timelineRefresh.disabled=false;
+      }
+    }
+    timelineFilter.onchange=()=>refreshTimeline();
+    timelineRefresh.onclick=()=>refreshTimeline();
     reviewRefresh.onclick=()=>refreshInbox().catch(error=>{message.textContent=error.message;});
     async function refresh(){
       const r=await getJSON(base());if(generation!==state.generation)return;
@@ -4023,6 +4085,7 @@
       evaluate.disabled=!r.rules.length;
       await refreshInbox();
       await refreshAllSignals();
+      await refreshTimeline();
       await refreshHistory();
     }
     add.onclick=async()=>{

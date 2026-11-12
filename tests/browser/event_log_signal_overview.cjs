@@ -95,6 +95,27 @@ const path=require('node:path');
     assert(!JSON.stringify(serverState).includes('evidence_cases'));
     assert(!JSON.stringify(serverState).includes('state_fingerprint'));
 
+    // Cross-log historical timeline is distinct from current review state.
+    await page.locator('#owgSignalTimelineStatus').filter({hasText:/1 retained changes/}).waitFor();
+    const historyRows=page.locator('#owgSignalTimelineResults tbody tr');
+    assert.equal(await historyRows.count(),1);
+    assert.equal(await page.locator('#owgSignalTimelineResults img').count(),0,
+      'untrusted historical signal names are text, never HTML');
+    assert.equal(await page.evaluate(()=>window.signalOverviewInjected),undefined);
+    const history=await page.evaluate(async()=>(
+      await (await fetch('/v1/event-logs/signal-timeline?transition=triggered')).json()));
+    assert.deepEqual(history.counts,{triggered:1,cleared:0});
+    assert.equal(history.items[0].log_id,setup.a);
+    assert.equal(history.items[0].transition,'triggered');
+    assert(!JSON.stringify(history).includes('state_fingerprint'));
+    assert(!JSON.stringify(history).includes('evidence_cases'));
+    await page.locator('#owgSignalTimelineFilter').selectOption('cleared');
+    await page.locator('#owgSignalTimelineStatus').filter({hasText:/showing 0 of 0 matching/}).waitFor();
+    assert.equal(await historyRows.count(),0);
+    await page.locator('#owgSignalTimelineFilter').selectOption('triggered');
+    await page.locator('#owgSignalTimelineStatus').filter({hasText:/showing 1 of 1 matching/}).waitFor();
+    assert.equal(await historyRows.count(),1);
+
     await page.locator('#owgSignalAllFilter').selectOption('all');
     await page.locator('#owgSignalAllStatus').filter({hasText:'Showing 3 of 3 matching rules'}).waitFor();
     assert.equal(await rows.count(),3);
@@ -119,6 +140,12 @@ const path=require('node:path');
     await page.locator('#owgSignalAllResults').getByRole('button',{name:/Open dataset Accounts B/}).click();
     await page.waitForFunction(id=>document.querySelector('#owgEventLogPick')?.value===id,setup.b);
     await page.locator('#owgSignalInbox').filter({hasText:'not evaluated'}).waitFor();
+    // Historical change deep-link navigates from B back to its original
+    // source log A without acknowledging or re-evaluating any signal.
+    await page.locator('#owgSignalTimelineResults').getByRole('button',
+      {name:/Open dataset Accounts A for signal/}).click();
+    await page.waitForFunction(id=>document.querySelector('#owgEventLogPick')?.value===id,setup.a);
+    await page.locator('#owgSignalTimelineResults').filter({hasText:/Triggered/}).waitFor();
 
     await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
     const audit=await page.evaluate(()=>window.axe.run(document.querySelector('#owgEventLogSignals'),{
