@@ -21,6 +21,45 @@ def inputs(**changes):
 
 
 class ReviewedTransactionTests(unittest.TestCase):
+    def test_read_only_preflight_requires_consent_before_any_read(self):
+        with patch.object(tx.cycle, "review") as review:
+            with self.assertRaisesRegex(ReceiptError, "read consent"):
+                tx.preflight(**{k: inputs(consent_local_read=False)[k] for k in (
+                    "tenant", "mailbox", "folder", "log_id", "confirm_log_id",
+                    "grant_file", "candidate", "ledger_dir", "expected_review_csv_sha256",
+                    "consent_local_read")})
+            review.assert_not_called()
+
+    def test_read_only_preflight_checks_generation_without_mutation(self):
+        values = inputs(expected_previous_candidate_sha256="b" * 64)
+        allowed = ("tenant", "mailbox", "folder", "log_id", "confirm_log_id",
+                   "grant_file", "candidate", "ledger_dir", "expected_review_csv_sha256",
+                   "expected_previous_candidate_sha256", "consent_local_read")
+        with patch.object(tx.cycle, "review", return_value={"csv_sha256": DIGEST}), \\
+             patch.object(tx, "inspect_checkpoint", return_value={
+                 "candidate_sha256": "b" * 64, "log_id": "log", "generation": 3}), \\
+             patch.object(tx.cycle, "append") as append, \\
+             patch.object(tx.cycle, "checkpoint_commit") as commit:
+            result = tx.preflight(**{k: values[k] for k in allowed})
+            self.assertEqual(result["proposed_generation"], 4)
+            self.assertEqual(result["owg_writes"], 0)
+            self.assertFalse(result["checkpoint_advanced"])
+            append.assert_not_called()
+            commit.assert_not_called()
+
+    def test_read_only_preflight_refuses_stale_predecessor(self):
+        values = inputs(expected_previous_candidate_sha256="c" * 64)
+        allowed = ("tenant", "mailbox", "folder", "log_id", "confirm_log_id",
+                   "grant_file", "candidate", "ledger_dir", "expected_review_csv_sha256",
+                   "expected_previous_candidate_sha256", "consent_local_read")
+        with patch.object(tx.cycle, "review", return_value={"csv_sha256": DIGEST}), \\
+             patch.object(tx, "inspect_checkpoint", return_value={
+                 "candidate_sha256": "b" * 64, "log_id": "log", "generation": 3}), \\
+             patch.object(tx.cycle, "append") as append:
+            with self.assertRaisesRegex(ReceiptError, "Stale"):
+                tx.preflight(**{k: values[k] for k in allowed})
+            append.assert_not_called()
+
     def test_missing_approval_refuses_without_read_or_write(self):
         with patch.object(tx.cycle, "review") as review, patch.object(tx.cycle, "append") as append:
             with self.assertRaises(ReceiptError):
