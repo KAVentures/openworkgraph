@@ -721,8 +721,8 @@
             String(probe.reason||'unsupported table shape').replaceAll('_',' ')+
             '. This is not evidence that the rules are complete.'));output.appendChild(detail);continue;
         }
-        detail.appendChild(el('p','Artificial values along the single declared numeric path '+
-          probe.fact_path+'. '+Number(probe.first_precedence_competition_count||0)+
+        detail.appendChild(el('p','Artificial values for one shared declared numeric fact field. '+
+          Number(probe.first_precedence_competition_count||0)+
           ' FIRST precedence point(s) matched multiple rows. '+Number(probe.unsampled_numeric_regions||0)+
           ' numeric region(s) could not be represented. These are sample checks, not proof of exhaustive domain coverage, real policy compliance or an authorized decision.'));
         for(const [key,label] of [
