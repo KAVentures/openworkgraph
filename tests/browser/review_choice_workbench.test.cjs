@@ -119,6 +119,37 @@ const getControls=results=>[results.children.find(x=>x.tagName==='select'),resul
    assert.match(status.textContent,/Choose an exact export/);
    console.log('PASS overlapping opportunity inspections retain current busy state');
  }
+ // Recovery ID changes during a pending revoke must unlock loading a new identity.
+ {
+   const panel=new Node('section');
+   const doc={createElement:t=>new Node(t),getElementById:id=>id==='panel-evidence'?panel:null,
+     addEventListener(k,fn){this[k]=fn;}};
+   let finishRevoke;
+   const context={document:doc,window:{__owgAuthReady:Promise.resolve()},fetch:async(url,options)=>{
+     if(options.method==='POST')return new Promise(resolve=>{finishRevoke=resolve;});
+     return {ok:true,json:async()=>({format:'openworkgraph.human-review.v1',
+       idea_id:'idea-1',project_id:'p1',revision:2,decision:'approved',execution_authorized:false})};
+   }};
+   vm.runInNewContext(fs.readFileSync(path.resolve(__dirname,'../../dashboard/review_choice_workbench.js'),'utf8'),context);
+   doc.DOMContentLoaded();
+   const recovery=panel.children[0].children.at(-1);
+   const [ideaLabel,projectLabel,load,revoke,status]=recovery.children.slice(2);
+   const idea=ideaLabel.children[0],project=projectLabel.children[0];
+   idea.value='idea-1';project.value='p1';
+   await load.onclick();
+   assert.equal(revoke.disabled,false);
+   const pending=revoke.onclick();
+   await Promise.resolve();await Promise.resolve();
+   assert.equal(load.disabled,true);
+   project.value='p2';project.listeners.input();
+   assert.equal(load.disabled,false,'new identity must remain recoverable');
+   assert.equal(revoke.disabled,true,'old approval must not apply to new identity');
+   finishRevoke({ok:true,json:async()=>({idea_id:'idea-1',project_id:'p1',revision:3,
+     decision:'revoked',execution_authorized:false})});
+   await pending;
+   assert.match(status.textContent,/IDs changed/);
+   console.log('PASS recovery identity change during revoke');
+ }
  await scenario('stale revision invalidates choice',[basis(),{...basis(),idea:{...basis().idea,revision:4}}],async({results,details,status})=>{const [select,review]=getControls(results);select.value='p1';await review.onclick();assert.equal(review.disabled,true);assert.equal(results.children.length,0);assert.equal(details.children.length,0);assert.match(status.textContent,/Review basis changed/);});
  await scenario('403 denies review and clears choice',[basis(),{ok:false,status:403}],async({results,details,status})=>{const [select,review]=getControls(results);select.value='p1';await review.onclick();assert.equal(review.disabled,true);assert.equal(results.children.length,0);assert.equal(details.children.length,0);assert.match(status.textContent,/Review failed/);});
  await scenario('duplicate project identity rejected',[{...basis(),projects:[basis().projects[0],{...basis().projects[0],archive_sha256:'c'.repeat(64)}]}],async({results,status})=>{assert.equal(results.children.length,0);assert.match(status.textContent,/Incomplete or inconsistent/);});
