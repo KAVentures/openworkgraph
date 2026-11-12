@@ -175,3 +175,4 @@ with TestClient(app) as client:
 def test_catalog_ui_offers_clarification():
     script = (Path(__file__).resolve().parents[1] / "dashboard" / "process_catalog.js").read_text(encoding="utf-8")
     assert "renderClarification(host)" in script and "/v1/process-catalog/clarify/decide" in script
+    assert "expected_documents_sha256:result.documents_sha256" in script
