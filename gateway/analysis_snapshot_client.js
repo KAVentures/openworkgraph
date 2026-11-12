@@ -5,10 +5,12 @@ function fail(){throw new Error('Choose a bounded OWG aggregate snapshot; unexpe
 function object(value,keys){if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>!keys.includes(k)))fail();}
 function count(v){if(!Number.isSafeInteger(v)||v<0||v>1e12)fail();return v;}
 function validate(doc){
- object(doc,['format','generated_at','level','columns','rows','matching_cases','matching_rows','rows_truncated','non_finite_results_withheld','metric_coverage','source_content_sha256','analysis_spec_sha256','fingerprint_algorithm','group_labels_included','source_independently_verified','execution_authorized']);
+ object(doc,['format','generated_at','level','columns','rows','matching_cases','matching_rows','rows_truncated','non_finite_results_withheld','metric_coverage','source_content_sha256','analysis_spec_sha256','metric_definition_sha256','fingerprint_algorithm','group_labels_included','source_independently_verified','execution_authorized']);
  if(doc.format!==FORMAT||typeof doc.generated_at!=='string'||!/(Z|[+-]\d\d:\d\d)$/.test(doc.generated_at)||!Number.isFinite(Date.parse(doc.generated_at))||!['cases','events'].includes(doc.level)||typeof doc.rows_truncated!=='boolean')fail();
  if(doc.fingerprint_algorithm!=='openworkgraph.discovery-source.v1'||doc.group_labels_included!==false||doc.source_independently_verified!==false||doc.execution_authorized!==false)fail();
  for(const key of ['source_content_sha256','analysis_spec_sha256'])if(typeof doc[key]!=='string'||!/^[a-f0-9]{64}$/.test(doc[key]))fail();
+ const fingerprints=doc.metric_definition_sha256===undefined?[]:doc.metric_definition_sha256;
+ if(!Array.isArray(fingerprints)||fingerprints.length>4||fingerprints.some(v=>typeof v!=='string'||!/^[a-f0-9]{64}$/.test(v)))fail();
  if(!Array.isArray(doc.columns)||!doc.columns.length||doc.columns.length>6||!Array.isArray(doc.rows)||doc.rows.length>100)fail();
  const columns=doc.columns.map(c=>{
   object(c,['heading','kind','unit','aggregation','value_basis','metric_slot']);
@@ -39,7 +41,7 @@ function validate(doc){
   if(out.with_value+out.without_value!==doc.matching_cases||[out.missing_operand,out.zero_divisor,out.non_finite].some(v=>v>out.without_value))fail();return out;
  });
  if(new Set(coverage.map(c=>c.slot)).size!==coverage.length||columns.some(c=>c.metric_slot!==null&&!coverage.some(v=>v.slot===c.metric_slot)))fail();
- const result={format:FORMAT,generated_at:doc.generated_at,level:doc.level,columns,rows,matching_cases:count(doc.matching_cases),matching_rows:count(doc.matching_rows),rows_truncated:doc.rows_truncated,non_finite_results_withheld:count(doc.non_finite_results_withheld),metric_coverage:coverage,source_content_sha256:doc.source_content_sha256,analysis_spec_sha256:doc.analysis_spec_sha256,fingerprint_algorithm:doc.fingerprint_algorithm,group_labels_included:false,source_independently_verified:false,execution_authorized:false};
+ const result={format:FORMAT,generated_at:doc.generated_at,level:doc.level,columns,rows,matching_cases:count(doc.matching_cases),matching_rows:count(doc.matching_rows),rows_truncated:doc.rows_truncated,non_finite_results_withheld:count(doc.non_finite_results_withheld),metric_coverage:coverage,source_content_sha256:doc.source_content_sha256,analysis_spec_sha256:doc.analysis_spec_sha256,metric_definition_sha256:fingerprints,fingerprint_algorithm:doc.fingerprint_algorithm,group_labels_included:false,source_independently_verified:false,execution_authorized:false};
  if(new TextEncoder().encode(JSON.stringify(result)).length>128*1024)fail();return result;
 }
 window.owgAnalysisSnapshotClient={validate};
