@@ -52,6 +52,25 @@ class ReviewQueueTests(unittest.TestCase):
         self.assertEqual(out["event_reviews_count"], 2)
         self.assertTrue(all(x["review_status"] == "observed_pair_needs_review" for x in out["event_reviews"]))
 
+    def test_equivalent_timezone_windows_cannot_hide_multi_pair_ambiguity(self):
+        a = {"session_started_at": "2026-11-01T09:00:00Z",
+             "evidence_event_ids": ["shared"]}
+        b = {"session_started_at": "2026-11-01T10:00:00+01:00",
+             "evidence_event_ids": ["shared"]}
+        out = build_review_queue(payload([
+            pair("A", "F", [], [a]), pair("B", "G", [], [b])]))
+        self.assertEqual(out["event_reviews_count"], 1)
+        self.assertEqual(out["event_reviews"][0]["review_status"],
+                         "ambiguous_multiple_pairs")
+        self.assertFalse(out["event_reviews"][0]["confirmed_case"])
+
+    def test_malformed_or_naive_session_windows_fail_closed(self):
+        for value in ("2026-99-99", "2026-11-01T09:00:00",
+                      "2026-11-01T09:00:00Zextra", "2", 123, None):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "timestamp"):
+                build_review_queue(payload([pair("A", "F", [], [
+                    {"session_started_at": value, "evidence_event_ids": ["old"]}])]))
+
     def test_truncation_propagates(self):
         data = payload([pair("A", "F", ["e"], current_evidence_truncated=True)])
         self.assertTrue(build_review_queue(data)["coverage_incomplete"])

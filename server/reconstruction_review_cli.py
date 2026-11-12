@@ -9,6 +9,7 @@ import argparse
 import json
 import sys
 from collections import defaultdict
+from datetime import date, datetime, timezone
 from typing import Any
 
 MAX_PAIRS = 24
@@ -28,6 +29,22 @@ def _event_ids(value: Any) -> list[str]:
 
 # History-access modes that may produce a review queue; anything else is denied.
 REVIEWABLE_ACCESS = ("all_saved", "current_run")
+
+
+def _session_window(value: Any) -> str:
+    """Canonicalize a bounded session instant; refuse forged or ambiguous labels."""
+    if not isinstance(value, str) or not value or len(value) > 64:
+        raise ValueError("invalid earlier session timestamp")
+    try:
+        if len(value) == 10:
+            # Legacy date-only sessions remain distinct from timestamped sessions.
+            return "earlier:" + date.fromisoformat(value).isoformat()
+        instant = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if instant.tzinfo is None or instant.utcoffset() is None:
+            raise ValueError("timezone required")
+        return "earlier:" + instant.astimezone(timezone.utc).isoformat()
+    except (ValueError, OverflowError) as exc:
+        raise ValueError("invalid earlier session timestamp") from exc
 
 
 def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
@@ -76,12 +93,9 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(earlier, list) or len(earlier) > MAX_SESSIONS_PER_PAIR:
             raise ValueError("unbounded earlier corroborations")
         for session in earlier:
-            if not isinstance(session, dict) or not isinstance(session.get("session_started_at"), str):
+            if not isinstance(session, dict) or "session_started_at" not in session:
                 raise ValueError("invalid earlier session")
-            started_at = session["session_started_at"]
-            if not started_at or len(started_at) > 64 or not started_at[0].isdigit():
-                raise ValueError("invalid earlier session timestamp")
-            window = "earlier:" + started_at
+            window = _session_window(session["session_started_at"])
             for event_id in _event_ids(session.get("evidence_event_ids")):
                 indexed[(window, event_id)].add(pair_key)
             incomplete |= bool(session.get("evidence_truncated"))

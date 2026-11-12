@@ -167,7 +167,7 @@ def test_review_isolates_interleaved_cases_with_reused_event_ids(monkeypatch):
     rows = body["review"]["event_reviews"]
     assert len(rows) == 3
     by_window = {(row["window"], row["event_id"]): row for row in rows}
-    earlier = by_window[("earlier:2026-11-09T10:00:00Z", "reused")]
+    earlier = by_window[("earlier:2026-11-09T10:00:00+00:00", "reused")]
     current = by_window[("current", "reused")]
     interleaved = by_window[("current", "interleave")]
     assert earlier["candidate_resource_pairs"] != current["candidate_resource_pairs"]
