@@ -152,9 +152,11 @@ async def owner_grants(request: Request):
 async def owner_issue_grant(request: Request):
     _require_dashboard(request)
     data = await _body(request)
+    from .open_work_declaration_routes import _source_scope
+    scope = await asyncio.to_thread(_source_scope)
     try:
         return await asyncio.to_thread(grants.issue, data.get("work_item_ref"),
-            data.get("agent"), data.get("hours"), confirmed=data.get("confirm_grant"))
+            data.get("agent"), data.get("hours"), confirmed=data.get("confirm_grant"), source_scope=scope)
     except grants.GrantError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
 
@@ -205,3 +207,37 @@ async def granted_report(request: Request):
         data.get("outcome"), note=data.get("note", ""),
         operation_receipt_ref=data.get("operation_receipt_ref"),
         expected_agent=identity["agent"])
+
+
+@router.get("/v1/open-work/dispatch/granted/case-context")
+async def granted_reviewed_case_context(request: Request):
+    """Bounded, local-only owner-reviewed context; never a provider or outcome receipt."""
+    from .open_work_declaration_routes import _source_scope
+    from .open_work_case_declarations import list_case_declarations, CaseDeclarationError
+    identity = _grant(request)
+    # Legacy grants cannot acquire retrospective source access. A grant must
+    # have been issued under this exact connected source scope.
+    scope = await asyncio.to_thread(_source_scope)
+    if not scope or not identity.get("source_scope") or identity["source_scope"] != scope:
+        raise HTTPException(403, "current source-bound grant required")
+    try:
+        snapshot = await asyncio.to_thread(list_case_declarations, scope)
+    except (CaseDeclarationError, OSError) as exc:
+        raise HTTPException(503, "reviewed case context unavailable") from None
+    # Recheck both independent permissions after reading: source connection,
+    # owner review, offer generation and grant revocation can change in flight.
+    if await asyncio.to_thread(_source_scope) != scope or not grants.authenticate(
+        request.headers.get("authorization"), identity["work_item_ref"]
+    ):
+        raise HTTPException(409, "source or grant changed during context read")
+    item = next((entry for entry in snapshot["items"] if
+                 entry["work_item_ref"] == identity["work_item_ref"]), None)
+    if item is None:
+        raise HTTPException(404, "no currently reviewed case context")
+    # Edit tokens are owner-only compare-and-swap capabilities; never give
+    # them to an agent. No provider reads or business success assertions.
+    safe = {key: value for key, value in item.items() if key not in ("edit_token", "scope_ref")}
+    return {"format": "openworkgraph.granted-reviewed-case-context.v1",
+            "case": safe, "source_state": "unknown_until_explicit_recheck",
+            "provider_receipt_verified": False, "customer_outcome_verified": False,
+            "agent_execution_authorized": False, "source_read_performed": False}
