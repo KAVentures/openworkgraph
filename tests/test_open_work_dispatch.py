@@ -164,6 +164,10 @@ with TestClient(app) as client:
         assert result.status_code == 422, result.text
     assert client.post("/v1/open-work/dispatch/agent/claim", content=b'{}',
                        headers={**agent, "Content-Type": "text/plain"}).status_code == 415
+    # An empty JSON body still reaches route-level semantic validation, not parser rejection.
+    empty = client.post("/v1/open-work/dispatch/agent/claim", content=b"",
+                        headers={**agent, "Content-Type": "application/json"})
+    assert empty.status_code != 422, empty.text
 
 '''
     env = os.environ.copy()
