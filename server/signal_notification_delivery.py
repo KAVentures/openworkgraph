@@ -147,6 +147,12 @@ def any_enabled() -> bool:
         return any(item["enabled"] for item in _read()["channels"].values())
 
 
+def enabled_for(log_id: str) -> bool:
+    with _LOCK:
+        item = _read()["channels"].get(log_id)
+        return bool(item and item["enabled"])
+
+
 def status(log_id: str) -> dict:
     with _LOCK:
         item = _read()["channels"].get(log_id)
@@ -378,5 +384,5 @@ def deliver_due(*, now: float | None = None, transport=None) -> dict:
                 "case_data_included": False, "business_actions": False}
 
 
-__all__ = ["DeliveryError", "configure", "remove", "resume", "status", "any_enabled", "queue_current",
+__all__ = ["DeliveryError", "configure", "remove", "resume", "status", "enabled_for", "any_enabled", "queue_current",
            "deliver_due", "FORMAT", "PAYLOAD_FORMAT"]
