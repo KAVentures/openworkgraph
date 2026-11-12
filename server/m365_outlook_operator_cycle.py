@@ -88,11 +88,24 @@ def review(*, consent_local_read=False, **kwargs):
 
 
 def append(*, consent_local_read=False, consent_local_append=False,
-           confirm_candidate_reviewed=False, **kwargs):
+           confirm_candidate_reviewed=False, expected_review_csv_sha256=None, **kwargs):
     """Append only a separately reviewed existing candidate, with durable latch."""
     if not all((consent_local_read is True, consent_local_append is True,
                 confirm_candidate_reviewed is True)):
         raise ReceiptError("Separate read, append and candidate-review confirmation required")
+    if expected_review_csv_sha256 is not None:
+        if (type(expected_review_csv_sha256) is not str
+                or len(expected_review_csv_sha256) != 64
+                or any(c not in "0123456789abcdef"
+                       for c in expected_review_csv_sha256)):
+            raise ReceiptError("Invalid reviewed CSV digest")
+        checked = review_candidate(
+            tenant=kwargs["tenant"], mailbox=kwargs["mailbox"],
+            folder=kwargs["folder"], grant_file=kwargs["grant_file"],
+            candidate=kwargs["candidate"], consent_local_read=True)
+        if (checked.get("status") != "review_ready"
+                or checked.get("csv_sha256") != expected_review_csv_sha256):
+            raise ReceiptError("Candidate differs from explicitly reviewed CSV")
     result = append_and_record(
         consent_local_read=True, consent_local_append=True, **kwargs)
     if result.get("status") != "receipt_persisted":
@@ -226,6 +239,7 @@ def main(argv=None):
                 p.add_argument("--" + flag, type=Path, required=True)
             p.add_argument("--consent-local-append", action="store_true")
             p.add_argument("--confirm-candidate-reviewed", action="store_true")
+            p.add_argument("--expected-review-csv-sha256")
         else:
             for flag in ("candidate", "csv-path", "receipt-file",
                          "journal-dir", "handoff-dir"):
