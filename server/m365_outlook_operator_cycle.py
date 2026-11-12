@@ -34,28 +34,39 @@ def extract(*, consent_local_read=False, consent_delta_read=False,
                 consent_local_export is True,
                 confirm_removals_reviewed is True)):
         raise ReceiptError("Explicit extraction and previous-removal review consent required")
-    # In checkpoint-bound mode, a committed scoped predecessor must match
-    # the prior candidate before any authenticated Graph GET.
+    # Snapshot the committed predecessor, then compare it again after the
+    # bounded Graph read. A concurrent checkpoint advance must not be shown
+    # as a safe successor to an obsolete generation.
+    predecessor = None
     if ledger_dir is not None or expected_generation is not None:
         if ledger_dir is None or type(expected_generation) is not int or expected_generation < 1:
             raise ReceiptError("Checkpoint-bound extraction requires a positive exact generation")
-        prior = inspect_checkpoint(
+        predecessor = inspect_checkpoint(
             tenant=kwargs["tenant"], mailbox=kwargs["mailbox"],
             folder=kwargs["folder"], ledger_dir=Path(ledger_dir),
             grant_file=Path(kwargs["grant_file"]), consent_local_read=True)
-        if prior is None or prior["generation"] != expected_generation:
+        if predecessor is None or predecessor["generation"] != expected_generation:
             raise ReceiptError("Missing or stale committed checkpoint generation")
         raw = json.loads(
             _private_read(Path(kwargs["previous_candidate"]), MAX_CANDIDATE_BYTES),
             object_pairs_hook=_unique)
         if (type(raw) is not dict
-                or raw.get("csv_sha256") != prior["candidate_sha256"]
-                or prior["log_id"] != kwargs["log_id"]):
+                or raw.get("csv_sha256") != predecessor["candidate_sha256"]
+                or predecessor["log_id"] != kwargs["log_id"]):
             raise ReceiptError("Previous candidate does not match committed checkpoint")
     result = run_verified_next_round(
         consent_local_read=True, consent_delta_read=True,
         consent_local_export=True, confirm_removals_reviewed=True,
         require_event_membership=require_event_membership, **kwargs)
+    if predecessor is not None:
+        current = inspect_checkpoint(
+            tenant=kwargs["tenant"], mailbox=kwargs["mailbox"],
+            folder=kwargs["folder"], ledger_dir=Path(ledger_dir),
+            grant_file=Path(kwargs["grant_file"]), consent_local_read=True)
+        if current != predecessor:
+            # Graph may already have written private review artifacts. Never
+            # claim them as the next safe round or retry automatically.
+            raise ReceiptError("Checkpoint changed during Graph extraction; manual review required")
     if result.get("status") != "next_round_review_ready":
         raise ReceiptError("Extraction not ready for human review")
     return {"format": FORMAT, "phase": "extract", "status": "review_required",
