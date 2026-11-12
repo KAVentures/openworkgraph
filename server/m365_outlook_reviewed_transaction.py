@@ -59,7 +59,7 @@ def preflight(*, tenant, mailbox, folder, log_id, confirm_log_id,
             "automatic_retry_allowed": False}
 
 
-def execute(*: tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
+def execute(*, tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
             candidate, csv_path, receipt_file, journal_dir, handoff_dir,
             ledger_dir, successor_label, expected_review_csv_sha256,
             expected_previous_candidate_sha256=None, port=8765, session=None,
