@@ -81,7 +81,8 @@ def _candidates(linked: list[dict]) -> tuple[list[dict], bool]:
     for number, (source_key, rows) in enumerate(sorted(by_source.items()), 1):
         rows.sort(key=lambda r: (r["start"], r["end"], r["idea_id"], r["measurement_id"]))
         for i, first in enumerate(rows):
-            for other in rows[i + 1:]:
+            for j in range(i + 1, len(rows)):
+                other = rows[j]
                 if other["start"] > first["end"]:
                     break
                 if other["idea_id"] == first["idea_id"]:
