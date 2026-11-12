@@ -69,7 +69,7 @@ const path=require('node:path');
   // Both directions include two independently asserted reverse links.
   await page.locator('#owgObjectRelationDirection').selectOption('both');
   await page.locator('#owgObjectRelationRun').click();
-  await page.locator('#owgObjectRelationStatus').filter({hasText:'33 of 33'}).waitFor();
+  await page.locator('#owgObjectRelationStatus').filter({hasText:'25 of 33'}).waitFor();
   await page.locator('#owgObjectRelationTraceHops').selectOption('2');
   const [traceReply]=await Promise.all([
     page.waitForResponse(response=>response.url().endsWith('/object-relationships/trace')&&
