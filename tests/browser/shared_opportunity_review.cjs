@@ -42,7 +42,7 @@ const path=require('node:path');
   await page.locator('#opportunityBudgetStatus').filter({hasText:'Budget preview checked'}).waitFor();
   assert.match(await page.locator('#opportunityBudgetResult').textContent(),/2000.00/);
   assert.match(await page.locator('#opportunityBudgetResult').textContent(),/-500.00/);
-  assert.match(await page.locator('#opportunityBudgetResult').textContent(),/spending authorized false/);
+  assert.equal(await page.locator('#opportunityBudgetResult dt').filter({hasText:'spending authorized'}).evaluate(n=>n.nextElementSibling.textContent),'false');
   await page.locator('#opportunityBudgetPreviewCeiling').fill('3500.00');
   assert.equal(await page.locator('#opportunityBudgetResult').textContent(),'');
   assert.equal(await page.locator('#opportunityBudgetPreviewConfirm').isChecked(),false);
