@@ -1564,6 +1564,10 @@
     for(const control of [object,sourceType,targetType,direction,exact,qualifier,limit]){
       control.addEventListener(control.tagName==='INPUT'&&control.type==='text'?'input':'change',scopeChanged);
     }
+    traceHops.addEventListener('change',()=>{
+      traceVersion++;traceRun.disabled=object.value==='';traceView.replaceChildren();
+      traceStatus.textContent='Traversal depth changed. Trace again for the selected object.';
+    });
     async function inspect(selected,turn){
       evidence.replaceChildren(el('h4','Current linked log events for '+literal(selected.object_id)));
       if(!selected.observed_events){evidence.append(el('p','No retained events are linked to this object. Its supplied object relationships remain visible; no lifecycle steps are inferred.'));return;}
