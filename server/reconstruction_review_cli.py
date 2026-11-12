@@ -93,7 +93,7 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(earlier, list) or len(earlier) > MAX_SESSIONS_PER_PAIR:
             raise ValueError("unbounded earlier corroborations")
         for session in earlier:
-            if not isinstance(session, dict) or not isinstance(session.get("session_started_at"), str):
+            if not isinstance(session, dict) or "session_started_at" not in session:
                 raise ValueError("invalid earlier session")
             window = _session_window(session["session_started_at"])
             for event_id in _event_ids(session.get("evidence_event_ids")):
