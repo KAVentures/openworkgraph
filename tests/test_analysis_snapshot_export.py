@@ -87,3 +87,33 @@ with TestClient(app) as c:
     env={**os.environ,'WORKFLOW_OBSERVER_DATA':str(tmp_path/'data'),'WORKFLOW_OBSERVER_AUTH_DIR':str(tmp_path/'auth'),'WORKFLOW_OBSERVER_CONFIG':str(tmp_path/'config.json')}
     r=subprocess.run([sys.executable,'-c',code],cwd=Path(__file__).resolve().parents[1],env=env,capture_output=True,text=True,timeout=120)
     assert r.returncode==0,r.stdout+r.stderr
+
+
+def test_freshness_checks_current_lineage_without_attesting_supplied_rows(log):
+    definition = spec()
+    published = sharing.export_snapshot(log, definition)
+    result = sharing.check_snapshot_freshness(log, {"spec": definition, "snapshot": published})
+    assert result["lineage_current"] is True
+    assert result["rows_authenticated"] is False
+    assert result["execution_authorized"] is False
+    assert "rows" not in result and "source_content_sha256" not in result
+
+    # An otherwise valid fabricated numeric row cannot be authenticated by
+    # comparing lineage fingerprints alone.
+    forged = dict(published)
+    forged["rows"] = [[None, 999]]
+    forged_result = sharing.check_snapshot_freshness(log, {"spec": definition, "snapshot": forged})
+    assert forged_result["lineage_current"] is True
+    assert forged_result["rows_authenticated"] is False
+
+    changed = sharing.check_snapshot_freshness(
+        log, {"spec": spec(dimensions=[]), "snapshot": published})
+    assert changed["analysis_spec_unchanged"] is False
+    assert changed["lineage_current"] is False
+
+
+def test_freshness_rejects_untrusted_snapshot_and_extra_request_fields(log):
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        sharing.check_snapshot_freshness(log, {"spec": spec(), "snapshot": {}, "extra": 1})
+    with pytest.raises(workspace.EventLogWorkspaceError):
+        sharing.check_snapshot_freshness(log, {"spec": spec(), "snapshot": {"rows": []}})
