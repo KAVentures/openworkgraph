@@ -120,7 +120,31 @@ def revoke(grant_id: str) -> bool:
         return cursor.rowcount == 1
 
 def list_grants() -> list[dict]:
+    """Owner metadata reflects effective offer authority, not merely DB expiry.
+
+    A withdrawn, re-offered, or reported case must never be shown as an active
+    grant. No bearer credential or connected source identifier is returned.
+    """
+    from .open_work_dispatch import status
+    current = status(owner=True)
+    offers = {item["work_item_ref"]: item for item in current["offers"]} if current["enabled"] else {}
+    now = int(time.time())
     with _db() as db:
-        rows = db.execute("SELECT id,work_item_ref,agent,expires_at,revoked FROM grants ORDER BY created_at DESC LIMIT 100").fetchall()
-    return [{"grant_id": r[0], "work_item_ref": r[1], "agent": r[2],
-             "expires_at": r[3], "active": not r[4] and r[3] > int(time.time())} for r in rows]
+        rows = db.execute(
+            "SELECT id,work_item_ref,agent,expires_at,revoked,offered_at,context_approved "
+            "FROM grants ORDER BY created_at DESC LIMIT 100"
+        ).fetchall()
+    result = []
+    for grant_id, ref, agent, expiry, revoked, generation, context_approved in rows:
+        offer = offers.get(ref)
+        valid_offer = bool(
+            offer and offer["status"] in ("offered", "claimed")
+            and generation and hmac.compare_digest(offer["offered_at"], generation)
+        )
+        active = not revoked and expiry > now and valid_offer
+        result.append({
+            "grant_id": grant_id, "work_item_ref": ref, "agent": agent,
+            "expires_at": expiry, "active": active,
+            "case_context_approved": bool(context_approved),
+        })
+    return result
