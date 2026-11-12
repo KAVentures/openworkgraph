@@ -136,7 +136,11 @@
                 const result=await response.json();
                 if(result.format!=='openworkgraph.reviewed-handoff-preflight.v1'||
                    result.idea_id!==id||result.project_id!==projectId||
+                   result.idea_revision!==snapshot.idea.revision||
+                   result.spec_sha256!==selected.spec_sha256||
+                   result.archive_sha256!==selected.archive_sha256||
                    result.project_set_sha256!==snapshot.project_set_sha256||
+                   !Number.isSafeInteger(result.review_revision)||result.review_revision!==reviewRevision||
                    result.human_review_approved!==true||result.execution_authorized!==false||
                    result.source_read_authorized!==false)
                   throw new Error('Decision evidence changed.');
