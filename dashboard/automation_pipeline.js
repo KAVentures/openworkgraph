@@ -2179,7 +2179,28 @@
            JSON.stringify(attestation.blockers)!==JSON.stringify(basis.blockers)){
           throw new Error('Destination review attestation inconsistent. Inspect again.');
         }
-        // Only reveal the decision surface after authenticated exact-export checks.
+        // The destination must also independently confirm the durable human
+        // approval, not merely the (non-authorizing) export inspection.
+        // A revoked or concurrently edited review must fail closed here.
+        const reviewed=await api('/v1/review-choice-workbench/'+encodeURIComponent(id)+'/reviewed-handoff-preflight',{
+          method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(basis)
+        });
+        if(!reviewed.ok)throw new Error('Destination approved-review preflight refused ('+reviewed.status+').');
+        const approval=await reviewed.json();
+        if(!current())return;
+        if(approval.format!=='openworkgraph.reviewed-handoff-preflight.v1'||
+           approval.idea_id!==id||approval.project_id!==handoff.project_id||
+           approval.idea_revision!==handoff.idea_revision||
+           approval.project_set_sha256!==basis.project_set_sha256||
+           approval.spec_sha256!==handoff.spec_sha256||
+           approval.archive_sha256!==handoff.archive_sha256||
+           approval.human_review_approved!==true||
+           !Number.isSafeInteger(approval.review_revision)||approval.review_revision<1||
+           approval.execution_authorized!==false||approval.source_read_authorized!==false){
+          throw new Error('Destination approval changed or is inconsistent. Inspect again.');
+        }
+        // Only reveal the decision surface after authenticated exact-export
+        // AND approved-review checks. Neither preflight authorizes execution.
         await show(id);
         if(!current())return;
         const button=document.getElementById('owgPipelineJourney');
