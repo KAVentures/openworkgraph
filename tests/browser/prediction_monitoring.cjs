@@ -54,6 +54,15 @@ const path=require('node:path');
   const qualityText=await quality.textContent();
   assert.match(qualityText,/Open/);assert.match(qualityText,/Work/);
   assert.match(await out.textContent(),/At least 20 completed cases per activity/);
+  // Even a log with no unfinished cases needs an explicit absence disclosure.
+  const coverage=(await watched.json()).open_case_coverage;
+  assert.equal(coverage.still_open_cases_not_scored,0);
+  assert.equal(coverage.completed_cases_in_selected_cohort,1200);
+  assert.equal(coverage.censoring_adjustment_applied,false);
+  await out.getByText('Still-open cases excluded from monitoring').waitFor();
+  assert.match(await out.textContent(),/0 of 1,200 cases \(0%\)/);
+  assert.match(await out.textContent(),/No unfinished cases in this selected cohort/);
+
 
   assert.match(await out.textContent(),/Proposal, not applied: scale each range around its median by \d\.\d\d×/);
   await page.locator('#owgPredictOutcome').selectOption('duration_over');
