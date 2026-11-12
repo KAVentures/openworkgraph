@@ -229,3 +229,43 @@ def test_granted_context_denies_missing_review_and_cross_case(setup, monkeypatch
                             headers={"Authorization": "Bearer " + issued["token"]})
         assert result.status_code == 404
         assert OTHER not in result.text
+
+
+def test_operator_inventory_tracks_effective_authority_not_only_expiry(setup):
+    """The owner must not mistake an invalidated grant for live access."""
+    issued = grants.issue(REF, "agent-a", 1, confirmed=True, context_approved=False)
+    def listed():
+        return next(item for item in grants.list_grants() if item["grant_id"] == issued["grant_id"])
+    assert listed()["active"] is True
+    assert listed()["case_context_approved"] is False
+    assert "token" not in str(listed())
+    dispatch.withdraw(REF)
+    assert listed()["active"] is False
+    dispatch.offer(REF)
+    assert listed()["active"] is False  # no resurrection after re-offer
+    replacement = grants.issue(REF, "agent-b", 1, confirmed=True)
+    assert next(g for g in grants.list_grants() if g["grant_id"] == replacement["grant_id"])["active"]
+    lease = dispatch.claim(REF, "agent-b")
+    dispatch.report(REF, lease["lease_token"], "attempted")
+    assert next(g for g in grants.list_grants() if g["grant_id"] == replacement["grant_id"])["active"] is False
+    dispatch.acknowledge(REF, reoffer=True)
+    assert next(g for g in grants.list_grants() if g["grant_id"] == replacement["grant_id"])["active"] is False
+    assert grants.revoke(replacement["grant_id"])
+    assert next(g for g in grants.list_grants() if g["grant_id"] == replacement["grant_id"])["active"] is False
+
+
+def test_operator_grant_inventory_rest_requires_dashboard_session(setup):
+    app = FastAPI()
+    app.include_router(router)
+    grant = grants.issue(REF, "agent-a", 1, confirmed=True)
+    with TestClient(app) as client:
+        path = "/v1/open-work/dispatch/grants"
+        assert client.get(path).status_code == 403
+        assert client.get(path, headers={"Authorization": "Bearer " + grant["token"]}).status_code == 403
+        owner = {"Authorization": "OWG-Session " + create_dashboard_session()}
+        result = client.get(path, headers=owner)
+        assert result.status_code == 200
+        entry = next(g for g in result.json()["grants"] if g["grant_id"] == grant["grant_id"])
+        assert entry["active"] is True
+        assert entry["case_context_approved"] is False
+        assert "token" not in result.text
