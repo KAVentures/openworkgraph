@@ -38,6 +38,7 @@ from . import event_log_domain_packs as domain_packs
 from . import event_log_object_diagnostics as object_diagnostics
 from . import event_log_objects as objects
 from . import event_log_object_relationships as object_relationships
+from . import event_log_object_paths as object_paths
 from . import event_log_organization as organization
 from . import event_log_playback as playback
 from . import event_log_process_map as process_maps
@@ -458,6 +459,14 @@ async def event_log_object_relationship_query(request: Request, log_id: str):
     _require_dashboard(request)
     spec = await _json_body(request, "relationship filters", strict=True)
     return await run_in_threadpool(_respond, object_relationships.query, log_id, spec)
+
+
+@router.post("/v1/event-logs/{log_id}/object-relationships/trace")
+async def event_log_object_relationship_trace(request: Request, log_id: str):
+    """Explicit bounded local multi-hop navigation over supplied O2O links."""
+    _require_dashboard(request)
+    spec = await _json_body(request, "relationship trace", strict=True, limit=16384)
+    return await run_in_threadpool(_respond, object_paths.trace, log_id, spec)
 
 
 @router.get("/v1/event-logs/{log_id}/object-flattening")
