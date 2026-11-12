@@ -15,6 +15,7 @@ from . import m365_outlook_operator_cycle as cycle
 from .m365_outlook_owg_receipt import ReceiptError, UncertainReceipt
 from .m365_operator_audit_writer import (preflight_operator_audit, record_operator_phase, AuditWriteError)
 from .m365_outlook_delta import DeltaError
+from .m365_outlook_checkpoint import inspect_checkpoint
 
 FORMAT = "openworkgraph.m365-reviewed-transaction.v1"
 
@@ -59,6 +60,18 @@ def execute(*, tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
     audit("review", checked)
     if checked.get("csv_sha256") != expected_review_csv_sha256:
         raise ReceiptError("Candidate changed since explicit review")
+    # Refuse a stale predecessor BEFORE the first append. The checkpoint
+    # commit still performs its authoritative exclusive-create CAS after
+    # authenticated membership verification; this is only an early guard.
+    predecessor = inspect_checkpoint(
+        **scope, ledger_dir=Path(ledger_dir), consent_local_read=True)
+    if predecessor is None:
+        if expected_previous_candidate_sha256 is not None:
+            raise ReceiptError("Missing predecessor checkpoint; append refused")
+    elif (type(expected_previous_candidate_sha256) is not str
+          or predecessor["candidate_sha256"] != expected_previous_candidate_sha256
+          or predecessor["log_id"] != log_id):
+        raise ReceiptError("Stale or different predecessor checkpoint; append refused")
     shared = dict(**scope, log_id=log_id, confirm_log_id=confirm_log_id,
                   candidate=Path(candidate), csv_path=Path(csv_path),
                   receipt_file=Path(receipt_file), port=port, session=session)
