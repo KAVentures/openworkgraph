@@ -27,6 +27,8 @@ URL = "https://example.com/hooks/owner-reviewed-alerts"
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(notices, "_path", lambda: tmp_path / "signal_delivery_channels.json")
     monkeypatch.setattr(scheduler, "scheduled", lambda kind, target: kind == "event_log_signals" and target == LOG)
+    monkeypatch.setattr(scheduler, "status", lambda: {"schedules": [
+        {"kind": "event_log_signals", "target_id": LOG, "enabled": True}]})
     items = [{"rule_id": "sig_" + "1" * 16, "name": "private-diagnosis-label",
               "status": "unreviewed", "requires_review": True,
               "state_fingerprint": STATE_A},
@@ -133,6 +135,27 @@ def test_failed_delivery_retains_pending_and_pauses_after_five(isolated):
     notices.resume(LOG, confirm_external_delivery=True)
     assert notices.deliver_due(transport=lambda *_: 200)["sent"] == 1
     assert notices.status(LOG)["pending_notifications"] == 0
+
+
+def test_opted_in_quiet_hours_defer_delivery_without_losing_pending(isolated, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    make()
+    notices.queue_current(LOG)
+    now = datetime.now(timezone.utc)
+    beginning = (now - timedelta(minutes=1)).strftime("%H:%M")
+    ending = (now + timedelta(minutes=10)).strftime("%H:%M")
+    monkeypatch.setattr(scheduler, "status", lambda: {"schedules": [
+        {"kind": "event_log_signals", "target_id": LOG, "enabled": True,
+         "quiet_hours": {"timezone": "UTC", "start": beginning, "end": ending}}]})
+    called = []
+    result = notices.deliver_due(transport=lambda *x: called.append(x) or 200)
+    assert result.get("deferred_quiet_hours") is True
+    assert called == []
+    assert notices.status(LOG)["pending_notifications"] == 1
+    monkeypatch.setattr(scheduler, "status", lambda: {"schedules": [
+        {"kind": "event_log_signals", "target_id": LOG, "enabled": True}]})
+    assert notices.deliver_due(transport=lambda *x: called.append(x) or 200)["sent"] == 1
+    assert len(called) == 1
 
 
 def test_revocation_erases_keys_and_pending_and_does_not_send(isolated):
