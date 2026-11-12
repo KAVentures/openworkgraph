@@ -241,8 +241,28 @@ def resumption_candidates(
     result["coverage"]["pointer_rows_scanned"] = len(pointer_rows)
     if len(pointer_rows) >= MAX_POINTER_ROWS:
         result["coverage"]["scan_truncated"] = True
+    # Event IDs are external labels, not unique row identities. Exclude ALL
+    # observations bearing a colliding label before building any identity,
+    # co-reference or candidate evidence; stripping pair edges afterward leaves
+    # contaminated singleton tracks and session overlap behind.
+    event_id_counts: dict[str, int] = {}
+    for row in pointer_rows:
+        event_id = str(row["event_id"] or "")[:120]
+        if event_id:
+            event_id_counts[event_id] = event_id_counts.get(event_id, 0) + 1
+    colliding_event_ids = {eid for eid, count in event_id_counts.items() if count > 1}
+    if colliding_event_ids:
+        result["coverage"]["ambiguous_event_id_collisions"] = len(colliding_event_ids)
+        result["coverage"]["excluded_colliding_pointer_rows"] = sum(
+            1 for row in pointer_rows if str(row["event_id"] or "")[:120] in colliding_event_ids
+        )
+        result["coverage"]["scan_truncated"] = True
     by_session: list[dict[str, Any]] = [{"refs": {}, "events": [], "tracks": {}, "coobserved": set(), "pair_events": {}} for _ in sessions]
     for row in pointer_rows:
+        # Ambiguous external labels cannot safely contribute even singleton
+        # identity tracks, candidate overlap, or case-review evidence.
+        if str(row["event_id"] or "")[:120] in colliding_event_ids:
+            continue
         data = dict(row)
         instant = data.get("instant")
         if instant is None:
@@ -271,32 +291,6 @@ def resumption_candidates(
                 track["event_ids"].append(str(data.get("event_id") or "")[:120])
         if pointers and len(bucket["events"]) < 6:
             bucket["events"].append(str(data.get("event_id") or "")[:120])
-
-    # Event IDs are external labels, not unique database-row identities. If
-    # two observed rows reuse one label, neither row can safely be represented
-    # by that label in an event-to-pair review. Fail closed for the colliding
-    # label rather than merge distinct cases into a fabricated multi-pair event.
-    # This also covers duplicate labels with different timestamps in one window.
-    event_id_counts: dict[str, int] = {}
-    for row in pointer_rows:
-        event_id = str(row["event_id"] or "")[:120]
-        if event_id:
-            event_id_counts[event_id] = event_id_counts.get(event_id, 0) + 1
-    colliding_event_ids = {key for key, count in event_id_counts.items() if count > 1}
-    if colliding_event_ids:
-        result["coverage"]["ambiguous_event_id_collisions"] = len(colliding_event_ids)
-        result["coverage"]["scan_truncated"] = True
-        for bucket in by_session:
-            for pair, event_ids in bucket["pair_events"].items():
-                event_ids.difference_update(colliding_event_ids)
-            for track in bucket["tracks"].values():
-                track["event_ids"] = [eid for eid in track["event_ids"] if eid not in colliding_event_ids]
-                track["observations"] = [(t, eid) for t, eid in track["observations"]
-                                         if eid not in colliding_event_ids]
-            bucket["events"] = [eid for eid in bucket["events"] if eid not in colliding_event_ids]
-            # A collided label cannot corroborate a pair across sessions either.
-            # Preserve only edges backed by at least one unambiguous row label.
-            bucket["coobserved"] = {pair for pair, ids in bucket["pair_events"].items() if ids}
 
     sessions_seen: dict[str, int] = {}
     for bucket in by_session:
