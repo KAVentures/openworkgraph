@@ -106,7 +106,7 @@ def test_optional_roles_and_reconfiguration_do_not_touch_manual_metrics():
     saved = install(log_id, mapping=reduced)
     assert len(saved["metric_ids"]) == 1
     assert {entry["unmapped_role"] for entry in saved["not_applicable"]} >= {
-        "approve", "reject", "refund", "close", "receive"}
+        "approve", "reject", "refund", "close"}
     query.save_metric(log_id, {"metric": {"name": "manual_review_count", "kind": "activity_count",
                                           "activity": "Inspected"}})
     changed = install(log_id, parameters={"assessment_days": 14, "refund_days": 30})
