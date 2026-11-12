@@ -349,6 +349,10 @@ def deliver_due(*, now: float | None = None, transport=None) -> dict:
         "created_at": entry["created_at"],
         "unreviewed_signal_states": len(entry["states"]),
         "message": "Open your local OWG dashboard to review saved signal alerts.",
+        # The generic `text` field is also accepted by Slack-style incoming
+        # webhooks; it contains only the count, never local source identities.
+        "text": "OWG: " + str(len(entry["states"])) +
+                " saved signal state(s) require review on your local device.",
         "case_data_included": False, "source_identifiers_included": False,
         "execution_authorized": False,
     }
