@@ -3304,7 +3304,7 @@
         if(generation!==state.generation||attempt!==sharingAttempt||snapshot!==sharingSnapshot)return;
         if(result.format!=='openworkgraph.analysis-snapshot-freshness.v1'||typeof result.lineage_current!=='boolean'||typeof result.current_results_match!=='boolean')throw new Error('Unexpected freshness response.');
         freshnessStatus.textContent=!result.lineage_current?'Snapshot lineage is stale. Prepare and review a new snapshot before sharing.':!result.current_results_match?'Snapshot values differ from the current recomputation. Prepare and review a new snapshot before sharing.':'Current source, specification, metric lineage and minimized values match. Original publication and source authenticity are not verified.';
-        freshnessStatus.dataset.stale=String(!result.current_results_match);sharingDownload.disabled=!result.current_results_match||!sharingConsent.checked;
+        freshnessStatus.dataset.stale=String(!result.lineage_current||!result.current_results_match);sharingDownload.disabled=!result.lineage_current||!result.current_results_match||!sharingConsent.checked;
       }catch(error){if(generation===state.generation&&attempt===sharingAttempt){freshnessStatus.textContent=error.message+' Freshness unknown; prepare a new snapshot.';freshnessStatus.dataset.stale='true';sharingDownload.disabled=true;}}
       finally{if(generation===state.generation&&attempt===sharingAttempt)freshness.disabled=false;}
     };
