@@ -71,6 +71,7 @@ const getControls=results=>[results.children.find(x=>x.tagName==='select'),resul
    ['different review revision',{review_revision:1}],
    ['different specification digest',{spec_sha256:'f'.repeat(64)}],
    ['different archive digest',{archive_sha256:'f'.repeat(64)}],
+   ['different opportunity revision',{idea_revision:4}],
    ['missing review revision',{review_revision:undefined}]
  ]){
    const preflight={format:'openworkgraph.review-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
