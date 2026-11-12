@@ -123,6 +123,36 @@ def test_dashboard_and_mcp_wiring():
     assert "clear_dispatch_offers()" in history
 
 
+def test_agent_routes_fail_closed_when_router_mounted_without_global_auth():
+    """The route itself must enforce bearer auth, not only secure_app middleware."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from server.local_auth import create_dashboard_session, ensure_api_token
+    from server.open_work_handoff_routes import router
+
+    app = FastAPI()
+    app.include_router(router)
+    owner = {"Authorization": "OWG-Session " + create_dashboard_session()}
+    wrong = {"Authorization": "Bearer invalid"}
+    agent = {"Authorization": "Bearer " + ensure_api_token()}
+    with TestClient(app) as client:
+        for method, path in (
+            ("get", "/v1/open-work/dispatch/agent"),
+            ("post", "/v1/open-work/dispatch/agent/claim"),
+            ("post", "/v1/open-work/dispatch/agent/release"),
+            ("post", "/v1/open-work/dispatch/agent/report"),
+        ):
+            call = getattr(client, method)
+            for headers in ({}, owner, wrong):
+                response = call(path, headers=headers)
+                assert response.status_code == 401, (path, response.text)
+        # Valid bearer reaches the handler; it does not confer permission to
+        # claim anything absent an explicit owner-offered case.
+        response = client.get("/v1/open-work/dispatch/agent", headers=agent)
+        assert response.status_code == 200
+        assert response.json()["offers"] == []
+
+
 def test_rest_routes_split_owner_and_agent_authority(tmp_path):
     import subprocess
     import sys
