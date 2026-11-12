@@ -323,6 +323,23 @@ def _send(receiver_url: str, body: bytes, headers: dict[str, str]) -> int:
         conn.close()
 
 
+def _delivery_quiet(log_id: str, epoch: float) -> bool:
+    # Delivery shares the *existing* owner's schedule quiet hours. A disabled
+    # schedule cannot authorize outbound messages; an invalid quiet window
+    # errs on the side of NOT sending.
+    from . import local_scheduler
+    try:
+        jobs = local_scheduler.status()["schedules"]
+        job = next((item for item in jobs if item["kind"] == "event_log_signals" and
+                    item["target_id"] == log_id and item["enabled"]), None)
+        if job is None:
+            return False  # _valid_states will suppress a disabled schedule.
+        quiet = local_scheduler._validate_quiet_hours(job.get("quiet_hours"))
+        return bool(quiet and local_scheduler._is_quiet(epoch, quiet))
+    except Exception:
+        return True
+
+
 def deliver_due(*, now: float | None = None, transport=None) -> dict:
     """Send at most one reviewed notice per tick. Every send is independently gated."""
     current = time.time() if now is None else now
@@ -334,6 +351,8 @@ def deliver_due(*, now: float | None = None, transport=None) -> dict:
     if not candidates:
         return {"attempted": 0, "sent": 0}
     log_id, entry, channel_id = sorted(candidates, key=lambda row: row[1]["next_attempt_epoch"])[0]
+    if _delivery_quiet(log_id, current):
+        return {"attempted": 0, "sent": 0, "deferred_quiet_hours": True}
     if not _valid_states(log_id, entry):
         with _LOCK:
             data = _read()
