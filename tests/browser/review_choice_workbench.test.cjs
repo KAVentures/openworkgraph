@@ -47,7 +47,7 @@ const getControls=results=>[results.children.find(x=>x.tagName==='select'),resul
     execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false},
    // The decision handoff now requires a durable human approval (reviewed-handoff preflight).
    {format:'openworkgraph.reviewed-handoff-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
-    spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),human_review_approved:true,
+    spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),review_revision:0,human_review_approved:true,
     execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false}],
    async({results,details,opened,lastEvent,calls})=>{
      const [select,review]=getControls(results);select.value='p1';await review.onclick();
@@ -65,6 +65,28 @@ const getControls=results=>[results.children.find(x=>x.tagName==='select'),resul
      assert.equal(lastEvent().detail.spec_sha256,'a'.repeat(64));
      assert.equal(lastEvent().detail.archive_sha256,'b'.repeat(64));
    },true);
+
+ // A server response approving another revision or export must never open a handoff.
+ for(const [label,override] of [
+   ['different review revision',{review_revision:1}],
+   ['different specification digest',{spec_sha256:'f'.repeat(64)}],
+   ['different archive digest',{archive_sha256:'f'.repeat(64)}],
+   ['missing review revision',{review_revision:undefined}]
+ ]){
+   const preflight={format:'openworkgraph.review-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
+     spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),blockers:[],review_required:true,
+     execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false};
+   const handoff={format:'openworkgraph.reviewed-handoff-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
+     spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),review_revision:0,human_review_approved:true,
+     execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false,...override};
+   await scenario('handoff denies '+label,[basis(),basis(),preflight,handoff],async({results,details,opened,status})=>{
+     const [select,review]=getControls(results);select.value='p1';await review.onclick();
+     await details.children.find(x=>x.textContent==='Revalidate review basis on server').onclick();
+     await details.children.find(x=>x.textContent==='Open opportunity decision and handoff').onclick();
+     assert.equal(opened(),0,'stale review or export must not navigate');
+     assert.match(status.textContent,/Decision review expired/);
+   },true);
+ }
  // An in-flight inspection invalidated by editing the ID must not strand the load button.
  {
    const panel=new Node('section');
