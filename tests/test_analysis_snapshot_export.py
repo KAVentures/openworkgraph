@@ -83,6 +83,19 @@ with TestClient(app) as c:
  assert 'secret' not in reply.text and 'private' not in reply.text
  bearer={'Authorization':'Bearer '+local_auth.ensure_api_token(),'X-OWG-Analysis-Sharing-Preview':'true'}
  assert c.post(base,json=spec,headers=bearer).status_code==403
+ freshness=base.replace('analysis-sharing-preview','analysis-sharing-freshness')
+ snapshot=reply.json()
+ assert c.post(freshness,json={'spec':spec,'snapshot':snapshot},headers=h).status_code==403
+ assert c.post(freshness,json={'spec':spec,'snapshot':snapshot},headers={**h,'X-OWG-Analysis-Sharing-Preview':'true'}).status_code==200
+ current=c.post(freshness,json={'spec':spec,'snapshot':snapshot},headers={**h,'X-OWG-Analysis-Sharing-Preview':'true'})
+ assert current.headers['cache-control']=='no-store'
+ assert current.json()['lineage_current'] is True
+ assert current.json()['rows_authenticated'] is False
+ assert 'secret' not in current.text and 'private' not in current.text
+ assert c.post(freshness,json={'spec':spec,'snapshot':snapshot},headers=bearer).status_code==403
+ assert c.post(freshness,json={'spec':spec,'snapshot':snapshot,'extra':1},headers={**h,'X-OWG-Analysis-Sharing-Preview':'true'}).status_code==422
+ changed=c.post(freshness,json={'spec':{**spec,'dimensions':[]},'snapshot':snapshot},headers={**h,'X-OWG-Analysis-Sharing-Preview':'true'})
+ assert changed.status_code==200 and changed.json()['lineage_current'] is False
 '''
     env={**os.environ,'WORKFLOW_OBSERVER_DATA':str(tmp_path/'data'),'WORKFLOW_OBSERVER_AUTH_DIR':str(tmp_path/'auth'),'WORKFLOW_OBSERVER_CONFIG':str(tmp_path/'config.json')}
     r=subprocess.run([sys.executable,'-c',code],cwd=Path(__file__).resolve().parents[1],env=env,capture_output=True,text=True,timeout=120)
