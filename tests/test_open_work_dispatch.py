@@ -143,6 +143,10 @@ with TestClient(app) as client:
     assert client.post("/v1/open-work/dispatch/offers", json={"work_item_ref": ref}, headers=owner).status_code == 403
     assert client.post("/v1/open-work/dispatch/offers", json={"work_item_ref": ref, "confirm_offer": True},
                        headers=owner).status_code == 200
+    assert client.get("/v1/open-work/dispatch/agent", headers=owner).status_code == 403
+    assert client.get("/v1/open-work/dispatch/agent").status_code in (401, 403)
+    assert client.post("/v1/open-work/dispatch/agent/claim", json={
+        "work_item_ref": ref, "agent": "intruder"}, headers=owner).status_code == 403
     listed = client.get("/v1/open-work/dispatch/agent", headers=agent).json()
     assert [o["work_item_ref"] for o in listed["offers"]] == [ref]
     claim = client.post("/v1/open-work/dispatch/agent/claim", json={"work_item_ref": ref, "agent": "a"}, headers=agent)
