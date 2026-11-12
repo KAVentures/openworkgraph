@@ -44,19 +44,29 @@ def _write(data: dict[str, Any]) -> None:
             pass
 
 
-def decisions(workflow_id: str, revision: int, content_sha256: str) -> dict[str, dict[str, Any]]:
-    """Decisions recorded for this exact revision content; other revisions ask again."""
+def decisions(workflow_id: str, revision: int, content_sha256: str,
+              documents_sha256: str | None = None) -> dict[str, dict[str, Any]]:
+    """Only exact process *and source bundle* decisions suppress questions.
+
+    Historical decisions without a document pin remain inspectable but never
+    grant a new approval to changed or freshly supplied policy text.
+    """
+    if documents_sha256 is None:
+        return {}
     with _LOCK:
         entries = _read()["processes"].get(workflow_id, [])
     return {e["question_id"]: e for e in entries
-            if e.get("revision") == revision and e.get("content_sha256") == content_sha256}
+            if e.get("revision") == revision and e.get("content_sha256") == content_sha256
+            and e.get("documents_sha256") == documents_sha256}
 
 
 def record(workflow_id: str, revision: int, content_sha256: str, question: dict[str, Any],
-           decision: dict[str, Any], citations: list[dict[str, Any]]) -> dict[str, Any]:
+           decision: dict[str, Any], citations: list[dict[str, Any]],
+           documents_sha256: str) -> dict[str, Any]:
     entry = {
         "question_id": question["question_id"], "kind": question["kind"], "target_id": question["target_id"],
         "prompt": question["prompt"], "revision": revision, "content_sha256": content_sha256,
+        "documents_sha256": documents_sha256,
         "decision": decision["decision"], "answer": decision.get("answer", ""),
         "cited_statements": citations, "decided_at": datetime.now(timezone.utc).isoformat(),
         "decided_by": "local_owner", "changes_model_automatically": False,
@@ -64,7 +74,9 @@ def record(workflow_id: str, revision: int, content_sha256: str, question: dict[
     with _LOCK:
         data = _read()
         entries = [e for e in data["processes"].get(workflow_id, [])
-                   if not (e["question_id"] == entry["question_id"] and e["revision"] == revision)]
+                   if not (e.get("question_id") == entry["question_id"] and e.get("revision") == revision
+                           and e.get("content_sha256") == content_sha256
+                           and e.get("documents_sha256") == documents_sha256)]
         entries.append(entry)
         data["processes"][workflow_id] = entries[-_MAX_PER_PROCESS:]
         _write(data)
