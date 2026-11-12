@@ -708,6 +708,35 @@
         detail.appendChild(rowList);
         output.appendChild(detail);
       }
+      // Separate hypothetical probes from the independently supplied case batch.
+      // Never imply sampled boundaries prove whole-domain safety or grant action rights.
+      for(const probe of result.decision_table_boundary_probes||[]){
+        const detail=el('details');detail.className='owgDecisionBoundaryProbes';
+        const gap=Number(probe.status_counts?.gap||0),overlap=Number(probe.status_counts?.overlap||0);
+        detail.appendChild(el('summary','Synthetic numeric boundaries · '+probe.table_id+
+          (probe.status==='sampled'?' · '+Number(probe.sampled_numeric_points||0)+
+            ' test points · '+gap+' gaps · '+overlap+' overlaps':' · not evaluated')));
+        if(probe.status!=='sampled'){
+          detail.appendChild(el('p','No synthetic numeric boundary check: '+
+            String(probe.reason||'unsupported table shape').replaceAll('_',' ')+
+            '. This is not evidence that the rules are complete.'));output.appendChild(detail);continue;
+        }
+        detail.appendChild(el('p','Artificial values along the single declared numeric path '+
+          probe.fact_path+'. '+Number(probe.first_precedence_competition_count||0)+
+          ' FIRST precedence point(s) matched multiple rows. '+Number(probe.unsampled_numeric_regions||0)+
+          ' numeric region(s) could not be represented. These are sample checks, not proof of exhaustive domain coverage, real policy compliance or an authorized decision.'));
+        for(const [key,label] of [
+          ['gap_witnesses','No branch at'],['overlap_witnesses','Competing UNIQUE branches at'],
+          ['first_precedence_competition_witnesses','FIRST precedence masks competing rows at']]){
+          const values=probe[key]||[];
+          if(!values.length)continue;
+          const list=el('ul');
+          for(const item of values)list.appendChild(el('li',label+' hypothetical value '+
+            String(item.synthetic_value)+'. Review the declared rules.'));
+          detail.appendChild(list);
+        }
+        output.appendChild(detail);
+      }
       if(result.decision_table_test_coverage?.length)output.appendChild(el('p',
         'Decision evidence is from a selected local file, not verified actual operations. Rows without a selected example may still be valid; the test set does not prove completeness, fairness, correctness or execution authorization.'));
       const reasons={matched:'Matched declared comparison',not_matched:'Did not match declared comparison',unknown:'Unknown: missing or incompatible fact',
