@@ -77,6 +77,26 @@
         details.append(node('h3','Human review · exact recorded project'),node('p','Project '+projectId),
           node('p','Specification SHA-256: '+selected.spec_sha256),
           node('p','Archive SHA-256: '+selected.archive_sha256));
+        // Show the provenance the operator is actually reviewing, not just the
+        // project hashes. All values are text nodes; no untrusted HTML or source
+        // contents are rendered, and this remains a non-authorizing inspection.
+        const provenance=node('section');
+        provenance.setAttribute('aria-label','Recorded workflow and dataset provenance');
+        provenance.append(node('h4','Recorded workflow provenance'),
+          node('p','Process status: '+String(snapshot.process_status)),
+          node('p','Workflow ID: '+String(snapshot.process_reference?.workflow_id??'not recorded')),
+          node('p','Workflow revision: '+String(snapshot.process_reference?.revision??'not recorded')),
+          node('p','Workflow content SHA-256: '+String(snapshot.process_reference?.content_sha256??'not recorded')));
+        const origins=node('ul');
+        const datasets=Array.isArray(snapshot.dataset_origins)?snapshot.dataset_origins:[];
+        if(!datasets.length)origins.append(node('li','No dataset origin linked'));
+        for(const origin of datasets.slice(0,64)){
+          origins.append(node('li','Origin status: '+String(origin?.status??'unknown')+
+            ' · source SHA-256: '+String(origin?.source_content_sha256??'not recorded')+
+            ' · selection SHA-256: '+String(origin?.selection_sha256??'not recorded')));
+        }
+        provenance.append(node('p','Dataset origin records: '+datasets.length),origins);
+        details.append(provenance);
         const blockers=node('ul');
         for(const blocker of selected.blockers)blockers.append(node('li',blocker.replaceAll('_',' ')));
         blockers.append(node('li','Independent execution and business outcomes remain unverified'));
@@ -111,14 +131,15 @@
             // Continue into the existing authenticated pipeline decision UI, not a
             // second approval implementation. Preflight is non-authorizing; the
             // pipeline requires its own current-revision check on any decision.
-            const continueReview=node('button','Open opportunity decision and handoff');continueReview.type='button';
+            const consentLabel=node('label');const consent=node('input');consent.type='checkbox';consent.setAttribute('aria-label','Confirm this reviewed project and current evidence before opening the decision');consentLabel.append(consent,node('span',' I inspected this exact project and understand that approval does not authorize execution.'));const continueReview=node('button','Open opportunity decision and handoff');continueReview.type='button';continueReview.disabled=true;
             continueReview.onclick=async()=>{
-              if(token!==generation||choice.value!==projectId||input.value.trim()!==id)return;
+              if(token!==generation||choice.value!==projectId||input.value.trim()!==id||!consent.checked||reviewMutationPending||handoffPreflightPending||!notesMatchSaved())return;
               const pipelineCard=document.getElementById('owgPipelineCard');
               if(!pipelineCard){status.textContent='Automation pipeline unavailable. Reopen the dashboard and inspect again.';return;}
               // The opportunity can change after the first preflight. Revalidate
               // immediately before crossing into the decision surface, fail closed.
-              continueReview.disabled=true;
+              handoffPreflightPending=true;
+              updateContinue();
               status.textContent='Rechecking current evidence before opening the decision…';
               try{
                 await window.__owgAuthReady;
@@ -136,16 +157,29 @@
                 const result=await response.json();
                 if(result.format!=='openworkgraph.reviewed-handoff-preflight.v1'||
                    result.idea_id!==id||result.project_id!==projectId||
+                   result.idea_revision!==snapshot.idea.revision||
+                   result.spec_sha256!==selected.spec_sha256||
+                   result.archive_sha256!==selected.archive_sha256||
                    result.project_set_sha256!==snapshot.project_set_sha256||
                    result.human_review_approved!==true||result.execution_authorized!==false||
-                   result.source_read_authorized!==false)
+                   result.source_read_authorized!==false||
+                   !Number.isSafeInteger(result.review_revision)||result.review_revision!==reviewRevision||
+                   !consent.checked||reviewMutationPending||currentDecision!=='approved'||!reviewStillSelected()||!notesMatchSaved())
                   throw new Error('Decision evidence changed.');
-                window.dispatchEvent(new CustomEvent('owg-pipeline-open',{detail:{idea_id:id,project_id:projectId,idea_revision:snapshot.idea.revision,idea_state:snapshot.idea.state,spec_sha256:selected.spec_sha256,archive_sha256:selected.archive_sha256,review_basis:{project_id:projectId,project_set_sha256:snapshot.project_set_sha256,idea_revision:snapshot.idea.revision,idea_state:snapshot.idea.state,spec_sha256:selected.spec_sha256,archive_sha256:selected.archive_sha256,process_status:snapshot.process_status,process_reference:snapshot.process_reference,dataset_origins:snapshot.dataset_origins,dataset_origin_check_available:snapshot.dataset_origin_check_available,blockers:selected.blockers}}}));
+                window.dispatchEvent(new CustomEvent('owg-pipeline-open',{detail:{idea_id:id,project_id:projectId,idea_revision:snapshot.idea.revision,idea_state:snapshot.idea.state,spec_sha256:selected.spec_sha256,archive_sha256:selected.archive_sha256,review_revision:reviewRevision,review_basis:{project_id:projectId,project_set_sha256:snapshot.project_set_sha256,idea_revision:snapshot.idea.revision,idea_state:snapshot.idea.state,spec_sha256:selected.spec_sha256,archive_sha256:selected.archive_sha256,process_status:snapshot.process_status,process_reference:snapshot.process_reference,dataset_origins:snapshot.dataset_origins,dataset_origin_check_available:snapshot.dataset_origin_check_available,blockers:selected.blockers}}}));
                 pipelineCard.scrollIntoView({block:'start',behavior:'auto'});
+                // A reviewed navigation is single-use. Re-inspect before another handoff;
+                // the pipeline itself still requires independent authorization.
+                currentDecision='handoff-completed';
                 status.textContent='Opened reviewed opportunity decision. Human approval verified; no agent execution access was granted.';
               }catch(e){
-                if(token===generation){clear();status.textContent='Decision review expired. Inspect again. '+e.message;}
-              }finally{continueReview.disabled=false;}
+                if(token===generation){currentDecision='unknown';clear();status.textContent='Decision review expired. Inspect again. '+e.message;}
+              }finally{
+                // A failed or superseded preflight must never resurrect navigation.
+                // A new authoritative inspection is required after clear().
+                handoffPreflightPending=false;
+                updateContinue();
+              }
             };
             // Durable human review is a separate, non-executing decision.
             const notes=node('textarea');notes.maxLength=2000;notes.setAttribute('aria-label','Human review notes');
@@ -156,6 +190,18 @@
             for(const b of [saveDraft,approve,revoke])b.type='button';
             const reviewPath='/v1/review-choice-workbench/'+encodeURIComponent(id)+'/review';
             let reviewRevision=0;
+            // The next step is only actionable for a current approved review.
+            // The server independently rechecks approval and provenance.
+            let currentDecision='unreviewed';
+            let savedNotes='';
+            // Keep navigation closed throughout any in-flight review mutation.
+            let reviewMutationPending=false;
+            // Only one authoritative reviewed-handoff preflight may run at a time.
+            let handoffPreflightPending=false;
+            // Unsaved edits must not appear to be part of the approved handoff.
+            const notesMatchSaved=()=>notes.value===savedNotes;
+            notes.addEventListener('input',()=>{continueReview.disabled=true;updateContinue();});
+            const updateContinue=()=>{continueReview.disabled=!consent.checked||reviewMutationPending||handoffPreflightPending||currentDecision!=='approved'||!notesMatchSaved();};consent.addEventListener('change',updateContinue);
             // A pending read must never overwrite a later save/revoke result.
             // Disable mutation until the authoritative revision has loaded.
             let reviewRequestGeneration=0;
@@ -172,34 +218,63 @@
               dataset_origin_check_available:snapshot.dataset_origin_check_available,blockers:selected.blockers};
             async function refreshReview(){
               const requestGeneration=++reviewRequestGeneration;
-              const response=await fetch(reviewPath+'/'+encodeURIComponent(projectId),{cache:'no-store'});
+              await window.__owgAuthReady;
+      const response=await fetch(reviewPath+'/'+encodeURIComponent(projectId),{cache:'no-store'});
               if(!response.ok)throw new Error('Review state unavailable ('+response.status+').');
               const state=await response.json();
               if(!reviewStillSelected()||requestGeneration!==reviewRequestGeneration)return;
-              if(state.execution_authorized!==false||state.project_id!==projectId)throw new Error('Invalid review state');
-              reviewRevision=state.revision;notes.value=state.reviewer_notes||'';
+              if(state.format!=='openworkgraph.human-review.v1'||state.execution_authorized!==false||
+                 state.idea_id!==id||state.project_id!==projectId||
+                 !Number.isSafeInteger(state.revision)||state.revision<0||
+                 !['unreviewed','draft','approved','revoked'].includes(state.decision)||
+                 (state.revision===0)!==(state.decision==='unreviewed')||
+                 (state.revision>0&&!/^[a-f0-9]{64}$/i.test(state.basis_sha256||''))||
+                 typeof state.reviewer_notes!=='string'||state.reviewer_notes.length>2000)
+                throw new Error('Invalid review state');
+              // An authoritative refresh after a rejected mutation supersedes that mutation.
+              // Release its pending lock only after the refreshed state validates.
+              reviewMutationPending=false;
+              // A server refresh may replace the exact approved revision. An
+              // acknowledgement of the previous revision is never transferable.
+              consent.checked=false;
+              reviewRevision=state.revision;currentDecision=state.decision;notes.value=state.reviewer_notes||'';savedNotes=notes.value;updateContinue();
               reviewState.textContent='Saved review: '+state.decision+' (revision '+state.revision+'). No agent access granted.';
               for(const b of [saveDraft,approve,revoke])b.disabled=false;
             }
             async function persistReview(decision){
-              if(!reviewStillSelected())return;
-              ++reviewRequestGeneration;
+              if(!reviewStillSelected()||reviewMutationPending||handoffPreflightPending||reviewRevision<0)return;
+              const mutationGeneration=++reviewRequestGeneration;
+              reviewMutationPending=true;
+              // Any new saved decision requires a fresh, explicit human acknowledgement.
+              // Never carry consent from an earlier approved revision into this mutation.
+              consent.checked=false;
+              // A second mutation or refresh supersedes this response. Never let
+              // an older save resurrect approval after a later revoke.
+              continueReview.disabled=true;
               for(const b of [saveDraft,approve,revoke])b.disabled=true;
+              const submittedNotes=notes.value;
               try{
+                await window.__owgAuthReady;
                 const response=await fetch(reviewPath,{method:'POST',cache:'no-store',
                   headers:{'Content-Type':'application/json'},
-                  body:JSON.stringify({basis,expected_review_revision:reviewRevision,decision,reviewer_notes:notes.value})});
+                  body:JSON.stringify({basis,expected_review_revision:reviewRevision,decision,reviewer_notes:submittedNotes})});
                 if(!response.ok)throw new Error('Review save refused ('+response.status+'); re-inspect or reload.');
                 const state=await response.json();
-                if(!reviewStillSelected())return;
-                if(state.execution_authorized!==false||state.project_id!==projectId)throw new Error('Invalid saved review');
-                reviewRevision=state.revision;
+                if(!reviewStillSelected()||mutationGeneration!==reviewRequestGeneration)return;
+                if(state.format!=='openworkgraph.human-review.v1'||state.execution_authorized!==false||
+                   state.idea_id!==id||state.project_id!==projectId||state.decision!==decision||
+                   !Number.isSafeInteger(state.revision)||state.revision!==reviewRevision+1||
+                   !/^[a-f0-9]{64}$/i.test(state.basis_sha256||'')||
+                   typeof state.reviewer_notes!=='string'||state.reviewer_notes!==submittedNotes)
+                  throw new Error('Invalid saved review response');
+                reviewRevision=state.revision;currentDecision=state.decision;savedNotes=submittedNotes;updateContinue();
                 reviewState.textContent='Saved '+decision+' at revision '+reviewRevision+'. This does not authorize execution.';
               }catch(e){
                 if(reviewStillSelected()){
                   reviewState.textContent=e.message+' Reloading authoritative review revision…';
                   try{await refreshReview();}
                   catch(refreshError){
+                    currentDecision='unknown';updateContinue();
                     reviewState.textContent='Review state uncertain. Inspect again before editing: '+refreshError.message;
                     for(const b of [saveDraft,approve,revoke])b.disabled=true;
                   }
@@ -207,6 +282,7 @@
               }finally{
                 // A failed refresh keeps controls disabled; only a verified state
                 // may re-enable them. Do not resurrect a superseded selection.
+                if(mutationGeneration===reviewRequestGeneration){reviewMutationPending=false;updateContinue();}
                 if(!reviewStillSelected())for(const b of [saveDraft,approve,revoke])b.disabled=true;
                 else if(reviewState.textContent.startsWith('Saved ')||reviewState.textContent.startsWith('Review revoked'))
                   for(const b of [saveDraft,approve,revoke])b.disabled=false;
@@ -215,33 +291,46 @@
             saveDraft.onclick=()=>persistReview('draft');
             approve.onclick=()=>persistReview('approved');
             revoke.onclick=async()=>{
-              if(!reviewStillSelected()||reviewRevision<1)return;
-              ++reviewRequestGeneration;
+              if(!reviewStillSelected()||reviewMutationPending||handoffPreflightPending||reviewRevision<1)return;
+              const mutationGeneration=++reviewRequestGeneration;
+              reviewMutationPending=true;
+              consent.checked=false;
+              currentDecision='unknown';continueReview.disabled=true;
               // Revocation must work when evidence has changed since approval.
               // Never depend on the stale-basis preflight for withdrawing consent.
               for(const b of [saveDraft,approve,revoke])b.disabled=true;
               try{
+                await window.__owgAuthReady;
+                if(!reviewStillSelected()||mutationGeneration!==reviewRequestGeneration)return;
                 const response=await fetch(reviewPath+'/'+encodeURIComponent(projectId)+'/revoke',{
                   method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},
                   body:JSON.stringify({expected_review_revision:reviewRevision})});
                 if(!response.ok)throw new Error('Revocation refused ('+response.status+'); reload review state.');
                 const state=await response.json();
-                if(!reviewStillSelected())return;
-                if(state.decision!=='revoked'||state.execution_authorized!==false||
-                   state.project_id!==projectId||state.revision!==reviewRevision+1)
+                if(!reviewStillSelected()||mutationGeneration!==reviewRequestGeneration)return;
+                if(state.format!=='openworkgraph.human-review.v1'||state.decision!=='revoked'||
+                   state.execution_authorized!==false||state.idea_id!==id||
+                   state.project_id!==projectId||!Number.isSafeInteger(state.revision)||
+                   state.revision!==reviewRevision+1||
+                   !/^[a-f0-9]{64}$/i.test(state.basis_sha256||'')||
+                   typeof state.reviewer_notes!=='string'||state.reviewer_notes.length>2000)
                   throw new Error('Invalid revocation response');
-                reviewRevision=state.revision;
+                reviewRevision=state.revision;currentDecision='revoked';updateContinue();
                 reviewState.textContent='Review revoked at revision '+reviewRevision+'. No agent access granted.';
               }catch(e){
-                if(reviewStillSelected()){
+                if(reviewStillSelected()&&mutationGeneration===reviewRequestGeneration){
                   reviewState.textContent=e.message+' Reloading authoritative review revision…';
                   try{await refreshReview();}
                   catch(refreshError){
+                    currentDecision='unknown';updateContinue();
                     reviewState.textContent='Review state uncertain. Inspect again before editing: '+refreshError.message;
                     for(const b of [saveDraft,approve,revoke])b.disabled=true;
                   }
                 }
               }finally{
+                // Revocation must release the mutation lock only for its own
+                // authoritative request; stale responses cannot unlock handoff.
+                if(mutationGeneration===reviewRequestGeneration){reviewMutationPending=false;updateContinue();}
                 // A failed refresh keeps controls disabled; only a verified state
                 // may re-enable them. Do not resurrect a superseded selection.
                 if(!reviewStillSelected())for(const b of [saveDraft,approve,revoke])b.disabled=true;
@@ -251,7 +340,7 @@
             };
             details.append(node('h3','Record human review'),notes,saveDraft,approve,revoke,reviewState);
             refreshReview().catch(e=>{if(reviewStillSelected()){reviewState.textContent=e.message;for(const b of [saveDraft,approve,revoke])b.disabled=true;}});
-            details.append(continueReview);
+            details.append(consentLabel,continueReview);
             status.textContent='Current export basis confirmed by server. Continue to the existing opportunity decision; agent handoff still requires separate authorization.';
           }catch(e){if(token===generation){clear();status.textContent='Server preflight failed. Inspect again. '+e.message;}}
         };
@@ -275,11 +364,21 @@
     let recoveryGeneration=0,recoveryRevision=null,recoveryIdentity=null;
     function resetRecovery(){
       recoveryGeneration++;recoveryRevision=null;recoveryIdentity=null;
-      recoveryRevoke.disabled=true;recoveryStatus.textContent='IDs changed. Load the saved review again.';
+      recoveryRevoke.disabled=true;recoveryLoad.disabled=false;
+      recoveryStatus.textContent='IDs changed. Load the saved review again.';
     }
     recoveryIdea.addEventListener('input',resetRecovery);
     recoveryProject.addEventListener('input',resetRecovery);
     const recoveryPath=(idea,project)=>'/v1/review-choice-workbench/'+encodeURIComponent(idea)+'/review/'+encodeURIComponent(project);
+    // Recovery is deliberately independent of missing source evidence, but
+    // only a recognized, revisioned persisted decision can be revoked.
+    const validRecoveryState=(state,idea,project)=>state?.format==='openworkgraph.human-review.v1'&&
+      state.idea_id===idea&&state.project_id===project&&state.execution_authorized===false&&
+      Number.isSafeInteger(state.revision)&&state.revision>=0&&
+      ['unreviewed','draft','approved','revoked'].includes(state.decision)&&
+      (state.revision===0)===(state.decision==='unreviewed')&&
+      (state.revision===0||/^[a-f0-9]{64}$/i.test(state.basis_sha256||''))&&
+      typeof state.reviewer_notes==='string'&&state.reviewer_notes.length<=2000;
     recoveryLoad.onclick=async()=>{
       const idea=recoveryIdea.value.trim(),project=recoveryProject.value.trim();
       const generation=++recoveryGeneration;
@@ -289,9 +388,7 @@
       try{
         const state=await request(recoveryPath(idea,project));
         if(generation!==recoveryGeneration)return;
-        if(state.format!=='openworkgraph.human-review.v1'||state.idea_id!==idea||
-           state.project_id!==project||state.execution_authorized!==false||
-           !Number.isSafeInteger(state.revision)||state.revision<0)
+        if(!validRecoveryState(state,idea,project))
           throw new Error('Invalid saved review state.');
         recoveryRevision=state.revision;recoveryIdentity={idea,project};
         recoveryRevoke.disabled=state.revision===0||state.decision==='revoked';
@@ -313,8 +410,8 @@
         if(generation!==recoveryGeneration)return;
         if(!response.ok)throw new Error('Revocation refused ('+response.status+'). Reload the saved revision.');
         const state=await response.json();
-        if(state.idea_id!==idea||state.project_id!==project||state.decision!=='revoked'||
-           state.execution_authorized!==false||state.revision!==revision+1)
+        if(!validRecoveryState(state,idea,project)||state.decision!=='revoked'||
+           state.revision!==revision+1)
           throw new Error('Inconsistent revocation response; reload the saved review.');
         recoveryRevision=state.revision;
         recoveryStatus.textContent='Review revoked (revision '+state.revision+'). No execution access granted.';
