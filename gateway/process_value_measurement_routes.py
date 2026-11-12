@@ -11,6 +11,14 @@ def add_routes(router, store, human, body, response):
     base = "/v1/human/processes/{workflow_id}/value-measurements"
     ID = r"^[A-Za-z0-9_-]{1,80}$"
 
+    @router.get('/process-value-measurement-client.js', include_in_schema=False)
+    def script():
+        from pathlib import Path as FilePath
+        from fastapi.responses import Response
+        return Response(FilePath(__file__).with_name('process_value_measurement_client.js').read_text(encoding='utf-8'),
+                        media_type='application/javascript', headers={'Cache-Control':'no-store',
+                            'X-Content-Type-Options':'nosniff'})
+
     @router.get(base)
     def detail(workflow_id: str = Path(pattern=ID),
                revision: int | None = Query(default=None, ge=1, le=20), p=Depends(human)):
