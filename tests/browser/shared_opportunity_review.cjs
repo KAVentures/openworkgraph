@@ -34,6 +34,18 @@ const path=require('node:path');
   await page.locator('#opportunityComplianceAck').check();await decide('approved');
   assert.match(await page.locator('#opportunityDecision').textContent(),/current approved assessment: true/);
   await page.locator('#opportunityInventory').click();await page.locator('#opportunityInventoryStatus').filter({hasText:'1 opportunities in this page'}).waitFor();await page.locator('#opportunityFilter').fill('not a team');assert.equal(await page.locator('#opportunityPipeline').getByRole('button',{name:'Open opportunity '+root.workflow_id,exact:true}).count(),0);await page.locator('#opportunityFilter').fill('Service team');assert.equal(await page.locator('#opportunityPipeline').getByRole('button',{name:'Open opportunity '+root.workflow_id,exact:true}).count(),1);
+  // R15 selected budget preview: exact current revision, no spending authorization.
+  await page.locator('#opportunityBudgetSelect_'+root.workflow_id).check();
+  await page.locator('#opportunityBudgetPreviewCeiling').fill('1500.00');
+  await page.locator('#opportunityBudgetPreviewConfirm').check();
+  await page.locator('#opportunityBudgetPreview').click();
+  await page.locator('#opportunityBudgetStatus').filter({hasText:'Budget preview checked'}).waitFor();
+  assert.match(await page.locator('#opportunityBudgetResult').textContent(),/2000.00/);
+  assert.match(await page.locator('#opportunityBudgetResult').textContent(),/-500.00/);
+  assert.match(await page.locator('#opportunityBudgetResult').textContent(),/spending authorized false/);
+  await page.locator('#opportunityBudgetPreviewCeiling').fill('3500.00');
+  assert.equal(await page.locator('#opportunityBudgetResult').textContent(),'');
+  assert.equal(await page.locator('#opportunityBudgetPreviewConfirm').isChecked(),false);
   await page.locator('#disconnect').click();await login('alice');await selectRoot(1);
   await page.locator('#opportunityImplementation').check();await decide('implemented');assert.match(await page.locator('#opportunityDecision').textContent(),/Recorded stage: implemented/);assert.equal((await api(baseURL+'/opportunity')).business_outcomes_verified,false);
   // Metadata edits also reset approval; saved assessment remains immutable.
