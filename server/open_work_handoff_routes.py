@@ -42,7 +42,8 @@ async def _body(request: Request) -> dict[str, Any]:
             raise ValueError("nonstandard JSON number")
 
         try:
-            data = json.loads(raw, object_pairs_hook=unique_pairs, parse_constant=reject_constant)
+            # Preserve the existing empty-body contract; semantic validation stays in each route.
+            data = json.loads(raw, object_pairs_hook=unique_pairs, parse_constant=reject_constant) if raw else {}
         except (ValueError, UnicodeError, RecursionError):
             raise HTTPException(status_code=422, detail="invalid JSON") from None
     finally:
