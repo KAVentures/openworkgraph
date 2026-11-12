@@ -117,6 +117,23 @@ def test_node_bound_truncates_without_dangling_edges_or_fabricated_completion():
     assert not data["all_requested_hops_fully_traversed"]
 
 
+def test_two_way_frontier_deduplicates_repeated_edges_before_spending_budget():
+    log = imported()
+    # At hop two the incoming/outgoing frontier sees links already consumed
+    # at hop one. A six-edge budget must still include two genuinely new
+    # assertions, not waste its remaining slots on those old links.
+    result = trace(log, direction="both", max_hops=2, max_edges=6)
+    asserted = {(e["source_id"], e["target_id"], e["qualifier"])
+                for e in result["edges"]}
+    assert result["shown_edges"] == len(asserted) == 6
+    assert ("item1", "invoice1", "billed_by") in asserted
+    assert ("item2", "item2", "self") in asserted
+    assert result["truncated"] and result["truncation_reason"] == "max_edges_reached"
+    assert all(e["source_id"] in {n["object_id"] for n in result["nodes"]}
+               and e["target_id"] in {n["object_id"] for n in result["nodes"]}
+               for e in result["edges"])
+
+
 def test_edge_bound_reports_truncation_and_never_drops_existing_edges_from_counts():
     log = imported()
     data = trace(log, direction="outgoing", max_hops=2, max_edges=1)
