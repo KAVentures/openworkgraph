@@ -74,6 +74,14 @@ def portfolio_rollup(request: Request):
     return _respond(pipeline.portfolio)
 
 
+@router.get("/v1/automation-pipeline/benefit-overlap")
+def benefit_overlap_review(request: Request):
+    """Read-only potential benefit duplication review, never an aggregate savings claim."""
+    _require_dashboard(request)
+    from . import automation_benefit_overlap
+    return JSONResponse(automation_benefit_overlap.review(), headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/automation-pipeline")
 async def create_idea(request: Request):
     _require_dashboard(request)

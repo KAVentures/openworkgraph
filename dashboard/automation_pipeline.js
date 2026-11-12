@@ -720,7 +720,41 @@
       }catch(e){status.textContent=e.message;}
       finally{portfolioButton.disabled=false;}
     };
-    card.append(row,resumeSection,auditSection,tools,status,counts,portfolioButton,portfolioHost,viewCount,list,comparison,detail);
+    const benefitOverlapButton=button('Review overlapping benefit evidence','secondary');
+    benefitOverlapButton.id='owgPipelineBenefitOverlap';
+    const benefitOverlapHost=el('div');
+    benefitOverlapHost.id='owgPipelineBenefitOverlapResult';
+    benefitOverlapHost.setAttribute('role','status');
+    benefitOverlapHost.setAttribute('aria-live','polite');
+    benefitOverlapButton.onclick=async()=>{
+      benefitOverlapButton.disabled=true;
+      try{
+        const r=await (await api('/v1/automation-pipeline/benefit-overlap')).json();
+        if(!Array.isArray(r.candidate_pairs)||typeof r.after_measurements!=='number')
+          throw new Error('Unexpected benefit-overlap report');
+        const count=el('p',r.candidate_pairs.length+
+          ' cross-idea review candidates shown from '+r.after_measurements+
+          ' recorded after-period measurements. '+r.unlinked_after_measurements+
+          ' lack an exact source reference.','muted');
+        const title=id=>(latestIdeas.find(idea=>idea.idea_id===id)||{}).title||id;
+        const items=el('ul');
+        for(const pair of r.candidate_pairs){
+          items.appendChild(el('li',title(pair.first_idea_id)+' ('+pair.first_measurement_id+
+            ') and '+title(pair.second_idea_id)+' ('+pair.second_measurement_id+
+            '): '+pair.overlap_start+' to '+pair.overlap_end+
+            ' · '+pair.source_kind+' · '+pair.source_group));
+        }
+        const note=r.rows_truncated||r.candidate_pairs_truncated||r.unreadable_measurements?
+          'Some evidence could not be fully reviewed; do not infer non-overlap from omitted rows.':
+          r.candidate_pairs.length?'Review the underlying case populations before attributing or adding benefits.':
+          'No exact source overlap was found; different or missing references may still cover the same work.';
+        benefitOverlapHost.replaceChildren(el('h4','Potential benefit overlap'),count,
+          ...(r.candidate_pairs.length?[items]:[]),el('p',note,'muted'),
+          el('p',r.interpretation,'muted'));
+      }catch(e){benefitOverlapHost.replaceChildren(el('p',e.message,'muted'));}
+      finally{benefitOverlapButton.disabled=false;}
+    };
+    card.append(row,resumeSection,auditSection,tools,status,counts,portfolioButton,portfolioHost,benefitOverlapButton,benefitOverlapHost,viewCount,list,comparison,detail);
     panel.appendChild(card);
 
     let latestIdeas=[],refreshGeneration=0,resumeGeneration=0,auditGeneration=0,auditPageIndex=0,auditAbort=null;
