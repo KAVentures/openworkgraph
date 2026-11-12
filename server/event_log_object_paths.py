@@ -97,14 +97,23 @@ def trace(log_id: str, spec: Any) -> dict[str, Any]:
             if available <= 0:
                 truncated_reason = "max_edges_reached"
                 break
+            # With direction=both, later frontiers can revisit edges already
+            # traversed. Fetch enough extra candidates to discard EVERY
+            # previously seen edge without making a complete graph scan.
+            # Otherwise a small remaining edge budget can hide novel edges
+            # behind the repeated entries and incorrectly mark traversal
+            # complete or truncated.
+            scan_limit = available + len(seen_edges) + 1
             candidates = _neighbors(conn, log_id, sorted(frontier), settings.direction,
-                                    settings.qualifier, available + 1)
-            exceeded = len(candidates) > available
+                                    settings.qualifier, scan_limit)
             next_frontier: list[str] = []
-            for source, target, qualifier, source_type, target_type in candidates[:available]:
+            for source, target, qualifier, source_type, target_type in candidates:
                 edge_key = source, target, qualifier
                 if edge_key in seen_edges:
                     continue
+                if len(edges) >= settings.max_edges:
+                    truncated_reason = "max_edges_reached"
+                    break
                 first, last = ((source, source_type), (target, target_type))
                 missing = {
                     node_id: kind for node_id, kind in (first, last)
@@ -127,7 +136,11 @@ def trace(log_id: str, spec: Any) -> dict[str, Any]:
             hops_visited = hop
             if truncated_reason:
                 break
-            if exceeded:
+            # At most settings.max_edges stored edges can be duplicates, so
+            # scan_limit necessarily contains another unseen candidate if
+            # the database returned a full page. Fail closed if bounds leave
+            # any uncertainty; never claim the subgraph is exhaustive.
+            if len(candidates) == scan_limit:
                 truncated_reason = "edge_scan_limit_reached"
                 break
             frontier = next_frontier
