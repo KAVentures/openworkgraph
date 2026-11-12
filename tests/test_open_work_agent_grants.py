@@ -107,6 +107,18 @@ def test_grant_loses_authority_when_offer_withdrawn_or_dispatch_disabled(setup):
     assert dispatch.withdraw(REF)
     assert grants.authenticate(header) is None
     dispatch.offer(REF)
-    assert grants.authenticate(header) is not None
+    # A fresh offer must never resurrect an earlier approval.
+    assert grants.authenticate(header) is None
+    replacement = grants.issue(REF, "agent-a", 1, confirmed=True)
+    assert grants.authenticate("Bearer " + replacement["token"]) is not None
     dispatch.set_enabled(False)
     assert grants.authenticate(header) is None
+
+
+def test_grant_never_revives_after_dispatch_restart(setup):
+    old = grants.issue(REF, "agent-a", 1, confirmed=True)
+    dispatch.set_enabled(False)
+    dispatch.set_enabled(True)
+    dispatch.offer(REF)
+    assert grants.authenticate("Bearer " + old["token"]) is None
+    assert grants.authenticate("Bearer " + grants.issue(REF, "agent-b", 1, confirmed=True)["token"]) is not None
