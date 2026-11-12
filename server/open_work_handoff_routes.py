@@ -193,7 +193,8 @@ async def granted_release(request: Request):
     identity = _grant(request)
     data = await _body(request)
     _grant(request, data.get("work_item_ref"))
-    return await _run(dispatch.release, identity["work_item_ref"], data.get("lease_token"))
+    return await _run(dispatch.release, identity["work_item_ref"], data.get("lease_token"),
+                      expected_agent=identity["agent"])
 
 @router.post("/v1/open-work/dispatch/granted/report")
 async def granted_report(request: Request):
@@ -202,4 +203,5 @@ async def granted_report(request: Request):
     _grant(request, data.get("work_item_ref"))
     return await _run(dispatch.report, identity["work_item_ref"], data.get("lease_token"),
         data.get("outcome"), note=data.get("note", ""),
-        operation_receipt_ref=data.get("operation_receipt_ref"))
+        operation_receipt_ref=data.get("operation_receipt_ref"),
+        expected_agent=identity["agent"])

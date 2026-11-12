@@ -27,3 +27,9 @@ OAuth; no consent-revision or employee-actor identity is bound yet. There is
 no case-context/receipt retrieval under this credential, no operator dashboard
 grant UI, and no real-provider acceptance. This is a production-path security
 integration slice, not completion of #247. Do not expose the local API publicly.
+
+A valid grant for the same case does not authorize releasing or reporting another
+agent's active lease, even if that lease token is exposed. Granted REST routes
+bind lease operations to the authenticated grant's agent identity under the
+same dispatch state lock. Legacy installation-local MCP calls retain their
+existing lease-token interface. Reports remain unverified claims.

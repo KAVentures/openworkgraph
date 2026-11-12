@@ -134,3 +134,43 @@ def test_owner_acknowledge_reoffer_requires_new_grant(setup):
     assert grants.authenticate(header) is None
     replacement = grants.issue(REF, "agent-a", 1, confirmed=True)
     assert grants.authenticate("Bearer " + replacement["token"]) is not None
+
+
+def test_one_granted_agent_cannot_release_or_report_anothers_lease(setup):
+    """Two valid case grants are not interchangeable lease principals."""
+    app = FastAPI()
+    app.include_router(router)
+    first = grants.issue(REF, "agent-a", 1, confirmed=True)
+    second = grants.issue(REF, "agent-b", 1, confirmed=True)
+    a = {"Authorization": "Bearer " + first["token"]}
+    b = {"Authorization": "Bearer " + second["token"]}
+    with TestClient(app) as client:
+        claim = client.post("/v1/open-work/dispatch/granted/claim", headers=a,
+                            json={"work_item_ref": REF})
+        assert claim.status_code == 200, claim.text
+        lease = claim.json()["lease_token"]
+        for route, payload in (
+            ("release", {"work_item_ref": REF, "lease_token": lease}),
+            ("report", {"work_item_ref": REF, "lease_token": lease, "outcome": "attempted"}),
+        ):
+            denied = client.post("/v1/open-work/dispatch/granted/" + route,
+                                 headers=b, json=payload)
+            assert denied.status_code == 409, denied.text
+        state = dispatch.status(owner=True)["offers"][0]
+        assert state["status"] == "claimed"
+        assert state["claimed_by"] == "agent-a"
+        assert state["last_report"] is None
+        # The actual principal can still complete the original lease.
+        accepted = client.post("/v1/open-work/dispatch/granted/report", headers=a,
+                               json={"work_item_ref": REF, "lease_token": lease,
+                                     "outcome": "attempted"})
+        assert accepted.status_code == 200, accepted.text
+        assert accepted.json()["last_report"]["verified"] is False
+
+
+def test_legacy_local_dispatch_lease_contract_still_works(setup):
+    """The new identity constraint must not silently break existing MCP callers."""
+    lease = dispatch.claim(REF, "local-agent")["lease_token"]
+    assert dispatch.release(REF, lease)["status"] == "offered"
+    lease = dispatch.claim(REF, "local-agent")["lease_token"]
+    assert dispatch.report(REF, lease, "declined")["last_report"]["verified"] is False
