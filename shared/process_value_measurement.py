@@ -14,7 +14,7 @@ from pydantic import Field, StrictBool, StrictInt, field_validator, model_valida
 
 from .process_hierarchy import Digest, Hierarchy, Reference, Strict
 
-Money = Annotated[str, Field(pattern=r"^(0|[1-9][0-9]{0,11})(\\.[0-9]{1,2})?$")]
+Money = Annotated[str, Field(pattern=r"^(0|[1-9][0-9]{0,11})(\.[0-9]{1,2})?$")]
 Currency = Literal["USD", "EUR", "GBP", "SEK"]
 MAX_REVISIONS = 20
 
