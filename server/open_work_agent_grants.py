@@ -5,6 +5,9 @@ never plaintext. Every use re-reads SQLite so revocation survives processes.
 """
 from __future__ import annotations
 import hashlib
+import os
+import stat
+from contextlib import contextmanager
 import hmac
 import re
 import secrets
@@ -18,9 +21,14 @@ _AGENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._:-]{0,63}$")
 class GrantError(ValueError):
     pass
 
+@contextmanager
 def _db():
     path = auth_dir() / ".open_work_agent_grants.sqlite3"
+    if path.is_symlink():
+        raise OSError("unsafe agent grant store path")
     connection = sqlite3.connect(path, timeout=10)
+    if os.name == "posix":
+        os.chmod(path, 0o600)
     try:
         connection.execute("PRAGMA busy_timeout=10000")
         connection.execute("""CREATE TABLE IF NOT EXISTS grants (
@@ -29,10 +37,10 @@ def _db():
             expires_at INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL)""")
         connection.commit()
-        return connection
-    except BaseException:
+        yield connection
+        connection.commit()
+    finally:
         connection.close()
-        raise
 
 def issue(work_item_ref: str, agent: str, hours: int, *, confirmed: bool) -> dict:
     if confirmed is not True:
