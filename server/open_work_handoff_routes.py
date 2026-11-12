@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 
 from . import open_work_dispatch as dispatch
-from .local_auth import dashboard_session_valid
+from .local_auth import dashboard_session_valid, bearer_matches
 
 router = APIRouter()
 _MAX_BODY = 2048
@@ -18,6 +18,15 @@ def _require_dashboard(request: Request) -> None:
     raw = str(request.headers.get("authorization") or "")
     if not raw.lower().startswith("owg-session ") or not dashboard_session_valid(raw[len("owg-session "):].strip()):
         raise HTTPException(status_code=403, detail="explicit local dashboard session required")
+
+
+def _require_agent(request: Request) -> None:
+    """Require local bearer even when mounted without the normal middleware.
+
+    This installation token is not an external-agent grant or action authority.
+    """
+    if not bearer_matches(request.headers.get("authorization")):
+        raise HTTPException(status_code=403, detail="explicit local agent bearer required")
 
 
 async def _body(request: Request) -> dict[str, Any]:
@@ -103,7 +112,8 @@ async def dispatch_acknowledge(request: Request):
 
 # Agent actions (called by the local MCP tools with the local API token).
 @router.get("/v1/open-work/dispatch/agent")
-async def agent_offers():
+async def agent_offers(request: Request):
+    _require_agent(request)
     result = await _run(dispatch.status, owner=False)
     result["offers"] = [o for o in result["offers"] if o["status"] == "offered"] if result["enabled"] else []
     return result
@@ -111,18 +121,21 @@ async def agent_offers():
 
 @router.post("/v1/open-work/dispatch/agent/claim")
 async def agent_claim(request: Request):
+    _require_agent(request)
     data = await _body(request)
     return await _run(dispatch.claim, data.get("work_item_ref"), data.get("agent"))
 
 
 @router.post("/v1/open-work/dispatch/agent/release")
 async def agent_release(request: Request):
+    _require_agent(request)
     data = await _body(request)
     return await _run(dispatch.release, data.get("work_item_ref"), data.get("lease_token"))
 
 
 @router.post("/v1/open-work/dispatch/agent/report")
 async def agent_report(request: Request):
+    _require_agent(request)
     data = await _body(request)
     return await _run(dispatch.report, data.get("work_item_ref"), data.get("lease_token"), data.get("outcome"),
                       note=data.get("note", ""), operation_receipt_ref=data.get("operation_receipt_ref"))
