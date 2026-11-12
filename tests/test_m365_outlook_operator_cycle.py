@@ -45,9 +45,9 @@ class OperatorCycleTests(unittest.TestCase):
                       grant_file=Path("grant"), previous_candidate=Path("previous"),
                       log_id="log")
         with patch.object(cycle, "inspect_checkpoint",
-                          side_effect=[prior, changed]) as inspect, \\
+                          side_effect=[prior, changed]) as inspect, \
              patch.object(cycle, "_private_read",
-                          return_value=json.dumps({"csv_sha256": "a" * 64}).encode()), \\
+                          return_value=json.dumps({"csv_sha256": "a" * 64}).encode()), \
              patch.object(cycle, "run_verified_next_round",
                           return_value=response) as graph:
             with self.assertRaisesRegex(ReceiptError, "changed during Graph"):
@@ -60,9 +60,9 @@ class OperatorCycleTests(unittest.TestCase):
         from pathlib import Path
         prior = {"generation": 2, "candidate_sha256": "a" * 64,
                  "log_id": "log", "cursor_url": "cursor"}
-        with patch.object(cycle, "inspect_checkpoint", return_value=prior) as inspect, \\
+        with patch.object(cycle, "inspect_checkpoint", return_value=prior) as inspect, \
              patch.object(cycle, "_private_read",
-                          return_value=json.dumps({"csv_sha256": "a" * 64}).encode()), \\
+                          return_value=json.dumps({"csv_sha256": "a" * 64}).encode()), \
              patch.object(cycle, "run_verified_next_round", return_value={
                  "status": "next_round_review_ready", "event_snapshots": 1,
                  "removal_markers_for_review": 0
