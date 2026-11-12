@@ -107,7 +107,7 @@ def test_nested_object_path_checks_are_internally_generated_without_case_values(
         rule["predicate"]["conditions"][0]["path"] = "/customer/amount"
     report = inspect(ProcessModel.model_validate(m))
     assert report["status"] == "sampled"
-    assert report["fact_path"] == "/customer/amount"
+    assert "fact_path" not in report
     assert report["gap_witnesses"] == []
     assert report["status_counts"]["unique_match"] == report["sampled_numeric_points"]
 
