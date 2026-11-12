@@ -38,3 +38,12 @@ increment, **not** dashboard UX completion or real Microsoft tenant acceptance.
 **Pre-append generation guard:** Before any OWG append, the transaction now reads the current scoped private checkpoint under the live grant. For generation one, the ledger must be empty; for later generations, `--expected-previous-candidate-sha256` must exactly match the latest committed predecessor and its destination log. A missing, revoked or expired grant, stale generation, or different destination refuses before appending. This is an early safety check, **not** a transaction lock: the checkpoint commit still performs its authoritative exclusive-create generation check. If another operator advances the ledger after this preflight, append may already have happened when commit refuses; inspect membership and receipts and reconcile manually rather than rerunning blindly.
 
 **Audited handoff boundary:** With `OWG_M365_AUDIT_DIR` configured, a successful verified handoff now requires a private, minimized `handoff` phase receipt before the checkpoint can advance. An audit-write failure after append stops checkpoint commit and requires manual reconciliation; it never triggers a retry. Review, append, handoff, and commit receipts are distinct. The audit directory must be private and supported by the POSIX writer.
+
+**Read-only preflight before approval:** The same command supports
+`--preflight-only --consent-local-read` without append/commit approvals.
+It checks the scoped live grant, candidate CSV digest, destination log and
+checkpoint predecessor and reports the proposed next generation. It makes
+zero Graph requests, OWG writes or checkpoint changes. All normal required
+path and scope arguments still apply. This is a point-in-time review, not
+a lock or authorization to commit: the later mutation revalidates the grant,
+candidate and checkpoint and still requires all explicit approvals.
