@@ -35,10 +35,10 @@ class ReviewedTransactionTests(unittest.TestCase):
         allowed = ("tenant", "mailbox", "folder", "log_id", "confirm_log_id",
                    "grant_file", "candidate", "ledger_dir", "expected_review_csv_sha256",
                    "expected_previous_candidate_sha256", "consent_local_read")
-        with patch.object(tx.cycle, "review", return_value={"csv_sha256": DIGEST}), \\
+        with patch.object(tx.cycle, "review", return_value={"csv_sha256": DIGEST}), \
              patch.object(tx, "inspect_checkpoint", return_value={
-                 "candidate_sha256": "b" * 64, "log_id": "log", "generation": 3}), \\
-             patch.object(tx.cycle, "append") as append, \\
+                 "candidate_sha256": "b" * 64, "log_id": "log", "generation": 3}), \
+             patch.object(tx.cycle, "append") as append, \
              patch.object(tx.cycle, "checkpoint_commit") as commit:
             result = tx.preflight(**{k: values[k] for k in allowed})
             self.assertEqual(result["proposed_generation"], 4)
@@ -52,9 +52,9 @@ class ReviewedTransactionTests(unittest.TestCase):
         allowed = ("tenant", "mailbox", "folder", "log_id", "confirm_log_id",
                    "grant_file", "candidate", "ledger_dir", "expected_review_csv_sha256",
                    "expected_previous_candidate_sha256", "consent_local_read")
-        with patch.object(tx.cycle, "review", return_value={"csv_sha256": DIGEST}), \\
+        with patch.object(tx.cycle, "review", return_value={"csv_sha256": DIGEST}), \
              patch.object(tx, "inspect_checkpoint", return_value={
-                 "candidate_sha256": "b" * 64, "log_id": "log", "generation": 3}), \\
+                 "candidate_sha256": "b" * 64, "log_id": "log", "generation": 3}), \
              patch.object(tx.cycle, "append") as append:
             with self.assertRaisesRegex(ReceiptError, "Stale"):
                 tx.preflight(**{k: values[k] for k in allowed})
