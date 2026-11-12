@@ -27,7 +27,7 @@ import time
 from typing import Any
 from urllib.parse import urlsplit
 
-from .db import DATA_DIR
+from . import local_auth
 
 FORMAT = "openworkgraph.signal-delivery-channels.v1"
 PAYLOAD_FORMAT = "openworkgraph.signal-attention.v1"
@@ -47,7 +47,10 @@ class DeliveryError(ValueError):
 
 
 def _path() -> Path:
-    return DATA_DIR / "signal_delivery_channels.json"
+    # Receiver paths can hold bearer-like secrets. Keep the entire delivery
+    # ledger in the application's credential directory, so an unencrypted
+    # local/automated backup cannot silently include it.
+    return local_auth.auth_dir() / "signal_delivery_channels.json"
 
 
 def _now(epoch: float | None = None) -> str:
