@@ -40,7 +40,7 @@ existing lease-token interface. Reports remain unverified claims.
 A newly issued dashboard grant records the currently connected source scope when
 one exists. `GET /v1/open-work/dispatch/granted/case-context` requires the
 same active offer generation, unexpired nonrevoked grant, connected source scope,
-and a currently retained and reviewed declaration for that exact case. Legacy
+a separately confirmed `confirm_case_context: true` at grant issuance (default false),\nand a currently retained and reviewed declaration for that exact case. Legacy
 scope-less grants cannot read this context. The response excludes owner edit
 CAS tokens and source scope identifiers. It is a **local-only, read-only**
 owner declaration, not live provider state, a verified receipt, agent action
