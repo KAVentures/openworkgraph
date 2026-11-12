@@ -30,7 +30,7 @@ class ReviewedTransactionTests(unittest.TestCase):
                 "--grant-file", "grant", "--candidate", "candidate",
                 "--ledger-dir", "ledger", "--expected-review-csv-sha256",
                 DIGEST, "--consent-local-read"]
-        with patch.object(tx, "preflight", return_value={"status": "review_ready_for_explicit_commit"}) as preflight, \\
+        with patch.object(tx, "preflight", return_value={"status": "review_ready_for_explicit_commit"}) as preflight, \
              patch.object(tx, "execute") as execute:
             output = io.StringIO()
             with redirect_stdout(output):
@@ -46,7 +46,7 @@ class ReviewedTransactionTests(unittest.TestCase):
                 "--grant-file", "grant", "--candidate", "candidate",
                 "--ledger-dir", "ledger", "--expected-review-csv-sha256",
                 DIGEST, "--consent-local-read"]
-        with patch.object(tx, "preflight", side_effect=ReceiptError("revoked")), \\
+        with patch.object(tx, "preflight", side_effect=ReceiptError("revoked")), \
              patch.object(tx, "execute") as execute:
             output = io.StringIO()
             with redirect_stdout(output):
