@@ -251,6 +251,10 @@ def resumption_candidates(
         if event_id:
             event_id_counts[event_id] = event_id_counts.get(event_id, 0) + 1
     colliding_event_ids = {eid for eid, count in event_id_counts.items() if count > 1}
+    unlabeled_pointer_rows = sum(1 for row in pointer_rows if not str(row["event_id"] or "")[:120])
+    if unlabeled_pointer_rows:
+        result["coverage"]["excluded_unlabeled_pointer_rows"] = unlabeled_pointer_rows
+        result["coverage"]["scan_truncated"] = True
     if colliding_event_ids:
         result["coverage"]["ambiguous_event_id_collisions"] = len(colliding_event_ids)
         result["coverage"]["excluded_colliding_pointer_rows"] = sum(
@@ -261,7 +265,7 @@ def resumption_candidates(
     for row in pointer_rows:
         # Ambiguous external labels cannot safely contribute even singleton
         # identity tracks, candidate overlap, or case-review evidence.
-        if str(row["event_id"] or "")[:120] in colliding_event_ids:
+        if not str(row["event_id"] or "")[:120] or str(row["event_id"] or "")[:120] in colliding_event_ids:
             continue
         data = dict(row)
         instant = data.get("instant")
