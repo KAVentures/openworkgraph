@@ -96,7 +96,7 @@
           const download=el('button','Export this saved revision (JSON)');download.type='button';
           download.onclick=()=>work(async still=>{
             const current=selected.process.workflow_id;
-            const result=await call('/v1/human/processes/'+encodeURIComponent(current)+'/value-measurements?revision='+artifact.revision);
+            const result=await call('/v1/human/processes/'+encodeURIComponent(current)+'/value-measurements/export?revision='+artifact.revision);
             if(!still())return;
             const blob=new Blob([JSON.stringify(result,null,2)],{type:'application/json'});
             const url=URL.createObjectURL(blob);
