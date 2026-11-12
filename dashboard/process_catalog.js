@@ -890,7 +890,7 @@
       const query='?'+new URLSearchParams({workflow_id:selected.workflow_id,revision:selected.revision});
       const result=await request('/v1/process-catalog/clarify'+query,{documents:docs()});
       if(record!==selected)return;
-      output.replaceChildren(el('p',result.questions.length+' open questions · '+result.answered_question_count+' already answered for revision '+result.revision+' · '+result.statement_count+' statements read'));
+      output.replaceChildren(el('p',result.questions.length+' open questions · '+result.answered_question_count+' already answered for revision '+result.revision+' and these exact source documents · '+result.statement_count+' statements read'));
       if(result.instruction_like_statements.length)output.appendChild(el('p',result.instruction_like_statements.length+' statement(s) read like instructions to the system and were ignored.'));
       for(const q of result.questions){
         const box=el('section');box.appendChild(el('h5',q.prompt));
@@ -904,7 +904,7 @@
           box.appendChild(button(choice[0].toUpperCase()+choice.slice(1),()=>locked(async()=>{
             const cited=[...q.citations.map(c=>c.statement_id),...q.contradictions.flatMap(c=>c.statements.map(s=>s.statement_id))].slice(0,5);
             const res=await request('/v1/process-catalog/clarify/decide'+query,{documents:docs(),
-              decision:{question_id:q.question_id,decision:choice,answer:answer.value,cited_statement_ids:[...new Set(cited)].slice(0,5)}});
+              decision:{question_id:q.question_id,decision:choice,answer:answer.value,cited_statement_ids:[...new Set(cited)].slice(0,5),expected_documents_sha256:result.documents_sha256}});
             status(res.proposed_change?'Decision recorded. Confirming this rule is proposed for the next revision; review the rule and save to apply it.':'Decision recorded for revision '+selected.revision+'.');
             await run();
           })));
