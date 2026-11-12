@@ -28,7 +28,7 @@ async function scenario(title,responses,check,withPipeline=false){
 }
 const getControls=results=>[results.children.find(x=>x.tagName==='select'),results.children.find(x=>x.tagName==='button')];
 (async()=>{
- await scenario('successful read-only review',[basis(),basis()],async({results,details,status,calls})=>{const [select,review]=getControls(results);assert.ok(select&&review);select.value='p1';await review.onclick();assert.equal(calls(),2);assert.match(details.children.map(x=>x.textContent).join(' '),/Specification SHA-256/);assert.match(status.textContent,/Read-only choice inspected/);});
+ await scenario('successful read-only review',[basis(),basis()],async({results,details,status,calls})=>{const [select,review]=getControls(results);assert.ok(select&&review);select.value='p1';await review.onclick();assert.equal(calls(),2);assert.match(details.children.map(x=>x.textContent).join(' '),/Specification SHA-256/);const provenance=details.children.find(x=>x.tagName==='section');assert.ok(provenance,'review must show recorded workflow and dataset provenance');assert.match(provenance.children.map(x=>x.textContent).join(' '),/Process status: current/);assert.match(provenance.children.map(x=>x.textContent).join(' '),/Dataset origin records: 0/);assert.match(status.textContent,/Read-only choice inspected/);});
  await scenario('decision navigation rechecks server and fails closed on stale review',[basis(),basis(),
    {format:'openworkgraph.review-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
     spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),blockers:[],review_required:true,
