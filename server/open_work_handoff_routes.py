@@ -5,7 +5,7 @@ import asyncio
 import json
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 
 from . import open_work_dispatch as dispatch
 from .local_auth import bearer_matches, dashboard_session_valid
@@ -210,11 +210,12 @@ async def granted_report(request: Request):
 
 
 @router.get("/v1/open-work/dispatch/granted/case-context")
-async def granted_reviewed_case_context(request: Request):
+async def granted_reviewed_case_context(request: Request, response: Response):
     """Bounded, local-only owner-reviewed context; never a provider or outcome receipt."""
     from .open_work_declaration_routes import _source_scope
     from .open_work_case_declarations import list_case_declarations, CaseDeclarationError
     identity = _grant(request)
+    response.headers["Cache-Control"] = "no-store"
     # Legacy grants cannot acquire retrospective source access. A grant must
     # have been issued under this exact connected source scope.
     scope = await asyncio.to_thread(_source_scope)
