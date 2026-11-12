@@ -24,7 +24,7 @@ Limitations: the legacy local installation bearer/MCP dispatch path remains for
 backward compatibility and is **not** an independently identified external
 agent. The grant is scoped to the local installation, not hosted multi-tenant
 OAuth; no consent-revision or employee-actor identity is bound yet. There is
-no case-context/receipt retrieval under this credential, no operator dashboard
+no verified-receipt retrieval under this credential, no operator dashboard
 grant UI, and no real-provider acceptance. This is a production-path security
 integration slice, not completion of #247. Do not expose the local API publicly.
 
@@ -50,3 +50,16 @@ occurs on this route. It must not be published as a hosted multi-tenant API.
 A source disconnect or scope change denies access; operator grant revocation
 and offer withdrawal deny access at the next request. The separate dashboard
 session remains required to issue and revoke grants.
+
+### Operator grant inventory semantics
+
+The authenticated dashboard-session `GET /v1/open-work/dispatch/grants`
+returns no bearer secrets. Its `active` flag now reflects **effective local
+case access**, not just an unexpired database row: a withdrawn offer, disabled
+dispatch, stale offer generation, or an agent report awaiting review marks the
+grant inactive. A re-offer never revives an old grant. The separate
+`case_context_approved` flag records whether disclosure was explicitly
+confirmed when the credential was issued; it does **not** assert current source
+consent or live case-context accessibility. The case-context endpoint always
+rechecks the current source scope and review. This is owner metadata, not
+hosted tenant authorization or an outcome receipt.
