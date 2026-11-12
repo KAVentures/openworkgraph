@@ -175,7 +175,7 @@ def probe_table(table, rules: dict, *, as_of_date: str | None) -> dict[str, Any]
             if len(out["first_precedence_competition_witnesses"]) < MAX_WITNESSES:
                 out["first_precedence_competition_witnesses"].append(witness)
     out.update(
-        status="sampled", reason=None, fact_path=path,
+        status="sampled", reason=None,
         sampled_numeric_points=len(points),
         status_counts=dict(sorted(counts.items())),
         unsampled_numeric_regions=unsampled,
