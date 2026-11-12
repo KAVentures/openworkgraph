@@ -41,13 +41,15 @@ def _db():
         columns = {row[1] for row in connection.execute("PRAGMA table_info(grants)")}
         if "offered_at" not in columns:
             connection.execute("ALTER TABLE grants ADD COLUMN offered_at TEXT NOT NULL DEFAULT ''")
+        if "source_scope" not in columns:
+            connection.execute("ALTER TABLE grants ADD COLUMN source_scope TEXT NOT NULL DEFAULT ''")
         connection.commit()
         yield connection
         connection.commit()
     finally:
         connection.close()
 
-def issue(work_item_ref: str, agent: str, hours: int, *, confirmed: bool) -> dict:
+def issue(work_item_ref: str, agent: str, hours: int, *, confirmed: bool, source_scope: str | None = None) -> dict:
     if confirmed is not True:
         raise GrantError("explicit owner confirmation required")
     if not isinstance(work_item_ref, str) or not _REF.fullmatch(work_item_ref):
@@ -65,13 +67,15 @@ def issue(work_item_ref: str, agent: str, hours: int, *, confirmed: bool) -> dic
         raise GrantError("case must be explicitly offered first")
     offered_at = next(item["offered_at"] for item in current["offers"]
                       if item["work_item_ref"] == work_item_ref and item["status"] == "offered")
+    if source_scope is not None and not re.fullmatch(r"owg:scope:[0-9a-f]{32}", source_scope):
+        raise GrantError("invalid source scope")
     token = secrets.token_urlsafe(48)
     grant_id = secrets.token_hex(16)
     now = int(time.time())
     with _db() as db:
-        db.execute("INSERT INTO grants(id,digest,work_item_ref,agent,expires_at,created_at,offered_at) VALUES (?,?,?,?,?,?,?)",
+        db.execute("INSERT INTO grants(id,digest,work_item_ref,agent,expires_at,created_at,offered_at,source_scope) VALUES (?,?,?,?,?,?,?,?)",
                    (grant_id, hashlib.sha256(token.encode()).hexdigest(), work_item_ref,
-                    agent, now + hours * 3600, now, offered_at))
+                    agent, now + hours * 3600, now, offered_at, source_scope or ""))
     return {"grant_id": grant_id, "token": token, "work_item_ref": work_item_ref,
             "agent": agent, "expires_at": now + hours * 3600, "action_authority": False}
 
@@ -83,7 +87,7 @@ def authenticate(header: str | None, work_item_ref: str | None = None) -> dict |
         return None
     digest = hashlib.sha256(token.encode()).hexdigest()
     with _db() as db:
-        row = db.execute("SELECT id,work_item_ref,agent,expires_at,revoked,offered_at FROM grants WHERE digest=?",
+        row = db.execute("SELECT id,work_item_ref,agent,expires_at,revoked,offered_at,source_scope FROM grants WHERE digest=?",
                          (digest,)).fetchone()
     if row is None or row[4] or row[3] <= int(time.time()):
         return None
@@ -99,7 +103,8 @@ def authenticate(header: str | None, work_item_ref: str | None = None) -> dict |
         for item in current["offers"]
     ):
         return None
-    return {"grant_id": row[0], "work_item_ref": row[1], "agent": row[2], "expires_at": row[3]}
+    return {"grant_id": row[0], "work_item_ref": row[1], "agent": row[2], "expires_at": row[3],
+            "source_scope": row[6] or None}
 
 def revoke(grant_id: str) -> bool:
     if not isinstance(grant_id, str) or not re.fullmatch(r"[0-9a-f]{32}", grant_id):
