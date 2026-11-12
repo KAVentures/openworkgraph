@@ -278,20 +278,22 @@ def claim(work_item_ref: str, agent: str) -> dict[str, Any]:
         return {**_public(item, owner=False), "lease_token": token}
 
 
-def _claimed(state: dict[str, Any], work_item_ref: str, token: str) -> dict[str, Any]:
+def _claimed(state: dict[str, Any], work_item_ref: str, token: str, *, expected_agent: str | None = None) -> dict[str, Any]:
     item = state["offers"].get(str(work_item_ref))
     claim_ = item.get("claim") if item else None
     if not claim_ or not isinstance(token, str) or not secrets.compare_digest(claim_["token"], token):
         raise DispatchError("no active claim for this case and lease token")
+    if expected_agent is not None and not secrets.compare_digest(claim_.get("agent", ""), expected_agent):
+        raise DispatchError("claim belongs to a different agent")
     return item
 
 
-def release(work_item_ref: str, lease_token: str) -> dict[str, Any]:
+def release(work_item_ref: str, lease_token: str, *, expected_agent: str | None = None) -> dict[str, Any]:
     now = _now()
     with _LOCK:
         state = _read()
         _sweep(state, now)
-        item = _claimed(state, work_item_ref, lease_token)
+        item = _claimed(state, work_item_ref, lease_token, expected_agent=expected_agent)
         agent = item["claim"]["agent"]
         item["claim"], item["status"] = None, "offered"
         item["history"] = (item["history"] + [{"at": now.isoformat(), "event": "released", "agent": agent}])[-_MAX_HISTORY:]
@@ -300,7 +302,8 @@ def release(work_item_ref: str, lease_token: str) -> dict[str, Any]:
 
 
 def report(work_item_ref: str, lease_token: str, outcome: str, *,
-           note: str = "", operation_receipt_ref: str | None = None) -> dict[str, Any]:
+           note: str = "", operation_receipt_ref: str | None = None,
+           expected_agent: str | None = None) -> dict[str, Any]:
     """Agent action: record what it did. Stored as an unverified agent claim."""
     if outcome not in _OUTCOMES:
         raise DispatchError("outcome must be attempted, declined or needs_human")
@@ -312,7 +315,7 @@ def report(work_item_ref: str, lease_token: str, outcome: str, *,
     with _LOCK:
         state = _read()
         _sweep(state, now)
-        item = _claimed(state, work_item_ref, lease_token)
+        item = _claimed(state, work_item_ref, lease_token, expected_agent=expected_agent)
         agent = item["claim"]["agent"]
         item["last_report"] = {
             "agent": agent, "reported_at": now.isoformat(), "outcome": outcome,
