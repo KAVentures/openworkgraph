@@ -36,6 +36,11 @@ def _db():
             work_item_ref TEXT NOT NULL, agent TEXT NOT NULL,
             expires_at INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL)""")
+        # Older credentials predate offer-generation binding; leave their marker
+        # empty so they fail closed instead of regaining authority on re-offer.
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(grants)")}
+        if "offered_at" not in columns:
+            connection.execute("ALTER TABLE grants ADD COLUMN offered_at TEXT NOT NULL DEFAULT ''")
         connection.commit()
         yield connection
         connection.commit()
@@ -58,13 +63,15 @@ def issue(work_item_ref: str, agent: str, hours: int, *, confirmed: bool) -> dic
         for item in current["offers"]
     ):
         raise GrantError("case must be explicitly offered first")
+    offered_at = next(item["offered_at"] for item in current["offers"]
+                      if item["work_item_ref"] == work_item_ref and item["status"] == "offered")
     token = secrets.token_urlsafe(48)
     grant_id = secrets.token_hex(16)
     now = int(time.time())
     with _db() as db:
-        db.execute("INSERT INTO grants(id,digest,work_item_ref,agent,expires_at,created_at) VALUES (?,?,?,?,?,?)",
+        db.execute("INSERT INTO grants(id,digest,work_item_ref,agent,expires_at,created_at,offered_at) VALUES (?,?,?,?,?,?,?)",
                    (grant_id, hashlib.sha256(token.encode()).hexdigest(), work_item_ref,
-                    agent, now + hours * 3600, now))
+                    agent, now + hours * 3600, now, offered_at))
     return {"grant_id": grant_id, "token": token, "work_item_ref": work_item_ref,
             "agent": agent, "expires_at": now + hours * 3600, "action_authority": False}
 
@@ -76,7 +83,7 @@ def authenticate(header: str | None, work_item_ref: str | None = None) -> dict |
         return None
     digest = hashlib.sha256(token.encode()).hexdigest()
     with _db() as db:
-        row = db.execute("SELECT id,work_item_ref,agent,expires_at,revoked FROM grants WHERE digest=?",
+        row = db.execute("SELECT id,work_item_ref,agent,expires_at,revoked,offered_at FROM grants WHERE digest=?",
                          (digest,)).fetchone()
     if row is None or row[4] or row[3] <= int(time.time()):
         return None
@@ -88,6 +95,7 @@ def authenticate(header: str | None, work_item_ref: str | None = None) -> dict |
     current = status(owner=True)
     if not current["enabled"] or not any(
         item["work_item_ref"] == row[1] and item["status"] in ("offered", "claimed")
+        and row[5] and hmac.compare_digest(item["offered_at"], row[5])
         for item in current["offers"]
     ):
         return None
