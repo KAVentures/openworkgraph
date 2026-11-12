@@ -17,6 +17,9 @@ from server import signal_notification_delivery as notices
 from server import local_scheduler as scheduler
 from server import event_log_signal_inbox as inbox
 
+_REAL_SCHEDULED = scheduler.scheduled
+_REAL_INBOX_LIST = inbox.list_inbox
+
 LOG = "log_" + "a" * 16
 STATE_A = "a" * 64
 STATE_B = "b" * 64
@@ -193,6 +196,41 @@ def test_receiver_dns_rebinding_to_private_subnet_is_blocked(monkeypatch):
     with pytest.raises(notices.DeliveryError, match="restricted address"):
         notices._send(URL, b"{}", {})
     # A valid HTTPS URL is not authorization to contact internal networks.
+
+
+def test_real_pinned_scheduler_evaluation_enqueues_and_log_deletion_revokes(
+        tmp_path, monkeypatch):
+    """End-to-end in DuckDB: actual import/rule/schedule/evaluate/delete."""
+    from io import BytesIO
+    from server import event_log_workspace as workspace, event_log_signals as rules
+    monkeypatch.setattr(workspace, "DATA_DIR", tmp_path / "logs")
+    monkeypatch.setattr(scheduler, "DATA_DIR", tmp_path / "jobs")
+    monkeypatch.setattr(scheduler, "scheduled", _REAL_SCHEDULED)
+    monkeypatch.setattr(inbox, "list_inbox", _REAL_INBOX_LIST)
+    log = workspace.import_log(BytesIO(
+        b"case,activity,time\\nC1,Open,2024-01-01T00:00:00Z\\n"
+        b"C1,Close,2024-01-01T01:00:00Z\\n"),
+        name="Synthetic notifications", source_format="csv",
+        mapping={"case_column": "case", "activity_column": "activity",
+                 "timestamp_column": "time"})["log_id"]
+    rules.add_rule(log, {"name": "Open cases",
+                         "when": {"kind": "kpi", "metric": "case_count",
+                                  "operator": "above", "threshold": 0}})
+    schedule = scheduler.create("event_log_signals", log,
+        interval_minutes=15, confirm_scheduled_runs=True)
+    created = notices.configure(log, URL,
+        confirm_external_delivery=True, confirm_counts_only=True)
+    assert notices.status(log)["configured"] is True
+    job = scheduler._read()["schedules"][schedule["schedule_id"]]
+    outcome, _ = scheduler._run_pinned_signal_job(job)
+    assert outcome.startswith("succeeded:")
+    assert notices.status(log)["pending_notifications"] == 1
+    assert notices.deliver_due(transport=lambda *_: 204)["sent"] == 1
+    assert inbox.list_inbox(log)["unreviewed"] == 1
+    assert workspace.delete_log(log)["deleted"] is True
+    assert notices.status(log)["configured"] is False
+    assert not scheduler.scheduled("event_log_signals", log)
+    assert created["notification_secret"] not in notices._path().read_text()
 
 
 def test_local_route_requires_dashboard_session_and_explicit_delivery_consent(tmp_path):
