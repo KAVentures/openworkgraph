@@ -678,7 +678,7 @@ const path=require('node:path');
    await page.locator('#owgAnalysisSharingConsent').check();
    await page.locator('#owgAnalysisFreshness').click();
    await assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),true);
-   await page.locator('#owgAnalysisFreshnessStatus').getByText('Snapshot lineage is stale.',{exact:false}).waitFor();
+   await page.getByText('Snapshot lineage is stale.',{exact:false}).waitFor();
    await page.locator('#owgAnalysisSharingConsent').uncheck();
    await page.locator('#owgAnalysisSharingConsent').check();
    assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),true);
