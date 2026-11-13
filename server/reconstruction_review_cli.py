@@ -122,7 +122,18 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
                      "confirmed_case": False})
     # Pair-only evidence does not enumerate every event in the source scan.
     # Even a complete scan cannot establish that absent events were unassigned.
-    evidence_digest = hashlib.sha256(json.dumps(rows, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    # Bind the fingerprint to access mode and completeness, not only rows.
+    # The same event list under a changed grant mode or truncated scan must
+    # never be mistaken for the same review basis.
+    fingerprint_basis = {
+        "format": "openworkgraph.reconstruction-review.v2",
+        "saved_history_access": response["saved_history_access"],
+        "coverage_incomplete": incomplete,
+        "event_reviews": rows,
+    }
+    evidence_digest = hashlib.sha256(json.dumps(
+        fingerprint_basis, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")).hexdigest()
     return {"evidence_sha256": evidence_digest, "event_reviews": rows, "event_reviews_count": len(rows),
             "coverage_incomplete": incomplete,
             "unlisted_events_are_unassigned": False,
