@@ -1547,14 +1547,27 @@
     const drawing=el('div');drawing.id='owgObjectRelationDrawing';drawing.style.maxWidth='100%';
     const rowsOut=el('div');rowsOut.id='owgObjectRelationRows';rowsOut.style.cssText='overflow-x:auto;max-width:100%';
     const evidence=el('div');evidence.id='owgObjectRelationEvidence';evidence.setAttribute('aria-live','polite');
-    box.append(controls,statusLine,groups,drawing,rowsOut,evidence);
+    const traceHeading=el('h4','Follow related objects (up to three hops)');
+    const traceNote=el('p','Trace links in the retained OCEL relationship graph. This is a bounded navigation view, not a reconstructed case or validated handoff. Select one literal object ID above first. The direction and optional exact qualifier filter above also apply here.','muted');
+    const traceHops=select('owgObjectRelationTraceHops',[['1','1 hop'],['2','2 hops'],['3','3 hops']]);traceHops.value='2';
+    const traceRun=button('Trace related objects','secondary');traceRun.id='owgObjectRelationTraceRun';traceRun.disabled=true;
+    const traceStatus=el('p');traceStatus.id='owgObjectRelationTraceStatus';traceStatus.setAttribute('role','status');traceStatus.setAttribute('aria-live','polite');
+    const traceView=el('div');traceView.id='owgObjectRelationTraceResult';traceView.style.cssText='overflow-x:auto;max-width:100%';
+    const traceControls=el('div',null,'row');traceControls.style.alignItems='end';traceControls.append(field('Traversal depth',traceHops),traceRun);
+    box.append(controls,statusLine,groups,drawing,rowsOut,evidence,
+      traceHeading,traceNote,traceControls,traceStatus,traceView);
     let requestVersion=0,nextCursor=null,bookmarks=[null];
     const base='/v1/event-logs/'+encodeURIComponent(logId);
     const literal=value=>value===''?'(unqualified)':value.trim()!==value?JSON.stringify(value):value;
-    function scopeChanged(){requestVersion++;nextCursor=null;bookmarks=[null];previous.disabled=next.disabled=true;showRows.disabled=false;direction.disabled=object.value==='';rowsOut.replaceChildren();drawing.replaceChildren();evidence.replaceChildren();statusLine.textContent='Filters changed. Show relationships to refresh.';}
+    let traceVersion=0;
+    function scopeChanged(){requestVersion++;traceVersion++;nextCursor=null;bookmarks=[null];previous.disabled=next.disabled=true;showRows.disabled=false;direction.disabled=object.value==='';traceRun.disabled=object.value==='';rowsOut.replaceChildren();drawing.replaceChildren();evidence.replaceChildren();traceView.replaceChildren();traceStatus.textContent=object.value?'Select Trace related objects to inspect more than one hop.':'Select an object for multi-hop tracing.';statusLine.textContent='Filters changed. Show relationships to refresh.';}
     for(const control of [object,sourceType,targetType,direction,exact,qualifier,limit]){
       control.addEventListener(control.tagName==='INPUT'&&control.type==='text'?'input':'change',scopeChanged);
     }
+    traceHops.addEventListener('change',()=>{
+      traceVersion++;traceRun.disabled=object.value==='';traceView.replaceChildren();
+      traceStatus.textContent='Traversal depth changed. Trace again for the selected object.';
+    });
     async function inspect(selected,turn){
       evidence.replaceChildren(el('h4','Current linked log events for '+literal(selected.object_id)));
       if(!selected.observed_events){evidence.append(el('p','No retained events are linked to this object. Its supplied object relationships remain visible; no lifecycle steps are inferred.'));return;}
@@ -1607,6 +1620,39 @@
       }catch(error){if(current()&&turn===requestVersion){rowsOut.replaceChildren();drawing.replaceChildren();evidence.replaceChildren();nextCursor=null;bookmarks=[null];statusLine.textContent=error.message;}}
       finally{if(current()&&turn===requestVersion)showRows.disabled=false;}
     }
+    traceRun.onclick=async()=>{
+      if(!object.value||!current())return;
+      const turn=++traceVersion;
+      traceRun.disabled=true;traceView.replaceChildren();
+      traceStatus.textContent='Tracing bounded retained relationships locally…';
+      const spec={object_id:object.value,direction:direction.value,
+        max_hops:Number(traceHops.value),max_nodes:60,max_edges:100};
+      if(exact.checked)spec.qualifier=qualifier.value;
+      try{
+        const response=await(await api(base+'/object-relationships/trace',{method:'POST',
+          headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})).json();
+        if(!current()||turn!==traceVersion)return;
+        traceStatus.textContent=Number(response.shown_nodes)+' objects and '+
+          Number(response.shown_edges)+' original relationship assertions through '+
+          Number(response.hops_visited)+' hop(s)'+
+          (response.truncated?' — limited: '+String(response.truncation_reason).replaceAll('_',' '):' — selected depth fully traversed within the retained graph')+
+          '. This does not verify case membership or causality.';
+        traceView.replaceChildren(
+          el('p','Objects: source IDs and types as imported, with the shortest displayed hop distance.','muted'),
+          table(['Distance','Object ID','Object type'],(response.nodes||[]).map(n=>[
+            n.hop,objectButton(n.object_id),n.object_type
+          ])),
+          el('p','Links: their original direction and literal qualifier are preserved; no new links or event connections are inferred.','muted'),
+          table(['First seen hop','Source','Relationship label','Target'],(response.edges||[]).map(e=>[
+            e.encountered_at_hop,objectButton(e.source_id),literal(e.qualifier),objectButton(e.target_id)
+          ]))
+        );
+      }catch(error){
+        if(current()&&turn===traceVersion){traceView.replaceChildren();traceStatus.textContent=error.message||'Relationship trace unavailable.';}
+      }finally{
+        if(current()&&turn===traceVersion)traceRun.disabled=object.value==='';
+      }
+    };
     showRows.onclick=()=>{bookmarks=[null];load().catch(()=>{});};
     next.onclick=()=>{if(nextCursor){bookmarks.push(nextCursor);load(nextCursor).catch(()=>{});}};
     previous.onclick=()=>{if(bookmarks.length>1){bookmarks.pop();load(bookmarks[bookmarks.length-1]).catch(()=>{});}};
