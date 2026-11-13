@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import json
 import os
 import sys
@@ -212,6 +213,23 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
     }
 
 
+def score_bound_review_annotations(response: dict[str, Any], envelope: dict[str, Any]) -> dict[str, Any]:
+    """Reject stale/replayed reviewer labels from a different evidence export.
+
+    The digest binds the exact surfaced evidence, not authorization or reviewer
+    identity. Online callers must separately check live grants and provenance.
+    """
+    if not isinstance(envelope, dict) or set(envelope) != {"evidence_sha256", "annotations"}:
+        raise ValueError("annotation envelope requires evidence_sha256 and annotations")
+    digest = envelope["evidence_sha256"]
+    if not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+        raise ValueError("invalid evidence digest")
+    actual = build_review_queue(response)["evidence_sha256"]
+    if not hmac.compare_digest(digest, actual):
+        raise ValueError("annotation evidence digest mismatch")
+    return score_review_annotations(response, envelope["annotations"])
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Review exact observed event-to-resource-pair evidence offline")
     parser.add_argument("input", help="Authorized work-resumption response JSON, or - for stdin")
@@ -228,7 +246,7 @@ def main() -> int:
                 raise ValueError("source and annotation files must be distinct")
             with open(args.annotations, encoding="utf-8") as stream:
                 labels = json.load(stream)
-            output = score_review_annotations(payload, labels)
+            output = score_bound_review_annotations(payload, labels)
         else:
             output = build_review_queue(payload)
         print(json.dumps(output, sort_keys=True, separators=(",", ":")))
