@@ -909,7 +909,7 @@
   function renderClarification(host){
     const section=el('section');section.id='owgCatalogClarification';
     section.append(el('h4','Clarify this design against multiple policy sources'),
-      el('p','Review up to five separately supplied SOP or policy documents. Each citation identifies the source and character range. OWG does not store the document contents. Contradictory statements must be resolved by explicitly selecting the applicable evidence; no statement is trusted as an instruction or automatically approved. Saving answers does not change the process design.'));
+      el('p','Review up to five separately supplied SOP or policy documents. Each citation identifies the source and character range. OWG does not store the document contents. Contradictory statements must be resolved by explicitly selecting the applicable evidence; no statement is trusted as an instruction or automatically approved. Only selected citation excerpts and your answers are retained in the local decision ledger; the full documents are not. Saving an answer does not change the process design.'));
     const sources=el('div');sources.id='owgCatalogClarifyDocuments';
     const output=el('div');output.id='owgCatalogClarifyResult';output.setAttribute('role','status');
     const add=button('Add another policy or SOP',()=>appendDocument());
