@@ -100,6 +100,13 @@ with TestClient(app) as client:
     stale = client.post(endpoint, json=request, headers=preview_headers)
     assert stale.status_code == 409, stale.text
     assert 'rows' not in stale.text and 'private-case' not in stale.text
+    # Deleting the saved source must revoke the reviewed export, even if the
+    # caller retains the complete original lineage and dashboard session.
+    deleted = client.post(base + '/delete', headers=dashboard)
+    assert deleted.status_code == 200, deleted.text
+    missing = client.post(endpoint, json=request, headers=preview_headers)
+    assert missing.status_code in (404, 409), missing.text
+    assert 'rows' not in missing.text and 'private-case' not in missing.text
 """
     env = {**os.environ, 'WORKFLOW_OBSERVER_DATA': str(tmp_path / 'data'),
            'WORKFLOW_OBSERVER_AUTH_DIR': str(tmp_path / 'auth'),
