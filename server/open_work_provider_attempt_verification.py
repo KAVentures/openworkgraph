@@ -51,11 +51,13 @@ def verify_provider_attempt(
                "customer_outcome": "unknown"}
     if not all(map(_valid, (account, object_id, operation, correlation_id, expected_event_id))):
         return {**unknown, "reason": "invalid_identity"}
-    if not isinstance(max_age_seconds, int) or not 0 < max_age_seconds <= 3600:
+    if type(max_age_seconds) is not int or not 0 < max_age_seconds <= 3600:
         return {**unknown, "reason": "invalid_freshness"}
-    current = now or datetime.now(timezone.utc)
-    if current.tzinfo is None:
+    current = datetime.now(timezone.utc) if now is None else now
+    if not isinstance(current, datetime) or current.tzinfo is None:
         return {**unknown, "reason": "invalid_clock"}
+    if not callable(read_events):
+        return {**unknown, "reason": "invalid_provider_reader"}
     try:
         payload = read_events()
     except Exception:
