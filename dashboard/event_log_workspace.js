@@ -3883,7 +3883,7 @@
 
   function signalSection(activityNames){
     const box=section('Signals');box.id='owgEventLogSignals';
-    box.appendChild(el('div','Save conditions to check this log against, such as a slow median or cases left open. Checking shows which signals hold now and which cases are new since the last check. Signals never send messages or change anything.','muted'));
+    box.appendChild(el('div','Save conditions to check this log against, such as a slow median or cases left open. Checking shows which signals hold now and which cases are new since the last check. Signals never execute business actions. Optional outbound counts-only alerts require separate opt-in below.','muted'));
     const name=input('owgSignalName','text','Signal name');name.maxLength=120;
     const kind=select('owgSignalKind',[['cases','Cases that…'],['kpi','A KPI that…']]);
     const condition=select('owgSignalCondition',[['open_longer_than','are open longer than'],['duration_over','take longer than'],['lacks_activity','never reach activity'],['contains_activity','contain activity'],['has_rework','have rework']]);
@@ -3908,6 +3908,29 @@
     const reviewNote=el('p','Acknowledge a specific triggered result locally, or reopen it. Snooze a result for one hour or one day; it returns on refresh after expiry. Reviews never send notifications, approve actions, or imply business outcomes. Stale results require a fresh Check signals.','muted');
     const inbox=el('div');inbox.id='owgSignalInbox';
     const reviewRefresh=button('Refresh review inbox','secondary');reviewRefresh.id='owgSignalReviewRefresh';
+    const deliveryHeading=el('h4','Optional external signal alerts');
+    const deliveryNote=el('p','Only after you schedule saved signal checks and explicitly opt in, OWG can POST the NUMBER of newly unreviewed signal states to your HTTPS webhook. No log names, rule names, case IDs, source identifiers, metric values or evidence leave this computer. Alerts cannot authorize business actions. The receiver controls delivery and retention after receipt.','muted');
+    const deliveryUrl=input('owgSignalDeliveryUrl','url','https://your-https-webhook.example/alerts');
+    deliveryUrl.maxLength=700;
+    const deliveryConsent=input('owgSignalDeliveryConsent','checkbox');
+    const countsConsent=input('owgSignalCountsConsent','checkbox');
+    const deliveryEnable=button('Enable counts-only webhook','secondary');deliveryEnable.id='owgSignalDeliveryEnable';deliveryEnable.disabled=true;
+    const deliveryRefresh=button('Refresh delivery status','secondary');deliveryRefresh.id='owgSignalDeliveryRefresh';
+    const deliveryRemove=button('Remove webhook and erase queued alerts','secondary');deliveryRemove.id='owgSignalDeliveryRemove';deliveryRemove.disabled=true;
+    const deliveryResume=button('Resume paused webhook','secondary');deliveryResume.id='owgSignalDeliveryResume';deliveryResume.disabled=true;
+    const deliveryStatus=el('p','No external delivery is enabled by default.','muted');
+    deliveryStatus.id='owgSignalDeliveryStatus';deliveryStatus.setAttribute('role','status');
+    const deliverySecret=input('owgSignalDeliverySecret','password');deliverySecret.readOnly=true;deliverySecret.autocomplete='off';
+    const revealSecret=button('Reveal one-time signing secret','secondary');
+    const secretPane=el('div');secretPane.hidden=true;
+    secretPane.append(el('p','This HMAC secret is shown only when the channel is created. Store it with your receiving webhook, not in source control. It cannot be recovered from this page.','muted'),
+      field('One-time HMAC signing secret',deliverySecret),revealSecret);
+    revealSecret.onclick=()=>{deliverySecret.type=deliverySecret.type==='password'?'text':'password';};
+    const deliveryPanel=el('div');deliveryPanel.id='owgSignalDeliveryPanel';
+    deliveryPanel.append(deliveryHeading,deliveryNote,field('HTTPS webhook receiver',deliveryUrl),
+      field('I authorize OWG to send external signal attention notifications',deliveryConsent),
+      field('I reviewed the outbound disclosure: only counts and opaque notification IDs, no saved work or case evidence',countsConsent),
+      deliveryEnable,deliveryRefresh,deliveryResume,deliveryRemove,deliveryStatus,secretPane);
     const transitionHeading=el('h4','Signal state changes');
     const transitionNote=el('p','Locally recorded triggered and cleared transitions from explicit or scheduled evaluations. Repeated unchanged results do not create alerts. This is not live source monitoring or a notification feed. Up to 5,000 transitions are retained per log.','muted');
     const transitionRefresh=button('Refresh signal changes','secondary');transitionRefresh.id='owgSignalTransitionRefresh';
@@ -3937,12 +3960,72 @@
     const timelineControls=el('div',null,'actions');timelineControls.append(timelineFilter,timelineRefresh);
     const allControls=el('div',null,'actions');allControls.append(allFilter,allRefresh);
     box.append(row,message,rules,evaluate,out,reviewHeading,reviewNote,reviewRefresh,inbox,
-      transitionHeading,transitionNote,transitionRefresh,transitionStatus,transitionResults,
+      deliveryPanel,transitionHeading,transitionNote,transitionRefresh,transitionStatus,transitionResults,
       allHeading,allNote,allControls,allStatus,allResults,
       timelineHeading,timelineNote,timelineControls,timelineStatus,timelineResults);
     const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/signals';
     const selectedLogId=state.logId;
     const inboxBase=()=>'/v1/event-logs/'+encodeURIComponent(selectedLogId)+'/signal-inbox';
+    const deliveryBase=()=>'/v1/schedules/signal-delivery/'+encodeURIComponent(selectedLogId);
+    let deliveryRequestId=0,hasDelivery=false;
+    const deliverySync=()=>{
+      deliveryEnable.disabled=hasDelivery||!deliveryConsent.checked||!countsConsent.checked||!deliveryUrl.value.trim();
+      deliveryRemove.disabled=!hasDelivery;
+    };
+    deliveryConsent.onchange=countsConsent.onchange=deliveryUrl.oninput=deliverySync;
+    const refreshDelivery=async()=>{
+      const requestId=++deliveryRequestId;
+      const value=await getJSON(deliveryBase());
+      if(generation!==state.generation||requestId!==deliveryRequestId)return;
+      hasDelivery=value.configured===true;
+      deliveryResume.disabled=!hasDelivery||value.enabled!==false;
+      deliveryStatus.textContent=hasDelivery
+        ?'Counts-only webhook: '+(value.enabled?'enabled':'paused')+' for '+value.recipient_host+
+          '; '+value.pending_notifications+' pending, '+value.delivered_notifications+
+          ' acknowledged by receiver.'+(value.paused_reason?' Paused: '+value.paused_reason+'.':'')+
+          ' No source facts or identities are included.'
+        :'External alerts are disabled. Create an explicit saved-signal schedule first, then review the two delivery acknowledgements.';
+      deliverySync();
+    };
+    deliveryEnable.onclick=async()=>{
+      if(!deliveryConsent.checked||!countsConsent.checked||hasDelivery||generation!==state.generation)return;
+      deliveryEnable.disabled=true;secretPane.hidden=true;deliverySecret.value='';
+      try{
+        const response=await (await api(deliveryBase(),{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({receiver_url:deliveryUrl.value.trim(),
+            confirm_external_delivery:true,confirm_counts_only:true})})).json();
+        if(generation!==state.generation)return;
+        deliverySecret.value=response.notification_secret||'';
+        secretPane.hidden=!deliverySecret.value;
+        deliveryConsent.checked=false;countsConsent.checked=false;
+        await refreshDelivery();
+      }catch(error){deliveryStatus.textContent=error.message;}
+      finally{if(generation===state.generation)deliverySync();}
+    };
+    deliveryRemove.onclick=async()=>{
+      if(generation!==state.generation||!hasDelivery)return;
+      if(!window.confirm('Remove this webhook, its signing key and all queued alerts? Previously delivered messages cannot be recalled.'))return;
+      deliveryRemove.disabled=true;
+      try{
+        await api(deliveryBase()+'/remove',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({confirm_remove:true})});
+        if(generation!==state.generation)return;
+        secretPane.hidden=true;deliverySecret.value='';deliveryConsent.checked=false;countsConsent.checked=false;
+        await refreshDelivery();
+      }catch(error){deliveryStatus.textContent=error.message;}
+      finally{if(generation===state.generation)deliverySync();}
+    };
+    deliveryResume.onclick=async()=>{
+      if(generation!==state.generation||!hasDelivery)return;
+      if(!window.confirm('Resume outbound counts-only notification delivery to the previously approved webhook?'))return;
+      deliveryResume.disabled=true;
+      try{
+        await api(deliveryBase()+'/resume',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({confirm_external_delivery:true})});
+        if(generation===state.generation)await refreshDelivery();
+      }catch(error){deliveryStatus.textContent=error.message;}
+    };
+    deliveryRefresh.onclick=()=>refreshDelivery().catch(error=>{deliveryStatus.textContent=error.message;});
     const transitionBase=()=>'/v1/event-logs/'+encodeURIComponent(selectedLogId)+'/signal-history';
     const generation=state.generation;
     let transitionRequestId=0;
@@ -4042,7 +4125,7 @@
         finally{await refreshInbox().catch(error=>{message.textContent=error.message;});}
       };
       inbox.replaceChildren(
-        el('div',r.unreviewed+' signals currently require review. No automatic actions or delivery.','muted'),
+        el('div',r.unreviewed+' signals currently require review. No business actions. Outbound counts-only alerts are available only with a separate explicit webhook opt-in.','muted'),
         el('div','Select up to 20 unreviewed signals for one atomic acknowledgement. Snoozed and stale results cannot be bulk-reviewed.','muted'),
         bulk,
         rows.length?table(['Select','Signal','Review status','Evaluated','Acknowledged','Snoozed until',''],rows):el('div','No saved signals to review.','muted'));
@@ -4169,6 +4252,7 @@
       await refreshAllSignals();
       await refreshTimeline();
       await refreshHistory();
+      await refreshDelivery().catch(error=>{deliveryStatus.textContent=error.message;});
     }
     add.onclick=async()=>{
       try{

@@ -643,7 +643,7 @@ const path=require('node:path');
    await reviewPanel.getByText('unreviewed',{exact:true}).waitFor();
    await reviewPanel.getByRole('button',{name:'Acknowledge signal Skipped approval'}).click();
    await reviewPanel.getByText('acknowledged',{exact:true}).waitFor();
-   assert.match(await reviewPanel.textContent(),/No automatic actions or delivery/);
+   assert.match(await reviewPanel.textContent(),/No business actions/);
    await reviewPanel.getByRole('button',{name:'Reopen signal Skipped approval'}).click();
    await reviewPanel.getByText('unreviewed',{exact:true}).waitFor();
    await page.locator('#owgSignalReviewRefresh').click();
