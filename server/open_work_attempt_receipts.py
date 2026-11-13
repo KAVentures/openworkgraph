@@ -82,7 +82,7 @@ def append_receipt(path: str, *, tenant: str, actor: str, attempt: str,
     if verdict["status"] == "unknown" and verdict["provider_operation"] != "unknown":
         raise ValueError("unknown verdict cannot establish operation")
     # Refuse contradictory provider evidence; labels alone are not receipts.
-    if set(verdict) - {"status", "reason", "event_id", "provider_operation", "customer_outcome"}:
+    if set(verdict) - {"status", "reason", "event_id", "provider_operation", "customer_outcome", "checked_at"}:
         raise ValueError("unsupported verification fields")
     if verdict["status"] == "verified_provider_operation" and verdict["provider_operation"] == "unknown":
         raise ValueError("operation verification requires a known operation verdict")
