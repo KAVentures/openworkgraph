@@ -312,3 +312,54 @@ def test_granted_context_dependency_corruption_fails_closed(setup, monkeypatch):
                             headers={"Authorization": "Bearer " + grant["token"]})
         assert result.status_code == 503
         assert OTHER not in result.text
+
+
+def test_granted_context_rejects_mid_read_owner_review_change(setup, monkeypatch):
+    from server import open_work_declaration_routes as declarations
+    from server import open_work_case_declarations as case_store
+    scope = "owg:scope:" + "c" * 32
+    monkeypatch.setattr(declarations, "_source_scope", lambda: scope)
+    grant = grants.issue(REF, "agent-a", 1, confirmed=True,
+                         source_scope=scope, context_approved=True)
+    calls = {"count": 0}
+    def changing_review(current_scope):
+        assert current_scope == scope
+        calls["count"] += 1
+        return {"items": [{
+            "work_item_ref": REF,
+            "depends_on_work_item_refs": [] if calls["count"] == 1 else [OTHER],
+            "edit_token": "owner-only",
+        }]}
+    monkeypatch.setattr(case_store, "list_case_declarations", changing_review)
+    app = FastAPI()
+    app.include_router(router)
+    with TestClient(app) as client:
+        response = client.get("/v1/open-work/dispatch/granted/case-context",
+                              headers={"Authorization": "Bearer " + grant["token"]})
+    assert response.status_code == 409
+    assert OTHER not in response.text
+    assert "owner-only" not in response.text
+    assert calls["count"] == 2
+
+
+def test_granted_context_rejects_mid_read_revocation(setup, monkeypatch):
+    from server import open_work_declaration_routes as declarations
+    from server import open_work_case_declarations as case_store
+    scope = "owg:scope:" + "c" * 32
+    monkeypatch.setattr(declarations, "_source_scope", lambda: scope)
+    grant = grants.issue(REF, "agent-a", 1, confirmed=True,
+                         source_scope=scope, context_approved=True)
+    calls = {"count": 0}
+    def revoke_during_second_read(current_scope):
+        calls["count"] += 1
+        if calls["count"] == 2:
+            assert grants.revoke(grant["grant_id"])
+        return {"items": [{"work_item_ref": REF, "depends_on_work_item_refs": []}]}
+    monkeypatch.setattr(case_store, "list_case_declarations", revoke_during_second_read)
+    app = FastAPI()
+    app.include_router(router)
+    with TestClient(app) as client:
+        response = client.get("/v1/open-work/dispatch/granted/case-context",
+                              headers={"Authorization": "Bearer " + grant["token"]})
+    assert response.status_code == 409
+    assert calls["count"] == 2
