@@ -122,8 +122,33 @@ def build(log_id: str, case_type: str | None = None, cohort: dict[str, Any] | No
         "activities": workspace.activities(log_id, case_type, cohort),
         "slowest_transitions": slowest_transitions(log_id, case_type, cohort),
         "costs": _costs(log_id, case_type, cohort),
+        "insights": _insights(log_id, case_type, cohort, sla_seconds),
         "interpretation": _CAVEAT,
     }
+
+
+def _insights(log_id: str, case_type: str | None, cohort: dict[str, Any] | None,
+              sla_seconds: int | None) -> dict[str, Any]:
+    from . import event_log_insights as insights
+    spec: dict[str, Any] = {"limit": 5, "cohort": cohort or {}}
+    if case_type:
+        spec["case_type"] = case_type
+    if sla_seconds:
+        spec["sla_seconds"] = sla_seconds
+    return insights.insights(log_id, spec)
+
+
+def _insight_section(found: dict[str, Any] | None) -> str:
+    if not found or not found.get("findings"):
+        return ""
+    items = "".join(
+        f'<li><strong>{escape(f["title"])}</strong><br><span class="meta">{_num(f["cases"])} cases '
+        f'({_pct(f["case_share"])}){" · about " + _duration(f["impact_seconds"]) + " of case time involved" if f["impact_seconds"] else ""}. '
+        f'{escape(f["caveat"])}</span></li>' for f in found["findings"])
+    return f"""<h2>Where to look first</h2>
+<ol class="insights">{items}</ol>
+<p class="meta">{escape(found["interpretation"])}</p>
+"""
 
 
 def _cost_section(c: dict[str, Any] | None) -> str:
@@ -206,6 +231,7 @@ th{{font-size:12px;color:var(--muted);font-weight:600}} .n{{text-align:right;whi
 .bar{{display:inline-block;width:60px;height:8px;background:var(--soft);border-radius:4px;vertical-align:middle;overflow:hidden}}
 .bar span{{display:block;height:100%;background:var(--accent)}}
 .caveat{{border-left:3px solid var(--accent);background:var(--soft);padding:8px 12px;margin-top:16px}}
+.insights li{{margin-bottom:8px}}
 </style></head>
 <body><main>
 <h1>{escape(log["name"])}</h1>
@@ -215,6 +241,7 @@ generated {escape(data["generated_at"])}</p>
 {filter_html}
 <div class="tiles">{tile_html}</div>
 <p class="caveat">{escape(data["interpretation"])}</p>
+{_insight_section(data.get("insights"))}
 <h2>Most frequent variants</h2>
 <p class="meta">The {len(variants["variants"])} most frequent of {_num(variants["distinct_variants"])} variants cover {coverage} of cases.</p>
 <div class="scroll">{_table(["#", "Path", "Cases", "Share", "Median duration"], variant_rows, {0, 2, 3, 4})}</div>
