@@ -83,6 +83,12 @@ def prepare(*, tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
         consent_local_read=True)
     if proposal["proposed_generation"] != expected_generation + 1:
         raise ReceiptError("Concurrent checkpoint transition")
+    # The preflight is read-only, not a lock. Refuse to present a review
+    # as current if another operator committed while it was running.
+    current = inspect_checkpoint(
+        **scope, ledger_dir=Path(ledger_dir), consent_local_read=True)
+    if current != predecessor:
+        raise ReceiptError("Checkpoint changed during review preflight")
     if (checked["event_snapshots"] != extracted["event_snapshots"]
             or checked["removal_markers_for_review"] != extracted["removal_markers_for_review"]):
         raise ReceiptError("Extracted candidate review count mismatch")
