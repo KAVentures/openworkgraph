@@ -222,6 +222,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_map_export.cjs
       - name: Verify the self-contained event-log HTML report downloads and renders offline
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_report.cjs
+      - name: Verify an Excel workbook converts to CSV locally and imports with a chosen offset
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_xlsx.cjs
       - name: Verify the local automation pipeline records decisions without authorizing execution
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/automation_pipeline.cjs
       - name: Verify automation portfolio planning in Chromium

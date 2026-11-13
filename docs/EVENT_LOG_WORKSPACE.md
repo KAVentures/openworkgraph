@@ -18,6 +18,7 @@ delete them.
 | Format | Import | Export | Notes |
 | --- | --- | --- | --- |
 | CSV | yes | yes | You map the case, activity, timestamp and (optional) resource columns. |
+| Excel (.xlsx) | yes | no | One worksheet is converted to CSV on this computer, then mapped and imported like any CSV (below). |
 | XES (IEEE 1849) | yes | yes | `concept:name`, `time:timestamp` and `org:resource`; other string-like attributes are kept (32 max, 500 chars each). |
 | OCEL 2.0 JSON | yes | yes | Objects, object types, events, event-to-object links and supplied directed object-to-object relationships with qualifiers. Object attribute values keep their times (below). |
 | OCEL 2.0 XML | yes | yes | The same retained content in the OCEL 2.0 worked-example XML layout (`.xmlocel`). Objects must precede events as in the original 2.0 printed root schema. See the relationship contract for schema/example errata and format limits. |
@@ -28,8 +29,34 @@ object type, `case`. For an OCEL log you choose the case notion (`order`,
 events.
 
 Timestamps must carry a timezone (`Z` or an offset). Rows without one, or with
-an unparseable time, are counted as rejected and never guessed. XML with a
-`DOCTYPE` or entity declaration is refused before parsing.
+an unparseable time, are counted as rejected and never guessed, unless you
+state the offset such times use ("Offset for times without one" in the CSV
+mapping, `naive_timestamp_offset=+01:00` in the API). That choice is recorded
+with the import. XML with a `DOCTYPE` or entity declaration is refused before
+parsing.
+
+### Excel workbooks
+
+Choosing an `.xlsx` file in the dashboard converts its first worksheet to CSV
+on this computer (`POST /v1/event-logs/xlsx-to-csv`, with `?sheet=` for another
+sheet). The response holds the CSV and is not stored. The dashboard then puts
+the CSV in place of the workbook, and you map columns, consent and import as
+usual. The first non-empty row is the header. Cells become text: strings as
+written, TRUE/FALSE, numbers without a trailing `.0`, and cells formatted as
+dates or times become ISO 8601 times to the millisecond (1900 and 1904 date
+systems).
+
+Excel stores no time zone, so when the sheet has date cells the dashboard
+fills in your browser's current offset under "Offset for times without one".
+Change it if the export came from another zone. A single fixed offset is
+applied, so an export spanning a daylight-saving change is off by an hour on
+one side: fix the source column or import the two periods separately.
+
+Refused: files that are not a zip with `xl/workbook.xml` (including Excel
+97-2003 `.xls`), macro-enabled workbooks, XML parts with a `DOCTYPE`, uploads
+over 64 MB, parts over 256 MB or a workbook over 512 MB uncompressed, and
+sheets over 2,000,000 rows or 500 columns. Formulas are read as their last
+calculated value, as Excel saved it.
 
 ## Object-centric maps
 
@@ -156,6 +183,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | --- | --- |
 | `GET /v1/event-logs` | List stored logs. |
 | `POST /v1/event-logs/import?format=csv\|xes\|ocel\|ocelxml&name=...` | Import the request body. Requires `X-OWG-Local-Storage-Confirmed: true`. CSV also takes `case_column`, `activity_column`, `timestamp_column`, `resource_column`, `delimiter` (`t` for tab) and repeated `attribute_column` for up to 32 extra columns to keep as event attributes (nothing else is stored). |
+| `POST /v1/event-logs/xlsx-to-csv?sheet=...` | Convert one worksheet of the `.xlsx` request body to CSV (`csv`, `sheet`, `sheets`, `rows`, `columns`, `date_columns`, `dates_have_no_offset`). Nothing is stored. |
 | `POST /v1/event-logs/{log_id}/delete` | Delete the log and every row that belongs to it. |
 | `POST /v1/event-logs/{log_id}/derive` | Save the cases matching a filter as a new log (below). |
 | `GET /v1/event-logs/{log_id}/quality` | Stored quality and mapping reports per import and append, plus current whole-log diagnostics (below). |
