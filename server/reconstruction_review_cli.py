@@ -220,6 +220,16 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
         counts["events"] += 1
     precision = tp / (tp + fp) if tp + fp else 0.0
     recall = tp / (tp + fn) if tp + fn else 0.0
+    # Report window-level quality as rates as well as counts. Aggregated micro
+    # scores can conceal an entirely failed earlier-session reconstruction.
+    per_window_metrics = {}
+    for window, counts in sorted(by_window.items()):
+        wp = counts["tp"] / (counts["tp"] + counts["fp"]) if counts["tp"] + counts["fp"] else 0.0
+        wr = counts["tp"] / (counts["tp"] + counts["fn"]) if counts["tp"] + counts["fn"] else 0.0
+        per_window_metrics[window] = {
+            **counts, "precision": wp, "recall": wr,
+            "f1": 2 * wp * wr / (wp + wr) if wp + wr else 0.0,
+        }
     return {
         "evidence_sha256": queue["evidence_sha256"],
         "annotated_events": len(labels), "source_review_events": len(observed),
@@ -228,6 +238,7 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
         "true_positive_pairs": tp, "false_positive_pairs": fp, "false_negative_pairs": fn,
         "precision": precision, "recall": recall,
         "per_window_counts": {window: by_window[window] for window in sorted(by_window)},
+        "per_window_metrics": per_window_metrics,
         "cross_case_contamination_measured": False,
         "f1": 2 * precision * recall / (precision + recall) if precision + recall else 0.0,
         "evaluation_scope": "all_surfaced_event_pair_evidence_only",
