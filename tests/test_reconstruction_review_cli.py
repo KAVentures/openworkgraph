@@ -178,6 +178,20 @@ class ExplicitAnnotationScoreTests(unittest.TestCase):
                 score_review_annotations(changed, labels)
 
 
+class DuplicatePairProvenanceTests(unittest.TestCase):
+    def test_duplicate_pair_rows_rejected_even_with_distinct_events(self):
+        source = payload([pair("A", "F", ["first"]), pair("A", "F", ["second"])])
+        with self.assertRaisesRegex(ValueError, "duplicate resource pair assignment"):
+            build_review_queue(source)
+
+    def test_reversed_duplicate_pair_identity_is_rejected(self):
+        first = pair("A", "F", ["first"])
+        reversed_pair = {**first, "resource_pointers": list(reversed(first["resource_pointers"])),
+                         "current_evidence_event_ids": ["second"]}
+        with self.assertRaisesRegex(ValueError, "duplicate resource pair assignment"):
+            build_review_queue(payload([first, reversed_pair]))
+
+
 class ReviewQueueTests(unittest.TestCase):
     def test_denied_revoked_and_unknown_access_never_generate_review_rows(self):
         for mode in ("off", "none", "denied", "revoked", "future_mode", None):
