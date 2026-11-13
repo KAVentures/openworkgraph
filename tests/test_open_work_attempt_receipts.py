@@ -120,3 +120,35 @@ def test_receipt_journal_rejects_inconsistent_provider_claims(tmp_path, verdict)
         append_receipt(path, tenant="org", actor="actor", attempt="run", verdict=verdict)
     if (tmp_path / "receipts.sqlite").exists():
         assert list_receipts(path, tenant="org", actor="actor", attempt="run") == []
+
+
+@pytest.mark.parametrize("source_checked", [
+    "not-a-date", "2026-11-13T12:00:00", 12345,
+    "x" * 65, "2026-13-99T12:00:00+00:00",
+])
+def test_receipt_journal_refuses_untrustworthy_verifier_timestamp(tmp_path, source_checked):
+    path = str(tmp_path / "receipts.sqlite")
+    with pytest.raises(ValueError, match="verification timestamp"):
+        append_receipt(
+            path, tenant="org", actor="actor", attempt="run",
+            verdict={"status": "verified_provider_event",
+                     "provider_operation": "unknown",
+                     "customer_outcome": "unknown", "event_id": "evt_1",
+                     "checked_at": source_checked},
+        )
+    if (tmp_path / "receipts.sqlite").exists():
+        assert list_receipts(path, tenant="org", actor="actor", attempt="run") == []
+
+
+def test_receipt_journal_accepts_timezone_aware_verifier_timestamp(tmp_path):
+    path = str(tmp_path / "receipts.sqlite")
+    append_receipt(
+        path, tenant="org", actor="actor", attempt="run",
+        verdict={"status": "verified_provider_event",
+                 "provider_operation": "unknown",
+                 "customer_outcome": "unknown", "event_id": "evt_1",
+                 "checked_at": "2026-11-13T11:00:00+00:00"},
+    )
+    rows = list_receipts(path, tenant="org", actor="actor", attempt="run")
+    assert len(rows) == 1
+    assert rows[0]["customer_outcome"] == "unknown"
