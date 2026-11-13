@@ -934,7 +934,8 @@ def install(log_id: str, pack_id: str, spec: Any) -> dict[str, Any]:
             raise
         finally:
             conn.close()
-    return {**record, "installation_token": _installation_token(record), "change": change, "previous_version": previous["version"] if previous else None,
+    return {**{k: v for k, v in record.items() if k != "configuration_history"},
+            "installation_token": _installation_token(record), "change": change, "previous_version": previous["version"] if previous else None,
             "not_applicable": definitions["not_applicable"]}
 
 
@@ -955,6 +956,7 @@ def installed(log_id: str) -> dict[str, Any]:
     installs = [json.loads(d) for (d,) in rows]
     for record in installs:
         record["installation_token"] = _installation_token(record)
+        record.pop("configuration_history", None)
         record["latest_version"] = _pack(record["pack_id"])["version"] if record["pack_id"] in PACKS else None
         record["upgrade_available"] = bool(record["latest_version"]) and \
             _version_key(record["latest_version"]) > _version_key(record["version"])
