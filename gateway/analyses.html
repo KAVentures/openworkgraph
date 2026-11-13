@@ -14,6 +14,13 @@ body{font:16px/1.5 system-ui,sans-serif;max-width:1050px;margin:auto;padding:20p
 <section><h2>Your authorized publications</h2><button id="refresh">Refresh</button><button id="new">New publication</button><div id="inventory"></div><button id="more" hidden>More publications</button></section>
 <section id="detail" hidden><h2 id="viewTitle"></h2><p id="basis"></p><div class="scroll" id="table"></div><div id="coverage"></div>
 <label>Revision <input id="revision" type="number" min="1" step="1"></label><button id="openRevision">Open revision</button><button id="export">Download this revision</button>
+<div id="revisionCompare" hidden>
+<h3>Compare retained revisions</h3>
+<p>This review compares only two authorized revisions of the same publication. It shows arithmetic changes only for complete, ungrouped, identically defined numeric snapshots. Export-specific group codes cannot be matched across files. Publisher-supplied values are not independently verified.</p>
+<label>Compare the revision shown above against revision <input id="compareOther" type="number" min="1" max="10" step="1"></label>
+<button id="compareRun">Compare revisions</button>
+<div id="compareResult" role="status" aria-live="polite"></div>
+</div>
 </section>
 <section id="publisher" hidden><h2>Publish a reviewed snapshot</h2><p>In the local event-log workspace, run an analysis, select “Prepare sharing snapshot”, review it, then download it. Group codes have meaning only within that file. Numeric values, units and your title may still be sensitive. Every permitted member can read all retained revisions; publishing a new revision does not hide an old one.</p>
 <label>Snapshot file <input id="file" type="file" accept="application/json,.json"></label><div id="preview" class="scroll"></div>
@@ -45,7 +52,7 @@ function table(node,doc){
  for(const row of doc.rows){const tr=document.createElement('tr');for(const v of row)tr.append(text('td',v===null?'—':String(v)));body.append(tr);}t.append(body);node.append(t);
 }
 function clearFile(){fileAttempt++;snapshot=null;$('file').value='';$('preview').replaceChildren();$('confirm').checked=false;sync();}
-function clearSelection(){caseUI.clear();viewAttempt++;selected=null;$('table').replaceChildren();$('coverage').replaceChildren();$('viewTitle').textContent='';$('basis').textContent='';$('revision').value='';$('detail').hidden=true;$('access').hidden=true;$('members').replaceChildren();$('renew').value='';$('title').value='';clearFile();}
+function clearSelection(){caseUI.clear();viewAttempt++;selected=null;$('revisionCompare').hidden=true;$('compareResult').replaceChildren();$('compareOther').value='';$('table').replaceChildren();$('coverage').replaceChildren();$('viewTitle').textContent='';$('basis').textContent='';$('revision').value='';$('detail').hidden=true;$('access').hidden=true;$('members').replaceChildren();$('renew').value='';$('title').value='';clearFile();}
 function sync(){
  $('publisher').hidden=!credential||!canPublish;
  $('publish').disabled=!snapshot||!$('confirm').checked||!!(selected&&!selected.permissions.edit);
@@ -84,6 +91,10 @@ async function open(id,revision){
  const d=await api(base+'/'+id+(revision?'?revision='+revision:''));if(attempt!==viewAttempt)return;selected=d;clearFile();$('detail').hidden=false;
  $('viewTitle').textContent=d.title;$('title').value=d.title;$('revision').value=d.viewing_revision;$('revision').max=d.revision;
  $('basis').textContent='Viewing revision '+d.viewing_revision+' of '+d.revision+' · expires '+d.expires_at+' · publisher-supplied snapshot, source freshness unknown. Digest '+d.content_sha256;
+ $('revisionCompare').hidden=d.revision<2;
+ $('compareOther').max=d.revision;
+ $('compareOther').value=d.viewing_revision>1?String(d.viewing_revision-1):String(2);
+ $('compareResult').replaceChildren();
  table($('table'),d.snapshot);$('coverage').replaceChildren(text('p',d.snapshot.matching_cases+' selected cases; '+d.snapshot.matching_rows+' '+d.snapshot.level+' rows. '+(d.snapshot.rows_truncated?'Only bounded result rows are included. ':'')+'Group codes apply only within this snapshot.'));
  for(const c of d.snapshot.metric_coverage)$('coverage').append(text('p','Metric '+c.slot+': '+c.with_value+' cases with a value, '+c.without_value+' without; '+c.missing_operand+' missing operand, '+c.zero_divisor+' zero divisor, '+c.non_finite+' nonfinite.'));
  $('access').hidden=!d.permissions.manage;$('members').replaceChildren();$('accessConfirm').checked=false;$('deleteConfirm').checked=false;$('renew').value='';
@@ -146,6 +157,58 @@ $('publish').onclick=()=>run(async()=>{
  if(attempt!==viewAttempt||fileVersion!==fileAttempt)return;clearFile();await inventory();if(attempt!==viewAttempt)return;await open(d.view_id);$('status').textContent='Snapshot published. Access is limited to its owner, analysis administrators and explicit members.';
 });
 $('openRevision').onclick=()=>run(()=>open(selected.view_id,Number($('revision').value)));
+const COMPARISON_REASONS={
+  different_analysis_specification:'Analysis selection/filter or query specification differs',
+  different_event_or_case_level:'Case/event level differs',
+  different_measure_definitions:'Measure columns, units or calculation types differ',
+  different_metric_definition_versions:'Metric definition digests differ',
+  metric_definition_not_versioned:'Case metric lacks a comparable versioned definition',
+  different_fingerprint_algorithm:'Source fingerprint algorithms differ',
+  group_codes_have_no_cross_export_identity:'Group codes cannot be matched across exports',
+  bounded_rows_are_not_complete:'At least one result table is truncated',
+  requires_one_complete_ungrouped_row:'Complete one-row numerical summaries are required',
+  nonfinite_results_withheld:'At least one non-finite output was withheld',
+  incomplete_metric_coverage:'At least one custom metric has missing case values',
+  missing_numeric_measure:'Some numeric cells are missing or not numbers',
+  same_fingerprint_but_different_values:'Identical claimed source fingerprints disagree about values',
+};
+$('compareRun').onclick=()=>run(async()=>{
+ if(!selected||selected.revision<2)return;
+ const left=selected.viewing_revision,right=Number($('compareOther').value);
+ if(!Number.isSafeInteger(right)||right<1||right>selected.revision||left===right)
+   throw new Error('Select a different retained revision.');
+ const attempt=viewAttempt,id=selected.view_id;
+ const result=await api(base+'/'+id+'/compare?left='+left+'&right='+right);
+ if(attempt!==viewAttempt||!selected||selected.view_id!==id)return;
+ const target=$('compareResult');
+ target.replaceChildren(text('p','Revision '+left+' vs '+right+
+   ' · '+(result.same_claimed_source?'same claimed source fingerprint':'different claimed source fingerprints')+
+   ' · '+(result.comparable?'numeric comparison supported':'numeric change withheld')));
+ const details=text('p','Revisions '+result.left.content_sha256+' / '+result.right.content_sha256+
+   '. Source freshness and validity of the published figures are not independently established.');
+ details.className='muted';target.append(details);
+ if(!result.comparable){
+   const list=document.createElement('ul');
+   for(const reason of result.refusal_reasons)list.append(text('li',COMPARISON_REASONS[reason]||reason));
+   target.append(text('p','No numerical deltas calculated; inspect the separate revisions instead.'),list);
+   return;
+ }
+ const t=document.createElement('table'),thead=document.createElement('tr');
+ for(const label of ['Measure','Revision '+left,'Revision '+right,'Change','Relative change']){
+   const th=text('th',label);th.scope='col';thead.append(th);
+ }
+ t.append(thead);
+ for(const change of result.changes){
+   const tr=document.createElement('tr');
+   const values=[
+     change.heading+' · '+change.aggregation+(change.unit?' ('+change.unit+')':''),
+     String(change.before),String(change.after),change.change_decimal,
+     change.relative_percent_decimal===null?'Undefined (zero baseline)':change.relative_percent_decimal+'%',
+   ];
+   for(const value of values)tr.append(text('td',value));t.append(tr);
+ }
+ target.append(t,text('p','Changes are arithmetic on publisher-supplied snapshots, not verified savings, causal effects or automated decisions.'));
+});
 $('export').onclick=()=>run(async()=>{
  const d=await api(base+'/'+selected.view_id+'/export?revision='+selected.viewing_revision);
  const url=URL.createObjectURL(new Blob([JSON.stringify(d,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='owg-shared-analysis.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);$('status').textContent='Revision exported; this download is recorded in the audit log.';
