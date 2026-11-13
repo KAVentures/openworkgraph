@@ -1250,7 +1250,7 @@ async def event_log_simulation_portfolio(request: Request, log_id: str,
                                          case_type: str | None = Query(default=None, max_length=200)):
     """Review 2–4 changed process simulations against one calibrated baseline."""
     _require_dashboard(request)
-    spec = await _json_body(request, "simulation portfolio", limit=65536)
+    spec = await _json_body(request, "simulation portfolio", strict=True, limit=65536)
     try:
         result = await run_in_threadpool(simulation_portfolio.compare, log_id, spec, case_type)
     except workspace.EventLogWorkspaceError as exc:
