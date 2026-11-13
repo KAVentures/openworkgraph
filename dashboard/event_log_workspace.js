@@ -1364,7 +1364,7 @@
             // a sentinel that cannot collide with a real suggested label.
             let custom='__owg_exact_label__';while(names.includes(custom))custom+='_';
             const s=select('owgDomainPackRole-'+r.role,[['',r.required?'Choose (required)':'Not in this log'],...names.map(n=>[n,n]),[custom,'Enter exact label…']]);
-            const exact=input('owgDomainPackExact-'+r.role,'text');exact.maxLength=200;
+            const exact=input('owgDomainPackExact-'+r.role,'text');exact.maxLength=400; // HTML counts UTF-16 units; server enforces 200 Unicode characters.
             exact.setAttribute('aria-label','Exact label for '+r.label);
             const saved=installed&&installed.mapping[kind][r.role];
             s.value=saved&&!names.includes(saved)?custom:packGuess(r,names,saved);
