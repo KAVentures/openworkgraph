@@ -2977,3 +2977,92 @@ async def get_local_durable_reviewed_dependencies(request: Request, response: Re
         "source_read_performed": False, "agent_execution_authorized": False,
         "customer_outcome": "unknown", "available": True,
     }
+
+
+@router.post("/v1/open-work/declarations/human-outcomes/attempt-receipts")
+async def read_local_bound_attempt_receipts(request: Request, response: Response):
+    """Operator-only inspection of retained, explicitly bound run receipts.
+
+    This is NOT an agent/provider receipt ingestion endpoint. Historic journal
+    entries are untrusted verification claims until independently rechecked;
+    even a verified provider operation never establishes customer success.
+    """
+    _dashboard_only(request)
+    scope = await _require_scope()
+    payload = await _body(request, {
+        "work_item_ref", "expected_revision", "expected_edit_token",
+        "confirm_historical_review", "confirm_run_comparison",
+        "max_cases", "deployment_id", "run_id",
+    })
+    if payload["confirm_historical_review"] is not True or payload["confirm_run_comparison"] is not True:
+        raise HTTPException(403, "explicit run and historical review required")
+    from .open_work_run_case_binding import get_binding, _retention
+    from .open_work_attempt_receipts import list_receipts
+    from .local_auth import auth_dir
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    triage, admitted, signature, secret = await _load_review_triage(scope, payload)
+    try:
+        run = await asyncio.to_thread(
+            read_imported_run, deployment_id=payload["deployment_id"],
+            run_id=payload["run_id"], scope=scope, secret=secret,
+        )
+        await asyncio.to_thread(
+            _operation_ledger_guard, scope, payload["work_item_ref"],
+            payload["expected_revision"], payload["expected_edit_token"], signature,
+        )
+        await _recheck_source(scope)
+        actor = hashlib.sha256(request.headers["authorization"].encode("utf-8")).hexdigest()
+        fields = dict(
+            scope=scope, actor=actor, secret=secret,
+            case_ref=payload["work_item_ref"], run_ref=run["run_ref"],
+            fingerprint=run["run_snapshot_fingerprint"],
+            revision=payload["expected_revision"],
+        )
+        if not await asyncio.to_thread(get_binding, **fields):
+            raise HTTPException(403, "current operator run/case binding required")
+        retention = await asyncio.to_thread(_retention)
+        path = Path(auth_dir()) / ".open_work_attempt_receipts.sqlite3"
+        # A missing journal is empty, not an invitation to create storage.
+        if path.exists() or path.is_symlink():
+            rows = await asyncio.to_thread(
+                list_receipts, str(path), tenant=scope, actor=actor,
+                attempt=run["run_ref"],
+            )
+        else:
+            rows = []
+        cutoff = datetime.now(timezone.utc) - retention
+        rows = [row for row in rows if
+                datetime.fromisoformat(row["checked_at"]).astimezone(timezone.utc) > cutoff]
+        repeated, refreshed, refreshed_signature, _ = await _load_review_triage(scope, payload)
+        second_run = await asyncio.to_thread(
+            read_imported_run, deployment_id=payload["deployment_id"],
+            run_id=payload["run_id"], scope=scope, secret=secret,
+        )
+        if (triage != repeated or signature != refreshed_signature
+                or admitted["work_item_ref"] != refreshed["work_item_ref"]
+                or run != second_run
+                or not await asyncio.to_thread(get_binding, **fields)):
+            raise CaseDeclarationError("run/case review or binding changed")
+        await asyncio.to_thread(
+            _operation_ledger_guard, scope, payload["work_item_ref"],
+            payload["expected_revision"], payload["expected_edit_token"], signature,
+        )
+    except HTTPException:
+        raise
+    except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError,
+            KeyError, ValueError, OverflowError) as exc:
+        raise _safe_error(exc) from None
+    await _recheck_source(scope)
+    _dashboard_only(request)
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "format": "openworkgraph.bound-attempt-receipts.v1",
+        "case_ref": payload["work_item_ref"], "run_ref": run["run_ref"],
+        "entries": rows, "receipt_provenance": "local_untrusted_journal",
+        "provider_event_independently_rechecked_on_this_read": False,
+        "customer_outcome_verified": False,
+        "agent_execution_authorized": False,
+        "source_read_performed": False,
+    }
