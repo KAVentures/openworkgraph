@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 def test_operator_audit_ui_keeps_phases_review_only():
-    html = (Path(__file__).resolve().parents[1] / "dashboard" / "index.html").read_text()
+    html = (Path(__file__).resolve().parents[1] / "dashboard" / "index.html").read_text(encoding="utf-8")
     block = html.split("/* Read-only Microsoft 365 operator audit receipts;", 1)[1]
     block = block.split("</script>", 1)[0]
     assert "fetch('/v1/m365/operator-audit', {cache: 'no-store'})" in block
