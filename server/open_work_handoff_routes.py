@@ -237,6 +237,18 @@ async def granted_reviewed_case_context(request: Request, response: Response):
                  entry["work_item_ref"] == identity["work_item_ref"]), None)
     if item is None:
         raise HTTPException(404, "no currently reviewed case context")
+    # A source-scoped grant is not enough if the owner edits or withdraws a
+    # declaration during the read. Pin the complete reviewed snapshot, not
+    # merely the presence of this case, so changed dependency edges cannot
+    # be returned under an earlier approval.
+    try:
+        latest = await asyncio.to_thread(list_case_declarations, scope)
+    except (CaseDeclarationError, OSError):
+        raise HTTPException(503, "reviewed case context unavailable") from None
+    if latest != snapshot or await asyncio.to_thread(_source_scope) != scope or not grants.authenticate(
+        request.headers.get("authorization"), identity["work_item_ref"]
+    ):
+        raise HTTPException(409, "review or grant changed during context read")
     # Edit tokens are owner-only compare-and-swap capabilities; never give
     # them to an agent. No provider reads or business success assertions.
     # Dependencies are owner-declared edges, not proof of blocking or completion.
