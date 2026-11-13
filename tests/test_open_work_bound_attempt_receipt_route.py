@@ -99,7 +99,10 @@ def test_binding_revoked_during_read_fails_closed(monkeypatch, tmp_path):
 def test_run_only_receipts_refuse_ambiguous_case_attribution(monkeypatch, tmp_path):
     """A run linked to two cases cannot identify which case its receipt belongs to."""
     from server import open_work_run_case_binding as bindings
+    real_exclusivity_guard = bindings.require_exclusive_run_case_binding
     setup(monkeypatch, tmp_path)
+    # Route fixtures stub this guard; exercise the real ledger guard in this test.
+    monkeypatch.setattr(bindings, "require_exclusive_run_case_binding", real_exclusivity_guard)
     monkeypatch.setattr(bindings, "auth_dir", lambda: tmp_path)
     monkeypatch.setattr(bindings, "_retention", lambda: timedelta(days=7))
     actor = hashlib.sha256(b"OWG-Session valid").hexdigest()
