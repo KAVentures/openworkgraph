@@ -54,7 +54,13 @@ def preflight(*, tenant, mailbox, folder, log_id, confirm_log_id,
             raise ReceiptError("Stale or different predecessor checkpoint")
         generation = predecessor["generation"] + 1
     return {"format": FORMAT, "status": "review_ready_for_explicit_commit",
-            "proposed_generation": generation, "provider_requests": 0,
+            "proposed_generation": generation,
+            "reviewed_event_snapshots": checked.get("event_snapshots"),
+            "removal_markers_for_review": checked.get("removal_markers_for_review"),
+            "reviewed_csv_sha256": expected_review_csv_sha256,
+            "checkpoint_predecessor_generation": generation - 1,
+            "manual_review_and_separate_commit_required": True,
+            "provider_requests": 0,
             "owg_writes": 0, "checkpoint_advanced": False,
             "automatic_retry_allowed": False}
 

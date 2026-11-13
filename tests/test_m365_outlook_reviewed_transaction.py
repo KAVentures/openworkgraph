@@ -91,6 +91,27 @@ class ReviewedTransactionTests(unittest.TestCase):
             append.assert_not_called()
             commit.assert_not_called()
 
+    def test_read_only_preflight_surfaces_bounded_review_summary(self):
+        values = inputs()
+        allowed = ("tenant", "mailbox", "folder", "log_id", "confirm_log_id",
+                   "grant_file", "candidate", "ledger_dir", "expected_review_csv_sha256",
+                   "consent_local_read")
+        checked = {"csv_sha256": DIGEST, "event_snapshots": 12,
+                   "removal_markers_for_review": 2}
+        with patch.object(tx.cycle, "review", return_value=checked), \
+             patch.object(tx, "inspect_checkpoint", return_value=None), \
+             patch.object(tx.cycle, "append") as append, \
+             patch.object(tx.cycle, "checkpoint_commit") as commit:
+            result = tx.preflight(**{k: values[k] for k in allowed})
+        self.assertEqual(result["reviewed_event_snapshots"], 12)
+        self.assertEqual(result["removal_markers_for_review"], 2)
+        self.assertEqual(result["reviewed_csv_sha256"], DIGEST)
+        self.assertEqual(result["checkpoint_predecessor_generation"], 0)
+        self.assertTrue(result["manual_review_and_separate_commit_required"])
+        self.assertEqual(result["provider_requests"], 0)
+        append.assert_not_called()
+        commit.assert_not_called()
+
     def test_read_only_preflight_refuses_stale_predecessor(self):
         values = inputs(expected_previous_candidate_sha256="c" * 64)
         allowed = ("tenant", "mailbox", "folder", "log_id", "confirm_log_id",

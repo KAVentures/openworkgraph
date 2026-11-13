@@ -62,3 +62,5 @@ python -m server.m365_outlook_reviewed_transaction \\
 For later generations, add `--expected-previous-candidate-sha256`.
 This is still local reviewed-candidate preflight, **not** an authenticated
 Graph extraction, dashboard integration, or real-tenant validation.
+
+Read-only preflight also returns bounded reviewed event and removal-marker counts, the exact reviewed CSV SHA-256, and the predecessor generation. These are review aids, not authorization to commit. Operators must inspect the actual private candidate and removal markers, explicitly approve them, and revalidate at commit. No provider request or OWG write occurs during preflight. Real-tenant validation remains outstanding.
