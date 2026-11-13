@@ -19,6 +19,59 @@ def payload(pairs):
 
 
 
+
+class AnnotationCliTests(unittest.TestCase):
+    def test_operator_scoring_entrypoint_uses_explicit_labels(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from server.reconstruction_review_cli import main
+
+        source = payload([pair("A", "F", ["e1"])])
+        row = build_review_queue(source)["event_reviews"][0]
+        labels = [{"window": row["window"], "event_id": row["event_id"],
+                   "true_resource_pairs": row["candidate_resource_pairs"]}]
+        with tempfile.TemporaryDirectory() as directory:
+            source_path = Path(directory) / "source.json"
+            labels_path = Path(directory) / "labels.json"
+            source_path.write_text(json.dumps(source), encoding="utf-8")
+            labels_path.write_text(json.dumps(labels), encoding="utf-8")
+            output = StringIO()
+            with patch("sys.argv", ["review", str(source_path), "--annotations", str(labels_path)]):
+                with redirect_stdout(output):
+                    self.assertEqual(main(), 0)
+            result = json.loads(output.getvalue())
+            self.assertEqual(result["true_positive_pairs"], 1)
+            self.assertFalse(result["held_out_verified"])
+            self.assertFalse(result["real_work_accuracy_claim"])
+
+    def test_operator_scoring_refuses_same_file_and_revoked_source(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        from contextlib import redirect_stderr
+        from io import StringIO
+        from server.reconstruction_review_cli import main
+
+        with tempfile.TemporaryDirectory() as directory:
+            source_path = Path(directory) / "source.json"
+            labels_path = Path(directory) / "labels.json"
+            source = payload([pair("A", "F", ["e1"])])
+            source_path.write_text(json.dumps(source), encoding="utf-8")
+            labels_path.write_text("[]", encoding="utf-8")
+            with patch("sys.argv", ["review", str(source_path), "--annotations", str(source_path)]):
+                with redirect_stderr(StringIO()):
+                    self.assertEqual(main(), 2)
+            source["saved_history_access"] = "revoked"
+            source_path.write_text(json.dumps(source), encoding="utf-8")
+            with patch("sys.argv", ["review", str(source_path), "--annotations", str(labels_path)]):
+                with redirect_stderr(StringIO()):
+                    self.assertEqual(main(), 2)
+
 class ExplicitAnnotationScoreTests(unittest.TestCase):
     def test_interleaved_cases_score_only_exact_annotated_event_pair(self):
         data = payload([pair("A", "F", ["a"]), pair("B", "G", ["b"])])
