@@ -1272,6 +1272,31 @@ def export_event_log(request: Request, log_id: str, format: str = Query(pattern=
                         headers={"Cache-Control": "no-store"}, background=BackgroundTask(os.unlink, handle.name))
 
 
+@router.post("/v1/event-logs/{log_id}/cases/explain")
+async def event_log_explain_case(request: Request, log_id: str):
+    """Where one case's time went, compared with the typical gap of each transition."""
+    from . import event_log_case_explain as case_explain
+    _require_dashboard(request)
+    spec = await _json_body(request, "case explanation settings", strict=True, limit=8192)
+    try:
+        result = await run_in_threadpool(case_explain.explain, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/cases/slowest")
+async def event_log_slowest_cases(request: Request, log_id: str):
+    from . import event_log_case_explain as case_explain
+    _require_dashboard(request)
+    spec = await _json_body(request, "slowest case settings", strict=True, limit=16384)
+    try:
+        result = await run_in_threadpool(case_explain.slowest, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/{log_id}/cases/query")
 async def event_log_cases(request: Request, log_id: str,
                           case_type: str | None = Query(default=None, max_length=200)):

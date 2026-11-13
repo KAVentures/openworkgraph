@@ -874,6 +874,31 @@ and the log's events are never changed.
 A log keeps at most 100 tags and 200,000 tagged cases. Deleting the log deletes
 its tags. A log saved from matching cases does not copy them.
 
+## Explain a case
+
+**Explain a case** offers the five slowest cases (honouring the case notion and
+filter), or takes any case ID, and shows where that case's time went:
+
+* each step-to-step gap next to the median gap of the same transition across
+  the log;
+* the steps that took longest above typical, with their share of the case's
+  extra time;
+* activities the case repeats, and steps that fewer than 10% of cases take;
+* the case's duration against the log's median and 90th percentile.
+
+A transition that fewer than 3 cases take has no typical gap, so all of its
+time counts as above typical.
+
+API:
+
+* `POST /v1/event-logs/{log_id}/cases/explain` with `{"case_id": "…",
+  "case_type": null}`;
+* `POST /v1/event-logs/{log_id}/cases/slowest` with `{"limit": 10, "cohort":
+  {}, "case_type": null}`.
+
+Both need the dashboard session. Gaps are elapsed time between recorded
+events, not measured work or verified waiting.
+
 ## Organizational mining (handovers)
 
 `GET /v1/event-logs/{log_id}/organization` (dashboard session only) describes how work moves
