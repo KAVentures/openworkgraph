@@ -57,6 +57,7 @@ def test_one_locked_handoff_is_minimized_exact_pair(local_log):
     lambda x: x["case_dataset"].update(source_content_sha256="a" * 64),
     lambda x: x["case_dataset"].update(analysis_spec_sha256="b" * 64),
     lambda x: x["aggregate_snapshot"].update(matching_cases=10),
+    lambda x: x["aggregate_snapshot"].update(matching_rows=10),
     lambda x: x.update(case_attachment_authorized=True),
     lambda x: x.update(organization_publication_authorized=True),
     lambda x: x.update(source_independently_verified=True),
