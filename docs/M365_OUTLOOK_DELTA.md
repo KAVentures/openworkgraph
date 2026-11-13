@@ -71,3 +71,8 @@ issue expiring grants and explicitly revoke old grants when migrating.
 Expiry is a local authorization gate, not a Microsoft OAuth refresh or
 provider-side revocation guarantee; provider token expiry and actual tenant
 acceptance still require independent validation.
+
+
+### Mid-round grant replacement
+
+A bounded delta extraction pins the exact private grant-file bytes at preflight. Each subsequent Graph request, each completed response, and each private artifact publication revalidates the same authorization revision and its current expiry. Even a same-tenant, same-mailbox grant reissue stops the round rather than silently transferring authority. A rejected round does not publish a candidate checkpoint; a CSV already published before a late failure is an uncommitted artifact and must not be imported without an independently reviewed candidate. This is a local race defense, not a guarantee against revocation and re-enablement between two filesystem reads, and not a substitute for provider-side token revocation.
