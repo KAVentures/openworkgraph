@@ -37,6 +37,12 @@ const path=require('node:path');
   await viewer.locator('#file').setInputFiles(file);await viewer.locator('#preview table').waitFor();await viewer.locator('#title').fill('Second revision');await viewer.locator('#confirm').check();await viewer.locator('#publish').click();await viewer.locator('#status').filter({hasText:'Snapshot published.'}).waitFor();
   await owner.locator('#refresh').click();await owner.locator('#inventory button').filter({hasText:'Second revision'}).click();await owner.locator('#basis').filter({hasText:'Viewing revision 2 of 2'}).waitFor();
   await owner.locator('#revision').fill('1');await owner.locator('#openRevision').click();await owner.locator('#basis').filter({hasText:'Viewing revision 1 of 2'}).waitFor();assert.equal(await owner.locator('#viewTitle').textContent(),'Aggregate case counts');
+  // Fresh group codes cannot identify the same cohort across exports.
+  assert.equal(await owner.locator('#revisionCompare').isHidden(),false);
+  await owner.locator('#compareOther').fill('2');await owner.locator('#compareRun').click();
+  await owner.locator('#compareResult').filter({hasText:'numeric change withheld'}).waitFor();
+  assert.match(await owner.locator('#compareResult').textContent(),/Group codes cannot be matched across exports/);
+  assert.equal(await owner.locator('#compareResult table').count(),0);
   await owner.getByRole('button',{name:'Remove member'}).click();await owner.locator('#accessConfirm').check();await owner.locator('#saveAccess').click();await owner.locator('#status').filter({hasText:'Access updated;'}).waitFor();
   await viewer.locator('#refresh').click();await viewer.locator('#inventory').getByText('No authorized publications.').waitFor();assert.equal(await viewer.locator('#detail').isHidden(),true);assert.equal(await viewer.locator('#table').textContent(),'');
   assert.equal(await viewer.evaluate(async({base,wid})=>(await fetch(base+'/v1/human/analyses/'+wid+'/export?revision=1',{headers:{Authorization:'Bearer bob'}})).status,{base,wid}),404);
