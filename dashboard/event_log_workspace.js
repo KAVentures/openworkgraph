@@ -2256,6 +2256,94 @@
         routeKind.onchange=()=>{show(pathsField,routeKind.value==='paths');showContext();};showContext();
         form.replaceChildren(top,calRow,arrivalRow,field('How cases move between activities',routeKind),contextField,attributeField,pathsField,wrap,addRowNode,poolRow,
           el('div','Measured times are median gaps before each activity and include waiting. '+coverage,'muted'),run);
+
+        // Compare 2–4 reviewed staffing proposals against ONE static calibration.
+        // This small visual entry point changes one mapped activity's staffing
+        // per alternative; the API also supports multi-activity configurations.
+        const portfolioPanel=el('div');portfolioPanel.id='owgEventLogSimPortfolio';
+        const portfolioChoices=el('div');
+        const portfolioCases=input('owgEventLogSimPortfolioCases','number');
+        portfolioCases.min='10';portfolioCases.max='5000';portfolioCases.step='1';portfolioCases.value='400';
+        const portfolioRows=[];
+        function addPortfolioChoice(){
+          if(portfolioRows.length>=4)return;
+          const n=portfolioRows.length+1;
+          const title=input('owgEventLogSimPortfolioName'+n,'text');
+          title.value='Alternative '+n;title.maxLength=80;
+          const activity=select('owgEventLogSimPortfolioActivity'+n,
+            Object.keys(cal.activities||{}).map(value=>[value,value]));
+          const staff=input('owgEventLogSimPortfolioStaff'+n,'number');
+          staff.min='1';staff.max='1000';staff.step='1';
+          const original=cal.activities[activity.value]?.resources||1;
+          staff.value=String(Math.min(1000,original+(n-1)));
+          activity.onchange=()=>{staff.value=String(cal.activities[activity.value]?.resources||1);};
+          const row=el('div',null,'row');row.style.alignItems='end';
+          row.append(field('Alternative name',title),field('Measured activity',activity),
+            field('People assigned',staff));
+          portfolioChoices.append(row);
+          portfolioRows.push({title,activity,staff});
+        }
+        addPortfolioChoice();addPortfolioChoice();
+        const addPortfolio=button('Add staffing alternative','secondary');
+        addPortfolio.id='owgEventLogSimPortfolioAdd';
+        addPortfolio.onclick=()=>{addPortfolioChoice();addPortfolio.disabled=portfolioRows.length>=4;};
+        const comparePortfolio=button('Compare staffing alternatives','secondary');
+        comparePortfolio.id='owgEventLogSimPortfolioRun';
+        const portfolioResult=el('div');portfolioResult.id='owgEventLogSimPortfolioResults';
+        portfolioResult.setAttribute('role','status');portfolioResult.setAttribute('aria-live','polite');
+        const compareToolbar=el('div',null,'row');
+        compareToolbar.style.alignItems='end';
+        compareToolbar.append(field('Cases per simulated run',portfolioCases),addPortfolio,comparePortfolio);
+        portfolioPanel.append(el('h4','Compare several staffing alternatives'),
+          el('p','Select two to four candidate staffing levels. The same observed paths, input calibration, random seed and sample count are used across every run. This is hypothetical process modeling, not a staffing recommendation, forecast or employee performance score.','muted'),
+          portfolioChoices,compareToolbar,portfolioResult);
+        form.append(portfolioPanel);
+        comparePortfolio.onclick=async()=>{
+          try{
+            const caseCount=Number(portfolioCases.value);
+            if(!Number.isInteger(caseCount)||caseCount<10||caseCount>5000)
+              throw new Error('Choose 10–5000 cases for the portfolio.');
+            const choices=portfolioRows.map(item=>{
+              const name=item.title.value.trim(),activity=item.activity.value,
+                staff=Number(item.staff.value);
+              if(!name||name.length>80||!activity||!Number.isInteger(staff)||staff<1||staff>1000)
+                throw new Error('Review each alternative name, activity and staffing level.');
+              // Object.create(null) prevents activity names like __proto__
+              // from changing any object's prototype during construction.
+              const overrides=Object.create(null);overrides[activity]={resources:staff};
+              return {label:name,activities:overrides};
+            });
+            if(new Set(choices.map(x=>x.label)).size!==choices.length)
+              throw new Error('Give every alternative a distinct name.');
+            const baseline={cases:caseCount,seed:1,activity_time_basis:timeBasis.value};
+            if(arrivals.value!=='')baseline.arrivals_per_hour=Number(arrivals.value);
+            if(days.value)baseline.calendar=simCalendar({
+              days:days.value,from:from.value,to:to.value,
+              timezone:zone.value,holidays:holidays.value});
+            const body={format:'openworkgraph.simulation-portfolio.v1',baseline,alternatives:choices};
+            comparePortfolio.disabled=true;portfolioResult.replaceChildren(el('p','Comparing the selected alternatives locally…','muted'));
+            const report=await(await api(logPath('simulation/portfolio'),{
+              method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)
+            })).json();
+            const cycle=result=>result.cycle_time_seconds?.p50===null?'—':duration(result.cycle_time_seconds?.p50);
+            const entries=[['Measured baseline',cycle(report.baseline),report.baseline.cases_measured,
+              report.baseline.unstable?'Overloaded':'Reference only']];
+            for(const item of report.alternatives){
+              entries.push([item.label,cycle(item.result),item.result.cases_measured,
+                item.descriptive_cycle_time_comparable?
+                  'Descriptive change '+(item.cycle_time_change_seconds.p50>=0?'+':'−')+
+                    duration(Math.abs(item.cycle_time_change_seconds.p50)):
+                  'No comparable delta: '+item.reasons_deltas_withheld.join(', ').replaceAll('_',' ')]);
+            }
+            portfolioResult.replaceChildren(
+              el('p','Shared source and calibration digest '+report.calibration_and_shared_inputs_sha256+
+                '. All numbers are simulations; a smaller median is not proof of savings.','muted'),
+              table(['Run','Median cycle time','Post-warm-up cases completed','Comparison status'],entries),
+              el('p','Runs with unstable queues or incomplete/abandoned cases have their deltas withheld. No winning option is selected or executed.','muted')
+            );
+          }catch(error){portfolioResult.replaceChildren(el('p',error.message,'muted'));}
+          finally{comparePortfolio.disabled=false;}
+        };
         run.onclick=async()=>{
           try{
             const activities=Object.create(null);
