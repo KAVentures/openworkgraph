@@ -109,7 +109,7 @@ def build_runtime_project(packet: dict) -> bytes:
     spec = build_runtime_spec(packet)
     model = ProcessModel.model_validate(spec['process_model'])
     files = {name: (_TEMPLATES / (name + '.txt')).read_text(encoding='utf-8')
-             for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py', 'monitor.py', 'test_monitor.py', 'send_report.py', 'configure.py', 'test_configuration.py', 'evaluate.py', 'test_evaluation.py', 'plan_sources.py', 'test_source_planning.py', 'evaluate_sources.py', 'test_source_evaluation.py')}
+             for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py', 'monitor.py', 'test_monitor.py', 'send_report.py', 'stop.py', 'configure.py', 'test_configuration.py', 'evaluate.py', 'test_evaluation.py', 'plan_sources.py', 'test_source_planning.py', 'evaluate_sources.py', 'test_source_evaluation.py')}
     files['owg_report_signing.py'] = (Path(__file__).parent/'automation_report_signing.py').read_text(encoding='utf-8')
     for name in ('process_source_state.py','process_rule_conditions.py'):
         files[name]=(Path(__file__).parent/name).read_text(encoding='utf-8')
@@ -324,6 +324,22 @@ def build_runtime_project(packet: dict) -> bytes:
         'OWG Automation monitoring. It makes no model, tool or OWG calls. It\n'
         'requires this exact exported specification and a newly generated journal\n'
         'with its spec hash. Older journals without that binding are refused.\n'
+        '## Emergency stop: future customer tool attempts\n\n'
+        'From the generated project directory, to stop all future tool calls\n'
+        'using the normal local execution journal directory:\n\n'
+        '```sh\npython stop.py --stop --confirm-stop\npython stop.py --status\n```\n\n'
+        'To target a separately configured journal directory, supply the exact\n'
+        '--journal-directory path to both execute.py and stop.py. The durable\n'
+        'private .owg-stop marker prevents new executions and stops future\n'
+        'attempts within running executions at the next local safety check.\n'
+        'It does NOT cancel a tool request already submitted to a provider,\n'
+        'and cannot roll back effects of prior writes. Stop status is not an\n'
+        'independent statement about remote business state. The runtime logs\n'
+        'when it observes the stop. There is intentionally no automatic\n'
+        'resume command: stop the process and inspect provider outcomes and\n'
+        'journal first; a new human review and new execution intent are\n'
+        'required before manually clearing the marker. Never reuse a prior\n'
+        'intent or retry uncertain actions merely because the marker cleared.\n\n'
         'Only actual tool attempt IDs, statuses, timestamps and the opaque intent\n'
         'digest are exported. Case inputs, arguments, results, source references\n'
         'and credentials are excluded; no planned human or gateway steps are invented.\n'
