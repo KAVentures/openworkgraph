@@ -550,6 +550,42 @@ def score_authorized_reconstruction_review(
     return score
 
 
+
+def build_live_reconstruction_review_queue(
+    connection: Any,
+    *,
+    lease: dict[str, Any],
+    authorize_review: Any,
+    run_started_at: str | None = None,
+) -> dict[str, Any]:
+    """Build a bounded reviewer queue from live grant-scoped history.
+
+    This service adapter is for authenticated hosts, not an HTTP endpoint.
+    The host must supply a trusted lease and a fresh authorization callback;
+    neither may be accepted from client-provided JSON. The returned event
+    identifiers remain sensitive and must not be cached beyond the grant.
+    """
+    if not callable(authorize_review) or authorize_review() is not True:
+        raise PermissionError("live reconstruction review authorization denied")
+    if not isinstance(lease, dict):
+        raise PermissionError("trusted saved-history lease required")
+    lease_snapshot = deepcopy(lease)
+    from .recent_resource_references import lease_window
+    from .reconstruction_review_cli import REVIEWABLE_ACCESS, build_review_queue
+    access_mode, scope_where, _ = lease_window(lease_snapshot, run_started_at)
+    if access_mode not in REVIEWABLE_ACCESS or scope_where is None:
+        raise PermissionError("reviewable saved-history grant required")
+    response = resumption_candidates(
+        connection, lease=lease_snapshot, run_started_at=run_started_at
+    )
+    queue = build_review_queue(response)
+    if authorize_review() is not True:
+        raise PermissionError("reconstruction review authorization revoked during queue build")
+    if lease != lease_snapshot:
+        raise PermissionError("reconstruction review lease changed during queue build")
+    return queue
+
+
 def score_live_reconstruction_review(
     connection: Any,
     annotation_envelope: dict[str, Any],
@@ -594,4 +630,4 @@ def score_live_reconstruction_review(
     return score
 
 
-__all__ = ["resumption_candidates", "score_authorized_reconstruction_review", "score_live_reconstruction_review"]
+__all__ = ["resumption_candidates", "score_authorized_reconstruction_review", "score_live_reconstruction_review", "build_live_reconstruction_review_queue"]
