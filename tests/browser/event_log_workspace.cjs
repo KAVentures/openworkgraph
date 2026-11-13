@@ -746,6 +746,44 @@ const path=require('node:path');
    const [pairedAggregate]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisSharingDownload').click()]);
    assert.deepEqual(JSON.parse(await fs.readFile(await pairedAggregate.path(),'utf8')),pair.aggregate_snapshot);
    if(process.env.OWG_SHARED_CASE_PAIR_OUTPUT)await fs.writeFile(process.env.OWG_SHARED_CASE_PAIR_OUTPUT,JSON.stringify(pair));
+   // R4 + R9: one paired file must be reviewed twice and revalidated against
+   // current source, metric definitions and numeric aggregate at download time.
+   const [companyResponse]=await Promise.all([
+     page.waitForResponse(r=>r.url().endsWith('/company-handoff-preview')),
+     page.locator('#owgAnalysisPrepareCompany').click()]);
+   assert.equal(companyResponse.status(),200);
+   const companyPacket=await companyResponse.json();
+   assert.equal(companyPacket.format,'openworkgraph.analysis-handoff-bundle.v1');
+   assert.equal(companyPacket.case_dataset.cases.length,companyPacket.aggregate_snapshot.matching_cases);
+   assert.equal(companyPacket.case_dataset.source_content_sha256,companyPacket.aggregate_snapshot.source_content_sha256);
+   assert.equal(await page.locator('#owgAnalysisBundleDownload').isDisabled(),true);
+   await page.locator('#owgAnalysisSharingConsent').check();
+   assert.equal(await page.locator('#owgAnalysisBundleDownload').isDisabled(),true,'aggregate consent alone cannot release cases');
+   await page.locator('#owgAnalysisCaseConsent').check();
+   assert.equal(await page.locator('#owgAnalysisBundleDownload').isDisabled(),false);
+   await page.route('**/analysis-sharing-freshness',route=>route.fulfill({
+     status:200,contentType:'application/json',
+     body:JSON.stringify({format:'openworkgraph.analysis-snapshot-freshness.v1',
+       lineage_current:true,current_results_match:false})
+   }),{times:1});
+   await page.locator('#owgAnalysisBundleDownload').click();
+   await page.locator('#owgAnalysisFreshnessStatus').filter({hasText:'Paired handoff stale or changed.'}).waitFor();
+   assert.equal(await page.locator('#owgAnalysisBundleDownload').isDisabled(),true);
+   await page.unroute('**/analysis-sharing-freshness');
+   const [reprepared]=await Promise.all([
+     page.waitForResponse(r=>r.url().endsWith('/company-handoff-preview')),
+     page.locator('#owgAnalysisPrepareCompany').click()]);
+   assert.equal(reprepared.status(),200);
+   const reviewedCompany=await reprepared.json();
+   await page.locator('#owgAnalysisSharingConsent').check();
+   await page.locator('#owgAnalysisCaseConsent').check();
+   const [pairedCompanyDownload]=await Promise.all([
+     page.waitForEvent('download'),page.locator('#owgAnalysisBundleDownload').click()]);
+   const downloadedCompany=JSON.parse(await fs.readFile(await pairedCompanyDownload.path(),'utf8'));
+   assert.deepEqual(downloadedCompany,reviewedCompany);
+   assert.equal(await page.locator('#owgAnalysisSharingConsent').isChecked(),false);
+   assert.equal(await page.locator('#owgAnalysisCaseConsent').isChecked(),false);
+   assert.ok(!JSON.stringify(downloadedCompany).includes('"resource"'),'no raw resource content');
    // An older prepare response cannot re-open a sharing preview after a new analysis runs.
    let releaseSharing,sharingHeld;const sharingSeen=new Promise(resolve=>sharingHeld=resolve);
    await page.route('**/analysis-sharing-preview',async route=>{const response=await route.fetch();sharingHeld();await new Promise(resolve=>releaseSharing=resolve);await route.fulfill({response});},{times:1});

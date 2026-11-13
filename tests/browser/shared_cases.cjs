@@ -40,6 +40,31 @@ const {chromium}=require('playwright'),assert=require('node:assert/strict'),fs=r
   const axe=await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8');await owner.evaluate(source=>{const s=document.createElement('script');s.nonce=document.querySelector('script[nonce]').nonce;s.textContent=source;document.head.append(s);},axe);assert.deepEqual((await owner.evaluate(()=>axe.run(document,{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}))).violations,[]);
   await owner.setViewportSize({width:390,height:844});assert(await owner.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
   await owner.locator('#caseDeleteConfirm').check();await owner.locator('#deleteCaseData').click();await owner.locator('#caseWorkspace').getByRole('status').filter({hasText:'Case data and grants deleted'}).waitFor();assert.equal(await owner.locator('#table table').count(),1);
+  // One reviewed file can carry both disclosures, but the portal uploads only
+  // the aggregate until the separately checked case attachment is requested.
+  const aggregate=JSON.parse(await fs.readFile(path.join(scratch,'aggregate.json'),'utf8'));
+  const paired={format:'openworkgraph.analysis-handoff-bundle.v1',aggregate_snapshot:aggregate,
+    case_dataset:doc,source_independently_verified:false,
+    case_attachment_authorized:false,organization_publication_authorized:false};
+  await owner.locator('#new').click();
+  await owner.locator('#file').setInputFiles({name:'invalid-paired.json',mimeType:'application/json',
+    buffer:Buffer.from(JSON.stringify({...paired,case_dataset:{...doc,analysis_spec_sha256:'0'.repeat(64)}}))});
+  await owner.locator('#status').filter({hasText:'same selected source and analysis'}).waitFor();
+  assert.equal(await owner.locator('#publish').isDisabled(),true,'mismatched files never publish');
+  await owner.locator('#file').setInputFiles({name:'paired-handoff.json',mimeType:'application/json',
+    buffer:Buffer.from(JSON.stringify(paired))});
+  await owner.locator('#preview').getByText(/Paired handoff: 2 complete coded cases/).waitFor();
+  await owner.locator('#title').fill('Reviewed paired handoff');
+  await owner.locator('#confirm').check();
+  const priorPosts=uploads;
+  await owner.locator('#publish').click();
+  await owner.locator('#status').filter({hasText:'Paired case data are staged in this browser only'}).waitFor();
+  assert.equal(uploads,priorPosts,'aggregate publication must not silently upload cases');
+  assert.equal(await owner.locator('#attachCaseData').isDisabled(),true,'separate case confirmation mandatory');
+  await owner.locator('#caseConfirm').check();
+  await owner.locator('#attachCaseData').click();
+  await owner.locator('#caseWorkspace').getByRole('status').filter({hasText:'Case data loaded'}).waitFor();
+  assert.equal(uploads,priorPosts+1,'only a separate explicit action uploads the case dataset');
   await owner.locator('#disconnect').click();assert.equal(await owner.locator('#caseWorkspace').isHidden(),true);assert.equal(await owner.locator('#caseWorkspace ol').count(),0);assert.deepEqual(errors,[]);
   console.log('Shared case data acceptance passed: actual paired local export, hidden fields refused before transfer, exact aggregate attachment, separate grants, coded timeline/filter/export, parent-ACL invalidation, deletion preserving aggregate, clear, WCAG/mobile.');
  }catch(e){throw new Error(e.stack+'\nServer:\n'+logs);}finally{if(browser)await browser.close();server.kill('SIGTERM');await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);if(server.exitCode===null)server.kill('SIGKILL');await fs.rm(scratch,{recursive:true,force:true});}

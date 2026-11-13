@@ -22,8 +22,8 @@ body{font:16px/1.5 system-ui,sans-serif;max-width:1050px;margin:auto;padding:20p
 <div id="compareResult" role="status" aria-live="polite"></div>
 </div>
 </section>
-<section id="publisher" hidden><h2>Publish a reviewed snapshot</h2><p>In the local event-log workspace, run an analysis, select “Prepare sharing snapshot”, review it, then download it. Group codes have meaning only within that file. Numeric values, units and your title may still be sensitive. Every permitted member can read all retained revisions; publishing a new revision does not hide an old one.</p>
-<label>Snapshot file <input id="file" type="file" accept="application/json,.json"></label><div id="preview" class="scroll"></div>
+<section id="publisher" hidden><h2>Publish a reviewed snapshot</h2><p>In the local event-log workspace, run an analysis, select “Prepare sharing snapshot” or “Prepare paired company handoff”, review each selected disclosure, then download it. A paired handoff can stage case data in this browser after aggregate publication, but does NOT attach cases until a separate confirmation. Group codes have meaning only within their file. Numeric values, units and your title may still be sensitive. Every permitted member can read all retained revisions; publishing a new revision does not hide an old one.</p>
+<label>Reviewed snapshot or paired company handoff file <input id="file" type="file" accept="application/json,.json"></label><div id="preview" class="scroll"></div>
 <label>Publication title <input id="title" type="text" maxlength="480"></label>
 <label>Retention for a new publication (days, 1–90) <input id="days" type="number" min="1" max="90" value="7"></label>
 <p>Revisions keep the current expiry. Only the owner can renew it under Access.</p>
@@ -39,11 +39,12 @@ body{font:16px/1.5 system-ui,sans-serif;max-width:1050px;margin:auto;padding:20p
 <script nonce="__NONCE__" src="/analysis-snapshot-client.js"></script>
 <script nonce="__NONCE__" src="/analysis-case-queries-client.js"></script>
 <script nonce="__NONCE__" src="/analysis-cases-client.js"></script>
+<script nonce="__NONCE__" src="/analysis-bundle-client.js"></script>
 <script nonce="__NONCE__">
 (()=>{'use strict';
 const $=id=>document.getElementById(id),base='/v1/human/analyses';
 let identityScopes=[],identityActor='';
-let credential='',credentialScheme='Bearer',epoch=0,selected=null,snapshot=null,canPublish=false,next=null,fileAttempt=0,viewAttempt=0,listAttempt=0;
+let credential='',credentialScheme='Bearer',epoch=0,selected=null,snapshot=null,pairedCase=null,canPublish=false,next=null,fileAttempt=0,viewAttempt=0,listAttempt=0;
 const text=(tag,value)=>{const n=document.createElement(tag);n.textContent=value;return n;};
 function table(node,doc){
  node.replaceChildren();const t=document.createElement('table'),head=document.createElement('tr');
@@ -51,7 +52,7 @@ function table(node,doc){
  const thead=document.createElement('thead');thead.append(head);t.append(thead);const body=document.createElement('tbody');
  for(const row of doc.rows){const tr=document.createElement('tr');for(const v of row)tr.append(text('td',v===null?'—':String(v)));body.append(tr);}t.append(body);node.append(t);
 }
-function clearFile(){fileAttempt++;snapshot=null;$('file').value='';$('preview').replaceChildren();$('confirm').checked=false;sync();}
+function clearFile(){fileAttempt++;snapshot=null;pairedCase=null;$('file').value='';$('preview').replaceChildren();$('confirm').checked=false;sync();}
 function clearSelection(){caseUI.clear();viewAttempt++;selected=null;$('revisionCompare').hidden=true;$('compareResult').replaceChildren();$('compareOther').value='';$('table').replaceChildren();$('coverage').replaceChildren();$('viewTitle').textContent='';$('basis').textContent='';$('revision').value='';$('detail').hidden=true;$('access').hidden=true;$('members').replaceChildren();$('renew').value='';$('title').value='';clearFile();}
 function sync(){
  $('publisher').hidden=!credential||!canPublish;
@@ -143,18 +144,33 @@ $('companySignIn').onclick=()=>{
 fetch(base+'/sign-in/config',{credentials:'omit',cache:'no-store'}).then(r=>r.ok?r.json():null).then(d=>{$('companySignIn').hidden=d?.company_sign_in_enabled!==true;}).catch(()=>{});
 $('refresh').onclick=()=>run(async()=>{clearSelection();await inventory();});$('new').onclick=clearSelection;$('more').onclick=()=>run(()=>inventory(next));
 $('file').onchange=()=>run(async()=>{
- const file=$('file').files[0];clearFile();if(!file)return;if(file.size>128*1024)throw new Error('Snapshot file exceeds 128 KiB.');
- const attempt=fileAttempt,raw=await file.text();if(attempt!==fileAttempt)return;const doc=window.owgAnalysisSnapshotClient.validate(JSON.parse(raw));
+ const file=$('file').files[0];clearFile();if(!file)return;if(file.size>640*1024)throw new Error('Selected file exceeds the 640 KiB handoff limit.');
+ const attempt=fileAttempt,raw=await file.text();if(attempt!==fileAttempt)return;const parsed=JSON.parse(raw);
+ const bundle=parsed?.format==='openworkgraph.analysis-handoff-bundle.v1'?
+   window.owgAnalysisBundleClient.validate(parsed):null;
+ if(!bundle&&file.size>128*1024)throw new Error('Standalone snapshot exceeds 128 KiB.');
+ const doc=bundle?bundle.aggregate_snapshot:window.owgAnalysisSnapshotClient.validate(parsed);
+ pairedCase=bundle?bundle.case_dataset:null;
  if(doc.format!=='openworkgraph.aggregate-analysis-snapshot.v1'||!Array.isArray(doc.columns)||!Array.isArray(doc.rows)||doc.columns.length>6||doc.rows.length>100||doc.rows.some(r=>!Array.isArray(r)||r.length!==doc.columns.length))throw new Error('Choose a bounded OWG analysis snapshot.');
- snapshot=doc;table($('preview'),doc);$('preview').append(text('p',doc.matching_cases+' selected cases; '+doc.matching_rows+' '+doc.level+' rows; '+doc.non_finite_results_withheld+' nonfinite output results withheld; generated '+doc.generated_at+'. Source fingerprint '+doc.source_content_sha256+'. Analysis fingerprint '+doc.analysis_spec_sha256+'. '+(doc.rows_truncated?'Bounded result rows only. ':'')));for(const c of doc.metric_coverage)$('preview').append(text('p','Metric '+c.slot+': '+c.with_value+' cases with a value; '+c.without_value+' without; '+c.missing_operand+' missing operand; '+c.zero_divisor+' zero divisor; '+c.non_finite+' nonfinite.'));sync();
+ snapshot=doc;table($('preview'),doc);$('preview').append(text('p',doc.matching_cases+' selected cases; '+doc.matching_rows+' '+doc.level+' rows; '+doc.non_finite_results_withheld+' nonfinite output results withheld; generated '+doc.generated_at+'. Source fingerprint '+doc.source_content_sha256+'. Analysis fingerprint '+doc.analysis_spec_sha256+'. '+(doc.rows_truncated?'Bounded result rows only. ':'')));for(const c of doc.metric_coverage)$('preview').append(text('p','Metric '+c.slot+': '+c.with_value+' cases with a value; '+c.without_value+' without; '+c.missing_operand+' missing operand; '+c.zero_divisor+' zero divisor; '+c.non_finite+' nonfinite.'));
+ if(pairedCase)$('preview').append(text('p','Paired handoff: '+pairedCase.cases.length+
+   ' complete coded cases and '+pairedCase.cases.reduce((n,c)=>n+c.events.length,0)+
+   ' events. Publishing sends ONLY the aggregate; case data stay in this browser until separately reviewed and attached. No case-viewer access is granted automatically.'));
+ sync();
 });
 $('confirm').onchange=sync;
 $('publish').onclick=()=>run(async()=>{
  if(!snapshot||!$('confirm').checked)return;
  if([...$('title').value.trim()].length>240)throw new Error('Use at most 240 characters in the title.');
- const attempt=viewAttempt,fileVersion=fileAttempt;
+ const attempt=viewAttempt,fileVersion=fileAttempt,stagedCandidate=pairedCase;
  const d=await post(base+(selected?'/'+selected.view_id:''),{title:$('title').value.trim(),snapshot,expected_revision:selected?.revision||0,expires_in_days:Number($('days').value),user_confirmed:true,organization_sharing_confirmed:true});
- if(attempt!==viewAttempt||fileVersion!==fileAttempt)return;clearFile();await inventory();if(attempt!==viewAttempt)return;await open(d.view_id);$('status').textContent='Snapshot published. Access is limited to its owner, analysis administrators and explicit members.';
+ if(attempt!==viewAttempt||fileVersion!==fileAttempt)return;clearFile();await inventory();if(attempt!==viewAttempt)return;await open(d.view_id);
+ let staged=false;
+ if(stagedCandidate)try{staged=caseUI.stagePaired(stagedCandidate);}catch(_){staged=false;}
+ $('status').textContent=staged?
+   'Aggregate published. Paired case data are staged in this browser only; review and check the separate case attachment confirmation below. No case viewers have been granted.':
+   'Snapshot published. Access is limited to its owner, analysis administrators and explicit members.'+
+   (stagedCandidate?' Case data were not attached or staged; use the separate case workflow with the required permissions.':'');
 });
 $('openRevision').onclick=()=>run(()=>open(selected.view_id,Number($('revision').value)));
 const COMPARISON_REASONS={
