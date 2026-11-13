@@ -1,11 +1,15 @@
 # Domain packs
 
-A domain pack bundles the definitions a process team would otherwise rebuild for every log of a well-known
-process. Four packs ship, each at version 1.0.0: **order to cash** (`order_to_cash`), **procure to pay**
-(`procure_to_pay`), **IT service management** (`service_management`) and
-**sales lead qualification** (`sales_lead_management`). Packs are local definitions: they add no source access,
-uploads or model calls. Multiple packs can be installed on the same log; each owns its own metrics.
-
+A domain pack bundles reusable process definitions for an imported event log. Nine
+versioned local packs ship: **order to cash** (`order_to_cash`),
+**procure to pay** (`procure_to_pay`), **IT service management**
+(`service_management`), **sales lead qualification**
+(`sales_lead_management`), **customer onboarding** (`customer_onboarding`),
+**employee onboarding** (`employee_onboarding`), **employee offboarding**
+(`employee_offboarding`), **expense reimbursement** (`expense_reimbursement`),
+and **returns and refunds** (`returns_refunds`). No pack grants source access,
+uploads data or calls AI services. Multiple packs may be installed on one log;
+each owns only its own saved metric definitions.
 ## What a pack contains
 
 - **Roles:** what the process's object types and activities mean, for example `order`, `item`, `delivery`,
@@ -120,6 +124,13 @@ configurable timing and sequence checks, and a per-case check for more than one 
 opportunity-creation event. Repeated events do not establish distinct CRM opportunities;
 open or disqualified leads can appear as missing responses. The simple reference path
 allows one optional review and does not model reopening. See [sales lead qualification](SALES_LEAD_DOMAIN_PACK.md).
+
+## Onboarding, offboarding and expense packs
+
+- [Customer onboarding and activation](CUSTOMER_ONBOARDING_DOMAIN_PACK.md): selected customer lifecycle, activation and optional handoff evidence.
+- [Employee offboarding and access revocation](EMPLOYEE_OFFBOARDING_DOMAIN_PACK.md): selected offboarding and observed revocation events, not entitlement proof.
+- [Expense reimbursement](EXPENSE_REIMBURSEMENT_DOMAIN_PACK.md): submitted claims, approval, recorded payment and optional checks.
+- [Employee onboarding and access readiness](EMPLOYEE_ONBOARDING_DOMAIN_PACK.md): observed access provisioning, start, optional training and access review. Version-pinned and read-only, not account provisioning.
 
 ## Install, upgrade and uninstall
 
