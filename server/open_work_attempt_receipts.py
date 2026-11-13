@@ -98,6 +98,18 @@ def append_receipt(path: str, *, tenant: str, actor: str, attempt: str,
     reason = verdict.get("reason")
     if reason is not None and (not isinstance(reason, str) or len(reason) > 160):
         raise ValueError("invalid reason")
+    # Validate independently supplied verifier metadata before persistence.
+    source_checked = verdict.get("checked_at")
+    if source_checked is not None:
+        if not isinstance(source_checked, str) or len(source_checked) > 64:
+            raise ValueError("invalid source verification timestamp")
+        try:
+            parsed = datetime.fromisoformat(source_checked.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError("invalid source verification timestamp") from None
+        if parsed.tzinfo is None:
+            raise ValueError("source verification timestamp requires timezone")
+        # Journal checked_at is the local append time, not a source freshness claim.
     checked = datetime.now(timezone.utc).isoformat()
     with _connect(path) as db:
         db.execute("BEGIN IMMEDIATE")
