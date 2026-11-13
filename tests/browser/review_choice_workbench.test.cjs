@@ -73,6 +73,35 @@ const getControls=results=>[results.children.find(x=>x.tagName==='select'),resul
      assert.equal(lastEvent().detail.archive_sha256,'b'.repeat(64));
    },true);
 
+
+ // A malformed save receipt cannot be treated as an approved, durable decision.
+ // Reload the authoritative review revision instead of trusting a response
+ // that echoes the wrong decision or a non-monotonic revision.
+ for(const [label,receipt] of [
+   ['wrong decision',{decision:'draft',revision:1}],
+   ['non-monotonic revision',{decision:'approved',revision:0}],
+   ['missing revision',{decision:'approved'}]
+ ]){
+   await scenario('reject '+label+' in saved approval receipt',[
+     basis(),basis(),
+     {format:'openworkgraph.review-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
+       spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),blockers:[],review_required:true,
+       execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false},
+     {project_id:'p1',execution_authorized:false,...receipt}
+   ],async({results,details,opened})=>{
+     const [select,review]=getControls(results);select.value='p1';await review.onclick();
+     await details.children.find(x=>x.textContent==='Revalidate review basis on server').onclick();
+     // Saved-review GET is the authoritative draft (revision zero).
+     await Promise.resolve();await Promise.resolve();
+     const approve=details.children.find(x=>x.textContent==='Approve reviewed choice');
+     const state=details.children.find(x=>x.tagName==='p'&&/Saved review:/.test(x.textContent));
+     assert.ok(approve);assert.ok(state);assert.equal(approve.disabled,false);
+     await approve.onclick();
+     assert.match(state.textContent,/Saved review: draft/);
+     assert.doesNotMatch(state.textContent,/Saved approved/);
+     assert.equal(opened(),0);
+   },true);
+ }
  // A server response approving another revision or export must never open a handoff.
  for(const [label,override] of [
    ['different review revision',{review_revision:1}],
