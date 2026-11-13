@@ -777,7 +777,11 @@ const path=require('node:path');
    await page.locator('#owgAnalysisPrepareCases').click();
    await page.locator('#owgAnalysisCaseConsent').check();
    const [caseDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCaseDownload').click()]);
-   assert.deepEqual(JSON.parse(await fs.readFile(await caseDownload.path(),'utf8')),pair.case_dataset);
+   const downloadedCases=JSON.parse(await fs.readFile(await caseDownload.path(),'utf8'));
+   // Download-time recomputation legitimately regenerates the audit timestamp;
+   // compare the complete source-bound payload without that volatile field.
+   assert.equal(typeof downloadedCases.generated_at,'string');
+   assert.deepEqual({...downloadedCases,generated_at:pair.case_dataset.generated_at},pair.case_dataset);
    assert.equal(await page.locator('#owgAnalysisCaseConsent').isChecked(),false);
    assert.equal(await page.locator('#owgAnalysisSharingConsent').isChecked(),false);
    await page.locator('#owgAnalysisSharingConsent').check();
