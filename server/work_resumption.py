@@ -561,6 +561,13 @@ def score_live_reconstruction_review(
     if not isinstance(lease, dict):
         raise PermissionError("trusted saved-history lease required")
     lease_snapshot = deepcopy(lease)
+    # A reviewer permission is not itself a saved-history grant. Reject
+    # disabled, unknown and malformed scopes before touching the event store.
+    from .recent_resource_references import lease_window
+    from .reconstruction_review_cli import REVIEWABLE_ACCESS
+    access_mode, scope_where, _scope_args = lease_window(lease_snapshot, run_started_at)
+    if access_mode not in REVIEWABLE_ACCESS or scope_where is None:
+        raise PermissionError("reviewable saved-history grant required")
     response = resumption_candidates(
         connection, lease=lease_snapshot, run_started_at=run_started_at
     )
