@@ -792,6 +792,15 @@ async def event_log_impact(request: Request, log_id: str):
 _PACK_ID = r"^[a-z][a-z0-9_]{0,39}$"
 
 
+@router.post("/v1/event-logs/{log_id}/domain-pack-labels")
+async def event_log_domain_pack_labels(request: Request, log_id: str):
+    _require_dashboard(request)
+    body = await _json_body(request, "domain pack label search", strict=True, limit=4096)
+    if not isinstance(body, dict) or set(body) - {"kind", "search", "after"} or not {"kind", "search"} <= set(body):
+        raise HTTPException(422, "label search needs kind and search")
+    return _respond(domain_packs.find_mapping_labels, log_id, body["kind"], body["search"], body.get("after", ""))
+
+
 @router.get("/v1/event-log-domain-packs")
 def event_log_domain_pack_catalog(request: Request):
     _require_dashboard(request)

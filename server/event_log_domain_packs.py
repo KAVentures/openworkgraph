@@ -818,6 +818,27 @@ def _digest(definitions: dict[str, Any]) -> str:
 
 # --- install -------------------------------------------------------------------
 
+def find_mapping_labels(log_id: str, kind: str, search: str, after: str = "") -> dict[str, Any]:
+    """Page literal labels from this log only, without returning source events."""
+    if kind not in ("activities", "object_types") or not isinstance(search, str) or not 1 <= len(search) <= 200:
+        raise workspace.EventLogWorkspaceError("choose a label kind and enter 1 to 200 search characters")
+    if not isinstance(after, str) or len(after) > 200:
+        raise workspace.EventLogWorkspaceError("invalid label cursor")
+    table, column = (("events", "activity") if kind == "activities" else ("objects", "object_type"))
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            workspace._check_log(conn, log_id)
+            rows = conn.execute(
+                f"SELECT DISTINCT {column} FROM {table} WHERE log_id = ? AND strpos({column}, ?) > 0 "
+                f"AND length({column}) BETWEEN 1 AND 200 AND {column} > ? ORDER BY {column} LIMIT 101", [log_id, search, after]).fetchall()
+        finally:
+            conn.close()
+    labels = [r[0] for r in rows[:100]]
+    return {"labels": labels, "next_after": labels[-1] if len(rows) > 100 else None,
+            "match": "case_sensitive_literal", "limit": 100}
+
+
 def _parse_install(pack_id: str, spec: Any) -> tuple[dict[str, Any], InstallSpec, dict[str, float]]:
     try:
         parsed = InstallSpec.model_validate(spec)
