@@ -461,7 +461,11 @@ def _structured(result):
     return content
 
 
-def ensure_current(intent, now=None):
+def ensure_current(intent, now=None, stop_marker=None):
+    # A malformed or symlinked marker still means STOP. This is a local
+    # operator control; it cannot recall a tool call already in flight.
+    if stop_marker is not None and os.path.lexists(str(stop_marker)):
+        raise ImplementationError('Local operator stop is active; no further tool attempts are permitted')
     expiry = datetime.fromisoformat(intent['expires_at'].replace('Z', '+00:00'))
     if (now or datetime.now(timezone.utc)) >= expiry:
         raise ImplementationError('Customer intent expired; no further operations are permitted')
@@ -480,12 +484,16 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
         raise ImplementationError('Configure the separate least-privilege customer tool and OWG source-read credentials')
     execution_id = digest(intent)
     folder = Path(journal_directory); folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+    stop_marker = folder / '.owg-stop'
+    ensure_current(intent, now, stop_marker)
     target = folder / (execution_id + '.jsonl')
     try:
         descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:
         raise ImplementationError('This customer intent already has a journal; inspect it rather than retrying actions') from None
-    result = {'execution_id': execution_id, 'process_reference': reference(spec), 'actions': [], 'source_checks': [],
+    result = {'execution_id': execution_id, 'process_reference': reference(spec),
+        'operator_stop_switch_enabled': True, 'operator_stopped': False,
+        'in_flight_requests_cannot_be_cancelled': True, 'actions': [], 'source_checks': [],
         'model_invoked': False, 'business_objective_verified': False, 'agent_causality_verified': False,
         'automatic_retries': False, 'customer_intent_is_signed_policy': False,
         'source_rule_checks':[], 'source_rule_reads_are_atomic_with_actions':False,
@@ -498,7 +506,7 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
         async def check_catalog():
             if not spec.get('organization_catalog_reference'):
                 return
-            ensure_current(intent, now)
+            ensure_current(intent, now, stop_marker)
             try:
                 state = await catalog_reader(endpoint(bindings['process_catalog_url']), catalog_token, spec)
                 current = catalog_is_current(state, spec)
@@ -508,13 +516,13 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
             record('catalog_checked', current_independent_design_review=bool(current))
             if not current:
                 raise ImplementationError('Shared process changed, lost review, was archived or is unavailable')
-            ensure_current(intent, now)
+            ensure_current(intent, now, stop_marker)
         async def check_decisions():
             if not prepared.get('decision_tables'):return
             from decision_runtime import check_decision_receipt
             passed=True
             for request in prepared['decision_tables']:
-                ensure_current(intent,now)
+                ensure_current(intent,now,stop_marker)
                 try:
                     receipt=await source_state_reader(endpoint(bindings['source_api_url'],source=True),source_token,request)
                 except Exception:receipt=None
@@ -522,7 +530,7 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                 result.setdefault('decision_table_checks',[]).append(summary)
                 record('decision_table_checked',**summary)
                 passed=passed and summary['route_matches']
-            ensure_current(intent,now)
+            ensure_current(intent,now,stop_marker)
             if not passed:
                 policy='ordered FIRST' if any(t.get('hit_policy')=='FIRST' for t in spec['process_model'].get('decision_tables',[])) else 'UNIQUE'
                 raise ImplementationError('Current '+policy+' decision route or effective date not established')
@@ -534,7 +542,7 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
             passed=True
             for request in prepared['source_rules']:
                 from process_rule_conditions import evaluate_predicate
-                ensure_current(intent,now)
+                ensure_current(intent,now,stop_marker)
                 try:
                     receipt=await source_state_reader(endpoint(bindings['source_api_url'],source=True),source_token,request)
                     facts=facts_from_receipt(receipt,request['resource_ref'],request['source_type'],now=now)
@@ -545,7 +553,7 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                     'record_association':'customer_selected_not_independently_established'}
                 result['source_rule_checks'].append(summary);record('source_rule_checked',**summary)
                 passed=passed and status=='matched'
-            ensure_current(intent,now)
+            ensure_current(intent,now,stop_marker)
             if not passed:raise ImplementationError('Fresh source rule invariant was false or unknown')
             await check_decisions()
         try:
@@ -560,7 +568,7 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
             result['source_preflight'] = []
             for request in prepared['outcomes']:
                 try:
-                    ensure_current(intent, now)
+                    ensure_current(intent, now, stop_marker)
                     receipt = await receipt_reader(endpoint(bindings['source_api_url'], source=True), source_token, request)
                 except Exception:
                     receipt = None
@@ -575,7 +583,7 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
             async with AsyncExitStack() as stack:
                 if prepared['actions']:
                     client = await stack.enter_async_context(client_factory(endpoint(bindings['tool_server_url']), tool_token))
-                    ensure_current(intent, now)
+                    ensure_current(intent, now, stop_marker)
                     tools = await client.list_tools()
                     names = {tool.get('name') if isinstance(tool, dict) else tool.name for tool in tools}
                     current_tools = {tool.get('name') if isinstance(tool,dict) else tool.name:tool for tool in tools}
@@ -590,12 +598,13 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                                 raise ImplementationError('A mapped tool input schema changed; inspect and review current bindings')
                     for index, action in enumerate(prepared['actions']):
                         await check_catalog()
-                        ensure_current(intent, now)
+                        ensure_current(intent, now, stop_marker)
                         if action['precondition']:
                             await check_decisions()
                             condition = action['precondition']
                             record('precondition_pending', activity_id=action['activity_id'], attempt=index+1)
                             try:
+                                ensure_current(intent, now, stop_marker)
                                 response = await client.call_tool(condition['tool_name'], condition['arguments'])
                                 content = _structured(response)
                                 if digest(pointer(content, condition['result_pointer'])) != digest(condition['result_equals']):
@@ -606,11 +615,12 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                                 break
                         await check_catalog()
                         await check_source_rules()
-                        ensure_current(intent, now)
+                        ensure_current(intent, now, stop_marker)
                         record('attempt_pending', activity_id=action['activity_id'], attempt=index+1,
                                arguments_sha256=digest(action['arguments']))
                         status = 'uncertain'
                         try:
+                            ensure_current(intent, now, stop_marker)
                             response = await client.call_tool(action['tool_name'], action['arguments'])
                             content = _structured(response)
                             if digest(pointer(content, action['result_pointer'])) != digest(action['result_equals']):
@@ -624,8 +634,13 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                         if status != 'tool_returned_expected_structure':
                             break
         except ImplementationError:
-            record('implementation_contract_or_intent_not_established')
-            result['implementation_contract_or_intent_not_established'] = True
+            if os.path.lexists(str(stop_marker)):
+                result['operator_stopped'] = True
+                record('operator_stop_observed', future_tool_attempts_stopped=True,
+                       already_in_flight_requests_not_cancelled=True)
+            else:
+                record('implementation_contract_or_intent_not_established')
+                result['implementation_contract_or_intent_not_established'] = True
         except Exception:
             record('transport_or_tool_inventory_unavailable')
             result['transport_or_tool_inventory_unavailable'] = True
@@ -638,7 +653,7 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
         for request in prepared['outcomes']:
             attempted = False
             try:
-                ensure_current(intent, now)
+                ensure_current(intent, now, stop_marker)
                 attempted = True
                 receipt = await receipt_reader(endpoint(bindings['source_api_url'], source=True), source_token, request)
             except Exception:
@@ -649,7 +664,11 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
         result['all_tool_results_matched'] = (len(result['actions']) == len(prepared['actions'])
             and all(row['status'] == 'tool_returned_expected_structure' for row in result['actions']))
         result['all_declared_operations_verified'] = bool(prepared['outcomes']) and all(row['operation_verified'] for row in result['source_checks'])
+        if os.path.lexists(str(stop_marker)):
+            result['operator_stopped'] = True
+            record('operator_stop_active_at_completion', in_flight_requests_not_cancelled=True)
         result['declared_route_checks_satisfied']=(result['all_tool_results_matched']
+            and not result['operator_stopped']
             and result['source_rules_matched_at_completion']
             and not result.get('implementation_contract_or_intent_not_established')
             and not result.get('transport_or_tool_inventory_unavailable'))
