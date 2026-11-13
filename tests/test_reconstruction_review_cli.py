@@ -38,7 +38,7 @@ class AnnotationCliTests(unittest.TestCase):
             source_path = Path(directory) / "source.json"
             labels_path = Path(directory) / "labels.json"
             source_path.write_text(json.dumps(source), encoding="utf-8")
-            labels_path.write_text(json.dumps(labels), encoding="utf-8")
+            labels_path.write_text(json.dumps({"evidence_sha256": build_review_queue(source)["evidence_sha256"], "annotations": labels}), encoding="utf-8")
             output = StringIO()
             with patch("sys.argv", ["review", str(source_path), "--annotations", str(labels_path)]):
                 with redirect_stdout(output):
@@ -91,6 +91,31 @@ class AnnotationCliTests(unittest.TestCase):
                 with redirect_stderr(StringIO()) as errors:
                     self.assertEqual(main(), 2)
             self.assertIn("must be distinct", errors.getvalue())
+
+class EvidenceBoundAnnotationTests(unittest.TestCase):
+    def test_bound_annotations_accept_exact_export_and_reject_stale_export(self):
+        from server.reconstruction_review_cli import score_bound_review_annotations
+        source = payload([pair("A", "F", ["a"])])
+        queue = build_review_queue(source)
+        row = queue["event_reviews"][0]
+        envelope = {"evidence_sha256": queue["evidence_sha256"],
+                    "annotations": [{"window": row["window"], "event_id": row["event_id"],
+                                     "true_resource_pairs": row["candidate_resource_pairs"]}]}
+        self.assertEqual(score_bound_review_annotations(source, envelope)["true_positive_pairs"], 1)
+        changed = payload([pair("B", "G", ["a"])])
+        with self.assertRaisesRegex(ValueError, "digest mismatch"):
+            score_bound_review_annotations(changed, envelope)
+
+    def test_unbound_or_invalid_annotation_envelopes_are_refused(self):
+        from server.reconstruction_review_cli import score_bound_review_annotations
+        source = payload([pair("A", "F", ["a"])])
+        for envelope in ([], {}, {"annotations": []},
+                         {"evidence_sha256": "x" * 64, "annotations": []},
+                         {"evidence_sha256": build_review_queue(source)["evidence_sha256"],
+                          "annotations": [], "reviewer": "unverified"}):
+            with self.subTest(envelope=envelope), self.assertRaises(ValueError):
+                score_bound_review_annotations(source, envelope)
+
 
 class ExplicitAnnotationScoreTests(unittest.TestCase):
     def test_empty_review_cohort_cannot_report_zero_f1(self):
