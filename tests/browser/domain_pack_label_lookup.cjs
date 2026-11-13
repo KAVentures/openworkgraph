@@ -65,6 +65,25 @@ const path=require('node:path');
   await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
   const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgDomainPacks'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
   assert.deepEqual(audit.violations.map(v=>v.id),[]);await page.setViewportSize({width:390,height:900});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth+1));
+  // A delayed response for the old log must not populate its detached view.
+  const oldId=await page.locator('#owgEventLogPick').inputValue();
+  await page.evaluate(()=>{window.__oldLabelMatches=document.querySelector('#owgDomainPackMatches-submitted');});
+  await page.locator('#owgDomainPackFinder-submitted summary').click();
+  let releaseOld;const oldHeld=new Promise(resolve=>{releaseOld=resolve;});
+  await page.route('**/domain-pack-labels',async route=>{await oldHeld;await route.continue();},{times:1});
+  await page.locator('#owgDomainPackLookup-submitted').fill('Noise');
+  const oldRequest=page.waitForRequest(r=>r.url().endsWith('/domain-pack-labels')&&r.method()==='POST');
+  await page.getByRole('button',{name:'Find labels for Submit claim'}).click();await oldRequest;
+  const second='case,activity,time\nc2,Second log,2026-01-01T00:00:00Z\n';
+  await page.locator('#owgEventLogFile').setInputFiles({name:'second.csv',mimeType:'text/csv',buffer:Buffer.from(second)});
+  await page.locator('#owgEventLogStatus').filter({hasText:'File mapping ready.'}).waitFor();
+  await page.locator('#owgEventLogCase').selectOption('case');await page.locator('#owgEventLogActivity').selectOption('activity');await page.locator('#owgEventLogTime').selectOption('time');
+  await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
+  await page.waitForFunction(previous=>document.querySelector('#owgEventLogPick')?.value!==previous,oldId);
+  const oldResponse=page.waitForResponse(r=>r.url().endsWith('/domain-pack-labels')&&r.request().method()==='POST');
+  releaseOld();await (await oldResponse).finished();
+  await page.evaluate(()=>new Promise(resolve=>setTimeout(resolve,50)));
+  assert.equal(await page.evaluate(()=>window.__oldLabelMatches.childElementCount),0);
   assert.deepEqual(errors,[]);console.log('Searchable domain-pack labels: mapped, retained after reload, invalid label refused, axe/mobile passed.');
  }finally{if(browser)await browser.close();server.kill('SIGTERM');await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);if(server.exitCode===null)server.kill('SIGKILL');await fs.rm(scratch,{recursive:true,force:true});}
 })().catch(e=>{console.error(e);process.exit(1);});
