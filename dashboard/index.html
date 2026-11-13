@@ -477,13 +477,41 @@ document.addEventListener('DOMContentLoaded', () => {
       const summary = document.createElement('p');
       summary.textContent = result.total_receipts + ' receipts; ' + (result.truncated ? 'showing newest 50. ' : '') + 'No Microsoft tenant validation inferred.';
       output.appendChild(summary);
+      // Receipts may cover several scopes and are not a complete transaction log.
+      // Never infer an approved sync, current checkpoint, or permission to retry.
+      const caution = document.createElement('p');
+      caution.className = 'muted';
+      caution.textContent = 'Historical receipts only. Each phase is independently recorded; receipts may belong to different folders. A checkpoint receipt does not authorize another extraction or prove that Microsoft 365 is connected now.';
+      output.appendChild(caution);
       const list = document.createElement('ol');
+      const phaseLabels = {
+        readiness: 'Review prepared — approval still required',
+        extract: 'Candidate extracted — inspect before append',
+        append: 'OWG append recorded — verify evidence before continuing',
+        handoff: 'Next-round handoff prepared — not executed',
+        commit: 'Checkpoint commit recorded — historical only'
+      };
       for (const record of result.records || []) {
         const item = document.createElement('li');
-        item.textContent = String(record.timestamp_utc) + ' · ' + String(record.action) + ' · ' + String(record.status) + ' · generation ' + String(record.committed_generation ?? record.expected_generation ?? 'not recorded') + ' · snapshots ' + String(record.event_snapshots ?? 'not recorded');
+        const heading = document.createElement('strong');
+        heading.textContent = phaseLabels[record.action] || 'Unknown phase';
+        item.appendChild(heading);
+        const detail = document.createElement('div');
+        detail.className = 'muted';
+        detail.textContent = String(record.timestamp_utc) + ' · ' + String(record.status) +
+          ' · generation ' + String(record.committed_generation ?? record.expected_generation ?? 'not recorded') +
+          ' · snapshots ' + String(record.event_snapshots ?? 'not recorded') +
+          ' · removals for review ' + String(record.removal_markers_for_review ?? 'not recorded');
+        item.appendChild(detail);
         list.appendChild(item);
       }
-      output.appendChild(list);
+      if (!list.children.length) {
+        const empty = document.createElement('p');
+        empty.textContent = 'No recorded operator phases. Start with explicit local consent and scoped identity/folder preflight outside this read-only view.';
+        output.appendChild(empty);
+      } else {
+        output.appendChild(list);
+      }
     } catch (error) { output.textContent = String(error.message || 'Audit evidence unavailable'); }
   });
 });
