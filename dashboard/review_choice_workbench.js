@@ -180,8 +180,8 @@
             const revoke=node('button','Revoke reviewed choice');
             for(const b of [saveDraft,approve,revoke])b.type='button';
             const reviewPath='/v1/review-choice-workbench/'+encodeURIComponent(id)+'/review';
-            let reviewRevision=0,currentDecision='unreviewed',savedNotes='',reviewPending=false,handoffPending=false;
-            const reviewReady=()=>consent.checked&&!reviewPending&&!handoffPending&&
+            let reviewRevision=0,currentDecision='unreviewed',savedNotes='',reviewPending=false,handoffPending=false,reviewTrusted=false;
+            const reviewReady=()=>consent.checked&&reviewTrusted&&!reviewPending&&!handoffPending&&
               currentDecision==='approved'&&notes.value===savedNotes&&reviewStillSelected();
             const updateContinue=()=>{continueReview.disabled=!reviewReady();};
             notes.addEventListener('input',updateContinue);
@@ -200,6 +200,8 @@
               dataset_origins:snapshot.dataset_origins,
               dataset_origin_check_available:snapshot.dataset_origin_check_available,blockers:selected.blockers};
             async function refreshReview(){
+              // An uncertain write must never inherit a previously trusted approval.
+              reviewTrusted=false;consent.checked=false;updateContinue();
               const requestGeneration=++reviewRequestGeneration;
               const response=await fetch(reviewPath+'/'+encodeURIComponent(projectId),{cache:'no-store'});
               if(!response.ok)throw new Error('Review state unavailable ('+response.status+').');
@@ -207,14 +209,14 @@
               if(!reviewStillSelected()||requestGeneration!==reviewRequestGeneration)return;
               if(state.execution_authorized!==false||state.project_id!==projectId||!Number.isSafeInteger(state.revision)||state.revision<0||!['draft','approved','revoked'].includes(state.decision))throw new Error('Invalid review state');
               reviewRevision=state.revision;notes.value=state.reviewer_notes||'';
-              savedNotes=notes.value;currentDecision=state.decision;reviewPending=false;consent.checked=false;updateContinue();
+              savedNotes=notes.value;currentDecision=state.decision;reviewPending=false;reviewTrusted=true;consent.checked=false;updateContinue();
               reviewState.textContent='Saved review: '+state.decision+' (revision '+state.revision+'). No agent access granted.';
               for(const b of [saveDraft,approve,revoke])b.disabled=false;
             }
             async function persistReview(decision){
               if(!reviewStillSelected())return;
               ++reviewRequestGeneration;
-              reviewPending=true;consent.checked=false;updateContinue();
+              reviewPending=true;reviewTrusted=false;consent.checked=false;updateContinue();
               for(const b of [saveDraft,approve,revoke])b.disabled=true;
               try{
                 const response=await fetch(reviewPath,{method:'POST',cache:'no-store',
@@ -224,7 +226,7 @@
                 const state=await response.json();
                 if(!reviewStillSelected())return;
                 if(state.execution_authorized!==false||state.project_id!==projectId||state.decision!==decision||!Number.isSafeInteger(state.revision)||state.revision!==reviewRevision+1)throw new Error('Invalid saved review');
-                reviewRevision=state.revision;currentDecision=decision;savedNotes=notes.value;
+                reviewRevision=state.revision;currentDecision=decision;savedNotes=notes.value;reviewTrusted=true;
                 reviewState.textContent='Saved '+decision+' at revision '+reviewRevision+'. This does not authorize execution.';
               }catch(e){
                 if(reviewStillSelected()){
@@ -249,7 +251,7 @@
             revoke.onclick=async()=>{
               if(!reviewStillSelected()||reviewRevision<1)return;
               ++reviewRequestGeneration;
-              reviewPending=true;consent.checked=false;updateContinue();
+              reviewPending=true;reviewTrusted=false;consent.checked=false;updateContinue();
               // Revocation must work when evidence has changed since approval.
               // Never depend on the stale-basis preflight for withdrawing consent.
               for(const b of [saveDraft,approve,revoke])b.disabled=true;
@@ -263,7 +265,7 @@
                 if(state.decision!=='revoked'||state.execution_authorized!==false||
                    state.project_id!==projectId||state.revision!==reviewRevision+1)
                   throw new Error('Invalid revocation response');
-                reviewRevision=state.revision;currentDecision='revoked';savedNotes=notes.value;
+                reviewRevision=state.revision;currentDecision='revoked';savedNotes=notes.value;reviewTrusted=true;
                 reviewState.textContent='Review revoked at revision '+reviewRevision+'. No agent access granted.';
               }catch(e){
                 if(reviewStillSelected()){

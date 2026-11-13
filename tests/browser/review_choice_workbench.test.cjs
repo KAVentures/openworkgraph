@@ -8,14 +8,14 @@ class Node {
  addEventListener(k,fn){this.listeners[k]=fn;}
 }
 const basis=()=>({format:'openworkgraph.review-choices.v1',idea:{idea_id:'idea-1',revision:3,state:'approved'},process_status:'current',process_reference:{revision:1},dataset_origins:[],dataset_origin_check_available:true,project_set_sha256:'d'.repeat(64),projects_truncated:false,projects:[{project_id:'p1',idea_revision:3,spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),blockers:[],execution_authorized:false,review_required:true}],execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false});
-async function scenario(title,responses,check,withPipeline=false){
+async function scenario(title,responses,check,withPipeline=false,reviewRead=null){
  const panel=new Node('section'),pipeline=new Node('section');pipeline.scrollIntoView=()=>{};
  const doc={createElement:t=>new Node(t),getElementById:id=>id==='panel-evidence'?panel:(withPipeline&&id==='owgPipelineCard'?pipeline:null),addEventListener(k,fn){this[k]=fn;}};
  let opened=0, lastEvent=null;
- let calls=0;
+ let calls=0,reviewReads=0;
  const context={document:doc,CustomEvent:class {constructor(type,init){this.type=type;this.detail=init.detail;}},window:{__owgAuthReady:Promise.resolve(),dispatchEvent:e=>{opened++;lastEvent=e;}},fetch:async(url,options)=>{assert.equal(options.cache,'no-store');
    // The saved-review read is answered separately so scenarios keep counting their decision calls.
-   if(!options.method&&/\/review\/[^/]+$/.test(String(url)))return {ok:true,status:200,json:async()=>({project_id:'p1',revision:0,decision:'draft',reviewer_notes:'',execution_authorized:false})};
+   if(!options.method&&/\/review\/[^/]+$/.test(String(url))){const result=reviewRead?reviewRead(++reviewReads):null;return result||{ok:true,status:200,json:async()=>({project_id:'p1',revision:0,decision:'draft',reviewer_notes:'',execution_authorized:false})};}
    if(options.method==='POST'&&/\/review$/.test(String(url))){const b=JSON.parse(options.body);const x=responses[calls++];if(x&&x.project_id)return {ok:true,status:200,json:async()=>x};calls--;return {ok:true,status:200,json:async()=>({project_id:'p1',revision:b.expected_review_revision+1,decision:b.decision,execution_authorized:false})};}
    const x=responses[calls++];if(x instanceof Error)throw x;return {ok:x.ok!==false,status:x.status||200,json:async()=>x.data||x};}};
  vm.runInNewContext(fs.readFileSync(path.resolve(__dirname,'../../dashboard/review_choice_workbench.js'),'utf8'),context);
@@ -107,6 +107,29 @@ const getControls=results=>[results.children.find(x=>x.tagName==='select'),resul
      assert.equal(opened(),0);
    },true);
  }
+ // A failed save followed by denied authoritative refresh must not reuse
+ // an earlier approved state, even if the operator checks consent again.
+ await scenario('denied review refresh cannot resurrect prior approval',[
+   basis(),basis(),
+   {format:'openworkgraph.review-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
+     spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),blockers:[],review_required:true,
+     execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false},
+   {project_id:'p1',decision:'draft',revision:2,execution_authorized:false}
+ ],async({results,details,opened})=>{
+   const [select,review]=getControls(results);select.value='p1';await review.onclick();
+   await details.children.find(x=>x.textContent==='Revalidate review basis on server').onclick();
+   await Promise.resolve();await Promise.resolve();
+   const approve=details.children.find(x=>x.textContent==='Approve reviewed choice');
+   const consent=details.children.find(x=>x.tagName==='label'&&x.children.some(y=>y.tagName==='input'))?.children.find(x=>x.tagName==='input');
+   const proceed=details.children.find(x=>x.textContent==='Open opportunity decision and handoff');
+   assert.equal(proceed.disabled,true);
+   await approve.onclick();
+   consent.checked=true;consent.listeners.change();
+   assert.equal(proceed.disabled,true,'unverified review must never enable handoff');
+   await proceed.onclick();assert.equal(opened(),0);
+ },true,(read)=>read===1?
+   {ok:true,status:200,json:async()=>({project_id:'p1',revision:1,decision:'approved',reviewer_notes:'',execution_authorized:false})}:
+   {ok:false,status:403,json:async()=>({})});
  // A server response approving another revision or export must never open a handoff.
  for(const [label,override] of [
    ['different review revision',{review_revision:1}],
