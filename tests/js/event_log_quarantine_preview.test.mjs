@@ -118,7 +118,7 @@ test('discard action invalidates the current release preview', async()=>{
   await settle();
   await h.buttons.get('Preview release').onclick();
   assert.equal(h.buttons.get('Release rows').disabled,false);
-  await h.buttons.get('Discard kept rows').onclick();
+  await h.buttons.get('Discard all kept rows').onclick();
   assert.equal(h.buttons.get('Release rows').disabled,true);
   assert.match(h.requests.at(-1).url,/\/quarantine\/discard$/);
 });

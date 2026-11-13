@@ -2720,7 +2720,7 @@
       };
       const preview=button('Preview release','secondary');preview.id='owgQuarantinePreview';
       const release=button('Release rows','secondary');release.id='owgQuarantineRelease';
-      const discard=button('Discard kept rows','secondary');discard.id='owgQuarantineDiscard';
+      const discard=button('Discard all kept rows','secondary');discard.id='owgQuarantineDiscard';
       const message=el('div',null,'muted');message.id='owgQuarantineStatus';message.setAttribute('role','status');
       let reviewed=null;
       let previewGeneration=0;

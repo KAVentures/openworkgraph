@@ -9,7 +9,7 @@ The existing local **Event logs → Analyse → Data quality → Rejected rows k
 3. Click **Preview release**. The panel displays **rows considered**, **rows parseable with the chosen offset**, and **rows still rejected**. Nothing is appended, discarded, or modified by preview. Rows already present in the event log may be skipped as duplicates during actual release; **parseable rows are not a promise of events added**.
 4. Review the counts and deliberately click **Release rows**. This uses the existing append path, which records a new quality report and a decision. Editing the offset, switching logs, or discarding rows invalidates the dashboard's preview. If another local operation changed the selected rejected rows, the server refuses the stale release and requires a new preview.
 
-The existing **Discard kept rows** action remains a separate explicit destructive decision. Legacy direct API clients may still use release without a preview token for backward compatibility; the dashboard always supplies one.
+The existing **Discard all kept rows** action remains a separate explicit destructive decision. Legacy direct API clients may still use release without a preview token for backward compatibility; the dashboard always supplies one.
 
 ## Session-authenticated API
 
@@ -41,7 +41,7 @@ The dashboard can select a batch and optional inclusive first/last row numbers.
 The row table shows the retained row numbers and provides first/next page controls;
 choosing a batch scopes the table. A range requires a batch and both bounds.
 Changing the offset or any scope field invalidates the preview. Release sends
-exactly the previewed scope and fingerprint. **Discard kept rows** remains a
+exactly the previewed scope and fingerprint. **Discard all kept rows** remains a
 separate action that discards all retained rows; the range does not scope discard.
 
 API callers may add `row_start` and `row_end` alongside `batch` to preview and
