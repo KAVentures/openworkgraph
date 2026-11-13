@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections import defaultdict
 from datetime import date, datetime, timezone
@@ -132,6 +133,8 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
     if not isinstance(annotations, list) or not annotations or len(annotations) > 192:
         raise ValueError("annotations must be a nonempty bounded list")
     observed = {(row["window"], row["event_id"]): row for row in queue["event_reviews"]}
+    if not observed:
+        raise ValueError("no surfaced review events to score")
     labels: dict[tuple[str, str], set[str]] = {}
     for annotation in annotations:
         if not isinstance(annotation, dict):
@@ -201,7 +204,7 @@ def main() -> int:
             with open(args.input, encoding="utf-8") as stream:
                 payload = json.load(stream)
         if args.annotations:
-            if args.annotations == args.input:
+            if args.input != "-" and os.path.samefile(args.annotations, args.input):
                 raise ValueError("source and annotation files must be distinct")
             with open(args.annotations, encoding="utf-8") as stream:
                 labels = json.load(stream)
