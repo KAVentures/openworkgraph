@@ -184,6 +184,20 @@ class DuplicatePairProvenanceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate resource pair assignment"):
             build_review_queue(source)
 
+    def test_duplicate_event_id_in_one_source_pair_is_rejected(self):
+        # A repeated label is not two independent observations.
+        with self.assertRaisesRegex(ValueError, "duplicate evidence event ID"):
+            build_review_queue(payload([pair("A", "F", ["same", "same"])]))
+
+    def test_duplicate_earlier_window_with_different_timezone_is_rejected(self):
+        # Equivalent instants must not be represented as separate corroborations.
+        earlier = [
+            {"session_started_at": "2026-11-01T09:00:00Z", "evidence_event_ids": ["old1"]},
+            {"session_started_at": "2026-11-01T10:00:00+01:00", "evidence_event_ids": ["old2"]},
+        ]
+        with self.assertRaisesRegex(ValueError, "duplicate earlier session window"):
+            build_review_queue(payload([pair("A", "F", ["new"], earlier)]))
+
     def test_reversed_duplicate_pair_identity_is_rejected(self):
         first = pair("A", "F", ["first"])
         reversed_pair = {**first, "resource_pointers": list(reversed(first["resource_pointers"])),
