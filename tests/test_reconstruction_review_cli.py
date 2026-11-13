@@ -72,7 +72,31 @@ class AnnotationCliTests(unittest.TestCase):
                 with redirect_stderr(StringIO()):
                     self.assertEqual(main(), 2)
 
+    def test_operator_scoring_refuses_hardlink_to_source(self):
+        import json
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        from contextlib import redirect_stderr
+        from io import StringIO
+        from server.reconstruction_review_cli import main
+
+        with tempfile.TemporaryDirectory() as directory:
+            source_path = Path(directory) / "source.json"
+            alias_path = Path(directory) / "labels.json"
+            source_path.write_text(json.dumps(payload([pair("A", "F", ["e1"])])), encoding="utf-8")
+            os.link(source_path, alias_path)
+            with patch("sys.argv", ["review", str(source_path), "--annotations", str(alias_path)]):
+                with redirect_stderr(StringIO()) as errors:
+                    self.assertEqual(main(), 2)
+            self.assertIn("must be distinct", errors.getvalue())
+
 class ExplicitAnnotationScoreTests(unittest.TestCase):
+    def test_empty_review_cohort_cannot_report_zero_f1(self):
+        with self.assertRaisesRegex(ValueError, "no surfaced review events"):
+            score_review_annotations(payload([]), [{"window": "current", "event_id": "fake", "true_resource_pairs": []}])
+
     def test_interleaved_cases_score_only_exact_annotated_event_pair(self):
         data = payload([pair("A", "F", ["a"]), pair("B", "G", ["b"])])
         review = build_review_queue(data)
