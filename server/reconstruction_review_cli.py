@@ -6,6 +6,7 @@ authorized response; callers must protect its event IDs under the original grant
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -120,7 +121,8 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
                      "confirmed_case": False})
     # Pair-only evidence does not enumerate every event in the source scan.
     # Even a complete scan cannot establish that absent events were unassigned.
-    return {"event_reviews": rows, "event_reviews_count": len(rows),
+    evidence_digest = hashlib.sha256(json.dumps(rows, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return {"evidence_sha256": evidence_digest, "event_reviews": rows, "event_reviews_count": len(rows),
             "coverage_incomplete": incomplete,
             "unlisted_events_are_unassigned": False,
             "no_case_identity_inferred": True, "requires_human_review": True}
@@ -193,6 +195,7 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
     precision = tp / (tp + fp) if tp + fp else 0.0
     recall = tp / (tp + fn) if tp + fn else 0.0
     return {
+        "evidence_sha256": queue["evidence_sha256"],
         "annotated_events": len(labels), "source_review_events": len(observed),
         "unannotated_events": len(observed) - len(labels),
         "ambiguous_annotated_events": ambiguous,
