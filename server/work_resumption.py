@@ -557,7 +557,12 @@ def score_live_reconstruction_review(
         connection, lease=lease, run_started_at=run_started_at
     )
     from .reconstruction_review_cli import score_bound_review_annotations
-    return score_bound_review_annotations(response, annotation_envelope)
+    score = score_bound_review_annotations(response, annotation_envelope)
+    # The grant can be revoked while a large history scan or scoring is running.
+    # Never return derived evidence after a failed final live authorization check.
+    if authorize_review() is not True:
+        raise PermissionError("reconstruction review authorization revoked during scoring")
+    return score
 
 
 __all__ = ["resumption_candidates", "score_authorized_reconstruction_review", "score_live_reconstruction_review"]
