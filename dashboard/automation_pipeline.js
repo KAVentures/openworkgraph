@@ -754,7 +754,40 @@
       }catch(e){benefitOverlapHost.replaceChildren(el('p',e.message,'muted'));}
       finally{benefitOverlapButton.disabled=false;}
     };
-    card.append(row,resumeSection,auditSection,tools,status,counts,portfolioButton,portfolioHost,benefitOverlapButton,benefitOverlapHost,viewCount,list,comparison,detail);
+    const dependencyScheduleButton=button('Review dependency schedule risks','secondary');
+    dependencyScheduleButton.id='owgPipelineDependencySchedule';
+    const dependencyScheduleHost=el('div');
+    dependencyScheduleHost.id='owgPipelineDependencyScheduleResult';
+    dependencyScheduleHost.setAttribute('role','status');
+    dependencyScheduleHost.setAttribute('aria-live','polite');
+    dependencyScheduleButton.onclick=async()=>{
+      dependencyScheduleButton.disabled=true;
+      try{
+        const r=await (await api('/v1/automation-pipeline/dependency-schedule')).json();
+        if(!Array.isArray(r.risk_candidates)||typeof r.active_ideas!=='number')
+          throw new Error('Unexpected dependency schedule review');
+        const name=id=>(latestIdeas.find(idea=>idea.idea_id===id)||{}).title||id;
+        const lines=el('ul');
+        for(const finding of r.risk_candidates){
+          const path=finding.path.map(name).join(' → ');
+          const basis='Target '+(finding.idea_target_quarter||'not set')+
+            '; prerequisite '+(finding.dependency_target_quarter||'not set')+
+            ' ('+finding.dependency_state.replaceAll('_',' ')+')';
+          lines.appendChild(el('li',finding.kind.replaceAll('_',' ')+': '+path+'. '+basis+'.'));
+        }
+        const caveat=r.risk_candidates_truncated||!r.review_complete?
+          'The review was truncated or reached a depth boundary: unlisted issues remain unknown.':
+          'No live source was queried. These are plan consistency candidates, not forecast delivery dates.';
+        dependencyScheduleHost.replaceChildren(el('h4','Dependency schedule review'),
+          el('p',r.active_ideas+' active ideas; '+r.active_ideas_with_dependencies+
+            ' declare dependencies, '+r.active_ideas_with_target_quarter+
+            ' have target quarters; '+r.risk_candidates.length+' candidates shown.','muted'),
+          ...(r.risk_candidates.length?[lines]:[]),
+          el('p',caveat,'muted'),el('p',r.interpretation,'muted'));
+      }catch(e){dependencyScheduleHost.replaceChildren(el('p',e.message,'muted'));}
+      finally{dependencyScheduleButton.disabled=false;}
+    };
+    card.append(row,resumeSection,auditSection,tools,status,counts,portfolioButton,portfolioHost,benefitOverlapButton,benefitOverlapHost,dependencyScheduleButton,dependencyScheduleHost,viewCount,list,comparison,detail);
     panel.appendChild(card);
 
     let latestIdeas=[],refreshGeneration=0,resumeGeneration=0,auditGeneration=0,auditPageIndex=0,auditAbort=null;
