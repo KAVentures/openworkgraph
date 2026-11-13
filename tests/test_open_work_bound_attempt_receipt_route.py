@@ -115,3 +115,15 @@ def test_run_only_receipts_refuse_ambiguous_case_attribution(monkeypatch, tmp_pa
     bindings.revoke_binding(scope=SCOPE, actor=actor, secret=fields["secret"],
                             case_ref=other_case, run_ref=RUN)
     bindings.require_exclusive_run_case_binding(**fields, case_ref=CASE)
+
+
+def test_ambiguous_run_case_receipt_read_denied(monkeypatch, tmp_path):
+    bindings = setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(bindings, "get_binding", lambda **_kwargs: {"association": "operator_confirmed"})
+    from server.open_work_case_declarations import CaseDeclarationError
+    def ambiguous(**_kwargs):
+        raise CaseDeclarationError("ambiguous or stale run/case receipt attribution")
+    monkeypatch.setattr(bindings, "require_exclusive_run_case_binding", ambiguous)
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(routes.read_local_bound_attempt_receipts(request(), Response()))
+    assert error.value.status_code in (403, 409)
