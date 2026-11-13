@@ -786,7 +786,10 @@ const path=require('node:path');
    assert.equal(await page.locator('#owgAnalysisSharingConsent').isChecked(),false);
    await page.locator('#owgAnalysisSharingConsent').check();
    const [pairedAggregate]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisSharingDownload').click()]);
-   assert.deepEqual(JSON.parse(await fs.readFile(await pairedAggregate.path(),'utf8')),pair.aggregate_snapshot);
+   const downloadedAggregate=JSON.parse(await fs.readFile(await pairedAggregate.path(),'utf8'));
+   // The independently revalidated aggregate also receives a fresh audit timestamp.
+   assert.equal(typeof downloadedAggregate.generated_at,'string');
+   assert.deepEqual({...downloadedAggregate,generated_at:pair.aggregate_snapshot.generated_at},pair.aggregate_snapshot);
    if(process.env.OWG_SHARED_CASE_PAIR_OUTPUT)await fs.writeFile(process.env.OWG_SHARED_CASE_PAIR_OUTPUT,JSON.stringify(pair));
    // An older prepare response cannot re-open a sharing preview after a new analysis runs.
    let releaseSharing,sharingHeld;const sharingSeen=new Promise(resolve=>sharingHeld=resolve);
