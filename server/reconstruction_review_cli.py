@@ -118,6 +118,70 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
             "no_case_identity_inferred": True, "requires_human_review": True}
 
 
+
+def score_review_annotations(response: dict[str, Any], annotations: list[dict[str, Any]]) -> dict[str, Any]:
+    """Score explicit event/pair labels without treating absent events as negatives.
+
+    This is a bounded reviewer-side calculation, NOT a claim of held-out quality.
+    The caller must reauthorize the source response and independently establish
+    annotation provenance, cohort independence, and grant validity.
+    """
+    queue = build_review_queue(response)
+    if queue["coverage_incomplete"]:
+        raise ValueError("incomplete source evidence cannot be scored")
+    if not isinstance(annotations, list) or not annotations or len(annotations) > 192:
+        raise ValueError("annotations must be a nonempty bounded list")
+    observed = {(row["window"], row["event_id"]): row for row in queue["event_reviews"]}
+    labels: dict[tuple[str, str], set[str]] = {}
+    for annotation in annotations:
+        if not isinstance(annotation, dict):
+            raise ValueError("invalid annotation")
+        key = (annotation.get("window"), annotation.get("event_id"))
+        if key not in observed or key in labels:
+            raise ValueError("unknown or duplicate annotated event")
+        expected = annotation.get("true_resource_pairs")
+        if not isinstance(expected, list) or len(expected) > MAX_PAIRS:
+            raise ValueError("invalid ground truth pairs")
+        canonical: set[str] = set()
+        for identities in expected:
+            if not isinstance(identities, list) or len(identities) != 2:
+                raise ValueError("ground truth pair must have two identities")
+            pair = []
+            for identity in identities:
+                if not isinstance(identity, list) or len(identity) != 3 or any(
+                    not isinstance(part, str) or not part or len(part) > 256 for part in identity
+                ):
+                    raise ValueError("invalid ground truth identity")
+                pair.append(identity)
+            if pair[0] == pair[1]:
+                raise ValueError("self-pair ground truth")
+            canonical.add(json.dumps(sorted(pair), separators=(",", ":")))
+        if len(canonical) != len(expected):
+            raise ValueError("duplicate ground truth pair")
+        labels[key] = canonical
+    tp = fp = fn = ambiguous = 0
+    for key, true_pairs in labels.items():
+        row = observed[key]
+        predicted = {json.dumps(pair, separators=(",", ":")) for pair in row["candidate_resource_pairs"]}
+        tp += len(predicted & true_pairs)
+        fp += len(predicted - true_pairs)
+        fn += len(true_pairs - predicted)
+        ambiguous += row["review_status"] == "ambiguous_multiple_pairs"
+    precision = tp / (tp + fp) if tp + fp else 0.0
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    return {
+        "annotated_events": len(labels), "source_review_events": len(observed),
+        "unannotated_events": len(observed) - len(labels),
+        "ambiguous_annotated_events": ambiguous,
+        "true_positive_pairs": tp, "false_positive_pairs": fp, "false_negative_pairs": fn,
+        "precision": precision, "recall": recall,
+        "f1": 2 * precision * recall / (precision + recall) if precision + recall else 0.0,
+        "evaluation_scope": "explicitly_annotated_event_pair_evidence_only",
+        "held_out_verified": False, "independent_annotation_verified": False,
+        "real_work_accuracy_claim": False, "confirmed_case": False,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Review exact observed event-to-resource-pair evidence offline")
     parser.add_argument("input", help="Authorized work-resumption response JSON, or - for stdin")
