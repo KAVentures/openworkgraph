@@ -610,6 +610,19 @@ class LiveReconstructionServiceTests(unittest.TestCase):
                     object(), envelope, lease={"mode": "all_saved"},
                     authorize_review=lambda: next(decisions))
 
+    def test_live_service_requires_reviewable_history_scope_before_database_access(self):
+        from unittest.mock import patch
+        from server.work_resumption import score_live_reconstruction_review
+        with patch("server.work_resumption.resumption_candidates") as rebuild:
+            for lease in ({"mode": "off"}, {"mode": "unexpected"},
+                          {"mode": "selected_range", "since": "bad", "until": "bad"}, {}):
+                with self.subTest(lease=lease):
+                    with self.assertRaisesRegex(PermissionError, "reviewable saved-history grant"):
+                        score_live_reconstruction_review(
+                            object(), {}, lease=lease, authorize_review=lambda: True,
+                            run_started_at=None)
+            rebuild.assert_not_called()
+
     def test_live_service_denial_precedes_database_reconstruction(self):
         from unittest.mock import patch
         from server.work_resumption import score_live_reconstruction_review
