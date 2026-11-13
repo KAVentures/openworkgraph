@@ -3047,8 +3047,6 @@ async def read_local_bound_attempt_receipts(request: Request, response: Response
                 or not await asyncio.to_thread(get_binding, **fields)):
             raise CaseDeclarationError("run/case review or binding changed")
         await asyncio.to_thread(require_exclusive_run_case_binding, **fields)
-        if False:
-            raise CaseDeclarationError("run/case review or binding changed")
         await asyncio.to_thread(
             _operation_ledger_guard, scope, payload["work_item_ref"],
             payload["expected_revision"], payload["expected_edit_token"], signature,
