@@ -175,13 +175,21 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
     if len(labels) != len(observed):
         raise ValueError("all surfaced review events require explicit labels")
     tp = fp = fn = ambiguous = 0
+    # Window-level counts reveal regressions hidden by aggregate accuracy.
+    by_window: dict[str, dict[str, int]] = {}
     for key, true_pairs in labels.items():
         row = observed[key]
         predicted = {json.dumps(pair, separators=(",", ":")) for pair in row["candidate_resource_pairs"]}
-        tp += len(predicted & true_pairs)
-        fp += len(predicted - true_pairs)
-        fn += len(true_pairs - predicted)
+        correct, extra, missed = len(predicted & true_pairs), len(predicted - true_pairs), len(true_pairs - predicted)
+        tp += correct
+        fp += extra
+        fn += missed
         ambiguous += row["review_status"] == "ambiguous_multiple_pairs"
+        counts = by_window.setdefault(key[0], {"tp": 0, "fp": 0, "fn": 0, "events": 0})
+        counts["tp"] += correct
+        counts["fp"] += extra
+        counts["fn"] += missed
+        counts["events"] += 1
     precision = tp / (tp + fp) if tp + fp else 0.0
     recall = tp / (tp + fn) if tp + fn else 0.0
     return {
@@ -190,6 +198,8 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
         "ambiguous_annotated_events": ambiguous,
         "true_positive_pairs": tp, "false_positive_pairs": fp, "false_negative_pairs": fn,
         "precision": precision, "recall": recall,
+        "per_window_counts": {window: by_window[window] for window in sorted(by_window)},
+        "cross_case_contamination_measured": False,
         "f1": 2 * precision * recall / (precision + recall) if precision + recall else 0.0,
         "evaluation_scope": "all_surfaced_event_pair_evidence_only",
         "missed_source_events_measured": False,
