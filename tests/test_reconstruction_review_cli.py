@@ -167,11 +167,19 @@ class ReviewQueueTests(unittest.TestCase):
         self.assertEqual(out["event_reviews"][0]["review_status"], "ambiguous_multiple_pairs")
         self.assertEqual(len(out["event_reviews"][0]["candidate_resource_pairs"]), 2)
 
-    def test_same_id_in_different_windows_is_not_a_collision(self):
-        out = build_review_queue(payload([pair("A", "F", ["id"], [
-            {"session_started_at": "2026-11-01", "evidence_event_ids": ["id"]}])]))
+    def test_same_id_in_different_windows_is_rejected(self):
+        # A single source event cannot independently corroborate two sessions.
+        with self.assertRaisesRegex(ValueError, "reused across session windows"):
+            build_review_queue(payload([pair("A", "F", ["id"], [
+                {"session_started_at": "2026-11-01", "evidence_event_ids": ["id"]}])]))
+
+    def test_distinct_ids_in_different_windows_remain_separate(self):
+        out = build_review_queue(payload([pair("A", "F", ["current-id"], [
+            {"session_started_at": "2026-11-01", "evidence_event_ids": ["earlier-id"]}])]))
         self.assertEqual(out["event_reviews_count"], 2)
-        self.assertTrue(all(x["review_status"] == "observed_pair_needs_review" for x in out["event_reviews"]))
+        self.assertEqual({row["event_id"] for row in out["event_reviews"]},
+                         {"earlier-id", "current-id"})
+        self.assertTrue(all(not row["confirmed_case"] for row in out["event_reviews"]))
 
     def test_equivalent_timezone_windows_cannot_hide_multi_pair_ambiguity(self):
         a = {"session_started_at": "2026-11-01T09:00:00Z",
