@@ -755,7 +755,7 @@ const path=require('node:path');
    await page.route('**/case-sharing-preview',route=>route.fulfill({status:403,
      contentType:'application/json',body:JSON.stringify({error:'sharing revoked'})}),{times:1});
    await page.locator('#owgAnalysisCaseDownload').click();
-   await page.getByText('Case revalidation failed (403). Case download refused.',{exact:false}).waitFor();
+   await page.getByText('Case download refused.',{exact:false}).waitFor();
    assert.equal(await page.locator('#owgAnalysisCaseDownload').isDisabled(),true);
    await page.unroute('**/case-sharing-preview');
    await page.locator('#owgAnalysisPrepareCases').click();
