@@ -565,7 +565,7 @@ class LiveReconstructionServiceTests(unittest.TestCase):
         envelope = {"evidence_sha256": queue["evidence_sha256"], "annotations": [
             {"window": row["window"], "event_id": row["event_id"],
              "true_resource_pairs": row["candidate_resource_pairs"]}]}
-        lease = {"trusted": "host-owned"}
+        lease = {"mode": "all_saved"}
         with patch("server.work_resumption.resumption_candidates", return_value=source) as rebuild:
             scored = score_live_reconstruction_review(
                 object(), envelope, lease=lease, authorize_review=lambda: True)
