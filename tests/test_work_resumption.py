@@ -366,3 +366,20 @@ def test_unlabeled_event_does_not_taint_labeled_identity_provenance():
     assert all(p["resource_ref"] != REF["b"] for c in result["candidates"]
                for p in c["shared_pointers"])
     assert all(t["pointer"]["resource_ref"] != REF["b"] for t in result["identity_timelines"])
+
+
+def test_pointer_label_collision_with_nonpointer_activity_is_not_case_evidence():
+    """A duplicated external event ID is unsafe even if only one row has pointers."""
+    db = _database([
+        (_day(12, "09:00"), _ref("a")),
+        (_day(12, "09:01"), {}),
+        (_day(14, "10:00"), _ref("a")),
+    ])
+    # The duplicate is an ordinary activity row; a pointer-only scan misses it.
+    db.execute("UPDATE events SET event_id = 'e1' WHERE id = 2")
+    result = resumption_candidates(db, lease=ALL)
+    assert result["coverage"]["ambiguous_event_id_collisions"] == 1
+    assert result["coverage"]["excluded_colliding_pointer_rows"] == 1
+    assert result["coverage"]["scan_truncated"] is True
+    assert result["candidates"] == []
+    assert result["current_session"]["pointer_count"] == 1
