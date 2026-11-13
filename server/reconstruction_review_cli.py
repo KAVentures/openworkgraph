@@ -80,6 +80,7 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         indexed[(window, event_id)].add(pair_key)
     incomplete = bool(response.get("observed_pair_event_assignments_truncated") or
                       coverage.get("scan_truncated"))
+    seen_pair_keys: set[str] = set()
     for pair in pairs:
         if not isinstance(pair, dict) or pair.get("assignment_status") != "observed_same_event_pair" or pair.get("proves_same_case") is not False:
             raise ValueError("unsupported pair assignment")
@@ -97,6 +98,11 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         if identities[0] == identities[1]:
             raise ValueError("self-pair is not co-reference")
         pair_key = json.dumps(sorted(identities), separators=(",", ":"))
+        # A repeated pair record can carry conflicting event provenance.
+        # Refuse duplicates instead of silently unioning their evidence.
+        if pair_key in seen_pair_keys:
+            raise ValueError("duplicate resource pair assignment")
+        seen_pair_keys.add(pair_key)
         for event_id in _event_ids(pair.get("current_evidence_event_ids")):
             add_evidence("current", event_id, pair_key)
         earlier = pair.get("earlier_corroborations", [])
