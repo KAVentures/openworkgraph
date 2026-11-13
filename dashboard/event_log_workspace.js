@@ -1040,13 +1040,15 @@
     const status=el('div',null,'muted');status.id='owgDomainPackStatus';status.setAttribute('role','status');
     const form=el('div');form.id='owgDomainPackForm';
     const out=el('div');out.id='owgDomainPackReport';
+    const historyOut=el('div');historyOut.id='owgDomainPackConfigurations';
+    let historyTurn=0;
     const setup=button('Set up a domain pack','secondary');setup.id='owgDomainPackSetup';
-    box.append(setup,form,status,out);
+    box.append(setup,form,status,out,historyOut);
     const generation=state.generation,logId=state.logId,base='/v1/event-logs/'+encodeURIComponent(logId)+'/domain-packs';
     let turn=0;const current=t=>generation===state.generation&&box.isConnected&&t===turn;
     const post=(url,body)=>api(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     setup.onclick=async()=>{
-      const t=++turn;setup.disabled=true;status.textContent='Loading…';
+      const t=++turn;setup.disabled=true;historyTurn++;historyOut.replaceChildren();status.textContent='Loading…';
       try{
         const [catalog,installs]=await Promise.all([getJSON('/v1/event-log-domain-packs'),getJSON(base)]);
         if(!current(t))return;
@@ -1067,17 +1069,40 @@
           const run=button('Run pack report','secondary');run.id='owgDomainPackRun';run.disabled=!installed;
           const remove=button('Uninstall','secondary');remove.id='owgDomainPackUninstall';remove.disabled=!installed;
           const paramRow=el('div',null,'row');paramRow.style.alignItems='end';paramRow.append(...params);
-          const actions=el('div',null,'row');actions.append(install,run,remove);
+          const reviewHistory=button('Review saved configurations','secondary');reviewHistory.id='owgDomainPackHistory';reviewHistory.disabled=!installed;
+          reviewHistory.onclick=async()=>{
+            const t2=turn,h=++historyTurn;reviewHistory.disabled=true;
+            historyOut.replaceChildren(el('div','Loading saved configurations…','muted'));
+            try{
+              const r=await getJSON(base+'/'+pack.pack_id+'/configurations');
+              if(!current(t2)||h!==historyTurn)return;
+              historyOut.replaceChildren(el('h4','Saved configurations'),el('div',
+                'Setup snapshots only. Older entries may be unavailable. These do not reproduce historical events or verified outcomes.','muted'));
+              for(const entry of [...r.entries].reverse()){
+                const details=el('details');
+                details.appendChild(el('summary',(entry.current?'Current':'Earlier')+' '+entry.version+' — '+entry.installed_at));
+                details.appendChild(el('div','Definitions: '+entry.definitions_sha256,'muted'));
+                if(entry.configuration_available){
+                  const rows=[];
+                  for(const [kind,roles] of Object.entries(entry.mapping))for(const [role,name] of Object.entries(roles))rows.push([kind==='object_types'?'Object type':'Activity',role,name]);
+                  details.append(table(['Kind','Role','Mapped label'],rows),table(['Parameter','Value'],Object.entries(entry.parameters)));
+                }else details.appendChild(el('div','Configuration unavailable: this older entry retained only version, date and digest.','muted'));
+                historyOut.appendChild(details);
+              }
+            }catch(error){if(current(t2)&&h===historyTurn)historyOut.replaceChildren(el('div',error.message,'muted'));}
+            finally{if(reviewHistory.isConnected)reviewHistory.disabled=!installs.installs.some(i=>i.pack_id===pack.pack_id);}
+          };
+          const actions=el('div',null,'row');actions.append(install,run,remove,reviewHistory);
           const assumptions=el('ul');assumptions.className='muted';pack.assumptions.forEach(a=>assumptions.appendChild(el('li',a)));
           form.replaceChildren(field('Domain pack',chooser),el('h4',pack.title+' '+pack.latest_version),el('div',pack.description,'muted'),table(['Kind','Role','Name in this log'],rows),paramRow,actions,el('h4','Assumptions'),assumptions);
           status.textContent=(installed?'Installed: '+installed.version+' on '+String(installed.installed_at).slice(0,10)+'.':'Not installed on this log.')+(installs.names_truncated?' Only the 1,000 most frequent object types and activities are offered.':'');
           install.onclick=async()=>{
-            const t2=++turn;install.disabled=true;
+            const t2=++turn;install.disabled=true;historyTurn++;historyOut.replaceChildren();
             try{
               const parameters={};for(const [k,i] of Object.entries(inputs))parameters[k]=Number(i.value);
               const r=await (await post(base+'/'+pack.pack_id,{version:pack.latest_version,mapping:packMapping(pack,choices),parameters})).json();
               if(!current(t2))return;
-              run.disabled=remove.disabled=false;
+              run.disabled=remove.disabled=reviewHistory.disabled=false;
             installs.installs=[...installs.installs.filter(i=>i.pack_id!==pack.pack_id),r];
               status.textContent=({installed:'Installed',upgraded:'Upgraded from '+r.previous_version+' to',reconfigured:'Reinstalled'}[r.change])+' '+r.version+'. '+r.metric_ids.length+' case metrics were added to this log’s metric library.'+(r.not_applicable.length?' '+r.not_applicable.length+' definitions do not apply without their optional roles.':'');
             }catch(error){if(current(t2))status.textContent=error.message;}
@@ -1100,17 +1125,17 @@
             finally{if(current(t2))run.disabled=false;}
           };
           remove.onclick=async()=>{
-            const t2=++turn;remove.disabled=true;
+            const t2=++turn;remove.disabled=true;historyTurn++;historyOut.replaceChildren();
             try{
               const r=await (await api(base+'/'+pack.pack_id,{method:'DELETE'})).json();
               if(!current(t2))return;
               installs.installs=installs.installs.filter(i=>i.pack_id!==pack.pack_id);
-            run.disabled=true;out.replaceChildren();status.textContent='Uninstalled '+r.version+'; '+r.metrics_removed+' pack case metrics were removed.';
+            run.disabled=reviewHistory.disabled=true;out.replaceChildren();status.textContent='Uninstalled '+r.version+'; '+r.metrics_removed+' pack case metrics were removed.';
             }catch(error){if(current(t2)){status.textContent=error.message;remove.disabled=false;}}
           };
         };
         // Switching packs drops any answer still on its way for the previous one.
-        chooser.onchange=()=>{turn++;out.replaceChildren();show();};
+        chooser.onchange=()=>{turn++;historyTurn++;historyOut.replaceChildren();out.replaceChildren();show();};
         show();
       }catch(error){if(current(t))status.textContent=error.message;}
       finally{if(current(t))setup.disabled=false;}
