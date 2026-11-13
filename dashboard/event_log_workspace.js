@@ -1360,10 +1360,22 @@
           const choices={object_types:{},activities:{}},inputs={};
           const rows=[];
           for(const [kind,names] of [['object_types',installs.log_object_types],['activities',installs.log_activities]])for(const r of pack[kind]){
-            const s=select('owgDomainPackRole-'+r.role,[['',r.required?'Choose (required)':'Not in this log'],...names.map(n=>[n,n])]);
-            s.value=packGuess(r,names,installed&&installed.mapping[kind][r.role]);s.setAttribute('aria-label',r.label+(r.required?' (required)':' (optional)'));
-            s.onchange=()=>{choices[kind][r.role]=s.value;edited();};choices[kind][r.role]=s.value;
-            rows.push([kind==='object_types'?'Object type':'Activity',r.label+(r.required?'':' (optional)'),s]);
+            // Allow an exact source label beyond the bounded suggestions. Pick
+            // a sentinel that cannot collide with a real suggested label.
+            let custom='__owg_exact_label__';while(names.includes(custom))custom+='_';
+            const s=select('owgDomainPackRole-'+r.role,[['',r.required?'Choose (required)':'Not in this log'],...names.map(n=>[n,n]),[custom,'Enter exact label…']]);
+            const exact=input('owgDomainPackExact-'+r.role,'text');exact.maxLength=200;
+            exact.setAttribute('aria-label','Exact label for '+r.label);
+            const saved=installed&&installed.mapping[kind][r.role];
+            s.value=saved&&!names.includes(saved)?custom:packGuess(r,names,saved);
+            exact.value=s.value===custom?saved:'';exact.hidden=s.value!==custom;
+            s.setAttribute('aria-label',r.label+(r.required?' (required)':' (optional)'));
+            const selected=()=>s.value===custom?exact.value:s.value;
+            s.onchange=()=>{exact.hidden=s.value!==custom;choices[kind][r.role]=selected();edited();};
+            exact.oninput=()=>{choices[kind][r.role]=selected();edited();};
+            choices[kind][r.role]=selected();
+            const control=el('span');control.append(s,exact);
+            rows.push([kind==='object_types'?'Object type':'Activity',r.label+(r.required?'':' (optional)'),control]);
           }
           const params=pack.parameters.map(p=>{const i=input('owgDomainPackParam-'+p.name,'number');i.min=String(p.min);i.max=String(p.max);i.value=String(installed?installed.parameters[p.name]:p.default);inputs[p.name]=i;i.oninput=()=>edited();return field(p.label,i);});
           const install=button(installed?'Install '+pack.latest_version+(installed.version===pack.latest_version?' again':' (upgrade from '+installed.version+')'):'Install '+pack.title+' '+pack.latest_version);install.id='owgDomainPackInstall';
@@ -1382,7 +1394,7 @@
           const actions=el('div',null,'row');actions.append(install,run,remove,exportReport);
           const assumptions=el('ul');assumptions.className='muted';pack.assumptions.forEach(a=>assumptions.appendChild(el('li',a)));
           form.replaceChildren(field('Domain pack',chooser),el('h4',pack.title+' '+pack.latest_version),el('div',pack.description,'muted'),table(['Kind','Role','Name in this log'],rows),paramRow,actions,el('div','Report downloads include supplied case/object examples and mapped labels. Save and share them only where authorized.','muted'),el('h4','Assumptions'),assumptions);
-          status.textContent=(installed?'Installed: '+installed.version+' on '+String(installed.installed_at).slice(0,10)+'.':'Not installed on this log.')+(installs.names_truncated?' Only the 1,000 most frequent object types and activities are offered.':'');
+          status.textContent=(installed?'Installed: '+installed.version+' on '+String(installed.installed_at).slice(0,10)+'.':'Not installed on this log.')+(installs.names_truncated?' Suggestions show the 1,000 most frequent labels; enter an exact label for others.':'');
           install.onclick=async()=>{
             invalidate();const t2=++turn;install.disabled=true;run.disabled=true;
             try{
