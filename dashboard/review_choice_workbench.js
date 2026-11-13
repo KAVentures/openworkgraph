@@ -111,9 +111,9 @@
             // Continue into the existing authenticated pipeline decision UI, not a
             // second approval implementation. Preflight is non-authorizing; the
             // pipeline requires its own current-revision check on any decision.
-            const continueReview=node('button','Open opportunity decision and handoff');continueReview.type='button';
+            const consentLabel=node('label');const consent=node('input');consent.type='checkbox';consent.setAttribute('aria-label','Confirm exact reviewed project before handoff');consentLabel.append(consent,node('span',' I inspected this project and understand approval does not authorize execution.'));const continueReview=node('button','Open opportunity decision and handoff');continueReview.type='button';continueReview.disabled=true;consent.addEventListener('change',()=>{continueReview.disabled=!consent.checked;});
             continueReview.onclick=async()=>{
-              if(token!==generation||choice.value!==projectId||input.value.trim()!==id)return;
+              if(token!==generation||choice.value!==projectId||input.value.trim()!==id||!consent.checked||continueReview.disabled)return;
               const pipelineCard=document.getElementById('owgPipelineCard');
               if(!pipelineCard){status.textContent='Automation pipeline unavailable. Reopen the dashboard and inspect again.';return;}
               // The opportunity can change after the first preflight. Revalidate
@@ -255,7 +255,7 @@
             };
             details.append(node('h3','Record human review'),notes,saveDraft,approve,revoke,reviewState);
             refreshReview().catch(e=>{if(reviewStillSelected()){reviewState.textContent=e.message;for(const b of [saveDraft,approve,revoke])b.disabled=true;}});
-            details.append(continueReview);
+            details.append(consentLabel,continueReview);
             status.textContent='Current export basis confirmed by server. Continue to the existing opportunity decision; agent handoff still requires separate authorization.';
           }catch(e){if(token===generation){clear();status.textContent='Server preflight failed. Inspect again. '+e.message;}}
         };
