@@ -99,7 +99,7 @@
     card.appendChild(el('h2','Large event logs'));
     card.appendChild(el('div','Import a CSV, XES or OCEL 2.0 event log exported from your own systems and analyse it on this computer. Imported logs are stored locally until you delete them and are never readable by connected AI apps. Results describe the log; they are not verified business policy or causes.','muted'));
 
-    const file=input('owgEventLogFile','file');file.accept='.csv,.tsv,.txt,.xes,.json,.jsonocel,.xmlocel,.xml';
+    const file=input('owgEventLogFile','file');file.accept='.csv,.tsv,.txt,.xlsx,.xes,.json,.jsonocel,.xmlocel,.xml';
     const format=select('owgEventLogFormat',[['csv','CSV'],['xes','XES'],['ocel','OCEL 2.0 JSON'],['ocelxml','OCEL 2.0 XML']]);
     const name=input('owgEventLogName','text','Log name');name.maxLength=120;
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('File',file),field('Format',format),field('Name',name));
@@ -108,7 +108,10 @@
     const delimiter=select('owgEventLogDelimiter',[[',','Comma'],[';','Semicolon'],['t','Tab'],['|','Pipe']]);
     const extras=select('owgEventLogAttributes',[]);extras.multiple=true;extras.size=3;
     extras.title='Only the columns you choose are stored, for example a lifecycle (start/complete) or end-time column.';
-    mapping.append(field('Case column',cols.case),field('Activity column',cols.activity),field('Timestamp column (with timezone)',cols.time),field('Resource column',cols.resource),field('Extra columns to keep (optional)',extras),field('Delimiter',delimiter));
+    // Times written without an offset (always the case for Excel dates) are read with this offset.
+    const naiveOffset=input('owgEventLogNaiveOffset','text','none: reject them');naiveOffset.maxLength=6;naiveOffset.size=8;naiveOffset.pattern='[+-][0-9]{2}:[0-9]{2}';
+    naiveOffset.title='For timestamps without a time zone, e.g. +01:00 or -05:00. Leave empty to reject such rows.';
+    mapping.append(field('Case column',cols.case),field('Activity column',cols.activity),field('Timestamp column (with timezone)',cols.time),field('Resource column',cols.resource),field('Extra columns to keep (optional)',extras),field('Delimiter',delimiter),field('Offset for times without one',naiveOffset));
     const identity=el('fieldset');identity.id='owgEventLogIdentity';identity.append(el('legend','Supplied source-event IDs (optional)'));
     const useIdentity=input('owgEventLogUseIdentity','checkbox');
     const identityFields=el('div',null,'row');identityFields.style.alignItems='end';
@@ -185,6 +188,7 @@
       q.set('case_column',cols.case.value);q.set('activity_column',cols.activity.value);q.set('timestamp_column',cols.time.value);q.set('resource_column',cols.resource.value);
       if(!(useIdentity.checked&&jsonColumn.value))[...extras.selectedOptions].forEach(o=>{if(![cols.case.value,cols.activity.value,cols.time.value,cols.resource.value].includes(o.value))q.append('attribute_column',o.value);});
       q.set('delimiter',delimiter.value);if(keep.checked)q.set('keep_rejected','true');
+      if(naiveOffset.value.trim())q.set('naive_timestamp_offset',naiveOffset.value.trim());
       if(useIdentity.checked)for(const [key,value] of Object.entries({event_id_column:eventId.value,source_namespace:sourceNamespace.value,source_namespace_column:sourceColumn.value,case_namespace:caseNamespace.value,case_namespace_column:caseColumn.value,attributes_json_column:jsonColumn.value}))if(value)q.set(key,value);
     }
     async function readColumns(){
@@ -225,7 +229,20 @@
         if(sequence===columnReadSequence){readingColumns=false;refreshImport();}
       }
     }
-    file.onchange=()=>{const chosen=file.files&&file.files[0];if(chosen){format.value=detectFormat(chosen.name);if(!name.value)name.value=chosen.name.replace(/\.[^.]+$/,'').slice(0,120);if(chosen.name.toLowerCase().endsWith('.tsv'))delimiter.value='t';}consent.checked=false;readColumns();};
+    // An Excel workbook is converted to CSV on this computer (nothing is stored), then imported like any CSV.
+    const localOffset=()=>{const m=-new Date().getTimezoneOffset(),a=Math.abs(m);return (m<0?'-':'+')+String(Math.floor(a/60)).padStart(2,'0')+':'+String(a%60).padStart(2,'0');};
+    async function convertWorkbook(chosen){
+      columnReadSequence++;readingColumns=true;refreshImport();status('Reading the first worksheet of '+chosen.name+'…');
+      try{
+        const r=await (await api('/v1/event-logs/xlsx-to-csv',{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream'}})).json();
+        const transfer=new DataTransfer();transfer.items.add(new File([r.csv],chosen.name.replace(/\.xlsx$/i,'')+'.csv',{type:'text/csv'}));
+        file.files=transfer.files;format.value='csv';delimiter.value=',';
+        if(r.dates_have_no_offset&&!naiveOffset.value.trim())naiveOffset.value=localOffset();
+        readingColumns=false;await readColumns();
+        status('Read worksheet “'+r.sheet+'”'+(r.sheets.length>1?' (first of '+r.sheets.length+')':'')+': '+Number(r.rows).toLocaleString()+' rows.'+(r.dates_have_no_offset?' Excel dates have no time zone; they will be read with offset '+naiveOffset.value+' (change it under Offset for times without one).':''));
+      }catch(error){readingColumns=false;file.value='';refreshImport();status(error.message);}
+    }
+    file.onchange=()=>{const chosen=file.files&&file.files[0];if(chosen){if(!name.value)name.value=chosen.name.replace(/\.[^.]+$/,'').slice(0,120);if(chosen.name.toLowerCase().endsWith('.xlsx')){consent.checked=false;convertWorkbook(chosen);return;}format.value=detectFormat(chosen.name);if(chosen.name.toLowerCase().endsWith('.tsv'))delimiter.value='t';}consent.checked=false;readColumns();};
     format.onchange=()=>{consent.checked=false;readColumns();};
     delimiter.onchange=()=>{consent.checked=false;readColumns();};
     consent.onchange=refreshImport;name.oninput=refreshImport;

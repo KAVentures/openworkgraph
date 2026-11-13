@@ -62,6 +62,7 @@ from .db import DATA_DIR
 from .local_auth import dashboard_session_valid
 
 router = APIRouter()
+XLSX_MAX_BYTES = 64 * 1024 * 1024
 _SCRIPT = Path(__file__).resolve().parents[1] / "dashboard" / "event_log_workspace.js"
 _TYPES = {"csv": "text/csv", "sourcecsv": "text/csv", "xes": "application/xml", "ocel": "application/json", "ocelxml": "application/xml"}
 _SUFFIX = {"csv": "csv", "sourcecsv": "csv", "xes": "xes", "ocel": "jsonocel", "ocelxml": "xmlocel"}
@@ -235,6 +236,26 @@ def event_log_signal_timeline(
     """Read-only cross-log transition journal; local dashboard session only."""
     _require_dashboard(request)
     return _respond(signal_timeline.timeline, transition=transition, limit=limit)
+
+
+@router.post("/v1/event-logs/xlsx-to-csv")
+async def convert_xlsx_event_log(request: Request, sheet: str | None = Query(default=None, max_length=200)):
+    """Convert one worksheet of an .xlsx file to CSV for the ordinary CSV import. Nothing is stored."""
+    from . import event_log_xlsx as xlsx
+    _require_dashboard(request)
+    with tempfile.SpooledTemporaryFile(max_size=8 << 20, dir=str(DATA_DIR)) as spool:
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > XLSX_MAX_BYTES:
+                raise HTTPException(413, "the workbook is larger than the supported limit")
+            spool.write(chunk)
+        spool.seek(0)
+        try:
+            result = await run_in_threadpool(xlsx.to_csv, spool, sheet)
+        except xlsx.XlsxError as exc:
+            raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 @router.post("/v1/event-logs/import")
