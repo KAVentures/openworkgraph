@@ -82,6 +82,14 @@ def benefit_overlap_review(request: Request):
     return JSONResponse(automation_benefit_overlap.review(), headers={"Cache-Control": "no-store"})
 
 
+@router.get("/v1/automation-pipeline/dependency-schedule")
+def dependency_schedule_review(request: Request):
+    """Bounded human review of declared dependency timing, no delivery predictions."""
+    _require_dashboard(request)
+    from . import automation_dependency_schedule
+    return JSONResponse(automation_dependency_schedule.review(), headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/automation-pipeline")
 async def create_idea(request: Request):
     _require_dashboard(request)
