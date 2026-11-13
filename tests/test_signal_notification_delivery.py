@@ -203,6 +203,8 @@ def test_real_pinned_scheduler_evaluation_enqueues_and_log_deletion_revokes(
     """End-to-end in DuckDB: actual import/rule/schedule/evaluate/delete."""
     from io import BytesIO
     from server import event_log_workspace as workspace, event_log_signals as rules
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "jobs").mkdir()
     monkeypatch.setattr(workspace, "DATA_DIR", tmp_path / "logs")
     monkeypatch.setattr(scheduler, "DATA_DIR", tmp_path / "jobs")
     monkeypatch.setattr(scheduler, "scheduled", _REAL_SCHEDULED)
