@@ -850,8 +850,15 @@ def _parse_install(pack_id: str, spec: Any) -> tuple[dict[str, Any], InstallSpec
 
 
 def _check_names(conn, log_id: str, mapping: Mapping) -> None:
-    types = {r[0] for r in conn.execute("SELECT DISTINCT object_type FROM objects WHERE log_id = ?", [log_id]).fetchall()}
-    activities = {r[0] for r in conn.execute("SELECT DISTINCT activity FROM events WHERE log_id = ?", [log_id]).fetchall()}
+    # Bound returned rows to the explicitly mapped labels; an event log can
+    # contain far more distinct names than a pack can map. Values remain bound
+    # parameters, and the log predicate prevents cross-log matches.
+    types = {r[0] for r in conn.execute(
+        "SELECT DISTINCT object_type FROM objects WHERE log_id = ? AND object_type IN (SELECT unnest(?))",
+        [log_id, list(mapping.object_types.values())]).fetchall()}
+    activities = {r[0] for r in conn.execute(
+        "SELECT DISTINCT activity FROM events WHERE log_id = ? AND activity IN (SELECT unnest(?))",
+        [log_id, list(mapping.activities.values())]).fetchall()}
     for role, name in mapping.object_types.items():
         if name not in types:
             raise workspace.EventLogWorkspaceError(f"{role} is mapped to {name!r}, which is not an object type of this log")
