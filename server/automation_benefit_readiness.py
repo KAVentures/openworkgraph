@@ -33,9 +33,12 @@ ACTIONS = {
 
 
 def review() -> dict[str, Any]:
-    ideas = pipeline.pipeline("implemented")["ideas"]
-    by_id = {idea["idea_id"]: idea for idea in ideas}
+    # Read idea state and measurements together under their existing write
+    # locks. No unrelated public pipeline request can race the implemented
+    # cohort between these two SELECTs.
     with pipeline._LOCK, benefits._LOCK, closing(pipeline._connect()) as conn:
+        ideas = [pipeline._public(row) for row in conn.execute(
+            "SELECT * FROM ideas WHERE state='implemented' ORDER BY idea_id").fetchall()]
         exists = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='idea_measurements'"
         ).fetchone()
@@ -45,6 +48,7 @@ def review() -> dict[str, Any]:
                WHERE i.state='implemented' ORDER BY m.idea_id,m.measurement_id LIMIT ?""",
             (MAX_ROWS+1,),
         ).fetchall() if exists else []
+    by_id = {idea["idea_id"]: idea for idea in ideas}
     truncated = len(raw) > MAX_ROWS
     rows = raw[:MAX_ROWS]
     indexed: dict[str,list[dict]] = defaultdict(list)
