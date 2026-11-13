@@ -578,6 +578,38 @@ class LiveReconstructionServiceTests(unittest.TestCase):
                 score_live_reconstruction_review(
                     object(), envelope, lease=lease, authorize_review=lambda: True)
 
+    def test_revocation_during_reconstruction_or_scoring_refuses_result(self):
+        from unittest.mock import patch
+        from server.work_resumption import score_live_reconstruction_review
+        source = payload([pair("A", "F", ["e1"])])
+        queue = build_review_queue(source)
+        row = queue["event_reviews"][0]
+        envelope = {"evidence_sha256": queue["evidence_sha256"], "annotations": [
+            {"window": row["window"], "event_id": row["event_id"],
+             "true_resource_pairs": row["candidate_resource_pairs"]}]}
+        checks = iter([True, False])
+        with patch("server.work_resumption.resumption_candidates", return_value=source) as rebuild:
+            with self.assertRaisesRegex(PermissionError, "revoked during scoring"):
+                score_live_reconstruction_review(
+                    object(), envelope, lease={"mode": "all_saved"},
+                    authorize_review=lambda: next(checks))
+            rebuild.assert_called_once()
+
+    def test_revocation_after_scoring_does_not_leak_result(self):
+        from unittest.mock import patch
+        from server.work_resumption import score_live_reconstruction_review
+        source = payload([pair("A", "F", ["e1"])])
+        row = build_review_queue(source)["event_reviews"][0]
+        envelope = {"evidence_sha256": build_review_queue(source)["evidence_sha256"],
+                    "annotations": [{"window": row["window"], "event_id": row["event_id"],
+                                     "true_resource_pairs": row["candidate_resource_pairs"]}]}
+        decisions = iter([True, False])
+        with patch("server.work_resumption.resumption_candidates", return_value=source):
+            with self.assertRaises(PermissionError):
+                score_live_reconstruction_review(
+                    object(), envelope, lease={"mode": "all_saved"},
+                    authorize_review=lambda: next(decisions))
+
     def test_live_service_denial_precedes_database_reconstruction(self):
         from unittest.mock import patch
         from server.work_resumption import score_live_reconstruction_review
