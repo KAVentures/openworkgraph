@@ -202,6 +202,21 @@ async def _recheck_source(scope: str) -> None:
             raise HTTPException(
                 503, "durable dependency source revocation cleanup unavailable"
             ) from exc
+        # A source-scoped attempt receipt must lose authority on disconnect,
+        # including receipts owned by other (now revoked) dashboard sessions.
+        # Do not create an empty journal for installations that never opted in.
+        from pathlib import Path
+        from .open_work_attempt_receipts import purge_tenant
+        receipt_path = auth_dir() / ".open_work_attempt_receipts.sqlite3"
+        if receipt_path.exists() or receipt_path.is_symlink():
+            try:
+                await asyncio.to_thread(
+                    purge_tenant, str(receipt_path), tenant=scope,
+                )
+            except (OSError, sqlite3.DatabaseError, ValueError) as exc:
+                raise HTTPException(
+                    503, "provider receipt source revocation cleanup unavailable"
+                ) from exc
         raise HTTPException(409, "local source connection changed")
 
 
