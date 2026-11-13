@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
+import {URLSearchParams} from 'node:url';
 
 const source = readFileSync(new URL('../../dashboard/event_log_workspace.js', import.meta.url), 'utf8');
 const start = source.indexOf('  function quarantineBlock(){');
@@ -20,13 +21,13 @@ function harness(previewJSON) {
     setAttribute(){}, replaceChildren(...items){this.children=items;}
   });
   const sandbox = {
-    state,
+    state, URLSearchParams,
     el:(tag,value)=>node(tag,value),
     show:()=>{},
     getJSON:async()=>({rows_kept:2, decisions:[], rows:[], reasons:{}, note:'Local review'}),
     input:(id,kind,value='')=>{
       const x={id,kind,value,disabled:false,listeners:{},
-        addEventListener(type,handler){this.listeners[type]=handler;}};
+        addEventListener(type,handler){const old=this.listeners[type];this.listeners[type]=old?()=>{old();handler();}:handler;}};
       inputs.set(id,x);
       return x;
     },
@@ -120,4 +121,20 @@ test('discard action invalidates the current release preview', async()=>{
   await h.buttons.get('Discard kept rows').onclick();
   assert.equal(h.buttons.get('Release rows').disabled,true);
   assert.match(h.requests.at(-1).url,/\/quarantine\/discard$/);
+});
+
+
+test('batch and row selection bind the preview and invalidate release on edits', async()=>{
+  const h=harness(preview);h.build();await settle();
+  for(const [id,value] of [['owgQuarantineBatch','0'],['owgQuarantineRowStart','22'],['owgQuarantineRowEnd','23']]){
+    const control=h.inputs.get(id);control.value=value;control.listeners.input();
+  }
+  await settle();await h.buttons.get('Preview release').onclick();
+  assert.deepEqual(h.requests[0].body,{naive_timestamp_offset:'+01:00',batch:0,row_start:22,row_end:23});
+  assert.equal(h.buttons.get('Release rows').disabled,false);
+  const end=h.inputs.get('owgQuarantineRowEnd');end.value='24';end.listeners.input();
+  assert.equal(h.buttons.get('Release rows').disabled,true);
+  end.value='23';end.listeners.input();await h.buttons.get('Preview release').onclick();
+  await h.buttons.get('Release rows').onclick();
+  assert.deepEqual(h.requests.at(-1).body,{naive_timestamp_offset:'+01:00',batch:0,row_start:22,row_end:23,expected_preview_sha256:'a'.repeat(64)});
 });

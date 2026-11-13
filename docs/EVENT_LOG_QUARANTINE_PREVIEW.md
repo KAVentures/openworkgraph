@@ -28,3 +28,30 @@ The preview and release share the same CSV parsing predicate, including the requ
 ## Verification
 
 The Python regression covers preview nonmutation, deterministic snapshots, changed offsets, stale selection refusal, batch isolation, invalid input and session-authenticated HTTP. The Node regression extracts and exercises the **actual dashboard quarantine block**, covering explicit preview before release, offset invalidation, changed-log refusal and discard invalidation. Required native Ubuntu/macOS/Windows pytest, Node/browser, process collaboration, accessibility, scale, starter and packaging/release workflows must execute successfully on the exact PR head before merge. Synthetic fixtures are not real customer/provider acceptance.
+
+## Large retained selections
+
+A single preview or release processes at most 10,000 retained rows and 32 MiB
+of serialized row data. The server checks both limits in DuckDB before loading
+row values into application memory. If a selection is larger, it refuses the
+operation without changing the log or retained rows and asks for a narrower
+selection. No rows are silently omitted.
+
+The dashboard can select a batch and optional inclusive first/last row numbers.
+The row table shows the retained row numbers and provides first/next page controls;
+choosing a batch scopes the table. A range requires a batch and both bounds.
+Changing the offset or any scope field invalidates the preview. Release sends
+exactly the previewed scope and fingerprint. **Discard kept rows** remains a
+separate action that discards all retained rows; the range does not scope discard.
+
+API callers may add `row_start` and `row_end` alongside `batch` to preview and
+release. They are non-negative whole numbers, inclusive, and must be supplied
+together with a batch. The preview fingerprint binds the scope as well as the
+retained values and offset. Smaller selections with no range retain the previous
+API behavior and fingerprint format. Batch/row numbering refers to the imported
+CSV's retained-row positions, not independently verified source identifiers.
+
+The bound limits application-side materialization, not database scan time or
+all memory use. Choose smaller ranges when a single row set exceeds the byte
+limit. Rows remain retained until explicitly released, discarded or the log is
+deleted.
