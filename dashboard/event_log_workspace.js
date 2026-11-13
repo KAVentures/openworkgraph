@@ -622,6 +622,7 @@
     results.appendChild(conformanceSection((variants.variants||[])[0]));
     results.appendChild(clusterSection());
     results.appendChild(caseTagSection(names));
+    results.appendChild(caseExplainSection());
     results.appendChild(discoverySection());
     results.appendChild(driftSection());
     results.appendChild(deriveSection(names));
@@ -1029,6 +1030,46 @@
     setTimeout(()=>URL.revokeObjectURL(url),1000);
   }
   // Analyst tags on cases: mark cases while investigating, then filter any analysis with "Tagged".
+  // Explain one case: compare each of its gaps with the typical gap of the same transition.
+  function caseExplainSection(){
+    const box=section('Explain a case');box.id='owgCaseExplain';
+    box.appendChild(el('div','Pick one of the slowest cases or enter a case ID to see which steps took longer than usual in this log.','muted'));
+    const caseId=input('owgCaseExplainId','text','case ID');caseId.maxLength=500;caseId.autocomplete='off';
+    const run=button('Explain case','secondary');run.id='owgCaseExplainRun';
+    const slowList=el('div');slowList.id='owgCaseExplainSlowest';
+    const out=el('div');out.id='owgCaseExplainResult';out.setAttribute('role','status');out.setAttribute('aria-live','polite');
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Case',caseId),run);
+    box.append(slowList,row,out);
+    const generation=state.generation;
+    const base='/v1/event-logs/'+encodeURIComponent(state.logId)+'/cases/';
+    const post=(path,body)=>api(base+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json());
+    const explainCase=async id=>{
+      run.disabled=true;
+      try{
+        const spec={case_id:id};if(state.caseType)spec.case_type=state.caseType;
+        const r=await post('explain',spec);if(generation!==state.generation)return;
+        const lines=[el('div','Case '+r.case_id+' took '+duration(r.duration_seconds)+' (log median '+duration(r.log_median_seconds)+', 90th percentile '+duration(r.log_p90_seconds)+'); it is slower than '+pct(r.slower_than_share_of_cases)+' of cases.')];
+        if(r.biggest_excess.length)lines.push(el('div','Most of the extra time: '+r.biggest_excess.slice(0,3).map(g=>g.from+' → '+g.to+' ('+duration(g.excess_seconds)+(g.typical_gap_seconds===null?', a path few cases take':' over the usual '+duration(g.typical_gap_seconds))+')').join('; ')+'.'));
+        else lines.push(el('div','No step took longer than usual for its transition.','muted'));
+        if(r.repeated_activities.length)lines.push(el('div','Repeated: '+r.repeated_activities.map(a=>a.activity+' ×'+a.times).join(', ')+'.'));
+        if(r.uncommon_activities.length)lines.push(el('div','Uncommon steps (in under 10% of cases): '+r.uncommon_activities.join(', ')+'.'));
+        const rows=r.gaps.map(g=>[g.from+' → '+g.to,duration(g.gap_seconds),g.typical_gap_seconds===null?'too few cases':duration(g.typical_gap_seconds),g.excess_seconds>0?'+'+duration(g.excess_seconds):'—']);
+        out.replaceChildren(...lines,table(['Step','This case','Typical (median)','Above typical'],rows),el('div',r.interpretation,'muted'));
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      finally{run.disabled=false;}
+    };
+    run.onclick=()=>{const id=caseId.value.trim();if(!id){out.replaceChildren(el('div','Enter a case ID.','muted'));return;}explainCase(id);};
+    const spec={limit:5};if(state.caseType)spec.case_type=state.caseType;if(state.follows.length)spec.cohort={follows:state.follows};
+    post('slowest',spec).then(r=>{
+      if(generation!==state.generation||!r.cases.length)return;
+      const wrap=el('div',null,'row');wrap.appendChild(el('span','Slowest cases:','muted'));
+      r.cases.forEach(c=>{const b=button(c.case_id+' ('+duration(c.duration_seconds)+')','secondary');b.setAttribute('aria-label','Explain case '+c.case_id);
+        b.onclick=()=>{caseId.value=c.case_id;explainCase(c.case_id);};wrap.appendChild(b);});
+      slowList.replaceChildren(wrap);
+    }).catch(()=>{});
+    return box;
+  }
+
   function caseTagSection(activityNames){
     const box=section('Case tags');box.id='owgCaseTags';
     box.appendChild(el('div','Tag cases you have looked at, such as “checked” or “root cause: missing PO”, then choose the tag under “Tagged” in any filter. Tags are your judgement, stored on this computer; the log itself is not changed.','muted'));
