@@ -101,3 +101,22 @@ def test_receipt_journal_rejects_dangling_sidecar_symlink(tmp_path):
     with pytest.raises(ValueError, match="unsupported receipt journal sidecar"):
         list_receipts(str(path), tenant="org", actor="alice", attempt="run")
     assert sidecar.is_symlink()
+
+@pytest.mark.parametrize("verdict", [
+    {"status": "verified_provider_operation", "provider_operation": "unknown",
+     "event_id": "evt_1", "customer_outcome": "unknown"},
+    {"status": "verified_provider_event", "provider_operation": "succeeded",
+     "event_id": "evt_1", "customer_outcome": "unknown"},
+    {"status": "verified_provider_event", "provider_operation": "unknown",
+     "customer_outcome": "unknown"},
+    {"status": "unknown", "provider_operation": "unknown",
+     "event_id": "evt_1", "customer_outcome": "unknown"},
+    {"status": "unknown", "provider_operation": "unknown",
+     "customer_outcome": "unknown", "provider_token": "secret"},
+])
+def test_receipt_journal_rejects_inconsistent_provider_claims(tmp_path, verdict):
+    path = str(tmp_path / "receipts.sqlite")
+    with pytest.raises(ValueError):
+        append_receipt(path, tenant="org", actor="actor", attempt="run", verdict=verdict)
+    if (tmp_path / "receipts.sqlite").exists():
+        assert list_receipts(path, tenant="org", actor="actor", attempt="run") == []
