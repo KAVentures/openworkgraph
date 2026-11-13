@@ -192,6 +192,7 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
 def main() -> int:
     parser = argparse.ArgumentParser(description="Review exact observed event-to-resource-pair evidence offline")
     parser.add_argument("input", help="Authorized work-resumption response JSON, or - for stdin")
+    parser.add_argument("--annotations", help="Explicit reviewer labels JSON; scoring remains non-held-out")
     args = parser.parse_args()
     try:
         if args.input == "-":
@@ -199,7 +200,15 @@ def main() -> int:
         else:
             with open(args.input, encoding="utf-8") as stream:
                 payload = json.load(stream)
-        print(json.dumps(build_review_queue(payload), sort_keys=True, separators=(",", ":")))
+        if args.annotations:
+            if args.annotations == args.input:
+                raise ValueError("source and annotation files must be distinct")
+            with open(args.annotations, encoding="utf-8") as stream:
+                labels = json.load(stream)
+            output = score_review_annotations(payload, labels)
+        else:
+            output = build_review_queue(payload)
+        print(json.dumps(output, sort_keys=True, separators=(",", ":")))
         return 0
     except (ValueError, OSError, json.JSONDecodeError) as exc:
         print(f"reconstruction review refused: {exc}", file=sys.stderr)
