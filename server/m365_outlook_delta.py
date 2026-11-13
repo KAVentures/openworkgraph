@@ -17,6 +17,7 @@ import re
 import stat
 import sys
 import tempfile
+from datetime import datetime, timezone
 from urllib import error, parse, request
 
 from .m365_outlook_selected import (
@@ -80,12 +81,25 @@ def _grant(path, tenant, mailbox, folder):
                           object_pairs_hook=_pairs)
     except (ValueError, UnicodeError, TypeError, RecursionError):
         raise DeltaError("Current delta grant invalid") from None
-    if (type(data) is not dict or set(data) != GRANT_KEYS
+    if (type(data) is not dict or set(data) not in (GRANT_KEYS, GRANT_KEYS | {"expires_at"})
             or type(data["version"]) is not int or data["version"] != 1
             or data["enabled"] is not True or data["consented"] is not True
             or data["tenant_scope"] != tenant or data["mailbox_scope"] != mailbox
             or data["folder_id"] != folder):
         raise DeltaError("Current delta grant revoked or mismatched")
+    # Optional, explicit expiry for newly issued grants. Existing grants remain
+    # readable until revoked; an expired grant never authorizes another Graph GET.
+    if "expires_at" in data:
+        value = data["expires_at"]
+        if (type(value) is not str
+                or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", value)):
+            raise DeltaError("Current delta grant expired or invalid")
+        try:
+            expiry = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        except ValueError:
+            raise DeltaError("Current delta grant expired or invalid") from None
+        if datetime.now(timezone.utc) >= expiry:
+            raise DeltaError("Current delta grant expired or invalid")
 
 
 def _initial(folder):
