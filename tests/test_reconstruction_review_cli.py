@@ -504,3 +504,28 @@ class ReviewQueueTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FingerprintScopeTests(unittest.TestCase):
+    def test_same_rows_different_access_modes_have_different_digest(self):
+        source = payload([pair("A", "F", ["e1"])])
+        first = build_review_queue(source)
+        changed = dict(source, saved_history_access="current_run")
+        second = build_review_queue(changed)
+        self.assertEqual(first["event_reviews"], second["event_reviews"])
+        self.assertNotEqual(first["evidence_sha256"], second["evidence_sha256"])
+
+    def test_truncated_evidence_changes_digest_and_cannot_be_scored(self):
+        from server.reconstruction_review_cli import score_bound_review_annotations
+        source = payload([pair("A", "F", ["e1"])])
+        queue = build_review_queue(source)
+        row = queue["event_reviews"][0]
+        envelope = {"evidence_sha256": queue["evidence_sha256"], "annotations": [
+            {"window": row["window"], "event_id": row["event_id"],
+             "true_resource_pairs": row["candidate_resource_pairs"]}
+        ]}
+        changed = dict(source, coverage={"scan_truncated": True})
+        self.assertNotEqual(queue["evidence_sha256"], build_review_queue(changed)["evidence_sha256"])
+        with self.assertRaisesRegex(ValueError, "digest mismatch"):
+            score_bound_review_annotations(changed, envelope)
+
