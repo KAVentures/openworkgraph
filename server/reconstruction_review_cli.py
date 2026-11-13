@@ -143,6 +143,12 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         "format": "openworkgraph.reconstruction-review.v2",
         "saved_history_access": response["saved_history_access"],
         "coverage_incomplete": incomplete,
+        # Bind the observed scan and current session too: an unchanged set of
+        # surfaced pairs under a different observation boundary is not the
+        # same review basis. This metadata is produced by the live engine.
+        "coverage": coverage,
+        "current_session": response.get("current_session"),
+        "session_gap_minutes": response.get("session_gap_minutes"),
         "event_reviews": rows,
     }
     evidence_digest = hashlib.sha256(json.dumps(
