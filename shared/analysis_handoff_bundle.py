@@ -32,8 +32,9 @@ class HandoffBundle(Strict):
         if (aggregate.source_content_sha256 != cases.source_content_sha256 or
                 aggregate.analysis_spec_sha256 != cases.analysis_spec_sha256):
             raise ValueError("aggregate and case dataset must share exact source and analysis fingerprints")
-        if aggregate.matching_cases != len(cases.cases):
-            raise ValueError("case dataset must represent the full selected aggregate case count")
+        if (aggregate.matching_cases != len(cases.cases) or
+                aggregate.matching_rows != len(cases.cases)):
+            raise ValueError("case dataset must match the full selected case population and row count")
         if len(canonical(self.model_dump(mode="json"))) > MAX_BYTES:
             raise ValueError("paired handoff exceeds its 640 KiB size limit")
         return self
