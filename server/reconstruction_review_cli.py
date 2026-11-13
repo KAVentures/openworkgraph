@@ -159,7 +159,13 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
         if len(canonical) != len(expected):
             raise ValueError("duplicate ground truth pair")
         labels[key] = canonical
-    # A subset selected by the reviewer can inflate accuracy. Require an\n    # explicit label (including an empty pair list) for every surfaced event.\n    # Even then, unseen events remain outside this pair-only evaluation.\n    if len(labels) != len(observed):\n        raise ValueError("all surfaced review events require explicit labels")\n    tp = fp = fn = ambiguous = 0\n    for key, true_pairs in labels.items():
+    # A subset selected by the reviewer can inflate accuracy. Require an
+    # explicit label (including an empty pair list) for every surfaced event.
+    # Even then, unseen events remain outside this pair-only evaluation.
+    if len(labels) != len(observed):
+        raise ValueError("all surfaced review events require explicit labels")
+    tp = fp = fn = ambiguous = 0
+    for key, true_pairs in labels.items():
         row = observed[key]
         predicted = {json.dumps(pair, separators=(",", ":")) for pair in row["candidate_resource_pairs"]}
         tp += len(predicted & true_pairs)
@@ -175,7 +181,9 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
         "true_positive_pairs": tp, "false_positive_pairs": fp, "false_negative_pairs": fn,
         "precision": precision, "recall": recall,
         "f1": 2 * precision * recall / (precision + recall) if precision + recall else 0.0,
-        "evaluation_scope": "all_surfaced_event_pair_evidence_only",\n        "missed_source_events_measured": False,\n        "complete_case_recall_measured": False,
+        "evaluation_scope": "all_surfaced_event_pair_evidence_only",
+        "missed_source_events_measured": False,
+        "complete_case_recall_measured": False,
         "held_out_verified": False, "independent_annotation_verified": False,
         "real_work_accuracy_claim": False, "confirmed_case": False,
     }
