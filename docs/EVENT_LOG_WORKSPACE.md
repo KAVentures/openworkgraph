@@ -35,6 +35,32 @@ mapping, `naive_timestamp_offset=+01:00` in the API). That choice is recorded
 with the import. XML with a `DOCTYPE` or entity declaration is refused before
 parsing.
 
+### Timestamp formats
+
+ISO 8601 times (`2024-03-04T14:05:00Z`, `2024-03-04 14:05:00+01:00`) need no
+setting. For other layouts, such as `13/03/2024 14:05`, `04.03.2024 14:05:00`
+or `04-MAR-24 02.05.00 PM`, declare the format of the timestamp column as a
+strptime pattern ("Timestamp format" in the CSV mapping, `timestamp_format=` in
+the API). Patterns may use `%d %m %Y %y %H %I %M %S %f %p %b %B %z`, with
+spaces and `/ . - : , T` between them. They need a year, a month and a day,
+and `%I` needs `%p`.
+
+Every value must match the pattern exactly. A value with trailing text, an
+impossible date such as 31/02, or a value in another layout is rejected as
+unparseable, not guessed. A pattern without `%z` describes times without an
+offset, so the import also needs the offset decision, or it is refused before
+anything is read. The pattern is recorded in the import's transform and its
+digest.
+
+After you choose a file, the dashboard sends the first 256 KB of the file to
+this computer's server (`POST /v1/event-logs/timestamp-formats?column=...`;
+nothing is stored). The server tries the known layouts on up to 500 values of
+the timestamp column and preselects a format that reads them all. When every
+day in the sample is 12 or less, day-first and month-first both fit; the
+dashboard then lists both with how the first value would read, and you choose.
+Quarantined rows are released with ISO parsing only, so re-import a file that
+needs a format.
+
 ### Excel workbooks
 
 Choosing an `.xlsx` file in the dashboard converts its first worksheet to CSV
@@ -183,6 +209,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | --- | --- |
 | `GET /v1/event-logs` | List stored logs. |
 | `POST /v1/event-logs/import?format=csv\|xes\|ocel\|ocelxml&name=...` | Import the request body. Requires `X-OWG-Local-Storage-Confirmed: true`. CSV also takes `case_column`, `activity_column`, `timestamp_column`, `resource_column`, `delimiter` (`t` for tab) and repeated `attribute_column` for up to 32 extra columns to keep as event attributes (nothing else is stored). |
+| `POST /v1/event-logs/timestamp-formats?column=...&delimiter=...` | Suggest a timestamp format from the start of a CSV file (body, at most 256 KB): `candidates` (each with `pattern`, `order`, `has_offset` and how the first value reads), `ambiguous`, `suggested`. Nothing is stored. Imports and appends take `timestamp_format=`. |
 | `POST /v1/event-logs/xlsx-to-csv?sheet=...` | Convert one worksheet of the `.xlsx` request body to CSV (`csv`, `sheet`, `sheets`, `rows`, `columns`, `date_columns`, `dates_have_no_offset`). Nothing is stored. |
 | `POST /v1/event-logs/{log_id}/delete` | Delete the log and every row that belongs to it. |
 | `POST /v1/event-logs/{log_id}/derive` | Save the cases matching a filter as a new log (below). |

@@ -255,6 +255,7 @@ async def convert_xlsx_event_log(request: Request, sheet: str | None = Query(def
             result = await run_in_threadpool(xlsx.to_csv, spool, sheet)
         except xlsx.XlsxError as exc:
             raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 @router.post("/v1/event-logs/timestamp-formats")
