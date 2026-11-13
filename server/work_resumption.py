@@ -534,4 +534,30 @@ def score_authorized_reconstruction_review(
     return score_bound_review_annotations(response, annotation_envelope)
 
 
-__all__ = ["resumption_candidates", "score_authorized_reconstruction_review"]
+def score_live_reconstruction_review(
+    connection: Any,
+    annotation_envelope: dict[str, Any],
+    *,
+    lease: dict[str, Any],
+    authorize_review: Any,
+    run_started_at: str | None = None,
+) -> dict[str, Any]:
+    """Score against a freshly reconstructed, grant-scoped response, not client JSON.
+
+    The authenticated host supplies the database connection, active lease and
+    a live reviewer authorization callback. Never accept those from request
+    payloads. Revocation must be checked on each call; a fingerprint alone
+    cannot authorize saved-history access. This is a service entrypoint, not
+    an HTTP route or durable reviewer-decision store.
+    """
+    if not callable(authorize_review) or authorize_review() is not True:
+        raise PermissionError("live reconstruction review authorization denied")
+    # Recompute within the current lease; stale exports cannot be scored.
+    response = resumption_candidates(
+        connection, lease=lease, run_started_at=run_started_at
+    )
+    from .reconstruction_review_cli import score_bound_review_annotations
+    return score_bound_review_annotations(response, annotation_envelope)
+
+
+__all__ = ["resumption_candidates", "score_authorized_reconstruction_review", "score_live_reconstruction_review"]
