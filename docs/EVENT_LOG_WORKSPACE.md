@@ -239,6 +239,8 @@ file to attach to an email or ticket. It holds:
   `sla_seconds`, the share of cases over the SLA;
 * the most frequent variants (15 by default; `variants` takes 1–50), with their
   share of cases and median duration;
+* **Where to look first**: the five highest-ranked automatic insights (see
+  *Where to look first* below), using the report's case filter and SLA;
 * activity frequencies;
 * the slowest transitions: the median and 90th-percentile time between one
   activity and the next, for up to 10 transitions seen in at least 3 cases
