@@ -1036,7 +1036,10 @@ def install(log_id: str, pack_id: str, spec: Any) -> dict[str, Any]:
                        if previous else [])[-MAX_HISTORY:]
             record = {"format": INSTALL_FORMAT, "pack_id": pack_id, "version": parsed.version,
                       "installed_at": now.isoformat() + "Z", "mapping": mapping, "parameters": params,
-                      "definitions_sha256": _digest(definitions), "metric_ids": metric_ids, "history": history}
+                      "definitions_sha256": _digest(definitions), "metric_ids": metric_ids, "history": history,
+                      "configuration_history": ([*previous.get("configuration_history", []),
+                          {k: copy.deepcopy(previous[k]) for k in ("version", "installed_at", "definitions_sha256", "mapping", "parameters")} ]
+                          if previous else [])[-MAX_HISTORY:]}
             conn.execute("DELETE FROM domain_pack_installs WHERE log_id = ? AND pack_id = ?", [log_id, pack_id])
             conn.execute("INSERT INTO domain_pack_installs VALUES (?, ?, ?, ?)",
                          [log_id, pack_id, now, json.dumps(record, sort_keys=True)])
@@ -1046,7 +1049,8 @@ def install(log_id: str, pack_id: str, spec: Any) -> dict[str, Any]:
             raise
         finally:
             conn.close()
-    return {**record, "installation_token": _installation_token(record), "change": change, "previous_version": previous["version"] if previous else None,
+    return {**{k: v for k, v in record.items() if k != "configuration_history"},
+            "installation_token": _installation_token(record), "change": change, "previous_version": previous["version"] if previous else None,
             "not_applicable": definitions["not_applicable"]}
 
 
@@ -1067,11 +1071,46 @@ def installed(log_id: str) -> dict[str, Any]:
     installs = [json.loads(d) for (d,) in rows]
     for record in installs:
         record["installation_token"] = _installation_token(record)
+        record.pop("configuration_history", None)
         record["latest_version"] = _pack(record["pack_id"])["version"] if record["pack_id"] in PACKS else None
         record["upgrade_available"] = bool(record["latest_version"]) and \
             _version_key(record["latest_version"]) > _version_key(record["version"])
     return {"installs": installs, "log_object_types": types[:MAX_NAMES], "log_activities": activities[:MAX_NAMES],
             "names_truncated": len(types) > MAX_NAMES or len(activities) > MAX_NAMES}
+
+
+def configuration_history(log_id: str, pack_id: str) -> dict[str, Any]:
+    """Review retained setup only; never reconstruct historical events or outcomes."""
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            workspace._check_log(conn, log_id)
+            record = _record(conn, log_id, pack_id)
+        finally:
+            conn.close()
+    if record is None:
+        raise workspace.EventLogWorkspaceError("this domain pack is not installed on the log")
+    history = record.get("history", [])[-MAX_HISTORY:]
+    snapshots = record.get("configuration_history", [])[-len(history):] if history else []
+    offset = len(history) - len(snapshots)
+    entries = []
+    for index, metadata in enumerate(history):
+        snapshot = snapshots[index - offset] if index >= offset else None
+        available = (isinstance(snapshot, dict)
+                     and all(snapshot.get(k) == metadata.get(k) for k in
+                             ("version", "installed_at", "definitions_sha256"))
+                     and isinstance(snapshot.get("mapping"), dict)
+                     and isinstance(snapshot.get("parameters"), dict))
+        entries.append({"entry": index, "current": False, **metadata,
+                        "configuration_available": available,
+                        **({k: copy.deepcopy(snapshot[k]) for k in ("mapping", "parameters")} if available else {})})
+    entries.append({"entry": len(history), "current": True, "configuration_available": True,
+                    **{k: copy.deepcopy(record[k]) for k in
+                       ("version", "installed_at", "definitions_sha256", "mapping", "parameters")}})
+    return {"format": "openworkgraph.domain-pack-configurations.v1", "pack_id": pack_id,
+            "entries": entries, "max_previous": MAX_HISTORY, "complete_installation_history": False,
+            "historical_events_retained": False, "historical_outcomes_verified": False,
+            "execution_authorized": False}
 
 
 def uninstall(log_id: str, pack_id: str, *, expected_installation: str | None = None) -> dict[str, Any]:

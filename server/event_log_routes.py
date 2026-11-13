@@ -834,6 +834,12 @@ def event_log_domain_packs_installed(request: Request, log_id: str):
     return _respond(domain_packs.installed, log_id)
 
 
+@router.get("/v1/event-logs/{log_id}/domain-packs/{pack_id}/configurations")
+def event_log_domain_pack_configurations(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+    _require_dashboard(request)
+    return _respond(domain_packs.configuration_history, log_id, pack_id)
+
+
 @router.post("/v1/event-logs/{log_id}/domain-packs/{pack_id}")
 async def event_log_domain_pack_install(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
     _require_dashboard(request)
