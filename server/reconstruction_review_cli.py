@@ -69,6 +69,13 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(coverage, dict):
         raise ValueError("invalid coverage metadata")
     indexed: dict[tuple[str, str], set[str]] = defaultdict(set)
+    event_windows: dict[str, str] = {}
+    def add_evidence(window: str, event_id: str, pair_key: str) -> None:
+        # A source event cannot independently corroborate different windows.
+        previous = event_windows.setdefault(event_id, window)
+        if previous != window:
+            raise ValueError("event ID reused across session windows")
+        indexed[(window, event_id)].add(pair_key)
     incomplete = bool(response.get("observed_pair_event_assignments_truncated") or
                       coverage.get("scan_truncated"))
     for pair in pairs:
@@ -89,7 +96,7 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("self-pair is not co-reference")
         pair_key = json.dumps(sorted(identities), separators=(",", ":"))
         for event_id in _event_ids(pair.get("current_evidence_event_ids")):
-            indexed[("current", event_id)].add(pair_key)
+            add_evidence("current", event_id, pair_key)
         earlier = pair.get("earlier_corroborations", [])
         if not isinstance(earlier, list) or len(earlier) > MAX_SESSIONS_PER_PAIR:
             raise ValueError("unbounded earlier corroborations")
@@ -98,7 +105,7 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
                 raise ValueError("invalid earlier session")
             window = _session_window(session["session_started_at"])
             for event_id in _event_ids(session.get("evidence_event_ids")):
-                indexed[(window, event_id)].add(pair_key)
+                add_evidence(window, event_id, pair_key)
             incomplete |= bool(session.get("evidence_truncated"))
         incomplete |= bool(pair.get("current_evidence_truncated") or pair.get("earlier_sessions_truncated"))
     rows = []
