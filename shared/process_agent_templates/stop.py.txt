@@ -1,0 +1,76 @@
+"""Customer-owned emergency stop for the exported OWG runtime.
+
+The stop marker is local, durable and visible before *future* attempts.
+A marker cannot cancel an operation that the provider already received.
+There is deliberately no automatic reset or resume mode.
+"""
+from __future__ import annotations
+
+import argparse
+from datetime import datetime, timezone
+import json
+import os
+from pathlib import Path
+
+MARKER = ".owg-stop"
+
+
+def stopped(directory: Path) -> bool:
+    # lexists also detects a broken symlink or malformed file: fail closed.
+    return os.path.lexists(str(directory / MARKER))
+
+
+def stop(directory: Path) -> dict:
+    if directory.is_symlink():
+        raise ValueError("Refusing a symlink journal directory")
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    target = directory / MARKER
+    if stopped(directory):
+        return {"stopped": True, "new_stop": False,
+                "network_contacted": False, "in_flight_request_cancelled": False}
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    fd = os.open(str(target), flags, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            json.dump({"format": "openworkgraph.customer-operator-stop.v1",
+                       "stopped_at": datetime.now(timezone.utc).isoformat(),
+                       "stop_requested": True}, out, separators=(",", ":"))
+            out.write("\n")
+            out.flush()
+            os.fsync(out.fileno())
+    except Exception:
+        # A partial marker remains a valid stop; do not remove it.
+        raise
+    if os.name == "posix":
+        directory_fd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    return {"stopped": True, "new_stop": True,
+            "network_contacted": False, "in_flight_request_cancelled": False}
+
+
+def main(argv=None) -> dict:
+    parser = argparse.ArgumentParser(description="Emergency stop for future OWG customer runtime tool calls")
+    parser.add_argument("--journal-directory", type=Path,
+                        default=Path(__file__).resolve().parent / "execution-journal")
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument("--status", action="store_true")
+    action.add_argument("--stop", action="store_true")
+    parser.add_argument("--confirm-stop", action="store_true")
+    args = parser.parse_args(argv)
+    if args.status:
+        return {"stopped": stopped(args.journal_directory),
+                "network_contacted": False, "in_flight_request_cancelled": False}
+    if args.confirm_stop is not True:
+        raise ValueError("Stopping future operations requires --confirm-stop")
+    return stop(args.journal_directory)
+
+
+if __name__ == "__main__":
+    try:
+        print(json.dumps(main(), sort_keys=True))
+    except (ValueError, OSError) as exc:
+        raise SystemExit("Could not create operator stop marker; no execution authorized: " +
+                         type(exc).__name__) from None
