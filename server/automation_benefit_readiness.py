@@ -126,7 +126,10 @@ def review() -> dict[str, Any]:
         "measurements_scanned": len(rows),
         "unreadable_measurements_in_overlap_scan": overlap_unreadable,
         "rows_truncated": truncated,
-        "comparison_complete": not (truncated or pairs_truncated or overlap_unreadable or any(invalid.values())),
+        "scan_complete": not (truncated or pairs_truncated or overlap_unreadable or any(invalid.values())),
+        "comparison_complete": (not (truncated or pairs_truncated or overlap_unreadable or any(invalid.values()))
+                                and all(row["readiness"] == "ready_for_noncausal_comparison"
+                                        for row in report_rows)),
         "reported_source_identity_verified": False,
         "same_cases_verified": False,
         "causal_effect_verified": False,
