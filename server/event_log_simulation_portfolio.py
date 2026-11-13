@@ -148,6 +148,10 @@ def compare(log_id: str, spec: Any, case_type: str | None = None) -> dict[str, A
         ) from None
 
     reference = {
+        # Include the exact selected saved-log revision as well as the
+        # numeric calibration; two logs with equal aggregate parameters
+        # must not accidentally receive one claimed input identity.
+        "log": base["log"],
         "case_notion": base["case_notion"],
         "calibration": {
             field: base[field]
