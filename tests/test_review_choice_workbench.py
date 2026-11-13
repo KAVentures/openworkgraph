@@ -176,8 +176,10 @@ def test_preflight_continue_uses_existing_pipeline_decision_not_implicit_approva
     assert "if(!pipelineCard)" in script
     assert "details.append(consentLabel,continueReview);" in script
     assert "consent.type='checkbox'" in script
-    assert "continueReview.disabled=!consent.checked;" in script
-    assert "!consent.checked||continueReview.disabled" in script
+    assert "const reviewReady=()=>consent.checked&&!reviewPending&&!handoffPending&&" in script
+    assert "currentDecision==='approved'&&notes.value===savedNotes" in script
+    assert "const updateContinue=()=>{continueReview.disabled=!reviewReady();};" in script
+    assert "continueReview.disabled||!reviewReady()" in script
     assert "execution_authorized:false" in pipeline
 
 
