@@ -113,7 +113,7 @@
             // pipeline requires its own current-revision check on any decision.
             const consentLabel=node('label');const consent=node('input');consent.type='checkbox';consent.setAttribute('aria-label','Confirm exact reviewed project before handoff');consentLabel.append(consent,node('span',' I inspected this project and understand approval does not authorize execution.'));const continueReview=node('button','Open opportunity decision and handoff');continueReview.type='button';continueReview.disabled=true;consent.addEventListener('change',()=>{continueReview.disabled=!consent.checked;});
             continueReview.onclick=async()=>{
-              if(token!==generation||choice.value!==projectId||input.value.trim()!==id||!consent.checked)return;
+              if(token!==generation||choice.value!==projectId||input.value.trim()!==id||!consent.checked||continueReview.disabled)return;
               const pipelineCard=document.getElementById('owgPipelineCard');
               if(!pipelineCard){status.textContent='Automation pipeline unavailable. Reopen the dashboard and inspect again.';return;}
               // The opportunity can change after the first preflight. Revalidate
