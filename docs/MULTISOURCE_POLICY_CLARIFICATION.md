@@ -13,7 +13,7 @@ OWG's local Process catalog now supports a guided review against **up to five se
 
 ## Guarantees and boundaries
 
-The source-bundle fingerprint uses length-prefixed titles and source text, preserving order. It is a local integrity pin, **not** proof that a document is accurate, current, authorized or signed by a policy owner. Cited text may contain sensitive names or obligations. The browser holds it only in the current review; server responses show excerpts, so use a private authenticated local session.
+The source-bundle fingerprint uses length-prefixed titles and source text, preserving order. It is a local integrity pin, **not** proof that a document is accurate, current, authorized or signed by a policy owner. Cited text may contain sensitive names or obligations. The browser holds the complete source text only in the current review; server responses show excerpts and the local decision ledger retains selected cited excerpts and explanations, so use a private authenticated local session. Deleting the saved process also removes its clarification ledger.
 
 The backend rejects approval of a multi-way contradiction unless the reviewer explicitly selects **one** statement that appears among the disputed evidence and supplies an explanation. This avoids the former UI behavior of auto-including both incompatible sources in one recorded confirmation. Where several documents contradict each other, a human may need to amend or replace source material; OWG does not silently choose which organization policy is legally binding.
 
