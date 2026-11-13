@@ -511,4 +511,27 @@ def resumption_candidates(
     return result
 
 
-__all__ = ["resumption_candidates"]
+def score_authorized_reconstruction_review(
+    response: dict[str, Any],
+    annotation_envelope: dict[str, Any],
+    *,
+    authorize_review: Any,
+) -> dict[str, Any]:
+    """Fail-closed adapter for scoring a freshly authorized reconstruction review.
+
+    The host must supply a live authorization decision bound to the same tenant,
+    reviewer, history scope and grant as the response. An exported response or
+    digest is not an authorization credential. This adapter neither stores
+    reviewer decisions nor certifies independent ground truth.
+    """
+    if not callable(authorize_review):
+        raise PermissionError("live reconstruction review authorization required")
+    # Authorization precedes parsing or scoring sensitive event evidence.
+    # Explicit True avoids accepting truthy metadata or expired grant objects.
+    if authorize_review() is not True:
+        raise PermissionError("reconstruction review authorization denied")
+    from .reconstruction_review_cli import score_bound_review_annotations
+    return score_bound_review_annotations(response, annotation_envelope)
+
+
+__all__ = ["resumption_candidates", "score_authorized_reconstruction_review"]
