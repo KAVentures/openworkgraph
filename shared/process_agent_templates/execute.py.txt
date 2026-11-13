@@ -561,7 +561,12 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
             await check_source_rules()
         except ImplementationError:
             result.update(stopped_before_tools=True, all_tool_results_matched=False, all_declared_operations_verified=False)
-            record('stopped_before_tools', reason='shared_design_or_source_rules_not_established')
+            if os.path.lexists(str(stop_marker)):
+                result['operator_stopped'] = True
+                record('operator_stop_observed', future_tool_attempts_stopped=True,
+                       already_in_flight_requests_not_cancelled=True)
+            else:
+                record('stopped_before_tools', reason='shared_design_or_source_rules_not_established')
             return result
 
         if any(action['operation_kind'] == 'write' for action in prepared['actions']):
@@ -577,7 +582,12 @@ async def execute_approved(spec, plan_document, case, bindings, intent, *, journ
                 result['source_preflight'].append(summary); record('source_preflight', **summary)
             if not result['source_preflight'] or not all(row['ready_for_write_attempt'] for row in result['source_preflight']):
                 result.update(stopped_before_tools=True, all_tool_results_matched=False, all_declared_operations_verified=False)
-                record('stopped_before_tools', reason='source_verifier_unavailable_or_terminal_state_already_matches')
+                if os.path.lexists(str(stop_marker)):
+                    result['operator_stopped'] = True
+                    record('operator_stop_observed', future_tool_attempts_stopped=True,
+                           already_in_flight_requests_not_cancelled=True)
+                else:
+                    record('stopped_before_tools', reason='source_verifier_unavailable_or_terminal_state_already_matches')
                 return result
         try:
             async with AsyncExitStack() as stack:
