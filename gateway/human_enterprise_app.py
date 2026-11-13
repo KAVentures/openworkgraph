@@ -78,6 +78,8 @@ def create_human_enterprise_app(
     analysis_signin, analysis_human = build_analysis_signin_router(app,analysis_sessions,human_access,app.state.human_principal_dependency)
     app.include_router(analysis_signin)
     app.include_router(build_router(analysis_store, analysis_human))
+    from .analysis_revision_comparison_routes import build_router as build_comparison_router
+    app.include_router(build_comparison_router(analysis_store, analysis_human))
     app.state.analysis_publications = analysis_store
     from .analysis_case_data import CaseData
     from .analysis_case_routes import build_router as build_case_router
