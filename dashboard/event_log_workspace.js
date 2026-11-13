@@ -1374,7 +1374,38 @@
             s.onchange=()=>{exact.hidden=s.value!==custom;choices[kind][r.role]=selected();edited();};
             exact.oninput=()=>{choices[kind][r.role]=selected();edited();};
             choices[kind][r.role]=selected();
-            const control=el('span');control.append(s,exact);
+            const lookup=input('owgDomainPackLookup-'+r.role,'search');lookup.maxLength=400;
+            lookup.setAttribute('aria-label','Search labels for '+r.label);
+            const find=button('Find labels','secondary');find.setAttribute('aria-label','Find labels for '+r.label);
+            const more=button('More labels','secondary');more.hidden=true;more.setAttribute('aria-label','More labels for '+r.label);
+            const found=el('div');found.id='owgDomainPackMatches-'+r.role;
+            const hint=el('div',null,'muted');hint.setAttribute('role','status');
+            let lookupTurn=0,nextAfter=null;
+            const findPage=async after=>{
+              if(generation!==state.generation||!box.isConnected)return;
+              const q=lookup.value,request=++lookupTurn;find.disabled=true;more.hidden=true;
+              if(!q||Array.from(q).length>200){hint.textContent='Enter 1 to 200 characters.';find.disabled=false;return;}
+              hint.textContent='Searching…';found.replaceChildren();
+              try{
+                const url='/v1/event-logs/'+encodeURIComponent(logId)+'/domain-pack-labels';
+                const result=await (await post(url,{kind,search:q,after:after||''})).json();
+                if(!s.isConnected||generation!==state.generation||request!==lookupTurn)return;
+                for(const label of result.labels){
+                  const choose=button(label,'secondary');
+                  choose.onclick=()=>{s.value=custom;exact.value=label;exact.hidden=false;choices[kind][r.role]=label;edited();hint.textContent='Label selected.';};
+                  found.appendChild(choose);
+                }
+                nextAfter=result.next_after;more.hidden=!nextAfter;
+                hint.textContent=result.labels.length?result.labels.length+' labels found on this page.':'No labels found.';
+              }catch(error){if(s.isConnected&&generation===state.generation&&request===lookupTurn)hint.textContent=error.message;}
+              finally{if(s.isConnected&&generation===state.generation&&request===lookupTurn)find.disabled=false;}
+            };
+            lookup.oninput=()=>{lookupTurn++;find.disabled=false;more.hidden=true;nextAfter=null;found.replaceChildren();hint.textContent='';};
+            lookup.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();findPage('');}};
+            find.onclick=()=>findPage('');more.onclick=()=>findPage(nextAfter);
+            const finder=el('details');finder.id='owgDomainPackFinder-'+r.role;
+            finder.append(el('summary','Find a label'),lookup,find,more,hint,found);
+            const control=el('div');control.append(s,exact,finder);
             rows.push([kind==='object_types'?'Object type':'Activity',r.label+(r.required?'':' (optional)'),control]);
           }
           const params=pack.parameters.map(p=>{const i=input('owgDomainPackParam-'+p.name,'number');i.min=String(p.min);i.max=String(p.max);i.value=String(installed?installed.parameters[p.name]:p.default);inputs[p.name]=i;i.oninput=()=>edited();return field(p.label,i);});
