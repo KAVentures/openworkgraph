@@ -70,3 +70,18 @@ with TestClient(app) as client:
     env={**os.environ,'WORKFLOW_OBSERVER_DATA':str(tmp_path/'data'),'WORKFLOW_OBSERVER_AUTH_DIR':str(tmp_path/'auth'),'WORKFLOW_OBSERVER_CONFIG':str(tmp_path/'config.json')}
     run=subprocess.run([sys.executable,'-c',code],cwd=Path(__file__).resolve().parents[1],env=env,capture_output=True,text=True,timeout=120)
     assert run.returncode==0,run.stdout+'\n'+run.stderr
+
+
+def test_review_csv_keeps_quoted_formula_like_values_in_one_literal_cell():
+    mapping={'case_column':'case','activity_column':'activity','timestamp_column':'time','resource_column':'who'}
+    activity='=HYPERLINK("https://example.invalid/?a=1,b=2","open")'
+    resource='\u00a0@name'
+    made=workspace.import_log(file([['e1','c1',activity,'2026-01-01T00:00:00Z',resource]]),
+                              name='Synthetic quoting',source_format='csv',mapping=mapping)
+    review=StringIO(newline='');workspace.export_log(made['log_id'],'csv-review',review,'case')
+    row=next(csv.DictReader(StringIO(review.getvalue())))
+    assert row['activity_review']=="'"+activity
+    assert row['resource_review']=="'"+resource
+    exact=StringIO(newline='');workspace.export_log(made['log_id'],'csv',exact,'case')
+    original=next(csv.DictReader(StringIO(exact.getvalue())))
+    assert original['activity']==activity and original['resource']==resource
