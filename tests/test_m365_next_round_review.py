@@ -86,6 +86,24 @@ class NextRoundTests(unittest.TestCase):
                 flow.prepare(**inputs())
             commit.assert_not_called()
 
+    def test_checkpoint_changes_during_preflight_refuses_review(self):
+        predecessor = {"generation": 2, "candidate_sha256": SHA, "log_id": "log"}
+        successor = {"generation": 3, "candidate_sha256": "d" * 64, "log_id": "log"}
+        with patch.object(flow, "inspect_checkpoint",
+                          side_effect=[predecessor, successor]) as checkpoint, \
+             patch.object(flow.cycle, "extract", return_value={
+                 "event_snapshots": 1, "removal_markers_for_review": 0}), \
+             patch.object(flow.cycle, "review", return_value={
+                 "csv_sha256": "c" * 64, "event_snapshots": 1,
+                 "removal_markers_for_review": 0}), \
+             patch.object(flow.transaction, "preflight",
+                          return_value={"proposed_generation": 3}), \
+             patch.object(flow.transaction, "execute") as commit:
+            with self.assertRaisesRegex(ReceiptError, "Checkpoint changed"):
+                flow.prepare(**inputs())
+            self.assertEqual(checkpoint.call_count, 2)
+            commit.assert_not_called()
+
     def test_count_disagreement_refuses_no_commit(self):
         with patch.object(flow, "inspect_checkpoint", return_value={
                 "generation": 2, "candidate_sha256": SHA, "log_id": "log"}), \
