@@ -58,8 +58,26 @@ const path=require('node:path');
    assert.match(await section.textContent(),/Source labels are not independently verified/);
    assert.match(await section.textContent(),/not proof that the automation caused it/);
    assert.match(await section.textContent(),/Only one baseline and one after period/);
+   // Portfolio-wide readiness is a separate human review; a missing baseline
+   // source reference blocks any headline savings claim.
+   await page.locator('#owgPipelineBenefitReadiness').click();
+   const review=page.locator('#owgPipelineBenefitReadinessResult');
+   await review.getByText('Benefit evidence readiness',{exact:true}).waitFor();
+   assert.match(await review.textContent(),/1 missing source reference/);
+   assert.match(await review.textContent(),/Match remittances/);
+   assert.match(await review.textContent(),/Review the provenance/);
+   await page.locator('#owgPipelineBenefitReadinessFilter').selectOption('missing_source_reference');
+   assert.match(await page.locator('#owgPipelineBenefitReadinessRows').textContent(),/1 matching ideas/);
+   await page.locator('#owgPipelineBenefitReadinessSearch').fill('not-an-idea');
+   assert.match(await page.locator('#owgPipelineBenefitReadinessRows').textContent(),/0 matching ideas/);
+   await page.locator('#owgPipelineBenefitReadinessSearch').fill('Match remittances');
+   assert.match(await page.locator('#owgPipelineBenefitReadinessRows').textContent(),/1 matching ideas/);
    await page.getByRole('button',{name:'Remove after measurement from '+day(0)}).click();
    await page.locator('#owgRealizedTable tbody tr').nth(1).waitFor({state:'detached'});
+   await page.locator('#owgPipelineBenefitReadiness').click();
+   await page.locator('#owgPipelineBenefitReadinessFilter').selectOption('missing_after');
+   assert.match(await page.locator('#owgPipelineBenefitReadinessRows').textContent(),/Match remittances/);
+   assert.match(await page.locator('#owgPipelineBenefitReadinessRows').textContent(),/Record a post-implementation measurement/);
    await page.addScriptTag({content:axeSource});
    const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgPipelineCard'),{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21aa']}}));
    assert.deepEqual(audit.violations.map(v=>v.id+': '+v.nodes.map(n=>n.target).join(',')),[]);

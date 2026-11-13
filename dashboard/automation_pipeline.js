@@ -754,6 +754,61 @@
       }catch(e){benefitOverlapHost.replaceChildren(el('p',e.message,'muted'));}
       finally{benefitOverlapButton.disabled=false;}
     };
+    const benefitReadinessButton=button('Review benefit evidence readiness','secondary');
+    benefitReadinessButton.id='owgPipelineBenefitReadiness';
+    const benefitReadinessHost=el('div');
+    benefitReadinessHost.id='owgPipelineBenefitReadinessResult';
+    benefitReadinessHost.setAttribute('role','status');
+    benefitReadinessHost.setAttribute('aria-live','polite');
+    benefitReadinessButton.onclick=async()=>{
+      benefitReadinessButton.disabled=true;
+      try{
+        const r=await (await api('/v1/automation-pipeline/benefit-readiness')).json();
+        if(r.format!=='openworkgraph.automation-portfolio-benefit-readiness.v1'||
+           !Array.isArray(r.ideas)||typeof r.implemented_ideas_reviewed!=='number')
+          throw new Error('Unexpected portfolio evidence readiness report.');
+        const filter=select('owgPipelineBenefitReadinessFilter',[
+          ['all','All implemented ideas'],...Object.keys(r.ideas_by_readiness).map(k=>[k,k.replaceAll('_',' ')])
+        ]);
+        const search=input('owgPipelineBenefitReadinessSearch','search','Find title or idea ID');
+        const display=el('div');display.id='owgPipelineBenefitReadinessRows';
+        const show=()=>{
+          const term=search.value.trim().toLowerCase();
+          const matched=r.ideas.filter(i=>(filter.value==='all'||i.readiness===filter.value)&&
+            (!term||(i.title+' '+i.idea_id).toLowerCase().includes(term)));
+          const t=el('table'),thead=el('thead'),tr=el('tr');
+          ['Idea','Evidence readiness','Baseline / after','Source links missing',
+            'Reported per-case effort change (hours/month)','Next human review'].forEach(v=>{
+            const th=el('th',v);th.scope='col';tr.append(th);
+          });thead.append(tr);const body=el('tbody');
+          matched.slice(0,150).forEach(i=>{
+            const row=el('tr'),th=el('th',i.title+' · '+i.idea_id);th.scope='row';row.append(th);
+            const change=i.reported_effort_change_hours_per_month_at_after_volume;
+            [i.readiness.replaceAll('_',' '),i.baseline_periods+' / '+i.after_periods,
+             i.missing_source_references,
+             change==null?'Not comparable':Number(change).toFixed(3),
+             i.next_review_action].forEach(v=>row.append(el('td',String(v))));
+            body.append(row);
+          });t.append(thead,body);
+          const wrap=el('div',null,'table-wrap');wrap.append(t);
+          display.replaceChildren(el('p',matched.length+' matching ideas; displaying '+Math.min(150,matched.length)+
+            '. Unlisted or filtered ideas were not marked complete.','muted'),
+            ...(matched.length?[wrap]:[el('p','No matching ideas.','muted')]));
+        };
+        filter.onchange=search.oninput=show;
+        const counts=Object.entries(r.ideas_by_readiness).map(([kind,n])=>n+' '+kind.replaceAll('_',' ')).join(' · ');
+        const warning=r.comparison_complete?
+          'This inventory reports entered evidence coverage, not independently verified savings or distinct cases.':
+          'The evidence is unreadable, truncated or incomplete. No missing claims are certified clear.';
+        benefitReadinessHost.replaceChildren(el('h4','Benefit evidence readiness'),
+          el('p',r.implemented_ideas_reviewed+' implemented ideas. '+counts+'.'),
+          el('p',r.candidate_overlap_pairs+' possible cross-idea overlap pairs; '+warning,'muted'),
+          field('Readiness category',filter),field('Search implemented ideas',search),
+          display,el('p',r.interpretation,'muted'));
+        show();
+      }catch(e){benefitReadinessHost.replaceChildren(el('p',e.message,'muted'));}
+      finally{benefitReadinessButton.disabled=false;}
+    };
     const dependencyScheduleButton=button('Review dependency schedule risks','secondary');
     dependencyScheduleButton.id='owgPipelineDependencySchedule';
     const dependencyScheduleHost=el('div');
@@ -787,7 +842,7 @@
       }catch(e){dependencyScheduleHost.replaceChildren(el('p',e.message,'muted'));}
       finally{dependencyScheduleButton.disabled=false;}
     };
-    card.append(row,resumeSection,auditSection,tools,status,counts,portfolioButton,portfolioHost,benefitOverlapButton,benefitOverlapHost,dependencyScheduleButton,dependencyScheduleHost,viewCount,list,comparison,detail);
+    card.append(row,resumeSection,auditSection,tools,status,counts,portfolioButton,portfolioHost,benefitOverlapButton,benefitOverlapHost,benefitReadinessButton,benefitReadinessHost,dependencyScheduleButton,dependencyScheduleHost,viewCount,list,comparison,detail);
     panel.appendChild(card);
 
     let latestIdeas=[],refreshGeneration=0,resumeGeneration=0,auditGeneration=0,auditPageIndex=0,auditAbort=null;
