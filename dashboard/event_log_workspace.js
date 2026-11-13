@@ -3421,7 +3421,7 @@
     const out=el('div');out.id='owgAnalysisResults';
     const savedList=el('div');savedList.id='owgAnalysisSaved';
     let last=null,lastSpec=null;
-    let sharingAttempt=0,sharingSnapshot=null,casePacket=null;
+    let sharingAttempt=0,sharingSnapshot=null,casePacket=null,caseDownloadReady=false;
     const prepareShare=button('Prepare sharing snapshot','secondary');prepareShare.id='owgAnalysisPrepareShare';prepareShare.disabled=true;
     const prepareCases=button('Prepare case sharing files','secondary');prepareCases.id='owgAnalysisPrepareCases';prepareCases.disabled=true;
     const sharing=el('div');sharing.id='owgAnalysisSharingPreview';sharing.hidden=true;
@@ -3436,7 +3436,7 @@
     const casePane=el('div');casePane.hidden=true;const caseTable=el('div');caseTable.style.overflowX='auto';
     const caseConsent=input('owgAnalysisCaseConsent','checkbox');const caseDownload=button('Download reviewed case dataset','secondary');caseDownload.id='owgAnalysisCaseDownload';caseDownload.disabled=true;
     casePane.append(el('p','This separate case file contains complete coded cases and within-case elapsed microseconds. Original case/activity/person labels, resources, attributes and absolute dates are omitted. Codes, topology and timings are still sensitive and are not anonymization. Codes apply only to this file; no group-row mapping or cross-case time order is disclosed. Review every timeline below. A separate case-read scope and explicit revision grant are required at the Gateway.'),caseTable,field('I reviewed the complete coded case timelines and intend this case-level disclosure',caseConsent),caseDownload);sharing.append(casePane);
-    function resetSharing(){casePacket=null;casePane.hidden=true;caseTable.replaceChildren();caseConsent.checked=false;caseDownload.disabled=true;sharingAttempt++;sharingSnapshot=null;sharing.hidden=true;sharingConsent.checked=false;sharingDownload.disabled=true;freshness.disabled=true;freshnessStatus.textContent='Freshness not checked.';freshnessStatus.dataset.stale='true';}
+    function resetSharing(){caseDownloadReady=false;casePacket=null;casePane.hidden=true;caseTable.replaceChildren();caseConsent.checked=false;caseDownload.disabled=true;sharingAttempt++;sharingSnapshot=null;sharing.hidden=true;sharingConsent.checked=false;sharingDownload.disabled=true;freshness.disabled=true;freshnessStatus.textContent='Freshness not checked.';freshnessStatus.dataset.stale='true';}
     sharingConsent.onchange=()=>{sharingDownload.disabled=!sharingConsent.checked||!sharingSnapshot||freshnessStatus.dataset.stale==='true';};
     async function prepareSharing(withCases=false){
       if(!lastSpec)return;
@@ -3446,7 +3446,7 @@
         const r=withCases?result.aggregate_snapshot:result;
         if(generation!==state.generation||attempt!==sharingAttempt)return;
         sharingSnapshot=r;sharing.hidden=false;freshness.disabled=withCases;freshnessStatus.dataset.stale=String(!withCases);freshnessStatus.textContent=withCases?'Paired preview was recomputed; review both files before download.':'Freshness not checked. Check current source, metric definitions and numeric results before downloading.';
-        if(withCases){casePacket=result.case_dataset;casePane.hidden=false;caseTable.replaceChildren(...casePacket.cases.map(c=>{const details=el('details'),summary=el('summary',c.code+' · '+c.events.length+' events'),list=el('ol');for(const e of c.events)list.append(el('li',e.activity+' · '+e.elapsed_microseconds/1000000+' seconds since case start'));details.append(summary,list);return details;}));}
+        if(withCases){casePacket=result.case_dataset;caseDownloadReady=true;casePane.hidden=false;caseTable.replaceChildren(...casePacket.cases.map(c=>{const details=el('details'),summary=el('summary',c.code+' · '+c.events.length+' events'),list=el('ol');for(const e of c.events)list.append(el('li',e.activity+' · '+e.elapsed_microseconds/1000000+' seconds since case start'));details.append(summary,list);return details;}));}
         sharingTable.replaceChildren(table(r.columns.map(c=>c.heading+(c.aggregation?' · '+c.aggregation:'')+(c.value_basis?' · '+c.value_basis:'')+(c.metric_slot?' '+c.metric_slot:'')+(c.unit?' ('+c.unit+')':'')),r.rows),
           ...r.metric_coverage.map(c=>el('p','Metric '+c.slot+': '+c.with_value+' cases with a value; '+c.without_value+' without; '+c.missing_operand+' missing operand; '+c.zero_divisor+' zero divisor; '+c.non_finite+' nonfinite.')));
         sharingInfo.textContent=r.matching_cases+' selected cases; '+r.matching_rows+' selected '+r.level+' rows. '+(r.rows_truncated?'Only the bounded result rows are included. ':'')+r.non_finite_results_withheld+' output results withheld as nonfinite. Generated '+r.generated_at+'. Source fingerprint: '+r.source_content_sha256+'. Analysis fingerprint: '+r.analysis_spec_sha256+'. Group codes apply only within this snapshot; source freshness after export is unknown.';
@@ -3469,8 +3469,48 @@
       finally{if(generation===state.generation&&attempt===sharingAttempt)freshness.disabled=false;}
     };
     prepareShare.onclick=()=>prepareSharing();prepareCases.onclick=()=>prepareSharing(true);
-    caseConsent.onchange=()=>{caseDownload.disabled=!caseConsent.checked||!casePacket;};
-    caseDownload.onclick=()=>{if(!caseConsent.checked||!casePacket||generation!==state.generation)return;download('owg-analysis-case-dataset.json',JSON.stringify(casePacket),'application/json');caseConsent.checked=false;caseDownload.disabled=true;};
+    caseConsent.onchange=()=>{caseDownload.disabled=!caseConsent.checked||!casePacket||!caseDownloadReady;};
+    caseDownload.onclick=async()=>{
+      if(!caseConsent.checked||!casePacket||!sharingSnapshot||!lastSpec||!caseDownloadReady||generation!==state.generation||caseDownload.disabled)return;
+      // The preview is not a download authorization. Recompute both files under
+      // the server's case-sharing lock and reject any changed case sequence,
+      // elapsed timing, source/spec fingerprint or aggregate numeric result.
+      const attempt=sharingAttempt,selectedGeneration=state.generation;
+      const packet=casePacket,snapshot=sharingSnapshot,spec=lastSpec;
+      // Single-use reviewed preview: a failed, cancelled or revoked attempt
+      // cannot be rearmed by toggling the consent checkbox.
+      caseDownloadReady=false;
+      caseDownload.disabled=true;
+      try{
+        const response=await api(base()+'/case-sharing-preview',{method:'POST',
+          headers:{'Content-Type':'application/json','X-OWG-Case-Sharing-Preview':'true'},
+          body:JSON.stringify(spec)});
+        if(!response.ok)throw new Error('Case revalidation failed ('+response.status+').');
+        const current=await response.json();
+        if(attempt!==sharingAttempt||selectedGeneration!==state.generation||
+           packet!==casePacket||snapshot!==sharingSnapshot||!caseConsent.checked)return;
+        const freshPacket=current.case_dataset, freshAggregate=current.aggregate_snapshot;
+        // generated_at is intentionally excluded: a fresh recomputation has a
+        // different clock time even when the complete minimized data is equal.
+        const stablePacket=p=>JSON.stringify([p?.source_content_sha256,p?.analysis_spec_sha256,p?.cases]);
+        const stableAggregate=p=>JSON.stringify([p?.source_content_sha256,p?.analysis_spec_sha256,
+          p?.columns,p?.rows,p?.metric_coverage,p?.matching_cases,p?.matching_rows,
+          p?.rows_truncated,p?.non_finite_results_withheld]);
+        if(!freshPacket||!freshAggregate||stablePacket(packet)!==stablePacket(freshPacket)||
+           stableAggregate(snapshot)!==stableAggregate(freshAggregate)){
+          throw new Error('Case dataset or aggregate changed; prepare and review a new paired preview.');
+        }
+        download('owg-analysis-case-dataset.json',JSON.stringify(packet),'application/json');
+        caseConsent.checked=false;
+        freshnessStatus.textContent='Case download revalidated against the current saved log. Later changes cannot be ruled out.';
+      }catch(error){
+        if(attempt===sharingAttempt&&selectedGeneration===state.generation)
+          freshnessStatus.textContent=error.message+' Case download refused.';
+      }finally{
+        // A fresh preview and explicit review are required before another download.
+        if(attempt===sharingAttempt&&selectedGeneration===state.generation)caseDownload.disabled=true;
+      }
+    };
     sharingDownload.onclick=async()=>{
       if(!sharingConsent.checked||!sharingSnapshot||!lastSpec||freshnessStatus.dataset.stale==='true'||generation!==state.generation||sharingDownload.disabled)return;
       // The earlier preview/check is not a download authorization: a saved log

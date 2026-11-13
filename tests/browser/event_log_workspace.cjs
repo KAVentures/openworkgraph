@@ -738,13 +738,71 @@ const path=require('node:path');
    assert.equal(pair.case_dataset.cases.length,60);assert.equal(pair.case_dataset.source_content_sha256,pair.aggregate_snapshot.source_content_sha256);
    assert.equal(await page.locator('#owgAnalysisCaseDownload').isDisabled(),true);
    await page.locator('#owgAnalysisCaseConsent').check();
+   // Download must independently revalidate the full paired source, not trust
+   // the earlier prepared case file or merely a matching aggregate.
+   await page.route('**/case-sharing-preview',async route=>{
+     const changed=structuredClone(pair);
+     changed.case_dataset.cases[0]={...changed.case_dataset.cases[0],tampered_timeline:true};
+     await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(changed)});
+   },{times:1});
+   await page.locator('#owgAnalysisCaseDownload').click();
+   await page.getByText('Case dataset or aggregate changed; prepare and review a new paired preview.',{exact:false}).waitFor();
+   assert.equal(await page.locator('#owgAnalysisCaseDownload').isDisabled(),true);
+   await page.unroute('**/case-sharing-preview');
+   // Reprepare to obtain a fresh review grant after a refused download.
+   await page.locator('#owgAnalysisPrepareCases').click();
+   await page.locator('#owgAnalysisCaseConsent').check();
+   await page.route('**/case-sharing-preview',route=>route.fulfill({status:403,
+     contentType:'application/json',body:JSON.stringify({error:'sharing revoked'})}),{times:1});
+   await page.locator('#owgAnalysisCaseDownload').click();
+   await page.getByText('Case download refused.',{exact:false}).waitFor();
+   assert.equal(await page.locator('#owgAnalysisCaseDownload').isDisabled(),true);
+   await page.unroute('**/case-sharing-preview');
+   // A saved log deleted after preparation must fail closed at download time.
+   // Recovery requires a new preview; an old consent checkbox cannot retry.
+   await page.locator('#owgAnalysisPrepareCases').click();
+   await page.locator('#owgAnalysisCaseConsent').check();
+   await page.route('**/case-sharing-preview',route=>route.fulfill({status:404,
+     contentType:'application/json',body:JSON.stringify({error:'saved log not found'})}),{times:1});
+   await page.locator('#owgAnalysisCaseDownload').click();
+   await page.getByText('Case download refused.',{exact:false}).waitFor();
+   assert.equal(await page.locator('#owgAnalysisCaseDownload').isDisabled(),true);
+   await page.locator('#owgAnalysisCaseConsent').uncheck();
+   await page.locator('#owgAnalysisCaseConsent').check();
+   assert.equal(await page.locator('#owgAnalysisCaseDownload').isDisabled(),true);
+   await page.unroute('**/case-sharing-preview');
+   await page.locator('#owgAnalysisPrepareCases').click();
+   await page.locator('#owgAnalysisCaseConsent').check();
+   let releaseCaseCheck,signalCaseCheck;
+   const caseCheckStarted=new Promise(resolve=>signalCaseCheck=resolve);
+   await page.route('**/case-sharing-preview',async route=>{
+     signalCaseCheck();
+     await new Promise(resolve=>releaseCaseCheck=resolve);
+     await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(pair)});
+   },{times:1});
+   await page.locator('#owgAnalysisCaseDownload').click();
+   await caseCheckStarted;
+   await page.locator('#owgAnalysisCaseConsent').uncheck();
+   releaseCaseCheck();
+   await page.waitForTimeout(100);
+   assert.equal(await page.locator('#owgAnalysisCaseDownload').isDisabled(),true);
+   await page.unroute('**/case-sharing-preview');
+   await page.locator('#owgAnalysisPrepareCases').click();
+   await page.locator('#owgAnalysisCaseConsent').check();
    const [caseDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCaseDownload').click()]);
-   assert.deepEqual(JSON.parse(await fs.readFile(await caseDownload.path(),'utf8')),pair.case_dataset);
+   const downloadedCases=JSON.parse(await fs.readFile(await caseDownload.path(),'utf8'));
+   // Download-time recomputation legitimately regenerates the audit timestamp;
+   // compare the complete source-bound payload without that volatile field.
+   assert.equal(typeof downloadedCases.generated_at,'string');
+   assert.deepEqual({...downloadedCases,generated_at:pair.case_dataset.generated_at},pair.case_dataset);
    assert.equal(await page.locator('#owgAnalysisCaseConsent').isChecked(),false);
    assert.equal(await page.locator('#owgAnalysisSharingConsent').isChecked(),false);
    await page.locator('#owgAnalysisSharingConsent').check();
    const [pairedAggregate]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisSharingDownload').click()]);
-   assert.deepEqual(JSON.parse(await fs.readFile(await pairedAggregate.path(),'utf8')),pair.aggregate_snapshot);
+   const downloadedAggregate=JSON.parse(await fs.readFile(await pairedAggregate.path(),'utf8'));
+   // The independently revalidated aggregate also receives a fresh audit timestamp.
+   assert.equal(typeof downloadedAggregate.generated_at,'string');
+   assert.deepEqual({...downloadedAggregate,generated_at:pair.aggregate_snapshot.generated_at},pair.aggregate_snapshot);
    if(process.env.OWG_SHARED_CASE_PAIR_OUTPUT)await fs.writeFile(process.env.OWG_SHARED_CASE_PAIR_OUTPUT,JSON.stringify(pair));
    // An older prepare response cannot re-open a sharing preview after a new analysis runs.
    let releaseSharing,sharingHeld;const sharingSeen=new Promise(resolve=>sharingHeld=resolve);
