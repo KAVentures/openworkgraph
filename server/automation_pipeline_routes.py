@@ -82,6 +82,15 @@ def benefit_overlap_review(request: Request):
     return JSONResponse(automation_benefit_overlap.review(), headers={"Cache-Control": "no-store"})
 
 
+@router.get("/v1/automation-pipeline/benefit-readiness")
+def benefit_evidence_readiness(request: Request):
+    """One bounded human review worklist; never an additive realized-savings claim."""
+    _require_dashboard(request)
+    from . import automation_benefit_readiness
+    return JSONResponse(automation_benefit_readiness.review(),
+                        headers={"Cache-Control": "no-store"})
+
+
 @router.get("/v1/automation-pipeline/dependency-schedule")
 def dependency_schedule_review(request: Request):
     """Bounded human review of declared dependency timing, no delivery predictions."""
