@@ -48,3 +48,28 @@ def test_provider_failure_and_unknown_status():
     assert check(lambda: (_ for _ in ()).throw(OSError("offline")))["reason"] == "provider_unavailable"
     assert check(lambda: payload(events=[dict(payload()["events"][0], status="pending")]))["reason"] == "unconfirmed_provider_status"
     assert check(lambda: payload(events=[dict(payload()["events"][0], status="failed")]))["provider_operation"] == "failed"
+
+
+def test_invalid_verifier_inputs_do_not_call_provider():
+    calls = []
+    def reader():
+        calls.append(True)
+        return payload()
+    for age in (True, False, 0, -1, 3601, 1.5, "300"):
+        result = check(reader, max_age_seconds=age)
+        assert result["reason"] == "invalid_freshness"
+        assert result["customer_outcome"] == "unknown"
+    for clock in (False, 0, "2026-11-06T11:00:00Z",
+                  datetime(2026, 11, 6, 11, 0)):
+        result = verify_provider_attempt(account="acct_1", object_id="inv_1",
+            operation="invoice.update", correlation_id="attempt_1",
+            expected_event_id="evt_1", read_events=reader, now=clock)
+        assert result["reason"] == "invalid_clock"
+    assert calls == []
+    assert check(None)["reason"] == "invalid_provider_reader"
+
+
+def test_valid_explicit_utc_clock_and_age_still_verify_provider_only():
+    result = check(lambda: payload(), max_age_seconds=300)
+    assert result["status"] == "verified_provider_operation"
+    assert result["customer_outcome"] == "unknown"
