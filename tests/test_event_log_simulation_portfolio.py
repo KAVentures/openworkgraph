@@ -72,6 +72,21 @@ def test_same_alternative_under_another_label_returns_identical_simulated_metric
     assert len(result["calibration_and_shared_inputs_sha256"])==64
 
 
+def test_calibration_digest_differentiates_distinct_sources_with_same_numeric_model(monkeypatch):
+    log=_log()
+    first=portfolio.compare(log,proposal())
+    original=sim.calibrate
+    def different_source(*args,**kwargs):
+        data=original(*args,**kwargs)
+        data["log"]={"test_only_alternate_log_identity":"another"}
+        return data
+    monkeypatch.setattr(sim,"calibrate",different_source)
+    second=portfolio.compare(log,proposal())
+    assert first["baseline"]==second["baseline"]
+    assert first["alternatives"]==second["alternatives"]
+    assert first["calibration_and_shared_inputs_sha256"]!=second["calibration_and_shared_inputs_sha256"]
+
+
 def test_simulator_withholds_comparison_for_incomplete_or_unstable_population():
     baseline={"cases_simulated":100,"cases_measured":90,"unstable":False,
               "cycle_time_seconds":{"p50":20,"p90":40,"mean":30}}
