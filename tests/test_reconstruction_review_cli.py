@@ -156,6 +156,28 @@ class ExplicitAnnotationScoreTests(unittest.TestCase):
         self.assertEqual(score["per_window_counts"]["earlier:2026-10-12T09:00:00+00:00"],
                          {"tp": 1, "fp": 0, "fn": 0, "events": 1})
         self.assertFalse(score["cross_case_contamination_measured"])
+        disagreements = score["event_disagreements"]
+        self.assertEqual(len(disagreements), 1)
+        self.assertEqual(disagreements[0]["event_id"], "earlier-1")
+        self.assertEqual(len(disagreements[0]["false_positive_resource_pairs"]), 1)
+        self.assertEqual(disagreements[0]["false_negative_resource_pairs"], [])
+        self.assertTrue(score["event_disagreements_are_review_evidence_not_confirmed_cases"])
+
+    def test_disagreement_rows_distinguish_false_negative_from_false_positive(self):
+        source = payload([pair("A", "F", ["e1"])])
+        row = build_review_queue(source)["event_reviews"][0]
+        other = [["github", "issue", "unrelated-1"], ["github", "issue", "unrelated-2"]]
+        score = score_review_annotations(source, [{
+            "window": row["window"], "event_id": row["event_id"],
+            "true_resource_pairs": [other],
+        }])
+        self.assertEqual((score["true_positive_pairs"], score["false_positive_pairs"],
+                          score["false_negative_pairs"]), (0, 1, 1))
+        self.assertEqual(len(score["event_disagreements"]), 1)
+        disagreement = score["event_disagreements"][0]
+        self.assertEqual(disagreement["false_positive_resource_pairs"], row["candidate_resource_pairs"])
+        self.assertEqual(disagreement["false_negative_resource_pairs"], [other])
+        self.assertFalse(score["complete_case_recall_measured"])
         self.assertFalse(score["held_out_verified"])
 
     def test_unlabeled_events_are_not_assumed_negative(self):
