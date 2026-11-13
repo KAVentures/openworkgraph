@@ -758,6 +758,19 @@ const path=require('node:path');
    await page.getByText('Case download refused.',{exact:false}).waitFor();
    assert.equal(await page.locator('#owgAnalysisCaseDownload').isDisabled(),true);
    await page.unroute('**/case-sharing-preview');
+   // A saved log deleted after preparation must fail closed at download time.
+   // Recovery requires a new preview; an old consent checkbox cannot retry.
+   await page.locator('#owgAnalysisPrepareCases').click();
+   await page.locator('#owgAnalysisCaseConsent').check();
+   await page.route('**/case-sharing-preview',route=>route.fulfill({status:404,
+     contentType:'application/json',body:JSON.stringify({error:'saved log not found'})}),{times:1});
+   await page.locator('#owgAnalysisCaseDownload').click();
+   await page.getByText('Case download refused.',{exact:false}).waitFor();
+   assert.equal(await page.locator('#owgAnalysisCaseDownload').isDisabled(),true);
+   await page.locator('#owgAnalysisCaseConsent').uncheck();
+   await page.locator('#owgAnalysisCaseConsent').check();
+   assert.equal(await page.locator('#owgAnalysisCaseDownload').isDisabled(),true);
+   await page.unroute('**/case-sharing-preview');
    await page.locator('#owgAnalysisPrepareCases').click();
    await page.locator('#owgAnalysisCaseConsent').check();
    let releaseCaseCheck,signalCaseCheck;
