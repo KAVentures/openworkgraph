@@ -29,3 +29,48 @@ def test_review_digest_changes_when_evidence_changes():
     first = build_review_queue(_response("event-1"))
     second = build_review_queue(_response("event-2"))
     assert first["evidence_sha256"] != second["evidence_sha256"]
+
+
+def _envelope(response):
+    queue = build_review_queue(response)
+    row = queue["event_reviews"][0]
+    return {
+        "evidence_sha256": queue["evidence_sha256"],
+        "annotations": [{
+            "window": row["window"], "event_id": row["event_id"],
+            "true_resource_pairs": row["candidate_resource_pairs"],
+        }],
+    }
+
+
+def test_authorized_adapter_scores_bound_review_without_claiming_validation():
+    from server.work_resumption import score_authorized_reconstruction_review
+    response = _response("event-1")
+    result = score_authorized_reconstruction_review(
+        response, _envelope(response), authorize_review=lambda: True
+    )
+    assert result["true_positive_pairs"] == 1
+    assert result["held_out_verified"] is False
+    assert result["cross_case_contamination_measured"] is False
+
+
+def test_authorized_adapter_denies_revoked_or_unverified_grants_before_scoring():
+    import pytest
+    from server.work_resumption import score_authorized_reconstruction_review
+    response = _response("event-1")
+    for authorization in (lambda: False, lambda: {"allowed": True}, None):
+        with pytest.raises(PermissionError):
+            score_authorized_reconstruction_review(
+                response, {"invalid": "envelope"}, authorize_review=authorization
+            )
+
+
+def test_authorized_adapter_rejects_stale_evidence_after_live_authorization():
+    import pytest
+    from server.work_resumption import score_authorized_reconstruction_review
+    response = _response("event-1")
+    stale = _envelope(response)
+    with pytest.raises(ValueError, match="digest mismatch"):
+        score_authorized_reconstruction_review(
+            _response("event-2"), stale, authorize_review=lambda: True
+        )
