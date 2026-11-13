@@ -623,5 +623,39 @@ class LiveReconstructionServiceTests(unittest.TestCase):
                     object(), {}, lease={}, authorize_review=None)
             rebuild.assert_not_called()
 
+
+    def test_live_service_rejects_lease_scope_change_mid_scan(self):
+        from unittest.mock import patch
+        from server.work_resumption import score_live_reconstruction_review
+        source = payload([pair("A", "F", ["e1"])])
+        queue = build_review_queue(source)
+        row = queue["event_reviews"][0]
+        envelope = {"evidence_sha256": queue["evidence_sha256"],
+                    "annotations": [{"window": row["window"], "event_id": row["event_id"],
+                                     "true_resource_pairs": row["candidate_resource_pairs"]}]}
+        lease = {"mode": "all_saved"}
+        def change_lease(*args, **kwargs):
+            lease["mode"] = "off"
+            return source
+        with patch("server.work_resumption.resumption_candidates", side_effect=change_lease) as rebuild:
+            with self.assertRaisesRegex(PermissionError, "lease changed"):
+                score_live_reconstruction_review(
+                    object(), envelope, lease=lease, authorize_review=lambda: True)
+            self.assertEqual(rebuild.call_args.kwargs["lease"], {"mode": "all_saved"})
+
+    def test_offline_adapter_rechecks_revocation_after_scoring(self):
+        from unittest.mock import patch
+        from server.work_resumption import score_authorized_reconstruction_review
+        source = payload([pair("A", "F", ["e1"])])
+        queue = build_review_queue(source)
+        row = queue["event_reviews"][0]
+        envelope = {"evidence_sha256": queue["evidence_sha256"],
+                    "annotations": [{"window": row["window"], "event_id": row["event_id"],
+                                     "true_resource_pairs": row["candidate_resource_pairs"]}]}
+        decisions = iter([True, False])
+        with self.assertRaisesRegex(PermissionError, "revoked during scoring"):
+            score_authorized_reconstruction_review(
+                source, envelope, authorize_review=lambda: next(decisions))
+
 if __name__ == "__main__":
     unittest.main()
