@@ -258,6 +258,15 @@ async def convert_xlsx_event_log(request: Request, sheet: str | None = Query(def
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/mapping-matches")
+async def event_log_mapping_matches(request: Request):
+    """Earlier CSV column mappings that fit a file header (by column names only). Nothing is stored."""
+    from . import event_log_mapping_reuse as reuse
+    _require_dashboard(request)
+    spec = await _json_body(request, "mapping match settings", strict=True, limit=262144)
+    return await run_in_threadpool(_respond, reuse.matches, spec)
+
+
 @router.post("/v1/event-logs/timestamp-formats")
 async def detect_timestamp_formats(request: Request, column: str = Query(min_length=1, max_length=200),
                                    delimiter: str = Query(default=",", max_length=1)):

@@ -61,6 +61,22 @@ dashboard then lists both with how the first value would read, and you choose.
 Quarantined rows are released with ISO parsing only, so re-import a file that
 needs a format.
 
+### Reusing an earlier mapping
+
+When a CSV file's header has every column an earlier import mapped (case,
+activity, timestamp and, if one was mapped, resource), with the same
+delimiter, the dashboard offers "Use the mapping from <log>". Choosing it
+fills in those columns, the extra attribute columns this file also has, the
+timestamp format and the offset decision. It never applies the mapping on its
+own, and it asks for consent again. When a log is selected and its own mapping
+fits, that one is offered. Only the newest mapping of each log counts.
+Columns are matched by name only, so check they still mean the same thing.
+Source event identity settings are not reused.
+
+`POST /v1/event-logs/mapping-matches` with `{"columns": [...], "delimiter": ";"}`
+returns up to five matching mappings, newest first, each with its
+`missing_attribute_columns`. Nothing is stored.
+
 ### Excel workbooks
 
 Choosing an `.xlsx` file in the dashboard converts its first worksheet to CSV

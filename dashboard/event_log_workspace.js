@@ -196,6 +196,7 @@
     }
     async function readColumns(){
       const sequence=++columnReadSequence;
+      const staleOffer=document.getElementById('owgEventLogReuse');if(staleOffer){staleOffer.hidden=true;staleOffer.replaceChildren();}
       const chosen=file.files&&file.files[0];
       columnsReady=false;
       if(!chosen||format.value!=='csv'){
@@ -226,7 +227,7 @@
         jsonColumn.value=columns.includes('attributes')?'attributes':'';
         columnsReady=!!(cols.case.value&&cols.activity.value&&cols.time.value);
         status(columnsReady?'File mapping ready. Review the selected columns before storing.':'Choose a CSV with case, activity and time columns.');
-        if(columnsReady)detectTimeFormat();
+        if(columnsReady)detectTimeFormat().then(()=>findReusableMapping(columns));
       }catch(_){
         if(sequence===columnReadSequence)status('Could not read the column names.');
       }finally{
@@ -270,6 +271,29 @@
       }catch(_){/* detection is a convenience; the import still validates every row */}
     }
     cols.time.addEventListener('change',detectTimeFormat);
+    // Offer the mapping recorded with an earlier import whose columns this file also has.
+    const reuseRow=el('div',null,'row');reuseRow.id='owgEventLogReuse';reuseRow.hidden=true;mapping.appendChild(reuseRow);
+    let reuseSequence=0;
+    function applyMapping(m){
+      cols.case.value=m.case_column;cols.activity.value=m.activity_column;cols.time.value=m.timestamp_column;cols.resource.value=m.resource_column||'';
+      [...extras.options].forEach(o=>{o.selected=(m.attribute_columns||[]).includes(o.value);});
+      naiveOffset.value=m.naive_timestamp_offset||'';
+      if(m.timestamp_format&&![...timeFormat.options].some(o=>o.value===m.timestamp_format))timeFormat.appendChild(new Option(m.timestamp_format,m.timestamp_format));
+      timeFormat.value=m.timestamp_format||'';
+      columnsReady=true;consent.checked=false;refreshImport();
+    }
+    async function findReusableMapping(columns){
+      const sequence=++reuseSequence;reuseRow.hidden=true;reuseRow.replaceChildren();
+      try{
+        const r=await (await api('/v1/event-logs/mapping-matches',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({columns,delimiter:delimiter.value})})).json();
+        if(sequence!==reuseSequence||!r.matches.length)return;
+        // Appending to the selected log: its own mapping first.
+        const match=r.matches.find(x=>x.log_id===state.logId)||r.matches[0];
+        const use=button('Use the mapping from \u201c'+match.name+'\u201d');use.onclick=()=>{applyMapping(match.mapping);reuseRow.replaceChildren(el('span','Mapping from \u201c'+match.name+'\u201d applied. '+r.note+(match.missing_attribute_columns.length?' Not in this file: '+match.missing_attribute_columns.join(', ')+'.':''),'muted'));status('Mapping applied. Review the selected columns before storing.');};
+        use.id='owgEventLogReuseMapping';
+        reuseRow.append(use,el('span',' This file has the columns mapped when \u201c'+match.name+'\u201d was imported.','muted'));reuseRow.hidden=false;
+      }catch(_){/* a convenience only */}
+    }
     timeFormat.onchange=()=>{const fmt=timeFormat.value;if(fmt&&!fmt.includes('%z')&&!naiveOffset.value.trim())naiveOffset.value=localOffset();};
     consent.onchange=refreshImport;name.oninput=refreshImport;
     importButton.onclick=async()=>{
