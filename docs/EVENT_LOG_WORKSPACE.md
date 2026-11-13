@@ -13,6 +13,33 @@ Nothing is uploaded anywhere. Imported logs are written to
 `<data dir>/event_logs.duckdb` (owner-only permissions) and stay there until you
 delete them.
 
+## Try it with a sample log
+
+No export of your own yet? **Try with a sample log** stores and analyses a
+synthetic order-to-cash log (`POST /v1/event-logs/sample`). It needs the
+dashboard session and the same "store on this computer" confirmation as an
+import.
+
+**What's in it:**
+
+* 400 orders with items, deliveries, invoices and payments, as an OCEL 2.0
+  object-centric log;
+* the activity names of the order-to-cash domain pack;
+* patterns to find:
+  * waiting for payment after the invoice;
+  * order changes (rework);
+  * credit holds that add days;
+  * slower picking in the most recent orders;
+  * some invoices still unpaid.
+
+**Where it comes from:** it is generated on this computer from a fixed seed,
+so it is the same every time and contains no real customers, people or
+amounts.
+
+**How it is stored:** it is saved as *Sample: order to cash (synthetic)* and
+opened with *order* as the case notion. Asking again opens the existing
+sample rather than adding a copy. It is deleted like any other log.
+
 ## Formats
 
 | Format | Import | Export | Notes |

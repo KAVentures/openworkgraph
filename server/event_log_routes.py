@@ -237,6 +237,16 @@ def event_log_signal_timeline(
     return _respond(signal_timeline.timeline, transition=transition, limit=limit)
 
 
+@router.post("/v1/event-logs/sample")
+def import_sample_event_log(request: Request):
+    """Store the synthetic order-to-cash sample (or return it if it is already saved)."""
+    from . import event_log_sample as sample
+    _require_dashboard(request)
+    if request.headers.get("x-owg-local-storage-confirmed") != "true":
+        raise HTTPException(403, "Explicit confirmation to store this event log on this computer is required")
+    return _respond(sample.import_sample)
+
+
 @router.post("/v1/event-logs/import")
 async def import_event_log(
     request: Request,

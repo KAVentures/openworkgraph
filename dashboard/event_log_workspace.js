@@ -125,7 +125,9 @@
     const statusLine=el('div',null,'muted');statusLine.id='owgEventLogStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const appendButton=button('Add file to selected log','secondary');appendButton.id='owgEventLogAppend';appendButton.disabled=true;
     appendButton.title='Adds events from a newer export to the stored log chosen below; events it already holds are skipped.';
-    const importRow=el('div',null,'row');importRow.append(importButton,appendButton);
+    const sampleButton=button('Try with a sample log','secondary');sampleButton.id='owgEventLogSample';
+    sampleButton.title='Stores a synthetic order-to-cash log (no real data) on this computer and analyses it';
+    const importRow=el('div',null,'row');importRow.append(importButton,appendButton,sampleButton);
     card.append(row,mapping,identity,consentLabel,keepLabel,importRow,statusLine);
 
     const pick=select('owgEventLogPick',[]);const caseType=select('owgEventLogCaseType',[]);
@@ -240,6 +242,18 @@
         consent.checked=false;keep.checked=false;file.value='';name.value='';
         await refreshLogs(log.log_id);
       }catch(error){status(error.message);}finally{refreshImport();}
+    };
+    sampleButton.onclick=async()=>{
+      sampleButton.disabled=true;status('Creating the synthetic sample log…');
+      try{
+        const r=await (await api('/v1/event-logs/sample',{method:'POST',headers:{'X-OWG-Local-Storage-Confirmed':'true'}})).json();
+        await refreshLogs(r.log.log_id);
+        const caseType=document.getElementById('owgEventLogCaseType');
+        if(r.suggested_case_notion&&[...caseType.options].some(o=>o.value===r.suggested_case_notion)){caseType.value=r.suggested_case_notion;state.caseType=r.suggested_case_notion;}
+        else if([...caseType.options].some(o=>o.value==='order')){caseType.value='order';state.caseType='order';}
+        await analyse();
+        status((r.already_present?'Opened the sample log you already have. ':'Created the sample log: ')+'synthetic order-to-cash data with no real customers or people, analysed by order.');
+      }catch(error){status(error.message);}finally{sampleButton.disabled=false;}
     };
     appendButton.onclick=async()=>{
       const chosen=file.files&&file.files[0];const target=state.logs.find(l=>l.log_id===state.logId);if(!chosen||!consent.checked||!target)return;
