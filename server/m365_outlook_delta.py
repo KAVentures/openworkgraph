@@ -92,7 +92,7 @@ def _grant(path, tenant, mailbox, folder):
     if "expires_at" in data:
         value = data["expires_at"]
         if (type(value) is not str
-                or not re.fullmatch(r"\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z", value)):
+                or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", value)):
             raise DeltaError("Current delta grant expired or invalid")
         try:
             expiry = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
