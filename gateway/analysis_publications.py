@@ -193,31 +193,43 @@ class AnalysisPublications:
         self.scope(p, 'org:analysis:write')
         if not body.user_confirmed or not body.organization_sharing_confirmed:
             raise PublicationError('Explicit review and organization sharing confirmation required', 403)
+        with self.transaction(p) as c:
+            return self.publish_in(c, p, body, view_id)
+
+    def publish_in(self, c, p, body: Publish, view_id=None):
+        """Publish one revision within an existing organization transaction.
+
+        Shared with paired aggregate+case publishing so either both commit or
+        neither does. Keep the exact same quotas, CAS, audit, access and
+        validation as the existing single-publication entry point.
+        """
+        self.scope(p, 'org:analysis:write')
+        if not body.user_confirmed or not body.organization_sharing_confirmed:
+            raise PublicationError('Explicit review and organization sharing confirmation required', 403)
         snapshot = body.snapshot.model_dump(mode='json')
         digest = content_digest(snapshot)
-        with self.transaction(p) as c:
-            if view_id is None:
-                if body.expected_revision != 0: raise PublicationError('New publication requires revision zero')
-                # Serialize quota admission per organization on both backends.
-                self.q(c, 'INSERT INTO gateway_analysis_orgs VALUES (?) ON CONFLICT DO NOTHING', (p.organization_id,))
-                self.q(c, 'SELECT organization_id FROM gateway_analysis_orgs WHERE organization_id=?'+
-                       (' FOR UPDATE' if self.db.is_postgres else ''), (p.organization_id,)).fetchone()
-                total = self.q(c, 'SELECT count(*) FROM gateway_analysis_views WHERE organization_id=?', (p.organization_id,)).fetchone()[0]
-                if total >= MAX_VIEWS: raise PublicationError('Organization publication capacity reached')
-                view_id = 'ana_'+uuid4().hex
-                expiry = (self.now()+timedelta(days=body.expires_in_days)).isoformat()
-                self.q(c, 'INSERT INTO gateway_analysis_views VALUES (?, ?, ?, 0, 1, ?)', (p.organization_id, view_id, p.actor_id, expiry))
-            meta = self.meta(c, p, view_id)
-            if meta['your_role'] not in {'owner','admin','editor'}: raise PublicationError('Analysis editor permission required', 403)
-            if meta['revision'] != body.expected_revision: raise PublicationError('Analysis revision changed; reload before publishing')
-            if meta['revision'] >= MAX_REVISIONS: raise PublicationError('Publication retains at most ten revisions; no history was removed')
-            revision = meta['revision']+1
-            self.q(c, 'INSERT INTO gateway_analysis_revisions VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                   (p.organization_id, view_id, revision, body.title, json.dumps(snapshot), digest, self.now().isoformat(), p.actor_id))
-            self.q(c, 'UPDATE gateway_analysis_views SET revision=? WHERE organization_id=? AND view_id=?', (revision, p.organization_id, view_id))
-            self.audit(c, p, 'analysis.published', view_id=view_id, revision=revision, content_sha256=digest)
-            meta['revision'] = revision
-            return self.detail_in(c, p, meta)
+        if view_id is None:
+            if body.expected_revision != 0: raise PublicationError('New publication requires revision zero')
+            # Serialize quota admission per organization on both backends.
+            self.q(c, 'INSERT INTO gateway_analysis_orgs VALUES (?) ON CONFLICT DO NOTHING', (p.organization_id,))
+            self.q(c, 'SELECT organization_id FROM gateway_analysis_orgs WHERE organization_id=?'+
+                   (' FOR UPDATE' if self.db.is_postgres else ''), (p.organization_id,)).fetchone()
+            total = self.q(c, 'SELECT count(*) FROM gateway_analysis_views WHERE organization_id=?', (p.organization_id,)).fetchone()[0]
+            if total >= MAX_VIEWS: raise PublicationError('Organization publication capacity reached')
+            view_id = 'ana_'+uuid4().hex
+            expiry = (self.now()+timedelta(days=body.expires_in_days)).isoformat()
+            self.q(c, 'INSERT INTO gateway_analysis_views VALUES (?, ?, ?, 0, 1, ?)', (p.organization_id, view_id, p.actor_id, expiry))
+        meta = self.meta(c, p, view_id)
+        if meta['your_role'] not in {'owner','admin','editor'}: raise PublicationError('Analysis editor permission required', 403)
+        if meta['revision'] != body.expected_revision: raise PublicationError('Analysis revision changed; reload before publishing')
+        if meta['revision'] >= MAX_REVISIONS: raise PublicationError('Publication retains at most ten revisions; no history was removed')
+        revision = meta['revision']+1
+        self.q(c, 'INSERT INTO gateway_analysis_revisions VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+               (p.organization_id, view_id, revision, body.title, json.dumps(snapshot), digest, self.now().isoformat(), p.actor_id))
+        self.q(c, 'UPDATE gateway_analysis_views SET revision=? WHERE organization_id=? AND view_id=?', (revision, p.organization_id, view_id))
+        self.audit(c, p, 'analysis.published', view_id=view_id, revision=revision, content_sha256=digest)
+        meta['revision'] = revision
+        return self.detail_in(c, p, meta)
 
     def detail(self, p, view_id, revision=None, *, exporting=False):
         with self.transaction(p) as c:

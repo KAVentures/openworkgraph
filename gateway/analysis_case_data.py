@@ -114,25 +114,32 @@ class CaseData:
             packet[k]==a[k] for k in ('source_content_sha256','analysis_spec_sha256','fingerprint_algorithm'))
 
     def attach(self,p,view_id,body):
+        self.parent.scope(p,WRITE);self.parent.scope(p,READ)
+        if not body.user_confirmed or not body.case_sharing_confirmed:
+            raise PublicationError('Explicit case-level sharing confirmation required',403)
+        with self.parent.transaction(p) as c:
+            return self.attach_in(c,p,view_id,body)
+
+    def attach_in(self,c,p,view_id,body):
+        """Attach exact case data in an existing transaction, for atomic bundles."""
         s=self.parent;s.scope(p,WRITE);s.scope(p,READ)
         if not body.user_confirmed or not body.case_sharing_confirmed:raise PublicationError('Explicit case-level sharing confirmation required',403)
-        with s.transaction(p) as c:
-            # Same organization admission lock used by parent publication quotas.
-            s.q(c,'INSERT INTO gateway_analysis_orgs VALUES (?) ON CONFLICT DO NOTHING',(p.organization_id,))
-            s.q(c,'SELECT organization_id FROM gateway_analysis_orgs WHERE organization_id=?'+(' FOR UPDATE' if s.db.is_postgres else ''),(p.organization_id,)).fetchone()
-            meta=self.owner(c,p,view_id)
-            if (body.revision,body.expected_parent_access_revision)!=(meta['revision'],meta['access_revision']):raise PublicationError('Analysis revision or access changed; reload')
-            parent=s.detail_in(c,p,meta,body.revision)
-            if parent['content_sha256']!=body.parent_content_sha256:raise PublicationError('Analysis content changed')
-            packet=body.dataset.model_dump(mode='json')
-            if not self.matches(packet,parent):raise PublicationError('Case source, analysis fingerprint or complete population differs from the parent analysis',422)
-            if s.q(c,'SELECT 1 FROM gateway_analysis_case_data WHERE organization_id=? AND view_id=? AND revision=?',(p.organization_id,view_id,body.revision)).fetchone():raise PublicationError('This immutable revision already has case data; publish a new analysis revision')
-            n=s.q(c,'SELECT count(*) FROM gateway_analysis_case_data WHERE organization_id=? AND deleted=0',(p.organization_id,)).fetchone()[0]
-            if n>=MAX_ATTACHMENTS:raise PublicationError('Organization case attachment capacity reached; no history was pruned')
-            digest=content_digest(packet)
-            s.q(c,'INSERT INTO gateway_analysis_case_data (organization_id,view_id,revision,payload,content_sha256,access_revision,published_at) VALUES (?,?,?,?,?,1,?)',(p.organization_id,view_id,body.revision,json.dumps(packet),digest,s.now().isoformat()))
-            s.audit(c,p,'analysis.cases.published',view_id=view_id,revision=body.revision,content_sha256=digest,cases=len(packet['cases']),events=sum(len(x['events']) for x in packet['cases']))
-            return {'attached':True,'revision':body.revision,'content_sha256':digest}
+        # Same organization admission lock used by parent publication quotas.
+        s.q(c,'INSERT INTO gateway_analysis_orgs VALUES (?) ON CONFLICT DO NOTHING',(p.organization_id,))
+        s.q(c,'SELECT organization_id FROM gateway_analysis_orgs WHERE organization_id=?'+(' FOR UPDATE' if s.db.is_postgres else ''),(p.organization_id,)).fetchone()
+        meta=self.owner(c,p,view_id)
+        if (body.revision,body.expected_parent_access_revision)!=(meta['revision'],meta['access_revision']):raise PublicationError('Analysis revision or access changed; reload')
+        parent=s.detail_in(c,p,meta,body.revision)
+        if parent['content_sha256']!=body.parent_content_sha256:raise PublicationError('Analysis content changed')
+        packet=body.dataset.model_dump(mode='json')
+        if not self.matches(packet,parent):raise PublicationError('Case source, analysis fingerprint or complete population differs from the parent analysis',422)
+        if s.q(c,'SELECT 1 FROM gateway_analysis_case_data WHERE organization_id=? AND view_id=? AND revision=?',(p.organization_id,view_id,body.revision)).fetchone():raise PublicationError('This immutable revision already has case data; publish a new analysis revision')
+        n=s.q(c,'SELECT count(*) FROM gateway_analysis_case_data WHERE organization_id=? AND deleted=0',(p.organization_id,)).fetchone()[0]
+        if n>=MAX_ATTACHMENTS:raise PublicationError('Organization case attachment capacity reached; no history was pruned')
+        digest=content_digest(packet)
+        s.q(c,'INSERT INTO gateway_analysis_case_data (organization_id,view_id,revision,payload,content_sha256,access_revision,published_at) VALUES (?,?,?,?,?,1,?)',(p.organization_id,view_id,body.revision,json.dumps(packet),digest,s.now().isoformat()))
+        s.audit(c,p,'analysis.cases.published',view_id=view_id,revision=body.revision,content_sha256=digest,cases=len(packet['cases']),events=sum(len(x['events']) for x in packet['cases']))
+        return {'attached':True,'revision':body.revision,'content_sha256':digest}
 
     def access(self,p,view_id,revision,body=None):
         s=self.parent
