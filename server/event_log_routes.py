@@ -798,7 +798,7 @@ async def event_log_domain_pack_labels(request: Request, log_id: str):
     body = await _json_body(request, "domain pack label search", strict=True, limit=4096)
     if not isinstance(body, dict) or set(body) - {"kind", "search", "after"} or not {"kind", "search"} <= set(body):
         raise HTTPException(422, "label search needs kind and search")
-    return _respond(domain_packs.find_mapping_labels, log_id, body["kind"], body["search"], body.get("after", ""))
+    return await run_in_threadpool(_respond, domain_packs.find_mapping_labels, log_id, body["kind"], body["search"], body.get("after", ""))
 
 
 @router.get("/v1/event-log-domain-packs")

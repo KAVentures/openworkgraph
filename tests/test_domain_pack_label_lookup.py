@@ -83,3 +83,38 @@ def test_million_distinct_labels_return_only_bounded_pages(tmp_path, monkeypatch
     assert len(first['labels'])==len(second['labels'])==100
     assert (first['labels'][0],first['labels'][-1],second['labels'][0])==('item100000','item100099','item100100')
     assert first['next_after']==first['labels'][-1] and second['next_after']==second['labels'][-1]
+
+
+def test_slow_search_does_not_block_the_local_event_loop(tmp_path):
+    code=r'''
+import asyncio, threading, time
+import httpx
+from server.secure_app import app
+from server import local_auth, event_log_domain_packs
+started=threading.Event()
+release=threading.Event()
+def slow(*args):
+    started.set()
+    release.wait(5)
+    return {'labels':[],'next_after':None,'match':'case_sensitive_literal','limit':100}
+event_log_domain_packs.find_mapping_labels=slow
+@app.get('/owned-test-probe')
+async def probe():
+    return {'responsive':True}
+async def main():
+    owner={'Authorization':'OWG-Session '+local_auth.create_dashboard_session()}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://testserver') as client:
+        t=time.monotonic()
+        search=asyncio.create_task(client.post('/v1/event-logs/owned/domain-pack-labels',json={'kind':'activities','search':'x'},headers=owner))
+        assert await asyncio.to_thread(started.wait,2)
+        response=await client.get('/owned-test-probe')
+        elapsed=time.monotonic()-t
+        release.set()
+        assert response.status_code==200 and response.json()['responsive'] and elapsed<3,elapsed
+        result=await search
+        assert result.status_code==200,result.text
+asyncio.run(main())
+'''
+    env={**os.environ,'WORKFLOW_OBSERVER_DATA':str(tmp_path/'data'),'WORKFLOW_OBSERVER_AUTH_DIR':str(tmp_path/'auth'),'WORKFLOW_OBSERVER_CONFIG':str(tmp_path/'config.json')}
+    run=subprocess.run([sys.executable,'-c',code],cwd=Path(__file__).resolve().parents[1],env=env,capture_output=True,text=True,timeout=30)
+    assert run.returncode==0,run.stdout+'\n'+run.stderr

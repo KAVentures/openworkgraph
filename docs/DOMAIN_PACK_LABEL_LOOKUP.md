@@ -22,3 +22,7 @@ or approve execution. The owner still selects the role and installs the pack.
 
 A synthetic DuckDB test checks pagination over one million distinct labels; it
 does not establish latency or capacity for every device or log distribution.
+
+The DuckDB lookup runs in a worker thread so a slow local scan does not block
+unrelated requests on the local server's event loop. This is not a guarantee that
+a particular search will complete within a fixed time.
