@@ -1003,6 +1003,23 @@ async def event_log_case_sharing_preview(request: Request, log_id: str):
     return await run_in_threadpool(_respond, prepare, log_id, parsed)
 
 
+@router.post("/v1/event-logs/{log_id}/company-handoff-preview")
+async def event_log_company_handoff_preview(request: Request, log_id: str):
+    """Explicitly prepare one paired, minimized file for separate human publication."""
+    _require_dashboard(request)
+    if request.headers.get("x-owg-company-handoff-preview") != "true":
+        raise HTTPException(403, "Explicit aggregate and case handoff preview confirmation required")
+    spec = await _json_body(request, "company handoff preview")
+    from .analysis_handoff_bundle import prepare as prepare_handoff
+    try:
+        packet = await run_in_threadpool(prepare_handoff, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    except ValueError:
+        raise HTTPException(422, "Paired handoff exceeds format bounds or has inconsistent evidence") from None
+    return JSONResponse(packet, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/{log_id}/analysis-sharing-preview")
 async def analysis_sharing_preview(request: Request, log_id: str):
     _require_dashboard(request)
