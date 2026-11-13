@@ -27,6 +27,9 @@ const path=require('node:path');
   await page.locator('#owgEventLogAnalyze').click();await page.locator('#owgDomainPackSetup').click();
   await page.locator('#owgDomainPackChoice').selectOption('expense_reimbursement');
   await page.locator('#owgDomainPackRole-claim').selectOption('case');
+  await page.locator('#owgDomainPackFinder-submitted summary').click();
+  await page.locator('#owgDomainPackFinder-approved summary').click();
+  await page.locator('#owgDomainPackFinder-paid summary').click();
   // An old response must not reappear after the user changes the query.
   let release;const held=new Promise(resolve=>{release=resolve;});
   await page.route('**/domain-pack-labels',async route=>{await held;await route.continue();},{times:1});
@@ -40,7 +43,7 @@ const path=require('node:path');
   assert.equal(await page.locator('#owgDomainPackMatches-submitted button').count(),0);
   // Page a broad literal query, then select each exact rare label by search.
   await page.locator('#owgDomainPackLookup-submitted').fill('Noise');
-  await page.getByRole('button',{name:'Find labels for Submit claim'}).click();
+  await page.locator('#owgDomainPackLookup-submitted').press('Enter');
   await page.locator('#owgDomainPackMatches-submitted').getByRole('button',{name:'Noise0000',exact:true}).waitFor();
   await page.getByRole('button',{name:'More labels for Submit claim'}).click();
   await page.locator('#owgDomainPackMatches-submitted').getByRole('button',{name:'Noise0100',exact:true}).waitFor();

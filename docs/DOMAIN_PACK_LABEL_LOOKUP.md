@@ -1,6 +1,6 @@
 # Find a domain-pack mapping label
 
-For any domain-pack role, enter part of a label in **Search labels** and choose
+For any domain-pack role, open **Find a label**, enter part of a label in **Search labels**, and choose
 **Find labels**. Results are exact, case-sensitive substring matches from the
 selected local log. Select a result to fill the exact-label field, then install
 the mapping. **More labels** moves through the next page; each page contains at
