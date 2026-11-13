@@ -16,6 +16,7 @@ from . import m365_outlook_operator_cycle as cycle
 from . import m365_outlook_reviewed_transaction as transaction
 from .m365_outlook_owg_receipt import ReceiptError
 from .m365_outlook_delta import DeltaError
+from .m365_outlook_checkpoint import inspect_checkpoint
 from .m365_operator_audit_writer import preflight_operator_audit, record_operator_phase, AuditWriteError
 
 FORMAT = "openworkgraph.m365-next-round-review.v1"
@@ -50,9 +51,11 @@ def prepare(*, tenant, mailbox, folder, log_id, confirm_log_id, grant_file,
         preflight_operator_audit(Path(audit_dir))
     scope = dict(tenant=tenant, mailbox=mailbox, folder=folder,
                  grant_file=Path(grant_file))
-    predecessor = cycle.checkpoint_inspect(
+    predecessor = inspect_checkpoint(
         **scope, ledger_dir=Path(ledger_dir), consent_local_read=True)
-    if predecessor.get("generation") != expected_generation:
+    if (predecessor is None or predecessor["generation"] != expected_generation
+            or predecessor["candidate_sha256"] != expected_previous_candidate_sha256
+            or predecessor["log_id"] != log_id):
         raise ReceiptError("Stale predecessor checkpoint")
     # Production extraction verifies the full predecessor candidate, persisted
     # handoff, authenticated OWG membership and checkpoint generation again.
