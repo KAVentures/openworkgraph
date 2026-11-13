@@ -502,8 +502,6 @@ class ReviewQueueTests(unittest.TestCase):
                 self.assertFalse(row["confirmed_case"])
             db.close()
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class FingerprintScopeTests(unittest.TestCase):
@@ -528,4 +526,5 @@ class FingerprintScopeTests(unittest.TestCase):
         self.assertNotEqual(queue["evidence_sha256"], build_review_queue(changed)["evidence_sha256"])
         with self.assertRaisesRegex(ValueError, "digest mismatch"):
             score_bound_review_annotations(changed, envelope)
-
+if __name__ == "__main__":
+    unittest.main()
