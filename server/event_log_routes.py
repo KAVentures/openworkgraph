@@ -1062,6 +1062,22 @@ async def analysis_sharing_freshness(request: Request, log_id: str):
     return JSONResponse(result, headers={'Cache-Control': 'no-store'})
 
 
+@router.post("/v1/event-logs/{log_id}/analysis-sharing-download")
+async def analysis_sharing_download(request: Request, log_id: str):
+    """Recompute minimized export and refuse drift from explicitly reviewed lineage."""
+    _require_dashboard(request)
+    if request.headers.get("x-owg-analysis-sharing-preview") != "true":
+        raise HTTPException(403, "Explicit sharing-preview confirmation required")
+    body = await _json_body(request, "source-bound analysis download", strict=True)
+    try:
+        result = await run_in_threadpool(analysis_snapshot_export.export_if_source_current, log_id, body)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(409, str(exc)) from None
+    except ValueError:
+        raise HTTPException(422, "Analysis cannot fit the bounded sharing format") from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/v1/event-logs/{log_id}/analyses")
 def event_log_saved_analyses(request: Request, log_id: str):
     _require_dashboard(request)
