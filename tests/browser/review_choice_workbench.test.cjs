@@ -52,7 +52,13 @@ const getControls=results=>[results.children.find(x=>x.tagName==='select'),resul
    async({results,details,opened,lastEvent,calls})=>{
      const [select,review]=getControls(results);select.value='p1';await review.onclick();
      await details.children.find(x=>x.textContent==='Revalidate review basis on server').onclick();
-     await details.children.find(x=>x.textContent==='Open opportunity decision and handoff').onclick();
+     const consent=details.children.find(x=>x.tagName==='label'&&x.children.some(y=>y.tagName==='input'))?.children.find(x=>x.tagName==='input');
+     const proceed=details.children.find(x=>x.textContent==='Open opportunity decision and handoff');
+     assert.ok(consent,'explicit inspection consent must be visible');
+     assert.equal(proceed.disabled,true,'navigation is disabled without consent');
+     await proceed.onclick();assert.equal(opened(),0,'programmatic click cannot bypass consent');
+     consent.checked=true;consent.listeners.change();assert.equal(proceed.disabled,false);
+     await proceed.onclick();
      assert.equal(calls(),4);assert.equal(opened(),1);
      assert.equal(lastEvent().type,'owg-pipeline-open');
      assert.equal(lastEvent().detail.idea_revision,3);
@@ -83,7 +89,13 @@ const getControls=results=>[results.children.find(x=>x.tagName==='select'),resul
    await scenario('handoff denies '+label,[basis(),basis(),preflight,handoff],async({results,details,opened,status})=>{
      const [select,review]=getControls(results);select.value='p1';await review.onclick();
      await details.children.find(x=>x.textContent==='Revalidate review basis on server').onclick();
-     await details.children.find(x=>x.textContent==='Open opportunity decision and handoff').onclick();
+     const consent=details.children.find(x=>x.tagName==='label'&&x.children.some(y=>y.tagName==='input'))?.children.find(x=>x.tagName==='input');
+     const proceed=details.children.find(x=>x.textContent==='Open opportunity decision and handoff');
+     assert.ok(consent,'explicit inspection consent must be visible');
+     assert.equal(proceed.disabled,true,'navigation is disabled without consent');
+     await proceed.onclick();assert.equal(opened(),0,'programmatic click cannot bypass consent');
+     consent.checked=true;consent.listeners.change();assert.equal(proceed.disabled,false);
+     await proceed.onclick();
      assert.equal(opened(),0,'stale review or export must not navigate');
      assert.match(status.textContent,/Decision review expired/);
    },true);
