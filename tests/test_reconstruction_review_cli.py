@@ -554,5 +554,42 @@ class FingerprintScopeTests(unittest.TestCase):
         self.assertNotEqual(queue["evidence_sha256"], build_review_queue(changed)["evidence_sha256"])
         with self.assertRaisesRegex(ValueError, "digest mismatch"):
             score_bound_review_annotations(changed, envelope)
+
+class LiveReconstructionServiceTests(unittest.TestCase):
+    def test_live_service_rebuilds_evidence_and_refuses_stale_envelope(self):
+        from unittest.mock import patch
+        from server.work_resumption import score_live_reconstruction_review
+        source = payload([pair("A", "F", ["e1"])])
+        queue = build_review_queue(source)
+        row = queue["event_reviews"][0]
+        envelope = {"evidence_sha256": queue["evidence_sha256"], "annotations": [
+            {"window": row["window"], "event_id": row["event_id"],
+             "true_resource_pairs": row["candidate_resource_pairs"]}]}
+        lease = {"trusted": "host-owned"}
+        with patch("server.work_resumption.resumption_candidates", return_value=source) as rebuild:
+            scored = score_live_reconstruction_review(
+                object(), envelope, lease=lease, authorize_review=lambda: True)
+            self.assertEqual(scored["true_positive_pairs"], 1)
+            self.assertFalse(scored["held_out_verified"])
+            self.assertEqual(rebuild.call_args.kwargs["lease"], lease)
+        changed = payload([pair("A", "F", ["different-event"])])
+        with patch("server.work_resumption.resumption_candidates", return_value=changed):
+            with self.assertRaisesRegex(ValueError, "digest mismatch"):
+                score_live_reconstruction_review(
+                    object(), envelope, lease=lease, authorize_review=lambda: True)
+
+    def test_live_service_denial_precedes_database_reconstruction(self):
+        from unittest.mock import patch
+        from server.work_resumption import score_live_reconstruction_review
+        with patch("server.work_resumption.resumption_candidates") as rebuild:
+            for denied in (None, False, 1, {"authorized": True}):
+                with self.assertRaises(PermissionError):
+                    score_live_reconstruction_review(
+                        object(), {}, lease={}, authorize_review=lambda d=denied: d)
+            with self.assertRaises(PermissionError):
+                score_live_reconstruction_review(
+                    object(), {}, lease={}, authorize_review=None)
+            rebuild.assert_not_called()
+
 if __name__ == "__main__":
     unittest.main()
