@@ -58,6 +58,30 @@ def build_router(store,human):
         parsed=await body(request,Publish)
         return await run_in_threadpool(response,store.publish,p,parsed)
 
+    @router.post('/v1/human/analyses/with-cases')
+    async def publish_with_cases(request:Request,p=Depends(human)):
+        """One human-reviewed transaction: new aggregate + separately gated cases."""
+        from .analysis_paired_publishing import PairedPublish, publish as publish_paired
+        # Check full permission set before receiving a potentially identifying
+        # case file. The store rechecks all scopes and case ownership in-transaction.
+        from .analysis_case_data import READ, WRITE
+        for scope in ('org:analysis:read','org:analysis:write',READ,WRITE):
+            if scope not in p.scopes:raise HTTPException(403,'Missing analysis permission: '+scope)
+        parsed=await body(request,PairedPublish,720*1024)
+        return await run_in_threadpool(response,publish_paired,store,p,parsed)
+
+    @router.post('/v1/human/analyses/{view_id}/with-cases')
+    async def update_with_cases(request:Request,view_id:str=Path(pattern=ID),p=Depends(human)):
+        """Owner-only successor revision; aggregate and case row commit together."""
+        from .analysis_paired_publishing import PairedPublish, publish as publish_paired
+        from .analysis_case_data import CaseData, READ, WRITE
+        for scope in ('org:analysis:read','org:analysis:write',READ,WRITE):
+            if scope not in p.scopes:raise HTTPException(403,'Missing analysis permission: '+scope)
+        # Owner-only preflight BEFORE receiving the sensitive paired files.
+        await run_in_threadpool(response,CaseData(store).preflight,p,view_id)
+        parsed=await body(request,PairedPublish,720*1024)
+        return await run_in_threadpool(response,publish_paired,store,p,parsed,view_id)
+
     @router.get('/v1/human/analyses/{view_id}')
     def detail(view_id:str=Path(pattern=ID),revision:int|None=Query(default=None,ge=1,le=10),p=Depends(human)):
         return response(store.detail,p,view_id,revision)
