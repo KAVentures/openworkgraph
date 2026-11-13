@@ -174,7 +174,10 @@ def test_preflight_continue_uses_existing_pipeline_decision_not_implicit_approva
     assert "if(current()){detail.replaceChildren();" in pipeline
     assert "if(token!==generation||choice.value!==projectId||input.value.trim()!==id)return;" in script
     assert "if(!pipelineCard)" in script
-    assert "details.append(continueReview);" in script
+    assert "details.append(consentLabel,continueReview);" in script
+    assert "consent.type='checkbox'" in script
+    assert "continueReview.disabled=!consent.checked;" in script
+    assert "!consent.checked||continueReview.disabled" in script
     assert "execution_authorized:false" in pipeline
 
 
