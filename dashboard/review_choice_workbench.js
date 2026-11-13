@@ -77,6 +77,26 @@
         details.append(node('h3','Human review · exact recorded project'),node('p','Project '+projectId),
           node('p','Specification SHA-256: '+selected.spec_sha256),
           node('p','Archive SHA-256: '+selected.archive_sha256));
+        // Display the actual provenance bound to this review basis, not just
+        // export hashes. Render source-provided values only as inert text.
+        const provenance=node('section');
+        provenance.setAttribute('aria-label','Recorded workflow and dataset provenance');
+        const process=snapshot.process_reference;
+        provenance.append(node('h4','Recorded workflow provenance'),
+          node('p','Process status: '+String(snapshot.process_status)),
+          node('p','Workflow ID: '+String(process?.workflow_id??'not recorded')),
+          node('p','Workflow revision: '+String(process?.revision??'not recorded')),
+          node('p','Workflow content SHA-256: '+String(process?.content_sha256??'not recorded')));
+        const origins=node('ul');
+        const datasets=Array.isArray(snapshot.dataset_origins)?snapshot.dataset_origins:[];
+        if(!datasets.length)origins.append(node('li','No dataset origin linked'));
+        for(const origin of datasets.slice(0,64)){
+          origins.append(node('li','Origin status: '+String(origin?.status??'unknown')+
+            ' · source SHA-256: '+String(origin?.source_content_sha256??'not recorded')+
+            ' · selection SHA-256: '+String(origin?.selection_sha256??'not recorded')));
+        }
+        provenance.append(node('p','Dataset origin records: '+datasets.length),origins);
+        details.append(provenance);
         const blockers=node('ul');
         for(const blocker of selected.blockers)blockers.append(node('li',blocker.replaceAll('_',' ')));
         blockers.append(node('li','Independent execution and business outcomes remain unverified'));
