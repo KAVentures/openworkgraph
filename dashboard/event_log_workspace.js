@@ -3513,26 +3513,38 @@
     };
     sharingDownload.onclick=async()=>{
       if(!sharingConsent.checked||!sharingSnapshot||!lastSpec||freshnessStatus.dataset.stale==='true'||generation!==state.generation||sharingDownload.disabled)return;
-      // The earlier preview/check is not a download authorization: a saved log
-      // can change between checking freshness and pressing Download.
       const attempt=sharingAttempt,snapshot=sharingSnapshot,spec=lastSpec,selectedGeneration=state.generation;
+      // A reviewed preview is single-use, even if the HTTP request fails or consent changes.
       sharingDownload.disabled=true;freshness.disabled=true;freshnessStatus.dataset.stale='true';
-      freshnessStatus.textContent='Revalidating the current saved log before download…';
+      freshnessStatus.textContent='Authorizing the reviewed export against the current saved log…';
       try{
-        const result=await(await api(base()+'/analysis-sharing-freshness',{method:'POST',headers:{'Content-Type':'application/json','X-OWG-Analysis-Sharing-Preview':'true'},body:JSON.stringify({spec,snapshot})})).json();
+        const response=await api(base()+'/analysis-sharing-download',{method:'POST',
+          headers:{'Content-Type':'application/json','X-OWG-Analysis-Sharing-Preview':'true'},
+          body:JSON.stringify({spec,source_content_sha256:snapshot.source_content_sha256,
+            analysis_spec_sha256:snapshot.analysis_spec_sha256,
+            metric_definition_sha256:snapshot.metric_definition_sha256})});
+        if(!response.ok)throw new Error('Source-bound download refused ('+response.status+').');
+        const current=await response.json();
         if(attempt!==sharingAttempt||selectedGeneration!==state.generation||snapshot!==sharingSnapshot||!sharingConsent.checked)return;
-        if(result.format!=='openworkgraph.analysis-snapshot-freshness.v1'||result.lineage_current!==true||result.current_results_match!==true){
-          freshnessStatus.textContent='Source, metric lineage or values changed. Prepare and review a new snapshot.';
-          return;
+        // The server recomputes under the workspace lock; do not release changed
+        // minimized values even if their lineage is unexpectedly identical.
+        if(current.source_content_sha256!==snapshot.source_content_sha256||
+           current.analysis_spec_sha256!==snapshot.analysis_spec_sha256||
+           JSON.stringify(current.metric_definition_sha256)!==JSON.stringify(snapshot.metric_definition_sha256)||
+           JSON.stringify(current.columns)!==JSON.stringify(snapshot.columns)||
+           JSON.stringify(current.rows)!==JSON.stringify(snapshot.rows)){
+          throw new Error('Reviewed snapshot differs from the current recomputation.');
         }
-        // No local download is offered after failed/unknown server validation.
-        download('owg-analysis-snapshot.json',JSON.stringify(snapshot,null,2),'application/json');
+        download('owg-analysis-snapshot.json',JSON.stringify(current,null,2),'application/json');
         sharingConsent.checked=false;
-        freshnessStatus.textContent='Download validated against the current saved log. Source changes after this check cannot be ruled out.';
+        freshnessStatus.textContent='Downloaded the server-recomputed, source-bound snapshot. Prepare and review again for another export.';
       }catch(error){
-        if(attempt===sharingAttempt&&selectedGeneration===state.generation){freshnessStatus.textContent=error.message+' Download refused; recheck the snapshot.';}
+        if(attempt===sharingAttempt&&selectedGeneration===state.generation)
+          freshnessStatus.textContent=error.message+' Prepare and review a new snapshot.';
       }finally{
-        if(attempt===sharingAttempt&&selectedGeneration===state.generation){sharingDownload.disabled=true;freshness.disabled=false;}
+        if(attempt===sharingAttempt&&selectedGeneration===state.generation){
+          sharingDownload.disabled=true;freshness.disabled=true;
+        }
       }
     };
     const exports=exportButtons('owgAnalysis',()=>last,r=>[r.columns,...r.rows]);
