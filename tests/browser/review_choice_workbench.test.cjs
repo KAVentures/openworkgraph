@@ -37,7 +37,7 @@ const getControls=results=>[results.children.find(x=>x.tagName==='select'),resul
    const confirm=details.children.find(x=>x.textContent==='Revalidate review basis on server');
    assert.ok(confirm);await confirm.onclick();
    const proceed=details.children.find(x=>x.textContent==='Open opportunity decision and handoff');
-   assert.ok(proceed);await proceed.onclick();
+   assert.ok(proceed);const consent=details.children.find(x=>x.tagName==='label'&&x.children.some(y=>y.tagName==='input'))?.children.find(x=>x.tagName==='input');assert.ok(consent);assert.equal(proceed.disabled,true);consent.checked=true;consent.listeners.change();await proceed.onclick();
    assert.equal(calls(),4);assert.equal(opened(),0);
    assert.equal(results.children.length,0);assert.match(status.textContent,/Decision review expired/);
  },true);
