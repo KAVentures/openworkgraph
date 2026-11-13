@@ -205,6 +205,7 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
     tp = fp = fn = ambiguous = 0
     # Window-level counts reveal regressions hidden by aggregate accuracy.
     by_window: dict[str, dict[str, int]] = {}
+    disagreements: list[dict[str, Any]] = []
     for key, true_pairs in labels.items():
         row = observed[key]
         predicted = {json.dumps(pair, separators=(",", ":")) for pair in row["candidate_resource_pairs"]}
@@ -213,6 +214,16 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
         fp += extra
         fn += missed
         ambiguous += row["review_status"] == "ambiguous_multiple_pairs"
+        if extra or missed:
+            # Exact event/window provenance lets an authorized reviewer inspect
+            # a disagreement without inferring a case from transitive groups.
+            # Bounded by the mandatory complete annotation set (<=192 rows).
+            disagreements.append({
+                "window": key[0], "event_id": key[1],
+                "false_positive_resource_pairs": [json.loads(p) for p in sorted(predicted - true_pairs)],
+                "false_negative_resource_pairs": [json.loads(p) for p in sorted(true_pairs - predicted)],
+                "ambiguous_multiple_pairs": row["review_status"] == "ambiguous_multiple_pairs",
+            })
         counts = by_window.setdefault(key[0], {"tp": 0, "fp": 0, "fn": 0, "events": 0})
         counts["tp"] += correct
         counts["fp"] += extra
@@ -239,6 +250,8 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
         "precision": precision, "recall": recall,
         "per_window_counts": {window: by_window[window] for window in sorted(by_window)},
         "per_window_metrics": per_window_metrics,
+        "event_disagreements": sorted(disagreements, key=lambda item: (item["window"], item["event_id"])),
+        "event_disagreements_are_review_evidence_not_confirmed_cases": True,
         "cross_case_contamination_measured": False,
         "f1": 2 * precision * recall / (precision + recall) if precision + recall else 0.0,
         "evaluation_scope": "all_surfaced_event_pair_evidence_only",
