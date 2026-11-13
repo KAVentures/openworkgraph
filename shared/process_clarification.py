@@ -228,21 +228,20 @@ def validate_decision_evidence(question: dict[str, Any], decision: Decision) -> 
     """Do not silently treat both sides of a policy conflict as endorsed.
 
     Rejecting/deferring may leave a conflict unresolved. Resolving it must
-    choose one exact cited statement per contradictory pair with a named human
+    choose one governing cited statement from the disputed source set with a named human
     explanation. A decision is still only a ledger entry, never executable
     policy or a change to the saved process model.
     """
     if question.get("kind") != "contradiction" or decision.decision not in ("confirm", "revise"):
         return
     chosen = decision.cited_statement_ids
-    if len(chosen) != len(set(chosen)):
-        raise ValueError("choose each cited statement only once")
+    disputed = {item["statement_id"]
+                for conflict in question.get("contradictions", [])
+                for item in conflict["statements"]}
+    if len(chosen) != 1 or chosen[0] not in disputed:
+        raise ValueError("choose one governing statement from the disputed sources")
     if not decision.answer.strip():
-        raise ValueError("explain why the selected source statement applies")
-    for conflict in question.get("contradictions", []):
-        pair = {item["statement_id"] for item in conflict["statements"]}
-        if len(pair & set(chosen)) != 1:
-            raise ValueError("select exactly one applicable statement from each contradictory pair")
+        raise ValueError("explain why this selected source governs the discrepancy")
 
 
 
