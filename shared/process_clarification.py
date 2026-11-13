@@ -223,6 +223,29 @@ def clarify(record: dict[str, Any], request: ClarificationRequest,
     }
 
 
+
+def validate_decision_evidence(question: dict[str, Any], decision: Decision) -> None:
+    """Do not silently treat both sides of a policy conflict as endorsed.
+
+    Rejecting/deferring may leave a conflict unresolved. Resolving it must
+    choose one exact cited statement per contradictory pair with a named human
+    explanation. A decision is still only a ledger entry, never executable
+    policy or a change to the saved process model.
+    """
+    if question.get("kind") != "contradiction" or decision.decision not in ("confirm", "revise"):
+        return
+    chosen = decision.cited_statement_ids
+    if len(chosen) != len(set(chosen)):
+        raise ValueError("choose each cited statement only once")
+    if not decision.answer.strip():
+        raise ValueError("explain why the selected source statement applies")
+    for conflict in question.get("contradictions", []):
+        pair = {item["statement_id"] for item in conflict["statements"]}
+        if len(pair & set(chosen)) != 1:
+            raise ValueError("select exactly one applicable statement from each contradictory pair")
+
+
+
 def proposed_change(record: dict[str, Any], question: dict[str, Any], decision: Decision) -> dict[str, Any] | None:
     """A model change the owner may save; never applied automatically."""
     if decision.decision != "confirm" or question["kind"] != "unconfirmed_rule":
@@ -234,4 +257,4 @@ def proposed_change(record: dict[str, Any], question: dict[str, Any], decision: 
             "process_model": model, "apply_with": "POST /v1/process-catalog (normal save, new revision)"}
 
 
-__all__ = ["ClarificationRequest", "DECISIONS", "Decision", "Document", "clarify", "documents_sha256", "proposed_change", "statements"]
+__all__ = ["ClarificationRequest", "DECISIONS", "Decision", "Document", "clarify", "documents_sha256", "proposed_change", "statements", "validate_decision_evidence"]
