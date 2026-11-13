@@ -45,10 +45,9 @@ class ExplicitAnnotationScoreTests(unittest.TestCase):
     def test_unlabeled_events_are_not_assumed_negative(self):
         data = payload([pair("A", "F", ["a", "b"])])
         row = build_review_queue(data)["event_reviews"][0]
-        score = score_review_annotations(data, [{"window": row["window"],
-            "event_id": row["event_id"], "true_resource_pairs": []}])
-        self.assertEqual(score["unannotated_events"], 1)
-        self.assertEqual(score["false_positive_pairs"], 1)
+        with self.assertRaisesRegex(ValueError, "all surfaced review events"):
+            score_review_annotations(data, [{"window": row["window"],
+                "event_id": row["event_id"], "true_resource_pairs": []}])
 
     def test_fail_closed_on_revocation_truncation_duplicate_and_unknown_event(self):
         data = payload([pair("A", "F", ["a"])])
