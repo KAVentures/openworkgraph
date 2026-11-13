@@ -114,6 +114,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_decision_dependencies.cjs
       - name: Verify rule library linking and drift in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_rule_library.cjs
+      - name: Verify five-source SOP reconciliation and explicit conflict choices
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_clarification.cjs
       - name: Verify versioned repository hierarchies and drift in Chromium
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/process_hierarchies.cjs
       - name: Verify analyst case tags and the tag case filter in Chromium
