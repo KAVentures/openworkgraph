@@ -69,7 +69,7 @@ with TestClient(app) as client:
               'X-OWG-Analysis-Sharing-Preview': 'true'}
     mapping = '?format=csv&name=private&case_column=case&activity_column=activity&timestamp_column=time'
     imported = client.post('/v1/event-logs/import' + mapping,
-        content=b'case,activity,time\\nprivate-case,A,2024-01-01T00:00:00Z\\n',
+        content=b'case,activity,time\nprivate-case,A,2024-01-01T00:00:00Z\n',
         headers={**dashboard, 'X-OWG-Local-Storage-Confirmed': 'true'})
     assert imported.status_code == 200, imported.text
     log_id = imported.json()['log_id']
@@ -94,7 +94,7 @@ with TestClient(app) as client:
     malformed = client.post(endpoint, json={**request, 'unexpected': True}, headers=preview_headers)
     assert malformed.status_code in (409, 422), malformed.text
     append = client.post(base + '/append?format=csv&case_column=case&activity_column=activity&timestamp_column=time',
-        content=b'case,activity,time\\nnew-case,B,2024-01-02T00:00:00Z\\n',
+        content=b'case,activity,time\nnew-case,B,2024-01-02T00:00:00Z\n',
         headers={**dashboard, 'X-OWG-Local-Storage-Confirmed': 'true'})
     assert append.status_code == 200, append.text
     stale = client.post(endpoint, json=request, headers=preview_headers)
