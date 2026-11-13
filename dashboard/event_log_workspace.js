@@ -3307,9 +3307,10 @@
     const out=el('div');out.id='owgAnalysisResults';
     const savedList=el('div');savedList.id='owgAnalysisSaved';
     let last=null,lastSpec=null;
-    let sharingAttempt=0,sharingSnapshot=null,casePacket=null;
+    let sharingAttempt=0,sharingSnapshot=null,casePacket=null,bundlePacket=null;
     const prepareShare=button('Prepare sharing snapshot','secondary');prepareShare.id='owgAnalysisPrepareShare';prepareShare.disabled=true;
     const prepareCases=button('Prepare case sharing files','secondary');prepareCases.id='owgAnalysisPrepareCases';prepareCases.disabled=true;
+    const prepareCompany=button('Prepare paired company handoff','secondary');prepareCompany.id='owgAnalysisPrepareCompany';prepareCompany.disabled=true;
     const sharing=el('div');sharing.id='owgAnalysisSharingPreview';sharing.hidden=true;
     const sharingTable=el('div');sharingTable.style.overflowX='auto';
     const sharingInfo=el('p',null,'muted');sharingInfo.style.overflowWrap='anywhere';
@@ -3399,7 +3400,7 @@
         measure1.value=draft.measures[0];measure2.value=draft.measures[1];
         // A previous result and its export/share grants belong to the old definition.
         resetSharing();last=null;lastSpec=null;out.replaceChildren();exports.enable(false);
-        save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;
+        save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;prepareCompany.disabled=true;
         message.textContent='Metric updated in this draft; dependent arithmetic and selected measures follow any rename. Run analysis to recalculate before saving or exporting.';
       }catch(error){message.textContent=error.message;}
     };
@@ -3461,7 +3462,7 @@
           const additions=savedMetricBundle(m,r.metrics,metrics);
           metrics.push(...additions);renderMetrics();
           resetSharing();last=null;lastSpec=null;out.replaceChildren();exports.enable(false);
-          save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;
+          save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;prepareCompany.disabled=true;
           message.textContent='Added '+additions.length+' saved metric'+(additions.length===1?'':'s')+
             ' in dependency order. Choose a measure and rerun before saving or exporting.';
         }catch(error){message.textContent=error.message;}};
@@ -3484,7 +3485,7 @@
       const ownAttempt=++attempt,jobBase=base()+'/analysis-jobs';
       const current=()=>generation===state.generation&&box.isConnected&&ownAttempt===attempt;
       running=true;cancelRequested=false;job=null;run.disabled=true;background.disabled=true;cancel.disabled=!background.checked;
-      resetSharing();last=null;lastSpec=null;out.replaceChildren();exports.enable(false);save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;
+      resetSharing();last=null;lastSpec=null;out.replaceChildren();exports.enable(false);save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;prepareCompany.disabled=true;
       if(state.caseType)spec.case_type=state.caseType;
       let r;
       try{
@@ -3518,7 +3519,7 @@
       }
       if(!current())return;
       message.textContent='Analysis complete. Static result; rerun after changing the log.';
-      resetSharing();last=r;lastSpec=spec;exports.enable(true);save.disabled=false;prepareShare.disabled=false;prepareCases.disabled=false;
+      resetSharing();last=r;lastSpec=spec;exports.enable(true);save.disabled=false;prepareShare.disabled=false;prepareCases.disabled=false;prepareCompany.disabled=false;
       const units=r.units||{};
       out.replaceChildren(el('div',Number(r.matching.cases).toLocaleString()+' matching cases'+(r.rows_truncated?'; showing the first '+r.rows.length+' rows.':'.'),'muted'),
         table(r.columns,r.rows.map(row=>row.map((v,i)=>cell(r.columns[i],v,units[r.columns[i]])))),
@@ -3547,7 +3548,7 @@
             hours.value=draft.hours;endsWith.value=draft.endsWith;
             sync();measure1.value=draft.measure1;measure2.value=draft.measure2;
             resetSharing();last=null;lastSpec=null;out.replaceChildren();exports.enable(false);
-            save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;name.value='';
+            save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;prepareCompany.disabled=true;name.value='';
             message.textContent='Loaded '+a.name+' into the builder. Edit and run it, then save under a new name; the original is unchanged.';
           }catch(error){message.textContent=error.message;}
         };
