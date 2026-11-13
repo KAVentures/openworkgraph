@@ -27,7 +27,11 @@ def _event_ids(value: Any) -> list[str]:
         raise ValueError("unbounded evidence list")
     if any(not isinstance(x, str) or not x or len(x) > 120 for x in value):
         raise ValueError("invalid event ID")
-    return sorted(set(value))
+    # Duplicate source labels can hide conflicting provenance in an export.
+    # Never normalize malformed evidence into apparently independent support.
+    if len(set(value)) != len(value):
+        raise ValueError("duplicate evidence event ID")
+    return sorted(value)
 
 
 # History-access modes that may produce a review queue; anything else is denied.
@@ -108,10 +112,14 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         earlier = pair.get("earlier_corroborations", [])
         if not isinstance(earlier, list) or len(earlier) > MAX_SESSIONS_PER_PAIR:
             raise ValueError("unbounded earlier corroborations")
+        seen_earlier_windows: set[str] = set()
         for session in earlier:
             if not isinstance(session, dict) or "session_started_at" not in session:
                 raise ValueError("invalid earlier session")
             window = _session_window(session["session_started_at"])
+            if window in seen_earlier_windows:
+                raise ValueError("duplicate earlier session window")
+            seen_earlier_windows.add(window)
             for event_id in _event_ids(session.get("evidence_event_ids")):
                 add_evidence(window, event_id, pair_key)
             incomplete |= bool(session.get("evidence_truncated"))
