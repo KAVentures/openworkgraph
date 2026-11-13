@@ -1,7 +1,7 @@
 """Adversarial review queue tests; synthetic fixtures are not assignment-F1 evidence."""
 import unittest
 
-from server.reconstruction_review_cli import build_review_queue
+from server.reconstruction_review_cli import build_review_queue, score_review_annotations
 
 
 def pair(left, right, events, earlier=None, **extra):
@@ -16,6 +16,51 @@ def pair(left, right, events, earlier=None, **extra):
 def payload(pairs):
     return {"derived": True, "authoritative": False, "saved_history_access": "all_saved",
             "observed_pair_event_assignments": pairs, "coverage": {"scan_truncated": False}}
+
+
+
+class ExplicitAnnotationScoreTests(unittest.TestCase):
+    def test_interleaved_cases_score_only_exact_annotated_event_pair(self):
+        data = payload([pair("A", "F", ["a"]), pair("B", "G", ["b"])])
+        review = build_review_queue(data)
+        labels = [{"window": row["window"], "event_id": row["event_id"],
+                   "true_resource_pairs": row["candidate_resource_pairs"]}
+                  for row in review["event_reviews"]]
+        score = score_review_annotations(data, labels)
+        self.assertEqual((score["precision"], score["recall"], score["f1"]), (1.0, 1.0, 1.0))
+        self.assertFalse(score["held_out_verified"])
+        self.assertFalse(score["real_work_accuracy_claim"])
+
+    def test_ambiguous_assignment_counts_false_positive_not_silent_case_merge(self):
+        data = payload([pair("A", "F", ["shared"]), pair("B", "G", ["shared"])])
+        row = build_review_queue(data)["event_reviews"][0]
+        label = {"window": row["window"], "event_id": row["event_id"],
+                 "true_resource_pairs": row["candidate_resource_pairs"][:1]}
+        score = score_review_annotations(data, [label])
+        self.assertEqual(score["ambiguous_annotated_events"], 1)
+        self.assertEqual(score["false_positive_pairs"], 1)
+        self.assertEqual(score["precision"], 0.5)
+        self.assertFalse(score["confirmed_case"])
+
+    def test_unlabeled_events_are_not_assumed_negative(self):
+        data = payload([pair("A", "F", ["a", "b"])])
+        row = build_review_queue(data)["event_reviews"][0]
+        score = score_review_annotations(data, [{"window": row["window"],
+            "event_id": row["event_id"], "true_resource_pairs": []}])
+        self.assertEqual(score["unannotated_events"], 1)
+        self.assertEqual(score["false_positive_pairs"], 1)
+
+    def test_fail_closed_on_revocation_truncation_duplicate_and_unknown_event(self):
+        data = payload([pair("A", "F", ["a"])])
+        label = {"window": "current", "event_id": "a", "true_resource_pairs": []}
+        for changed, labels in (
+            ({**data, "saved_history_access": "revoked"}, [label]),
+            ({**data, "coverage": {"scan_truncated": True}}, [label]),
+            (data, [label, label]),
+            (data, [{**label, "event_id": "unseen"}]),
+        ):
+            with self.assertRaises(ValueError):
+                score_review_annotations(changed, labels)
 
 
 class ReviewQueueTests(unittest.TestCase):
