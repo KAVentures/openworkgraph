@@ -159,6 +159,10 @@ with TestClient(app) as c:
     assert valid.headers["cache-control"]=="no-store"
     assert c.post(path,headers=auth,json={**body,"alternatives":[body["alternatives"][0]]}).status_code==422
     assert c.post(path,headers={**auth,"Content-Type":"application/json"},
+                  content=b'{"format":"one","format":"two"}').status_code==422
+    assert c.post(path,headers={**auth,"Content-Type":"application/json"},
+                  content=b'{"format":NaN}').status_code==422
+    assert c.post(path,headers={**auth,"Content-Type":"application/json"},
                   content=b"{}"+b" "*70000).status_code==413
     assert c.get(path,headers=auth).status_code==405
 '''
