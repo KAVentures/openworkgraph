@@ -568,8 +568,10 @@ def score_live_reconstruction_review(
     score = score_bound_review_annotations(response, annotation_envelope)
     # The grant can be revoked while a large history scan or scoring is running.
     # Never return derived evidence after a failed final live authorization check.
-    if authorize_review() is not True or lease != lease_snapshot:
-        raise PermissionError("reconstruction review authorization or lease changed during scoring")
+    if authorize_review() is not True:
+        raise PermissionError("reconstruction review authorization revoked during scoring")
+    if lease != lease_snapshot:
+        raise PermissionError("reconstruction review lease changed during scoring")
     return score
 
 
