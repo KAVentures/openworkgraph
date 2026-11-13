@@ -314,3 +314,32 @@ def test_cli_explicit_consents_and_minimized_receipt(private, monkeypatch, capsy
     assert TOKEN not in output and FOLDER not in output and ID_A not in output
     assert main(cmd, opener=Graph([page([message(ID_A)])])) == 2
     assert json.loads(capsys.readouterr().out)["status"] == "refused"
+
+
+def test_same_scope_grant_reissue_mid_round_refuses_continuation(private):
+    params = args(private)
+    def reissue(n):
+        if n == 1:
+            record = json.loads(params["grant_file"].read_text())
+            record["expires_at"] = "2999-01-01T00:00:00Z"
+            params["grant_file"].write_text(json.dumps(record))
+    graph = Graph([page([message(ID_A)], link=NEXT, next_page=True)], mutate=reissue)
+    with pytest.raises(DeltaError, match="grant changed"):
+        export_delta(**params, opener=graph)
+    assert len(graph.calls) == 1
+    assert not params["output"].exists()
+    assert not params["candidate"].exists()
+
+
+def test_equivalent_json_grant_reissue_mid_round_refuses_export(private):
+    params = args(private)
+    def reissue(n):
+        if n == 1:
+            record = json.loads(params["grant_file"].read_text())
+            params["grant_file"].write_text(json.dumps(record, indent=2))
+    graph = Graph([page([message(ID_A)])], mutate=reissue)
+    with pytest.raises(DeltaError, match="grant changed"):
+        export_delta(**params, opener=graph)
+    assert len(graph.calls) == 1
+    assert not params["candidate"].exists()
+

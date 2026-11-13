@@ -76,9 +76,9 @@ def _private_read(path, limit):
 
 
 def _grant(path, tenant, mailbox, folder):
+    raw = _private_read(path, 8192)
     try:
-        data = json.loads(_private_read(path, 8192).decode("utf-8"),
-                          object_pairs_hook=_pairs)
+        data = json.loads(raw.decode("utf-8"), object_pairs_hook=_pairs)
     except (ValueError, UnicodeError, TypeError, RecursionError):
         raise DeltaError("Current delta grant invalid") from None
     if (type(data) is not dict or set(data) not in (GRANT_KEYS, GRANT_KEYS | {"expires_at"})
@@ -100,6 +100,14 @@ def _grant(path, tenant, mailbox, folder):
             raise DeltaError("Current delta grant expired or invalid") from None
         if datetime.now(timezone.utc) >= expiry:
             raise DeltaError("Current delta grant expired or invalid")
+    return hashlib.sha256(raw).digest()
+
+
+def _same_grant(path, tenant, mailbox, folder, expected):
+    # A replacement grant (even for the same scope) is a new authorization.
+    # Do not stitch one delta round across independently issued authorities.
+    if _grant(path, tenant, mailbox, folder) != expected:
+        raise DeltaError("Scoped delta grant changed during round")
 
 
 def _initial(folder):
@@ -229,7 +237,7 @@ def _candidate(previous, scope, folder, confirmed):
     return _valid_link(value["cursor_url"], folder, "delta")
 
 
-def _publish(path, data, grant_file, tenant, mailbox, folder):
+def _publish(path, data, grant_file, tenant, mailbox, folder, grant_revision):
     tmp = None
     try:
         fd, tmp = tempfile.mkstemp(prefix=".owg-delta-", dir=path.parent)
@@ -237,7 +245,7 @@ def _publish(path, data, grant_file, tenant, mailbox, folder):
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
-        _grant(grant_file, tenant, mailbox, folder)
+        _same_grant(grant_file, tenant, mailbox, folder, grant_revision)
         os.link(tmp, path)
     except OSError:
         raise DeltaError("Could not create private delta artifact") from None
@@ -266,7 +274,7 @@ def export_delta(*, tenant, mailbox, folder_id, grant_file: Path,
     _delta_private_parent(output.parent)
     if any(p.exists() or p.is_symlink() for p in (output, candidate)):
         raise DeltaError("Delta artifacts must be new")
-    _grant(grant_file, tenant, mailbox, folder_id)
+    grant_revision = _grant(grant_file, tenant, mailbox, folder_id)
     url = _candidate(previous_candidate, namespace, folder_id, confirm_previous_import)
     transport = _opener() if opener is None else opener
     seen_urls = set()
@@ -279,7 +287,7 @@ def export_delta(*, tenant, mailbox, folder_id, grant_file: Path,
         if url in seen_urls or pages >= MAX_PAGES:
             raise DeltaError("Incomplete Graph delta round")
         seen_urls.add(url)
-        _grant(grant_file, tenant, mailbox, folder_id)
+        _same_grant(grant_file, tenant, mailbox, folder_id, grant_revision)
         req = request.Request(url, method="GET", headers={
             "Authorization": "Bearer " + token, "Accept": "application/json",
             "Prefer": 'IdType="ImmutableId", odata.maxpagesize=25',
@@ -316,7 +324,7 @@ def export_delta(*, tenant, mailbox, folder_id, grant_file: Path,
                     raise DeltaError("Conflicting Graph delta revision")
                 observations[state_key] = row
                 rows[row[3]] = row
-        _grant(grant_file, tenant, mailbox, folder_id)
+        _same_grant(grant_file, tenant, mailbox, folder_id, grant_revision)
         if kind == "delta":
             break
         url = cursor
@@ -333,9 +341,9 @@ def export_delta(*, tenant, mailbox, folder_id, grant_file: Path,
         "removed_case_ids": sorted(removed.values()), "pages": pages,
     }
     # CSV first, then its SHA-bound candidate. Failure never advances a cursor.
-    _publish(output, csv_bytes, grant_file, tenant, mailbox, folder_id)
+    _publish(output, csv_bytes, grant_file, tenant, mailbox, folder_id, grant_revision)
     _publish(candidate, (json.dumps(record, sort_keys=True) + "\n").encode(),
-             grant_file, tenant, mailbox, folder_id)
+             grant_file, tenant, mailbox, folder_id, grant_revision)
     return {
         "format": FORMAT, "status": "review_ready",
         "provider_get_requests": pages, "source_rows": total,
