@@ -164,12 +164,12 @@
                    result.human_review_approved!==true||result.execution_authorized!==false||
                    result.source_read_authorized!==false)
                   throw new Error('Decision evidence changed.');
-                window.dispatchEvent(new CustomEvent('owg-pipeline-open',{detail:{idea_id:id,project_id:projectId,idea_revision:snapshot.idea.revision,idea_state:snapshot.idea.state,spec_sha256:selected.spec_sha256,archive_sha256:selected.archive_sha256,review_basis:{project_id:projectId,project_set_sha256:snapshot.project_set_sha256,idea_revision:snapshot.idea.revision,idea_state:snapshot.idea.state,spec_sha256:selected.spec_sha256,archive_sha256:selected.archive_sha256,process_status:snapshot.process_status,process_reference:snapshot.process_reference,dataset_origins:snapshot.dataset_origins,dataset_origin_check_available:snapshot.dataset_origin_check_available,blockers:selected.blockers}}}));
+                window.dispatchEvent(new CustomEvent('owg-pipeline-open',{detail:{idea_id:id,project_id:projectId,idea_revision:snapshot.idea.revision,idea_state:snapshot.idea.state,review_revision:result.review_revision,spec_sha256:selected.spec_sha256,archive_sha256:selected.archive_sha256,review_basis:{project_id:projectId,project_set_sha256:snapshot.project_set_sha256,idea_revision:snapshot.idea.revision,idea_state:snapshot.idea.state,spec_sha256:selected.spec_sha256,archive_sha256:selected.archive_sha256,process_status:snapshot.process_status,process_reference:snapshot.process_reference,dataset_origins:snapshot.dataset_origins,dataset_origin_check_available:snapshot.dataset_origin_check_available,blockers:selected.blockers}}}));
                 pipelineCard.scrollIntoView({block:'start',behavior:'auto'});
                 status.textContent='Opened reviewed opportunity decision. Human approval verified; no agent execution access was granted.';
               }catch(e){
                 if(token===generation){clear();status.textContent='Decision review expired. Inspect again. '+e.message;}
-              }finally{continueReview.disabled=false;}
+              }finally{if(token===generation)continueReview.disabled=!consent.checked||!snapshot||choice.value!==projectId||input.value.trim()!==id;}
             };
             // Durable human review is a separate, non-executing decision.
             const notes=node('textarea');notes.maxLength=2000;notes.setAttribute('aria-label','Human review notes');
