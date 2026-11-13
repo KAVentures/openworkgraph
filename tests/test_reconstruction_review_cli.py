@@ -119,6 +119,20 @@ class ExplicitAnnotationScoreTests(unittest.TestCase):
         self.assertEqual(score["precision"], 0.5)
         self.assertFalse(score["confirmed_case"])
 
+    def test_window_errors_expose_interleaved_false_pair_without_claiming_case_metric(self):
+        earlier = [{"session_started_at": "2026-10-12T09:00:00Z", "evidence_event_ids": ["old"]}]
+        data = payload([pair("A", "F", ["new"], earlier=earlier)])
+        rows = build_review_queue(data)["event_reviews"]
+        labels = [{"window": row["window"], "event_id": row["event_id"],
+                   "true_resource_pairs": row["candidate_resource_pairs"] if row["event_id"] == "old" else []}
+                  for row in rows]
+        score = score_review_annotations(data, labels)
+        self.assertEqual(score["per_window_counts"]["current"], {"tp": 0, "fp": 1, "fn": 0, "events": 1})
+        self.assertEqual(score["per_window_counts"]["earlier:2026-10-12T09:00:00+00:00"],
+                         {"tp": 1, "fp": 0, "fn": 0, "events": 1})
+        self.assertFalse(score["cross_case_contamination_measured"])
+        self.assertFalse(score["held_out_verified"])
+
     def test_unlabeled_events_are_not_assumed_negative(self):
         data = payload([pair("A", "F", ["a", "b"])])
         row = build_review_queue(data)["event_reviews"][0]
