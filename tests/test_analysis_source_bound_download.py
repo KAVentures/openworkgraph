@@ -93,6 +93,23 @@ with TestClient(app) as client:
     assert 'private-case' not in ok.text
     malformed = client.post(endpoint, json={**request, 'unexpected': True}, headers=preview_headers)
     assert malformed.status_code in (409, 422), malformed.text
+    # A reviewed preview is bound to every digest and the complete metric order.
+    # Refuse tampered requests before releasing any minimized numeric rows.
+    for mutation in (
+        {'source_content_sha256': 'f' * 64},
+        {'analysis_spec_sha256': 'f' * 64},
+        {'metric_definition_sha256': ['f' * 64]},
+        {'source_content_sha256': 'NOT-A-DIGEST'},
+        {'metric_definition_sha256': ['f' * 64] * 33},
+    ):
+        rejected = client.post(endpoint, json={**request, **mutation}, headers=preview_headers)
+        assert rejected.status_code in (409, 422), rejected.text
+        assert 'rows' not in rejected.text and 'private-case' not in rejected.text
+    # Reusing lineage with a different query specification must also fail.
+    wrong_spec = client.post(endpoint, json={**request, 'spec': {'level': 'cases',
+        'dimensions': ['first_activity'], 'measures': [{'fn': 'count'}]}}, headers=preview_headers)
+    assert wrong_spec.status_code in (409, 422), wrong_spec.text
+    assert 'rows' not in wrong_spec.text
     append = client.post(base + '/append?format=csv&case_column=case&activity_column=activity&timestamp_column=time',
         content=b'case,activity,time\nnew-case,B,2024-01-02T00:00:00Z\n',
         headers={**dashboard, 'X-OWG-Local-Storage-Confirmed': 'true'})
