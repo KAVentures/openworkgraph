@@ -63,3 +63,17 @@ confirmed when the credential was issued; it does **not** assert current source
 consent or live case-context accessibility. The case-context endpoint always
 rechecks the current source scope and review. This is owner metadata, not
 hosted tenant authorization or an outcome receipt.
+
+
+### Reviewed dependency edges (local-only)
+
+The granted case-context response includes a bounded `dependency_review` list
+for the owner-declared dependency references of the granted case. A dependency
+is marked `currently_reviewed` only when it appears in the same retained,
+source-scoped reviewed snapshot. Otherwise it is `unknown_or_not_retained`.
+This does **not** grant access to the dependent case's declaration, source
+record, policy or credentials. Every dependency's provider state is `unknown`
+and outcome verification is `false`; an edge is not evidence of a blocked,
+completed or successful business obligation. Corrupt/oversized dependency
+lists fail closed. This local endpoint remains unsuitable for hosted tenants
+until separate tenant/actor authorization and independent source receipts exist.

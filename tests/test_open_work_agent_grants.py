@@ -269,3 +269,46 @@ def test_operator_grant_inventory_rest_requires_dashboard_session(setup):
         assert entry["active"] is True
         assert entry["case_context_approved"] is False
         assert "token" not in result.text
+
+
+def test_granted_context_dependencies_are_reviewed_only_not_verified(setup, monkeypatch):
+    from server import open_work_declaration_routes as declarations
+    from server import open_work_case_declarations as case_store
+    scope = "owg:scope:" + "c" * 32
+    monkeypatch.setattr(declarations, "_source_scope", lambda: scope)
+    grant = grants.issue(REF, "agent-a", 1, confirmed=True, source_scope=scope, context_approved=True)
+    # A declared dependency may have no retained review. Its state remains
+    # unknown, never inferred blocked/completed, and no other case is exposed.
+    monkeypatch.setattr(case_store, "list_case_declarations", lambda current_scope: {
+        "items": [{"work_item_ref": REF, "scope_ref": current_scope,
+                   "edit_token": "owner-secret", "depends_on_work_item_refs": [OTHER]}]
+    })
+    app = FastAPI()
+    app.include_router(router)
+    with TestClient(app) as client:
+        result = client.get("/v1/open-work/dispatch/granted/case-context",
+                            headers={"Authorization": "Bearer " + grant["token"]})
+        assert result.status_code == 200, result.text
+        edge = result.json()["dependency_review"][0]
+        assert edge == {"work_item_ref": OTHER, "review_state": "unknown_or_not_retained",
+                        "provider_state": "unknown", "outcome_verified": False}
+        assert "owner-secret" not in result.text
+        assert result.json()["customer_outcome_verified"] is False
+
+
+def test_granted_context_dependency_corruption_fails_closed(setup, monkeypatch):
+    from server import open_work_declaration_routes as declarations
+    from server import open_work_case_declarations as case_store
+    scope = "owg:scope:" + "c" * 32
+    monkeypatch.setattr(declarations, "_source_scope", lambda: scope)
+    grant = grants.issue(REF, "agent-a", 1, confirmed=True, source_scope=scope, context_approved=True)
+    monkeypatch.setattr(case_store, "list_case_declarations", lambda current_scope: {
+        "items": [{"work_item_ref": REF, "depends_on_work_item_refs": [OTHER] * 9}]
+    })
+    app = FastAPI()
+    app.include_router(router)
+    with TestClient(app) as client:
+        result = client.get("/v1/open-work/dispatch/granted/case-context",
+                            headers={"Authorization": "Bearer " + grant["token"]})
+        assert result.status_code == 503
+        assert OTHER not in result.text

@@ -239,8 +239,26 @@ async def granted_reviewed_case_context(request: Request, response: Response):
         raise HTTPException(404, "no currently reviewed case context")
     # Edit tokens are owner-only compare-and-swap capabilities; never give
     # them to an agent. No provider reads or business success assertions.
+    # Dependencies are owner-declared edges, not proof of blocking or completion.
+    # Resolve only against this same reviewed, retained, source-scoped snapshot;
+    # never disclose another case's goals, outcomes, edit tokens or existence
+    # outside an edge already explicitly disclosed by this case's owner.
+    dependencies = item.get("depends_on_work_item_refs", [])
+    if not isinstance(dependencies, list) or len(dependencies) > 8 or any(
+        not isinstance(ref, str) or not ref.startswith("owg:w:") or len(ref) != 38
+        for ref in dependencies
+    ):
+        raise HTTPException(503, "reviewed dependency context unavailable")
+    retained_refs = {entry.get("work_item_ref") for entry in snapshot["items"]}
+    dependency_review = [
+        {"work_item_ref": ref,
+         "review_state": "currently_reviewed" if ref in retained_refs else "unknown_or_not_retained",
+         "provider_state": "unknown", "outcome_verified": False}
+        for ref in dependencies
+    ]
     safe = {key: value for key, value in item.items() if key not in ("edit_token", "scope_ref")}
     return {"format": "openworkgraph.granted-reviewed-case-context.v1",
+            "dependency_review": dependency_review,
             "case": safe, "source_state": "unknown_until_explicit_recheck",
             "provider_receipt_verified": False, "customer_outcome_verified": False,
             "agent_execution_authorized": False, "source_read_performed": False}
