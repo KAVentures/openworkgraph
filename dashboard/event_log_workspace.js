@@ -3307,9 +3307,10 @@
     const out=el('div');out.id='owgAnalysisResults';
     const savedList=el('div');savedList.id='owgAnalysisSaved';
     let last=null,lastSpec=null;
-    let sharingAttempt=0,sharingSnapshot=null,casePacket=null;
+    let sharingAttempt=0,sharingSnapshot=null,casePacket=null,bundlePacket=null;
     const prepareShare=button('Prepare sharing snapshot','secondary');prepareShare.id='owgAnalysisPrepareShare';prepareShare.disabled=true;
     const prepareCases=button('Prepare case sharing files','secondary');prepareCases.id='owgAnalysisPrepareCases';prepareCases.disabled=true;
+    const prepareCompany=button('Prepare paired company handoff','secondary');prepareCompany.id='owgAnalysisPrepareCompany';prepareCompany.disabled=true;
     const sharing=el('div');sharing.id='owgAnalysisSharingPreview';sharing.hidden=true;
     const sharingTable=el('div');sharingTable.style.overflowX='auto';
     const sharingInfo=el('p',null,'muted');sharingInfo.style.overflowWrap='anywhere';
@@ -3321,23 +3322,34 @@
       freshness,freshnessStatus,field('I reviewed this snapshot and intend to share it with my organization',sharingConsent),sharingDownload);
     const casePane=el('div');casePane.hidden=true;const caseTable=el('div');caseTable.style.overflowX='auto';
     const caseConsent=input('owgAnalysisCaseConsent','checkbox');const caseDownload=button('Download reviewed case dataset','secondary');caseDownload.id='owgAnalysisCaseDownload';caseDownload.disabled=true;
-    casePane.append(el('p','This separate case file contains complete coded cases and within-case elapsed microseconds. Original case/activity/person labels, resources, attributes and absolute dates are omitted. Codes, topology and timings are still sensitive and are not anonymization. Codes apply only to this file; no group-row mapping or cross-case time order is disclosed. Review every timeline below. A separate case-read scope and explicit revision grant are required at the Gateway.'),caseTable,field('I reviewed the complete coded case timelines and intend this case-level disclosure',caseConsent),caseDownload);sharing.append(casePane);
-    function resetSharing(){casePacket=null;casePane.hidden=true;caseTable.replaceChildren();caseConsent.checked=false;caseDownload.disabled=true;sharingAttempt++;sharingSnapshot=null;sharing.hidden=true;sharingConsent.checked=false;sharingDownload.disabled=true;freshness.disabled=true;freshnessStatus.textContent='Freshness not checked.';freshnessStatus.dataset.stale='true';}
-    sharingConsent.onchange=()=>{sharingDownload.disabled=!sharingConsent.checked||!sharingSnapshot||freshnessStatus.dataset.stale==='true';};
-    async function prepareSharing(withCases=false){
+    const bundleDownload=button('Download paired company handoff','secondary');bundleDownload.id='owgAnalysisBundleDownload';bundleDownload.disabled=true;bundleDownload.hidden=true;
+    casePane.append(el('p','This separate case file contains complete coded cases and within-case elapsed microseconds. Original case/activity/person labels, resources, attributes and absolute dates are omitted. Codes, topology and timings are still sensitive and are not anonymization. Codes apply only to this file; no group-row mapping or cross-case time order is disclosed. Review every timeline below. A separate case-read scope and explicit revision grant are required at the Gateway.'),caseTable,field('I reviewed the complete coded case timelines and intend this case-level disclosure',caseConsent),caseDownload,bundleDownload,
+      el('p','A paired handoff contains both the minimized aggregate and these coded case timelines. Downloading sends nothing to the company portal. Publishing the aggregate and attaching case data still require distinct confirmations there.','muted'));sharing.append(casePane);
+    function resetSharing(){casePacket=null;bundlePacket=null;bundleDownload.hidden=true;bundleDownload.disabled=true;casePane.hidden=true;caseTable.replaceChildren();caseConsent.checked=false;caseDownload.disabled=true;sharingAttempt++;sharingSnapshot=null;sharing.hidden=true;sharingConsent.checked=false;sharingDownload.disabled=true;freshness.disabled=true;freshnessStatus.textContent='Freshness not checked.';freshnessStatus.dataset.stale='true';}
+    function sharingReady(){
+      sharingDownload.disabled=!sharingConsent.checked||!sharingSnapshot||freshnessStatus.dataset.stale==='true';
+      caseDownload.disabled=!caseConsent.checked||!casePacket;
+      bundleDownload.disabled=!bundlePacket||!sharingConsent.checked||!caseConsent.checked||freshnessStatus.dataset.stale==='true';
+    }
+    sharingConsent.onchange=sharingReady;
+    async function prepareSharing(withCases=false,company=false){
       if(!lastSpec)return;
-      resetSharing();const attempt=sharingAttempt;prepareShare.disabled=true;prepareCases.disabled=true;
+      resetSharing();const attempt=sharingAttempt;prepareShare.disabled=true;prepareCases.disabled=true;prepareCompany.disabled=true;
       try{
-        const result=await(await api(base()+(withCases?'/case-sharing-preview':'/analysis-sharing-preview'),{method:'POST',headers:{'Content-Type':'application/json',...(withCases?{'X-OWG-Case-Sharing-Preview':'true'}:{'X-OWG-Analysis-Sharing-Preview':'true'})},body:JSON.stringify(lastSpec)})).json();
+        const result=await(await api(base()+(company?'/company-handoff-preview':withCases?'/case-sharing-preview':'/analysis-sharing-preview'),{
+          method:'POST',headers:{'Content-Type':'application/json',
+            ...(company?{'X-OWG-Company-Handoff-Preview':'true'}:withCases?{'X-OWG-Case-Sharing-Preview':'true'}:{'X-OWG-Analysis-Sharing-Preview':'true'})},
+          body:JSON.stringify(lastSpec)})).json();
         const r=withCases?result.aggregate_snapshot:result;
         if(generation!==state.generation||attempt!==sharingAttempt)return;
         sharingSnapshot=r;sharing.hidden=false;freshness.disabled=withCases;freshnessStatus.dataset.stale=String(!withCases);freshnessStatus.textContent=withCases?'Paired preview was recomputed; review both files before download.':'Freshness not checked. Check current source, metric definitions and numeric results before downloading.';
+        if(company){bundlePacket=result;bundleDownload.hidden=false;}
         if(withCases){casePacket=result.case_dataset;casePane.hidden=false;caseTable.replaceChildren(...casePacket.cases.map(c=>{const details=el('details'),summary=el('summary',c.code+' · '+c.events.length+' events'),list=el('ol');for(const e of c.events)list.append(el('li',e.activity+' · '+e.elapsed_microseconds/1000000+' seconds since case start'));details.append(summary,list);return details;}));}
         sharingTable.replaceChildren(table(r.columns.map(c=>c.heading+(c.aggregation?' · '+c.aggregation:'')+(c.value_basis?' · '+c.value_basis:'')+(c.metric_slot?' '+c.metric_slot:'')+(c.unit?' ('+c.unit+')':'')),r.rows),
           ...r.metric_coverage.map(c=>el('p','Metric '+c.slot+': '+c.with_value+' cases with a value; '+c.without_value+' without; '+c.missing_operand+' missing operand; '+c.zero_divisor+' zero divisor; '+c.non_finite+' nonfinite.')));
         sharingInfo.textContent=r.matching_cases+' selected cases; '+r.matching_rows+' selected '+r.level+' rows. '+(r.rows_truncated?'Only the bounded result rows are included. ':'')+r.non_finite_results_withheld+' output results withheld as nonfinite. Generated '+r.generated_at+'. Source fingerprint: '+r.source_content_sha256+'. Analysis fingerprint: '+r.analysis_spec_sha256+'. Group codes apply only within this snapshot; source freshness after export is unknown.';
       }catch(error){if(generation===state.generation&&attempt===sharingAttempt)message.textContent=error.message;}
-      finally{if(generation===state.generation&&attempt===sharingAttempt){prepareShare.disabled=!lastSpec;prepareCases.disabled=!lastSpec;}}
+      finally{if(generation===state.generation&&attempt===sharingAttempt){prepareShare.disabled=!lastSpec;prepareCases.disabled=!lastSpec;prepareCompany.disabled=!lastSpec;}}
     };
     freshness.onclick=async()=>{
       if(!sharingSnapshot||!lastSpec||generation!==state.generation)return;
@@ -3354,9 +3366,41 @@
       }catch(error){if(generation===state.generation&&attempt===sharingAttempt){freshnessStatus.textContent=error.message+' Freshness unknown; prepare a new snapshot.';freshnessStatus.dataset.stale='true';sharingDownload.disabled=true;}}
       finally{if(generation===state.generation&&attempt===sharingAttempt)freshness.disabled=false;}
     };
-    prepareShare.onclick=()=>prepareSharing();prepareCases.onclick=()=>prepareSharing(true);
-    caseConsent.onchange=()=>{caseDownload.disabled=!caseConsent.checked||!casePacket;};
-    caseDownload.onclick=()=>{if(!caseConsent.checked||!casePacket||generation!==state.generation)return;download('owg-analysis-case-dataset.json',JSON.stringify(casePacket),'application/json');caseConsent.checked=false;caseDownload.disabled=true;};
+    prepareShare.onclick=()=>prepareSharing();prepareCases.onclick=()=>prepareSharing(true);prepareCompany.onclick=()=>prepareSharing(true,true);
+    caseConsent.onchange=sharingReady;
+    caseDownload.onclick=()=>{if(!caseConsent.checked||!casePacket||generation!==state.generation)return;download('owg-analysis-case-dataset.json',JSON.stringify(casePacket),'application/json');caseConsent.checked=false;sharingReady();};
+    bundleDownload.onclick=async()=>{
+      if(!bundlePacket||!caseConsent.checked||!sharingConsent.checked||!lastSpec||
+         freshnessStatus.dataset.stale==='true'||generation!==state.generation||bundleDownload.disabled)return;
+      const attempt=sharingAttempt,snapshot=sharingSnapshot,cases=casePacket,spec=lastSpec,reviewedBundle=bundlePacket;
+      if(!snapshot||!cases||reviewedBundle.aggregate_snapshot!==snapshot||reviewedBundle.case_dataset!==cases||
+         snapshot.source_content_sha256!==cases.source_content_sha256||
+         snapshot.analysis_spec_sha256!==cases.analysis_spec_sha256||
+         snapshot.matching_cases!==cases.cases.length)return;
+      bundleDownload.disabled=true;freshnessStatus.dataset.stale='true';
+      freshnessStatus.textContent='Rechecking source, metric lineage and paired snapshot before download…';
+      try{
+        const result=await(await api(base()+'/analysis-sharing-freshness',{method:'POST',
+          headers:{'Content-Type':'application/json','X-OWG-Analysis-Sharing-Preview':'true'},
+          body:JSON.stringify({spec,snapshot})})).json();
+        if(attempt!==sharingAttempt||generation!==state.generation||snapshot!==sharingSnapshot||
+           cases!==casePacket||reviewedBundle!==bundlePacket||!caseConsent.checked||!sharingConsent.checked)return;
+        if(result.format!=='openworkgraph.analysis-snapshot-freshness.v1'||
+           result.lineage_current!==true||result.current_results_match!==true){
+          freshnessStatus.textContent='Paired handoff stale or changed. Prepare and review a new handoff.';
+          return;
+        }
+        download('owg-company-analysis-handoff.json',JSON.stringify(reviewedBundle),'application/json');
+        caseConsent.checked=false;sharingConsent.checked=false;
+        freshnessStatus.textContent='Current source and aggregate verified at download. Changes after the check remain possible.';
+      }catch(error){
+        if(attempt===sharingAttempt&&generation===state.generation)
+          freshnessStatus.textContent=error.message+' No handoff downloaded.';
+      }finally{
+        if(attempt===sharingAttempt&&generation===state.generation)
+          sharingReady();
+      }
+    };
     sharingDownload.onclick=async()=>{
       if(!sharingConsent.checked||!sharingSnapshot||!lastSpec||freshnessStatus.dataset.stale==='true'||generation!==state.generation||sharingDownload.disabled)return;
       // The earlier preview/check is not a download authorization: a saved log
@@ -3384,7 +3428,7 @@
     const exports=exportButtons('owgAnalysis',()=>last,r=>[r.columns,...r.rows]);
     box.append(field('Run as a cancellable local job',background),
       el('p','Local jobs have a two-minute deadline including queue time. They use the log when execution starts; results are static. Results expire after ten minutes or restart. Leaving this view stops polling; work may continue until its deadline. Nothing is uploaded.','muted'),
-      row,metricBox,message,out,exports.node,prepareShare,prepareCases,sharing,saveRow,savedList);
+      row,metricBox,message,out,exports.node,prepareShare,prepareCases,prepareCompany,sharing,saveRow,savedList);
     mAdd.onclick=()=>{try{useMetric(readMetric());message.textContent='Metric added; choose it under Measure.';}catch(error){message.textContent=error.message;}};
     mUpdate.onclick=()=>{
       try{
@@ -3399,7 +3443,7 @@
         measure1.value=draft.measures[0];measure2.value=draft.measures[1];
         // A previous result and its export/share grants belong to the old definition.
         resetSharing();last=null;lastSpec=null;out.replaceChildren();exports.enable(false);
-        save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;
+        save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;prepareCompany.disabled=true;
         message.textContent='Metric updated in this draft; dependent arithmetic and selected measures follow any rename. Run analysis to recalculate before saving or exporting.';
       }catch(error){message.textContent=error.message;}
     };
@@ -3461,7 +3505,7 @@
           const additions=savedMetricBundle(m,r.metrics,metrics);
           metrics.push(...additions);renderMetrics();
           resetSharing();last=null;lastSpec=null;out.replaceChildren();exports.enable(false);
-          save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;
+          save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;prepareCompany.disabled=true;
           message.textContent='Added '+additions.length+' saved metric'+(additions.length===1?'':'s')+
             ' in dependency order. Choose a measure and rerun before saving or exporting.';
         }catch(error){message.textContent=error.message;}};
@@ -3484,7 +3528,7 @@
       const ownAttempt=++attempt,jobBase=base()+'/analysis-jobs';
       const current=()=>generation===state.generation&&box.isConnected&&ownAttempt===attempt;
       running=true;cancelRequested=false;job=null;run.disabled=true;background.disabled=true;cancel.disabled=!background.checked;
-      resetSharing();last=null;lastSpec=null;out.replaceChildren();exports.enable(false);save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;
+      resetSharing();last=null;lastSpec=null;out.replaceChildren();exports.enable(false);save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;prepareCompany.disabled=true;
       if(state.caseType)spec.case_type=state.caseType;
       let r;
       try{
@@ -3518,7 +3562,7 @@
       }
       if(!current())return;
       message.textContent='Analysis complete. Static result; rerun after changing the log.';
-      resetSharing();last=r;lastSpec=spec;exports.enable(true);save.disabled=false;prepareShare.disabled=false;prepareCases.disabled=false;
+      resetSharing();last=r;lastSpec=spec;exports.enable(true);save.disabled=false;prepareShare.disabled=false;prepareCases.disabled=false;prepareCompany.disabled=false;
       const units=r.units||{};
       out.replaceChildren(el('div',Number(r.matching.cases).toLocaleString()+' matching cases'+(r.rows_truncated?'; showing the first '+r.rows.length+' rows.':'.'),'muted'),
         table(r.columns,r.rows.map(row=>row.map((v,i)=>cell(r.columns[i],v,units[r.columns[i]])))),
@@ -3547,7 +3591,7 @@
             hours.value=draft.hours;endsWith.value=draft.endsWith;
             sync();measure1.value=draft.measure1;measure2.value=draft.measure2;
             resetSharing();last=null;lastSpec=null;out.replaceChildren();exports.enable(false);
-            save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;name.value='';
+            save.disabled=true;prepareShare.disabled=true;prepareCases.disabled=true;prepareCompany.disabled=true;name.value='';
             message.textContent='Loaded '+a.name+' into the builder. Edit and run it, then save under a new name; the original is unchanged.';
           }catch(error){message.textContent=error.message;}
         };
