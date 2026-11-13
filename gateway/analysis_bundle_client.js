@@ -14,7 +14,8 @@ function validate(value){
  if(aggregate_snapshot.level!=='cases'||
     aggregate_snapshot.source_content_sha256!==case_dataset.source_content_sha256||
     aggregate_snapshot.analysis_spec_sha256!==case_dataset.analysis_spec_sha256||
-    aggregate_snapshot.matching_cases!==case_dataset.cases.length)
+    (aggregate_snapshot.matching_cases!==case_dataset.cases.length||
+     aggregate_snapshot.matching_rows!==case_dataset.cases.length))
    throw new Error('The aggregate and case dataset do not describe the same selected source and analysis.');
  const out={format:FORMAT,aggregate_snapshot,case_dataset,
             source_independently_verified:false,case_attachment_authorized:false,
