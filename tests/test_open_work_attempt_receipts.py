@@ -152,3 +152,21 @@ def test_receipt_journal_accepts_timezone_aware_verifier_timestamp(tmp_path):
     rows = list_receipts(path, tenant="org", actor="actor", attempt="run")
     assert len(rows) == 1
     assert rows[0]["customer_outcome"] == "unknown"
+
+
+def test_source_revocation_purges_all_actors_but_not_other_tenants(tmp_path):
+    from server.open_work_attempt_receipts import purge_tenant
+    path = str(tmp_path / "receipts.sqlite")
+    unknown = {"status": "unknown", "reason": "provider_unavailable",
+               "provider_operation": "unknown", "customer_outcome": "unknown"}
+    for tenant, actor in (("source_a", "alice"), ("source_a", "bob"),
+                          ("source_b", "alice")):
+        append_receipt(path, tenant=tenant, actor=actor,
+                       attempt="attempt_1", verdict=unknown)
+    assert purge_tenant(path, tenant="source_a") == 2
+    assert list_receipts(path, tenant="source_a", actor="alice", attempt="attempt_1") == []
+    assert list_receipts(path, tenant="source_a", actor="bob", attempt="attempt_1") == []
+    assert len(list_receipts(path, tenant="source_b", actor="alice", attempt="attempt_1")) == 1
+    assert purge_tenant(path, tenant="source_a") == 0
+    with pytest.raises(ValueError):
+        purge_tenant(path, tenant="../source_b")
