@@ -19,3 +19,6 @@ retention and dashboard-session boundaries apply.
 
 Finding a label does not establish its business meaning, verify log completeness,
 or approve execution. The owner still selects the role and installs the pack.
+
+A synthetic DuckDB test checks pagination over one million distinct labels; it
+does not establish latency or capacity for every device or log distribution.

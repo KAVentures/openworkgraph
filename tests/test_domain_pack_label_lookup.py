@@ -22,6 +22,7 @@ def logs(tmp_path,monkeypatch):
 def test_pages_are_bounded_exact_and_selected_log_only(logs):
     first,other=logs
     p1=packs.find_mapping_labels(first,'activities','Prefix')
+    assert set(p1)=={'labels','next_after','match','limit'}
     p2=packs.find_mapping_labels(first,'activities','Prefix',p1['next_after'])
     p3=packs.find_mapping_labels(first,'activities','Prefix',p2['next_after'])
     labels=p1['labels']+p2['labels']+p3['labels']
@@ -62,3 +63,23 @@ with TestClient(app) as client:
     env={**os.environ,'WORKFLOW_OBSERVER_DATA':str(tmp_path/'data'),'WORKFLOW_OBSERVER_AUTH_DIR':str(tmp_path/'auth'),'WORKFLOW_OBSERVER_CONFIG':str(tmp_path/'config.json')}
     run=subprocess.run([sys.executable,'-c',code],cwd=Path(__file__).resolve().parents[1],env=env,capture_output=True,text=True,timeout=120)
     assert run.returncode==0,run.stdout+'\n'+run.stderr
+
+
+def test_million_distinct_labels_return_only_bounded_pages(tmp_path, monkeypatch):
+    """Real DuckDB scan with a million unique names, using the production query."""
+    import duckdb
+    path=str(tmp_path/'large-labels.duckdb')
+    conn=duckdb.connect(path)
+    conn.execute("CREATE TABLE events AS SELECT 'owned'::VARCHAR AS log_id, 'item' || lpad(i::VARCHAR, 6, '0') AS activity FROM range(1000000) t(i)")
+    conn.close()
+    monkeypatch.setattr(workspace,'_connect',lambda:duckdb.connect(path))
+    def checked(conn, log_id):
+        if log_id != 'owned':
+            raise workspace.EventLogWorkspaceError('unknown event log')
+        return {}
+    monkeypatch.setattr(workspace,'_check_log',checked)
+    first=packs.find_mapping_labels('owned','activities','item1')
+    second=packs.find_mapping_labels('owned','activities','item1',first['next_after'])
+    assert len(first['labels'])==len(second['labels'])==100
+    assert (first['labels'][0],first['labels'][-1],second['labels'][0])==('item100000','item100099','item100100')
+    assert first['next_after']==first['labels'][-1] and second['next_after']==second['labels'][-1]
