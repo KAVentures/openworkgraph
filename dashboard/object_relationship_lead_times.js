@@ -6,7 +6,7 @@
   'use strict';
   const $ = id => document.getElementById(id);
   const sessionKey = 'owg_dashboard_session_v1';
-  let activeLog = '', groups = [], generation = 0, queryGeneration = 0;
+  let activeLog = '', groups = [], generation = 0, queryGeneration = 0, attributeGeneration = 0;
   const activityGeneration = {source: 0, target: 0};
 
   const integer = value => Number.isInteger(value) && Number.isFinite(value);
@@ -73,6 +73,13 @@
   function status(message) { $('status').textContent = String(message); }
   function clearResult(message = '') {
     queryGeneration++;
+    attributeGeneration++;
+    $('inspectAttribute').disabled = false;
+    $('attributeResultSection').hidden = true;
+    $('attributeMetrics').replaceChildren();
+    $('attributeGroups').replaceChildren();
+    $('attributeSamples').replaceChildren();
+    $('attributeStatus').textContent = '';
     $('runQuery').disabled = false; // invalidating an in-flight query must restore the submit control.
     $('resultSection').hidden = true;
     $('metrics').replaceChildren();
@@ -248,6 +255,87 @@
     $('resultSection').hidden = false;
   }
 
+  function dataRow(values) {
+    const tr = document.createElement('tr');
+    values.forEach(value => {
+      const td = document.createElement('td');
+      td.textContent = String(value === null || value === undefined ? '—' : value);
+      tr.appendChild(td);
+    });
+    return tr;
+  }
+
+  function renderAttribute(result) {
+    const fields = [
+      ['Distinct related pairs', result.pairs],
+      ['Distinct source objects', result.distinct_source_objects],
+      ['Distinct related target objects', result.distinct_target_objects],
+      ['Target status known at source milestone', result.known_at_source_pairs],
+      ['Target status known at target milestone', result.known_at_target_pairs],
+      ['Attribute recorded only after source milestone', result.target_attribute_recorded_later_pairs],
+      ['Attribute not recorded for target', result.target_attribute_never_recorded_pairs],
+      ['Ambiguous at one effective time', result.ambiguous_same_timestamp_pairs],
+      ['Different known values across milestones', result.different_known_values_across_milestones_pairs],
+      ['Initial values without known start time', result.initial_untimed_value_used_at_source_pairs],
+    ];
+    $('attributeMetrics').replaceChildren(...fields.map(([name,value])=>metric(name,fmt(value))));
+    $('attributeBasis').textContent =
+      'Distinct caller-supplied directed object pairs · relationship revision '+
+      result.relationship_revision+' · selected events and timed attributes from locally imported OCEL';
+    $('attributeLimits').textContent =
+      'A missing source or target activity, a target attribute recorded later than the event, and multiple '+
+      'competing values at the same effective time remain unknown. A 1970 initial value does not prove when '+
+      'the business state began. Relationships are static imported assertions: neither historical membership, '+
+      'independent state verification, causal effect nor authorization is established.';
+    $('attributeGroups').replaceChildren(...(result.at_source_value_groups||[]).map(row=>
+      dataRow([row.status,row.value,row.pairs])));
+    const samples=Array.isArray(result.sample_pairs)?result.sample_pairs:[];
+    const sampleValue=(status,value)=>status==='known'?value:status;
+    $('attributeSamples').replaceChildren(...samples.map(row=>dataRow([
+      row.source_object_id,row.target_object_id,
+      sampleValue(row.at_source_status,row.target_value_at_source_activity),
+      sampleValue(row.at_target_status,row.target_value_at_target_activity),
+      row.source_first_activity_at,row.target_first_activity_at
+    ])));
+    $('attributeSampleStatus').textContent=fmt(samples.length)+' example pair(s) shown'+
+      (result.samples_truncated?'; additional pairs are included in aggregates.':'.');
+    $('attributeResultSection').hidden=false;
+  }
+
+  async function inspectAttribute() {
+    const id=activeLog;
+    if(!logIdIsValid(id)){ $('attributeStatus').textContent='Select a saved OCEL log.'; return; }
+    const attribute=$('targetAttribute').value;
+    if(!attribute.trim()){ $('attributeStatus').textContent='Enter the target object attribute name.'; return; }
+    const limit=Number($('sampleLimit').value);
+    if(!integer(limit)||limit<0||limit>50){
+      $('attributeStatus').textContent='Example limit must be an integer from 0 to 50.';return;
+    }
+    const settings={
+      source_type:$('sourceType').value,target_type:$('targetType').value,
+      source_activity:$('sourceActivity').value,target_activity:$('targetActivity').value,
+      target_attribute:attribute,sample_limit:limit,
+    };
+    if(['empty','literal'].includes($('qualifierMode').value))
+      settings.qualifier=$('qualifierMode').value==='empty'?'':$('qualifierValue').value;
+    const gen=++attributeGeneration;
+    $('inspectAttribute').disabled=true;
+    $('attributeResultSection').hidden=true;
+    $('attributeStatus').textContent='Comparing recorded target states at the selected activities…';
+    try{
+      const result=await api('/v1/event-logs/'+encodeURIComponent(id)+
+        '/object-relationships/attribute-milestones',{
+          method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(settings)});
+      if(gen!==attributeGeneration||id!==activeLog)return;
+      renderAttribute(result);
+      $('attributeStatus').textContent='Local temporal attribute comparison complete. Source labels and values are observations, not verified policy.';
+    }catch(error){
+      if(gen===attributeGeneration)$('attributeStatus').textContent=error.message||'Could not inspect target attribute.';
+    }finally{
+      if(gen===attributeGeneration)$('inspectAttribute').disabled=false;
+    }
+  }
+
   async function submit(event) {
     event.preventDefault();
     const id = activeLog;
@@ -294,10 +382,11 @@
     $('targetType').addEventListener('change', () => {clearResult();loadActivities('target');});
     // A prior response must never be presented under newly edited parameters.
     for (const id of ['sourceType', 'targetType', 'sourceActivity', 'targetActivity',
-                      'qualifierValue', 'sampleLimit']) {
+                      'qualifierValue', 'sampleLimit','targetAttribute']) {
       $(id).addEventListener('input', () => clearResult('Selection changed. Rerun analysis.'));
     }
     $('queryForm').addEventListener('submit', submit);
+    $('inspectAttribute').addEventListener('click', inspectAttribute);
     $('resetReport').addEventListener('click', () => clearResult('Results cleared. Your saved log remains unchanged.'));
     if (!session()) {
       status('Open this page from the same browser tab as the authenticated OWG dashboard.');

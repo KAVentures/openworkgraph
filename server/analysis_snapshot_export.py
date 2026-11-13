@@ -49,4 +49,43 @@ def export_snapshot(log_id, spec):
         matching_cases=result['matching']['cases'], matching_rows=result['matching']['rows'],
         rows_truncated=result['rows_truncated'], metric_coverage=coverage,
         non_finite_results_withheld=result['non_finite_results_withheld'], source_content_sha256=source_hash,
-        analysis_spec_sha256=content_digest(result['spec'])).model_dump(mode='json')
+        analysis_spec_sha256=content_digest(result['spec']),
+        metric_definition_sha256=[analysis._metric_lineage(metric.model_dump(mode='json'))['definition_sha256']
+                                  for metric in parsed.metrics if metric.name in needed]).model_dump(mode='json')
+
+
+def check_snapshot_freshness(log_id, request):
+    """Recompute lineage under the same bounded local export path.
+
+    This is NOT proof that the supplied numeric rows were ever published or
+    independently verified. Never echo case values, source rows or group labels.
+    """
+    from pydantic import ValidationError
+    if not isinstance(request, dict) or set(request) != {"spec", "snapshot"}:
+        raise workspace.EventLogWorkspaceError("freshness request needs only spec and snapshot")
+    try:
+        prior = Snapshot.model_validate(request["snapshot"])
+    except (ValidationError, ValueError, TypeError):
+        raise workspace.EventLogWorkspaceError("invalid bounded analysis snapshot") from None
+    current = export_snapshot(log_id, request["spec"])
+    same_source = prior.source_content_sha256 == current["source_content_sha256"]
+    same_spec = prior.analysis_spec_sha256 == current["analysis_spec_sha256"]
+    same_metrics = prior.metric_definition_sha256 == current["metric_definition_sha256"]
+    # Recompute the visible, minimized result rather than treating matching
+    # source/spec hashes as an attestation of caller-supplied numeric cells.
+    # Group codes are deterministic only within this exact recomputation.
+    comparable = ("level", "columns", "rows", "matching_cases", "matching_rows",
+                  "rows_truncated", "metric_coverage", "non_finite_results_withheld")
+    values_match = all(request["snapshot"].get(key) == current[key] for key in comparable)
+    return {
+        "format": "openworkgraph.analysis-snapshot-freshness.v1",
+        "source_unchanged": same_source,
+        "analysis_spec_unchanged": same_spec,
+        "metric_definitions_unchanged": same_metrics,
+        "lineage_current": same_source and same_spec and same_metrics,
+        "current_results_match": same_source and same_spec and same_metrics and values_match,
+        "rows_authenticated": False,
+        "source_independently_verified": False,
+        "execution_authorized": False,
+        "warning": "Current recomputation is not proof of original publication, source authenticity or authorization.",
+    }

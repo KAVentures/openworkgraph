@@ -56,3 +56,18 @@ A completed round creates the private CSV first and its SHA-bound candidate seco
 Integration tests use disposable Graph-shaped HTTPS responses through the **production request/parser/export path** and cover two-page completion, real continuation URL validation, explicit removal review, next-round cursor binding, consent, revocation, replay, changed source scope, unsafe redirects, partial/over-budget pages and private output. They do **not** establish Microsoft customer/sandbox acceptance. All exact-head native Ubuntu/macOS/Windows pytest, browser, process collaboration, scale, accessibility, starter and packaging/release checks remain mandatory before merge.
 
 **Still required for production lifecycle:** authorized Graph sandbox acceptance, verified delegated tenant/mailbox identity, token renewal/revocation, full-folder and multi-folder completeness, safe 429 retry scheduling, retention/deletion approval, authenticated OWG import receipts and durable, verified automatic checkpoint commits. Do not label this as a complete managed connector.
+
+
+### Expiring scoped grants
+
+A private, explicitly consented folder grant may include an optional
+`"expires_at": "2026-12-01T12:00:00Z"` field (UTC, seconds precision).
+The production delta grant validator refuses malformed or expired timestamps,
+even when `enabled` and `consented` are true. Every adapter that delegates
+to this validator inherits the check; revocation by setting `enabled: false`
+still takes precedence. Existing six-field grants remain supported for
+backward compatibility and **do not expire automatically**. Operators should
+issue expiring grants and explicitly revoke old grants when migrating.
+Expiry is a local authorization gate, not a Microsoft OAuth refresh or
+provider-side revocation guarantee; provider token expiry and actual tenant
+acceptance still require independent validation.

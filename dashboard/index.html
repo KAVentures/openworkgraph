@@ -169,6 +169,11 @@
         <div id="loopView" hidden><div class="table-wrap"><table><thead><tr><th>Observed navigation loop</th><th>Count</th></tr></thead><tbody id="seqTable"></tbody></table></div></div>
         <div id="transitionView" hidden><div class="table-wrap"><table><thead><tr><th>Transition</th><th>Count</th></tr></thead><tbody id="transitionsTable"></tbody></table></div></div>
       </div>
+      <div class="card" id="ocelBindingContinuityCard">
+        <h2>Object-centric event binding continuity</h2>
+        <p class="muted">For imported OCEL logs, compare two joint activities using the exact same supplied source and target objects and original event IDs. Co-occurrence is not inferred from dates, flattening, or activities in separate cases.</p>
+        <a class="btn secondary" href="/object-binding-continuity">Inspect OCEL joint-event bindings</a>
+      </div>
       <div class="card" id="savedDayCard">
         <h2>Browse saved days</h2>
         <div class="muted">Activity above uses the selected work period. Choose a previous date to inspect your <strong>locally retained</strong> work without changing what connected AI apps can read. Deletion and retention settings still apply.</div>
@@ -346,6 +351,7 @@ document.addEventListener('DOMContentLoaded',()=>{initTabs();const tabBar=docume
 <script src="/process-mining.js"></script>
 <script src="/process-designer.js"></script>
 <script src="/process-graph.js"></script>
+<script src="/focus-report.js"></script>
 <script src="/workflow-groupings.js"></script>
 <script src="/process-catalog.js"></script>
 <script src="/process-rule-editor.js"></script>
@@ -353,6 +359,7 @@ document.addEventListener('DOMContentLoaded',()=>{initTabs();const tabBar=docume
 <script src="/process-decisions.js"></script>
 <script src="/agent-starter.js"></script>
 <script src="/agent-preflight.js"></script>
+<script src="/time-allocation.js"></script>
 <script src="/opportunity-review.js"></script>
 <script src="/event-log-workspace.js"></script>
 <script src="/simulation-report-compare.js"></script>
@@ -363,6 +370,8 @@ document.addEventListener('DOMContentLoaded',()=>{initTabs();const tabBar=docume
 <script src="/sap-o2c.js"></script>
 <script src="/process-pdd.js"></script>
 <script src="/automation-pipeline.js"></script>
+<script src="/review-choice-workbench.js"></script>
+<script src="/open_work_dependencies.js"></script>
 <script>
 /* Navigation only. Never infer consent, approval, verified outcomes or agent authority. */
 document.addEventListener('DOMContentLoaded', () => {
@@ -442,6 +451,40 @@ document.addEventListener('DOMContentLoaded', () => {
       }
       status.textContent='Opened '+stage.label+'. Inspect and explicitly confirm any separate actions yourself. No consent, approval or execution was granted.';
     });
+  });
+});
+</script>
+<script>
+/* Read-only Microsoft 365 operator audit receipts; no consent or provider calls. */
+document.addEventListener('DOMContentLoaded', () => {
+  const panel = document.getElementById('panel-connect');
+  if (!panel) return;
+  const card = document.createElement('section');
+  card.className = 'card';
+  card.id = 'owgM365OperatorAudit';
+  card.innerHTML = '<h3>Microsoft 365 operator evidence</h3><p class="muted">Local, explicitly recorded review steps only. Not proof of tenant validation or completed sync.</p><button type="button" id="owgM365AuditRefresh">Refresh audit receipts</button><div id="owgM365AuditResult" role="status" aria-live="polite">Not loaded.</div>';
+  panel.appendChild(card);
+  const output = card.querySelector('#owgM365AuditResult');
+  card.querySelector('#owgM365AuditRefresh').addEventListener('click', async () => {
+    output.textContent = 'Reading private local receipts…';
+    try {
+      await window.__owgAuthReady;
+      const response = await fetch('/v1/m365/operator-audit', {cache: 'no-store'});
+      if (!response.ok) throw Error('Audit evidence unavailable (' + response.status + '). Check local private storage and dashboard session.');
+      const result = await response.json();
+      if (!result.configured) { output.textContent = 'No audit directory configured. Set OWG_M365_AUDIT_DIR to an owner-private local audit directory before launching OWG.'; return; }
+      output.replaceChildren();
+      const summary = document.createElement('p');
+      summary.textContent = result.total_receipts + ' receipts; ' + (result.truncated ? 'showing newest 50. ' : '') + 'No Microsoft tenant validation inferred.';
+      output.appendChild(summary);
+      const list = document.createElement('ol');
+      for (const record of result.records || []) {
+        const item = document.createElement('li');
+        item.textContent = String(record.timestamp_utc) + ' · ' + String(record.action) + ' · ' + String(record.status) + ' · generation ' + String(record.committed_generation ?? record.expected_generation ?? 'not recorded') + ' · snapshots ' + String(record.event_snapshots ?? 'not recorded');
+        list.appendChild(item);
+      }
+      output.appendChild(list);
+    } catch (error) { output.textContent = String(error.message || 'Audit evidence unavailable'); }
   });
 });
 </script>

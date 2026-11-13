@@ -68,6 +68,20 @@ def export_pipeline(request: Request, state: str | None = Query(default=None, ma
         "Cache-Control": "no-store", "Content-Disposition": 'attachment; filename="automation-pipeline.csv"'})
 
 
+@router.get("/v1/automation-pipeline/portfolio")
+def portfolio_rollup(request: Request):
+    _require_dashboard(request)
+    return _respond(pipeline.portfolio)
+
+
+@router.get("/v1/automation-pipeline/benefit-overlap")
+def benefit_overlap_review(request: Request):
+    """Read-only potential benefit duplication review, never an aggregate savings claim."""
+    _require_dashboard(request)
+    from . import automation_benefit_overlap
+    return JSONResponse(automation_benefit_overlap.review(), headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/automation-pipeline")
 async def create_idea(request: Request):
     _require_dashboard(request)
@@ -169,6 +183,12 @@ async def assess_idea(request: Request, idea_id: str):
     return _respond(pipeline.assess, idea_id, await _json(request))
 
 
+@router.post("/v1/automation-pipeline/{idea_id}/planning")
+async def plan_idea(request: Request, idea_id: str):
+    _require_dashboard(request)
+    return _respond(pipeline.plan, idea_id, await _json(request))
+
+
 @router.post("/v1/automation-pipeline/{idea_id}/transition")
 async def move_idea(request: Request, idea_id: str):
     _require_dashboard(request)
@@ -179,3 +199,32 @@ async def move_idea(request: Request, idea_id: str):
 def delete_idea(request: Request, idea_id: str):
     _require_dashboard(request)
     return _respond(pipeline.delete, idea_id)
+
+
+def _benefit(operation: Callable[..., Any], *args: Any) -> JSONResponse:
+    from . import automation_benefits
+    try:
+        return JSONResponse(operation(*args), headers={"Cache-Control": "no-store"})
+    except automation_benefits.BenefitError as exc:
+        raise HTTPException(404 if str(exc) in {"unknown idea", "unknown measurement"} else 422, str(exc)) from None
+
+
+@router.get("/v1/automation-pipeline/{idea_id}/realized-value")
+def realized_value(request: Request, idea_id: str):
+    from . import automation_benefits
+    _require_dashboard(request)
+    return _benefit(automation_benefits.report, idea_id)
+
+
+@router.post("/v1/automation-pipeline/{idea_id}/measurements")
+async def record_measurement(request: Request, idea_id: str):
+    from . import automation_benefits
+    _require_dashboard(request)
+    return _benefit(automation_benefits.record, idea_id, await _json(request))
+
+
+@router.post("/v1/automation-pipeline/{idea_id}/measurements/{measurement_id}/delete")
+def delete_measurement(request: Request, idea_id: str, measurement_id: str):
+    from . import automation_benefits
+    _require_dashboard(request)
+    return _benefit(automation_benefits.delete, idea_id, measurement_id)

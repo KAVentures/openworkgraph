@@ -336,3 +336,33 @@ def test_resumption_timeline_respects_history_grant_and_does_not_link_time_alone
     assert [x["pointer"]["resource_ref"] for x in full["identity_timelines"]] == [REF["a"]]
     assert [e["evidence_event_ids"] for e in full["identity_timelines"][0]["episodes"]] == [
         ["e1"], ["e3"]]
+
+
+def test_unlabeled_events_cannot_create_cross_session_continuity_or_case_evidence():
+    db = _database([
+        (_day(12, "09:00"), _ref("a")),
+        (_day(14, "10:00"), _ref("a")),
+    ])
+    db.execute("UPDATE events SET event_id = NULL")
+    result = resumption_candidates(db, lease=ALL)
+    assert result["candidates"] == []
+    assert result["identity_timelines"] == []
+    assert result["observed_case_groups"] == []
+    assert result["observed_pair_event_assignments"] == []
+    assert result["coverage"]["excluded_unlabeled_pointer_rows"] == 2
+    assert result["coverage"]["scan_truncated"] is True
+
+
+def test_unlabeled_event_does_not_taint_labeled_identity_provenance():
+    db = _database([
+        (_day(12, "09:00"), _ref("a")),
+        (_day(12, "09:01"), _ref("b")),
+        (_day(14, "10:00"), _ref("a")),
+    ])
+    db.execute("UPDATE events SET event_id = '' WHERE id = 2")
+    result = resumption_candidates(db, lease=ALL)
+    assert result["coverage"]["excluded_unlabeled_pointer_rows"] == 1
+    assert result["candidates"]
+    assert all(p["resource_ref"] != REF["b"] for c in result["candidates"]
+               for p in c["shared_pointers"])
+    assert all(t["pointer"]["resource_ref"] != REF["b"] for t in result["identity_timelines"])

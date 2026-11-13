@@ -83,13 +83,28 @@ def _scope(prefix: str | None) -> tuple[str, list[Any]]:
 
 
 def _set_digest(conn, sql: str, params: list[Any]) -> str:
-    """SHA-256 over the sorted per-row hashes of ``sql`` (one text column), bucketed so it stays bounded."""
-    buckets = conn.execute(f"""WITH r AS ({sql})
-        SELECT left(h, 2) AS b, count(*), sha256(string_agg(h, '' ORDER BY h)) FROM r GROUP BY b ORDER BY b""",
-                           params).fetchall()
+    """SHA-256 over sorted row hashes, streaming bounded batches without string aggregation."""
+    # Stream sorted hashes rather than materializing a potentially enormous
+    # string_agg per bucket. Preserve the exact v1/v2 bucket digest contract.
+    cursor = conn.execute(f"""WITH r AS ({sql})
+        SELECT left(h, 2) AS b, h FROM r ORDER BY b, h""", params)
     digest = hashlib.sha256()
-    for b, n, h in buckets:
-        digest.update(f"{b}:{n}:{h};".encode())
+    bucket = None
+    count = 0
+    bucket_digest = hashlib.sha256()
+
+    def finish_bucket() -> None:
+        if bucket is not None:
+            digest.update(f"{bucket}:{count}:{bucket_digest.hexdigest()};".encode())
+
+    while rows := cursor.fetchmany(4096):
+        for b, h in rows:
+            if b != bucket:
+                finish_bucket()
+                bucket, count, bucket_digest = b, 0, hashlib.sha256()
+            bucket_digest.update(h.encode("ascii"))
+            count += 1
+    finish_bucket()
     return digest.hexdigest()
 
 

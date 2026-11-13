@@ -102,6 +102,38 @@ def args(private, stem="first"):
     }
 
 
+@pytest.mark.parametrize("expiry,accepted", [
+    ("2000-01-01T00:00:00Z", False),
+    ("2999-01-01T00:00:00Z", True),
+    ("2026-13-01T00:00:00Z", False),
+    ("2026-11-13T00:00:00+00:00", False),
+    (None, False),
+    (True, False),
+])
+def test_scoped_grant_expiry_refuses_before_graph_access(private, expiry, accepted):
+    from server.m365_outlook_delta import _grant
+    parent, grant = private
+    record = json.loads(grant.read_text())
+    record["expires_at"] = expiry
+    grant.write_text(json.dumps(record))
+    if accepted:
+        _grant(grant, TENANT, MAILBOX, FOLDER)
+    else:
+        with pytest.raises(DeltaError, match="expired or invalid"):
+            _grant(grant, TENANT, MAILBOX, FOLDER)
+
+
+def test_revocation_still_refuses_with_future_expiry(private):
+    from server.m365_outlook_delta import _grant
+    _, grant = private
+    record = json.loads(grant.read_text())
+    record["expires_at"] = "2999-01-01T00:00:00Z"
+    record["enabled"] = False
+    grant.write_text(json.dumps(record))
+    with pytest.raises(DeltaError, match="revoked or mismatched"):
+        _grant(grant, TENANT, MAILBOX, FOLDER)
+
+
 def test_complete_two_page_round_exports_hashed_events_and_removal_review(private):
     params = args(private)
     transport = Graph([

@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-from shared.process_clarification import ClarificationRequest, Decision, clarify, proposed_change, statements
+from shared.process_clarification import ClarificationRequest, Decision, clarify, documents_sha256, proposed_change, statements
 from shared.process_model import ProcessModel
 
 
@@ -37,6 +37,18 @@ RECORD = {"workflow_id": "process_refunds", "revision": 3, "content_sha256": "c"
 def _docs(*texts):
     return ClarificationRequest.model_validate(
         {"documents": [{"title": f"Doc {i}", "text": t} for i, t in enumerate(texts, 1)]})
+
+
+def test_document_fingerprint_pins_exact_source_revision_without_exposing_text():
+    first = _docs("The agent must review refunds.").documents
+    assert documents_sha256(first) == documents_sha256(_docs("The agent must review refunds.").documents)
+    assert len(documents_sha256(first)) == 64
+    assert "agent" not in documents_sha256(first)
+    assert documents_sha256(first) != documents_sha256(_docs("The agent must review refunds now.").documents)
+    assert documents_sha256(first) != documents_sha256(
+        ClarificationRequest.model_validate({"documents": [{"title": "New Title", "text": "The agent must review refunds."}]}).documents)
+    assert documents_sha256(_docs("First policy.", "Second policy.").documents) != documents_sha256(
+        _docs("Second policy.", "First policy.").documents)
 
 
 def test_statements_carry_exact_offsets():
@@ -113,10 +125,11 @@ with TestClient(app) as client:
     result = client.post("/v1/process-catalog/clarify" + q, json={"documents": docs}, headers=owner).json()
     question = next(x for x in result["questions"] if x["kind"] == "unconfirmed_rule")
     bad = client.post("/v1/process-catalog/clarify/decide" + q, headers=owner, json={"documents": docs,
-        "decision": {"question_id": question["question_id"], "decision": "confirm", "cited_statement_ids": ["s_" + "0" * 16]}})
+        "decision": {"question_id": question["question_id"], "decision": "confirm", "expected_documents_sha256": result["documents_sha256"], "cited_statement_ids": ["s_" + "0" * 16]}})
     assert bad.status_code == 422
     ok = client.post("/v1/process-catalog/clarify/decide" + q, headers=owner, json={"documents": docs,
         "decision": {"question_id": question["question_id"], "decision": "confirm", "answer": "Team lead approves",
+                     "expected_documents_sha256": result["documents_sha256"],
                      "cited_statement_ids": [question["citations"][0]["statement_id"]]}})
     assert ok.status_code == 200, ok.text
     body = ok.json()
@@ -125,6 +138,29 @@ with TestClient(app) as client:
     assert question["question_id"] not in {x["question_id"] for x in again["questions"]}
     ledger = client.get(f"/v1/process-catalog/clarify/decisions?workflow_id={wid}", headers=owner).json()
     assert [d["decision"] for d in ledger["decisions"]] == ["confirm"]
+    assert ledger["decisions"][0]["documents_sha256"] == result["documents_sha256"]
+    changed_docs = [{"title": "SOP", "text": "Refund amount above 600 EUR needs manager approval."}]
+    stale = client.post("/v1/process-catalog/clarify/decide" + q, headers=owner,
+        json={"documents": changed_docs, "decision": {
+            "question_id": question["question_id"], "decision": "confirm",
+            "expected_documents_sha256": result["documents_sha256"]}})
+    assert stale.status_code == 409
+    changed = client.post("/v1/process-catalog/clarify" + q, headers=owner,
+        json={"documents": changed_docs}).json()
+    assert changed["documents_sha256"] != result["documents_sha256"]
+    assert question["question_id"] in {item["question_id"] for item in changed["questions"]}
+    confirmed = client.post("/v1/process-catalog/clarify/decide" + q, headers=owner,
+        json={"documents": changed_docs, "decision": {"question_id": question["question_id"],
+            "decision": "confirm", "expected_documents_sha256": changed["documents_sha256"],
+            "cited_statement_ids": [changed["questions"][0]["citations"][0]["statement_id"]]}})
+    assert confirmed.status_code == 200, confirmed.text
+    assert client.post("/v1/process-catalog/clarify" + q, headers=owner,
+        json={"documents": changed_docs}).json()["answered_question_count"] >= 1
+    past = client.get(f"/v1/process-catalog/clarify/decisions?workflow_id={wid}",
+                      headers=owner).json()["decisions"]
+    assert len(past) == 2
+    assert {row["documents_sha256"] for row in past} == {
+        changed["documents_sha256"], result["documents_sha256"]}
     assert catalog.get(wid)["revision"] == rev
 '''
     env = os.environ.copy()
@@ -139,3 +175,4 @@ with TestClient(app) as client:
 def test_catalog_ui_offers_clarification():
     script = (Path(__file__).resolve().parents[1] / "dashboard" / "process_catalog.js").read_text(encoding="utf-8")
     assert "renderClarification(host)" in script and "/v1/process-catalog/clarify/decide" in script
+    assert "expected_documents_sha256:result.documents_sha256" in script

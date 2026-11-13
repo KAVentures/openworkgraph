@@ -666,10 +666,73 @@ const path=require('node:path');
    assert.equal(sharingDoc.matching_cases,60);assert.equal(sharingDoc.group_labels_included,false);
    for(const secret of ['C0','ann','bob','has_rework','resource','cohort'])assert.ok(!JSON.stringify(sharingDoc).includes('"'+secret+'"'));
    await page.locator('#owgAnalysisSharingConsent').check();
+   assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),true,'consent alone cannot bypass required freshness validation');
+   await page.locator('#owgAnalysisFreshness').click();
+   await page.getByText('Current source, specification, metric lineage and minimized values match.',{exact:false}).waitFor();
+   assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),false);
+   // A previously successful preview is not enough: download must recheck the saved log.
+   let rechecks=0;
+   await page.route('**/analysis-sharing-freshness',route=>{
+     rechecks++;
+     return route.fulfill({status:200,contentType:'application/json',
+       body:JSON.stringify({format:'openworkgraph.analysis-snapshot-freshness.v1',lineage_current:true,current_results_match:false})});
+   });
+   await page.locator('#owgAnalysisSharingDownload').click();
+   await page.getByText('Source, metric lineage or values changed.',{exact:false}).waitFor();
+   assert.equal(rechecks,1);
+   assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),true);
+   await page.unroute('**/analysis-sharing-freshness');
+   await page.locator('#owgAnalysisFreshness').click();
+   await page.getByText('Current source, specification, metric lineage and minimized values match.',{exact:false}).waitFor();
+   assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),false);
+   // Revoke consent while the authenticated recheck is in flight.
+   let releaseRecheck,seenRecheck;
+   const recheckStarted=new Promise(resolve=>seenRecheck=resolve);
+   await page.route('**/analysis-sharing-freshness',async route=>{
+     seenRecheck();
+     await new Promise(resolve=>releaseRecheck=resolve);
+     await route.fulfill({status:200,contentType:'application/json',
+       body:JSON.stringify({format:'openworkgraph.analysis-snapshot-freshness.v1',lineage_current:true,current_results_match:true})});
+   },{times:1});
+   await page.locator('#owgAnalysisSharingDownload').click();
+   await recheckStarted;
+   await page.locator('#owgAnalysisSharingConsent').uncheck();
+   releaseRecheck();
+   await page.waitForTimeout(100); // allow the in-flight response handler to settle
+   assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),true);
+   await page.unroute('**/analysis-sharing-freshness');
+   await page.locator('#owgAnalysisSharingConsent').check();
+   await page.locator('#owgAnalysisFreshness').click();
+   await page.getByText('Current source, specification, metric lineage and minimized values match.',{exact:false}).waitFor();
    const [sharingFile]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisSharingDownload').click()]);
    const sharingText=await fs.readFile(await sharingFile.path(),'utf8');assert.deepEqual(JSON.parse(sharingText),sharingDoc);
    if(process.env.OWG_ANALYSIS_SNAPSHOT_OUTPUT)await fs.writeFile(process.env.OWG_ANALYSIS_SNAPSHOT_OUTPUT,sharingText);
    assert.equal(await page.locator('#owgAnalysisSharingConsent').isChecked(),false);
+   // A stale freshness result must not be bypassed by toggling sharing consent.
+   await page.route('**/analysis-sharing-freshness',route=>route.fulfill({
+     status:200,contentType:'application/json',
+     body:JSON.stringify({format:'openworkgraph.analysis-snapshot-freshness.v1',lineage_current:false,current_results_match:false})
+   }));
+   await page.locator('#owgAnalysisSharingConsent').check();
+   await page.locator('#owgAnalysisFreshness').click();
+   await assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),true);
+   await page.getByText('Snapshot lineage is stale.',{exact:false}).waitFor();
+   await page.locator('#owgAnalysisSharingConsent').uncheck();
+   await page.locator('#owgAnalysisSharingConsent').check();
+   assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),true);
+   await page.unroute('**/analysis-sharing-freshness');
+   // A contradictory freshness response cannot authorize download: both lineage and values must match.
+   await page.route('**/analysis-sharing-freshness',route=>route.fulfill({
+     status:200,contentType:'application/json',
+     body:JSON.stringify({format:'openworkgraph.analysis-snapshot-freshness.v1',lineage_current:false,current_results_match:true})
+   }));
+   await page.locator('#owgAnalysisFreshness').click();
+   await page.getByText('Snapshot lineage is stale.',{exact:false}).waitFor();
+   assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),true);
+   await page.locator('#owgAnalysisSharingConsent').uncheck();
+   await page.locator('#owgAnalysisSharingConsent').check();
+   assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),true);
+   await page.unroute('**/analysis-sharing-freshness');
    const [pairResponse]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/case-sharing-preview')),page.locator('#owgAnalysisPrepareCases').click()]);
    const pair=await pairResponse.json();assert.equal(pairResponse.status(),200,JSON.stringify(pair));
    assert.equal(pair.case_dataset.cases.length,60);assert.equal(pair.case_dataset.source_content_sha256,pair.aggregate_snapshot.source_content_sha256);

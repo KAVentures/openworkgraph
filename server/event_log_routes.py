@@ -38,6 +38,7 @@ from . import event_log_domain_packs as domain_packs
 from . import event_log_object_diagnostics as object_diagnostics
 from . import event_log_objects as objects
 from . import event_log_object_relationships as object_relationships
+from . import event_log_object_paths as object_paths
 from . import event_log_organization as organization
 from . import event_log_playback as playback
 from . import event_log_process_map as process_maps
@@ -50,7 +51,9 @@ from . import event_log_linked_attribute_analysis as linked_attribute_analysis
 from . import analysis_snapshot_export
 from . import event_log_signals as signals
 from . import event_log_signal_inbox as signal_inbox
+from . import event_log_signal_transitions as signal_transitions
 from . import event_log_signal_overview as signal_overview
+from . import event_log_signal_timeline as signal_timeline
 from . import event_log_simulation as simulation
 from . import event_log_trace_clusters as trace_clusters
 from . import event_log_waiting as waiting
@@ -84,6 +87,8 @@ def _require_dashboard(request: Request) -> None:
 def _respond(operation: Callable[..., Any], *args: Any, **kwargs: Any) -> JSONResponse:
     try:
         return JSONResponse(operation(*args, **kwargs), headers={"Cache-Control": "no-store"})
+    except domain_packs.DomainPackConflict as exc:
+        raise HTTPException(409, str(exc)) from None
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
 
@@ -93,16 +98,60 @@ def _case_filter(started_from: str = Query(default="", max_length=64),
                  resource: str = Query(default="", max_length=200),
                  activity: str = Query(default="", max_length=200),
                  attribute: str = Query(default="", max_length=200),
+                 event_attribute: str = Query(default="", max_length=200),
+                 tag: str = Query(default="", max_length=60),
                  follows: str = Query(default="", max_length=4000)) -> dict[str, Any]:
     """The case filter shared by analysis views; ``follows`` is a JSON list of follower rules."""
     cohort: dict[str, Any] = {"started_from": started_from, "started_before": started_before, "resource": resource,
-                              "activity": activity, "attribute": attribute}
+                              "activity": activity, "attribute": attribute, "event_attribute": event_attribute,
+                              "tag": tag}
     if follows:
         try:
             cohort["follows"] = json.loads(follows)
         except ValueError:
             raise HTTPException(422, "follows must be a JSON list of rules") from None
     return cohort
+
+
+@router.get("/v1/event-logs/{log_id}/cost-model")
+def event_log_cost_model(request: Request, log_id: str):
+    """The log's saved cost model, or null when none is saved."""
+    from . import event_log_costs as cost_model
+    _require_dashboard(request)
+    return _respond(lambda: {"log_id": log_id, "saved": cost_model.saved_model(log_id)})
+
+
+@router.post("/v1/event-logs/{log_id}/cost-model")
+async def event_log_save_cost_model(request: Request, log_id: str):
+    """Keep the analyst's prices with the log; the report then includes a cost section."""
+    from . import event_log_costs as cost_model
+    _require_dashboard(request)
+    spec = await _json_body(request, "cost model", strict=True, limit=131072)
+    try:
+        result = await run_in_threadpool(cost_model.save_model, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/cost-model/delete")
+def event_log_delete_cost_model(request: Request, log_id: str):
+    from . import event_log_costs as cost_model
+    _require_dashboard(request)
+    return _respond(cost_model.delete_model, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/costs")
+async def event_log_costs(request: Request, log_id: str):
+    """Process cost from a user-supplied cost model: per case, activity, variant and resource."""
+    from . import event_log_costs as cost_model
+    _require_dashboard(request)
+    spec = await _json_body(request, "cost model", strict=True, limit=131072)
+    try:
+        result = await run_in_threadpool(cost_model.costs, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 @router.post("/v1/event-logs/prepare-salesforce")
@@ -143,6 +192,19 @@ async def prepare_salesforce_export(request: Request):
         raw.clear()
 
 
+@router.post("/v1/event-logs/comparison")
+async def compare_event_logs(request: Request):
+    """Compare two saved logs (or one log under two filters): KPIs, activities, paths and variants."""
+    from . import event_log_log_comparison as log_comparison
+    _require_dashboard(request)
+    spec = await _json_body(request, "log comparison", strict=True, limit=32768)
+    try:
+        result = await run_in_threadpool(log_comparison.compare, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/event-log-workspace.js")
 def event_log_workspace_script() -> FileResponse:
     """Static dashboard client; it only calls the authenticated routes below."""
@@ -163,6 +225,16 @@ def event_log_signal_overview(
     """Local dashboard-only, non-mutating review queue across saved logs."""
     _require_dashboard(request)
     return _respond(signal_overview.overview, status=status, limit=limit)
+
+
+@router.get("/v1/event-logs/signal-timeline")
+def event_log_signal_timeline(
+    request: Request, transition: str = Query(default="all", max_length=20),
+    limit: int = Query(default=100, ge=1, le=200),
+):
+    """Read-only cross-log transition journal; local dashboard session only."""
+    _require_dashboard(request)
+    return _respond(signal_timeline.timeline, transition=transition, limit=limit)
 
 
 @router.post("/v1/event-logs/import")
@@ -247,6 +319,19 @@ def event_log_quality(request: Request, log_id: str):
     return _respond(quality.quality, log_id)
 
 
+@router.post("/v1/event-logs/{log_id}/derive")
+async def derive_event_log(request: Request, log_id: str):
+    """Save the cases matching a filter as a new event log; the source log is unchanged."""
+    from . import event_log_derive as derived_logs
+    _require_dashboard(request)
+    spec = await _json_body(request, "derived log settings", strict=True, limit=32768)
+    try:
+        result = await run_in_threadpool(derived_logs.derive, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/v1/event-logs/{log_id}/quarantine")
 def event_log_quarantine(request: Request, log_id: str, batch: int | None = Query(default=None, ge=0),
                          after: int = Query(default=0, ge=0), limit: int = Query(default=50, ge=1, le=100)):
@@ -283,6 +368,40 @@ async def event_log_quarantine_discard(request: Request, log_id: str):
     return _respond(quarantine.discard, log_id, await _json_body(request, "discard"))
 
 
+@router.get("/v1/event-logs/{log_id}/case-tags")
+def event_log_case_tags(request: Request, log_id: str, tag: str | None = Query(default=None, max_length=60),
+                        limit: int = Query(default=200, ge=1, le=1000)):
+    """The log's case tags with counts; with ``tag``, the tagged cases and their notes."""
+    from . import event_log_case_tags as case_tags
+    _require_dashboard(request)
+    return _respond(case_tags.listing, log_id, tag, limit)
+
+
+@router.post("/v1/event-logs/{log_id}/case-tags")
+async def event_log_add_case_tags(request: Request, log_id: str):
+    """Tag cases by ID or by a case filter. Tags are the analyst's judgement; events are not changed."""
+    from . import event_log_case_tags as case_tags
+    _require_dashboard(request)
+    spec = await _json_body(request, "case tags", strict=True, limit=262144)
+    try:
+        result = await run_in_threadpool(case_tags.add, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/case-tags/remove")
+async def event_log_remove_case_tags(request: Request, log_id: str):
+    from . import event_log_case_tags as case_tags
+    _require_dashboard(request)
+    spec = await _json_body(request, "case tags", strict=True, limit=262144)
+    try:
+        result = await run_in_threadpool(case_tags.remove, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/v1/event-logs/{log_id}/appends")
 def event_log_appends(request: Request, log_id: str):
     _require_dashboard(request)
@@ -295,11 +414,37 @@ def delete_event_log(request: Request, log_id: str):
     return _respond(workspace.delete_log, log_id)
 
 
+@router.post("/v1/event-logs/{log_id}/time-patterns")
+async def event_log_time_patterns(request: Request, log_id: str):
+    """Events and case arrivals by local weekday and hour."""
+    from . import event_log_time_patterns as time_patterns
+    _require_dashboard(request)
+    spec = await _json_body(request, "time-pattern settings", strict=True, limit=16384)
+    try:
+        result = await run_in_threadpool(time_patterns.time_patterns, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/v1/event-logs/{log_id}/summary")
 def event_log_summary(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
                       cohort: dict[str, Any] = Depends(_case_filter)):
     _require_dashboard(request)
     return _respond(workspace.summary, log_id, case_type, cohort=cohort)
+
+
+@router.post("/v1/event-logs/{log_id}/attribute-profile")
+async def event_log_attribute_profile(request: Request, log_id: str):
+    """Coverage, type, level and frequent values of every event attribute."""
+    from . import event_log_attribute_profile as attribute_profile
+    _require_dashboard(request)
+    spec = await _json_body(request, "attribute profile settings", strict=True, limit=16384)
+    try:
+        result = await run_in_threadpool(attribute_profile.profile, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 @router.get("/v1/event-logs/{log_id}/object-types")
@@ -327,6 +472,14 @@ async def event_log_object_relationship_query(request: Request, log_id: str):
     return await run_in_threadpool(_respond, object_relationships.query, log_id, spec)
 
 
+@router.post("/v1/event-logs/{log_id}/object-relationships/trace")
+async def event_log_object_relationship_trace(request: Request, log_id: str):
+    """Explicit bounded local multi-hop navigation over supplied O2O links."""
+    _require_dashboard(request)
+    spec = await _json_body(request, "relationship trace", strict=True, limit=16384)
+    return await run_in_threadpool(_respond, object_paths.trace, log_id, spec)
+
+
 @router.get("/v1/event-logs/{log_id}/object-flattening")
 def event_log_object_flattening(request: Request, log_id: str):
     _require_dashboard(request)
@@ -339,6 +492,19 @@ def event_log_object_attributes(request: Request, log_id: str,
                                 object_id: str | None = Query(default=None, max_length=200)):
     _require_dashboard(request)
     return _respond(object_attributes.attribute_changes, log_id, object_type, object_id)
+
+
+@router.post("/v1/event-logs/{log_id}/stuck-cases")
+async def event_log_stuck_cases(request: Request, log_id: str):
+    """Open cases idle much longer than usual after their latest activity."""
+    from . import event_log_stuck as stuck
+    _require_dashboard(request)
+    spec = await _json_body(request, "stuck-case settings", strict=True, limit=16384)
+    try:
+        result = await run_in_threadpool(stuck.stuck_cases, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 @router.get("/v1/event-logs/{log_id}/variants")
@@ -394,6 +560,67 @@ def event_log_kpis(request: Request, log_id: str, case_type: str | None = Query(
     resources = (automation_resource if automation_resource is not None else
                  [item.strip() for item in automation_resources.split(",") if item.strip()])
     return _respond(analytics.kpis, log_id, case_type, sla_seconds, resources, cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/saved-reports")
+def event_log_saved_reports(request: Request, log_id: str):
+    """Copies of the HTML report saved on this computer, newest first."""
+    from . import event_log_saved_reports as saved_reports
+    _require_dashboard(request)
+    return _respond(saved_reports.listing, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/saved-reports")
+def event_log_save_report(request: Request, log_id: str):
+    """Save a copy of the HTML report now (a schedule can do the same)."""
+    from . import event_log_saved_reports as saved_reports
+    _require_dashboard(request)
+    return _respond(saved_reports.save, log_id)
+
+
+@router.get("/v1/event-logs/{log_id}/saved-report-changes")
+def event_log_saved_report_changes(request: Request, log_id: str,
+                                   older: str | None = Query(default=None, max_length=80),
+                                   newer: str | None = Query(default=None, max_length=80)):
+    """What changed between two saved report copies (by default the two newest)."""
+    from . import event_log_saved_reports as saved_reports
+    _require_dashboard(request)
+    return _respond(saved_reports.changes, log_id, older, newer)
+
+
+@router.get("/v1/event-logs/{log_id}/saved-reports/{name}")
+def event_log_saved_report_file(request: Request, log_id: str, name: str):
+    from . import event_log_saved_reports as saved_reports
+    _require_dashboard(request)
+    try:
+        target = saved_reports.path(log_id, name)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(404, str(exc)) from None
+    return FileResponse(target, media_type="text/html", filename=f"{log_id}-{name}", headers={
+        "Cache-Control": "no-store",
+        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"})
+
+
+@router.get("/v1/event-logs/{log_id}/report.html")
+def event_log_report(request: Request, log_id: str, case_type: str | None = Query(default=None, max_length=200),
+                     sla_seconds: int | None = Query(default=None, ge=1, le=10 ** 9),
+                     variants: int = Query(default=15, ge=1, le=50),
+                     cohort: dict[str, Any] = Depends(_case_filter)):
+    """A self-contained, script-free HTML report (overview, KPIs, variants, activities) to save or share."""
+    from fastapi.responses import HTMLResponse
+
+    from . import event_log_report as report
+    _require_dashboard(request)
+    try:
+        html = report.report_html(log_id, case_type, cohort, sla_seconds=sla_seconds, variant_limit=variants)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return HTMLResponse(html, headers={
+        "Cache-Control": "no-store",
+        "Content-Disposition": f'attachment; filename="{log_id}-report.html"',
+        # The report has no scripts or external resources; forbid them if it is opened from the response.
+        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
+    })
 
 
 @router.get("/v1/event-logs/{log_id}/process-map")
@@ -596,15 +823,18 @@ async def event_log_domain_pack_install(request: Request, log_id: str, pack_id: 
     spec = await _json_body(request, "domain pack install", strict=True)
     try:
         result = await run_in_threadpool(domain_packs.install, log_id, pack_id, spec)
+    except domain_packs.DomainPackConflict as exc:
+        raise HTTPException(409, str(exc)) from None
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 @router.delete("/v1/event-logs/{log_id}/domain-packs/{pack_id}")
-def event_log_domain_pack_uninstall(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID)):
+def event_log_domain_pack_uninstall(request: Request, log_id: str, pack_id: str = PathParam(pattern=_PACK_ID),
+        expected_installation: str | None = Query(default=None, pattern=r"^[a-f0-9]{64}$", max_length=64)):
     _require_dashboard(request)
-    return _respond(domain_packs.uninstall, log_id, pack_id)
+    return _respond(domain_packs.uninstall, log_id, pack_id, expected_installation=expected_installation)
 
 
 @router.get("/v1/event-logs/{log_id}/domain-packs/{pack_id}/report")
@@ -627,6 +857,19 @@ async def event_log_map_comparison(request: Request, log_id: str,
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/rework")
+async def event_log_rework(request: Request, log_id: str):
+    """Repeated activities, loop patterns and how cases with rework compare."""
+    from . import event_log_rework as rework_analysis
+    _require_dashboard(request)
+    spec = await _json_body(request, "rework settings", strict=True, limit=16384)
+    try:
+        result = await run_in_threadpool(rework_analysis.rework, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/{log_id}/predictions")
 async def event_log_predictions(request: Request, log_id: str):
     _require_dashboard(request)
@@ -635,6 +878,64 @@ async def event_log_predictions(request: Request, log_id: str):
         result = await run_in_threadpool(predictions.predict, log_id, spec)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/prediction-snapshots")
+async def event_log_take_prediction_snapshot(request: Request, log_id: str):
+    from . import event_log_prediction_snapshots as prediction_snapshots
+    _require_dashboard(request)
+    spec = await _json_body(request, "prediction settings")
+    try:
+        result = await run_in_threadpool(prediction_snapshots.take, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/next-activity")
+async def event_log_next_activity(request: Request, log_id: str):
+    """What usually happens next in open cases, learned from completed cases and backtested."""
+    from . import event_log_next_activity as next_activity
+    _require_dashboard(request)
+    spec = await _json_body(request, "next-activity settings", strict=True, limit=32768)
+    try:
+        result = await run_in_threadpool(next_activity.next_activity, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/v1/event-logs/{log_id}/prediction-snapshots")
+async def event_log_list_prediction_snapshots(request: Request, log_id: str):
+    from . import event_log_prediction_snapshots as prediction_snapshots
+    _require_dashboard(request)
+    try:
+        result = await run_in_threadpool(prediction_snapshots.listing, log_id)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(404, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/v1/event-logs/{log_id}/prediction-snapshots/{snapshot_id}/evaluation")
+async def event_log_evaluate_prediction_snapshot(request: Request, log_id: str, snapshot_id: str):
+    from . import event_log_prediction_snapshots as prediction_snapshots
+    _require_dashboard(request)
+    try:
+        result = await run_in_threadpool(prediction_snapshots.evaluate, log_id, snapshot_id)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(404 if "unknown" in str(exc) else 422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/prediction-snapshots/{snapshot_id}/delete")
+async def event_log_delete_prediction_snapshot(request: Request, log_id: str, snapshot_id: str):
+    from . import event_log_prediction_snapshots as prediction_snapshots
+    _require_dashboard(request)
+    try:
+        result = await run_in_threadpool(prediction_snapshots.delete, log_id, snapshot_id)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(404, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
@@ -649,6 +950,19 @@ async def event_log_prediction_monitoring(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/batching")
+async def event_log_batching(request: Request, log_id: str):
+    """Batch processing inferred from timestamps and resources, with simulation proposals (R14)."""
+    from . import event_log_batching as batch_detection
+    _require_dashboard(request)
+    spec = await _json_body(request, "batch settings", strict=True, limit=8192)
+    try:
+        result = await run_in_threadpool(batch_detection.batching, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.post("/v1/event-logs/{log_id}/linked-attribute-analysis")
 async def event_log_linked_attribute_analysis(request: Request, log_id: str):
     """Read-only cardinality-aware joined object attribute breakdown (R9)."""
@@ -656,6 +970,19 @@ async def event_log_linked_attribute_analysis(request: Request, log_id: str):
     spec = await _json_body(request, "linked attribute analysis", strict=True, limit=8192)
     try:
         result = await run_in_threadpool(linked_attribute_analysis.analyze, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/work-in-progress")
+async def event_log_work_in_progress(request: Request, log_id: str):
+    """Arrivals, completions and open cases per day or week, with a Little's law check."""
+    from . import event_log_wip as wip
+    _require_dashboard(request)
+    spec = await _json_body(request, "work-in-progress settings", strict=True, limit=16384)
+    try:
+        result = await run_in_threadpool(wip.work_in_progress, log_id, spec)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
@@ -694,6 +1021,21 @@ async def analysis_sharing_preview(request: Request, log_id: str):
         raise HTTPException(422, str(exc)) from None
     except ValueError:
         raise HTTPException(422, 'Analysis cannot fit the bounded sharing format; select fewer rows or measures') from None
+    return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+
+
+@router.post("/v1/event-logs/{log_id}/analysis-sharing-freshness")
+async def analysis_sharing_freshness(request: Request, log_id: str):
+    _require_dashboard(request)
+    if request.headers.get('x-owg-analysis-sharing-preview') != 'true':
+        raise HTTPException(403, 'Explicit sharing-preview request required')
+    body = await _json_body(request, 'analysis snapshot freshness', strict=True)
+    try:
+        result = await run_in_threadpool(analysis_snapshot_export.check_snapshot_freshness, log_id, body)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    except ValueError:
+        raise HTTPException(422, 'Analysis cannot fit the bounded sharing format') from None
     return JSONResponse(result, headers={'Cache-Control': 'no-store'})
 
 
@@ -779,6 +1121,13 @@ def event_log_delete_signal_rule(request: Request, log_id: str, rule_id: str):
 def event_log_signal_inbox(request: Request, log_id: str):
     _require_dashboard(request)
     return _respond(signal_inbox.list_inbox, log_id)
+
+
+@router.get("/v1/event-logs/{log_id}/signal-history")
+def event_log_signal_history(request: Request, log_id: str,
+                             limit: int = Query(default=50, ge=1, le=200)):
+    _require_dashboard(request)
+    return _respond(signal_transitions.list_history, log_id, limit=limit)
 
 
 @router.post("/v1/event-logs/{log_id}/signal-inbox/acknowledge-batch")
@@ -961,3 +1310,52 @@ async def event_log_cohort_metric(
     return await run_in_threadpool(
         _respond, event_log_cohort_metrics.summarize, log_id, spec, case_type
     )
+
+
+@router.get("/v1/event-logs/{log_id}/activity-mappings")
+async def event_log_activity_mappings(request: Request, log_id: str):
+    from . import event_log_activity_mappings as activity_mappings
+    _require_dashboard(request)
+    try:
+        result = await run_in_threadpool(activity_mappings.listing, log_id)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(404, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/activity-mappings")
+async def event_log_create_activity_mapping(request: Request, log_id: str):
+    from . import event_log_activity_mappings as activity_mappings
+    _require_dashboard(request)
+    spec = await _json_body(request, "activity mapping", limit=262144)
+    try:
+        result = await run_in_threadpool(activity_mappings.create, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/activity-mappings/applied")
+async def event_log_apply_activity_mapping(request: Request, log_id: str):
+    """Body ``{"mapping_id": "amap_..."}`` applies one mapping; ``{"mapping_id": null}`` removes it."""
+    from . import event_log_activity_mappings as activity_mappings
+    _require_dashboard(request)
+    body = await _json_body(request, "applied activity mapping")
+    if not isinstance(body, dict) or set(body) != {"mapping_id"} or not (body["mapping_id"] is None or isinstance(body["mapping_id"], str)):
+        raise HTTPException(422, "send {\"mapping_id\": <id or null>}")
+    try:
+        result = await run_in_threadpool(activity_mappings.apply_mapping, log_id, body["mapping_id"])
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(404 if "unknown" in str(exc) else 422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/activity-mappings/{mapping_id}/delete")
+async def event_log_delete_activity_mapping(request: Request, log_id: str, mapping_id: str):
+    from . import event_log_activity_mappings as activity_mappings
+    _require_dashboard(request)
+    try:
+        result = await run_in_threadpool(activity_mappings.delete, log_id, mapping_id)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(404, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})

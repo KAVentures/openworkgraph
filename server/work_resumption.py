@@ -142,9 +142,17 @@ def _observed_case_groups(bucket: dict[str, Any]) -> list[dict[str, Any]]:
                     visited.add(neighbor)
                     pending.append(neighbor)
         component.sort()
-        events = sorted({event_id for node in component
-                         for _instant, event_id in bucket["tracks"][node]["observations"]
-                         if event_id})
+        # For multi-resource groups, show only row-exact pair evidence.
+        # A single-resource event on a member is NOT evidence that the
+        # whole connected component was co-observed (especially for A-B-C
+        # transitive chains). Keep singleton events for independent groups.
+        if len(component) > 1:
+            events = sorted({event_id for (left, right), pair_ids in bucket.get("pair_events", {}).items()
+                             if left in component and right in component
+                             for event_id in pair_ids if event_id})
+        else:
+            events = sorted({event_id for _instant, event_id in
+                             bucket["tracks"][component[0]]["observations"] if event_id})
         groups.append({
             "group_id": f"observed_group_{len(groups) + 1:02d}",
             "resource_pointers": [bucket["refs"][node] for node in component],
@@ -217,6 +225,10 @@ def resumption_candidates(
     result["coverage"]["activity_rows_scanned"] = len(instants)
     result["coverage"]["scan_truncated"] = truncated
     if not instants:
+        # Only authorized empty windows receive an explicit empty review queue.
+        from .reconstruction_review_cli import REVIEWABLE_ACCESS, build_review_queue
+        if result.get("saved_history_access") in REVIEWABLE_ACCESS:
+            result["event_assignment_review"] = build_review_queue(result)
         return result
     sessions = _sessions(instants, gap_minutes / 1440)
     starts = [start for start, _end in sessions]
@@ -229,8 +241,32 @@ def resumption_candidates(
     result["coverage"]["pointer_rows_scanned"] = len(pointer_rows)
     if len(pointer_rows) >= MAX_POINTER_ROWS:
         result["coverage"]["scan_truncated"] = True
-    by_session: list[dict[str, Any]] = [{"refs": {}, "events": [], "tracks": {}, "coobserved": set()} for _ in sessions]
+    # Event IDs are external labels, not unique row identities. Exclude ALL
+    # observations bearing a colliding label before building any identity,
+    # co-reference or candidate evidence; stripping pair edges afterward leaves
+    # contaminated singleton tracks and session overlap behind.
+    event_id_counts: dict[str, int] = {}
     for row in pointer_rows:
+        event_id = str(row["event_id"] or "")[:120]
+        if event_id:
+            event_id_counts[event_id] = event_id_counts.get(event_id, 0) + 1
+    colliding_event_ids = {eid for eid, count in event_id_counts.items() if count > 1}
+    unlabeled_pointer_rows = sum(1 for row in pointer_rows if not str(row["event_id"] or "")[:120])
+    if unlabeled_pointer_rows:
+        result["coverage"]["excluded_unlabeled_pointer_rows"] = unlabeled_pointer_rows
+        result["coverage"]["scan_truncated"] = True
+    if colliding_event_ids:
+        result["coverage"]["ambiguous_event_id_collisions"] = len(colliding_event_ids)
+        result["coverage"]["excluded_colliding_pointer_rows"] = sum(
+            1 for row in pointer_rows if str(row["event_id"] or "")[:120] in colliding_event_ids
+        )
+        result["coverage"]["scan_truncated"] = True
+    by_session: list[dict[str, Any]] = [{"refs": {}, "events": [], "tracks": {}, "coobserved": set(), "pair_events": {}} for _ in sessions]
+    for row in pointer_rows:
+        # Ambiguous external labels cannot safely contribute even singleton
+        # identity tracks, candidate overlap, or case-review evidence.
+        if not str(row["event_id"] or "")[:120] or str(row["event_id"] or "")[:120] in colliding_event_ids:
+            continue
         data = dict(row)
         instant = data.get("instant")
         if instant is None:
@@ -244,6 +280,9 @@ def resumption_candidates(
         for left_pos, left in enumerate(identities_in_event):
             for right in identities_in_event[left_pos + 1:]:
                 bucket["coobserved"].add((left, right))
+                event_id = str(data.get("event_id") or "")[:120]
+                if event_id:
+                    bucket["pair_events"].setdefault((left, right), set()).add(event_id)
         for pointer in pointers:
             identity = _identity(pointer)
             bucket["refs"].setdefault(identity, pointer)
@@ -309,21 +348,16 @@ def resumption_candidates(
     # This is an observed co-reference, never a task or case assertion.
     pair_assignments: list[dict[str, Any]] = []
     for pair in sorted(current["coobserved"]):
-        current_right_observations = set(current["tracks"][pair[1]]["observations"])
-        current_events = sorted({
-            event_id for instant, event_id in current["tracks"][pair[0]]["observations"]
-            if event_id and (instant, event_id) in current_right_observations
-        })
+        current_events = sorted(current["pair_events"].get(pair, ()))
+        if not current_events:
+            # A colliding external event label cannot safely identify the row.
+            continue
         earlier_matches: list[dict[str, Any]] = []
         for earlier_index in range(current_index - 1, -1, -1):
             earlier = by_session[earlier_index]
             if pair not in earlier["coobserved"]:
                 continue
-            earlier_right_observations = set(earlier["tracks"][pair[1]]["observations"])
-            earlier_events = sorted({
-                event_id for instant, event_id in earlier["tracks"][pair[0]]["observations"]
-                if event_id and (instant, event_id) in earlier_right_observations
-            })
+            earlier_events = sorted(earlier["pair_events"].get(pair, ()))
             earlier_matches.append({
                 "session_started_at": _iso(sessions[earlier_index][0]),
                 "evidence_event_ids": earlier_events[:8],
@@ -344,6 +378,11 @@ def resumption_candidates(
         })
     result["observed_pair_event_assignments"] = pair_assignments[:24]
     result["observed_pair_event_assignments_truncated"] = len(pair_assignments) > 24
+    # Review-only event attribution under the same grant; never a confirmed case.
+    # Denied, revoked or unknown history access gets no review queue at all.
+    from .reconstruction_review_cli import REVIEWABLE_ACCESS, build_review_queue
+    if result.get("saved_history_access") in REVIEWABLE_ACCESS:
+        result["event_assignment_review"] = build_review_queue(result)
     result["observed_group_continuity"] = group_matches[:24]
     result["observed_group_continuity_truncated"] = len(group_matches) > 24
     if not current["refs"]:

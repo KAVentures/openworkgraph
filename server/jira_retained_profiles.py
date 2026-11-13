@@ -1,7 +1,7 @@
 """Local Jira ingestion profiles, lifecycle and atomic supplied-ID checkpoints.
 
 All durable state shares the existing event-log DuckDB and workspace lock.
-Network reads never hold that lock. No scheduler, inventory scan or MCP route.
+Network reads never hold that lock. Creates no schedules, inventory scan or MCP route.
 """
 from __future__ import annotations
 
@@ -106,6 +106,8 @@ def _profile_scope(profile, host):
 
 
 def _public(profile, now):
+    from . import local_scheduler
+    scheduled = local_scheduler.scheduled("retained_jira_profile", profile["profile_id"])
     allowed = ('profile_id', 'host', 'resource_refs', 'enabled', 'revision', 'log_id',
                'status', 'error', 'last_attempt_at', 'last_success_at', 'retry_after', 'checkpoint',
                'credential_generation', 'credential_check_status', 'credential_check_error',
@@ -119,7 +121,8 @@ def _public(profile, now):
     result.update(selection_basis=basis, selected_case_count=len(profile['issue_keys']))
     if basis == 'native_issue_keys':
         result['selected_issue_keys'] = list(profile['issue_keys'])
-    result.update(provider='jira', manual_runs_only=True, source_completeness_verified=False,
+    result.update(provider='jira', manual_runs_only=not scheduled, scheduled_runs_enabled=scheduled,
+                  source_completeness_verified=False,
                   business_outcomes_verified=False, execution_authorized=False,
                   alert_eligible=False, credential_values_included=False)
     return result
@@ -136,7 +139,9 @@ def status():
         profiles = [_public(json.loads(row[0]), now) for row in conn.execute(
             'SELECT definition FROM jira_ingestion_profiles ORDER BY profile_id').fetchall()]
     return {'format': 'openworkgraph.retained-jira-profiles.v1', 'configured': configured,
-            'profiles': profiles, 'manual_runs_only': True, 'credentials_exposed': False,
+            'profiles': profiles, 'manual_runs_only': not any(p['scheduled_runs_enabled'] for p in profiles),
+            'scheduled_runs_enabled': any(p['scheduled_runs_enabled'] for p in profiles),
+            'credentials_exposed': False,
             'native_case_selection_configured': configured and native_selection_enabled()}
 
 

@@ -1,4 +1,4 @@
-"""Versioned domain packs for saved event logs: order to cash and procure to pay (#370 R23).
+"""Versioned domain packs for saved event logs, including returns/refunds (#370 R23).
 
 A domain pack bundles definitions a process team would otherwise rebuild for every log of a well-known process:
 
@@ -23,6 +23,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import secrets
 from datetime import datetime, timezone
 from typing import Annotated, Any
 
@@ -33,6 +34,7 @@ from . import event_log_object_constraints as object_constraints
 from . import event_log_object_process_model as object_model
 from . import event_log_query as query
 from . import event_log_workspace as workspace
+from .event_log_domain_packs_returns import RETURNS_REFUNDS_1_0_0
 
 FORMAT = "openworkgraph.domain-pack.v1"
 INSTALL_FORMAT = "openworkgraph.domain-pack-install.v1"
@@ -647,7 +649,8 @@ EXPENSE_REIMBURSEMENT_1_0_0: dict[str, Any] = {
     ],
 }
 
-PACKS: dict[str, dict[str, dict[str, Any]]] = {"order_to_cash": {"1.0.0": ORDER_TO_CASH_1_0_0},
+PACKS: dict[str, dict[str, dict[str, Any]]] = {"returns_refunds": {"1.0.0": RETURNS_REFUNDS_1_0_0},
+                                              "order_to_cash": {"1.0.0": ORDER_TO_CASH_1_0_0},
                                               "procure_to_pay": {"1.0.0": PROCURE_TO_PAY_1_0_0},
                                               "service_management": {"1.0.0": SERVICE_MANAGEMENT_1_0_0},
                                               "sales_lead_management": {"1.0.0": SALES_LEAD_1_0_0},
@@ -667,9 +670,14 @@ class Mapping(_Strict):
     activities: dict[Annotated[str, Field(max_length=40)], Name] = Field(max_length=80)
 
 
+class DomainPackConflict(workspace.EventLogWorkspaceError):
+    """The caller's reviewed installation is no longer current."""
+
+
 class InstallSpec(_Strict):
     version: Annotated[str, Field(pattern=r"^\d{1,4}\.\d{1,4}\.\d{1,4}$")]
     mapping: Mapping
+    expected_installation: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")] | None = None
     parameters: dict[Annotated[str, Field(max_length=40)], float] = Field(default_factory=dict, max_length=20)
 
 
@@ -852,10 +860,28 @@ def _check_names(conn, log_id: str, mapping: Mapping) -> None:
             raise workspace.EventLogWorkspaceError(f"{role} is mapped to {name!r}, which is not an activity of this log")
 
 
+def _installation_token(record: dict[str, Any]) -> str:
+    """Opaque equality token for the complete stored installation, including owned IDs."""
+    return _digest(record)
+
+
 def _record(conn, log_id: str, pack_id: str) -> dict[str, Any] | None:
     row = conn.execute("SELECT definition FROM domain_pack_installs WHERE log_id = ? AND pack_id = ?",
                        [log_id, pack_id]).fetchone()
     return json.loads(row[0]) if row else None
+
+
+def _insert_pack_metric(conn, log_id: str, metric: dict[str, Any], now: datetime) -> str:
+    """Use the metric library's schema, but write inside the pack transaction."""
+    try:
+        validated = query.SavedMetric.model_validate({"metric": metric}).metric
+    except ValidationError:
+        raise workspace.EventLogWorkspaceError("domain pack contains an invalid case metric") from None
+    metric_id = "met_" + secrets.token_hex(8)
+    definition = {"format": query.METRIC_FORMAT, "metric": validated.model_dump()}
+    conn.execute("INSERT INTO metric_definitions VALUES (?, ?, ?, ?)",
+                 [log_id, metric_id, now, json.dumps(definition, sort_keys=True)])
+    return metric_id
 
 
 def install(log_id: str, pack_id: str, spec: Any) -> dict[str, Any]:
@@ -866,40 +892,49 @@ def install(log_id: str, pack_id: str, spec: Any) -> dict[str, Any]:
     with workspace._LOCK:
         conn = workspace._connect()
         try:
+            conn.execute("BEGIN TRANSACTION")
             workspace._check_log(conn, log_id)
             _check_names(conn, log_id, parsed.mapping)
             previous = _record(conn, log_id, pack_id)
+            if "expected_installation" in parsed.model_fields_set:
+                current = _installation_token(previous) if previous is not None else None
+                if parsed.expected_installation != current:
+                    raise DomainPackConflict("domain pack installation changed; reload setup before saving")
             saved = {json.loads(d)["metric"]["name"]: m for m, d in conn.execute(
                 "SELECT metric_id, definition FROM metric_definitions WHERE log_id = ?", [log_id]).fetchall()}
-        finally:
-            conn.close()
-        if previous and _version_key(parsed.version) < _version_key(previous["version"]):
-            raise workspace.EventLogWorkspaceError(
-                f"version {previous['version']} is installed; downgrading to {parsed.version} is refused")
-        owned = set(previous["metric_ids"]) if previous else set()
-        clash = [n for n, m in saved.items() if m not in owned and any(d["metric"]["name"] == n for d in definitions["metrics"])]
-        if clash:
-            raise workspace.EventLogWorkspaceError(f"a saved case metric named {clash[0]} exists and is not this pack's")
-        for metric_id in owned & set(saved.values()):
-            query.delete_metric(log_id, metric_id)
-        metric_ids = [query.save_metric(log_id, {"metric": d["metric"]})["metric_id"] for d in definitions["metrics"]]
-        change = ("installed" if not previous else "upgraded" if parsed.version != previous["version"] else "reconfigured")
-        history = ([*previous["history"], {k: previous[k] for k in ("version", "installed_at", "definitions_sha256")}]
-                   if previous else [])[-MAX_HISTORY:]
-        record = {"format": INSTALL_FORMAT, "pack_id": pack_id, "version": parsed.version,
-                  "installed_at": now.isoformat() + "Z", "mapping": mapping, "parameters": params,
-                  "definitions_sha256": _digest(definitions), "metric_ids": metric_ids, "history": history,
-                  "configuration_history": ([*previous.get("configuration_history", []),
-                      {k: copy.deepcopy(previous[k]) for k in ("version", "installed_at", "definitions_sha256", "mapping", "parameters")} ]
-                      if previous else [])[-MAX_HISTORY:]}
-        conn = workspace._connect()
-        try:
+            if previous and _version_key(parsed.version) < _version_key(previous["version"]):
+                raise workspace.EventLogWorkspaceError(
+                    f"version {previous['version']} is installed; downgrading to {parsed.version} is refused")
+            owned = set(previous["metric_ids"]) if previous else set()
+            clash = [n for n, m in saved.items() if m not in owned
+                     and any(d["metric"]["name"] == n for d in definitions["metrics"])]
+            if clash:
+                raise workspace.EventLogWorkspaceError(f"a saved case metric named {clash[0]} exists and is not this pack's")
+            if len(saved) - len(owned & set(saved.values())) + len(definitions["metrics"]) > query.MAX_SAVED:
+                raise workspace.EventLogWorkspaceError(
+                    f"a log can hold at most {query.MAX_SAVED} saved case metrics")
+            for metric_id in owned & set(saved.values()):
+                conn.execute("DELETE FROM metric_definitions WHERE log_id = ? AND metric_id = ?", [log_id, metric_id])
+            metric_ids = [_insert_pack_metric(conn, log_id, d["metric"], now) for d in definitions["metrics"]]
+            change = ("installed" if not previous else "upgraded" if parsed.version != previous["version"] else "reconfigured")
+            history = ([*previous["history"], {k: previous[k] for k in ("version", "installed_at", "definitions_sha256")}]
+                       if previous else [])[-MAX_HISTORY:]
+            record = {"format": INSTALL_FORMAT, "pack_id": pack_id, "version": parsed.version,
+                      "installed_at": now.isoformat() + "Z", "mapping": mapping, "parameters": params,
+                      "definitions_sha256": _digest(definitions), "metric_ids": metric_ids, "history": history,
+                      "configuration_history": ([*previous.get("configuration_history", []),
+                          {k: copy.deepcopy(previous[k]) for k in ("version", "installed_at", "definitions_sha256", "mapping", "parameters")} ]
+                          if previous else [])[-MAX_HISTORY:]}
             conn.execute("DELETE FROM domain_pack_installs WHERE log_id = ? AND pack_id = ?", [log_id, pack_id])
             conn.execute("INSERT INTO domain_pack_installs VALUES (?, ?, ?, ?)",
                          [log_id, pack_id, now, json.dumps(record, sort_keys=True)])
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
         finally:
             conn.close()
-    return {**record, "change": change, "previous_version": previous["version"] if previous else None,
+    return {**record, "installation_token": _installation_token(record), "change": change, "previous_version": previous["version"] if previous else None,
             "not_applicable": definitions["not_applicable"]}
 
 
@@ -919,6 +954,7 @@ def installed(log_id: str) -> dict[str, Any]:
             conn.close()
     installs = [json.loads(d) for (d,) in rows]
     for record in installs:
+        record["installation_token"] = _installation_token(record)
         record["latest_version"] = _pack(record["pack_id"])["version"] if record["pack_id"] in PACKS else None
         record["upgrade_available"] = bool(record["latest_version"]) and \
             _version_key(record["latest_version"]) > _version_key(record["version"])
@@ -960,21 +996,30 @@ def configuration_history(log_id: str, pack_id: str) -> dict[str, Any]:
             "execution_authorized": False}
 
 
-def uninstall(log_id: str, pack_id: str) -> dict[str, Any]:
+def uninstall(log_id: str, pack_id: str, *, expected_installation: str | None = None) -> dict[str, Any]:
     with workspace._LOCK:
         conn = workspace._connect()
         try:
+            conn.execute("BEGIN TRANSACTION")
             workspace._check_log(conn, log_id)
             previous = _record(conn, log_id, pack_id)
+            if expected_installation is not None:
+                current = _installation_token(previous) if previous is not None else None
+                if expected_installation != current:
+                    raise DomainPackConflict("domain pack installation changed; reload setup before removing")
             if previous is None:
                 raise workspace.EventLogWorkspaceError("this domain pack is not installed on the log")
             owned = set(previous["metric_ids"]) & {m for (m,) in conn.execute(
                 "SELECT metric_id FROM metric_definitions WHERE log_id = ?", [log_id]).fetchall()}
             conn.execute("DELETE FROM domain_pack_installs WHERE log_id = ? AND pack_id = ?", [log_id, pack_id])
+            for metric_id in owned:
+                conn.execute("DELETE FROM metric_definitions WHERE log_id = ? AND metric_id = ?", [log_id, metric_id])
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
         finally:
             conn.close()
-        for metric_id in owned:
-            query.delete_metric(log_id, metric_id)
     return {"uninstalled": True, "pack_id": pack_id, "version": previous["version"], "metrics_removed": len(owned)}
 
 

@@ -193,6 +193,12 @@ behaviour.
   days (1–365, default 30). Older ones are deleted, along with their derived rows and
   stored pointer points, when new events arrive (at most once an hour). Clicks, pages
   and other structural activity follow the ordinary history retention instead.
+- **Storage quota.** *Store at most (MB)* (10–10,000, default 200) caps the stored hover,
+  drag and pointer detail, estimated from its stored metadata and pointer points (database
+  overhead not included). When retention runs, at most once an hour as events arrive, detail
+  over the quota is trimmed oldest first to 90% of it. Structural activity is never trimmed.
+  The coverage manifest (`high_fidelity_storage`) and *Show capture coverage* report current
+  use, the limit and the last trim.
 - **Delete now.** *Delete interaction detail now* removes every recorded hover, drag and
   pointer event from this computer and keeps all other activity
   (`POST /v1/capture-depth/delete` with `{"confirm": true}`, optionally
@@ -201,6 +207,15 @@ behaviour.
   with sampled browser pointer movement from the last 7 days, then shows where the samples fell
   on the chosen page as a 20 × 20 grid of counts. Only the counts reach the dashboard,
   never the points. It is not a measure of attention, effort or performance.
+- **Replay a visit.** *Replay a visit* replays one visit to a page, chosen from the pages
+  with pointer movement: the pointer path (as fractions of the viewport) and, in order,
+  each hover, drag and click with the kind of control only (tag and role, never a label,
+  text or value). Events more than five minutes apart start a new visit; the latest is
+  shown first. Play, pause and a time slider scrub through it, and a numbered step list
+  describes it for screen readers (with reduced motion, *Play* jumps to the end). Unlike
+  the heatmap this returns the recorded points to the local dashboard, so it needs the
+  dashboard session. Timing is approximate, since a pointer batch is stored when it is
+  flushed. It is not a measure of attention, effort or performance.
 
 ## Performance
 
@@ -234,8 +249,18 @@ covered by these tests.
   regression-tested on real macOS or Windows machines, including permissions,
   multi-monitor layouts and lock states.
 - Iframes from other origins are covered only where the content script already runs.
-- The issue's ablation evaluation, on held-out interleaved workflows, has not been run.
-  No reconstruction accuracy gain is claimed until it has.
+- The issue's ablation evaluation on independently labeled real sessions has not been
+  run. No reconstruction accuracy gain is claimed until it has.
+
+## Reconstruction
+
+Hover, drag and pointer events are never membership evidence. Exact-record lanes and
+linked work items are built from the other observations; a detail event joins only
+the item that already holds its exact record (with at least two observations), and a
+pointer sample, which carries no record, stays unassigned. A hover can therefore
+never turn a one-off interruption into a lane or merge two pieces of work.
+`python -m evals.reconstruction.interaction_detail` measures this on the synthetic
+corpus with and without added detail (see `evals/reconstruction/README.md`).
 
 ## Routes
 
@@ -246,4 +271,5 @@ covered by these tests.
 | `GET /v1/capture-coverage` | Coverage manifest |
 | `GET /v1/capture-coverage/friction?hours=` | Friction candidates; dashboard session only |
 | `GET /v1/capture-coverage/heatmap?hostname=&pathname=&hours=` | Pages with pointer samples or one page's grid of counts; dashboard session only |
+| `GET /v1/capture-coverage/playback?hostname=&pathname=&hours=&visit=` | One visit to a page replayed in order (control kinds and the pointer path only); dashboard session only |
 | `POST /v1/capture-depth/delete` | Delete recorded high-fidelity events now; dashboard session only, needs `confirm: true` |

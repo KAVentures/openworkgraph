@@ -30,6 +30,36 @@ const path=require('node:path');
   const portfolio=async()=>{await page.locator('#benefitPortfolioLoad').click();await page.locator('#benefitPortfolioStatus').filter({hasText:'Portfolio loaded.'}).waitFor();};
   const calculate=async()=>{await page.locator('#benefitPortfolioConfirm').check();await page.locator('#benefitPortfolioEstimate').click();await status.getByText('Status: modeled estimate',{exact:true}).waitFor();};
   await page.goto(base+'/processes');await login('alice');await select(r1);
+  // R16: reviewed before/after aggregates integrate into the existing portal.
+  await page.locator('#valueMeasurementLoad').click();
+  await page.locator('#valueMeasurementForm').waitFor();
+  await page.locator('#value_title').fill('Paired case observations');
+  await page.locator('#value_hourly_minor').fill('6000');
+  for(const [period,start,end,minutes,hash] of [
+    ['baseline','2026-09-01T10:00','2026-09-30T10:00','1000.00','a'.repeat(64)],
+    ['intervention','2026-10-01T10:00','2026-10-31T10:00','800.00','b'.repeat(64)]
+  ]){
+    await page.locator('#value_'+period+'_start').fill(start);
+    await page.locator('#value_'+period+'_end').fill(end);
+    await page.locator('#value_'+period+'_cases').fill('100');
+    await page.locator('#value_'+period+'_minutes').fill(minutes);
+    await page.locator('#value_'+period+'_receipts').fill(hash);
+    await page.locator('#value_'+period+'_coverage').selectOption('complete');
+  }
+  await page.locator('#value_cohorts').check();
+  await page.locator('#value_confirm').check();
+  await page.locator('#valueMeasurementForm button').click();
+  await page.locator('#valueMeasurementStatus').filter({hasText:'Saved measurement revision 1'}).waitFor();
+  assert.match(await page.locator('#valueMeasurementContent').textContent(),/2.00/);
+  const [measuredDownload]=await Promise.all([
+    page.waitForEvent('download'),
+    page.locator('#valueMeasurementContent button').click()
+  ]);
+  const measurement=JSON.parse(await fs.readFile(await measuredDownload.path(),'utf8'));
+  assert.equal(measurement.artifact.revision,1);
+  assert.equal(measurement.comparison.comparison.descriptive_minutes_difference_per_case,'2.00');
+  assert.equal(measurement.realized_savings_verified,false);
+  assert.equal(measurement.causal_effect_established,false);
   await add(a);await page.locator('#benefitScope_link_1').fill('invoice_pool');await page.locator('#benefitInclude_link_1').check();
   await add(b);await page.locator('#benefitScope_link_2').fill('payment_pool');assert.equal(await page.locator('#benefitInclude_link_2').isChecked(),false);
   await page.locator('#benefitTitle').fill('Service value assumptions');await save();

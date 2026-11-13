@@ -74,6 +74,15 @@
     const save=input('owgCommsSave','checkbox');const saveLabel=el('label');saveLabel.style.cssText='display:flex;gap:6px;align-items:center';
     saveLabel.append(save,document.createTextNode(' Also store an intent-only event log (thread, intent, time, direction) on this computer'));
     const classifier=select('owgCommsClassifier',[['keyword','Keyword taxonomy'],['learned','Learned model (from reviewed examples)']]);
+    const qualityGate=input('owgCommsQualityGate','checkbox');
+    const declaredLanguage=input('owgCommsGateLang','text','en, sv, de, pt-BR');declaredLanguage.maxLength=12;
+    const qualityLabel=el('label');qualityLabel.style.cssText='display:flex;gap:6px;align-items:center';
+    qualityLabel.append(qualityGate,document.createTextNode(' Require a strong reviewer-labelled holdout for this declared language (optional; may refuse analysis)'));
+    const qualityControls=el('div');qualityControls.id='owgCommsQualityControls';
+    const languageField=field('Declared language of the entire export (OWG does not detect it)',declaredLanguage);
+    qualityControls.append(qualityLabel,languageField);
+    const updateQuality=()=>{show(qualityControls,classifier.value==='learned');show(languageField,qualityGate.checked);};
+    classifier.onchange=updateQuality;qualityGate.onchange=updateQuality;updateQuality();
     const sample=input('owgCommsSample','checkbox');const sampleCount=input('owgCommsSampleCount','number');sampleCount.min='1';sampleCount.max='200';sampleCount.value='25';
     const sampleLabel=el('label');sampleLabel.style.cssText='display:flex;gap:6px;align-items:center';
     sampleLabel.append(sample,document.createTextNode(' Keep the least certain inbound messages, redacted, as review examples (needs review examples turned on below)'));
@@ -88,7 +97,7 @@
     const taxRow=el('div',null,'row');taxRow.append(saveTaxonomy,resetTaxonomy);
     taxonomyBox.append(el('div','One intent per line: "Name: term, term". A message gets the intent whose terms match best; ties are shown as ambiguous.','muted'),field('Intents and terms',taxonomy),taxRow,taxStatus);
     const review=el('details');review.id='owgCommsReview';review.appendChild(el('summary','Review examples and learned model'));
-    card.append(row,mapping,field('Intents from',classifier),consentLabel,saveLabel,sampleLabel,field('How many review examples',sampleCount),run,status,results,review,taxonomyBox);
+    card.append(row,mapping,field('Intents from',classifier),qualityControls,consentLabel,saveLabel,sampleLabel,field('How many review examples',sampleCount),run,status,results,review,taxonomyBox);
     const anchor=document.getElementById('owgEventLogCard')||document.getElementById('owgProcessCSV');
     if(anchor)anchor.insertAdjacentElement('afterend',card);else panel.appendChild(card);
 
@@ -116,6 +125,14 @@
       }else if(domains.value.trim())q.set('own_domains',domains.value);
       const headers={'Content-Type':'application/octet-stream','X-OWG-Local-Processing-Confirmed':'true'};
       q.set('classifier',classifier.value);
+      if(classifier.value==='learned'&&qualityGate.checked){
+        const code=declaredLanguage.value.trim();
+        if(!/^[a-z]{2,3}(?:-[a-z0-9]{2,8})?$/i.test(code)){
+          status.textContent='Declare one language for the whole export (for example en or sv), or turn off the optional holdout gate.';
+          return;
+        }
+        q.set('quality_gate_language',code.toLowerCase());
+      }
       if(sample.checked){q.set('review_sample',String(Math.max(1,Math.min(200,Number(sampleCount.value)||25))));headers['X-OWG-Review-Examples-Confirmed']='true';}
       if(save.checked){q.set('save_event_log','true');q.set('name',chosen.name.replace(/\.[^.]+$/,'').slice(0,100)+' intents');headers['X-OWG-Local-Storage-Confirmed']='true';}
       run.disabled=true;status.textContent='Analysing '+chosen.name+'…';results.replaceChildren();
@@ -133,12 +150,16 @@
     const ack=el('label');ack.style.cssText='display:flex;gap:6px;align-items:center';const ackText=el('span');ack.append(reviewOn,ackText);
     const saveReview=button('Save review settings','secondary');saveReview.id='owgCommsReviewSave';
     const examples=el('div');examples.id='owgCommsReviewExamples';
+    const prioritize=button('Prioritize human review','secondary');prioritize.id='owgCommsReviewTriage';
+    const newest=button('Show unlabelled examples','secondary');newest.id='owgCommsReviewNormal';
+    const reviewOrder=el('div',null,'row');reviewOrder.append(prioritize,newest);
+    let triageMode=false;
     const train=button('Train intent model','secondary');train.id='owgCommsTrain';
     const dropModel=button('Delete model','secondary');dropModel.id='owgCommsModelDelete';
     const model=el('div');model.id='owgCommsModel';
     let ackVersion='',intentNames=[];
     review.append(el('div','Off by default. When on, only the messages you choose are kept, with identifiers, contact details and card numbers redacted, for the retention you set (1–90 days). You label them to train and test a local model. One in five examples is held out and only used to measure quality. Message text is treated as data, never as instructions. Turning this off deletes every example and the model.','muted'),
-      ack,field('Keep examples for (days)',retention),saveReview,reviewStatus,examples,el('div',null,'row'),train,dropModel,model);
+      ack,field('Keep examples for (days)',retention),saveReview,reviewStatus,reviewOrder,examples,el('div',null,'row'),train,dropModel,model);
     const names=async()=>{const t=await api('/v1/communications/taxonomy');intentNames=t.taxonomy.intents.map(i=>i.name);};
     function renderModel(m){
       if(!m.trained){model.replaceChildren(el('div','No intent model is trained yet.','muted'));return;}
@@ -149,8 +170,11 @@
         return;
       }
       const e=m.evaluation;const f=v=>v===null||v===undefined?'—':Number(v).toFixed(2);
+      const gateLines=Object.entries(m.holdout_language_gates||{}).map(([code,g])=>code+': '+(g.ready?'descriptive gate passes':'blocked for '+g.rejected_intents_total+' intent(s)'));
       model.replaceChildren(el('h3','Learned model'),el('div','Trained '+m.trained_at+' from '+m.training_example_count+' examples; expires '+m.expires_at+'. Holdout: '+e.holdout_examples+' reviewed examples in '+(e.languages.join(', ')||'no language')+'. Macro F1 '+f(e.macro_f1_supported_intents)+'. Estimates, not verified reasons for contact.','muted'),
         table(['Intent','F1','Precision','Recall','Calibration error','Uncertain','Support','By language (F1)'],e.intents.map(i=>[i.intent,f(i.f1),f(i.precision),f(i.recall),f(i.expected_calibration_error),pct(i.uncertain_rate),i.sufficient_support?String(i.positive_examples):i.positive_examples+' (too few)',Object.entries(i.by_language).map(([l,v])=>l+' '+f(v.f1)).join(', ')])),
+        el('p','Optional reviewer-labelled language gate: '+(gateLines.join('; ')||'no supported language reported')+
+          '. Each modelled intent needs at least five held-out positives and negatives, F1 at least 0.80, and at most 35% uncertain decisions. Passing is NOT external validation. OWG does not detect the language of an uploaded export.','muted'),
         ...(m.skipped_intents.length?[el('div','Not trained (fewer than 5 positive or negative examples): '+m.skipped_intents.map(x=>x.intent).join(', ')+'.','muted')]:[]));
     }
     function renderExamples(page){
@@ -160,6 +184,11 @@
       items.forEach(x=>{
         const box=el('fieldset');box.appendChild(el('legend','Example '+x.example_id+(x.split==='holdout'?' (holdout)':'')));
         box.appendChild(el('div',x.text));
+        if(x.priority)box.appendChild(el('div','Review priority: '+x.priority.replaceAll('_',' ')+
+          '. Keyword suggestion: '+x.keyword_intent+
+          (x.learned_primary_intent?'; learned-model suggestion: '+x.learned_primary_intent:'')+
+          '. Reasons: '+(x.reasons||[]).join(', ')+
+          '. These are suggestions, never confirmed labels.','muted'));
         const picks=intentNames.map((n,i)=>{const c=input('owgCommsLabel_'+x.example_id+'_'+i,'checkbox');c.value=n;c.checked=(x.labels||[]).includes(n);const l=el('label');l.style.cssText='display:inline-flex;gap:4px;margin-right:10px';l.append(c,document.createTextNode(' '+n));box.appendChild(l);return c;});
         const lang=input('owgCommsLang_'+x.example_id,'text','en');lang.value=x.language==='und'?'':x.language;lang.maxLength=12;
         box.appendChild(field('Language',lang));
@@ -169,7 +198,14 @@
         remove.onclick=async()=>{try{await api('/v1/communications/review/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({example_ids:[x.example_id]})});await loadReview();}catch(error){reviewStatus.textContent=error.message;}};
         box.append(saveLabel,remove);list.appendChild(box);
       });
-      examples.replaceChildren(el('h3','Examples to label'),el('div',page.total+' unlabelled examples; showing '+items.length+'.','muted'),list);
+      const intro=triageMode?
+        page.total+' unlabelled training examples eligible; '+items.length+' prioritized suggestions shown. '+
+        page.unlabelled_holdout_excluded+' held-out examples excluded. '+
+        (page.learned_predictions_used?'Current learned-model suggestions included.':
+          'Keyword-only order; learned model '+page.model_status+'.'):
+        page.total+' unlabelled examples; showing '+items.length+'.';
+      examples.replaceChildren(el('h3',triageMode?'Human review suggestions':'Examples to label'),
+        el('div',intro,'muted'),list);
     }
     async function loadReview(){
       try{
@@ -177,10 +213,15 @@
         reviewOn.checked=st.enabled;retention.value=String(st.retention_days||30);
         reviewStatus.textContent=st.enabled?st.example_count+' examples kept ('+st.labelled_count+' labelled, '+st.holdout_count+' held out).':'Review examples are off.';
         await names();
-        renderExamples(st.enabled?await api('/v1/communications/review/examples?status=unlabelled&limit=20'):{examples:[],total:0});
+        prioritize.disabled=!st.enabled;newest.disabled=!st.enabled;
+        const endpoint=triageMode?'/v1/communications/review/triage?limit=20':
+          '/v1/communications/review/examples?status=unlabelled&limit=20';
+        renderExamples(st.enabled?await api(endpoint):{examples:[],total:0,unlabelled_holdout_excluded:0,model_status:'absent'});
         renderModel(await api('/v1/communications/review/model'));
       }catch(error){reviewStatus.textContent=error.message;}
     }
+    prioritize.onclick=()=>{triageMode=true;loadReview();};
+    newest.onclick=()=>{triageMode=false;loadReview();};
     saveReview.onclick=async()=>{
       if(!reviewOn.checked&&!window.confirm('Turn off review examples and delete every kept example and the model?'))return;
       try{await api('/v1/communications/review/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(reviewOn.checked?{enabled:true,acknowledgement_version:ackVersion,retention_days:Number(retention.value)}:{enabled:false})});await loadReview();}

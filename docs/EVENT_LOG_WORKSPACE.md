@@ -157,6 +157,7 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-logs` | List stored logs. |
 | `POST /v1/event-logs/import?format=csv\|xes\|ocel\|ocelxml&name=...` | Import the request body. Requires `X-OWG-Local-Storage-Confirmed: true`. CSV also takes `case_column`, `activity_column`, `timestamp_column`, `resource_column`, `delimiter` (`t` for tab) and repeated `attribute_column` for up to 32 extra columns to keep as event attributes (nothing else is stored). |
 | `POST /v1/event-logs/{log_id}/delete` | Delete the log and every row that belongs to it. |
+| `POST /v1/event-logs/{log_id}/derive` | Save the cases matching a filter as a new log (below). |
 | `GET /v1/event-logs/{log_id}/quality` | Stored quality and mapping reports per import and append, plus current whole-log diagnostics (below). |
 | `GET /v1/event-logs/{log_id}/summary` | Events, cases, activities, time span and case-duration median/p90/mean. |
 | `GET /v1/event-logs/{log_id}/object-types` | Object types, objects per type and shared events between types. |
@@ -171,9 +172,13 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-logs/{log_id}/variants` | Most frequent variants with share and median duration. |
 | `GET /v1/event-logs/{log_id}/directly-follows` | Directly-follows graph with start and end activities. |
 | `GET /v1/event-logs/{log_id}/activities` | Activity frequency and rework (cases that repeat the activity). |
+| `POST /v1/event-logs/{log_id}/attribute-profile` | Coverage, type, level and frequent values of every event attribute (below). |
 | `GET /v1/event-logs/{log_id}/kpis?sla_seconds=&automation_resources=` | Throughput p50/p90/p95, rework rate, SLA breach rate, automation rate and weekly completions. |
 | `POST /v1/event-logs/{log_id}/benchmark` | Compare two case cohorts (JSON body, below). |
+| `POST /v1/event-logs/{log_id}/costs` | Process cost from your cost model (below). |
+| `GET`/`POST /v1/event-logs/{log_id}/cost-model`, `POST .../cost-model/delete` | The log's saved prices (below). |
 | `POST /v1/event-logs/{log_id}/map-comparison` | Compare the process maps of two cohorts path by path (below). |
+| `POST /v1/event-logs/comparison` | Compare two saved logs, or one log under two filters (below). |
 | `POST /v1/event-logs/{log_id}/impact` | Before/after impact of an intervention on cycle time, rework, SLA breaches or an activity count, with bootstrap intervals, an optional control cohort and a placebo check. See [INTERVENTION_IMPACT.md](INTERVENTION_IMPACT.md). |
 | `GET /v1/event-logs/{log_id}/simulation/calibration` | Arrival rate, routing, activity times and resources measured from the log. |
 | `POST /v1/event-logs/{log_id}/simulate` | Run a what-if scenario against the measured baseline (JSON body, below). |
@@ -185,18 +190,104 @@ AI bearer tokens and MCP clients cannot read or change imported business logs.
 | `GET /v1/event-logs/{log_id}/drift?window=month\|week\|cases&window_cases=&min_cases=` | Change points in how cases run over time (below). |
 | `GET /v1/event-logs/{log_id}/playback?activities=&max_cases=` | Per-case event offsets for animating cases along the process map (below). |
 | `GET`/`POST /v1/event-logs/{log_id}/filter-sets`, `POST .../filter-sets/{set_id}/delete` | Saved, reusable case filters (below). |
+| `GET`/`POST /v1/event-logs/{log_id}/case-tags`, `POST .../case-tags/remove` | Analyst tags on cases (below). |
 | `GET /v1/event-logs/{log_id}/root-cause?outcome=...` | Case features associated with an outcome, with confidence intervals. |
 | `GET /v1/event-logs/{log_id}/export?format=csv\|xes\|ocel\|ocelxml` | Download the log. |
+| `GET /v1/event-logs/{log_id}/report.html?sla_seconds=&variants=` | Download a self-contained HTML report (below). |
+| `GET`/`POST /v1/event-logs/{log_id}/saved-reports`, `GET .../saved-reports/{name}` | Copies of the report saved on this computer (below). |
 
 Analysis routes take an optional `case_type` for OCEL logs. Every response is
 `Cache-Control: no-store` and is marked descriptive: it reports what the log
 contains and makes no causal claims, verifies no business policy and
 authorizes nothing.
 
+## Shareable HTML report
+
+**Download report**, next to **Export**, saves `<log_id>-report.html`, a single
+file to attach to an email or ticket. It holds:
+
+* the log's name, source and time range;
+* tiles for cases, events, activities, variants, median and p90 case duration,
+  the share of cases that repeat an activity, events per case and, with
+  `sla_seconds`, the share of cases over the SLA;
+* the most frequent variants (15 by default; `variants` takes 1–50), with their
+  share of cases and median duration;
+* activity frequencies;
+* the slowest transitions: the median and 90th-percentile time between one
+  activity and the next, for up to 10 transitions seen in at least 3 cases
+  (and 1% of cases). This is elapsed time between recorded events, not
+  measured work or verified waiting;
+* cases completed per week.
+
+The report applies the selected case notion, the applied activity mapping and
+any case filter (`started_from`, `started_before`, `resource`, `activity`,
+`attribute`, `follows`). When a filter is in effect, it states how many of the
+log's cases it covers.
+
+The file contains no scripts and loads nothing from the network, so it opens
+the same offline. The response forbids scripts and external resources with a
+Content-Security-Policy. Log names, activities and attribute values are
+HTML-escaped. Every figure is descriptive and the report carries the same
+caveat as the dashboard: durations are observed elapsed time, and repeated
+activities are not verified rework. The route requires the local dashboard
+session.
+
+**Saved copies.** **Saved copies**, next to **Download report**, lists copies
+of the whole-log report that were saved on this computer, newest first, and
+lets you download them. It also offers **Save a copy now** (the same as
+`POST /v1/event-logs/{log_id}/saved-reports`).
+
+To save copies regularly, for example to compare this week's report with last
+week's, add an **Event log report copy** job under *Scheduled jobs* with the
+log's ID. The job is local and runs at least every 15 minutes, at most every 7
+days. The newest 10 copies per log are kept in the data folder under
+`event_log_reports/<log_id>/`. Deleting the log deletes its copies and its
+report and signal schedules. Copies are never sent anywhere.
+
+**What changed.** Each copy is saved with its headline figures in a JSON file
+next to the HTML. The panel then shows **Changes since the previous copy**:
+
+* cases, events, activities and variants;
+* median and 90th-percentile case time;
+* events per case and the share of cases repeating an activity;
+* the total cost, when both copies had saved prices in the same currency;
+* activities that are new or no longer seen;
+* whether the most common variant changed;
+* the largest changes in cases per activity.
+
+`GET /v1/event-logs/{log_id}/saved-report-changes` compares the two newest
+copies, or the two given as `older` and `newer`. A change can come from
+appended events, an applied activity mapping or edited prices as much as from
+the process itself.
+
 ## Analytics
 
 The dashboard card **Large event logs** (Evidence tab) offers all of the
 following after **Analyse**.
+
+### Attribute profile
+
+**Attributes** (and `POST /v1/event-logs/{log_id}/attribute-profile` with
+`{"top_values": 10, "cohort": {}, "case_type": null}`) lists every event
+attribute in the log, ordered by how many cases carry it. Each attribute
+shows:
+
+* its event and case coverage;
+* its number of distinct values;
+* whether every value is a number. CSV cells are text, and text that parses as
+  a finite number counts as numeric;
+* whether it is **case-level** (one value in every case that has it, like a
+  region) or **event-level** (changes within at least one case, like an amount
+  at a step);
+* whether it is unique per event, like a ticket number.
+
+Categorical attributes list their most frequent values (`top_values` 1–50) with
+their share of cases and the median duration of cases with that value. Numeric
+attributes get min, quartiles, max and mean.
+
+Blank cells and JSON nulls count as missing. At most 100 attributes are
+returned (`attributes_truncated` says when more exist). Durations per value are
+descriptive: cases with a value can differ from the rest in many other ways.
 
 ### KPIs
 
@@ -210,9 +301,70 @@ following after **Analyse**.
 KPIs can be limited to a cohort with the query parameters `started_from` and
 `started_before` (timezone-qualified ISO times; a case belongs to the period
 its first event falls in), `resource` (a resource took part), `activity` (the
-case contains it) and `attribute` (`name=value` on the case object). The
+case contains it), `attribute` (`name=value` on the case object) and
+`event_attribute` (`name=value` on at least one event of the case, which is
+where columns kept from a CSV import live; values are compared as stored text).
+`event_attribute` is accepted wherever a case filter is: query parameters,
+`cohort` bodies and saved filter sets. The
 dashboard downloads the result as JSON or CSV; CSV cells that could be read as
 spreadsheet formulas are prefixed with `'`.
+
+### Process cost
+
+The log records what happened, not what it cost. **Process cost** applies your
+own cost model to the observed events. `POST /v1/event-logs/{log_id}/costs`
+takes:
+
+```json
+{"currency": "EUR", "activity_costs": {"Check invoice": 12.5, "Approve": 4},
+ "default_activity_cost": null, "hourly_open_case_cost": 0.8,
+ "cohort": {}, "case_type": null, "limit": 20}
+```
+
+* `activity_costs`: the cost of one execution of each activity (up to 500
+  activities; each from 0 to 1,000,000,000).
+* `default_activity_cost`: optional; prices every activity not listed.
+  Activities with no price are left out of the totals and listed in
+  `unpriced_activities`; their cost is never guessed.
+* `hourly_open_case_cost`: optional holding cost, charged for each case's time
+  between its first and last event.
+
+The response gives:
+
+* the total, activity and holding cost;
+* the cost of repeated executions (every execution of an activity after its
+  first in the same case) and its share of the total;
+* cost per case (mean, median, 90th percentile, maximum);
+* cost per activity (unit price and where it came from, total, share and the
+  cost of repeated executions);
+* the costliest variants (`limit`, 1–200);
+* cost per recorded resource.
+
+`cohort` takes the same keys as other analyses, so the cost of any filtered set
+of cases can be compared with the rest. Repeated executions are not verified
+rework.
+
+**Saved prices.** **Save prices** keeps the model (currency, activity prices,
+default price and hourly cost) with the log. Next time, the dashboard fills the
+prices in. The HTML report, and its saved and scheduled copies, then include a
+**Process cost** section, which shows:
+
+* the total cost;
+* the mean and median cost per case;
+* the share spent on repeated executions;
+* the ten costliest activities;
+* which activities have no price.
+
+The section uses the report's case filter. API:
+
+* `GET /v1/event-logs/{log_id}/cost-model` returns `{"saved": null}` or the
+  model and when it was saved;
+* `POST` with `{"currency", "activity_costs", "default_activity_cost",
+  "hourly_open_case_cost"}` replaces the model;
+* `POST .../cost-model/delete` forgets it.
+
+A log keeps one model. It is deleted with the log and not copied when matching
+cases are saved as a new log.
 
 ### Cohort benchmark
 
@@ -693,6 +845,35 @@ weights retain their precision; a zero-weight route may be disabled when
 another route has positive weight. Activity labels are data keys, including
 names that also occur on JavaScript object prototypes.
 
+## Case tags
+
+While investigating, tag cases such as "checked", "root cause: missing PO" or
+"exclude: test data", and come back to them. A tag is a label of 1–60
+characters with an optional note (up to 500 characters). Tags are stored on this
+computer next to the log. They are the analyst's judgement, not source data,
+and the log's events are never changed.
+
+* **Adding tags:** `POST /v1/event-logs/{log_id}/case-tags` with either:
+  * `{"tag": "checked", "note": "…", "case_ids": ["c1", "c2"]}`, for up to
+    1,000 IDs. IDs that are not cases of the log are counted in
+    `unknown_case_ids` and skipped; or
+  * `{"tag": "escalated", "cohort": {"activity": "Escalate"}}`, for up to
+    100,000 matching cases.
+
+  Tagging a case again replaces its note.
+* **Removing tags:** `POST /v1/event-logs/{log_id}/case-tags/remove` with
+  `{"tag": "checked", "case_ids": ["c1"]}`. Leave out `case_ids` to remove the
+  tag everywhere.
+* **Listing tags:** `GET /v1/event-logs/{log_id}/case-tags` lists the tags with
+  their case counts. Add `?tag=checked` to also get the tagged cases and their
+  notes (`limit` 1–1000).
+* **Filtering by tag:** the `tag` key of the case filter (`?tag=` on GET
+  analyses, `"tag"` in `cohort` bodies, and **Tagged** in the dashboard)
+  selects tagged cases in every analysis.
+
+A log keeps at most 100 tags and 200,000 tagged cases. Deleting the log deletes
+its tags. A log saved from matching cases does not copy them.
+
 ## Organizational mining (handovers)
 
 `GET /v1/event-logs/{log_id}/organization` (dashboard session only) describes how work moves
@@ -844,6 +1025,28 @@ forward/cyclic references and incompatible addition units, and disclose zero/mis
 coverage. Units are never converted. Saved arithmetic library entries are symbolic templates;
 save a complete analysis to retain their dependency definitions. JSON exports retain the spec,
 units and coverage; CSV exports remain numeric tables.
+
+## Saving matching cases as a new log
+
+**Save matching cases as a new log** (after **Analyse**), or
+`POST /v1/event-logs/{log_id}/derive` with
+`{"name": "Escalated orders", "cohort": {"activity": "Escalate"}, "case_type": null}`,
+copies the cases that match a case filter into a new saved log. `cohort` takes
+the same keys as other analyses and must filter something. It is evaluated
+under the chosen case notion and the source's activity mapping.
+
+* **What is copied:** every event of each matching case, with its attributes,
+  so a case keeps its full history. The objects those events are linked to are
+  copied too, with their links and timed attribute values. In an
+  object-centric log, an event linked to a matching case also brings its other
+  objects, which keep only the copied events.
+* **What is not copied:** activity mapping, saved filters and analyses,
+  signals, domain packs, source-identity keys, object-to-object relationships
+  and quality reports. The new log starts without them.
+* **The source log:** unchanged.
+* **The new log:** counts against the 50-log limit. It can be analysed,
+  exported, compared with the source (see *Comparing two logs*) or deleted like
+  any other log.
 
 ## Appending newer exports
 
@@ -1045,6 +1248,13 @@ The dashboard's "Process map" section has the two sliders (redrawn as you move t
 verified waiting. Redrawing a one-million-event log takes a few seconds
 (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_process_map.py`).
 
+**Download map (SVG)** and **(PNG)** save the map exactly as drawn at the current slider
+settings, for slides and documents. The SVG is self-contained: styles are inlined, and
+interactive attributes are removed. Its `<desc>` and a two-line footer record the log, the
+slider settings, the coverage shown and that the map is derived from the supplied log, not a
+verified business workflow. The PNG is rendered in the browser at twice the drawn size.
+Nothing is uploaded; activity names in the file are as sensitive as the log.
+
 ## Predicting open cases
 
 `POST /v1/event-logs/{log_id}/predictions` (dashboard session only) estimates remaining time and,
@@ -1116,6 +1326,42 @@ medians are within 15% of the true 50 · ln 2 hours for every open case; complet
 under 40% of it. The as-of backtest shows the survival estimator with at least 15% lower error than
 completed cases alone, and 10th–90th percentile coverage near the expected 80%. One million events
 with both estimators take about 18 seconds, including the import, in the scale acceptance.
+
+## Next activity in open cases
+
+**Next activity in open cases**, or `POST /v1/event-logs/{log_id}/next-activity`
+with `{"end_activities": ["Pay", "Close"]}`, estimates what usually comes next
+in each open case. A case is open when its latest activity is not one of
+`end_activities`.
+
+**How it predicts.** It learns from completed cases how often each activity,
+or the end of the case, followed the same last `history` activities (1–4,
+default 2). When fewer than `min_support` completed-case steps (default 5) were
+in that state, it backs off to a shorter history and finally to all
+transitions. Each prediction says which history it used and how many steps
+support it.
+
+Optional settings:
+
+* `top`: the number of next steps returned per case (1–10, default 3);
+* `limit`: the number of open cases returned, most recently active first
+  (1–500, default 50);
+* `backtest_share`: the share of completed cases used for the backtest
+  (default 0.3);
+* `cohort` and `case_type`: as for other analyses.
+
+`expected_next_across_open_cases` sums the probabilities over all open cases,
+giving an estimate of how many cases each step will come up for next.
+
+**Backtest.** The model learns from the completed cases that ended before a
+cutoff. It then predicts every step of the cases that ended after it,
+including their ending. The backtest reports top-1 and top-3 accuracy against
+two baselines: always guessing the most frequent next step, and the most
+frequent successor of the current activity alone. With too few cases on either
+side it says it is unavailable.
+
+The predictions describe this log's history. They are not instructions and say
+nothing about who should act.
 
 ## Processing and waiting time
 
@@ -1343,3 +1589,36 @@ The builder supports [cancellable local analysis jobs](LOCAL_ANALYSIS_JOBS.md),
 with bounded queues, deadlines, session-scoped status/results and explicit cancellation.
 
 Selected Jira issues can also be read manually into a retained local source-ID log with separate read/retention/label consent. See [Retained Jira ingestion](RETAINED_JIRA_INGESTION.md) for scope, lifecycle, checkpoint, pagination and completeness limits.
+
+## Comparing two logs
+
+**Compare with another log** (after **Analyse**) compares the selected log with
+another saved log. Typical uses are two regions or business units exported
+separately, or the same process before and after a system migration. The REST
+form also compares one log with itself under two case filters:
+
+```json
+{"baseline": {"log_id": "log_…", "case_type": null, "cohort": {}},
+ "comparison": {"log_id": "log_…", "cohort": {"started_from": "2024-07-01"}},
+ "limit": 25}
+```
+
+`cohort` takes the same keys as other analyses. `limit` (1–200) caps each ranked
+list. The response contains:
+
+* **KPIs for each side and their difference:** cases, events per case, the
+  share of cases that repeat an activity (with a 95% interval for the
+  difference), and case-duration quantiles. It also gives the probability that a
+  random comparison case takes longer than a random baseline case (0.5 means no
+  shift).
+* **Activities and paths:** those present only in the baseline, those present
+  only in the comparison, and the largest differences in the share of cases
+  that contain each one. Each difference has a Newcombe 95% interval.
+* **Variants:** how many variants occur in both logs and what share of each
+  log's cases they cover, plus the variants whose share differs most.
+
+Activities are matched by exact name after each log's applied activity
+mapping. Define a mapping to harmonize names that differ between source
+systems. The comparison is descriptive: the two logs may differ in extraction,
+coverage and case mix, so a difference is not evidence of its cause. The
+intervals are not corrected for the number of rows shown.

@@ -112,9 +112,28 @@ CREATE TABLE IF NOT EXISTS signal_reviews (
   state_fingerprint VARCHAR NOT NULL, acknowledged_at TIMESTAMP NOT NULL,
   PRIMARY KEY(log_id, rule_id)
 );
+CREATE TABLE IF NOT EXISTS signal_transitions (
+  log_id VARCHAR NOT NULL, rule_id VARCHAR NOT NULL,
+  transition_id VARCHAR PRIMARY KEY, occurred_at TIMESTAMP NOT NULL,
+  event_type VARCHAR NOT NULL, state_fingerprint VARCHAR NOT NULL
+);
+CREATE INDEX IF NOT EXISTS signal_transitions_by_log_time ON signal_transitions(log_id,occurred_at);
 """
 
 _SCHEMA += source_identity.SCHEMA + object_relationships.SCHEMA
+# Analyst case tags (event_log_case_tags); declared here so case filters can always refer to them.
+_SCHEMA += """
+CREATE TABLE IF NOT EXISTS case_tags (
+  log_id VARCHAR NOT NULL, case_id VARCHAR NOT NULL, tag VARCHAR NOT NULL, note VARCHAR NOT NULL,
+  tagged_at TIMESTAMP NOT NULL
+);
+"""
+# The saved cost model of a log (event_log_costs): at most one per log, the analyst's own prices.
+_SCHEMA += """
+CREATE TABLE IF NOT EXISTS cost_models (
+  log_id VARCHAR NOT NULL, model VARCHAR NOT NULL, saved_at TIMESTAMP NOT NULL
+);
+"""
 
 DESCRIPTIVE_ONLY = {
     "derived_from_supplied_log": True,
@@ -681,10 +700,12 @@ def delete_log(log_id: str) -> dict[str, Any]:
             _check_log(conn, log_id)
             conn.execute("BEGIN")
             try:
+                from .event_log_activity_mappings import erase as erase_mappings
+                erase_mappings(conn, log_id)
                 from .jira_retained_profiles import forget_dataset
                 forget_dataset(conn, log_id)
                 for table in ("object_relationships", "event_source_keys", "event_source_namespaces", "discovery_snapshots", "log_appends", "log_quality", "quarantine", "quarantine_decisions", "filter_sets",
-                              "domain_pack_installs", "metric_definitions", "saved_analyses", "signal_snoozes", "signal_reviews", "signal_rules", "event_objects", "events", "objects",
+                              "domain_pack_installs", "metric_definitions", "saved_analyses", "signal_snoozes", "signal_reviews", "signal_transitions", "signal_rules", "case_tags", "cost_models", "event_objects", "events", "objects",
                               "object_attribute_values",
                               "logs"):
                     conn.execute(f"DELETE FROM {table} WHERE log_id = ?", [log_id])
@@ -693,6 +714,13 @@ def delete_log(log_id: str) -> dict[str, Any]:
                 conn.execute("ROLLBACK")
                 raise
             conn.execute("CHECKPOINT")
+            from .event_log_prediction_snapshots import erase_log as erase_snapshots
+            erase_snapshots(log_id)
+            from .event_log_saved_reports import erase as erase_saved_reports
+            erase_saved_reports(log_id)
+            from .local_scheduler import forget_target
+            for kind in ("event_log_signals", "event_log_report"):
+                forget_target(kind, log_id)
             # Cover a submission racing with the first erasure while deletion waited for this lock.
             jobs.erase_log(log_id)
             return {"deleted": True, "log_id": log_id}
@@ -733,8 +761,11 @@ def _query(log_id: str, case_type: str | None, fn, *, control=None) -> dict[str,
                 notion = _case_type(query_conn, log_id, case_type)
                 # Materialize the case-notion projection once per request (temp, per connection).
                 query_conn.execute(f"CREATE OR REPLACE TEMP TABLE ce AS {_CASE_EVENTS}", [log_id, notion])
+                from .event_log_activity_mappings import apply_to_case_events
+                mapping = apply_to_case_events(query_conn, log_id)
                 result = fn(query_conn)
-                return {"log": info, "case_notion": notion, **result, **DESCRIPTIVE_ONLY}
+                return {"log": info, "case_notion": notion, **result, **DESCRIPTIVE_ONLY,
+                        **({"activity_mapping": mapping} if mapping else {})}
         finally:
             conn.close()
 
