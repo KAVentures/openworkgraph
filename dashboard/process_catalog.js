@@ -979,27 +979,24 @@
         const citeText=c=>'“'+c.text+'” — '+c.document_title+' (characters '+c.start+'–'+c.end+')';
         for(const c of q.citations)cites.append(el('li',citeText(c)));
         box.append(cites);
-        const selectedStatements=new Map();
+        const disputed=new Map();
         if(q.contradictions.length){
-          box.append(el('p','Conflicting source claims require a human decision. To confirm or revise, select exactly one applicable statement for each contradictory pair and explain why. Nothing is selected by default.'));
-          const choose=el('div');choose.className='owgClarifyConflicts';
+          box.append(el('p','The documents disagree. To confirm or revise, choose ONE governing source statement and explain why. Nothing is chosen automatically; reject or defer if the conflict remains unresolved.'));
           for(const conflict of q.contradictions){
-            const group=el('fieldset');
-            group.append(el('legend','Disagreement: '+conflict.kind.replaceAll('_',' ')));
-            for(const c of conflict.statements){
-              const label=el('label'),check=el('input');check.type='checkbox';
-              check.setAttribute('aria-label','Select applicable statement: '+c.document_title+' at '+c.start);
-              label.append(check,el('span',citeText(c)));group.append(label);
-              const prior=selectedStatements.get(c.statement_id)||[];
-              prior.push(check);selectedStatements.set(c.statement_id,prior);
-              check.addEventListener('change',()=>{
-                for(const other of group.querySelectorAll('input[type=checkbox]'))if(other!==check&&check.checked)other.checked=false;
-                for(const sibling of selectedStatements.get(c.statement_id)||[])if(sibling!==check)sibling.checked=check.checked;
-              });
-            }
-            choose.append(group);
+            box.append(el('p','Disagreement ('+conflict.kind.replaceAll('_',' ')+'): '+
+              conflict.statements.map(c=>c.document_title+' at '+c.start).join(' versus ')));
+            for(const c of conflict.statements)disputed.set(c.statement_id,c);
           }
-          box.append(choose);
+          const group=el('fieldset');group.className='owgClarifyConflicts';
+          group.append(el('legend','Select one governing statement'));
+          for(const [statementId,c] of disputed){
+            const label=el('label'),choiceInput=el('input');choiceInput.type='radio';
+            choiceInput.name='owgClarifySource_'+q.question_id;
+            choiceInput.value=statementId;
+            choiceInput.setAttribute('aria-label','Governing statement from '+c.document_title+' at '+c.start);
+            label.append(choiceInput,el('span',citeText(c)));group.append(label);
+          }
+          box.append(group);
         }
         const answer=el('input');answer.type='text';answer.maxLength=2000;
         answer.placeholder=q.kind==='contradiction'?'Explain which policy applies and why':'Your answer (optional)';
@@ -1010,14 +1007,11 @@
             throw new Error('Process or source documents changed; run clarification again.');
           let cited;
           if(q.kind==='contradiction'){
-            cited=[...selectedStatements].filter(([,checks])=>checks.some(node=>node.checked)).map(([id])=>id);
+            const chosen=box.querySelector('.owgClarifyConflicts input[type=radio]:checked')?.value;
+            cited=chosen?[chosen]:[];
             if(['confirm','revise'].includes(choice)){
+              if(!chosen)throw new Error('Select one governing statement before resolving a conflict.');
               if(!answer.value.trim())throw new Error('Explain your resolution of the contradictory policy statements.');
-              for(const conflict of q.contradictions){
-                const ids=conflict.statements.map(c=>c.statement_id);
-                if(ids.filter(id=>cited.includes(id)).length!==1)
-                  throw new Error('Select exactly one applicable statement from each contradictory pair.');
-              }
             }
           }else cited=[...new Set(q.citations.map(c=>c.statement_id))].slice(0,5);
           const res=await request('/v1/process-catalog/clarify/decide'+query,{documents,
