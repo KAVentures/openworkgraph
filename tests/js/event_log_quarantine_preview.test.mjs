@@ -138,3 +138,15 @@ test('batch and row selection bind the preview and invalidate release on edits',
   await h.buttons.get('Release rows').onclick();
   assert.deepEqual(h.requests.at(-1).body,{naive_timestamp_offset:'+01:00',batch:0,row_start:22,row_end:23,expected_preview_sha256:'a'.repeat(64)});
 });
+
+test('out-of-range batch and row values do not submit a preview', async()=>{
+  const h=harness(preview);h.build();await settle();
+  const batch=h.inputs.get('owgQuarantineBatch');batch.value='2147483648';batch.listeners.input();
+  await settle();await h.buttons.get('Preview release').onclick();
+  assert.equal(h.requests.length,0);
+  batch.value='0';batch.listeners.input();
+  const start=h.inputs.get('owgQuarantineRowStart'),end=h.inputs.get('owgQuarantineRowEnd');
+  start.value='1';start.listeners.input();end.value='1000000000';end.listeners.input();
+  await h.buttons.get('Preview release').onclick();
+  assert.equal(h.requests.length,0);
+});

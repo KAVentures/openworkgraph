@@ -2706,14 +2706,14 @@
       if(generation!==state.generation||(!r.rows_kept&&!r.decisions.length))return;
       show(wrap,true);
       const offset=input('owgQuarantineOffset','text','+01:00');offset.maxLength=6;
-      const batch=input('owgQuarantineBatch','number');batch.min='0';batch.step='1';
-      const rowStart=input('owgQuarantineRowStart','number');rowStart.min='0';rowStart.step='1';
-      const rowEnd=input('owgQuarantineRowEnd','number');rowEnd.min='0';rowEnd.step='1';
+      const batch=input('owgQuarantineBatch','number');batch.min='0';batch.max='2147483647';batch.step='1';
+      const rowStart=input('owgQuarantineRowStart','number');rowStart.min='0';rowStart.max='999999999';rowStart.step='1';
+      const rowEnd=input('owgQuarantineRowEnd','number');rowEnd.min='0';rowEnd.max='999999999';rowEnd.step='1';
       const readScope=()=>{
         const raw=[batch.value.trim(),rowStart.value.trim(),rowEnd.value.trim()];
         if(raw.some(x=>x&&!/^\d+$/.test(x)))throw new Error('Use whole numbers for batch and row range.');
         const nums=raw.map(x=>x?Number(x):null);
-        if(nums.some(x=>x!==null&&!Number.isSafeInteger(x)))throw new Error('Use whole numbers for batch and row range.');
+        if(nums.some(x=>x!==null&&!Number.isSafeInteger(x))||nums[0]>2147483647||nums[1]>999999999||nums[2]>999999999)throw new Error('Use whole numbers within the allowed batch and row limits.');
         if((nums[1]!==null||nums[2]!==null)&&(nums[0]===null||nums[1]===null||nums[2]===null||nums[2]<nums[1]))
           throw new Error('Select a batch and both ends of an inclusive row range.');
         return {...(nums[0]!==null?{batch:nums[0]}:{}),...(nums[1]!==null?{row_start:nums[1],row_end:nums[2]}:{})};
@@ -2732,7 +2732,7 @@
       let pageTurn=0,nextCursor=null;
       const renderPage=page=>{
         pageHost.replaceChildren(...(page.rows.length?[table(['Batch','Row','Case','Activity','Time as supplied','Why rejected'],
-          page.rows.map(x=>[x.batch||'import',x.row,x.case,x.activity,x.time,x.reasons.map(k=>REASON_LABELS[k]||k).join(', ')]))]:[el('div','No retained rows in this batch.','muted')]));
+          page.rows.map(x=>[x.batch===0?'import (0)':x.batch,x.row,x.case,x.activity,x.time,x.reasons.map(k=>REASON_LABELS[k]||k).join(', ')]))]:[el('div','No retained rows in this batch.','muted')]));
         nextCursor=page.next_after;nextPage.disabled=nextCursor===null||nextCursor===undefined;
       };
       const loadPage=async after=>{
