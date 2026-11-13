@@ -165,3 +165,17 @@ def purge_expired_receipts(path: str, *, tenant: str, actor: str,
             "DELETE FROM attempt_receipts WHERE tenant=? AND actor=? AND checked_at<?",
             (tenant, actor, cutoff))
         return cursor.rowcount
+
+
+def purge_tenant(path: str, *, tenant: str) -> int:
+    """Revoke all actors' receipts for one disconnected source scope.
+
+    Only a trusted server-side source lifecycle may call this. A browser or
+    agent must never supply the tenant; actor-scoped CLI purge remains separate.
+    """
+    _scope(tenant, "source_revocation", "purge")
+    with _connect(path) as db:
+        db.execute("BEGIN IMMEDIATE")
+        cursor = db.execute(
+            "DELETE FROM attempt_receipts WHERE tenant=?", (tenant,))
+        return cursor.rowcount
