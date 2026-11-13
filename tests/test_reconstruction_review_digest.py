@@ -74,3 +74,19 @@ def test_authorized_adapter_rejects_stale_evidence_after_live_authorization():
         score_authorized_reconstruction_review(
             _response("event-2"), stale, authorize_review=lambda: True
         )
+
+
+def test_review_digest_rejects_replay_across_changed_scan_or_session_boundary():
+    import pytest
+    from server.reconstruction_review_cli import score_bound_review_annotations
+    source = _response("event-1")
+    source["current_session"] = {"started_at": "2026-11-13T10:00:00+00:00"}
+    source["session_gap_minutes"] = 30
+    bound = _envelope(source)
+    for changed in (
+        {**source, "coverage": {"scan_truncated": False, "activity_rows_scanned": 12}},
+        {**source, "current_session": {"started_at": "2026-11-13T11:00:00+00:00"}},
+        {**source, "session_gap_minutes": 45},
+    ):
+        with pytest.raises(ValueError, match="digest mismatch"):
+            score_bound_review_annotations(changed, bound)
