@@ -670,5 +670,31 @@ class LiveReconstructionServiceTests(unittest.TestCase):
             score_authorized_reconstruction_review(
                 source, envelope, authorize_review=lambda: next(decisions))
 
+class WindowMetricsTests(unittest.TestCase):
+    def test_separate_earlier_window_failure_is_not_hidden_by_current_success(self):
+        source = payload([pair(
+            "A", "F", ["current-1"],
+            earlier=[{"session_started_at": "2026-11-01T08:00:00+00:00",
+                      "evidence_event_ids": ["earlier-1"]}],
+        )])
+        queue = build_review_queue(source)
+        annotations = []
+        for row in queue["event_reviews"]:
+            annotations.append({
+                "window": row["window"], "event_id": row["event_id"],
+                "true_resource_pairs": row["candidate_resource_pairs"]
+                if row["window"] == "current" else [],
+            })
+        score = score_review_annotations(source, annotations)
+        windows = score["per_window_metrics"]
+        self.assertEqual(windows["current"]["f1"], 1.0)
+        earlier = [v for k, v in windows.items() if k.startswith("earlier:")]
+        self.assertEqual(len(earlier), 1)
+        self.assertEqual(earlier[0]["false_positive_pairs"] if "false_positive_pairs" in earlier[0] else earlier[0]["fp"], 1)
+        self.assertEqual(earlier[0]["f1"], 0.0)
+        self.assertFalse(score["held_out_verified"])
+        self.assertFalse(score["cross_case_contamination_measured"])
+
+
 if __name__ == "__main__":
     unittest.main()
