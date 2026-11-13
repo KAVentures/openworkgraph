@@ -970,7 +970,7 @@
       if(record!==selected||generation!==sourceGeneration)return;
       output.replaceChildren(el('p',result.questions.length+' open questions · '+result.answered_question_count+
         ' answered on this process revision and exact source bundle · '+result.statement_count+
-        ' source statements. The documents are not retained.'));
+        ' source statements. Full documents are not retained; selected citations and answers are recorded.'));
       if(result.instruction_like_statements.length)output.append(el('p',
         result.instruction_like_statements.length+' statement(s) look like instructions to the system and were excluded from evidence.'));
       for(const q of result.questions){
