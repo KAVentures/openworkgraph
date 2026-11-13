@@ -252,6 +252,18 @@ def resumption_candidates(
         if event_id:
             event_id_counts[event_id] = event_id_counts.get(event_id, 0) + 1
     colliding_event_ids = {eid for eid, count in event_id_counts.items() if count > 1}
+    # A pointer-bearing row can share its external event label with an ordinary
+    # activity row. The pointer-only query cannot see that collision.
+    # Check all authorized activity within the scanned window before using
+    # event IDs as case-assignment evidence.
+    duplicate_labels = connection.execute(
+        "SELECT substr(event_id, 1, 120) AS evidence_id FROM events "
+        "WHERE julianday(observed_at) BETWEEN ? AND ? AND (" + where + ") "
+        "AND event_id IS NOT NULL AND event_id != '' "
+        "GROUP BY substr(event_id, 1, 120) HAVING COUNT(*) > 1",
+        tuple([instants[0], instants[-1]] + args),
+    ).fetchall()
+    colliding_event_ids.update(str(row[0]) for row in duplicate_labels)
     unlabeled_pointer_rows = sum(1 for row in pointer_rows if not str(row["event_id"] or "")[:120])
     if unlabeled_pointer_rows:
         result["coverage"]["excluded_unlabeled_pointer_rows"] = unlabeled_pointer_rows
