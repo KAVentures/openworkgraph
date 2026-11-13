@@ -13,6 +13,7 @@ however close in time it is. No titles, URLs, paths or contents are read.
 from __future__ import annotations
 
 from bisect import bisect_right
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -531,7 +532,10 @@ def score_authorized_reconstruction_review(
     if authorize_review() is not True:
         raise PermissionError("reconstruction review authorization denied")
     from .reconstruction_review_cli import score_bound_review_annotations
-    return score_bound_review_annotations(response, annotation_envelope)
+    score = score_bound_review_annotations(response, annotation_envelope)
+    if authorize_review() is not True:
+        raise PermissionError("reconstruction review authorization revoked during scoring")
+    return score
 
 
 def score_live_reconstruction_review(
@@ -552,16 +556,20 @@ def score_live_reconstruction_review(
     """
     if not callable(authorize_review) or authorize_review() is not True:
         raise PermissionError("live reconstruction review authorization denied")
-    # Recompute within the current lease; stale exports cannot be scored.
+    # Freeze the host-owned lease used for the scan. A concurrent grant-scope
+    # change must not allow a result built under the old scope to escape.
+    if not isinstance(lease, dict):
+        raise PermissionError("trusted saved-history lease required")
+    lease_snapshot = deepcopy(lease)
     response = resumption_candidates(
-        connection, lease=lease, run_started_at=run_started_at
+        connection, lease=lease_snapshot, run_started_at=run_started_at
     )
     from .reconstruction_review_cli import score_bound_review_annotations
     score = score_bound_review_annotations(response, annotation_envelope)
     # The grant can be revoked while a large history scan or scoring is running.
     # Never return derived evidence after a failed final live authorization check.
-    if authorize_review() is not True:
-        raise PermissionError("reconstruction review authorization revoked during scoring")
+    if authorize_review() is not True or lease != lease_snapshot:
+        raise PermissionError("reconstruction review authorization or lease changed during scoring")
     return score
 
 
