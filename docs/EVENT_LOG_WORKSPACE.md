@@ -260,6 +260,34 @@ copies, or the two given as `older` and `newer`. A change can come from
 appended events, an applied activity mapping or edited prices as much as from
 the process itself.
 
+## Where to look first (automatic insights)
+
+After **Analyse**, **Where to look first** lists up to six findings, ranked by the
+case time they involve. The same list comes from
+`POST /v1/event-logs/{log_id}/insights` with
+`{"limit": 8, "sla_seconds": null, "cohort": {}, "case_type": null}`.
+
+| Kind | Shown when |
+| --- | --- |
+| `slow_transition` | One step-to-step gap accounts for at least 15% of all recorded case time. |
+| `repeated_activity` | An activity recurs within at least 5% of cases. It shows the median duration with and without the repeat. |
+| `costly_detour` | Cases with a minority activity take at least 1.5× as long as the rest. |
+| `long_tail` | Always shown: the slowest tenth of cases and their share of case time. |
+| `variant_spread` | Always shown: how many paths cover 80% of cases. |
+| `slowing_down` | The newer half of cases (by start) has a median at least 1.25× the older half's. |
+| `sla_breaches` | With `sla_seconds`: the cases over that duration. |
+
+Each finding carries its numbers, the cases it touches, a caveat, and the case
+filter that reproduces it:
+
+* `cohort` for API use;
+* `follows` rules for the dashboard's case filter, so **Filter to these
+  cases** applies it to every analysis.
+
+Logs with fewer than 5 cases get no findings. Insights are descriptive: they
+show where recorded time and repetition concentrate, not why. A 300,000-event
+log takes about half a second.
+
 ## Analytics
 
 The dashboard card **Large event logs** (Evidence tab) offers all of the

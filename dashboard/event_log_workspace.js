@@ -575,6 +575,7 @@
     if(summary.cases_before_filter!==undefined){const note=el('div','Filtered: '+Number(summary.cases).toLocaleString()+' of '+Number(summary.cases_before_filter).toLocaleString()+' cases match the case filter.','muted');note.id='owgCaseFilterCount';overview.appendChild(note);}
     if(summary.activity_mapping){const m=summary.activity_mapping;const note=el('div','Activities are grouped by the mapping “'+m.name+'”: '+Number(m.events_relabeled).toLocaleString()+' events relabelled'+(m.repeats_collapsed?', '+Number(m.repeats_collapsed).toLocaleString()+' consecutive repeats collapsed':'')+'. The stored events are unchanged; remove the mapping under Group activities to see the original activities.','note');note.id='owgActivityMappingNotice';overview.appendChild(note);}
     results.appendChild(overview);
+    results.appendChild(insightSection());
     results.appendChild(activityMappingSection());
     results.appendChild(qualitySection());
     results.appendChild(attributeProfileSection());
@@ -835,6 +836,39 @@
     if(rules.length>5)throw new Error('Use at most 5 rules.');
     return rules;
   }
+  // "Where to look first": ranked, descriptive pointers computed automatically after Analyse.
+  function insightSection(){
+    const box=section('Where to look first');box.id='owgEventLogInsights';
+    const out=el('div');out.id='owgInsightResults';out.setAttribute('role','status');out.setAttribute('aria-live','polite');
+    out.appendChild(el('div','Looking for where case time and repetition concentrate…','muted'));
+    box.appendChild(out);
+    const generation=state.generation;
+    const spec={limit:6};if(state.caseType)spec.case_type=state.caseType;if(state.follows.length)spec.cohort={follows:state.follows};
+    api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/insights',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})
+      .then(r=>r.json()).then(r=>{
+        if(generation!==state.generation)return;
+        if(r.too_few_cases){out.replaceChildren(el('div','At least '+r.minimum_cases+' cases are needed for automatic insights.','muted'));return;}
+        if(!r.findings.length){out.replaceChildren(el('div','Nothing stands out: no step, loop or detour holds a large share of case time.','muted'));return;}
+        const list=el('ol');list.style.paddingLeft='1.2em';
+        r.findings.forEach(f=>{
+          const item=el('li');item.style.marginBottom='8px';
+          const title=el('strong',f.title);
+          const meta=el('div',Number(f.cases).toLocaleString()+' cases ('+pct(f.case_share)+')'+(f.impact_seconds?' · about '+duration(f.impact_seconds)+' of case time involved':'')+'. '+f.caveat,'muted');
+          item.append(title,meta);
+          if(f.follows&&f.follows.length&&!state.follows.length){
+            const go=button('Filter to these cases','secondary');go.setAttribute('aria-label','Filter to these cases: '+f.title);
+            go.onclick=()=>{state.follows=f.follows;analyse().catch(error=>status(error.message));};
+            item.appendChild(go);
+          }else if(f.cohort&&f.cohort.activity){
+            item.appendChild(el('div','To see these cases, choose “'+f.cohort.activity+'” under Contains activity in any filter.','muted'));
+          }
+          list.appendChild(item);
+        });
+        out.replaceChildren(list,el('div',r.interpretation,'muted'));
+      }).catch(error=>{if(generation===state.generation)out.replaceChildren(el('div',error.message,'muted'));});
+    return box;
+  }
+
   function followText(rule){
     return rule.from+(rule.negate?' is never ':' is ')+(rule.mode==='direct'?'directly':'eventually')+' followed by '+rule.to;
   }

@@ -447,6 +447,19 @@ async def event_log_attribute_profile(request: Request, log_id: str):
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/insights")
+async def event_log_insights(request: Request, log_id: str):
+    """Ranked, descriptive pointers to where case time and repetition concentrate."""
+    from . import event_log_insights as log_insights
+    _require_dashboard(request)
+    spec = await _json_body(request, "insight settings", strict=True, limit=16384)
+    try:
+        result = await run_in_threadpool(log_insights.insights, log_id, spec)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/v1/event-logs/{log_id}/object-types")
 def event_log_object_types(request: Request, log_id: str):
     _require_dashboard(request)
