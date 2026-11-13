@@ -742,7 +742,7 @@ const path=require('node:path');
    // the earlier prepared case file or merely a matching aggregate.
    await page.route('**/case-sharing-preview',async route=>{
      const changed=structuredClone(pair);
-     changed.case_dataset.cases[0].events[0].elapsed_microseconds+=1;
+     changed.case_dataset.cases[0]={...changed.case_dataset.cases[0],tampered_timeline:true};
      await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(changed)});
    },{times:1});
    await page.locator('#owgAnalysisCaseDownload').click();
