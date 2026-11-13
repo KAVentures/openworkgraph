@@ -16,7 +16,7 @@ async function scenario(title,responses,check,withPipeline=false){
  const context={document:doc,CustomEvent:class {constructor(type,init){this.type=type;this.detail=init.detail;}},window:{__owgAuthReady:Promise.resolve(),dispatchEvent:e=>{opened++;lastEvent=e;}},fetch:async(url,options)=>{assert.equal(options.cache,'no-store');
    // The saved-review read is answered separately so scenarios keep counting their decision calls.
    if(!options.method&&/\/review\/[^/]+$/.test(String(url)))return {ok:true,status:200,json:async()=>({project_id:'p1',revision:0,decision:'draft',reviewer_notes:'',execution_authorized:false})};
-   if(options.method==='POST'&&/\/review$/.test(String(url))){const b=JSON.parse(options.body);const x=responses[calls++];if(x&&x.reviewReceipt)return {ok:true,status:200,json:async()=>x.reviewReceipt};calls--;return {ok:true,status:200,json:async()=>({project_id:'p1',revision:b.expected_review_revision+1,decision:b.decision,execution_authorized:false})};}
+   if(options.method==='POST'&&/\/review$/.test(String(url))){const b=JSON.parse(options.body);const x=responses[calls++];if(x&&x.project_id)return {ok:true,status:200,json:async()=>x};calls--;return {ok:true,status:200,json:async()=>({project_id:'p1',revision:b.expected_review_revision+1,decision:b.decision,execution_authorized:false})};}
    const x=responses[calls++];if(x instanceof Error)throw x;return {ok:x.ok!==false,status:x.status||200,json:async()=>x.data||x};}};
  vm.runInNewContext(fs.readFileSync(path.resolve(__dirname,'../../dashboard/review_choice_workbench.js'),'utf8'),context);
  doc.DOMContentLoaded();
