@@ -718,5 +718,54 @@ class WindowMetricsTests(unittest.TestCase):
         self.assertFalse(score["cross_case_contamination_measured"])
 
 
+
+class LiveQueueAdapterTests(unittest.TestCase):
+    def test_queue_uses_trusted_lease_and_matches_offline_review(self):
+        from unittest.mock import patch
+        from server.work_resumption import build_live_reconstruction_review_queue
+        source = payload([pair("A", "F", ["e1"])])
+        lease = {"mode": "all_saved"}
+        with patch("server.work_resumption.resumption_candidates", return_value=source) as rebuild:
+            result = build_live_reconstruction_review_queue(
+                object(), lease=lease, authorize_review=lambda: True)
+        self.assertEqual(result, build_review_queue(source))
+        self.assertEqual(rebuild.call_args.kwargs["lease"], lease)
+
+    def test_queue_denies_before_database_read_without_history_grant(self):
+        from unittest.mock import patch
+        from server.work_resumption import build_live_reconstruction_review_queue
+        with patch("server.work_resumption.resumption_candidates") as rebuild:
+            for lease, authorize in [({"mode": "off"}, lambda: True),
+                                     ({"mode": "all_saved"}, lambda: False)]:
+                with self.assertRaises(PermissionError):
+                    build_live_reconstruction_review_queue(
+                        object(), lease=lease, authorize_review=authorize)
+            rebuild.assert_not_called()
+
+    def test_queue_rejects_revocation_during_build(self):
+        from unittest.mock import patch
+        from server.work_resumption import build_live_reconstruction_review_queue
+        decisions = iter([True, False])
+        with patch("server.work_resumption.resumption_candidates",
+                   return_value=payload([pair("A", "F", ["e1"])])):
+            with self.assertRaisesRegex(PermissionError, "revoked"):
+                build_live_reconstruction_review_queue(
+                    object(), lease={"mode": "all_saved"},
+                    authorize_review=lambda: next(decisions))
+
+    def test_queue_rejects_mid_scan_scope_change(self):
+        from unittest.mock import patch
+        from server.work_resumption import build_live_reconstruction_review_queue
+        lease = {"mode": "all_saved"}
+        def change_scope(*args, **kwargs):
+            lease["mode"] = "off"
+            return payload([pair("A", "F", ["e1"])])
+        with patch("server.work_resumption.resumption_candidates",
+                   side_effect=change_scope):
+            with self.assertRaisesRegex(PermissionError, "lease changed"):
+                build_live_reconstruction_review_queue(
+                    object(), lease=lease, authorize_review=lambda: True)
+
+
 if __name__ == "__main__":
     unittest.main()
