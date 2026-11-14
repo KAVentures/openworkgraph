@@ -226,3 +226,21 @@ def test_review_http_responses_are_uncacheable_even_on_denial_or_validation():
     assert source.index('async def reconstruction_review_no_store') < source.index(
         '@app.get("/v1/history/reconstruction-review")'
     )
+
+
+def test_dashboard_can_label_missing_true_pairs_for_event_level_recall():
+    """Candidate-only checkboxes make false negatives impossible by construction.
+
+    The reviewer must be able to add independently observed true resource
+    pairs that reconstruction missed, without persisting raw annotations.
+    """
+    from server.main import ROOT
+    source = (ROOT / "dashboard" / "history_retention.js").read_text(encoding="utf-8")
+    assert "const missed=document.createElement('textarea');" in source
+    assert "missed.setAttribute('aria-label'" in source
+    assert "reconstructionChoices[index]={row,pairs,selected,done,missed};" in source
+    assert "const extra=c.missed.value.trim()?JSON.parse(c.missed.value):[];" in source
+    assert "true_resource_pairs:chosen.concat(extra)" in source
+    assert "Invalid additional ground truth:" in source
+    assert "reconstructionLabelEpoch++;" in source
+    assert "localStorage.setItem('reconstruction" not in source
