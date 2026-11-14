@@ -90,3 +90,35 @@ def test_review_digest_rejects_replay_across_changed_scan_or_session_boundary():
     ):
         with pytest.raises(ValueError, match="digest mismatch"):
             score_bound_review_annotations(changed, bound)
+
+
+def test_review_digest_rejects_replay_across_changed_group_membership_or_truncation():
+    """Current navigation groups are part of the reviewer's evidence basis.
+
+    Direct event-pair labels can remain identical while a different set of
+    singleton or transitive groups is visible in the inspection response.
+    """
+    import pytest
+    from server.reconstruction_review_cli import score_bound_review_annotations
+
+    source = _response("event-1")
+    source["observed_case_groups"] = [{
+        "group_id": "observed_group_01",
+        "resource_pointers": [
+            {"provider": "github", "resource_kind": "issue", "resource_ref": "A"},
+            {"provider": "github", "resource_kind": "issue", "resource_ref": "B"},
+        ],
+        "proves_same_case": False,
+    }]
+    source["observed_case_groups_truncated"] = False
+    bound = _envelope(source)
+    altered_groups = [{**source["observed_case_groups"][0],
+                       "resource_pointers": [
+                           {"provider": "github", "resource_kind": "issue", "resource_ref": "A"}
+                       ]}]
+    for changed in (
+        {**source, "observed_case_groups": altered_groups},
+        {**source, "observed_case_groups_truncated": True},
+    ):
+        with pytest.raises(ValueError, match="digest mismatch"):
+            score_bound_review_annotations(changed, bound)
