@@ -106,6 +106,25 @@ class EvidenceBoundAnnotationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "digest mismatch"):
             score_bound_review_annotations(changed, envelope)
 
+    def test_changed_group_continuity_invalidates_review_labels(self):
+        from server.reconstruction_review_cli import score_bound_review_annotations
+        source = payload([pair("A", "F", ["e1"])])
+        source["observed_group_continuity"] = [{"group_id": "g1", "evidence_event_ids": ["e1"]}]
+        source["observed_group_continuity_truncated"] = False
+        queue = build_review_queue(source)
+        row = queue["event_reviews"][0]
+        envelope = {"evidence_sha256": queue["evidence_sha256"],
+                    "annotations": [{"window": row["window"], "event_id": row["event_id"],
+                                     "true_resource_pairs": row["candidate_resource_pairs"]}]}
+        self.assertEqual(score_bound_review_annotations(source, envelope)["true_positive_pairs"], 1)
+        changed = dict(source, observed_group_continuity=[
+            {"group_id": "g2", "evidence_event_ids": ["e1"]}])
+        with self.assertRaisesRegex(ValueError, "digest mismatch"):
+            score_bound_review_annotations(changed, envelope)
+        changed = dict(source, observed_group_continuity_truncated=True)
+        with self.assertRaisesRegex(ValueError, "digest mismatch"):
+            score_bound_review_annotations(changed, envelope)
+
     def test_unbound_or_invalid_annotation_envelopes_are_refused(self):
         from server.reconstruction_review_cli import score_bound_review_annotations
         source = payload([pair("A", "F", ["a"])])
