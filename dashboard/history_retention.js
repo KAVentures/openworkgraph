@@ -160,6 +160,7 @@
   let reconstructionChoices=[];
   let reconstructionRequestEpoch=0;
   let reconstructionScoring=false;
+  let reconstructionLabelEpoch=0;
   function reconstructionWorkbench(){
     const panel=document.querySelector('#panel-history');
     if(!panel||document.querySelector('#reconstructionWorkbench'))return;
@@ -175,6 +176,7 @@
     // Invalidate the in-flight score lease as well as the evidence. An older
     // request must not lock a freshly loaded review after revocation/reload.
     reconstructionScoring=false;
+    reconstructionLabelEpoch++;
     reconstructionEvidence=null;reconstructionChoices=[];
     const root=document.querySelector('#reconstructionWorkbench');if(!root)return;
     root.querySelector('#reconstructionEvents').replaceChildren();
@@ -208,12 +210,13 @@
         pairs.forEach((pair,pairIndex)=>{
           const label=document.createElement('label');
           const check=document.createElement('input');check.type='checkbox';
-          check.addEventListener('change',()=>{if(check.checked)selected.add(pairIndex);else selected.delete(pairIndex);});
+          check.addEventListener('change',()=>{if(check.checked)selected.add(pairIndex);else selected.delete(pairIndex);reconstructionLabelEpoch++;root.querySelector('#reconstructionMetrics').textContent='';});
           label.append(check,document.createTextNode(' True pair: '+JSON.stringify(pair)));
           item.appendChild(label);item.appendChild(document.createElement('div'));
         });
         const acknowledge=document.createElement('label');
         const done=document.createElement('input');done.type='checkbox';
+        done.addEventListener('change',()=>{reconstructionLabelEpoch++;root.querySelector('#reconstructionMetrics').textContent='';});
         acknowledge.append(done,document.createTextNode(' I reviewed this event (unchecked pairs are negatives)'));
         item.appendChild(acknowledge);host.appendChild(item);
         reconstructionChoices[index]={row,pairs,selected,done};
@@ -239,6 +242,7 @@
     root.querySelector('#reconstructionScore').disabled=true;
     reconstructionScoring=true;
     const epoch=reconstructionRequestEpoch;
+    const labelEpoch=reconstructionLabelEpoch;
     try{
       await window.__owgAuthReady;
       const response=await fetch('/v1/history/reconstruction-review/score',{
@@ -246,6 +250,10 @@
         body:JSON.stringify(envelope)});
       const result=await response.json().catch(()=>({}));
       if(epoch!==reconstructionRequestEpoch)return;
+      if(labelEpoch!==reconstructionLabelEpoch){
+        root.querySelector('#reconstructionStatus').textContent='Labels changed while scoring. Submit the current review again.';
+        return;
+      }
       if(!response.ok)throw new Error(result.detail||'Review scoring refused');
       root.querySelector('#reconstructionMetrics').textContent=JSON.stringify({
         precision:result.precision,recall:result.recall,f1:result.f1,
