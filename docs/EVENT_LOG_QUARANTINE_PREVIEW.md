@@ -71,3 +71,19 @@ The history is live rather than a fixed snapshot. If decisions are added while
 paging, totals and page boundaries can change; restart from the first page to
 review the current history. A page contains decision metadata, not retained
 rejected row values.
+
+### Reviewing retained batches
+
+The quarantine response includes at most the first 100 batch summaries and
+reports `batches_total`, `batches_next_after`, and
+`batches_stable_snapshot: false`. The owner dashboard provides a paged batch
+list with a control to select a batch for row review. Further summaries are
+available to the dashboard owner with `GET
+/v1/event-logs/{log_id}/quarantine/batches?after=99&limit=100`; `after` is an
+exclusive batch-number cursor. Responses are `no-store` and include counts,
+not rejected row values. `rows_kept` remains the exact count for the selected
+batch or all retained batches, independent of the summary page.
+
+The batch list is live: releases or discards may change it between requests.
+Start again from the first page to see the current list. The bound applies to
+returned summaries; the database must still count and group retained rows.
