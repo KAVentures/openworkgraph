@@ -167,3 +167,98 @@ def test_graph_http_adapter_revocation_after_response_prevents_report(
     assert len(calls) == 2
     assert len(transport.requests) == 1
     assert not output.exists()
+
+
+def test_real_delta_http_adapter_two_complete_rounds_without_implicit_checkpoint(tmp_path):
+    """Provider-shaped first and incremental delta pages through the real adapter.
+
+    The first candidate is only a review artifact: the second read requires
+    an explicit previous-import confirmation and a SHA-bound CSV on disk.
+    """
+    from server import m365_outlook_delta as delta
+
+    first_cursor = delta._initial("folder")
+    delta_cursor = ("https://graph.microsoft.com/v1.0/me/mailFolders/folder/"
+                    "messages/delta?%24deltatoken=first")
+    second_cursor = ("https://graph.microsoft.com/v1.0/me/mailFolders/folder/"
+                     "messages/delta?%24deltatoken=second")
+    message = {"id": "message1", "receivedDateTime": "2026-11-01T10:00:00Z",
+               "lastModifiedDateTime": "2026-11-01T10:01:00Z", "isRead": False}
+
+    class DeltaTransport:
+        def __init__(self, responses):
+            self.responses = responses
+            self.requests = []
+
+        def open(self, req, timeout):
+            self.requests.append((req.full_url, req.get_header("Authorization"), timeout))
+            assert req.full_url in self.responses
+            return Response(req.full_url, json.dumps(self.responses[req.full_url]).encode())
+
+    first = DeltaTransport({first_cursor: {"value": [message], "@odata.deltaLink": delta_cursor}})
+    second = DeltaTransport({delta_cursor: {
+        "value": [{"id": "message1", "@removed": {"reason": "deleted"}}],
+        "@odata.deltaLink": second_cursor}})
+    kwargs = dict(tenant="tenant", mailbox="mailbox", folder_id="folder",
+                  grant_file=tmp_path / "grant.json", token="test-token",
+                  consent_read=True, consent_export=True)
+    with (patch.object(delta, "_delta_private_parent"),
+          patch.object(delta, "_grant", return_value=b"fixed-grant")):
+        first_result = delta.export_delta(
+            **kwargs, output=tmp_path / "first.csv",
+            candidate=tmp_path / "first.json", opener=first)
+        assert first_result["event_snapshots"] == 1
+        assert first_result["checkpoint_advanced"] is False
+        assert first_result["automatic_owg_append"] is False
+        candidate = json.loads((tmp_path / "first.json").read_text())
+        assert candidate["cursor_url"] == delta_cursor
+        assert candidate["events"] == 1
+        assert candidate["removals"] == 0
+
+        with pytest.raises(delta.DeltaError):
+            delta.export_delta(
+                **kwargs, output=tmp_path / "refused.csv",
+                candidate=tmp_path / "refused.json",
+                previous_candidate=tmp_path / "first.json",
+                confirm_previous_import=False, opener=second)
+        assert second.requests == []
+        assert not (tmp_path / "refused.json").exists()
+
+        next_result = delta.export_delta(
+            **kwargs, output=tmp_path / "second.csv",
+            candidate=tmp_path / "second.json",
+            previous_candidate=tmp_path / "first.json",
+            confirm_previous_import=True, opener=second)
+    assert next_result["event_snapshots"] == 0
+    assert next_result["removal_markers_for_review"] == 1
+    assert next_result["checkpoint_advanced"] is False
+    assert json.loads((tmp_path / "second.json").read_text())["cursor_url"] == second_cursor
+    assert len(first.requests) == len(second.requests) == 1
+    assert first.requests[0][1:] == second.requests[0][1:] == ("Bearer test-token", 15)
+
+
+@pytest.mark.parametrize("failure", ["unauthorized", "redirect", "html", "oversized"])
+def test_real_delta_http_adapter_refuses_untrusted_transport_without_candidate(tmp_path, failure):
+    from server import m365_outlook_delta as delta
+
+    url = delta._initial("folder")
+    response = Response(
+        url + "/redirect" if failure == "redirect" else url,
+        b"x" * (delta.MAX_PAGE_BYTES + 1) if failure == "oversized" else
+        json.dumps({"value": [], "@odata.deltaLink":
+                    "https://graph.microsoft.com/v1.0/me/mailFolders/folder/"
+                    "messages/delta?%24deltatoken=first"}).encode(),
+        status=401 if failure == "unauthorized" else 200,
+        content_type="text/html" if failure == "html" else "application/json")
+    transport = Transport(response)
+    with (patch.object(delta, "_delta_private_parent"),
+          patch.object(delta, "_grant", return_value=b"fixed-grant"),
+          pytest.raises(delta.DeltaError)):
+        delta.export_delta(
+            tenant="tenant", mailbox="mailbox", folder_id="folder",
+            grant_file=tmp_path / "grant.json", output=tmp_path / "events.csv",
+            candidate=tmp_path / "candidate.json", token="test-token",
+            consent_read=True, consent_export=True, opener=transport)
+    assert len(transport.requests) == 1
+    assert not (tmp_path / "events.csv").exists()
+    assert not (tmp_path / "candidate.json").exists()
