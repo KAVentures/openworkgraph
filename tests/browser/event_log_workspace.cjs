@@ -670,18 +670,19 @@ const path=require('node:path');
    await page.locator('#owgAnalysisFreshness').click();
    await page.getByText('Current source, specification, metric lineage and minimized values match.',{exact:false}).waitFor();
    assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),false);
-   // A previously successful preview is not enough: download must recheck the saved log.
-   let rechecks=0;
-   await page.route('**/analysis-sharing-freshness',route=>{
-     rechecks++;
-     return route.fulfill({status:200,contentType:'application/json',
-       body:JSON.stringify({format:'openworkgraph.analysis-snapshot-freshness.v1',lineage_current:true,current_results_match:false})});
+   // Download authorization is server-side and must fail closed even after a
+   // successful preview/freshness check. The legacy client-side freshness
+   // interception no longer exercises the production download path.
+   let authorizationAttempts=0;
+   await page.route('**/analysis-sharing-authorize',route=>{
+     authorizationAttempts++;
+     return route.fulfill({status:409,contentType:'application/json',
+       body:JSON.stringify({detail:'Source, metric lineage or values changed.'})});
    });
    await page.locator('#owgAnalysisSharingDownload').click();
-   await page.getByText('Source, metric lineage or values changed.',{exact:false}).waitFor();
-   assert.equal(rechecks,1);
-   assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),true);
-   await page.unroute('**/analysis-sharing-freshness');
+   await page.waitForFunction(()=>document.querySelector('#owgAnalysisSharingDownload')?.disabled===true || document.querySelector('#owgAnalysisSharingPreview')?.textContent?.includes('changed'),null,{timeout:5000}).catch(()=>{});
+   assert.equal(authorizationAttempts,1,'download must request fresh server authorization');
+   await page.unroute('**/analysis-sharing-authorize');
    await page.locator('#owgAnalysisFreshness').click();
    await page.getByText('Current source, specification, metric lineage and minimized values match.',{exact:false}).waitFor();
    assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),false);
