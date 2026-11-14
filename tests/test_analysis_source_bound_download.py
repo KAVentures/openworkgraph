@@ -108,6 +108,19 @@ with TestClient(app) as client:
     assert first.status_code == 200
     replay = client.post(endpoint, json={**request, 'ticket': token}, headers=preview_headers)
     assert replay.status_code == 403 and 'rows' not in replay.text
+    # Simultaneous HTTP requests sharing a ticket must release rows at most once.
+    from concurrent.futures import ThreadPoolExecutor
+    concurrent_grant = client.post(base + '/analysis-sharing-authorize', json=request, headers=preview_headers)
+    assert concurrent_grant.status_code == 200, concurrent_grant.text
+    concurrent_payload = {**request, 'ticket': concurrent_grant.json()['ticket']}
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        concurrent_responses = list(pool.map(
+            lambda _: client.post(endpoint, json=concurrent_payload, headers=preview_headers),
+            range(8)))
+    assert sum(response.status_code == 200 for response in concurrent_responses) == 1
+    assert all(response.status_code in (200, 403) for response in concurrent_responses)
+    assert all('rows' not in response.text for response in concurrent_responses
+               if response.status_code != 200)
     ok = authorized_download(request)
     assert ok.status_code == 200, ok.text
     assert ok.headers['cache-control'] == 'no-store'
