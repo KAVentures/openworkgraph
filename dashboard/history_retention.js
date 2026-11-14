@@ -166,7 +166,7 @@
     if(!panel||document.querySelector('#reconstructionWorkbench'))return;
     const card=document.createElement('div');
     card.className='card';card.id='reconstructionWorkbench';
-    card.innerHTML='<h2>Reconstruction evidence review</h2><p class="muted">Requires an explicit all-saved AI history grant. Candidate pairs are observations, not confirmed cases. Labels stay in this browser tab and are never saved. Scores cover only surfaced candidate pairs. This UI cannot label missed pairs or measure complete recall, case accuracy, or held-out performance.</p><button type="button" id="reconstructionLoad">Load current evidence</button><div id="reconstructionStatus" role="status" aria-live="polite"></div><div id="reconstructionEvents"></div><button type="button" id="reconstructionScore" disabled>Score explicitly reviewed events</button><pre id="reconstructionMetrics" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>';
+    card.innerHTML='<h2>Reconstruction evidence review</h2><p class="muted">Requires an explicit all-saved AI history grant. Candidate pairs are observations, not confirmed cases. Labels stay in this browser tab and are never saved. Scores cover only surfaced candidate pairs. Reviewers can add missed true pairs for surfaced events, but unseen events cannot be labeled here; complete case recall, case accuracy and held-out performance are not measured.</p><button type="button" id="reconstructionLoad">Load current evidence</button><div id="reconstructionStatus" role="status" aria-live="polite"></div><div id="reconstructionEvents"></div><button type="button" id="reconstructionScore" disabled>Score explicitly reviewed events</button><pre id="reconstructionMetrics" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>';
     panel.appendChild(card);
     card.querySelector('#reconstructionLoad').addEventListener('click',loadReconstructionEvidence);
     card.querySelector('#reconstructionScore').addEventListener('click',scoreReconstructionEvidence);
@@ -231,7 +231,7 @@
       root.querySelector('#reconstructionScore').disabled=!!review.coverage_incomplete||!reconstructionChoices.length||reconstructionChoices.length>192;
       root.querySelector('#reconstructionStatus').textContent=review.coverage_incomplete
         ?'Source coverage is incomplete; scoring is disabled.'
-        :reconstructionChoices.length>192?'More than 192 surfaced events; scoring is unavailable for this bounded review. Narrow the evidence window.':review.event_reviews_count+' surfaced events. Review each event explicitly; absent events are not evaluated.';
+        :reconstructionChoices.length>192?'More than 192 surfaced events; scoring is unavailable for this bounded review. Narrow the evidence window.':review.event_reviews_count+' surfaced events. Review candidate and missed true pairs explicitly; absent events are not evaluated.';
     }catch(error){if(epoch===reconstructionRequestEpoch)clearReconstructionEvidence(String(error.message||error));}
   }
   async function scoreReconstructionEvidence(){
