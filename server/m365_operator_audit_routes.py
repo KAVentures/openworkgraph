@@ -363,3 +363,79 @@ def operator_reviewed_commit(
         "idempotent_replay": result.get("idempotent_replay", False),
         "automatic_retry_allowed": False, "provider_requests": 0,
     }, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/m365/operator-next-round-prepare")
+def operator_next_round_prepare(
+    request: Request, expected_generation: int = 0,
+    expected_previous_candidate_sha256: str = "",
+    consent_local_read: bool = False, consent_delta_read: bool = False,
+    consent_local_export: bool = False,
+    confirm_previous_removals_reviewed: bool = False,
+):
+    """Explicit bounded Graph extraction from a committed predecessor.
+
+    The browser may only supply the generation, predecessor digest and
+    independent approvals. All scope, artifacts, destination and credentials
+    remain server-controlled. Extraction never appends or commits.
+    """
+    authorization = str(request.headers.get("authorization") or "")
+    if (not authorization.lower().startswith("owg-session ")
+            or not dashboard_session_valid(authorization[len("owg-session "):].strip())):
+        raise HTTPException(403, "Local dashboard session required")
+    if not all((consent_local_read is True, consent_delta_read is True,
+                consent_local_export is True,
+                confirm_previous_removals_reviewed is True)):
+        raise HTTPException(403, "Independent local, Graph, export and previous-removal approvals required")
+    if (type(expected_generation) is not int or expected_generation < 1
+            or not re.fullmatch(r"[0-9a-f]{64}", expected_previous_candidate_sha256)):
+        raise HTTPException(422, "Exact committed generation and predecessor SHA-256 required")
+    names = (
+        "OWG_M365_TENANT", "OWG_M365_MAILBOX", "OWG_M365_FOLDER",
+        "OWG_M365_LOG_ID", "OWG_M365_GRANT_FILE",
+        "OWG_M365_PREVIOUS_CANDIDATE_FILE", "OWG_M365_PREVIOUS_CSV_PATH",
+        "OWG_M365_RECEIPT_FILE", "OWG_M365_JOURNAL_DIR",
+        "OWG_M365_HANDOFF_DIR", "OWG_M365_LEDGER_DIR",
+        "OWG_M365_SUCCESSOR_LABEL", "OWG_M365_CSV_PATH",
+        "OWG_M365_CANDIDATE_FILE",
+    )
+    values = [os.environ.get(name, "") for name in names]
+    token = os.environ.get("OWG_M365_GRAPH_TOKEN", "")
+    if not all(values) or not token:
+        raise HTTPException(409, "Microsoft 365 extraction configuration or credential unavailable")
+    from .m365_next_round_review import prepare
+    from .m365_outlook_owg_receipt import ReceiptError, UncertainReceipt
+    from .m365_outlook_delta import DeltaError
+    from .m365_operator_audit_writer import AuditWriteError
+    try:
+        result = prepare(
+            tenant=values[0], mailbox=values[1], folder=values[2],
+            log_id=values[3], confirm_log_id=values[3],
+            grant_file=Path(values[4]), previous_candidate=Path(values[5]),
+            previous_csv=Path(values[6]), receipt_file=Path(values[7]),
+            journal_dir=Path(values[8]), handoff_dir=Path(values[9]),
+            ledger_dir=Path(values[10]), successor_label=values[11],
+            output=Path(values[12]), candidate=Path(values[13]),
+            expected_generation=expected_generation,
+            expected_previous_candidate_sha256=expected_previous_candidate_sha256,
+            token=token, session=authorization[len("owg-session "):].strip(),
+            consent_local_read=True, consent_delta_read=True,
+            consent_local_export=True, confirm_previous_removals_reviewed=True,
+            require_event_membership=True)
+        if result.get("status") != "operator_review_required":
+            raise ReceiptError("Candidate not ready for review")
+    except (ReceiptError, UncertainReceipt, DeltaError, AuditWriteError,
+            OSError, ValueError, TypeError, KeyError, RecursionError):
+        # A bounded Graph read may have written private candidate artifacts.
+        # Do not retry or imply they are safe to commit without new review.
+        raise HTTPException(409, "Extraction refused or uncertain; inspect grant, checkpoint and private artifacts manually. Do not retry.") from None
+    return JSONResponse({
+        "format": "openworkgraph.m365-dashboard-next-round-prepare.v1",
+        "status": "operator_review_required",
+        "reviewed_csv_sha256": result["reviewed_csv_sha256"],
+        "proposed_generation": result["proposed_generation"],
+        "event_snapshots": result["event_snapshots"],
+        "removal_markers_for_review": result["removal_markers_for_review"],
+        "checkpoint_advanced": False, "owg_append_performed": False,
+        "automatic_retry_allowed": False, "provider_validated": False,
+    }, headers={"Cache-Control": "no-store"})
