@@ -3520,11 +3520,18 @@
       sharingDownload.disabled=true;freshness.disabled=true;freshnessStatus.dataset.stale='true';
       freshnessStatus.textContent='Authorizing the reviewed export against the current saved log…';
       try{
+        const reviewed={spec,source_content_sha256:snapshot.source_content_sha256,
+          analysis_spec_sha256:snapshot.analysis_spec_sha256,
+          metric_definition_sha256:snapshot.metric_definition_sha256};
+        const headers={'Content-Type':'application/json','X-OWG-Analysis-Sharing-Preview':'true'};
+        const authorization=await api(base()+'/analysis-sharing-authorize',{method:'POST',
+          headers,body:JSON.stringify(reviewed)});
+        if(!authorization.ok)throw new Error('Analysis authorization refused ('+authorization.status+').');
+        const grant=await authorization.json();
+        if(!grant.ticket||attempt!==sharingAttempt||selectedGeneration!==state.generation||
+           snapshot!==sharingSnapshot||!sharingConsent.checked||consentRevision!==sharingConsentRevision)return;
         const response=await api(base()+'/analysis-sharing-download',{method:'POST',
-          headers:{'Content-Type':'application/json','X-OWG-Analysis-Sharing-Preview':'true'},
-          body:JSON.stringify({spec,source_content_sha256:snapshot.source_content_sha256,
-            analysis_spec_sha256:snapshot.analysis_spec_sha256,
-            metric_definition_sha256:snapshot.metric_definition_sha256})});
+          headers,body:JSON.stringify({...reviewed,ticket:grant.ticket})});
         if(!response.ok)throw new Error('Source-bound download refused ('+response.status+').');
         const current=await response.json();
         if(attempt!==sharingAttempt||selectedGeneration!==state.generation||snapshot!==sharingSnapshot||!sharingConsent.checked||consentRevision!==sharingConsentRevision)return;
