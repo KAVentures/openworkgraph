@@ -235,3 +235,59 @@ def operator_candidate_review(request: Request, consent_local_read: bool = False
         "provider_requests": 0, "owg_writes": 0,
         "checkpoint_advanced": False, "automatic_retry_allowed": False,
     }, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/m365/operator-transaction-preflight")
+def operator_transaction_preflight(request: Request, consent_local_read: bool = False,
+                                   reviewed_csv_sha256: str = ""):
+    """Read-only, exact-digest checkpoint transition proposal; never commits.
+
+    Browser supplies only the digest it actually reviewed. Scope, destination
+    log, predecessor digest, grant and private artifacts are local configuration.
+    The mutation path must independently revalidate the same conditions.
+    """
+    authorization = str(request.headers.get("authorization") or "")
+    if (not authorization.lower().startswith("owg-session ")
+            or not dashboard_session_valid(authorization[len("owg-session "):].strip())):
+        raise HTTPException(403, "Local dashboard session required")
+    if consent_local_read is not True:
+        raise HTTPException(403, "Explicit transaction preflight consent required")
+    if not re.fullmatch(r"[0-9a-f]{64}", reviewed_csv_sha256):
+        raise HTTPException(422, "Exact reviewed CSV SHA-256 required")
+    names = ("OWG_M365_TENANT", "OWG_M365_MAILBOX", "OWG_M365_FOLDER",
+             "OWG_M365_LOG_ID", "OWG_M365_GRANT_FILE",
+             "OWG_M365_CANDIDATE_FILE", "OWG_M365_LEDGER_DIR")
+    values = [os.environ.get(name, "") for name in names]
+    if not all(values):
+        return JSONResponse({
+            "format": "openworkgraph.m365-dashboard-transaction-preflight.v1",
+            "configured": False, "review_ready": False,
+            "provider_requests": 0, "owg_writes": 0,
+            "checkpoint_advanced": False, "automatic_retry_allowed": False,
+        }, headers={"Cache-Control": "no-store"})
+    from .m365_outlook_reviewed_transaction import preflight
+    previous = os.environ.get("OWG_M365_PREVIOUS_CANDIDATE_SHA256") or None
+    try:
+        result = preflight(
+            tenant=values[0], mailbox=values[1], folder=values[2],
+            log_id=values[3], confirm_log_id=values[3],
+            grant_file=Path(values[4]), candidate=Path(values[5]),
+            ledger_dir=Path(values[6]),
+            expected_review_csv_sha256=reviewed_csv_sha256,
+            expected_previous_candidate_sha256=previous,
+            consent_local_read=True)
+        if result.get("status") != "review_ready_for_explicit_commit":
+            raise ValueError("Not ready")
+    except (OSError, ValueError, TypeError, KeyError, RecursionError, Exception):
+        raise HTTPException(409, "Preflight refused; inspect candidate, grant and checkpoint manually") from None
+    return JSONResponse({
+        "format": "openworkgraph.m365-dashboard-transaction-preflight.v1",
+        "configured": True, "review_ready": True,
+        "proposed_generation": result["proposed_generation"],
+        "checkpoint_predecessor_generation": result["checkpoint_predecessor_generation"],
+        "reviewed_event_snapshots": result["reviewed_event_snapshots"],
+        "removal_markers_for_review": result["removal_markers_for_review"],
+        "manual_review_and_separate_commit_required": True,
+        "provider_requests": 0, "owg_writes": 0,
+        "checkpoint_advanced": False, "automatic_retry_allowed": False,
+    }, headers={"Cache-Control": "no-store"})
