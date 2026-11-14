@@ -554,6 +554,51 @@ document.addEventListener('DOMContentLoaded', () => {
       recoveryRemoval.checked = false;
     }
   });
+  // Graph preflight requires two fresh approvals; provider identity does not
+  // establish tenant verification or permission to synchronize.
+  const identityControls = document.createElement('div');
+  const identityGraphLabel = document.createElement('label');
+  const identityGraphConsent = document.createElement('input');
+  identityGraphConsent.type = 'checkbox';
+  identityGraphLabel.append(identityGraphConsent, document.createTextNode(' I approve a bounded Microsoft Graph identity and folder read'));
+  const identityReportLabel = document.createElement('label');
+  const identityReportConsent = document.createElement('input');
+  identityReportConsent.type = 'checkbox';
+  identityReportLabel.append(identityReportConsent, document.createTextNode(' I approve exclusive private preflight reports'));
+  const identityButton = document.createElement('button');
+  identityButton.type = 'button';
+  identityButton.textContent = 'Verify Microsoft 365 identity and folder';
+  const identityResult = document.createElement('p');
+  identityResult.setAttribute('role', 'status');
+  identityResult.setAttribute('aria-live', 'polite');
+  identityResult.textContent = 'Identity and folder not checked.';
+  identityControls.append(identityGraphLabel, identityReportLabel, identityButton, identityResult);
+  card.insertBefore(identityControls, card.querySelector('#owgM365AuditRefresh'));
+  identityButton.addEventListener('click', async () => {
+    if (!identityGraphConsent.checked || !identityReportConsent.checked) {
+      identityResult.textContent = 'Separate Graph and private-report approvals required. No request made.';
+      return;
+    }
+    identityButton.disabled = true;
+    identityResult.textContent = 'Checking scoped identity and folder; do not retry if interrupted…';
+    try {
+      await window.__owgAuthReady;
+      const response = await fetch('/v1/m365/operator-identity-folder-preflight?consent_graph_read=true&consent_private_report=true', {
+        method: 'POST', cache: 'no-store', credentials: 'same-origin'
+      });
+      if (!response.ok) throw Error('Preflight refused or partial (' + response.status + '); inspect private reports and grant manually.');
+      const result = await response.json();
+      identityResult.textContent = result.status === 'identity_and_folder_observed'
+        ? 'Granted mailbox identifier and folder observed. Tenant identity is not verified; synchronization still requires separate approval.'
+        : 'Unexpected preflight result; manual reconciliation required.';
+    } catch (error) {
+      identityResult.textContent = String(error.message || 'Preflight outcome uncertain') + ' No automatic retry.';
+    } finally {
+      identityButton.disabled = false;
+      identityGraphConsent.checked = false;
+      identityReportConsent.checked = false;
+    }
+  });
   // Candidate review is independently consented and read-only. No approval
   // token, provider credential or private path is accepted from the browser.
   const reviewControls = document.createElement('div');
