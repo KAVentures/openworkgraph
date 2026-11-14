@@ -185,3 +185,39 @@ def test_inventory_retention_and_invalid_scope_fail_closed(ledger, monkeypatch):
         binding.list_case_bindings(scope=SCOPE, actor="operator-a", secret=SECRET,
                                    case_ref=CASE, revision=1)
     assert not list(ledger.iterdir())
+
+
+def test_shrinking_retention_revokes_existing_binding_and_inventory(ledger, monkeypatch):
+    """A shorter policy takes effect immediately, not at the original expiry."""
+    start = datetime(2026, 11, 3, tzinfo=timezone.utc)
+    binding.bind_run(**arguments(), now=start)
+    later = start + timedelta(days=2)
+    assert binding.get_binding(**arguments(), now=later) is not None
+    assert binding.list_case_bindings(
+        scope=SCOPE, actor="operator-a", secret=SECRET,
+        case_ref=CASE, revision=1, now=later)["items"]
+
+    monkeypatch.setattr(binding, "read_policy",
+                        lambda: {"human_retention": {"mode": "days", "days": 1}})
+    assert binding.get_binding(**arguments(), now=later) is None
+    assert binding.list_case_bindings(
+        scope=SCOPE, actor="operator-a", secret=SECRET,
+        case_ref=CASE, revision=1, now=later)["items"] == []
+    monkeypatch.setattr(binding, "_now", lambda ignored: later)
+    with pytest.raises(CaseDeclarationError):
+        binding.require_exclusive_run_case_binding(**arguments())
+    # An expired binding must not block an explicit fresh operator review.
+    binding.bind_run(**arguments(), now=later)
+    assert binding.get_binding(**arguments(), now=later) is not None
+    binding.require_exclusive_run_case_binding(**arguments())
+
+
+def test_tightened_retention_preserves_other_actor_isolation(ledger, monkeypatch):
+    start = datetime(2026, 11, 3, tzinfo=timezone.utc)
+    later = start + timedelta(days=2)
+    binding.bind_run(**arguments(actor="old"), now=start)
+    binding.bind_run(**arguments(actor="fresh"), now=later)
+    monkeypatch.setattr(binding, "read_policy",
+                        lambda: {"human_retention": {"mode": "days", "days": 1}})
+    assert binding.get_binding(**arguments(actor="old"), now=later) is None
+    assert binding.get_binding(**arguments(actor="fresh"), now=later) is not None
