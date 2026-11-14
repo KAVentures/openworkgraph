@@ -204,7 +204,7 @@ class ExplicitAnnotationScoreTests(unittest.TestCase):
         self.assertFalse(score["cross_case_contamination_measured"])
         disagreements = score["event_disagreements"]
         self.assertEqual(len(disagreements), 1)
-        self.assertEqual(disagreements[0]["event_id"], "earlier-1")
+        self.assertEqual(disagreements[0]["event_id"], "new")
         self.assertEqual(len(disagreements[0]["false_positive_resource_pairs"]), 1)
         self.assertEqual(disagreements[0]["false_negative_resource_pairs"], [])
         self.assertTrue(score["event_disagreements_are_review_evidence_not_confirmed_cases"])
