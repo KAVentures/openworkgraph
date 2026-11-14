@@ -131,13 +131,14 @@
             // Continue into the existing authenticated pipeline decision UI, not a
             // second approval implementation. Preflight is non-authorizing; the
             // pipeline requires its own current-revision check on any decision.
-            const consentLabel=node('label');const consent=node('input');consent.type='checkbox';consent.setAttribute('aria-label','Confirm exact reviewed project before handoff');consentLabel.append(consent,node('span',' I inspected this project and understand approval does not authorize execution.'));const continueReview=node('button','Open opportunity decision and handoff');continueReview.type='button';continueReview.disabled=true;consent.addEventListener('change',()=>updateContinue());
+            const consentLabel=node('label');const consent=node('input');consent.type='checkbox';consent.setAttribute('aria-label','Confirm exact reviewed project before handoff');consentLabel.append(consent,node('span',' I inspected this project and understand approval does not authorize execution.'));const continueReview=node('button','Open opportunity decision and handoff');continueReview.type='button';continueReview.disabled=true;let consentEpoch=0,notesEpoch=0;consent.addEventListener('change',()=>{consentEpoch++;updateContinue();});
             continueReview.onclick=async()=>{
               if(token!==generation||choice.value!==projectId||input.value.trim()!==id||continueReview.disabled||!reviewReady())return;
               const pipelineCard=document.getElementById('owgPipelineCard');
               if(!pipelineCard){status.textContent='Automation pipeline unavailable. Reopen the dashboard and inspect again.';return;}
               // The opportunity can change after the first preflight. Revalidate
               // immediately before crossing into the decision surface, fail closed.
+              const startedConsentEpoch=consentEpoch,startedNotesEpoch=notesEpoch;
               handoffPending=true;updateContinue();
               status.textContent='Rechecking current evidence before opening the decision…';
               try{
@@ -162,7 +163,8 @@
                    result.project_set_sha256!==snapshot.project_set_sha256||
                    !Number.isSafeInteger(result.review_revision)||result.review_revision!==reviewRevision||
                    result.human_review_approved!==true||result.execution_authorized!==false||
-                   result.source_read_authorized!==false||!consent.checked||currentDecision!=='approved'||notes.value!==savedNotes||reviewPending)
+                   result.source_read_authorized!==false||!consent.checked||consentEpoch!==startedConsentEpoch||
+                   notesEpoch!==startedNotesEpoch||!reviewTrusted||currentDecision!=='approved'||notes.value!==savedNotes||reviewPending)
                   throw new Error('Decision evidence changed.');
                 currentDecision='handoff-completed';consent.checked=false;updateContinue();
                 window.dispatchEvent(new CustomEvent('owg-pipeline-open',{detail:{idea_id:id,project_id:projectId,idea_revision:snapshot.idea.revision,idea_state:snapshot.idea.state,review_revision:result.review_revision,spec_sha256:selected.spec_sha256,archive_sha256:selected.archive_sha256,review_basis:{project_id:projectId,project_set_sha256:snapshot.project_set_sha256,idea_revision:snapshot.idea.revision,idea_state:snapshot.idea.state,spec_sha256:selected.spec_sha256,archive_sha256:selected.archive_sha256,process_status:snapshot.process_status,process_reference:snapshot.process_reference,dataset_origins:snapshot.dataset_origins,dataset_origin_check_available:snapshot.dataset_origin_check_available,blockers:selected.blockers}}}));
@@ -184,7 +186,7 @@
             const reviewReady=()=>consent.checked&&reviewTrusted&&!reviewPending&&!handoffPending&&
               currentDecision==='approved'&&notes.value===savedNotes&&reviewStillSelected();
             const updateContinue=()=>{continueReview.disabled=!reviewReady();};
-            notes.addEventListener('input',updateContinue);
+            notes.addEventListener('input',()=>{notesEpoch++;updateContinue();});
             // A pending read must never overwrite a later save/revoke result.
             // Disable mutation until the authoritative revision has loaded.
             let reviewRequestGeneration=0;
