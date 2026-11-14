@@ -683,6 +683,11 @@ const path=require('node:path');
    await page.waitForFunction(()=>document.querySelector('#owgAnalysisSharingDownload')?.disabled===true || document.querySelector('#owgAnalysisSharingPreview')?.textContent?.includes('changed'),null,{timeout:5000}).catch(()=>{});
    assert.equal(authorizationAttempts,1,'download must request fresh server authorization');
    await page.unroute('**/analysis-sharing-authorize');
+   // A rejected authorization invalidates the reviewed preview; refresh it
+   // before attempting another freshness check or download.
+   await page.locator('#owgAnalysisPrepareShare').click();
+   await page.locator('#owgAnalysisSharingPreview').waitFor();
+   await page.locator('#owgAnalysisSharingConsent').check();
    await page.locator('#owgAnalysisFreshness').click();
    await page.getByText('Current source, specification, metric lineage and minimized values match.',{exact:false}).waitFor();
    assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),false);
