@@ -214,12 +214,19 @@
           label.append(check,document.createTextNode(' True pair: '+JSON.stringify(pair)));
           item.appendChild(label);item.appendChild(document.createElement('div'));
         });
+        // Candidate checkboxes alone cannot capture false negatives: allow
+        // independently observed true pairs absent from the candidate set.
+        const missed=document.createElement('textarea');
+        missed.rows=2;missed.placeholder='Optional missed true pairs as JSON: [[[provider, kind, ref], [provider, kind, ref]]]';
+        missed.setAttribute('aria-label','Additional true resource pairs missed by reconstruction for this event (JSON)');
+        missed.addEventListener('input',()=>{reconstructionLabelEpoch++;root.querySelector('#reconstructionMetrics').textContent='';});
+        item.appendChild(missed);
         const acknowledge=document.createElement('label');
         const done=document.createElement('input');done.type='checkbox';
         done.addEventListener('change',()=>{reconstructionLabelEpoch++;root.querySelector('#reconstructionMetrics').textContent='';});
         acknowledge.append(done,document.createTextNode(' I reviewed this event (unchecked pairs are negatives)'));
         item.appendChild(acknowledge);host.appendChild(item);
-        reconstructionChoices[index]={row,pairs,selected,done};
+        reconstructionChoices[index]={row,pairs,selected,done,missed};
       });
       root.querySelector('#reconstructionScore').disabled=!!review.coverage_incomplete||!reconstructionChoices.length||reconstructionChoices.length>192;
       root.querySelector('#reconstructionStatus').textContent=review.coverage_incomplete
@@ -234,11 +241,26 @@
       root.querySelector('#reconstructionStatus').textContent='Explicitly review every surfaced event before scoring.';
       return;
     }
-    const envelope={evidence_sha256:reconstructionEvidence.evidence_sha256,
-      annotations:reconstructionChoices.map(c=>({
-        window:c.row.window,event_id:c.row.event_id,
-        true_resource_pairs:[...c.selected].sort((a,b)=>a-b).map(i=>c.pairs[i])
-      }))};
+    // Include independently identified missing pairs in ground truth.
+    // Otherwise false negatives are structurally impossible and recall is
+    // misleadingly perfect whenever a candidate pair is accepted.
+    let annotations;
+    try{
+      annotations=reconstructionChoices.map(c=>{
+        const extra=c.missed.value.trim()?JSON.parse(c.missed.value):[];
+        if(!Array.isArray(extra)||extra.length>24||extra.some(pair=>
+          !Array.isArray(pair)||pair.length!==2||pair.some(identity=>
+            !Array.isArray(identity)||identity.length!==3||identity.some(part=>
+              typeof part!=='string'||!part||part.length>256))))
+          throw new Error('Additional true pairs must be JSON pairs of [provider, kind, ref] identities.');
+        const chosen=[...c.selected].sort((a,b)=>a-b).map(i=>c.pairs[i]);
+        return {window:c.row.window,event_id:c.row.event_id,true_resource_pairs:chosen.concat(extra)};
+      });
+    }catch(error){
+      root.querySelector('#reconstructionStatus').textContent='Invalid additional ground truth: '+String(error.message||error);
+      return;
+    }
+    const envelope={evidence_sha256:reconstructionEvidence.evidence_sha256,annotations};
     root.querySelector('#reconstructionScore').disabled=true;
     reconstructionScoring=true;
     const epoch=reconstructionRequestEpoch;
