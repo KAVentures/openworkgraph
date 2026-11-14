@@ -172,7 +172,7 @@ test('on-demand local read renders counts as text and rejects stale log response
   assert.ok(run && download && output);
   assert.equal(requested,''); // no implicit data fetch
   const first=run.listeners.click();
-  assert.equal(requested,'/v1/event-logs/log_123/quality');
+  assert.equal(requested,'/v1/event-logs/log_123/quality/batch-history');
   assert.equal(download.disabled,true);
   picker.value='log_other';
   resolveFetch({ok:true,json:async()=>({batch_trends:{batches:[report(0,'first_report',2,0.2,null)]}})});
