@@ -495,6 +495,15 @@ def test_reviewed_handoff_real_api_approval_denial_stale_revocation_and_recovery
     allowed = client.post(gate, headers=headers, json=basis)
     assert allowed.status_code == 200
     assert allowed.json()["human_review_approved"] is True
+    # The destination UI checks these exact server-attested fields before
+    # opening the decision surface. Missing keys previously denied all valid handoffs.
+    assert allowed.json()["idea_id"] == "idea-1"
+    assert allowed.json()["project_id"] == "project-1"
+    assert allowed.json()["idea_revision"] == basis["idea_revision"]
+    assert allowed.json()["project_set_sha256"] == basis["project_set_sha256"]
+    assert allowed.json()["spec_sha256"] == basis["spec_sha256"]
+    assert allowed.json()["archive_sha256"] == basis["archive_sha256"]
+    assert allowed.json()["review_revision"] == 1
     assert allowed.json()["execution_authorized"] is False
     assert allowed.json()["source_read_authorized"] is False
     assert allowed.headers["cache-control"] == "no-store"
