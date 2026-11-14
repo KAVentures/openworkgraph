@@ -26,7 +26,7 @@ const path=require('node:path');
   await page.locator('#owgEventLogAnalyze').click();
   await page.locator('#owgQualityTrendsRun').waitFor();
   const [response]=await Promise.all([
-    page.waitForResponse(r=>r.url().endsWith('/quality/batch-history')),
+    page.waitForResponse(r=>r.url().endsWith('/quality/batch-history/page')),
     page.locator('#owgQualityTrendsRun').click()
   ]);
   assert.equal(response.status(),200);const data=await response.json();
