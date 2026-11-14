@@ -202,8 +202,8 @@ def test_reconstruction_submission_rejects_unbounded_annotation_batch():
 
     with pytest.raises(ValidationError):
         history_routes.ReconstructionReviewSubmission(
-            evidence_sha256="a" * 64, annotations=[{}] * 5001
+            evidence_sha256="a" * 64, annotations=[{}] * 193
         )
     assert len(history_routes.ReconstructionReviewSubmission(
-        evidence_sha256="a" * 64, annotations=[{}] * 5000
-    ).annotations) == 5000
+        evidence_sha256="a" * 64, annotations=[{}] * 192
+    ).annotations) == 192
