@@ -549,6 +549,54 @@ document.addEventListener('DOMContentLoaded', () => {
       reviewConsent.checked = false;
     }
   });
+  // A preflight is a read-only proposal, never an append or commit approval.
+  const preflightControls = document.createElement('div');
+  const preflightDigest = document.createElement('input');
+  preflightDigest.type = 'text';
+  preflightDigest.placeholder = 'Exact reviewed CSV SHA-256';
+  preflightDigest.setAttribute('aria-label', 'Reviewed Microsoft 365 candidate SHA-256');
+  preflightDigest.maxLength = 64;
+  const preflightConsent = document.createElement('input');
+  preflightConsent.type = 'checkbox';
+  const preflightLabel = document.createElement('label');
+  preflightLabel.append(preflightConsent, document.createTextNode(' I consent to local transaction preflight'));
+  const preflightButton = document.createElement('button');
+  preflightButton.type = 'button';
+  preflightButton.textContent = 'Check transaction preflight';
+  const preflightResult = document.createElement('p');
+  preflightResult.setAttribute('role', 'status');
+  preflightResult.setAttribute('aria-live', 'polite');
+  preflightControls.append(preflightDigest, preflightLabel, preflightButton, preflightResult);
+  card.insertBefore(preflightControls, card.querySelector('#owgM365AuditRefresh'));
+  preflightButton.addEventListener('click', async () => {
+    const digest = preflightDigest.value.trim();
+    if (!preflightConsent.checked || !/^[0-9a-f]{64}$/.test(digest)) {
+      preflightResult.textContent = 'Fresh consent and exact reviewed SHA-256 required. Nothing was read.';
+      return;
+    }
+    preflightButton.disabled = true;
+    preflightResult.textContent = 'Checking local transaction preflight…';
+    try {
+      await window.__owgAuthReady;
+      const response = await fetch('/v1/m365/operator-transaction-preflight?consent_local_read=true&reviewed_csv_sha256=' + encodeURIComponent(digest), {
+        method: 'POST', cache: 'no-store', credentials: 'same-origin'
+      });
+      if (!response.ok) throw Error('Preflight refused (' + response.status + '); manually inspect grant, candidate and checkpoint.');
+      const result = await response.json();
+      preflightResult.textContent = !result.configured
+        ? 'Transaction scope not configured.'
+        : 'Read-only proposal for generation ' + String(result.proposed_generation) +
+          ' from predecessor ' + String(result.checkpoint_predecessor_generation) +
+          '. ' + String(result.reviewed_event_snapshots) + ' snapshots; ' +
+          String(result.removal_markers_for_review) + ' removals require manual review. ' +
+          'No Graph request, append or checkpoint commit. Separate approvals required.';
+    } catch (error) {
+      preflightResult.textContent = String(error.message || 'Preflight unavailable') + ' No automatic retry.';
+    } finally {
+      preflightButton.disabled = false;
+      preflightConsent.checked = false;
+    }
+  });
   const output = card.querySelector('#owgM365AuditResult');
   card.querySelector('#owgM365AuditRefresh').addEventListener('click', async () => {
     output.textContent = 'Reading private local receipts…';
