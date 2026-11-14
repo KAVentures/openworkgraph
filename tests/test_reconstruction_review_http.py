@@ -183,3 +183,27 @@ def test_live_review_read_is_uncacheable_and_non_authoritative(monkeypatch):
     assert payload["derived"] is True
     assert payload["authoritative"] is False
     assert payload["review"]["evidence_sha256"] == "b" * 64
+
+
+def test_reconstruction_submission_rejects_malformed_evidence_digest():
+    """Reject noncanonical digests before any scoring or history access."""
+    from pydantic import ValidationError
+
+    for digest in ("", "a" * 63, "A" * 64, "g" * 64, "a" * 65):
+        with pytest.raises(ValidationError):
+            history_routes.ReconstructionReviewSubmission(
+                evidence_sha256=digest, annotations=[]
+            )
+
+
+def test_reconstruction_submission_rejects_unbounded_annotation_batch():
+    """A malicious client cannot send unlimited review rows into history scoring."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        history_routes.ReconstructionReviewSubmission(
+            evidence_sha256="a" * 64, annotations=[{}] * 5001
+        )
+    assert len(history_routes.ReconstructionReviewSubmission(
+        evidence_sha256="a" * 64, annotations=[{}] * 5000
+    ).annotations) == 5000
