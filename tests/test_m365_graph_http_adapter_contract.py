@@ -109,3 +109,61 @@ def test_graph_http_adapter_writes_private_report_only_after_success(tmp_path, k
     assert report["safe_to_retry"] is False
     assert result["status"] == report["status"]
     assert "test-token" not in output.read_text()
+
+
+@pytest.mark.parametrize("kind", ["identity", "folder"])
+@pytest.mark.parametrize("missing_consent", ["graph", "report"])
+def test_graph_http_adapter_requires_both_independent_consents_before_network(
+        tmp_path, kind, missing_consent):
+    module = identity if kind == "identity" else folder
+    output = tmp_path / ("mailbox-identity-consent.json" if kind == "identity"
+                         else "folder-preflight-consent.json")
+    transport = Transport(None)
+    kwargs = dict(tenant="tenant", mailbox="mailbox", folder="folder",
+                  grant_file=tmp_path / "grant.json", output=output,
+                  token="test-token", consent_graph_read=missing_consent != "graph",
+                  consent_private_report=missing_consent != "report",
+                  opener=transport)
+    if kind == "identity":
+        kwargs["expected_address"] = "owner@example.org"
+    with pytest.raises(identity.IdentityError if kind == "identity" else folder.PreflightError):
+        module.preflight(**kwargs)
+    assert transport.requests == []
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("kind", ["identity", "folder"])
+def test_graph_http_adapter_revocation_after_response_prevents_report(
+        tmp_path, kind):
+    """Grant must be checked again after Graph read, before durable evidence."""
+    module = identity if kind == "identity" else folder
+    url = (identity.URL if kind == "identity" else
+           "https://graph.microsoft.com/v1.0/me/mailFolders/folder?%24select=id,displayName,childFolderCount,totalItemCount")
+    data = ({"id": "user", "userPrincipalName": "owner@example.org"}
+            if kind == "identity" else
+            {"id": "folder", "displayName": "Inbox", "childFolderCount": 0,
+             "totalItemCount": 2})
+    transport = Transport(Response(url, json.dumps(data).encode()))
+    output = tmp_path / ("mailbox-identity-revoked.json" if kind == "identity"
+                         else "folder-preflight-revoked.json")
+    kwargs = dict(tenant="tenant", mailbox="mailbox", folder="folder",
+                  grant_file=tmp_path / "grant.json", output=output,
+                  token="test-token", consent_graph_read=True,
+                  consent_private_report=True, opener=transport)
+    if kind == "identity":
+        kwargs["expected_address"] = "owner@example.org"
+    calls = []
+
+    def grant_check(*args):
+        calls.append(args)
+        if len(calls) == 2:
+            raise PermissionError("revoked secret-token")
+
+    with (patch.object(module, "_scope", return_value="a" * 64),
+          patch.object(module, "_delta_private_parent"),
+          patch.object(module, "_grant", side_effect=grant_check),
+          pytest.raises(PermissionError)):
+        module.preflight(**kwargs)
+    assert len(calls) == 2
+    assert len(transport.requests) == 1
+    assert not output.exists()
