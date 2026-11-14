@@ -61,7 +61,7 @@
 
   async function quickPolicy(mode,days){
     await call('/v1/history-policy',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({human_mode:mode,human_days:days,agent_mode:mode,agent_days:days,onboarding_complete:true})});
-    document.querySelector('#historyOnboarding')?.remove();await refresh();
+    document.querySelector('#historyOnboarding')?.remove();clearReconstructionEvidence('History retention changed. Reload authorized evidence.');await refresh();
   }
 
   function renderPolicy(){
@@ -69,7 +69,7 @@
     const h=choiceValue(policy.human_retention),a=choiceValue(policy.agent_retention);
     const undecided=!policy.onboarding_complete&&policy?.human_retention?.mode==='days'&&Number(policy?.human_retention?.days)===7;
     host.innerHTML=`<div class="row"><div><label class="label" for="humanRetention">Human workflow history</label><select id="humanRetention" style="width:100%;min-height:42px;border:1px solid #cfd3cb;border-radius:9px;padding:8px">${options(h)}</select></div><div><label class="label" for="agentRetention">Agent run history</label><select id="agentRetention" style="width:100%;min-height:42px;border:1px solid #cfd3cb;border-radius:9px;padding:8px">${options(a)}</select></div></div><div class="note" style="margin-top:12px">${undecided?'No retention choice has been saved yet. The current 7-day setting is a local grace period while you decide; it does not grant AI access to saved history. ':''}“Don’t keep” uses temporary local working storage while the session is active, then deletes it. If OpenWorkGraph crashes, stale ephemeral sessions are deleted on the next start.</div><div class="modal-actions"><button id="saveHistoryPolicy" class="green">Save retention choices</button></div>`;
-    host.querySelector('#saveHistoryPolicy').onclick=async()=>{const hc=parseChoice(host.querySelector('#humanRetention').value),ac=parseChoice(host.querySelector('#agentRetention').value);await call('/v1/history-policy',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({human_mode:hc.mode,human_days:hc.days,agent_mode:ac.mode,agent_days:ac.days,onboarding_complete:true})});if(typeof window.toast==='function')window.toast('History retention updated.');await refresh();};
+    host.querySelector('#saveHistoryPolicy').onclick=async()=>{const hc=parseChoice(host.querySelector('#humanRetention').value),ac=parseChoice(host.querySelector('#agentRetention').value);await call('/v1/history-policy',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({human_mode:hc.mode,human_days:hc.days,agent_mode:ac.mode,agent_days:ac.days,onboarding_complete:true})});clearReconstructionEvidence('History retention changed. Reload authorized evidence.');if(typeof window.toast==='function')window.toast('History retention updated.');await refresh();};
   }
 
   function renderAccess(){
