@@ -175,7 +175,8 @@ def append(*, scope: str, actor: str, secret: str, case_ref: str, run_ref: str,
     finally:
         db.close()
     return review(scope=scope, actor=actor, secret=secret, case_ref=case_ref,
-                  run_ref=run_ref, fingerprint=fingerprint, revision=revision, guard=guard)
+                  run_ref=run_ref, fingerprint=fingerprint, revision=revision, guard=guard,
+                  now=current)
 
 
 def clear_scope(scope: str):
