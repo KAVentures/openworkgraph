@@ -215,3 +215,14 @@ def test_dashboard_refuses_unscorable_review_batch():
     source = (ROOT / "dashboard" / "history_retention.js").read_text(encoding="utf-8")
     assert "||reconstructionChoices.length>192" in source
     assert "More than 192 surfaced events; scoring is unavailable" in source
+
+
+def test_review_http_responses_are_uncacheable_even_on_denial_or_validation():
+    """Middleware must cover errors that never reach a route's success return."""
+    from server.main import ROOT
+    source = (ROOT / "server" / "history_routes.py").read_text(encoding="utf-8")
+    assert 'request.url.path.startswith("/v1/history/reconstruction-review")' in source
+    assert 'response.headers["Cache-Control"] = "no-store"' in source
+    assert source.index('async def reconstruction_review_no_store') < source.index(
+        '@app.get("/v1/history/reconstruction-review")'
+    )
