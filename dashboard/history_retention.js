@@ -154,4 +154,103 @@
   refresh=async function(){ensureUI();placeAgentCards();return baseRefresh();};
   window.refreshHistory=refresh;
   document.addEventListener('DOMContentLoaded',()=>{ensureUI();refresh();});
+}
+  // R1/R2: local-only reviewer workbench. No labels are persisted or exported.
+  // Every event requires an explicit reviewer acknowledgement before scoring.
+  let reconstructionEvidence=null;
+  let reconstructionChoices=[];
+  function reconstructionWorkbench(){
+    const panel=document.querySelector('#panel-history');
+    if(!panel||document.querySelector('#reconstructionWorkbench'))return;
+    const card=document.createElement('div');
+    card.className='card';card.id='reconstructionWorkbench';
+    card.innerHTML='<h2>Reconstruction evidence review</h2><p class="muted">Requires an explicit all-saved AI history grant. Candidate pairs are observations, not confirmed cases. Labels stay in this browser tab and are never saved. Scores are for this review window only, not held-out accuracy.</p><button type="button" id="reconstructionLoad">Load current evidence</button><div id="reconstructionStatus" role="status" aria-live="polite"></div><div id="reconstructionEvents"></div><button type="button" id="reconstructionScore" disabled>Score explicitly reviewed events</button><pre id="reconstructionMetrics" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>';
+    panel.appendChild(card);
+    card.querySelector('#reconstructionLoad').addEventListener('click',loadReconstructionEvidence);
+    card.querySelector('#reconstructionScore').addEventListener('click',scoreReconstructionEvidence);
+  }
+  function clearReconstructionEvidence(message){
+    reconstructionEvidence=null;reconstructionChoices=[];
+    const root=document.querySelector('#reconstructionWorkbench');if(!root)return;
+    root.querySelector('#reconstructionEvents').replaceChildren();
+    root.querySelector('#reconstructionMetrics').textContent='';
+    root.querySelector('#reconstructionScore').disabled=true;
+    root.querySelector('#reconstructionStatus').textContent=message||'';
+  }
+  async function loadReconstructionEvidence(){
+    clearReconstructionEvidence('Loading authorized local evidence…');
+    const root=document.querySelector('#reconstructionWorkbench');
+    if(!root)return;
+    try{
+      await window.__owgAuthReady;
+      const response=await fetch('/v1/history/reconstruction-review',{cache:'no-store'});
+      const data=await response.json().catch(()=>({}));
+      if(!response.ok)throw new Error(data.detail||'Evidence access denied');
+      const review=data.review;
+      if(!review||!Array.isArray(review.event_reviews)||!review.evidence_sha256)
+        throw new Error('Invalid reconstruction evidence');
+      reconstructionEvidence=review;
+      const host=root.querySelector('#reconstructionEvents');
+      review.event_reviews.forEach((row,index)=>{
+        const item=document.createElement('fieldset');
+        const legend=document.createElement('legend');
+        legend.textContent=(row.window||'')+' · '+(row.event_id||'')+' ('+(row.review_status||'review')+')';
+        item.appendChild(legend);
+        const selected=new Set();
+        const pairs=Array.isArray(row.candidate_resource_pairs)?row.candidate_resource_pairs:[];
+        pairs.forEach((pair,pairIndex)=>{
+          const label=document.createElement('label');
+          const check=document.createElement('input');check.type='checkbox';
+          check.addEventListener('change',()=>{if(check.checked)selected.add(pairIndex);else selected.delete(pairIndex);});
+          label.append(check,document.createTextNode(' True pair: '+JSON.stringify(pair)));
+          item.appendChild(label);item.appendChild(document.createElement('div'));
+        });
+        const acknowledge=document.createElement('label');
+        const done=document.createElement('input');done.type='checkbox';
+        acknowledge.append(done,document.createTextNode(' I reviewed this event (unchecked pairs are negatives)'));
+        item.appendChild(acknowledge);host.appendChild(item);
+        reconstructionChoices[index]={row,pairs,selected,done};
+      });
+      root.querySelector('#reconstructionScore').disabled=!!review.coverage_incomplete||!reconstructionChoices.length;
+      root.querySelector('#reconstructionStatus').textContent=review.coverage_incomplete
+        ?'Source coverage is incomplete; scoring is disabled.'
+        :review.event_reviews_count+' surfaced events. Review each event explicitly; absent events are not evaluated.';
+    }catch(error){clearReconstructionEvidence(String(error.message||error));}
+  }
+  async function scoreReconstructionEvidence(){
+    const root=document.querySelector('#reconstructionWorkbench');
+    if(!root||!reconstructionEvidence)return;
+    if(reconstructionChoices.some(c=>!c.done.checked)){
+      root.querySelector('#reconstructionStatus').textContent='Explicitly review every surfaced event before scoring.';
+      return;
+    }
+    const envelope={evidence_sha256:reconstructionEvidence.evidence_sha256,
+      annotations:reconstructionChoices.map(c=>({
+        window:c.row.window,event_id:c.row.event_id,
+        true_resource_pairs:[...c.selected].sort((a,b)=>a-b).map(i=>c.pairs[i])
+      }))};
+    root.querySelector('#reconstructionScore').disabled=true;
+    try{
+      await window.__owgAuthReady;
+      const response=await fetch('/v1/history/reconstruction-review/score',{
+        method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(envelope)});
+      const result=await response.json().catch(()=>({}));
+      if(!response.ok)throw new Error(result.detail||'Review scoring refused');
+      root.querySelector('#reconstructionMetrics').textContent=JSON.stringify({
+        precision:result.precision,recall:result.recall,f1:result.f1,
+        annotated_events:result.annotated_events,per_window_metrics:result.per_window_metrics,
+        event_disagreements:result.event_disagreements,
+        held_out_verified:result.held_out_verified,
+        cross_case_contamination_measured:result.cross_case_contamination_measured
+      },null,2);
+      root.querySelector('#reconstructionStatus').textContent='Local review scored. No case confirmed; no labels saved.';
+    }catch(error){
+      // Revocation or changed evidence invalidates all in-memory labels.
+      clearReconstructionEvidence('Review refused: '+String(error.message||error)+'. Reload current evidence.');
+    }finally{
+      if(reconstructionEvidence)root.querySelector('#reconstructionScore').disabled=false;
+    }
+  }
+  document.addEventListener('DOMContentLoaded',reconstructionWorkbench);
 })();
