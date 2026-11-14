@@ -214,7 +214,7 @@
               if(!response.ok)throw new Error('Review state unavailable ('+response.status+').');
               const state=await response.json();
               if(!reviewStillSelected()||requestGeneration!==reviewRequestGeneration)return;
-              if(state.execution_authorized!==false||state.project_id!==projectId||!Number.isSafeInteger(state.revision)||state.revision<0||!['draft','approved','revoked'].includes(state.decision))throw new Error('Invalid review state');
+              if(state.execution_authorized!==false||state.project_id!==projectId||!Number.isSafeInteger(state.revision)||state.revision<0||!['unreviewed','draft','approved','revoked'].includes(state.decision))throw new Error('Invalid review state');
               reviewRevision=state.revision;notes.value=state.reviewer_notes||'';
               savedNotes=notes.value;currentDecision=state.decision;reviewPending=false;reviewTrusted=true;consent.checked=false;updateContinue();
               reviewState.textContent='Saved review: '+state.decision+' (revision '+state.revision+'). No agent access granted.';
@@ -225,16 +225,22 @@
               ++reviewRequestGeneration;
               reviewPending=true;reviewTrusted=false;consent.checked=false;updateContinue();
               for(const b of [saveDraft,approve,revoke])b.disabled=true;
+              const submittedNotes=notes.value,submittedNotesEpoch=notesEpoch;
               try{
                 const response=await fetch(reviewPath,{method:'POST',cache:'no-store',
                   headers:{'Content-Type':'application/json'},
-                  body:JSON.stringify({basis,expected_review_revision:reviewRevision,decision,reviewer_notes:notes.value})});
+                  body:JSON.stringify({basis,expected_review_revision:reviewRevision,decision,reviewer_notes:submittedNotes})});
                 if(!response.ok)throw new Error('Review save refused ('+response.status+'); re-inspect or reload.');
                 const state=await response.json();
                 if(!reviewStillSelected())return;
                 if(state.execution_authorized!==false||state.project_id!==projectId||state.decision!==decision||!Number.isSafeInteger(state.revision)||state.revision!==reviewRevision+1)throw new Error('Invalid saved review');
-                reviewRevision=state.revision;currentDecision=decision;savedNotes=notes.value;reviewTrusted=true;
-                reviewState.textContent='Saved '+decision+' at revision '+reviewRevision+'. This does not authorize execution.';
+                reviewRevision=state.revision;currentDecision=decision;savedNotes=submittedNotes;
+                // The user may edit notes while a network save is pending. Never
+                // treat those newer, unsaved edits as part of the approved record.
+                reviewTrusted=notesEpoch===submittedNotesEpoch&&notes.value===submittedNotes;
+                reviewState.textContent=reviewTrusted
+                  ? 'Saved '+decision+' at revision '+reviewRevision+'. This does not authorize execution.'
+                  : 'Saved '+decision+' at revision '+reviewRevision+', but notes changed during save. Reload or save again before handoff.';
               }catch(e){
                 if(reviewStillSelected()){
                   reviewState.textContent=e.message+' Reloading authoritative review revision…';
