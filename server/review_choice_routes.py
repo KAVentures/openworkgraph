@@ -307,7 +307,10 @@ def reviewed_handoff_preflight(request: Request, idea_id: str, basis: ReviewBasi
     return JSONResponse({
         "format": "openworkgraph.reviewed-handoff-preflight.v1",
         "idea_id": idea_id, "project_id": basis.project_id,
-        "review_revision": row[0], "project_set_sha256": basis.project_set_sha256,
+        "idea_revision": basis.idea_revision,
+        "spec_sha256": current["spec_sha256"],
+        "archive_sha256": current["archive_sha256"],
+        "review_revision": row[0], "project_set_sha256": current["project_set_sha256"],
         "human_review_approved": True, "execution_authorized": False,
         "source_read_authorized": False
     }, headers={"Cache-Control": "no-store"})
