@@ -497,3 +497,62 @@ def operator_recovery_triage(
         "checkpoint_advanced": False, "owg_writes": 0,
         "provider_requests": 0, "automatic_retry_allowed": False,
     }, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/m365/operator-identity-folder-preflight")
+def operator_identity_folder_preflight(
+    request: Request, consent_graph_read: bool = False,
+    consent_private_report: bool = False,
+):
+    """Opt-in, bounded Graph identity and folder checks before any extraction.
+
+    Both checks are independently grant-scoped. Private reports are exclusive
+    create-only artifacts; a partial or uncertain outcome must be reconciled
+    manually, never retried automatically. Neither check proves tenant identity.
+    """
+    authorization = str(request.headers.get("authorization") or "")
+    if (not authorization.lower().startswith("owg-session ")
+            or not dashboard_session_valid(authorization[len("owg-session "):].strip())):
+        raise HTTPException(403, "Local dashboard session required")
+    if consent_graph_read is not True or consent_private_report is not True:
+        raise HTTPException(403, "Separate Graph-read and private-report approvals required")
+    names = (
+        "OWG_M365_TENANT", "OWG_M365_MAILBOX", "OWG_M365_FOLDER",
+        "OWG_M365_EXPECTED_ADDRESS", "OWG_M365_GRANT_FILE",
+        "OWG_M365_IDENTITY_REPORT", "OWG_M365_FOLDER_REPORT",
+    )
+    values = [os.environ.get(name, "") for name in names]
+    token = os.environ.get("OWG_M365_GRAPH_TOKEN", "")
+    if not all(values) or not token:
+        raise HTTPException(409, "Microsoft 365 preflight configuration or credential unavailable")
+    from .m365_outlook_mailbox_identity import preflight as identity_preflight
+    from .m365_outlook_folder_preflight import preflight as folder_preflight
+    try:
+        identity = identity_preflight(
+            tenant=values[0], mailbox=values[1], folder=values[2],
+            expected_address=values[3], grant_file=Path(values[4]),
+            output=Path(values[5]), token=token,
+            consent_graph_read=True, consent_private_report=True,
+        )
+        if identity.get("status") != "mailbox_identity_observed":
+            raise ValueError("Identity preflight refused")
+        folder = folder_preflight(
+            tenant=values[0], mailbox=values[1], folder=values[2],
+            grant_file=Path(values[4]), output=Path(values[6]),
+            token=token, consent_graph_read=True, consent_private_report=True,
+        )
+        if folder.get("status") != "folder_metadata_observed":
+            raise ValueError("Folder preflight refused")
+    except (OSError, ValueError, TypeError, KeyError, RecursionError):
+        raise HTTPException(
+            409, "Identity/folder preflight refused or partial; inspect private reports and grant manually. Do not retry."
+        ) from None
+    return JSONResponse({
+        "format": "openworkgraph.m365-dashboard-identity-folder-preflight.v1",
+        "status": "identity_and_folder_observed",
+        "mailbox_identifier_matched": True,
+        "folder_id_matched": True,
+        "tenant_verified": False, "sync_authorized": False,
+        "owg_writes": 0, "checkpoint_advanced": False,
+        "automatic_retry_allowed": False,
+    }, headers={"Cache-Control": "no-store"})
