@@ -55,6 +55,7 @@ from . import event_log_signal_transitions as signal_transitions
 from . import event_log_signal_overview as signal_overview
 from . import event_log_signal_timeline as signal_timeline
 from . import event_log_simulation as simulation
+from . import event_log_simulation_portfolio as simulation_portfolio
 from . import event_log_trace_clusters as trace_clusters
 from . import event_log_waiting as waiting
 from . import event_log_workspace as workspace
@@ -1268,6 +1269,19 @@ async def event_log_simulate(request: Request, log_id: str,
     # CPU-bound and bounded (at most MAX_CASES cases); run off the event loop.
     try:
         result = await run_in_threadpool(simulation.what_if, log_id, scenario, case_type)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/simulation/portfolio")
+async def event_log_simulation_portfolio(request: Request, log_id: str,
+                                         case_type: str | None = Query(default=None, max_length=200)):
+    """Review 2–4 changed process simulations against one calibrated baseline."""
+    _require_dashboard(request)
+    spec = await _json_body(request, "simulation portfolio", strict=True, limit=65536)
+    try:
+        result = await run_in_threadpool(simulation_portfolio.compare, log_id, spec, case_type)
     except workspace.EventLogWorkspaceError as exc:
         raise HTTPException(422, str(exc)) from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
