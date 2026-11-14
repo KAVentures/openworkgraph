@@ -149,6 +149,10 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         "coverage": coverage,
         "current_session": response.get("current_session"),
         "session_gap_minutes": response.get("session_gap_minutes"),
+        # Continuity is part of the reviewer-visible evidence basis. A changed
+        # group linkage must invalidate old labels even when pair rows match.
+        "observed_group_continuity": response.get("observed_group_continuity"),
+        "observed_group_continuity_truncated": response.get("observed_group_continuity_truncated"),
         "event_reviews": rows,
     }
     evidence_digest = hashlib.sha256(json.dumps(
