@@ -95,7 +95,7 @@ def test_dashboard_review_workbench_uses_live_authenticated_routes_without_persi
     assert "candidate_pair_f1:result.f1" in source
     assert "complete_case_recall_measured:result.complete_case_recall_measured" in source
     assert "missed_source_events_measured:result.missed_source_events_measured" in source
-    assert "This UI cannot label missed pairs or measure complete recall" in source
+    assert "unseen events cannot be labeled here" in source
     assert "held_out_verified:result.held_out_verified" in source
     assert "cross_case_contamination_measured:result.cross_case_contamination_measured" in source
     assert "localStorage.setItem('reconstruction" not in source
