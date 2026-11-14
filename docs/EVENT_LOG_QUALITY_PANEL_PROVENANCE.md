@@ -37,3 +37,12 @@ actual grouped-key counts. Neither fixture constitutes real-provider acceptance.
 
 No source read, log mutation, retention/consent change, new authorization,
 tenant scope, hash algorithm, or REST/MCP contract change is introduced.
+
+The batch-trends panel reads `GET /v1/event-logs/{log_id}/quality/batch-history`
+under the existing local dashboard owner session. It returns the same stored
+reports, missing-report list and derived trends as the full quality endpoint,
+without recomputing current whole-log diagnostics or content digests. Stored
+reports include mapping and source metadata; they do not include sample event
+values. The endpoint returns `Cache-Control: no-store`. It reads all retained
+batch reports, so its work and response still grow with the number of batches.
+The full quality endpoint remains available when a current snapshot is needed.

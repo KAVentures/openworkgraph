@@ -587,7 +587,7 @@
       message.textContent='Reading local batch reports…';
       try{
         // Dashboard bootstrap injects the local session; no AI bearer or external URL.
-        const response=await fetch('/v1/event-logs/'+encodeURIComponent(id)+'/quality',{cache:'no-store'});
+        const response=await fetch('/v1/event-logs/'+encodeURIComponent(id)+'/quality/batch-history',{cache:'no-store'});
         if(!response.ok)throw new Error('Quality report unavailable (HTTP '+response.status+').');
         const data=await response.json();
         if(!current(id,n))return;
