@@ -87,3 +87,24 @@ with TestClient(app) as client:
 '''
     env = {**os.environ, 'WORKFLOW_OBSERVER_DATA': str(tmp_path / 'data'), 'WORKFLOW_OBSERVER_AUTH_DIR': str(tmp_path / 'auth')}
     subprocess.run([sys.executable, '-c', code], env=env, check=True, timeout=60)
+
+
+def test_ten_thousand_batch_history_returns_one_bounded_page(tmp_path, monkeypatch):
+    monkeypatch.setattr(workspace, 'DATA_DIR', tmp_path)
+    mapping = {'case_column': 'case', 'activity_column': 'activity', 'timestamp_column': 'time'}
+    log = workspace.import_log(BytesIO(b'case,activity,time\n1,A,2024-01-01T00:00:00Z\n'),
+                               name='scale', source_format='csv', mapping=mapping)['log_id']
+    conn = workspace._connect()
+    try:
+        conn.execute('''INSERT INTO log_appends
+            SELECT ?, i, TIMESTAMP '2024-01-01', 'csv', 1, 0, 0, 0 FROM range(1, 10001) t(i)''', [log])
+        conn.execute('''INSERT INTO log_quality
+            SELECT log_id, i, created_at, json_merge_patch(report, json_object('batch', i, 'kind', 'append'))
+            FROM log_quality, range(1, 10001) t(i) WHERE log_id = ? AND batch = 0''', [log])
+    finally:
+        conn.close()
+    result = pages.page(log)
+    assert result['window']['total_batches'] == 10001
+    assert result['window']['batch_count'] == len(result['reports']) == 100
+    assert result['window']['next_before'] == 9901
+    assert len(result['batch_trends']['review_queue']) == 100
