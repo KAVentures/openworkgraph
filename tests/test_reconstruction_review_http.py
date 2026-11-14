@@ -244,3 +244,25 @@ def test_dashboard_can_label_missing_true_pairs_for_event_level_recall():
     assert "Invalid additional ground truth:" in source
     assert "reconstructionLabelEpoch++;" in source
     assert "localStorage.setItem('reconstruction" not in source
+
+
+def test_dashboard_invalidates_review_after_both_retention_policy_paths():
+    """Retention updates may delete source events without changing AI grants.
+
+    Both the first-run quick choice and the settings form must discard
+    in-memory reviewer labels immediately after the successful policy write.
+    """
+    from server.main import ROOT
+    source = (ROOT / "dashboard" / "history_retention.js").read_text(encoding="utf-8")
+    invalidation = "clearReconstructionEvidence('History retention changed. Reload authorized evidence.');"
+    assert source.count(invalidation) == 2
+    for start_marker, end_marker in (
+        ("async function quickPolicy(mode,days){", "function renderPolicy(){"),
+        ("host.querySelector('#saveRetention').onclick", "function renderAccess(){"),
+    ):
+        start = source.index(start_marker)
+        end = source.index(end_marker, start)
+        section = source[start:end]
+        assert "await call('/v1/history-policy',{method:'PUT'" in section
+        assert section.index("await call('/v1/history-policy'") < section.index(invalidation)
+        assert section.index(invalidation) < section.index("await refresh()")
