@@ -464,6 +464,48 @@ document.addEventListener('DOMContentLoaded', () => {
   card.id = 'owgM365OperatorAudit';
   card.innerHTML = '<h3>Microsoft 365 operator evidence</h3><p class="muted">Local, explicitly recorded review steps only. Not proof of tenant validation or completed sync.</p><button type="button" id="owgM365AuditRefresh">Refresh audit receipts</button><div id="owgM365AuditResult" role="status" aria-live="polite">Not loaded.</div>';
   panel.appendChild(card);
+  // Checkpoint inspection is a separate, explicit local-read operation. It
+  // neither contacts Graph nor authorizes extraction, append or commit.
+  const checkpointControls = document.createElement('div');
+  const consentLabel = document.createElement('label');
+  const checkpointConsent = document.createElement('input');
+  checkpointConsent.type = 'checkbox';
+  consentLabel.append(checkpointConsent, document.createTextNode(' I consent to read the local Microsoft 365 checkpoint for this inspection'));
+  const checkpointButton = document.createElement('button');
+  checkpointButton.type = 'button';
+  checkpointButton.textContent = 'Inspect current checkpoint';
+  const checkpointResult = document.createElement('p');
+  checkpointResult.setAttribute('role', 'status');
+  checkpointResult.setAttribute('aria-live', 'polite');
+  checkpointResult.textContent = 'Current checkpoint not inspected.';
+  checkpointControls.append(consentLabel, checkpointButton, checkpointResult);
+  card.insertBefore(checkpointControls, card.querySelector('#owgM365AuditRefresh'));
+  checkpointButton.addEventListener('click', async () => {
+    if (!checkpointConsent.checked) {
+      checkpointResult.textContent = 'Explicit local-read consent required. No checkpoint was inspected.';
+      return;
+    }
+    checkpointButton.disabled = true;
+    checkpointResult.textContent = 'Inspecting local checkpoint…';
+    try {
+      await window.__owgAuthReady;
+      const response = await fetch('/v1/m365/operator-checkpoint?consent_local_read=true', {
+        method: 'POST', cache: 'no-store', credentials: 'same-origin'
+      });
+      if (!response.ok) throw Error('Checkpoint unavailable (' + response.status + '); review local configuration and current grant.');
+      const result = await response.json();
+      checkpointResult.textContent = !result.configured
+        ? 'Microsoft 365 checkpoint scope is not configured on this device.'
+        : result.checkpoint_present
+          ? 'Local checkpoint generation ' + String(result.generation) + '. No Graph read, append or commit performed.'
+          : 'No committed checkpoint exists for the configured scope. No Graph read, append or commit performed.';
+    } catch (error) {
+      checkpointResult.textContent = String(error.message || 'Checkpoint inspection failed') + ' No automatic retry.';
+    } finally {
+      checkpointButton.disabled = false;
+      checkpointConsent.checked = false;
+    }
+  });
   const output = card.querySelector('#owgM365AuditResult');
   card.querySelector('#owgM365AuditRefresh').addEventListener('click', async () => {
     output.textContent = 'Reading private local receipts…';
