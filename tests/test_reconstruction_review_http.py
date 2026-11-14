@@ -119,7 +119,7 @@ def test_dashboard_invalidates_in_memory_review_after_grant_or_history_mutation(
         invalidation = source.index("clearReconstructionEvidence('" + message + "')", start)
         assert invalidation > start
         # Clear immediately after the successful request, before toast/refresh.
-        assert "});clearReconstructionEvidence(" in source[start:invalidation]
+        assert "});clearReconstructionEvidence(" in source[start:invalidation + len("clearReconstructionEvidence(")]
         assert "await refresh()" not in source[start:invalidation]
 
 
