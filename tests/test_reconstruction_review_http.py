@@ -94,3 +94,24 @@ def test_dashboard_review_workbench_uses_live_authenticated_routes_without_persi
     assert "cross_case_contamination_measured:result.cross_case_contamination_measured" in source
     assert "localStorage.setItem('reconstruction" not in source
     assert "sessionStorage.setItem('reconstruction" not in source
+
+
+def test_dashboard_invalidates_in_memory_review_after_grant_or_history_mutation():
+    """A successful consent change or session deletion must discard old labels.
+
+    Both mutations occur in History, outside the reconstruction workbench.
+    This guards against displaying or scoring stale evidence after the user
+    revokes access or deletes retained source events.
+    """
+    from server.main import ROOT
+    source = (ROOT / "dashboard" / "history_retention.js").read_text(encoding="utf-8")
+    for route, message in (
+        ("/v1/history/ai-access", "History access changed. Reload authorized evidence."),
+        ("/v1/history/delete-session", "Saved history changed. Reload authorized evidence."),
+    ):
+        start = source.index("await call('" + route + "'")
+        invalidation = source.index("clearReconstructionEvidence('" + message + "')", start)
+        assert invalidation > start
+        # Clear immediately after the successful request, before toast/refresh.
+        assert "});clearReconstructionEvidence(" in source[start:invalidation]
+        assert "await refresh()" not in source[start:invalidation]
