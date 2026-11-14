@@ -55,3 +55,19 @@ The bound limits application-side materialization, not database scan time or
 all memory use. Choose smaller ranges when a single row set exceeds the byte
 limit. Rows remain retained until explicitly released, discarded or the log is
 deleted.
+
+### Reviewing decision history
+
+The quarantine response includes the first 100 retained decisions, in ascending
+recorded time order, plus `decisions_total` and `decisions_next_offset`. The
+owner dashboard can retrieve further pages using `GET
+/v1/event-logs/{log_id}/quarantine/decisions?offset=100&limit=100`. Each page
+contains at most 100 decisions and reports `total`, `next_offset`, and
+`stable_snapshot: false`. Paging does not change or delete decisions; they are
+removed with the log. The endpoint requires the local dashboard owner session
+and returns `Cache-Control: no-store`.
+
+The history is live rather than a fixed snapshot. If decisions are added while
+paging, totals and page boundaries can change; restart from the first page to
+review the current history. A page contains decision metadata, not retained
+rejected row values.

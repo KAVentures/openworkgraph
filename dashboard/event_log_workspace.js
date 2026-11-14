@@ -2750,14 +2750,34 @@
       };
       firstPage.onclick=()=>loadPage(0);nextPage.onclick=()=>{if(nextCursor!==null&&nextCursor!==undefined)loadPage(nextCursor);};
       renderPage(r);
+      const decisionHost=el('div'),decisionStatus=el('div',null,'muted');
+      const decisionFirst=button('First decisions'),decisionNext=button('Next decisions');
+      decisionFirst.id='owgQuarantineDecisionsFirst';decisionNext.id='owgQuarantineDecisionsNext';
+      let decisionTurn=0,decisionNextOffset=r.decisions_next_offset??null;
+      const renderDecisions=(page)=>{
+        const decisions=page.decisions||[],total=Number(page.total??r.decisions_total??decisions.length),start=Number(page.offset||0);
+        decisionNextOffset=page.next_offset??null;
+        decisionHost.replaceChildren(...(decisions.length?[table(['Decision','When','Result'],decisions.map(d=>[d.kind==='release'?'Released with offset '+d.naive_timestamp_offset:'Discarded',d.decided_at.slice(0,16).replace('T',' ')+' UTC',
+          d.kind==='release'?d.rows_released+' of '+d.rows_considered+' rows released, '+(d.events_added||0)+' events added, '+(d.duplicates_skipped||0)+' already in the log':d.rows_discarded+' rows discarded']))]:[]));
+        decisionStatus.textContent=total?(decisions.length?'Showing '+(start+1).toLocaleString()+'–'+(start+decisions.length).toLocaleString()+' of '+total.toLocaleString()+' decisions':'No decisions on this page; '+total.toLocaleString()+' in total')+'. History can change between pages.':'';
+        show(decisionFirst,total>100);show(decisionNext,total>100);
+        decisionFirst.disabled=start===0;decisionNext.disabled=decisionNextOffset===null;
+      };
+      const loadDecisions=async offset=>{
+        const request=++decisionTurn;decisionFirst.disabled=true;decisionNext.disabled=true;
+        try{const page=await getJSON(base+'/decisions?offset='+offset+'&limit=100');
+          if(generation===state.generation&&request===decisionTurn)renderDecisions(page);
+        }catch(error){if(generation===state.generation&&request===decisionTurn){decisionStatus.textContent=error.message;decisionFirst.disabled=false;decisionNext.disabled=decisionNextOffset===null;}}
+      };
+      decisionFirst.onclick=()=>loadDecisions(0);decisionNext.onclick=()=>{if(decisionNextOffset!==null)loadDecisions(decisionNextOffset);};
+      renderDecisions({decisions:r.decisions,total:r.decisions_total??r.decisions.length,offset:0,next_offset:r.decisions_next_offset??null});
       const row=el('div',null,'row');row.style.alignItems='end';
       row.append(field('UTC offset to assume for times written without one',offset),field('Batch (blank for all)',batch),field('First row (optional)',rowStart),field('Last row (optional)',rowEnd),preview,release,discard);
       wrap.append(el('h4','Rejected rows kept for review'),
         el('div',Number(r.rows_kept).toLocaleString()+' rows kept ('+reasonText(r.reasons)+'). '+r.note,'muted'),
         pageHost,firstPage,nextPage,
         el('div','Batch and row range limit preview and release. Discard removes all kept rows.','muted'),row,message,
-        ...(r.decisions.length?[table(['Decision','When','Result'],r.decisions.map(d=>[d.kind==='release'?'Released with offset '+d.naive_timestamp_offset:'Discarded',d.decided_at.slice(0,16).replace('T',' ')+' UTC',
-          d.kind==='release'?d.rows_released+' of '+d.rows_considered+' rows released, '+(d.events_added||0)+' events added, '+(d.duplicates_skipped||0)+' already in the log':d.rows_discarded+' rows discarded']))]:[]));
+        decisionStatus,decisionHost,decisionFirst,decisionNext);
       for(const control of [offset,batch,rowStart,rowEnd])control.addEventListener('input',()=>{
         previewGeneration++;reviewed=null;release.disabled=true;
         message.textContent='Selection changed. Preview again before releasing.';

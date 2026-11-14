@@ -1518,7 +1518,8 @@ and are deleted with the log.
 
 | Route | Purpose |
 | --- | --- |
-| `GET /v1/event-logs/{log_id}/quarantine?batch=&after=&limit=` | Kept rows by batch and reason, a page of rows, and every decision taken. |
+| `GET /v1/event-logs/{log_id}/quarantine?batch=&after=&limit=` | Kept rows by batch and reason, a page of rows, and the first 100 decisions with paging metadata. |
+| `GET /v1/event-logs/{log_id}/quarantine/decisions?offset=&limit=` | A page of up to 100 recorded decisions; history can change between pages. |
 | `POST /v1/event-logs/{log_id}/quarantine/release` | `{"naive_timestamp_offset": "+01:00", "batch": 0}` (batch optional). |
 | `POST /v1/event-logs/{log_id}/quarantine/discard` | `{"batch": 0}` (batch optional) deletes kept rows. |
 

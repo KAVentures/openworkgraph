@@ -339,6 +339,14 @@ def event_log_quarantine(request: Request, log_id: str, batch: int | None = Quer
     return _respond(quarantine.quarantine, log_id, batch, after, limit)
 
 
+@router.get("/v1/event-logs/{log_id}/quarantine/decisions")
+def event_log_quarantine_decisions(request: Request, log_id: str,
+        offset: int = Query(default=0, ge=0, le=2_147_483_647),
+        limit: int = Query(default=100, ge=1, le=100)):
+    _require_dashboard(request)
+    return _respond(quarantine.decision_history, log_id, offset, limit)
+
+
 @router.post("/v1/event-logs/{log_id}/quarantine/preview")
 async def event_log_quarantine_preview(request: Request, log_id: str):
     """Read-only, counts-only release preview under the existing local dashboard session."""
