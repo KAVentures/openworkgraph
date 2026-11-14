@@ -83,6 +83,8 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("event ID reused across session windows")
         indexed[(window, event_id)].add(pair_key)
     incomplete = bool(response.get("observed_pair_event_assignments_truncated") or
+                      response.get("observed_group_continuity_truncated") or
+                      response.get("observed_case_groups_truncated") or
                       coverage.get("scan_truncated"))
     seen_pair_keys: set[str] = set()
     for pair in pairs:
