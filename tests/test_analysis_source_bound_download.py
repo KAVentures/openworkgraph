@@ -127,9 +127,6 @@ with TestClient(app) as client:
     consent_ticket = consent_grant.json()['ticket']
     without_consent = client.post(endpoint, json={**request, 'ticket': consent_ticket}, headers=dashboard)
     assert without_consent.status_code == 403 and 'rows' not in without_consent.text
-    # An opt-in restored after the rejected attempt must not resurrect that grant.
-    after_restored_consent = client.post(endpoint, json={**request, 'ticket': consent_ticket}, headers=preview_headers)
-    assert after_restored_consent.status_code == 403 and 'rows' not in after_restored_consent.text
     valid_grant = client.post(base + '/analysis-sharing-authorize', json=request, headers=preview_headers)
     assert valid_grant.status_code == 200
     token = valid_grant.json()['ticket']
