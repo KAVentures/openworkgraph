@@ -188,3 +188,50 @@ def operator_checkpoint(request: Request, consent_local_read: bool = False):
         "provider_requests": 0, "checkpoint_advanced": False,
         "provider_validated": False, "automatic_retry_allowed": False,
     }, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/m365/operator-candidate-review")
+def operator_candidate_review(request: Request, consent_local_read: bool = False):
+    """Read-only, scoped candidate review; never authorizes append or commit.
+
+    All scope, grant and artifact paths are trusted local operator configuration,
+    not HTTP parameters. The review digest is returned for a later *separate*
+    explicit approval, never treated as an approval itself.
+    """
+    authorization = str(request.headers.get("authorization") or "")
+    if (not authorization.lower().startswith("owg-session ")
+            or not dashboard_session_valid(authorization[len("owg-session "):].strip())):
+        raise HTTPException(403, "Local dashboard session required")
+    if consent_local_read is not True:
+        raise HTTPException(403, "Explicit candidate review consent required")
+    names = ("OWG_M365_TENANT", "OWG_M365_MAILBOX", "OWG_M365_FOLDER",
+             "OWG_M365_GRANT_FILE", "OWG_M365_CANDIDATE_FILE")
+    values = [os.environ.get(name, "") for name in names]
+    if not all(values):
+        return JSONResponse({
+            "format": "openworkgraph.m365-dashboard-candidate-review.v1",
+            "configured": False, "review_ready": False,
+            "provider_requests": 0, "owg_writes": 0,
+            "checkpoint_advanced": False, "automatic_retry_allowed": False,
+        }, headers={"Cache-Control": "no-store"})
+    from .m365_outlook_candidate_review import review
+    try:
+        result = review(
+            tenant=values[0], mailbox=values[1], folder=values[2],
+            grant_file=Path(values[3]), candidate=Path(values[4]),
+            consent_local_read=True)
+        if result.get("status") != "review_ready":
+            raise ValueError("Candidate not reviewable")
+    except (OSError, ValueError, TypeError, KeyError, RecursionError):
+        raise HTTPException(409, "Candidate or current grant unavailable; manual review required") from None
+    return JSONResponse({
+        "format": "openworkgraph.m365-dashboard-candidate-review.v1",
+        "configured": True, "review_ready": True,
+        "event_snapshots": result["event_snapshots"],
+        "removal_markers_for_review": result["removal_markers_for_review"],
+        "pages": result["pages"],
+        "csv_sha256": result["csv_sha256"],
+        "separate_append_approval_required": True,
+        "provider_requests": 0, "owg_writes": 0,
+        "checkpoint_advanced": False, "automatic_retry_allowed": False,
+    }, headers={"Cache-Control": "no-store"})
