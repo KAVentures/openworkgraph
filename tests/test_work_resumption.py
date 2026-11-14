@@ -412,3 +412,30 @@ def test_embedded_review_queue_sees_finalized_continuity(monkeypatch):
     response = resumption_candidates(db, lease=ALL)
     assert observed and observed[0]
     assert response["event_assignment_review"]
+
+
+def test_transitive_group_reports_missing_direct_edge_without_inventing_case():
+    """A-B and B-C in distinct events never establishes A-C co-reference."""
+    def both(left, right):
+        return {"resource_reference": _ref(left)["resource_reference"],
+                "file_reference": {"file_ref": FILE}} if right == "file" else None
+
+    # Two different source events share B but never co-observe A and C.
+    # Use the local file identity as B so both links are representable by
+    # the event schema's independent pointer fields.
+    rows = [
+        (_day(12, "09:00"), both("a", "file")),
+        (_day(12, "09:01"), both("c", "file")),
+        (_day(14, "10:00"), both("a", "file")),
+        (_day(14, "10:01"), both("c", "file")),
+    ]
+    result = resumption_candidates(_database(rows), lease=ALL)
+    groups = [g for g in result["observed_case_groups"]
+              if g["resource_count"] == 3]
+    assert groups, "expected connected A-file-C navigation component"
+    assert all(g["unobserved_transitive_pair_count"] == 1 for g in groups)
+    assert all(g["proves_same_case"] is False for g in groups)
+    assignments = result["observed_pair_event_assignments"]
+    assert all(not ({REF["a"], REF["c"]} <=
+                    {str(p.get("resource_ref")) for p in pair.get("resource_pointers", [])})
+               for pair in assignments)
