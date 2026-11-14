@@ -16,4 +16,7 @@ def test_operator_audit_ui_keeps_phases_review_only():
     assert "if (!list.children.length)" in block
     assert "textContent" in block and "createElement" in block
     assert "innerHTML =" not in block.split("output.replaceChildren();", 1)[1]
-    # The surrounding operator panel intentionally contains separately approved POST actions.\n    # Only the audit receipt handler itself must remain a read-only GET.\n    audit_handler = block.split("fetch('/v1/m365/operator-audit', {cache: 'no-store'})", 1)[1]\n    assert "method: 'POST'" not in audit_handler
+    # The surrounding operator panel intentionally contains separately approved POST actions. 
+    # Only the audit receipt handler itself must remain a read-only GET.
+    audit_handler = block.split("fetch('/v1/m365/operator-audit', {cache: 'no-store'})", 1)[1]
+    assert "method: 'POST'" not in audit_handler
