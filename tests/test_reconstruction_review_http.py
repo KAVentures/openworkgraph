@@ -115,3 +115,19 @@ def test_dashboard_invalidates_in_memory_review_after_grant_or_history_mutation(
         # Clear immediately after the successful request, before toast/refresh.
         assert "});clearReconstructionEvidence(" in source[start:invalidation]
         assert "await refresh()" not in source[start:invalidation]
+
+
+
+def test_dashboard_rejects_scores_from_superseded_reviewer_labels():
+    """A response for old checkbox selections must not be displayed as current."""
+    from server.main import ROOT
+    source = (ROOT / "dashboard" / "history_retention.js").read_text(encoding="utf-8")
+    assert "let reconstructionLabelEpoch=0;" in source
+    assert "reconstructionLabelEpoch++;" in source
+    assert "const labelEpoch=reconstructionLabelEpoch;" in source
+    assert "if(labelEpoch!==reconstructionLabelEpoch){" in source
+    assert source.index("if(labelEpoch!==reconstructionLabelEpoch){") < source.index(
+        "root.querySelector('#reconstructionMetrics').textContent=JSON.stringify({"
+    )
+    assert "Labels changed while scoring. Submit the current review again." in source
+    assert "root.querySelector('#reconstructionMetrics').textContent='';" in source
