@@ -83,15 +83,20 @@ with TestClient(app) as client:
                ('source_content_sha256', 'analysis_spec_sha256', 'metric_definition_sha256')}
     request['spec'] = spec
     endpoint = base + '/analysis-sharing-download'
+    def authorized_download(payload):
+        grant = client.post(base + '/analysis-sharing-authorize', json=payload, headers=preview_headers)
+        if grant.status_code != 200:
+            return grant
+        return client.post(endpoint, json={**payload, 'ticket': grant.json()['ticket']}, headers=preview_headers)
     assert client.post(endpoint, json=request).status_code == 403
     assert client.post(endpoint, json=request, headers=dashboard).status_code == 403
     assert client.post(endpoint, json=request, headers=bearer).status_code == 403
-    ok = client.post(endpoint, json=request, headers=preview_headers)
+    ok = authorized_download(request)
     assert ok.status_code == 200, ok.text
     assert ok.headers['cache-control'] == 'no-store'
     assert ok.json()['rows'] == snapshot['rows']
     assert 'private-case' not in ok.text
-    malformed = client.post(endpoint, json={**request, 'unexpected': True}, headers=preview_headers)
+    malformed = authorized_download({**request, 'unexpected': True})
     assert malformed.status_code in (409, 422), malformed.text
     # A reviewed preview is bound to every digest and the complete metric order.
     # Refuse tampered requests before releasing any minimized numeric rows.
@@ -102,26 +107,26 @@ with TestClient(app) as client:
         {'source_content_sha256': 'NOT-A-DIGEST'},
         {'metric_definition_sha256': ['f' * 64] * 33},
     ):
-        rejected = client.post(endpoint, json={**request, **mutation}, headers=preview_headers)
+        rejected = authorized_download({**request, **mutation})
         assert rejected.status_code in (409, 422), rejected.text
         assert 'rows' not in rejected.text and 'private-case' not in rejected.text
     # Reusing lineage with a different query specification must also fail.
-    wrong_spec = client.post(endpoint, json={**request, 'spec': {'level': 'cases',
-        'dimensions': ['first_activity'], 'measures': [{'fn': 'count'}]}}, headers=preview_headers)
+    wrong_spec = authorized_download({**request, 'spec': {'level': 'cases',
+        'dimensions': ['first_activity'], 'measures': [{'fn': 'count'}]}})
     assert wrong_spec.status_code in (409, 422), wrong_spec.text
     assert 'rows' not in wrong_spec.text
     append = client.post(base + '/append?format=csv&case_column=case&activity_column=activity&timestamp_column=time',
         content=b'case,activity,time\nnew-case,B,2024-01-02T00:00:00Z\n',
         headers={**dashboard, 'X-OWG-Local-Storage-Confirmed': 'true'})
     assert append.status_code == 200, append.text
-    stale = client.post(endpoint, json=request, headers=preview_headers)
+    stale = authorized_download(request)
     assert stale.status_code == 409, stale.text
     assert 'rows' not in stale.text and 'private-case' not in stale.text
     # Deleting the saved source must revoke the reviewed export, even if the
     # caller retains the complete original lineage and dashboard session.
     deleted = client.post(base + '/delete', headers=dashboard)
     assert deleted.status_code == 200, deleted.text
-    missing = client.post(endpoint, json=request, headers=preview_headers)
+    missing = authorized_download(request)
     assert missing.status_code in (404, 409), missing.text
     assert 'rows' not in missing.text and 'private-case' not in missing.text
 """
