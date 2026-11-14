@@ -30,3 +30,26 @@ def test_analysis_grant_rejects_invalid_session():
     import pytest
     with pytest.raises(ValueError):
         local_auth.issue_analysis_grant("invalid-session", "log", "digest")
+
+
+def test_analysis_grant_expires_and_cannot_be_replayed(monkeypatch):
+    # Time is controlled so this is deterministic on slow CI and all OSes.
+    clock = [1000.0]
+    monkeypatch.setattr(local_auth.time, "time", lambda: clock[0])
+    session = local_auth.create_dashboard_session()
+    ticket = local_auth.issue_analysis_grant(session, "log", "digest", ttl_seconds=1)["ticket"]
+    clock[0] += 2.0
+    assert not local_auth.consume_analysis_grant(ticket, session, "log", "digest")
+    assert not local_auth.consume_analysis_grant(ticket, session, "log", "digest")
+
+
+def test_analysis_grant_denies_revoked_session_and_burns_ticket():
+    session = local_auth.create_dashboard_session()
+    ticket = local_auth.issue_analysis_grant(session, "log", "digest")["ticket"]
+    # Simulate the same process-local session revocation used by shutdown.
+    with local_auth._LOCK:
+        local_auth._DASHBOARD_SESSIONS.pop(session, None)
+    assert not local_auth.consume_analysis_grant(ticket, session, "log", "digest")
+    with local_auth._LOCK:
+        local_auth._DASHBOARD_SESSIONS[session] = None
+    assert not local_auth.consume_analysis_grant(ticket, session, "log", "digest")
