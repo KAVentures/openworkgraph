@@ -116,3 +116,38 @@ def test_source_change_during_provider_io_denies_result(monkeypatch, tmp_path):
         assert exc.value.status_code == 409
         assert source.call_count == 1
     asyncio.run(exercise())
+
+
+def test_ambiguous_run_case_binding_denies_provider_verification(monkeypatch, tmp_path):
+    """A run bound to two cases must not gain case-specific provider authority."""
+    async def exercise():
+        _, source = setup(monkeypatch, tmp_path)
+        import hashlib
+        actor = hashlib.sha256(Request.headers["authorization"].encode()).hexdigest()
+        for case in (CASE, "owg:w:" + "e" * 32):
+            ledger.bind_run(scope=SCOPE, actor=actor, secret="secret-at-least-16",
+                            case_ref=case, run_ref=RUN, fingerprint=FP, revision=1)
+        with pytest.raises(HTTPException):
+            await routes.verify_local_bound_run_source(Request(), SimpleNamespace(headers={}))
+        source.assert_not_called()
+    asyncio.run(exercise())
+
+
+def test_binding_becomes_ambiguous_during_source_read(monkeypatch, tmp_path):
+    """A second case binding appearing during provider I/O denies the response."""
+    async def exercise():
+        _, source = setup(monkeypatch, tmp_path)
+        import hashlib
+        actor = hashlib.sha256(Request.headers["authorization"].encode()).hexdigest()
+        ledger.bind_run(scope=SCOPE, actor=actor, secret="secret-at-least-16",
+                        case_ref=CASE, run_ref=RUN, fingerprint=FP, revision=1)
+        def provider(*args):
+            ledger.bind_run(scope=SCOPE, actor=actor, secret="secret-at-least-16",
+                            case_ref="owg:w:" + "e" * 32, run_ref=RUN,
+                            fingerprint=FP, revision=1)
+            return {"provider_reported_state": "paid"}
+        source.side_effect = provider
+        with pytest.raises(HTTPException):
+            await routes.verify_local_bound_run_source(Request(), SimpleNamespace(headers={}))
+        assert source.call_count == 1
+    asyncio.run(exercise())
