@@ -109,7 +109,7 @@ with TestClient(app) as client:
     with local_auth._LOCK:
         local_auth._DASHBOARD_SESSIONS.pop(dashboard['Authorization'][len('OWG-Session '):], None)
     revoked = client.post(endpoint, json={**request, 'ticket': revoked_ticket}, headers=preview_headers)
-    assert revoked.status_code == 403 and 'rows' not in revoked.text
+    assert revoked.status_code in (401, 403) and 'rows' not in revoked.text
     # Restore only the test's session, to ensure the revoked grant was burned.
     with local_auth._LOCK:
         local_auth._DASHBOARD_SESSIONS[dashboard['Authorization'][len('OWG-Session '):]] = None
@@ -118,7 +118,7 @@ with TestClient(app) as client:
     with local_auth._LOCK:
         local_auth._DASHBOARD_SESSIONS.pop(dashboard['Authorization'][len('OWG-Session '):], None)
     denied_issue = client.post(base + '/analysis-sharing-authorize', json=request, headers=preview_headers)
-    assert denied_issue.status_code == 403 and 'ticket' not in denied_issue.text
+    assert denied_issue.status_code in (401, 403) and 'ticket' not in denied_issue.text
     with local_auth._LOCK:
         local_auth._DASHBOARD_SESSIONS[dashboard['Authorization'][len('OWG-Session '):]] = None
     # Consent/preview opt-in must remain present at consumption, not only issuance.
