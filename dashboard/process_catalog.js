@@ -908,40 +908,125 @@
   }
   function renderClarification(host){
     const section=el('section');section.id='owgCatalogClarification';
-    section.append(el('h4','Clarify this design with your documents'),
-      el('p','Paste policy or SOP text. OWG cites the exact statements behind each rule and step, shows where documents disagree, and asks only what is still open. Documents are treated as untrusted text and are not stored; your answers are recorded for this saved revision. Nothing changes the design until you save a new revision.'));
-    const title=el('input');title.type='text';title.placeholder='Document title';title.setAttribute('aria-label','Document title');
-    const text=el('textarea');text.rows=6;text.setAttribute('aria-label','Document text');
+    section.append(el('h4','Clarify this design against multiple policy sources'),
+      el('p','Review up to five separately supplied SOP or policy documents. Each citation identifies the source and character range. OWG does not store the document contents. Contradictory statements must be resolved by explicitly selecting the applicable evidence; no statement is trusted as an instruction or automatically approved. Only selected citation excerpts and your answers are retained in the local decision ledger; the full documents are not. Saving an answer does not change the process design.'));
+    const sources=el('div');sources.id='owgCatalogClarifyDocuments';
     const output=el('div');output.id='owgCatalogClarifyResult';output.setAttribute('role','status');
-    const docs=()=>text.value.trim()?[{title:title.value.trim()||'Document',text:text.value}]:[];
+    const add=button('Add another policy or SOP',()=>appendDocument());
+    add.id='owgCatalogClarifyAddDocument';
+    const rows=[];let sourceGeneration=0,serial=0;
+    function refresh(){
+      sources.replaceChildren(...rows.map((r,i)=>{r.legend.textContent='Document '+(i+1);return r.node;}));
+      add.disabled=rows.length>=5;
+    }
+    function invalidate(){
+      sourceGeneration++;
+      output.replaceChildren(el('p','Documents changed. Run clarification again before recording any answer.'));
+    }
+    function appendDocument(values={}){
+      if(rows.length>=5)throw new Error('Review at most five source documents in one bundle.');
+      const node=el('fieldset');node.className='owgClarifyDocument';
+      const legend=el('legend','Source document');
+      const titleLabel=el('label','Document title '),title=el('input');
+      title.type='text';title.maxLength=120;title.placeholder='Policy or SOP revision';
+      title.dataset.clarifyTitle='true';title.setAttribute('aria-label','Source document title');
+      title.value=values.title||'';titleLabel.append(title);
+      const textLabel=el('label','Exact source text '),sourceText=el('textarea');
+      sourceText.rows=5;sourceText.maxLength=60000;
+      sourceText.dataset.clarifyText='true';sourceText.setAttribute('aria-label','Source document text');
+      sourceText.value=values.text||'';textLabel.append(sourceText);
+      const fileLabel=el('label','Load UTF-8 plain text or Markdown file '),file=el('input');
+      file.type='file';file.accept='.txt,.md,text/plain,text/markdown';file.setAttribute('aria-label','Load source text file');
+      fileLabel.append(file);
+      const remove=button('Remove document',()=>{
+        const idx=rows.findIndex(row=>row.node===node);if(idx<0)return;
+        rows.splice(idx,1);refresh();invalidate();
+      });
+      const row={node,title,sourceText,legend};
+      for(const input of [title,sourceText])input.addEventListener('input',invalidate);
+      file.addEventListener('change',()=>locked(async()=>{
+        const source=file.files?.[0];
+        if(!source)return;
+        try{
+          if(source.size>65536||!/\.(txt|md)$/i.test(source.name))
+            throw new Error('Choose a UTF-8 .txt or .md document of no more than 64 KiB.');
+          const value=new TextDecoder('utf-8',{fatal:true}).decode(await source.arrayBuffer());
+          if(!value.trim()||value.length>60000)throw new Error('Source text must have 1–60,000 characters.');
+          title.value=source.name.slice(0,120);sourceText.value=value;invalidate();
+        }finally{file.value='';}
+      }));
+      node.append(legend,titleLabel,textLabel,fileLabel,remove);
+      rows.push(row);refresh();invalidate();
+    }
+    const docs=()=>rows.filter(row=>row.sourceText.value.trim()).map(row=>({
+      title:row.title.value.trim()||'Untitled source',text:row.sourceText.value}));
+    const queryFor=selected=>'?'+new URLSearchParams({workflow_id:selected.workflow_id,revision:selected.revision});
     const run=async()=>{
-      const selected=record;
-      const query='?'+new URLSearchParams({workflow_id:selected.workflow_id,revision:selected.revision});
-      const result=await request('/v1/process-catalog/clarify'+query,{documents:docs()});
-      if(record!==selected)return;
-      output.replaceChildren(el('p',result.questions.length+' open questions · '+result.answered_question_count+' already answered for revision '+result.revision+' and these exact source documents · '+result.statement_count+' statements read'));
-      if(result.instruction_like_statements.length)output.appendChild(el('p',result.instruction_like_statements.length+' statement(s) read like instructions to the system and were ignored.'));
+      const selected=record,generation=sourceGeneration,documents=docs();
+      if(!selected?.workflow_id)throw new Error('Save a versioned process before reviewing source documents.');
+      if(!documents.length)throw new Error('Enter at least one source document.');
+      const query=queryFor(selected);
+      const result=await request('/v1/process-catalog/clarify'+query,{documents});
+      if(record!==selected||generation!==sourceGeneration)return;
+      output.replaceChildren(el('p',result.questions.length+' open questions · '+result.answered_question_count+
+        ' answered on this process revision and exact source bundle · '+result.statement_count+
+        ' source statements. Full documents are not retained; selected citations and answers are recorded.'));
+      if(result.instruction_like_statements.length)output.append(el('p',
+        result.instruction_like_statements.length+' statement(s) look like instructions to the system and were excluded from evidence.'));
       for(const q of result.questions){
-        const box=el('section');box.appendChild(el('h5',q.prompt));
+        const box=el('section');box.append(el('h5',q.prompt));
         const cites=el('ul');
-        for(const c of q.citations)cites.appendChild(el('li','“'+c.text+'” — '+c.document_title));
-        for(const conflict of q.contradictions)cites.appendChild(el('li','Disagreement ('+conflict.kind.replaceAll('_',' ')+'): '+conflict.statements.map(c=>'“'+c.text+'”').join(' vs ')));
-        box.appendChild(cites);
-        const answer=el('input');answer.type='text';answer.placeholder='Your answer (optional)';answer.setAttribute('aria-label','Answer to: '+q.prompt);
-        box.appendChild(answer);
-        for(const choice of q.allowed_decisions){
-          box.appendChild(button(choice[0].toUpperCase()+choice.slice(1),()=>locked(async()=>{
-            const cited=[...q.citations.map(c=>c.statement_id),...q.contradictions.flatMap(c=>c.statements.map(s=>s.statement_id))].slice(0,5);
-            const res=await request('/v1/process-catalog/clarify/decide'+query,{documents:docs(),
-              decision:{question_id:q.question_id,decision:choice,answer:answer.value,cited_statement_ids:[...new Set(cited)].slice(0,5),expected_documents_sha256:result.documents_sha256}});
-            status(res.proposed_change?'Decision recorded. Confirming this rule is proposed for the next revision; review the rule and save to apply it.':'Decision recorded for revision '+selected.revision+'.');
-            await run();
-          })));
+        const citeText=c=>'“'+c.text+'” — '+c.document_title+' (characters '+c.start+'–'+c.end+')';
+        for(const c of q.citations)cites.append(el('li',citeText(c)));
+        box.append(cites);
+        const disputed=new Map();
+        if(q.contradictions.length){
+          box.append(el('p','The documents disagree. To confirm or revise, choose ONE governing source statement and explain why. Nothing is chosen automatically; reject or defer if the conflict remains unresolved.'));
+          for(const conflict of q.contradictions){
+            box.append(el('p','Disagreement ('+conflict.kind.replaceAll('_',' ')+'): '+
+              conflict.statements.map(c=>c.document_title+' at '+c.start).join(' versus ')));
+            for(const c of conflict.statements)disputed.set(c.statement_id,c);
+          }
+          const group=el('fieldset');group.className='owgClarifyConflicts';
+          group.append(el('legend','Select one governing statement'));
+          for(const [statementId,c] of disputed){
+            const label=el('label'),choiceInput=el('input');choiceInput.type='radio';
+            choiceInput.name='owgClarifySource_'+q.question_id;
+            choiceInput.value=statementId;
+            choiceInput.setAttribute('aria-label','Governing statement from '+c.document_title+' at '+c.start);
+            label.append(choiceInput,el('span',citeText(c)));group.append(label);
+          }
+          box.append(group);
         }
-        output.appendChild(box);
+        const answer=el('input');answer.type='text';answer.maxLength=2000;
+        answer.placeholder=q.kind==='contradiction'?'Explain which policy applies and why':'Your answer (optional)';
+        answer.setAttribute('aria-label','Human explanation for: '+q.prompt);
+        box.append(answer);
+        for(const choice of q.allowed_decisions)box.append(button(choice[0].toUpperCase()+choice.slice(1),()=>locked(async()=>{
+          if(record!==selected||generation!==sourceGeneration)
+            throw new Error('Process or source documents changed; run clarification again.');
+          let cited;
+          if(q.kind==='contradiction'){
+            const chosen=box.querySelector('.owgClarifyConflicts input[type=radio]:checked')?.value;
+            cited=chosen?[chosen]:[];
+            if(['confirm','revise'].includes(choice)){
+              if(!chosen)throw new Error('Select one governing statement before resolving a conflict.');
+              if(!answer.value.trim())throw new Error('Explain your resolution of the contradictory policy statements.');
+            }
+          }else cited=[...new Set(q.citations.map(c=>c.statement_id))].slice(0,5);
+          const res=await request('/v1/process-catalog/clarify/decide'+query,{documents,
+            decision:{question_id:q.question_id,decision:choice,answer:answer.value,
+              cited_statement_ids:cited.slice(0,5),expected_documents_sha256:result.documents_sha256}});
+          status(res.proposed_change?'Decision recorded. A proposed rule confirmation still needs an explicit new design revision.':
+            'Human decision recorded for revision '+selected.revision+' and this exact source set.');
+          await run();
+        })));
+        output.append(box);
       }
     };
-    section.append(title,text,button('Find open questions',()=>locked(run)),output);host.appendChild(section);
+    section.append(sources,add,button('Find open questions across sources',()=>locked(run)),output);
+    host.append(section);
+    appendDocument();
   }
   function renderShadowReview(host){
     const section=el('section');section.appendChild(el('h4','Review a shadow evaluation'));
