@@ -151,3 +151,29 @@ def test_binding_becomes_ambiguous_during_source_read(monkeypatch, tmp_path):
             await routes.verify_local_bound_run_source(Request(), SimpleNamespace(headers={}))
         assert source.call_count == 1
     asyncio.run(exercise())
+
+
+def test_session_revoked_during_provider_io_denies_verified_result(monkeypatch, tmp_path):
+    """Fresh provider evidence is not returned to a now-revoked operator."""
+    async def exercise():
+        _, source = setup(monkeypatch, tmp_path)
+        import hashlib
+        actor = hashlib.sha256(Request.headers["authorization"].encode()).hexdigest()
+        ledger.bind_run(scope=SCOPE, actor=actor, secret="secret-at-least-16",
+                        case_ref=CASE, run_ref=RUN, fingerprint=FP, revision=1)
+        checks = 0
+
+        def session_guard(_request):
+            nonlocal checks
+            checks += 1
+            if checks > 1:
+                raise HTTPException(403, "dashboard session revoked")
+
+        monkeypatch.setattr(routes, "_dashboard_only", session_guard)
+        with pytest.raises(HTTPException) as error:
+            await routes.verify_local_bound_run_source(
+                Request(), SimpleNamespace(headers={}))
+        assert error.value.status_code == 403
+        assert source.call_count == 1
+        assert checks >= 2
+    asyncio.run(exercise())

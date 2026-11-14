@@ -130,3 +130,22 @@ def test_ambiguous_run_case_receipt_read_denied(monkeypatch, tmp_path):
     with pytest.raises(HTTPException) as error:
         asyncio.run(routes.read_local_bound_attempt_receipts(request(), Response()))
     assert error.value.status_code in (403, 409)
+
+
+def test_session_revoked_during_receipt_read_denies_response(monkeypatch, tmp_path):
+    """Current source access does not keep a revoked dashboard session alive."""
+    bindings = setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(bindings, "get_binding",
+                        lambda **_kwargs: {"association": "operator_confirmed"})
+    checks = 0
+
+    def session_valid(token):
+        nonlocal checks
+        checks += 1
+        return token == "valid" and checks == 1
+
+    monkeypatch.setattr(routes, "dashboard_session_valid", session_valid)
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(routes.read_local_bound_attempt_receipts(request(), Response()))
+    assert error.value.status_code == 403
+    assert checks >= 2
