@@ -506,6 +506,49 @@ document.addEventListener('DOMContentLoaded', () => {
       checkpointConsent.checked = false;
     }
   });
+  // Candidate review is independently consented and read-only. No approval
+  // token, provider credential or private path is accepted from the browser.
+  const reviewControls = document.createElement('div');
+  const reviewConsentLabel = document.createElement('label');
+  const reviewConsent = document.createElement('input');
+  reviewConsent.type = 'checkbox';
+  reviewConsentLabel.append(reviewConsent, document.createTextNode(' I consent to read the local Microsoft 365 candidate for review'));
+  const reviewButton = document.createElement('button');
+  reviewButton.type = 'button';
+  reviewButton.textContent = 'Review local candidate';
+  const reviewResult = document.createElement('p');
+  reviewResult.setAttribute('role', 'status');
+  reviewResult.setAttribute('aria-live', 'polite');
+  reviewResult.textContent = 'Candidate not reviewed.';
+  reviewControls.append(reviewConsentLabel, reviewButton, reviewResult);
+  card.insertBefore(reviewControls, card.querySelector('#owgM365AuditRefresh'));
+  reviewButton.addEventListener('click', async () => {
+    if (!reviewConsent.checked) {
+      reviewResult.textContent = 'Explicit candidate review consent required. Nothing was read.';
+      return;
+    }
+    reviewButton.disabled = true;
+    reviewResult.textContent = 'Checking local candidate…';
+    try {
+      await window.__owgAuthReady;
+      const response = await fetch('/v1/m365/operator-candidate-review?consent_local_read=true', {
+        method: 'POST', cache: 'no-store', credentials: 'same-origin'
+      });
+      if (!response.ok) throw Error('Candidate unavailable (' + response.status + '); inspect grant and local artifacts.');
+      const result = await response.json();
+      reviewResult.textContent = !result.configured
+        ? 'Candidate scope is not configured on this device.'
+        : 'Candidate review ready: ' + String(result.event_snapshots) + ' event snapshots, ' +
+          String(result.removal_markers_for_review) + ' removals for manual review, ' +
+          String(result.pages) + ' pages. Digest: ' + String(result.csv_sha256) +
+          '. No Graph read, append or checkpoint commit performed. Separate approval required.';
+    } catch (error) {
+      reviewResult.textContent = String(error.message || 'Candidate review failed') + ' No automatic retry.';
+    } finally {
+      reviewButton.disabled = false;
+      reviewConsent.checked = false;
+    }
+  });
   const output = card.querySelector('#owgM365AuditResult');
   card.querySelector('#owgM365AuditRefresh').addEventListener('click', async () => {
     output.textContent = 'Reading private local receipts…';
