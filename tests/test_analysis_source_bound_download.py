@@ -128,6 +128,29 @@ with TestClient(app) as client:
     assert first.status_code == 200
     replay = client.post(endpoint, json={**request, 'ticket': token}, headers=preview_headers)
     assert replay.status_code == 403 and 'rows' not in replay.text
+    # A session revoked while the threadpool recomputes must not receive rows.
+    # Revoke from inside the actual recomputation to make the race deterministic.
+    from server import analysis_snapshot_export as snapshot_export
+    original_export = snapshot_export.export_if_source_current
+    session_token = dashboard['Authorization'][len('OWG-Session '):]
+    def revoke_during_export(log_id, payload):
+        result = original_export(log_id, payload)
+        with local_auth._LOCK:
+            local_auth._DASHBOARD_SESSIONS.pop(session_token, None)
+        return result
+    during_grant = client.post(base + '/analysis-sharing-authorize', json=request, headers=preview_headers)
+    assert during_grant.status_code == 200, during_grant.text
+    snapshot_export.export_if_source_current = revoke_during_export
+    try:
+        revoked_during = client.post(endpoint, json={**request, 'ticket': during_grant.json()['ticket']},
+                                     headers=preview_headers)
+        assert revoked_during.status_code == 403 and 'rows' not in revoked_during.text
+    finally:
+        snapshot_export.export_if_source_current = original_export
+        with local_auth._LOCK:
+            local_auth._DASHBOARD_SESSIONS[session_token] = None
+    assert client.post(endpoint, json={**request, 'ticket': during_grant.json()['ticket']},
+                       headers=preview_headers).status_code == 403
     # Simultaneous HTTP requests sharing a ticket must release rows at most once.
     from concurrent.futures import ThreadPoolExecutor
     concurrent_grant = client.post(base + '/analysis-sharing-authorize', json=request, headers=preview_headers)
