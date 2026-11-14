@@ -534,3 +534,38 @@ def test_reviewed_handoff_real_api_approval_denial_stale_revocation_and_recovery
         "basis": basis, "expected_review_revision": 2,
         "decision": "approved", "reviewer_notes": "Stale writer",
     }).status_code == 409
+
+
+def test_review_save_denies_session_revoked_after_preflight(monkeypatch, tmp_path):
+    """An expired session cannot persist an approval after the evidence check."""
+    import sqlite3
+    app = FastAPI()
+    app.include_router(routes.router)
+    client = TestClient(app)
+    db = tmp_path / "revoked-review.sqlite3"
+    monkeypatch.setattr(routes.pipeline, "_connect", lambda: sqlite3.connect(db))
+    live = {"value": True}
+    monkeypatch.setattr(routes, "dashboard_session_valid",
+                        lambda token: token == "owner" and live["value"])
+    basis = {
+        "project_id": "p1", "project_set_sha256": "a" * 64,
+        "idea_revision": 1, "idea_state": "approved",
+        "spec_sha256": "b" * 64, "archive_sha256": "c" * 64,
+        "process_status": "current", "process_reference": None,
+        "dataset_origins": [], "dataset_origin_check_available": True,
+        "blockers": [],
+    }
+    # Stub preflight must preserve its HTTP response contract.
+    from fastapi.responses import JSONResponse
+    monkeypatch.setattr(routes, "preflight",
+                        lambda request, idea_id, basis:
+                        (live.__setitem__("value", False) or JSONResponse({"blockers": []})))
+    response = client.post("/v1/review-choice-workbench/idea-1/review",
+                           headers={"Authorization": "OWG-Session owner"},
+                           json={"basis": basis, "expected_review_revision": 0,
+                                 "decision": "approved"})
+    assert response.status_code == 403
+    with sqlite3.connect(db) as conn:
+        assert conn.execute(
+            "SELECT name FROM sqlite_master WHERE name='project_human_reviews'"
+        ).fetchone() is None

@@ -144,6 +144,13 @@ def preflight(request: Request, idea_id: str, basis: ReviewBasis):
                         headers={"Cache-Control": "no-store"})
 
 
+
+def _require_live_review_session(request: Request) -> None:
+    """Revalidate at the durable review boundary, not only at HTTP entry."""
+    auth = str(request.headers.get("authorization") or "")
+    if not auth.lower().startswith("owg-session ") or not dashboard_session_valid(auth[len("owg-session "):].strip()):
+        raise HTTPException(403, "Local dashboard session required")
+
 class ReviewDecision(BaseModel):
     """Human review decision, explicitly distinct from agent execution consent."""
     basis: ReviewBasis
@@ -198,6 +205,7 @@ def save_review(request: Request, idea_id: str, payload: ReviewDecision):
                            sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     with pipeline._LOCK, pipeline.closing(pipeline._connect()) as conn:
+        _require_live_review_session(request)
         conn.execute("""CREATE TABLE IF NOT EXISTS project_human_reviews (
             idea_id TEXT NOT NULL, project_id TEXT NOT NULL,
             revision INTEGER NOT NULL, decision TEXT NOT NULL,
@@ -248,6 +256,7 @@ def revoke_review(request: Request, idea_id: str, project_id: str, payload: Revi
     if not idea_id or len(idea_id) > 128 or not project_id or len(project_id) > 128:
         raise HTTPException(422, "Invalid review identifier")
     with pipeline._LOCK, pipeline.closing(pipeline._connect()) as conn:
+        _require_live_review_session(request)
         conn.execute("""CREATE TABLE IF NOT EXISTS project_human_reviews (
             idea_id TEXT NOT NULL, project_id TEXT NOT NULL,
             revision INTEGER NOT NULL, decision TEXT NOT NULL,
@@ -292,6 +301,7 @@ def reviewed_handoff_preflight(request: Request, idea_id: str, basis: ReviewBasi
                            sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     with pipeline._LOCK, pipeline.closing(pipeline._connect()) as conn:
+        _require_live_review_session(request)
         # Missing table means no approval, never an implicit approval.
         conn.execute("""CREATE TABLE IF NOT EXISTS project_human_reviews (
             idea_id TEXT NOT NULL, project_id TEXT NOT NULL,
@@ -302,6 +312,7 @@ def reviewed_handoff_preflight(request: Request, idea_id: str, basis: ReviewBasi
             "SELECT revision, decision, basis_sha256 FROM project_human_reviews "
             "WHERE idea_id=? AND project_id=?",
             (idea_id, basis.project_id)).fetchone()
+    _require_live_review_session(request)
     if row is None or row[1] != "approved" or row[2] != digest:
         raise HTTPException(409, "Current evidence requires explicit human approval")
     return JSONResponse({
