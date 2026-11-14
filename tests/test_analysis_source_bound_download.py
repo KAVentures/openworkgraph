@@ -88,7 +88,7 @@ with TestClient(app) as client:
         if grant.status_code != 200:
             return grant
         return client.post(endpoint, json={**payload, 'ticket': grant.json()['ticket']}, headers=preview_headers)
-    assert client.post(endpoint, json=request).status_code == 403
+    assert client.post(endpoint, json=request).status_code in (401, 403)  # No authenticated session
     assert client.post(endpoint, json=request, headers=dashboard).status_code == 403
     assert client.post(endpoint, json=request, headers=bearer).status_code == 403
     assert client.post(base + '/analysis-sharing-authorize', json=request, headers=bearer).status_code == 403
