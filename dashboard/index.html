@@ -464,6 +464,362 @@ document.addEventListener('DOMContentLoaded', () => {
   card.id = 'owgM365OperatorAudit';
   card.innerHTML = '<h3>Microsoft 365 operator evidence</h3><p class="muted">Local, explicitly recorded review steps only. Not proof of tenant validation or completed sync.</p><button type="button" id="owgM365AuditRefresh">Refresh audit receipts</button><div id="owgM365AuditResult" role="status" aria-live="polite">Not loaded.</div>';
   panel.appendChild(card);
+  // Checkpoint inspection is a separate, explicit local-read operation. It
+  // neither contacts Graph nor authorizes extraction, append or commit.
+  const checkpointControls = document.createElement('div');
+  const consentLabel = document.createElement('label');
+  const checkpointConsent = document.createElement('input');
+  checkpointConsent.type = 'checkbox';
+  consentLabel.append(checkpointConsent, document.createTextNode(' I consent to read the local Microsoft 365 checkpoint for this inspection'));
+  const checkpointButton = document.createElement('button');
+  checkpointButton.type = 'button';
+  checkpointButton.textContent = 'Inspect current checkpoint';
+  const checkpointResult = document.createElement('p');
+  checkpointResult.setAttribute('role', 'status');
+  checkpointResult.setAttribute('aria-live', 'polite');
+  checkpointResult.textContent = 'Current checkpoint not inspected.';
+  checkpointControls.append(consentLabel, checkpointButton, checkpointResult);
+  card.insertBefore(checkpointControls, card.querySelector('#owgM365AuditRefresh'));
+  checkpointButton.addEventListener('click', async () => {
+    if (!checkpointConsent.checked) {
+      checkpointResult.textContent = 'Explicit local-read consent required. No checkpoint was inspected.';
+      return;
+    }
+    checkpointButton.disabled = true;
+    checkpointResult.textContent = 'Inspecting local checkpoint…';
+    try {
+      await window.__owgAuthReady;
+      const response = await fetch('/v1/m365/operator-checkpoint?consent_local_read=true', {
+        method: 'POST', cache: 'no-store', credentials: 'same-origin'
+      });
+      if (!response.ok) throw Error('Checkpoint unavailable (' + response.status + '); review local configuration and current grant.');
+      const result = await response.json();
+      checkpointResult.textContent = !result.configured
+        ? 'Microsoft 365 checkpoint scope is not configured on this device.'
+        : result.checkpoint_present
+          ? 'Local checkpoint generation ' + String(result.generation) + '. No Graph read, append or commit performed.'
+          : 'No committed checkpoint exists for the configured scope. No Graph read, append or commit performed.';
+    } catch (error) {
+      checkpointResult.textContent = String(error.message || 'Checkpoint inspection failed') + ' No automatic retry.';
+    } finally {
+      checkpointButton.disabled = false;
+      checkpointConsent.checked = false;
+    }
+  });
+  // Recovery triage is an explicit read-only authenticated OWG inventory check.
+  // It cannot authorize an append retry or checkpoint advancement.
+  const recoveryControls = document.createElement('div');
+  const recoveryReadLabel = document.createElement('label');
+  const recoveryRead = document.createElement('input');
+  recoveryRead.type = 'checkbox';
+  recoveryReadLabel.append(recoveryRead, document.createTextNode(' I consent to read local Microsoft 365 recovery evidence and authenticated OWG inventory'));
+  const recoveryRemovalLabel = document.createElement('label');
+  const recoveryRemoval = document.createElement('input');
+  recoveryRemoval.type = 'checkbox';
+  recoveryRemovalLabel.append(recoveryRemoval, document.createTextNode(' I have reviewed the previous candidate removal markers for recovery'));
+  const recoveryButton = document.createElement('button');
+  recoveryButton.type = 'button';
+  recoveryButton.textContent = 'Inspect uncertain Microsoft 365 append';
+  const recoveryResult = document.createElement('p');
+  recoveryResult.setAttribute('role', 'status');
+  recoveryResult.setAttribute('aria-live', 'polite');
+  recoveryResult.textContent = 'Recovery has not been inspected. Never automatically retry an uncertain append.';
+  recoveryControls.append(recoveryReadLabel, recoveryRemovalLabel, recoveryButton, recoveryResult);
+  card.insertBefore(recoveryControls, card.querySelector('#owgM365AuditRefresh'));
+  recoveryButton.addEventListener('click', async () => {
+    if (!recoveryRead.checked || !recoveryRemoval.checked) {
+      recoveryResult.textContent = 'Both independent approvals are required. No recovery inspection performed.';
+      return;
+    }
+    recoveryButton.disabled = true;
+    recoveryResult.textContent = 'Inspecting recovery evidence…';
+    try {
+      await window.__owgAuthReady;
+      const response = await fetch('/v1/m365/operator-recovery-triage?consent_local_read=true&confirm_removals_reviewed=true', {
+        method: 'POST', cache: 'no-store', credentials: 'same-origin'
+      });
+      if (!response.ok) throw Error('Recovery inspection unavailable (' + response.status + '). Manual reconciliation required.');
+      const result = await response.json();
+      const decisions = {
+        receipt_verified: 'Authenticated receipt verified. Separately review and approve any handoff.',
+        handoff_verified: 'Authenticated handoff verified. Separately approve any further extraction.',
+        manual_reconciliation_required: 'Manual reconciliation required: inspect grant, append history and local receipts.'
+      };
+      recoveryResult.textContent = (decisions[result.status] || 'Unrecognized recovery decision. Manual reconciliation required.') + ' No automatic retry.';
+    } catch (error) {
+      recoveryResult.textContent = String(error.message || 'Recovery failed') + ' No automatic retry.';
+    } finally {
+      recoveryButton.disabled = false;
+      recoveryRead.checked = false;
+      recoveryRemoval.checked = false;
+    }
+  });
+  // Graph preflight requires two fresh approvals; provider identity does not
+  // establish tenant verification or permission to synchronize.
+  const identityControls = document.createElement('div');
+  const identityGraphLabel = document.createElement('label');
+  const identityGraphConsent = document.createElement('input');
+  identityGraphConsent.type = 'checkbox';
+  identityGraphLabel.append(identityGraphConsent, document.createTextNode(' I approve a bounded Microsoft Graph identity and folder read'));
+  const identityReportLabel = document.createElement('label');
+  const identityReportConsent = document.createElement('input');
+  identityReportConsent.type = 'checkbox';
+  identityReportLabel.append(identityReportConsent, document.createTextNode(' I approve exclusive private preflight reports'));
+  const identityButton = document.createElement('button');
+  identityButton.type = 'button';
+  identityButton.textContent = 'Verify Microsoft 365 identity and folder';
+  const identityResult = document.createElement('p');
+  identityResult.setAttribute('role', 'status');
+  identityResult.setAttribute('aria-live', 'polite');
+  identityResult.textContent = 'Identity and folder not checked.';
+  identityControls.append(identityGraphLabel, identityReportLabel, identityButton, identityResult);
+  card.insertBefore(identityControls, card.querySelector('#owgM365AuditRefresh'));
+  identityButton.addEventListener('click', async () => {
+    if (!identityGraphConsent.checked || !identityReportConsent.checked) {
+      identityResult.textContent = 'Separate Graph and private-report approvals required. No request made.';
+      return;
+    }
+    identityButton.disabled = true;
+    identityResult.textContent = 'Checking scoped identity and folder; do not retry if interrupted…';
+    try {
+      await window.__owgAuthReady;
+      const response = await fetch('/v1/m365/operator-identity-folder-preflight?consent_graph_read=true&consent_private_report=true', {
+        method: 'POST', cache: 'no-store', credentials: 'same-origin'
+      });
+      if (!response.ok) throw Error('Preflight refused or partial (' + response.status + '); inspect private reports and grant manually.');
+      const result = await response.json();
+      identityResult.textContent = result.status === 'identity_and_folder_observed'
+        ? 'Granted mailbox identifier and folder observed. Tenant identity is not verified; synchronization still requires separate approval.'
+        : 'Unexpected preflight result; manual reconciliation required.';
+    } catch (error) {
+      identityResult.textContent = String(error.message || 'Preflight outcome uncertain') + ' No automatic retry.';
+    } finally {
+      identityButton.disabled = false;
+      identityGraphConsent.checked = false;
+      identityReportConsent.checked = false;
+    }
+  });
+  // Candidate review is independently consented and read-only. No approval
+  // token, provider credential or private path is accepted from the browser.
+  const reviewControls = document.createElement('div');
+  const reviewConsentLabel = document.createElement('label');
+  const reviewConsent = document.createElement('input');
+  reviewConsent.type = 'checkbox';
+  reviewConsentLabel.append(reviewConsent, document.createTextNode(' I consent to read the local Microsoft 365 candidate for review'));
+  const reviewButton = document.createElement('button');
+  reviewButton.type = 'button';
+  reviewButton.textContent = 'Review local candidate';
+  const reviewResult = document.createElement('p');
+  reviewResult.setAttribute('role', 'status');
+  reviewResult.setAttribute('aria-live', 'polite');
+  reviewResult.textContent = 'Candidate not reviewed.';
+  reviewControls.append(reviewConsentLabel, reviewButton, reviewResult);
+  card.insertBefore(reviewControls, card.querySelector('#owgM365AuditRefresh'));
+  reviewButton.addEventListener('click', async () => {
+    if (!reviewConsent.checked) {
+      reviewResult.textContent = 'Explicit candidate review consent required. Nothing was read.';
+      return;
+    }
+    reviewButton.disabled = true;
+    reviewResult.textContent = 'Checking local candidate…';
+    try {
+      await window.__owgAuthReady;
+      const response = await fetch('/v1/m365/operator-candidate-review?consent_local_read=true', {
+        method: 'POST', cache: 'no-store', credentials: 'same-origin'
+      });
+      if (!response.ok) throw Error('Candidate unavailable (' + response.status + '); inspect grant and local artifacts.');
+      const result = await response.json();
+      reviewResult.textContent = !result.configured
+        ? 'Candidate scope is not configured on this device.'
+        : 'Candidate review ready: ' + String(result.event_snapshots) + ' event snapshots, ' +
+          String(result.removal_markers_for_review) + ' removals for manual review, ' +
+          String(result.pages) + ' pages. Digest: ' + String(result.csv_sha256) +
+          '. No Graph read, append or checkpoint commit performed. Separate approval required.';
+    } catch (error) {
+      reviewResult.textContent = String(error.message || 'Candidate review failed') + ' No automatic retry.';
+    } finally {
+      reviewButton.disabled = false;
+      reviewConsent.checked = false;
+    }
+  });
+  // Checkpoint-bound Graph read: independent explicit approvals, no implicit commit.
+  const extractControls = document.createElement('div');
+  const extractGeneration = document.createElement('input');
+  extractGeneration.type = 'number';
+  extractGeneration.min = '1';
+  extractGeneration.step = '1';
+  extractGeneration.placeholder = 'Committed generation';
+  extractGeneration.setAttribute('aria-label', 'Expected committed Microsoft 365 generation');
+  const extractDigest = document.createElement('input');
+  extractDigest.type = 'text';
+  extractDigest.maxLength = 64;
+  extractDigest.placeholder = 'Committed predecessor CSV SHA-256';
+  extractDigest.setAttribute('aria-label', 'Expected predecessor Microsoft 365 candidate digest');
+  const extractApprovals = [
+    ['consent_local_read', 'I approve reading the committed local predecessor'],
+    ['consent_delta_read', 'I approve a bounded authenticated Microsoft Graph read'],
+    ['consent_local_export', 'I approve exporting private local review artifacts'],
+    ['confirm_previous_removals_reviewed', 'I reviewed the previous removal markers']
+  ].map(([name, description]) => {
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    const label = document.createElement('label');
+    label.append(input, document.createTextNode(' ' + description));
+    extractControls.appendChild(label);
+    return {name, input};
+  });
+  const extractButton = document.createElement('button');
+  extractButton.type = 'button';
+  extractButton.textContent = 'Prepare next Microsoft 365 Graph review';
+  const extractResult = document.createElement('p');
+  extractResult.setAttribute('role', 'status');
+  extractResult.setAttribute('aria-live', 'polite');
+  extractResult.textContent = 'No provider read requested.';
+  extractControls.prepend(extractGeneration, extractDigest);
+  extractControls.append(extractButton, extractResult);
+  card.insertBefore(extractControls, card.querySelector('#owgM365AuditRefresh'));
+  extractButton.addEventListener('click', async () => {
+    const generation = extractGeneration.value.trim();
+    const digest = extractDigest.value.trim();
+    if (!/^[1-9][0-9]*$/.test(generation) || !/^[0-9a-f]{64}$/.test(digest) ||
+        !extractApprovals.every(({input}) => input.checked)) {
+      extractResult.textContent = 'Exact committed predecessor and four fresh approvals required. No Graph request made.';
+      return;
+    }
+    extractButton.disabled = true;
+    extractResult.textContent = 'Preparing bounded Graph review; do not retry if interrupted…';
+    try {
+      await window.__owgAuthReady;
+      const query = new URLSearchParams({
+        expected_generation: generation,
+        expected_previous_candidate_sha256: digest
+      });
+      extractApprovals.forEach(({name}) => query.set(name, 'true'));
+      const response = await fetch('/v1/m365/operator-next-round-prepare?' + query.toString(), {
+        method: 'POST', cache: 'no-store', credentials: 'same-origin'
+      });
+      if (!response.ok) throw Error('Graph preparation refused (' + response.status + '); reconcile manually.');
+      const result = await response.json();
+      extractResult.textContent = 'Review required for generation ' +
+        String(result.proposed_generation) + ': ' + String(result.event_snapshots) +
+        ' snapshots and ' + String(result.removal_markers_for_review) +
+        ' removals. Reviewed CSV digest: ' + String(result.reviewed_csv_sha256) +
+        '. No OWG append or checkpoint commit. Independently review before approving commit.';
+    } catch (error) {
+      extractResult.textContent = String(error.message || 'Graph preparation failed') +
+        ' Outcome may be uncertain. No automatic retry.';
+    } finally {
+      extractButton.disabled = false;
+      extractApprovals.forEach(({input}) => { input.checked = false; });
+    }
+  });
+  // A preflight is a read-only proposal, never an append or commit approval.
+  const preflightControls = document.createElement('div');
+  const preflightDigest = document.createElement('input');
+  preflightDigest.type = 'text';
+  preflightDigest.placeholder = 'Exact reviewed CSV SHA-256';
+  preflightDigest.setAttribute('aria-label', 'Reviewed Microsoft 365 candidate SHA-256');
+  preflightDigest.maxLength = 64;
+  const preflightConsent = document.createElement('input');
+  preflightConsent.type = 'checkbox';
+  const preflightLabel = document.createElement('label');
+  preflightLabel.append(preflightConsent, document.createTextNode(' I consent to local transaction preflight'));
+  const preflightButton = document.createElement('button');
+  preflightButton.type = 'button';
+  preflightButton.textContent = 'Check transaction preflight';
+  const preflightResult = document.createElement('p');
+  preflightResult.setAttribute('role', 'status');
+  preflightResult.setAttribute('aria-live', 'polite');
+  preflightControls.append(preflightDigest, preflightLabel, preflightButton, preflightResult);
+  card.insertBefore(preflightControls, card.querySelector('#owgM365AuditRefresh'));
+  preflightButton.addEventListener('click', async () => {
+    const digest = preflightDigest.value.trim();
+    if (!preflightConsent.checked || !/^[0-9a-f]{64}$/.test(digest)) {
+      preflightResult.textContent = 'Fresh consent and exact reviewed SHA-256 required. Nothing was read.';
+      return;
+    }
+    preflightButton.disabled = true;
+    preflightResult.textContent = 'Checking local transaction preflight…';
+    try {
+      await window.__owgAuthReady;
+      const response = await fetch('/v1/m365/operator-transaction-preflight?consent_local_read=true&reviewed_csv_sha256=' + encodeURIComponent(digest), {
+        method: 'POST', cache: 'no-store', credentials: 'same-origin'
+      });
+      if (!response.ok) throw Error('Preflight refused (' + response.status + '); manually inspect grant, candidate and checkpoint.');
+      const result = await response.json();
+      preflightResult.textContent = !result.configured
+        ? 'Transaction scope not configured.'
+        : 'Read-only proposal for generation ' + String(result.proposed_generation) +
+          ' from predecessor ' + String(result.checkpoint_predecessor_generation) +
+          '. ' + String(result.reviewed_event_snapshots) + ' snapshots; ' +
+          String(result.removal_markers_for_review) + ' removals require manual review. ' +
+          'No Graph request, append or checkpoint commit. Separate approvals required.';
+    } catch (error) {
+      preflightResult.textContent = String(error.message || 'Preflight unavailable') + ' No automatic retry.';
+    } finally {
+      preflightButton.disabled = false;
+      preflightConsent.checked = false;
+    }
+  });
+  // A commit is a separate, potentially irreversible operation. No automatic retry.
+  const commitControls = document.createElement('div');
+  const commitDigest = document.createElement('input');
+  commitDigest.type = 'text';
+  commitDigest.maxLength = 64;
+  commitDigest.placeholder = 'Exact reviewed candidate CSV SHA-256';
+  commitDigest.setAttribute('aria-label', 'Approved Microsoft 365 CSV SHA-256 for commit');
+  const commitApprovals = [
+    ['consent_local_read', 'I approve reading the scoped local candidate and grant'],
+    ['consent_local_append', 'I approve appending the reviewed events to OWG'],
+    ['confirm_candidate_reviewed', 'I manually reviewed this exact candidate digest'],
+    ['confirm_removals_reviewed', 'I manually reviewed all removal markers'],
+    ['confirm_checkpoint_commit', 'I approve durable checkpoint advancement']
+  ].map(([name, description]) => {
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    const label = document.createElement('label');
+    label.append(input, document.createTextNode(' ' + description));
+    commitControls.appendChild(label);
+    return {name, input};
+  });
+  const commitButton = document.createElement('button');
+  commitButton.type = 'button';
+  commitButton.textContent = 'Commit reviewed Microsoft 365 transaction';
+  const commitResult = document.createElement('p');
+  commitResult.setAttribute('role', 'status');
+  commitResult.setAttribute('aria-live', 'polite');
+  commitControls.prepend(commitDigest);
+  commitControls.append(commitButton, commitResult);
+  card.insertBefore(commitControls, card.querySelector('#owgM365AuditRefresh'));
+  commitButton.addEventListener('click', async () => {
+    const digest = commitDigest.value.trim();
+    if (!/^[0-9a-f]{64}$/.test(digest) || !commitApprovals.every(({input}) => input.checked)) {
+      commitResult.textContent = 'Exact digest and five independent approvals required. No write attempted.';
+      return;
+    }
+    // Do not silently repeat an uncertain append even when the HTTP request fails.
+    if (!window.confirm('This may append events and advance a durable checkpoint. Confirm the exact reviewed digest and all removal markers. No automatic retry is possible.')) return;
+    commitButton.disabled = true;
+    commitResult.textContent = 'Submitting one approved transaction; do not retry if the outcome is uncertain…';
+    try {
+      await window.__owgAuthReady;
+      const query = new URLSearchParams({reviewed_csv_sha256: digest});
+      commitApprovals.forEach(({name}) => query.set(name, 'true'));
+      const response = await fetch('/v1/m365/operator-reviewed-commit?' + query.toString(), {
+        method: 'POST', cache: 'no-store', credentials: 'same-origin'
+      });
+      if (!response.ok) throw Error('Outcome not confirmed (' + response.status + '). Inspect audit, membership and checkpoint manually.');
+      const result = await response.json();
+      commitResult.textContent = result.status === 'checkpoint_committed'
+        ? 'Checkpoint committed at generation ' + String(result.generation) + '. Inspect the audit trail.'
+        : 'Unexpected response; manual reconciliation required. Do not retry.';
+    } catch (error) {
+      commitResult.textContent = String(error.message || 'Outcome uncertain') + ' Do not retry automatically.';
+    } finally {
+      commitApprovals.forEach(({input}) => { input.checked = false; });
+      commitButton.disabled = false;
+    }
+  });
   const output = card.querySelector('#owgM365AuditResult');
   card.querySelector('#owgM365AuditRefresh').addEventListener('click', async () => {
     output.textContent = 'Reading private local receipts…';
