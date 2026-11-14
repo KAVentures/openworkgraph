@@ -145,10 +145,18 @@ with TestClient(app) as client:
         'dimensions': ['first_activity'], 'measures': [{'fn': 'count'}]}})
     assert wrong_spec.status_code in (409, 422), wrong_spec.text
     assert 'rows' not in wrong_spec.text
+    # Authorization must not survive a source mutation between grant and download.
+    pre_edit = client.post(base + '/analysis-sharing-authorize', json=request, headers=preview_headers)
+    assert pre_edit.status_code == 200, pre_edit.text
+    pre_edit_ticket = pre_edit.json()['ticket']
     append = client.post(base + '/append?format=csv&case_column=case&activity_column=activity&timestamp_column=time',
         content=b'case,activity,time\nnew-case,B,2024-01-02T00:00:00Z\n',
         headers={**dashboard, 'X-OWG-Local-Storage-Confirmed': 'true'})
     assert append.status_code == 200, append.text
+    changed_after_authorize = client.post(endpoint, json={**request, 'ticket': pre_edit_ticket}, headers=preview_headers)
+    assert changed_after_authorize.status_code in (403, 404, 409), changed_after_authorize.text
+    assert 'rows' not in changed_after_authorize.text and 'private-case' not in changed_after_authorize.text
+    assert client.post(endpoint, json={**request, 'ticket': pre_edit_ticket}, headers=preview_headers).status_code == 403
     stale = authorized_download(request)
     assert stale.status_code == 409, stale.text
     assert 'rows' not in stale.text and 'private-case' not in stale.text
