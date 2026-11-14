@@ -489,7 +489,11 @@ def operator_recovery_triage(
     return JSONResponse({
         "format": "openworkgraph.m365-dashboard-recovery-triage.v1",
         "status": result["status"],
-        "next_action": result["next_action"],
+        "next_action": {
+            "receipt_verified": "operator_may_separately_prepare_handoff",
+            "handoff_verified": "operator_may_separately_authorize_next_extraction",
+            "manual_reconciliation_required": "inspect_local_evidence_and_authenticated_owg_history",
+        }[result["status"]],
         "checkpoint_advanced": False, "owg_writes": 0,
         "provider_requests": 0, "automatic_retry_allowed": False,
     }, headers={"Cache-Control": "no-store"})
