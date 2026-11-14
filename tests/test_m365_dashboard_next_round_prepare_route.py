@@ -118,3 +118,65 @@ def test_dashboard_requires_fresh_graph_approvals():
     assert "extractApprovals.every(({input}) => input.checked)" in page
     assert "extractApprovals.forEach(({input}) => { input.checked = false; })" in page
     assert "No automatic retry." in page
+
+
+def test_recovery_triage_auth_consent_and_minimized_decision(monkeypatch):
+    from server.m365_operator_audit_routes import operator_recovery_triage
+    configure(monkeypatch)
+    with patch("server.m365_operator_audit_routes.dashboard_session_valid", return_value=False):
+        with pytest.raises(HTTPException) as exc:
+            operator_recovery_triage(request(), True, True)
+        assert exc.value.status_code == 403
+    with (patch("server.m365_operator_audit_routes.dashboard_session_valid", return_value=True),
+          patch("server.m365_outlook_recovery_triage.triage") as triage):
+        for approvals in [(False, True), (True, False)]:
+            with pytest.raises(HTTPException) as exc:
+                operator_recovery_triage(request(), *approvals)
+            assert exc.value.status_code == 403
+        triage.assert_not_called()
+        triage.return_value = {
+            "status": "manual_reconciliation_required",
+            "next_action": "inspect_authenticated_owg_append_history_and_provider_grant",
+            "secret": "secret-token",
+        }
+        response = operator_recovery_triage(request(), True, True)
+        result = json.loads(response.body)
+        assert result["status"] == "manual_reconciliation_required"
+        assert result["automatic_retry_allowed"] is False
+        assert result["checkpoint_advanced"] is False
+        assert result["owg_writes"] == 0
+        assert response.headers["cache-control"] == "no-store"
+        assert "secret-token" not in response.body.decode()
+        assert triage.call_args.kwargs["session"] == "valid"
+        assert triage.call_args.kwargs["consent_local_read"] is True
+        assert triage.call_args.kwargs["confirm_removals_reviewed"] is True
+
+
+def test_recovery_triage_missing_config_and_fail_closed(monkeypatch):
+    from server.m365_operator_audit_routes import operator_recovery_triage
+    configure(monkeypatch)
+    monkeypatch.delenv("OWG_M365_RECEIPT_FILE")
+    with (patch("server.m365_operator_audit_routes.dashboard_session_valid", return_value=True),
+          patch("server.m365_outlook_recovery_triage.triage") as triage):
+        with pytest.raises(HTTPException) as exc:
+            operator_recovery_triage(request(), True, True)
+        assert exc.value.status_code == 409
+        triage.assert_not_called()
+    configure(monkeypatch)
+    with (patch("server.m365_operator_audit_routes.dashboard_session_valid", return_value=True),
+          patch("server.m365_outlook_recovery_triage.triage", side_effect=ValueError("secret-token"))):
+        with pytest.raises(HTTPException) as exc:
+            operator_recovery_triage(request(), True, True)
+        assert exc.value.status_code == 409
+        assert "secret-token" not in str(exc.value.detail)
+        assert "Do not retry" in str(exc.value.detail)
+
+
+def test_recovery_dashboard_requires_fresh_independent_approvals():
+    page = (Path(__file__).resolve().parents[1] / "dashboard" / "index.html").read_text(encoding="utf-8")
+    assert "Inspect uncertain Microsoft 365 append" in page
+    assert "operator-recovery-triage?consent_local_read=true&confirm_removals_reviewed=true" in page
+    assert "if (!recoveryRead.checked || !recoveryRemoval.checked)" in page
+    assert "recoveryRead.checked = false;" in page
+    assert "recoveryRemoval.checked = false;" in page
+    assert "No automatic retry." in page
