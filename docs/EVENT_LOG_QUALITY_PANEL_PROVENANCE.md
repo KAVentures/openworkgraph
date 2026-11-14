@@ -68,3 +68,10 @@ can browse older pages. Current diagnostics and content digests still scan the
 retained log and retain the same interpretation as the full quality endpoint.
 All overview components are read while the workspace lock is held, and the
 response is `no-store`. The original full quality endpoint is unchanged.
+
+The whole-log overview is requested when the owner opens “Import reports,
+digests and diagnostics”, not when analysis is first opened. A failed request
+can be retried from that panel. The separate batch-comparison and quarantine
+controls remain available without opening the overview. Reopening an already
+loaded panel does not request the same snapshot again; re-analyse the log for a
+fresh snapshot.

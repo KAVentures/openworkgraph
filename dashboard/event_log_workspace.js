@@ -2764,7 +2764,11 @@
     const details=el('details');details.appendChild(el('summary','Import reports, digests and diagnostics'));details.appendChild(out);
     box.append(el('div','Counts only: no values are shown here, and rejected rows are kept only if you chose to keep them at import. The digests let you check that the same file with the same mapping gives the same stored log.','muted'),details,quarantineBlock());
     const generation=state.generation;
-    getJSON('/v1/event-logs/'+encodeURIComponent(state.logId)+'/quality/overview').then(r=>{
+    let loaded=false,pending=false;
+    const loadQuality=()=>{
+      if(loaded||pending||generation!==state.generation)return;
+      pending=true;out.replaceChildren(el('div','Calculating current quality diagnostics…','muted'));
+      getJSON('/v1/event-logs/'+encodeURIComponent(state.logId)+'/quality/overview').then(r=>{
       if(generation!==state.generation)return;
       const d=r.current.diagnostics,short=h=>h?h.slice(0,12)+'…':'—';
       // This is a live snapshot, not the historical import-time report.
@@ -2808,7 +2812,14 @@
         el('div','Current content digest v1: '+r.current.content_sha256+'. '+
           (r.current.content_sha256_v2?' Current content digest v2 (delimiter-safe): '+r.current.content_sha256_v2+'.':' Content digest v2 not recorded (legacy server).')+
           ' '+r.current.completeness.note,'muted'));
-    }).catch(error=>{if(generation===state.generation)out.replaceChildren(el('div',error.message,'muted'));});
+      loaded=true;
+      }).catch(error=>{
+        if(generation!==state.generation)return;
+        const retry=button('Retry quality diagnostics','secondary');retry.onclick=loadQuality;
+        out.replaceChildren(el('div',error.message,'muted'),retry);
+      }).finally(()=>{pending=false;});
+    };
+    details.addEventListener('toggle',()=>{if(details.open)loadQuality();});
     return box;
   }
 
