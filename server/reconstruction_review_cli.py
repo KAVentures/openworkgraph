@@ -153,6 +153,11 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         # group linkage must invalidate old labels even when pair rows match.
         "observed_group_continuity": response.get("observed_group_continuity"),
         "observed_group_continuity_truncated": response.get("observed_group_continuity_truncated"),
+        # The reviewer also sees the current connected-component navigation
+        # groups. Their membership and truncation are part of the evidence
+        # basis even when direct pair assignments remain unchanged.
+        "observed_case_groups": response.get("observed_case_groups"),
+        "observed_case_groups_truncated": response.get("observed_case_groups_truncated"),
         "event_reviews": rows,
     }
     evidence_digest = hashlib.sha256(json.dumps(
