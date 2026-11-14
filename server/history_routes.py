@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from shared.evidence import rich_evidence_row
 from shared.history_policy import active_ai_history_access, read_policy, set_ai_history_access, update_retention, update_run_memory
@@ -225,8 +225,10 @@ def get_reconstruction_review() -> Response:
 
 
 class ReconstructionReviewSubmission(BaseModel):
-    evidence_sha256: str
-    annotations: list[dict[str, Any]]
+    # Reject malformed/stale evidence IDs and unbounded annotation batches at the
+    # request boundary, before any retained-history database access.
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$", min_length=64, max_length=64)
+    annotations: list[dict[str, Any]] = Field(max_length=5000)
 
 
 @app.post("/v1/history/reconstruction-review/score")
