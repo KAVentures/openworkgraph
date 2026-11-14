@@ -549,6 +549,77 @@ document.addEventListener('DOMContentLoaded', () => {
       reviewConsent.checked = false;
     }
   });
+  // Checkpoint-bound Graph read: independent explicit approvals, no implicit commit.
+  const extractControls = document.createElement('div');
+  const extractGeneration = document.createElement('input');
+  extractGeneration.type = 'number';
+  extractGeneration.min = '1';
+  extractGeneration.step = '1';
+  extractGeneration.placeholder = 'Committed generation';
+  extractGeneration.setAttribute('aria-label', 'Expected committed Microsoft 365 generation');
+  const extractDigest = document.createElement('input');
+  extractDigest.type = 'text';
+  extractDigest.maxLength = 64;
+  extractDigest.placeholder = 'Committed predecessor CSV SHA-256';
+  extractDigest.setAttribute('aria-label', 'Expected predecessor Microsoft 365 candidate digest');
+  const extractApprovals = [
+    ['consent_local_read', 'I approve reading the committed local predecessor'],
+    ['consent_delta_read', 'I approve a bounded authenticated Microsoft Graph read'],
+    ['consent_local_export', 'I approve exporting private local review artifacts'],
+    ['confirm_previous_removals_reviewed', 'I reviewed the previous removal markers']
+  ].map(([name, description]) => {
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    const label = document.createElement('label');
+    label.append(input, document.createTextNode(' ' + description));
+    extractControls.appendChild(label);
+    return {name, input};
+  });
+  const extractButton = document.createElement('button');
+  extractButton.type = 'button';
+  extractButton.textContent = 'Prepare next Microsoft 365 Graph review';
+  const extractResult = document.createElement('p');
+  extractResult.setAttribute('role', 'status');
+  extractResult.setAttribute('aria-live', 'polite');
+  extractResult.textContent = 'No provider read requested.';
+  extractControls.prepend(extractGeneration, extractDigest);
+  extractControls.append(extractButton, extractResult);
+  card.insertBefore(extractControls, card.querySelector('#owgM365AuditRefresh'));
+  extractButton.addEventListener('click', async () => {
+    const generation = extractGeneration.value.trim();
+    const digest = extractDigest.value.trim();
+    if (!/^[1-9][0-9]*$/.test(generation) || !/^[0-9a-f]{64}$/.test(digest) ||
+        !extractApprovals.every(({input}) => input.checked)) {
+      extractResult.textContent = 'Exact committed predecessor and four fresh approvals required. No Graph request made.';
+      return;
+    }
+    extractButton.disabled = true;
+    extractResult.textContent = 'Preparing bounded Graph review; do not retry if interrupted…';
+    try {
+      await window.__owgAuthReady;
+      const query = new URLSearchParams({
+        expected_generation: generation,
+        expected_previous_candidate_sha256: digest
+      });
+      extractApprovals.forEach(({name}) => query.set(name, 'true'));
+      const response = await fetch('/v1/m365/operator-next-round-prepare?' + query.toString(), {
+        method: 'POST', cache: 'no-store', credentials: 'same-origin'
+      });
+      if (!response.ok) throw Error('Graph preparation refused (' + response.status + '); reconcile manually.');
+      const result = await response.json();
+      extractResult.textContent = 'Review required for generation ' +
+        String(result.proposed_generation) + ': ' + String(result.event_snapshots) +
+        ' snapshots and ' + String(result.removal_markers_for_review) +
+        ' removals. Reviewed CSV digest: ' + String(result.reviewed_csv_sha256) +
+        '. No OWG append or checkpoint commit. Independently review before approving commit.';
+    } catch (error) {
+      extractResult.textContent = String(error.message || 'Graph preparation failed') +
+        ' Outcome may be uncertain. No automatic retry.';
+    } finally {
+      extractButton.disabled = false;
+      extractApprovals.forEach(({input}) => { input.checked = false; });
+    }
+  });
   // A preflight is a read-only proposal, never an append or commit approval.
   const preflightControls = document.createElement('div');
   const preflightDigest = document.createElement('input');
