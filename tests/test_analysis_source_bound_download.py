@@ -101,6 +101,26 @@ with TestClient(app) as client:
     assert wrong_session.status_code == 403 and 'rows' not in wrong_session.text
     burned = client.post(endpoint, json={**request, 'ticket': ticket}, headers=preview_headers)
     assert burned.status_code == 403
+    # Revocation after issuance must deny both the old session and any replay,
+    # even if a new dashboard session is created before consumption.
+    revoked_grant = client.post(base + '/analysis-sharing-authorize', json=request, headers=preview_headers)
+    assert revoked_grant.status_code == 200, revoked_grant.text
+    revoked_ticket = revoked_grant.json()['ticket']
+    with local_auth._LOCK:
+        local_auth._DASHBOARD_SESSIONS.pop(dashboard['Authorization'][len('OWG-Session '):], None)
+    revoked = client.post(endpoint, json={**request, 'ticket': revoked_ticket}, headers=preview_headers)
+    assert revoked.status_code == 403 and 'rows' not in revoked.text
+    # Restore only the test's session, to ensure the revoked grant was burned.
+    with local_auth._LOCK:
+        local_auth._DASHBOARD_SESSIONS[dashboard['Authorization'][len('OWG-Session '):]] = None
+    assert client.post(endpoint, json={**request, 'ticket': revoked_ticket}, headers=preview_headers).status_code == 403
+    # The old session must not mint a grant during the revocation interval.
+    with local_auth._LOCK:
+        local_auth._DASHBOARD_SESSIONS.pop(dashboard['Authorization'][len('OWG-Session '):], None)
+    denied_issue = client.post(base + '/analysis-sharing-authorize', json=request, headers=preview_headers)
+    assert denied_issue.status_code == 403 and 'ticket' not in denied_issue.text
+    with local_auth._LOCK:
+        local_auth._DASHBOARD_SESSIONS[dashboard['Authorization'][len('OWG-Session '):]] = None
     valid_grant = client.post(base + '/analysis-sharing-authorize', json=request, headers=preview_headers)
     assert valid_grant.status_code == 200
     token = valid_grant.json()['ticket']
