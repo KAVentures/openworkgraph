@@ -130,3 +130,29 @@ def test_revoked_next_round_stops_without_commit_or_automatic_retry(monkeypatch)
         assert "Do not retry" in str(error.value.detail)
         prepare.assert_called_once()
         commit.assert_not_called()
+
+
+@pytest.mark.parametrize("bad_result", [
+    {"status": "operator_review_required", "reviewed_csv_sha256": SECOND,
+     "proposed_generation": 1, "event_snapshots": 2, "removal_markers_for_review": 0},
+    {"status": "operator_review_required", "reviewed_csv_sha256": "not-a-digest",
+     "proposed_generation": 2, "event_snapshots": 2, "removal_markers_for_review": 0},
+    {"status": "operator_review_required", "reviewed_csv_sha256": SECOND,
+     "proposed_generation": 2, "event_snapshots": True, "removal_markers_for_review": 0},
+    {"status": "operator_review_required", "reviewed_csv_sha256": SECOND,
+     "proposed_generation": 2, "event_snapshots": 2, "removal_markers_for_review": -1},
+    None,
+])
+def test_next_round_rejects_malformed_or_stale_adapter_output(monkeypatch, bad_result):
+    configure(monkeypatch)
+    with (
+        patch("server.m365_operator_audit_routes.dashboard_session_valid", return_value=True),
+        patch("server.m365_next_round_review.prepare", return_value=bad_result) as prepare,
+        patch("server.m365_outlook_reviewed_transaction.execute") as commit,
+    ):
+        with pytest.raises(HTTPException) as error:
+            operator_next_round_prepare(request(), 1, FIRST, **EXTRACT_APPROVALS)
+        assert error.value.status_code == 409
+        assert "Do not retry" in str(error.value.detail)
+        prepare.assert_called_once()
+        commit.assert_not_called()
