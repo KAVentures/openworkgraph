@@ -131,8 +131,8 @@ def test_review_route_preserves_competing_event_provenance_without_confirming_ca
     assert response.headers["cache-control"] == "no-store"
 
 
-def test_review_isolates_interleaved_cases_with_reused_event_ids(monkeypatch):
-    """An earlier session's event ID must not contaminate a current case."""
+def test_review_isolates_interleaved_cases_with_distinct_window_event_ids(monkeypatch):
+    """Distinct earlier event IDs must not contaminate current case evidence."""
     monkeypatch.setattr(history_routes, "active_ai_history_access",
                         lambda: {"mode": "all_saved", "granted_at": "fixed"})
     monkeypatch.setattr(history_policy, "history_generation", lambda: 7)
@@ -159,7 +159,7 @@ def test_review_isolates_interleaved_cases_with_reused_event_ids(monkeypatch):
                             "saved_history_access": "all_saved",
                             "observed_pair_event_assignments": [
                                 pair("A", ["reused", "interleave"], []),
-                                pair("B", ["interleave"], ["reused"]),
+                                pair("B", ["interleave"], ["earlier-B"]),
                             ],
                             "coverage": {"scan_truncated": False},
                         })
@@ -167,7 +167,7 @@ def test_review_isolates_interleaved_cases_with_reused_event_ids(monkeypatch):
     rows = body["review"]["event_reviews"]
     assert len(rows) == 3
     by_window = {(row["window"], row["event_id"]): row for row in rows}
-    earlier = by_window[("earlier:2026-11-09T10:00:00+00:00", "reused")]
+    earlier = by_window[("earlier:2026-11-09T10:00:00+00:00", "earlier-B")]
     current = by_window[("current", "reused")]
     interleaved = by_window[("current", "interleave")]
     assert earlier["candidate_resource_pairs"] != current["candidate_resource_pairs"]
