@@ -77,3 +77,20 @@ def test_live_scoring_route_rejects_stale_evidence(monkeypatch):
     with pytest.raises(HTTPException) as error:
         history_routes.score_reconstruction_review_submission(_request())
     assert error.value.status_code == 422
+
+
+def test_dashboard_review_workbench_uses_live_authenticated_routes_without_persistence():
+    """Operator entrypoint must stay tied to live evidence and explicit labels."""
+    from server.main import ROOT
+    source = (ROOT / "dashboard" / "history_retention.js").read_text(encoding="utf-8")
+    assert "reconstructionWorkbench" in source
+    assert "reconstructionChoices.some(c=>!c.done.checked)" in source
+    assert "'/v1/history/reconstruction-review'" in source
+    assert "'/v1/history/reconstruction-review/score'" in source
+    assert "evidence_sha256:reconstructionEvidence.evidence_sha256" in source
+    assert "true_resource_pairs:" in source
+    assert "clearReconstructionEvidence('Review refused:" in source
+    assert "held_out_verified:result.held_out_verified" in source
+    assert "cross_case_contamination_measured:result.cross_case_contamination_measured" in source
+    assert "localStorage.setItem('reconstruction" not in source
+    assert "sessionStorage.setItem('reconstruction" not in source
