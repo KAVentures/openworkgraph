@@ -131,3 +131,49 @@ def test_dashboard_rejects_scores_from_superseded_reviewer_labels():
     )
     assert "Labels changed while scoring. Submit the current review again." in source
     assert "root.querySelector('#reconstructionMetrics').textContent='';" in source
+
+
+def test_live_review_read_denies_missing_grant_before_database(monkeypatch):
+    """Read endpoint must reject absent consent before any event access."""
+    _setup(monkeypatch, grant={"mode": "off"})
+    monkeypatch.setattr(history_routes, "connect", lambda: pytest.fail("database read before grant"))
+    with pytest.raises(HTTPException) as error:
+        history_routes.get_reconstruction_review()
+    assert error.value.status_code == 403
+
+
+def test_live_review_read_rechecks_revocation_after_build(monkeypatch):
+    """Revoking the lease while a queue is built must suppress its entire payload."""
+    state = _setup(monkeypatch)
+    from server import work_resumption, reconstruction_review_cli
+
+    def candidates(connection, *, lease):
+        assert lease == {"mode": "all_saved"}
+        state["generation"] += 1
+        return {"coverage": {}, "identity_timelines": [], "notice": None}
+
+    monkeypatch.setattr(work_resumption, "resumption_candidates", candidates)
+    monkeypatch.setattr(reconstruction_review_cli, "build_review_queue", lambda result: {"event_reviews": []})
+    with pytest.raises(HTTPException) as error:
+        history_routes.get_reconstruction_review()
+    assert error.value.status_code == 403
+
+
+def test_live_review_read_is_uncacheable_and_non_authoritative(monkeypatch):
+    """A valid read is explicitly provisional and must never be cached."""
+    _setup(monkeypatch)
+    from server import work_resumption, reconstruction_review_cli
+
+    monkeypatch.setattr(work_resumption, "resumption_candidates", lambda connection, *, lease: {
+        "coverage": {"complete": True}, "identity_timelines": [], "notice": None
+    })
+    monkeypatch.setattr(reconstruction_review_cli, "build_review_queue", lambda result: {
+        "event_reviews": [], "evidence_sha256": "b" * 64
+    })
+    response = history_routes.get_reconstruction_review()
+    assert response.headers["cache-control"] == "no-store"
+    import json
+    payload = json.loads(response.body)
+    assert payload["derived"] is True
+    assert payload["authoritative"] is False
+    assert payload["review"]["evidence_sha256"] == "b" * 64
