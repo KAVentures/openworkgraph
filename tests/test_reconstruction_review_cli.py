@@ -92,6 +92,33 @@ class AnnotationCliTests(unittest.TestCase):
                     self.assertEqual(main(), 2)
             self.assertIn("must be distinct", errors.getvalue())
 
+class TruncatedNavigationEvidenceTests(unittest.TestCase):
+    def test_group_or_continuity_truncation_blocks_scoring(self):
+        # Pair rows may be complete even when case navigation is not.
+        # A reviewer must not score that partial evidence as a complete cohort.
+        for flag in ("observed_case_groups_truncated",
+                     "observed_group_continuity_truncated"):
+            with self.subTest(flag=flag):
+                source = payload([pair("A", "F", ["e1"])])
+                source[flag] = True
+                queue = build_review_queue(source)
+                self.assertTrue(queue["coverage_incomplete"])
+                row = queue["event_reviews"][0]
+                labels = [{"window": row["window"], "event_id": row["event_id"],
+                           "true_resource_pairs": row["candidate_resource_pairs"]}]
+                with self.assertRaisesRegex(ValueError, "incomplete source evidence"):
+                    score_review_annotations(source, labels)
+
+    def test_complete_navigation_remains_scoreable(self):
+        source = payload([pair("A", "F", ["e1"])])
+        source["observed_case_groups_truncated"] = False
+        source["observed_group_continuity_truncated"] = False
+        row = build_review_queue(source)["event_reviews"][0]
+        labels = [{"window": row["window"], "event_id": row["event_id"],
+                   "true_resource_pairs": row["candidate_resource_pairs"]}]
+        self.assertEqual(score_review_annotations(source, labels)["true_positive_pairs"], 1)
+
+
 class EvidenceBoundAnnotationTests(unittest.TestCase):
     def test_bound_annotations_accept_exact_export_and_reject_stale_export(self):
         from server.reconstruction_review_cli import score_bound_review_annotations
