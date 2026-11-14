@@ -222,3 +222,45 @@ def get_reconstruction_review() -> Response:
         media_type="application/json",
         headers={"Cache-Control": "no-store"},
     )
+
+
+class ReconstructionReviewSubmission(BaseModel):
+    evidence_sha256: str
+    annotations: list[dict[str, Any]]
+
+
+@app.post("/v1/history/reconstruction-review/score")
+def score_reconstruction_review_submission(request: ReconstructionReviewSubmission) -> Response:
+    """Score explicit labels against fresh local evidence; never persist or confirm cases.
+
+    The trusted history lease comes exclusively from local policy, not the
+    caller. Secure-app middleware authenticates this route independently.
+    """
+    from shared.history_policy import history_generation
+    from .work_resumption import score_live_reconstruction_review
+
+    grant = active_ai_history_access()
+    if grant.get("mode") != "all_saved":
+        raise HTTPException(status_code=403, detail="Explicit all-saved history access required")
+    generation = history_generation()
+
+    def still_authorized() -> bool:
+        return active_ai_history_access() == grant and history_generation() == generation
+
+    try:
+        with connect() as connection:
+            result = score_live_reconstruction_review(
+                connection,
+                request.model_dump(),
+                lease=grant,
+                authorize_review=still_authorized,
+            )
+        payload = json.dumps(result, allow_nan=False)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="History access changed during review") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not still_authorized():
+        raise HTTPException(status_code=403, detail="History access changed during review")
+    return Response(content=payload, media_type="application/json",
+                    headers={"Cache-Control": "no-store"})
