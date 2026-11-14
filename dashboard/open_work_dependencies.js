@@ -36,6 +36,116 @@
     const list = document.createElement('ul');
     details.appendChild(list);
     card.append(heading, note, form, status, details);
+
+    // A deliberately separate, opt-in operator flow. Listing local owner
+    // declarations is not permission to scan the provider or execute work.
+    const dossierForm = document.createElement('form');
+    const dossierLabel = document.createElement('label');
+    dossierLabel.textContent = 'Reviewed case to inspect: ';
+    const dossierRef = document.createElement('input');
+    dossierRef.type = 'text';
+    dossierRef.maxLength = 38;
+    dossierRef.autocomplete = 'off';
+    dossierLabel.appendChild(dossierRef);
+    const scanLabel = document.createElement('label');
+    const scanConsent = document.createElement('input');
+    scanConsent.type = 'checkbox';
+    scanLabel.append(scanConsent, document.createTextNode(' I authorize a bounded live Stripe read for this case'));
+    const dossierButton = document.createElement('button');
+    dossierButton.type = 'submit';
+    dossierButton.textContent = 'Review case and verify source';
+    const dossierStatus = document.createElement('p');
+    dossierStatus.setAttribute('role', 'status');
+    dossierStatus.setAttribute('aria-live', 'polite');
+    const dossierResults = document.createElement('ul');
+    dossierForm.append(dossierLabel, scanLabel, dossierButton);
+    card.append(dossierForm, dossierStatus, dossierResults);
+    let dossierRequest = null;
+    dossierForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (dossierRequest) dossierRequest.abort();
+      const ref = dossierRef.value.trim();
+      dossierResults.replaceChildren();
+      if (!/^owg:w:[0-9a-f]{32}$/.test(ref) || !scanConsent.checked) {
+        dossierRequest = null;
+        dossierButton.disabled = false;
+        dossierStatus.textContent = 'Select a valid opaque case and explicitly approve the source read.';
+        return;
+      }
+      const controller = new AbortController();
+      dossierRequest = controller;
+      dossierButton.disabled = true;
+      dossierStatus.textContent = 'Checking current declaration and authorization…';
+      const current = () => dossierRequest === controller && !controller.signal.aborted;
+      const show = value => {
+        const item = document.createElement('li');
+        item.textContent = value;
+        dossierResults.appendChild(item);
+      };
+      try {
+        if (window.__owgAuthReady) await window.__owgAuthReady;
+        if (!current()) return;
+        const opts = {credentials:'same-origin', cache:'no-store',
+          headers:{Accept:'application/json'}, signal:controller.signal};
+        const declarationsResponse = await fetch('/v1/open-work/declarations', opts);
+        if (!current()) return;
+        if (!declarationsResponse.ok) throw new Error('declaration read denied');
+        const declarations = await declarationsResponse.json();
+        if (!current()) return;
+        if (declarations.format !== 'openworkgraph.local-case-declarations.v1' ||
+            declarations.available !== true || !Array.isArray(declarations.items) ||
+            declarations.items.length > 10000) throw new Error('invalid declaration inventory');
+        const matches = declarations.items.filter(item => item && item.work_item_ref === ref);
+        if (matches.length !== 1) throw new Error('case not currently reviewed');
+        const selected = matches[0];
+        if (!Number.isSafeInteger(selected.revision) || selected.revision < 1 ||
+            typeof selected.edit_token !== 'string' ||
+            !/^[0-9a-f]{32}$/.test(selected.edit_token)) {
+          throw new Error('invalid declaration revision');
+        }
+        if (!scanConsent.checked || !current()) return;
+        dossierStatus.textContent = 'Reading explicitly approved source evidence…';
+        const scanned = await fetch('/v1/open-work/declarations/dossier', {
+          ...opts, method:'POST',
+          headers:{...opts.headers, 'Content-Type':'application/json'},
+          body:JSON.stringify({work_item_ref:ref, expected_revision:selected.revision,
+            expected_edit_token:selected.edit_token, confirm_source_scan:true, max_pages:1})
+        });
+        if (!current()) return;
+        if (!scanned.ok) throw new Error('source review unavailable');
+        const dossier = await scanned.json();
+        if (!current()) return;
+        const source = dossier && dossier.source_reported_status;
+        if (dossier.format !== 'openworkgraph.local-reviewed-case-dossier.v1' ||
+            dossier.work_item_ref !== ref || !source ||
+            !['source_reported','unknown'].includes(source.availability) ||
+            dossier.agent_execution_authorized !== false ||
+            dossier.customer_outcome_verified !== false ||
+            dossier.expected_outcome_verified !== false ||
+            dossier.source_write_performed !== false ||
+            !Number.isSafeInteger(dossier.declared_prerequisite_count) ||
+            dossier.declared_prerequisite_count < 0) {
+          throw new Error('unexpected dossier response');
+        }
+        dossierStatus.textContent = 'Case reviewed. Provider status is not business success.';
+        show('Owner goal: ' + String(dossier.owner_declaration?.goal_code || 'unknown').slice(0,80));
+        show('Expected outcome: ' + String(dossier.owner_declaration?.expected_outcome_code || 'unknown').slice(0,80));
+        show('Reviewed prerequisites: ' + dossier.declared_prerequisite_count);
+        show('Provider status: ' + (source.availability === 'source_reported' && source.state === 'open'
+          ? 'open (source-reported)' : 'unknown'));
+        show('Customer outcome: unknown; no agent action authorized.');
+      } catch (_) {
+        if (current()) dossierStatus.textContent =
+          'Review unavailable, stale or revoked. No source or outcome conclusion can be drawn.';
+      } finally {
+        if (dossierRequest === controller) {
+          dossierRequest = null;
+          dossierButton.disabled = false;
+          scanConsent.checked = false;
+        }
+      }
+    });
+
     host.appendChild(card);
     let requestController = null;
     function line(value) {
