@@ -330,6 +330,12 @@ def event_log_quality(request: Request, log_id: str):
     return _respond(quality.quality, log_id)
 
 
+@router.get("/v1/event-logs/{log_id}/quality/overview")
+def event_log_quality_overview(request: Request, log_id: str):
+    _require_dashboard(request)
+    return _respond(quality.overview, log_id)
+
+
 @router.get("/v1/event-logs/{log_id}/quality/batch-history")
 def event_log_quality_batch_history(request: Request, log_id: str):
     _require_dashboard(request)

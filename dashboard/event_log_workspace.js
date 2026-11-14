@@ -2764,7 +2764,7 @@
     const details=el('details');details.appendChild(el('summary','Import reports, digests and diagnostics'));details.appendChild(out);
     box.append(el('div','Counts only: no values are shown here, and rejected rows are kept only if you chose to keep them at import. The digests let you check that the same file with the same mapping gives the same stored log.','muted'),details,quarantineBlock());
     const generation=state.generation;
-    getJSON('/v1/event-logs/'+encodeURIComponent(state.logId)+'/quality').then(r=>{
+    getJSON('/v1/event-logs/'+encodeURIComponent(state.logId)+'/quality/overview').then(r=>{
       if(generation!==state.generation)return;
       const d=r.current.diagnostics,short=h=>h?h.slice(0,12)+'…':'—';
       // This is a live snapshot, not the historical import-time report.
@@ -2785,13 +2785,14 @@
         Number(p.rows.rejected).toLocaleString()+(p.rows.rejected?' ('+reasonText(p.rows.rejected_by_reason)+')':''),
         p.rows.duplicates_skipped_on_append===undefined?'—':Number(p.rows.duplicates_skipped_on_append).toLocaleString(),
         el('code',short(p.transform.transform_sha256)),el('code',short(p.content_sha256)),el('code',short(p.content_sha256_v2))]);
-      const mapping=(r.reports[0]&&r.reports[0].transform.mapping)||{};
+      const mapping=(r.first_report&&r.first_report.transform.mapping)||{};
       const mapRows=mapping.case_column!==undefined?[['Case column',mapping.case_column],['Activity column',mapping.activity_column],['Timestamp column',mapping.timestamp_column],['Resource column',mapping.resource_column||'(none)'],['Extra columns kept',(mapping.attribute_columns||[]).join(', ')||'(none)'],['Mapping version',mapping.mapping_version]]:[['Standard',mapping.standard||'—'],['Mapping version',mapping.mapping_version||'—']];
       if(mapping.source_identity)for(const [key,value] of Object.entries(mapping.source_identity))if(value)mapRows.push(['Source identity: '+key,value]);
       out.replaceChildren(
         ...(r.log.source_identity?[el('p','Source-ID deduplication compares declared namespace and supplied event ID. The content-duplicate diagnostic below compares payloads; distinct source IDs with identical payloads remain separate events. Neither establishes verified provider identity or complete history.')]:[]),
+        el('div','Showing '+Number(r.window.batch_count).toLocaleString()+' of '+Number(r.window.total_batches).toLocaleString()+' batches. Use Compare batches below to browse older history.','muted'),
         table(['Batch','Format','Accepted','Rejected','Duplicates skipped','Transform','Content v1','Content v2'],reports),
-        ...(r.batches_without_report.length?[el('div','No report was stored for '+r.batches_without_report.map(b=>b?'append '+b:'the import').join(', ')+' (imported before reports existed, or the report could not be written).','muted')]:[]),
+        ...(r.batches_without_report.length?[el('div','No report was stored on this page for '+r.batches_without_report.map(b=>b?'append '+b:'the import').join(', ')+' (imported before reports existed, or the report could not be written).','muted')]:[]),
         table(['Mapping',''],mapRows),
         table(['Diagnostic (whole log)','Events'],[
           ['Duplicate event payloads (including attributes and qualified links; IDs excluded)',Number(d.duplicate_events).toLocaleString()],

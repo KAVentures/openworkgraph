@@ -57,3 +57,14 @@ stable snapshot, and can change between requests. The database must still
 count and order batch identifiers; the bound applies to returned history and
 application memory, not constant-time database work. The original full-history
 and full-quality endpoints remain available.
+
+The initial Data quality overview uses the owner-only
+`GET /v1/event-logs/{log_id}/quality/overview` response. It includes the most
+recent 100 logical batches plus the earliest stored report separately, so the
+earliest recorded mapping remains visible even when its batch falls outside that window;
+this is the import mapping when its report exists.
+Missing-report notices refer to the displayed page; the batch comparison panel
+can browse older pages. Current diagnostics and content digests still scan the
+retained log and retain the same interpretation as the full quality endpoint.
+All overview components are read while the workspace lock is held, and the
+response is `no-store`. The original full quality endpoint is unchanged.

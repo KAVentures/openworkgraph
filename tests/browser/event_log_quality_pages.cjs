@@ -26,7 +26,11 @@ const path=require('node:path');
   const logId=await page.locator('#owgEventLogPick').inputValue();
   const owner={'Authorization':'OWG-Session '+(await fs.readFile(path.join(scratch,'session.txt'),'utf8')).trim()};
   const seeded=await page.request.post(base+'/test-seed-quality-batches/'+encodeURIComponent(logId),{headers:owner});assert.equal(seeded.status(),200,await seeded.text());
-  await page.locator('#owgEventLogAnalyze').click();
+  const [overview]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/quality/overview')),page.locator('#owgEventLogAnalyze').click()]);
+  const initial=await overview.json();assert.equal(initial.reports.length,100);assert.equal(initial.first_report.batch,0);
+  await page.locator('#owgQuality summary').click();
+  await page.locator('#owgQualityResults').getByText('Showing 100 of 205 batches.',{exact:false}).waitFor();
+  await page.locator('#owgQualityResults').getByText('Case column',{exact:true}).waitFor();
   await page.locator('#owgQualityTrendsRun').waitFor();
   const [response]=await Promise.all([
     page.waitForResponse(r=>r.url().endsWith('/quality/batch-history/page')),
