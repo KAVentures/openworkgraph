@@ -258,7 +258,7 @@ def test_dashboard_invalidates_review_after_both_retention_policy_paths():
     assert source.count(invalidation) == 2
     for start_marker, end_marker in (
         ("async function quickPolicy(mode,days){", "function renderPolicy(){"),
-        ("host.querySelector('#saveRetention').onclick", "function renderAccess(){"),
+        ("host.querySelector('#saveHistoryPolicy').onclick", "function renderAccess(){"),
     ):
         start = source.index(start_marker)
         end = source.index(end_marker, start)
