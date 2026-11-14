@@ -228,7 +228,7 @@ class ReconstructionReviewSubmission(BaseModel):
     # Reject malformed/stale evidence IDs and unbounded annotation batches at the
     # request boundary, before any retained-history database access.
     evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$", min_length=64, max_length=64)
-    annotations: list[dict[str, Any]] = Field(max_length=5000)
+    annotations: list[dict[str, Any]] = Field(max_length=192)
 
 
 @app.post("/v1/history/reconstruction-review/score")
