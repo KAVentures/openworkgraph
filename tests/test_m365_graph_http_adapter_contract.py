@@ -50,7 +50,10 @@ def test_graph_http_adapter_refuses_untrusted_provider_response(tmp_path, kind, 
     data = ({"id": "user", "userPrincipalName": "owner@example.org"} if kind == "identity"
             else {"id": "folder", "displayName": "Inbox", "childFolderCount": 0, "totalItemCount": 2})
     if failure == "mismatch":
-        data["id"] = "other"
+        if kind == "identity":
+            data["userPrincipalName"] = "other@example.org"
+        else:
+            data["id"] = "other"
     raw = json.dumps(data).encode()
     if failure == "oversized":
         raw = b"x" * (module.MAX_BYTES + 1)
