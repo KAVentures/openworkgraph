@@ -40,6 +40,8 @@ const path=require('node:path');
   await page.locator('#owgQualityResults').getByText('Case column',{exact:true}).waitFor();
   await page.locator('#owgQuality summary').click();await page.locator('#owgQuality summary').click();
   assert.equal(overviewRequests,2,'reopening a loaded panel reuses the snapshot');
+  await Promise.all([page.waitForResponse(r=>r.url().endsWith('/quality/overview')&&r.status()===200),page.getByRole('button',{name:'Refresh quality diagnostics'}).click()]);
+  assert.equal(overviewRequests,3,'refresh explicitly reads a current snapshot');
   await page.locator('#owgQualityTrendsRun').waitFor();
   const [response]=await Promise.all([
     page.waitForResponse(r=>r.url().endsWith('/quality/batch-history/page')),

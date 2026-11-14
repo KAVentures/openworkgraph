@@ -2812,6 +2812,8 @@
         el('div','Current content digest v1: '+r.current.content_sha256+'. '+
           (r.current.content_sha256_v2?' Current content digest v2 (delimiter-safe): '+r.current.content_sha256_v2+'.':' Content digest v2 not recorded (legacy server).')+
           ' '+r.current.completeness.note,'muted'));
+      const refresh=button('Refresh quality diagnostics','secondary');
+      refresh.onclick=()=>{loaded=false;loadQuality();};out.appendChild(refresh);
       loaded=true;
       }).catch(error=>{
         if(generation!==state.generation)return;

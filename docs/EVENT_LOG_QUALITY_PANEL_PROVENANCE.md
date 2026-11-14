@@ -73,5 +73,5 @@ The whole-log overview is requested when the owner opens “Import reports,
 digests and diagnostics”, not when analysis is first opened. A failed request
 can be retried from that panel. The separate batch-comparison and quarantine
 controls remain available without opening the overview. Reopening an already
-loaded panel does not request the same snapshot again; re-analyse the log for a
-fresh snapshot.
+loaded panel does not request the same snapshot again. Use “Refresh quality
+diagnostics” to read a fresh snapshot, or re-analyse the log.
