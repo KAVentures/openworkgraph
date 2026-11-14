@@ -101,3 +101,65 @@ def test_dashboard_requires_fresh_preflight_consent():
     assert "preflightConsent.checked = false" in page
     assert "operator-transaction-preflight?consent_local_read=true" in page
     assert "Separate approvals required." in page
+
+# Explicit reviewed commit endpoint regression contracts.
+from server.m365_operator_audit_routes import operator_reviewed_commit
+from server.m365_outlook_owg_receipt import UncertainReceipt
+
+_COMMIT_APPROVALS = dict(
+    consent_local_read=True, consent_local_append=True,
+    confirm_candidate_reviewed=True, confirm_removals_reviewed=True,
+    confirm_checkpoint_commit=True,
+)
+_COMMIT_CONFIG = {
+    "OWG_M365_CSV_PATH": "/private/review.csv",
+    "OWG_M365_RECEIPT_FILE": "/private/receipt",
+    "OWG_M365_JOURNAL_DIR": "/private/journal",
+    "OWG_M365_HANDOFF_DIR": "/private/handoff",
+    "OWG_M365_SUCCESSOR_LABEL": "next",
+}
+
+def _commit_config(monkeypatch):
+    _configure(monkeypatch)
+    for name, value in _COMMIT_CONFIG.items():
+        monkeypatch.setenv(name, value)
+
+def test_commit_requires_auth_and_all_independent_approvals():
+    with patch("server.m365_operator_audit_routes.dashboard_session_valid", return_value=False):
+        with pytest.raises(HTTPException) as exc:
+            operator_reviewed_commit(_request(), DIGEST, **_COMMIT_APPROVALS)
+        assert exc.value.status_code == 403
+    with (patch("server.m365_operator_audit_routes.dashboard_session_valid", return_value=True),
+          patch("server.m365_outlook_reviewed_transaction.execute") as execute):
+        for name in _COMMIT_APPROVALS:
+            with pytest.raises(HTTPException) as exc:
+                operator_reviewed_commit(_request(), DIGEST,
+                                         **{**_COMMIT_APPROVALS, name: False})
+            assert exc.value.status_code == 403
+        with pytest.raises(HTTPException) as exc:
+            operator_reviewed_commit(_request(), "not-a-digest", **_COMMIT_APPROVALS)
+        assert exc.value.status_code == 422
+        execute.assert_not_called()
+
+def test_commit_scoped_success_and_uncertain_write_never_retried(monkeypatch):
+    _commit_config(monkeypatch)
+    with (patch("server.m365_operator_audit_routes.dashboard_session_valid", return_value=True),
+          patch("server.m365_outlook_reviewed_transaction.execute",
+                return_value={"status": "checkpoint_committed", "generation": 3}) as execute):
+        response = operator_reviewed_commit(_request(), DIGEST, **_COMMIT_APPROVALS)
+    body = json.loads(response.body)
+    assert body["generation"] == 3 and body["automatic_retry_allowed"] is False
+    assert response.headers["cache-control"] == "no-store"
+    assert "private-tenant" not in response.body.decode()
+    assert execute.call_args.kwargs["session"] == "valid"
+    assert execute.call_args.kwargs["expected_review_csv_sha256"] == DIGEST
+    assert execute.call_args.kwargs["log_id"] == execute.call_args.kwargs["confirm_log_id"]
+    with (patch("server.m365_operator_audit_routes.dashboard_session_valid", return_value=True),
+          patch("server.m365_outlook_reviewed_transaction.execute",
+                side_effect=UncertainReceipt("secret uncertain append")) as execute):
+        with pytest.raises(HTTPException) as exc:
+            operator_reviewed_commit(_request(), DIGEST, **_COMMIT_APPROVALS)
+    assert exc.value.status_code == 409
+    assert "secret" not in str(exc.value.detail)
+    assert "Do not retry" in str(exc.value.detail)
+    execute.assert_called_once()
