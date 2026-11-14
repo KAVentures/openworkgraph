@@ -597,6 +597,65 @@ document.addEventListener('DOMContentLoaded', () => {
       preflightConsent.checked = false;
     }
   });
+  // A commit is a separate, potentially irreversible operation. No automatic retry.
+  const commitControls = document.createElement('div');
+  const commitDigest = document.createElement('input');
+  commitDigest.type = 'text';
+  commitDigest.maxLength = 64;
+  commitDigest.placeholder = 'Exact reviewed candidate CSV SHA-256';
+  commitDigest.setAttribute('aria-label', 'Approved Microsoft 365 CSV SHA-256 for commit');
+  const commitApprovals = [
+    ['consent_local_read', 'I approve reading the scoped local candidate and grant'],
+    ['consent_local_append', 'I approve appending the reviewed events to OWG'],
+    ['confirm_candidate_reviewed', 'I manually reviewed this exact candidate digest'],
+    ['confirm_removals_reviewed', 'I manually reviewed all removal markers'],
+    ['confirm_checkpoint_commit', 'I approve durable checkpoint advancement']
+  ].map(([name, description]) => {
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    const label = document.createElement('label');
+    label.append(input, document.createTextNode(' ' + description));
+    commitControls.appendChild(label);
+    return {name, input};
+  });
+  const commitButton = document.createElement('button');
+  commitButton.type = 'button';
+  commitButton.textContent = 'Commit reviewed Microsoft 365 transaction';
+  const commitResult = document.createElement('p');
+  commitResult.setAttribute('role', 'status');
+  commitResult.setAttribute('aria-live', 'polite');
+  commitControls.prepend(commitDigest);
+  commitControls.append(commitButton, commitResult);
+  card.insertBefore(commitControls, card.querySelector('#owgM365AuditRefresh'));
+  commitButton.addEventListener('click', async () => {
+    const digest = commitDigest.value.trim();
+    if (!/^[0-9a-f]{64}$/.test(digest) || !commitApprovals.every(({input}) => input.checked)) {
+      commitResult.textContent = 'Exact digest and five independent approvals required. No write attempted.';
+      return;
+    }
+    // Do not silently repeat an uncertain append even when the HTTP request fails.
+    if (!window.confirm('This may append events and advance a durable checkpoint. Confirm the exact reviewed digest and all removal markers. No automatic retry is possible.')) return;
+    commitButton.disabled = true;
+    commitResult.textContent = 'Submitting one approved transaction; do not retry if the outcome is uncertain…';
+    try {
+      await window.__owgAuthReady;
+      const query = new URLSearchParams({reviewed_csv_sha256: digest});
+      commitApprovals.forEach(({name}) => query.set(name, 'true'));
+      const response = await fetch('/v1/m365/operator-reviewed-commit?' + query.toString(), {
+        method: 'POST', cache: 'no-store', credentials: 'same-origin'
+      });
+      if (!response.ok) throw Error('Outcome not confirmed (' + response.status + '). Inspect audit, membership and checkpoint manually.');
+      const result = await response.json();
+      commitResult.textContent = result.status === 'checkpoint_committed'
+        ? 'Checkpoint committed at generation ' + String(result.generation) + '. Inspect the audit trail.'
+        : 'Unexpected response; manual reconciliation required. Do not retry.';
+    } catch (error) {
+      commitResult.textContent = String(error.message || 'Outcome uncertain') + ' Do not retry automatically.';
+    } finally {
+      commitApprovals.forEach(({input}) => { input.checked = false; });
+      commitButton.disabled = false;
+    }
+  });
   const output = card.querySelector('#owgM365AuditResult');
   card.querySelector('#owgM365AuditRefresh').addEventListener('click', async () => {
     output.textContent = 'Reading private local receipts…';
