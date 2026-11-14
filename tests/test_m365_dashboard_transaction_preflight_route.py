@@ -163,3 +163,14 @@ def test_commit_scoped_success_and_uncertain_write_never_retried(monkeypatch):
     assert "secret" not in str(exc.value.detail)
     assert "Do not retry" in str(exc.value.detail)
     execute.assert_called_once()
+
+def test_dashboard_commit_requires_independent_approvals_and_no_retry():
+    page = (Path(__file__).resolve().parents[1] / "dashboard" / "index.html").read_text(encoding="utf-8")
+    assert "Commit reviewed Microsoft 365 transaction" in page
+    assert "operator-reviewed-commit?" in page
+    for flag in _COMMIT_APPROVALS:
+        assert "'" + flag + "'" in page
+    assert "commitApprovals.every(({input}) => input.checked)" in page
+    assert "window.confirm(" in page
+    assert "Do not retry automatically." in page
+    assert "input.checked = false" in page
