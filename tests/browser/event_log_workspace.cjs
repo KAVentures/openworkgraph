@@ -722,6 +722,12 @@ const path=require('node:path');
    assert.deepEqual({...downloadedSharingDoc,generated_at:sharingDoc.generated_at},sharingDoc);
    if(process.env.OWG_ANALYSIS_SNAPSHOT_OUTPUT)await fs.writeFile(process.env.OWG_ANALYSIS_SNAPSHOT_OUTPUT,sharingText);
    assert.equal(await page.locator('#owgAnalysisSharingConsent').isChecked(),false);
+   // A successful download consumes the reviewed snapshot and clears consent.
+   // Start a new review before exercising stale-lineage responses; otherwise
+   // the freshness control is intentionally disabled and this test never
+   // reaches the server-side freshness validation.
+   await page.locator('#owgAnalysisPrepareShare').click();
+   await page.locator('#owgAnalysisSharingPreview').waitFor();
    // A stale freshness result must not be bypassed by toggling sharing consent.
    await page.route('**/analysis-sharing-freshness',route=>route.fulfill({
      status:200,contentType:'application/json',
