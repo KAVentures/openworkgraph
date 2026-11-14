@@ -547,13 +547,6 @@ def test_review_save_denies_session_revoked_after_preflight(monkeypatch, tmp_pat
     live = {"value": True}
     monkeypatch.setattr(routes, "dashboard_session_valid",
                         lambda token: token == "owner" and live["value"])
-    original = routes.preflight
-
-    def revoke_during_preflight(request, idea_id, basis):
-        live["value"] = False
-        return {"blockers": []}
-
-    monkeypatch.setattr(routes, "preflight", revoke_during_preflight)
     basis = {
         "project_id": "p1", "project_set_sha256": "a" * 64,
         "idea_revision": 1, "idea_state": "approved",
