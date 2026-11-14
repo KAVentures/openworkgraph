@@ -161,6 +161,14 @@ def _observed_case_groups(bucket: dict[str, Any]) -> list[dict[str, Any]]:
             "evidence_event_ids": events[:12],
             "evidence_truncated": len(events) > 12,
             "observed_co_reference": len(component) > 1,
+            # Explicitly expose the missing edges in transitive A-B-C groups.
+            # A connected component is only navigation; A-C is not evidence
+            # unless one actual event directly co-observed A and C.
+            "unobserved_transitive_pair_count": sum(
+                1 for i, left in enumerate(component) for right in component[i + 1:]
+                if (left, right) not in bucket.get("pair_events", {})
+                and (right, left) not in bucket.get("pair_events", {})
+            ),
             "proves_same_case": False,
             "assignment_status": "observed_co_reference" if len(component) > 1 else "independent_resource",
         })
