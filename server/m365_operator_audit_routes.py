@@ -149,3 +149,42 @@ def operator_audit(request: Request):
     except AuditEvidenceError:
         raise HTTPException(409, "Private operator audit evidence unavailable") from None
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/m365/operator-checkpoint")
+def operator_checkpoint(request: Request, consent_local_read: bool = False):
+    """Explicit, read-only checkpoint inspection for the local dashboard.
+
+    Scope and private paths are server-configured, never browser supplied.
+    Cursor, tenant, mailbox, folder, grant contents and log ID stay private.
+    """
+    authorization = str(request.headers.get("authorization") or "")
+    if (not authorization.lower().startswith("owg-session ")
+            or not dashboard_session_valid(authorization[len("owg-session "):].strip())):
+        raise HTTPException(403, "Local dashboard session required")
+    if consent_local_read is not True:
+        raise HTTPException(403, "Explicit local checkpoint read consent required")
+    names = ("OWG_M365_TENANT", "OWG_M365_MAILBOX", "OWG_M365_FOLDER",
+             "OWG_M365_GRANT_FILE", "OWG_M365_LEDGER_DIR")
+    values = [os.environ.get(name, "") for name in names]
+    if not all(values):
+        return JSONResponse({"format": "openworkgraph.m365-dashboard-checkpoint.v1",
+                             "configured": False, "checkpoint_present": False,
+                             "provider_requests": 0, "checkpoint_advanced": False},
+                            headers={"Cache-Control": "no-store"})
+    from .m365_outlook_checkpoint import inspect_checkpoint
+    try:
+        entry = inspect_checkpoint(
+            tenant=values[0], mailbox=values[1], folder=values[2],
+            grant_file=Path(values[3]), ledger_dir=Path(values[4]),
+            consent_local_read=True)
+    except (OSError, ValueError, TypeError, KeyError):
+        # Revoked/expired grants and corrupt ledger entries are not empty state.
+        raise HTTPException(409, "Checkpoint or current grant unavailable; manual review required") from None
+    return JSONResponse({
+        "format": "openworkgraph.m365-dashboard-checkpoint.v1",
+        "configured": True, "checkpoint_present": entry is not None,
+        "generation": entry["generation"] if entry else 0,
+        "provider_requests": 0, "checkpoint_advanced": False,
+        "provider_validated": False, "automatic_retry_allowed": False,
+    }, headers={"Cache-Control": "no-store"})
