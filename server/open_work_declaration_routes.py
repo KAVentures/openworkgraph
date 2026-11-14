@@ -2660,6 +2660,9 @@ async def verify_local_bound_run_source(request: Request, response: Response):
         except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
             raise _safe_error(exc) from None
         await _recheck_source(scope)
+    # A dashboard session can be revoked while the provider request is in flight.
+    # Source authorization alone does not renew the caller session.
+    _dashboard_only(request)
     response.headers["Cache-Control"] = "no-store"
     return {
         "format": "openworkgraph.local-bound-run-source-verification.v1",
@@ -3074,6 +3077,8 @@ async def read_local_bound_attempt_receipts(request: Request, response: Response
             KeyError, ValueError, OverflowError) as exc:
         raise _safe_error(exc) from None
     await _recheck_source(scope)
+    _dashboard_only(request)
+    # Fail closed if this session was revoked during the retained journal read.
     _dashboard_only(request)
     response.headers["Cache-Control"] = "no-store"
     return {
