@@ -422,8 +422,15 @@ def operator_next_round_prepare(
             consent_local_read=True, consent_delta_read=True,
             consent_local_export=True, confirm_previous_removals_reviewed=True,
             require_event_membership=True)
-        if result.get("status") != "operator_review_required":
-            raise ReceiptError("Candidate not ready for review")
+        if (type(result) is not dict
+                or result.get("status") != "operator_review_required"
+                or type(result.get("reviewed_csv_sha256")) is not str
+                or not re.fullmatch(r"[0-9a-f]{64}", result["reviewed_csv_sha256"])
+                or type(result.get("proposed_generation")) is not int
+                or result["proposed_generation"] != expected_generation + 1
+                or any(type(result.get(key)) is not int or result[key] < 0
+                       for key in ("event_snapshots", "removal_markers_for_review"))):
+            raise ReceiptError("Invalid or stale Graph review candidate")
     except (ReceiptError, UncertainReceipt, DeltaError, AuditWriteError,
             OSError, ValueError, TypeError, KeyError, RecursionError):
         # A bounded Graph read may have written private candidate artifacts.
