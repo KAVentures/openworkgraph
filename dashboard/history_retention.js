@@ -158,6 +158,8 @@
   // Every event requires an explicit reviewer acknowledgement before scoring.
   let reconstructionEvidence=null;
   let reconstructionChoices=[];
+  let reconstructionRequestEpoch=0;
+  let reconstructionScoring=false;
   function reconstructionWorkbench(){
     const panel=document.querySelector('#panel-history');
     if(!panel||document.querySelector('#reconstructionWorkbench'))return;
@@ -169,6 +171,7 @@
     card.querySelector('#reconstructionScore').addEventListener('click',scoreReconstructionEvidence);
   }
   function clearReconstructionEvidence(message){
+    reconstructionRequestEpoch++;
     reconstructionEvidence=null;reconstructionChoices=[];
     const root=document.querySelector('#reconstructionWorkbench');if(!root)return;
     root.querySelector('#reconstructionEvents').replaceChildren();
@@ -178,12 +181,14 @@
   }
   async function loadReconstructionEvidence(){
     clearReconstructionEvidence('Loading authorized local evidence…');
+    const epoch=reconstructionRequestEpoch;
     const root=document.querySelector('#reconstructionWorkbench');
     if(!root)return;
     try{
       await window.__owgAuthReady;
       const response=await fetch('/v1/history/reconstruction-review',{cache:'no-store'});
       const data=await response.json().catch(()=>({}));
+      if(epoch!==reconstructionRequestEpoch)return;
       if(!response.ok)throw new Error(data.detail||'Evidence access denied');
       const review=data.review;
       if(!review||!Array.isArray(review.event_reviews)||!review.evidence_sha256)
@@ -214,11 +219,11 @@
       root.querySelector('#reconstructionStatus').textContent=review.coverage_incomplete
         ?'Source coverage is incomplete; scoring is disabled.'
         :review.event_reviews_count+' surfaced events. Review each event explicitly; absent events are not evaluated.';
-    }catch(error){clearReconstructionEvidence(String(error.message||error));}
+    }catch(error){if(epoch===reconstructionRequestEpoch)clearReconstructionEvidence(String(error.message||error));}
   }
   async function scoreReconstructionEvidence(){
     const root=document.querySelector('#reconstructionWorkbench');
-    if(!root||!reconstructionEvidence)return;
+    if(!root||!reconstructionEvidence||reconstructionScoring)return;
     if(reconstructionChoices.some(c=>!c.done.checked)){
       root.querySelector('#reconstructionStatus').textContent='Explicitly review every surfaced event before scoring.';
       return;
@@ -229,12 +234,15 @@
         true_resource_pairs:[...c.selected].sort((a,b)=>a-b).map(i=>c.pairs[i])
       }))};
     root.querySelector('#reconstructionScore').disabled=true;
+    reconstructionScoring=true;
+    const epoch=reconstructionRequestEpoch;
     try{
       await window.__owgAuthReady;
       const response=await fetch('/v1/history/reconstruction-review/score',{
         method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},
         body:JSON.stringify(envelope)});
       const result=await response.json().catch(()=>({}));
+      if(epoch!==reconstructionRequestEpoch)return;
       if(!response.ok)throw new Error(result.detail||'Review scoring refused');
       root.querySelector('#reconstructionMetrics').textContent=JSON.stringify({
         precision:result.precision,recall:result.recall,f1:result.f1,
@@ -246,9 +254,10 @@
       root.querySelector('#reconstructionStatus').textContent='Local review scored. No case confirmed; no labels saved.';
     }catch(error){
       // Revocation or changed evidence invalidates all in-memory labels.
-      clearReconstructionEvidence('Review refused: '+String(error.message||error)+'. Reload current evidence.');
+      if(epoch===reconstructionRequestEpoch)clearReconstructionEvidence('Review refused: '+String(error.message||error)+'. Reload current evidence.');
     }finally{
-      if(reconstructionEvidence)root.querySelector('#reconstructionScore').disabled=false;
+      reconstructionScoring=false;
+      if(epoch===reconstructionRequestEpoch&&reconstructionEvidence)root.querySelector('#reconstructionScore').disabled=false;
     }
   }
   document.addEventListener('DOMContentLoaded',reconstructionWorkbench);
