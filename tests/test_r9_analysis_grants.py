@@ -53,3 +53,14 @@ def test_analysis_grant_denies_revoked_session_and_burns_ticket():
     with local_auth._LOCK:
         local_auth._DASHBOARD_SESSIONS[session] = None
     assert not local_auth.consume_analysis_grant(ticket, session, "log", "digest")
+
+
+def test_analysis_grant_is_not_durable_across_local_server_restart(monkeypatch):
+    """Restart must fail closed: no old authorization survives a new process."""
+    session = local_auth.create_dashboard_session()
+    ticket = local_auth.issue_analysis_grant(session, "log", "digest")["ticket"]
+    # New process starts with an empty in-memory grant store. Preserve the
+    # original store for other tests instead of mutating shared global state.
+    monkeypatch.setattr(local_auth, "_ANALYSIS_GRANTS", {})
+    assert not local_auth.consume_analysis_grant(ticket, session, "log", "digest")
+    assert not local_auth.consume_analysis_grant(ticket, session, "log", "digest")
