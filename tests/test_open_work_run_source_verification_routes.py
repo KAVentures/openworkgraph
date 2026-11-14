@@ -250,3 +250,72 @@ def test_revocation_inside_optional_persistence_guard_denies_commit(monkeypatch,
         attempted.assert_called_once()
         assert checks >= 3
     asyncio.run(exercise())
+
+
+def test_receipt_journal_write_denied_when_session_revoked_inside_transaction(monkeypatch, tmp_path):
+    """An in-flight operator review cannot persist after session revocation."""
+    async def exercise():
+        setup(monkeypatch, tmp_path)
+        import hashlib
+        from server import open_work_run_receipts
+        actor = hashlib.sha256(Request.headers["authorization"].encode()).hexdigest()
+        ledger.bind_run(scope=SCOPE, actor=actor, secret="secret-at-least-16",
+                        case_ref=CASE, run_ref=RUN, fingerprint=FP, revision=1)
+        monkeypatch.setattr(routes, "read_operation_evidence", lambda *a, **kw: [])
+        monkeypatch.setattr(routes, "read_human_outcomes", lambda *a, **kw: [])
+        payload = dict(work_item_ref=CASE, expected_revision=1, expected_edit_token="edit",
+                       confirm_historical_review=True, confirm_run_comparison=True,
+                       max_cases=1, deployment_id="dep_" + "a" * 16, run_id="run",
+                       record_link={}, action="reviewed", confirm_receipt_write=True)
+        monkeypatch.setattr(routes, "_body", AsyncMock(return_value=payload))
+        revoked = False
+        def session_check(_request):
+            if revoked:
+                raise HTTPException(401, "session revoked")
+        monkeypatch.setattr(routes, "_dashboard_only", session_check)
+        writes = []
+        def append_after_revocation(**kwargs):
+            nonlocal revoked
+            revoked = True
+            kwargs["guard"]()
+            writes.append(kwargs)
+            return {}
+        monkeypatch.setattr(open_work_run_receipts, "append", append_after_revocation)
+        with pytest.raises(HTTPException) as exc:
+            await routes.bound_run_receipt_journal(Request(), SimpleNamespace(headers={}))
+        assert exc.value.status_code == 401
+        assert writes == []
+    asyncio.run(exercise())
+
+
+def test_receipt_journal_read_denied_if_session_revoked_before_response(monkeypatch, tmp_path):
+    """A successful journal read must not disclose evidence after session revocation."""
+    async def exercise():
+        setup(monkeypatch, tmp_path)
+        import hashlib
+        from server import open_work_run_receipts
+        actor = hashlib.sha256(Request.headers["authorization"].encode()).hexdigest()
+        ledger.bind_run(scope=SCOPE, actor=actor, secret="secret-at-least-16",
+                        case_ref=CASE, run_ref=RUN, fingerprint=FP, revision=1)
+        monkeypatch.setattr(routes, "read_operation_evidence", lambda *a, **kw: [])
+        monkeypatch.setattr(routes, "read_human_outcomes", lambda *a, **kw: [])
+        payload = dict(work_item_ref=CASE, expected_revision=1, expected_edit_token="edit",
+                       confirm_historical_review=True, confirm_run_comparison=True,
+                       max_cases=1, deployment_id="dep_" + "a" * 16, run_id="run",
+                       record_link={})
+        monkeypatch.setattr(routes, "_body", AsyncMock(return_value=payload))
+        monkeypatch.setattr(open_work_run_receipts, "review",
+                            lambda **kwargs: {"entries": [], "active_review_count": 0})
+        revoked = False
+        def session_check(_request):
+            if revoked:
+                raise HTTPException(401, "session revoked")
+        monkeypatch.setattr(routes, "_dashboard_only", session_check)
+        async def source_check(_scope):
+            nonlocal revoked
+            revoked = True
+        monkeypatch.setattr(routes, "_recheck_source", source_check)
+        with pytest.raises(HTTPException) as exc:
+            await routes.bound_run_receipt_journal(Request(), SimpleNamespace(headers={}))
+        assert exc.value.status_code == 401
+    asyncio.run(exercise())
