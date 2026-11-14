@@ -239,11 +239,15 @@ def issue_analysis_grant(session: str, log_id: str, lineage_digest: str, ttl_sec
 
     Callers must independently validate the reviewed preview and consent.
     """
-    if not dashboard_session_valid(session) or not log_id or not lineage_digest:
+    if not session or not log_id or not lineage_digest:
         raise ValueError("valid dashboard session and reviewed analysis required")
     ttl = max(1, min(int(ttl_seconds), 60))
     token = secrets.token_urlsafe(32)
     with _LOCK:
+        # Validate and insert under one lock: a revoked session cannot acquire
+        # a new grant between a separate validity check and issuance.
+        if session not in _DASHBOARD_SESSIONS:
+            raise ValueError("valid dashboard session and reviewed analysis required")
         now = time.time()
         for key, value in list(_ANALYSIS_GRANTS.items()):
             if value[0] <= now:
