@@ -177,3 +177,76 @@ def test_session_revoked_during_provider_io_denies_verified_result(monkeypatch, 
         assert source.call_count == 1
         assert checks >= 2
     asyncio.run(exercise())
+
+
+def test_revoked_session_before_optional_persistence_never_appends(monkeypatch, tmp_path):
+    """A revoked session must not write a provider claim after source I/O."""
+    async def exercise():
+        payload, source = setup(monkeypatch, tmp_path)
+        payload["persist_provider_check"] = True
+        import hashlib
+        from unittest.mock import Mock
+        actor = hashlib.sha256(Request.headers["authorization"].encode()).hexdigest()
+        ledger.bind_run(scope=SCOPE, actor=actor, secret="secret-at-least-16",
+                        case_ref=CASE, run_ref=RUN, fingerprint=FP, revision=1)
+        monkeypatch.setattr(routes, "read_operation_evidence",
+                            lambda *a, **kw: {"events": []})
+        append = Mock(return_value={"events": []})
+        monkeypatch.setattr(routes, "append_operation_evidence", append)
+        checks = 0
+
+        def session_guard(_request):
+            nonlocal checks
+            checks += 1
+            if source.call_count:
+                raise HTTPException(403, "dashboard session revoked")
+
+        monkeypatch.setattr(routes, "_dashboard_only", session_guard)
+        with pytest.raises(HTTPException) as error:
+            await routes.verify_local_bound_run_source(
+                Request(), SimpleNamespace(headers={}))
+        assert error.value.status_code == 403
+        assert source.call_count == 1
+        append.assert_not_called()
+    asyncio.run(exercise())
+
+
+def test_revocation_inside_optional_persistence_guard_denies_commit(monkeypatch, tmp_path):
+    """The storage guard must recheck session even after pre-append admission."""
+    async def exercise():
+        payload, source = setup(monkeypatch, tmp_path)
+        payload["persist_provider_check"] = True
+        import hashlib
+        from unittest.mock import Mock
+        actor = hashlib.sha256(Request.headers["authorization"].encode()).hexdigest()
+        ledger.bind_run(scope=SCOPE, actor=actor, secret="secret-at-least-16",
+                        case_ref=CASE, run_ref=RUN, fingerprint=FP, revision=1)
+        monkeypatch.setattr(routes, "read_operation_evidence",
+                            lambda *a, **kw: {"events": []})
+        attempted = Mock()
+
+        def append(*args, **kwargs):
+            attempted()
+            kwargs["guard"]()
+            return {"events": []}
+
+        monkeypatch.setattr(routes, "append_operation_evidence", append)
+        checks = 0
+
+        def session_guard(_request):
+            nonlocal checks
+            checks += 1
+            # Initial admission and pre-append admission pass; the guarded
+            # storage operation observes the revocation.
+            if checks >= 3:
+                raise HTTPException(403, "dashboard session revoked")
+
+        monkeypatch.setattr(routes, "_dashboard_only", session_guard)
+        with pytest.raises(HTTPException) as error:
+            await routes.verify_local_bound_run_source(
+                Request(), SimpleNamespace(headers={}))
+        assert error.value.status_code == 403
+        assert source.call_count == 1
+        attempted.assert_called_once()
+        assert checks >= 3
+    asyncio.run(exercise())
