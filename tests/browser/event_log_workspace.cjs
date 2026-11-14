@@ -707,6 +707,10 @@ const path=require('node:path');
    releaseAuthorization();
    assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),true);
    await page.unroute('**/analysis-sharing-authorize');
+   // A rejected in-flight authorization invalidates the reviewed preview.
+   // Re-prepare it before rechecking freshness; consent alone cannot restore it.
+   await page.locator('#owgAnalysisPrepareShare').click();
+   await page.locator('#owgAnalysisSharingPreview').waitFor();
    await page.locator('#owgAnalysisSharingConsent').check();
    await page.locator('#owgAnalysisFreshness').click();
    await page.getByText('Current source, specification, metric lineage and minimized values match.',{exact:false}).waitFor();
