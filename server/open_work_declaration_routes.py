@@ -2996,7 +2996,7 @@ async def read_local_bound_attempt_receipts(request: Request, response: Response
     })
     if payload["confirm_historical_review"] is not True or payload["confirm_run_comparison"] is not True:
         raise HTTPException(403, "explicit run and historical review required")
-    from .open_work_run_case_binding import get_binding, _retention
+    from .open_work_run_case_binding import get_binding, require_exclusive_run_case_binding, _retention
     from .open_work_attempt_receipts import list_receipts
     from .local_auth import auth_dir
     from datetime import datetime, timezone
@@ -3022,6 +3022,7 @@ async def read_local_bound_attempt_receipts(request: Request, response: Response
         )
         if not await asyncio.to_thread(get_binding, **fields):
             raise HTTPException(403, "current operator run/case binding required")
+        await asyncio.to_thread(require_exclusive_run_case_binding, **fields)
         retention = await asyncio.to_thread(_retention)
         path = Path(auth_dir()) / ".open_work_attempt_receipts.sqlite3"
         # A missing journal is empty, not an invitation to create storage.
@@ -3045,6 +3046,7 @@ async def read_local_bound_attempt_receipts(request: Request, response: Response
                 or run != second_run
                 or not await asyncio.to_thread(get_binding, **fields)):
             raise CaseDeclarationError("run/case review or binding changed")
+        await asyncio.to_thread(require_exclusive_run_case_binding, **fields)
         await asyncio.to_thread(
             _operation_ledger_guard, scope, payload["work_item_ref"],
             payload["expected_revision"], payload["expected_edit_token"], signature,

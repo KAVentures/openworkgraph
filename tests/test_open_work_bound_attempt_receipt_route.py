@@ -46,6 +46,7 @@ def setup(monkeypatch, tmp_path):
         "run_ref": RUN, "run_snapshot_fingerprint": "d" * 64})
     monkeypatch.setattr(local_auth, "auth_dir", lambda: tmp_path)
     monkeypatch.setattr(bindings, "_retention", lambda: timedelta(days=7))
+    monkeypatch.setattr(bindings, "require_exclusive_run_case_binding", lambda **_kwargs: None)
     return bindings
 
 
@@ -93,3 +94,39 @@ def test_binding_revoked_during_read_fails_closed(monkeypatch, tmp_path):
     with pytest.raises(HTTPException) as error:
         asyncio.run(routes.read_local_bound_attempt_receipts(request(), Response()))
     assert error.value.status_code == 409
+
+
+def test_run_only_receipts_refuse_ambiguous_case_attribution(monkeypatch, tmp_path):
+    """A run linked to two cases cannot identify which case its receipt belongs to."""
+    from server import open_work_run_case_binding as bindings
+    real_exclusivity_guard = bindings.require_exclusive_run_case_binding
+    setup(monkeypatch, tmp_path)
+    # Route fixtures stub this guard; exercise the real ledger guard in this test.
+    monkeypatch.setattr(bindings, "require_exclusive_run_case_binding", real_exclusivity_guard)
+    monkeypatch.setattr(bindings, "auth_dir", lambda: tmp_path)
+    monkeypatch.setattr(bindings, "_retention", lambda: timedelta(days=7))
+    actor = hashlib.sha256(b"OWG-Session valid").hexdigest()
+    fields = dict(scope=SCOPE, actor=actor, secret="secret" * 8,
+                  run_ref=RUN, fingerprint="d" * 64, revision=1)
+    bindings.bind_run(**fields, case_ref=CASE)
+    bindings.require_exclusive_run_case_binding(**fields, case_ref=CASE)
+    other_case = "owg:w:" + "e" * 32
+    bindings.bind_run(**fields, case_ref=other_case)
+    from server.open_work_case_declarations import CaseDeclarationError
+    with pytest.raises(CaseDeclarationError, match="ambiguous"):
+        bindings.require_exclusive_run_case_binding(**fields, case_ref=CASE)
+    bindings.revoke_binding(scope=SCOPE, actor=actor, secret=fields["secret"],
+                            case_ref=other_case, run_ref=RUN)
+    bindings.require_exclusive_run_case_binding(**fields, case_ref=CASE)
+
+
+def test_ambiguous_run_case_receipt_read_denied(monkeypatch, tmp_path):
+    bindings = setup(monkeypatch, tmp_path)
+    monkeypatch.setattr(bindings, "get_binding", lambda **_kwargs: {"association": "operator_confirmed"})
+    from server.open_work_case_declarations import CaseDeclarationError
+    def ambiguous(**_kwargs):
+        raise CaseDeclarationError("ambiguous or stale run/case receipt attribution")
+    monkeypatch.setattr(bindings, "require_exclusive_run_case_binding", ambiguous)
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(routes.read_local_bound_attempt_receipts(request(), Response()))
+    assert error.value.status_code in (403, 409)

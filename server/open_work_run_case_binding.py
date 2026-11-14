@@ -265,3 +265,29 @@ def list_case_bindings(*, scope: str, actor: str, secret: str, case_ref: str,
         "run_snapshots_rechecked": False,
         "agent_execution_authorized": False,
     }
+
+
+def require_exclusive_run_case_binding(*, scope: str, actor: str, secret: str,
+                                       case_ref: str, run_ref: str,
+                                       fingerprint: str, revision: int) -> None:
+    """Refuse case attribution of run-only receipts when bindings are ambiguous.
+
+    The legacy receipt journal is keyed by run, not case. A run bound to two
+    different cases cannot safely have its receipts attributed to either case.
+    This is a read guard, not evidence of run identity or provider success.
+    """
+    _validate(scope, case_ref, run_ref, fingerprint, revision)
+    key = _actor_key(secret, scope, actor)
+    current = _now(None).isoformat()
+    _retention()
+    with _database(False) as db:
+        if db is None:
+            raise CaseDeclarationError("current run/case binding required")
+        try:
+            rows = db.execute("""SELECT case_ref, fingerprint, revision FROM bindings
+                WHERE actor_key=? AND scope=? AND run_ref=? AND expires_at>?
+                LIMIT 2""", (key, scope, run_ref, current)).fetchall()
+        except sqlite3.Error:
+            raise CaseDeclarationError("binding ledger unavailable") from None
+    if len(rows) != 1 or rows[0] != (case_ref, fingerprint, revision):
+        raise CaseDeclarationError("ambiguous or stale run/case receipt attribution")
