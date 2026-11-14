@@ -61,7 +61,7 @@
 
   async function quickPolicy(mode,days){
     await call('/v1/history-policy',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({human_mode:mode,human_days:days,agent_mode:mode,agent_days:days,onboarding_complete:true})});
-    document.querySelector('#historyOnboarding')?.remove();await refresh();
+    document.querySelector('#historyOnboarding')?.remove();clearReconstructionEvidence('History retention changed. Reload authorized evidence.');await refresh();
   }
 
   function renderPolicy(){
@@ -69,7 +69,7 @@
     const h=choiceValue(policy.human_retention),a=choiceValue(policy.agent_retention);
     const undecided=!policy.onboarding_complete&&policy?.human_retention?.mode==='days'&&Number(policy?.human_retention?.days)===7;
     host.innerHTML=`<div class="row"><div><label class="label" for="humanRetention">Human workflow history</label><select id="humanRetention" style="width:100%;min-height:42px;border:1px solid #cfd3cb;border-radius:9px;padding:8px">${options(h)}</select></div><div><label class="label" for="agentRetention">Agent run history</label><select id="agentRetention" style="width:100%;min-height:42px;border:1px solid #cfd3cb;border-radius:9px;padding:8px">${options(a)}</select></div></div><div class="note" style="margin-top:12px">${undecided?'No retention choice has been saved yet. The current 7-day setting is a local grace period while you decide; it does not grant AI access to saved history. ':''}“Don’t keep” uses temporary local working storage while the session is active, then deletes it. If OpenWorkGraph crashes, stale ephemeral sessions are deleted on the next start.</div><div class="modal-actions"><button id="saveHistoryPolicy" class="green">Save retention choices</button></div>`;
-    host.querySelector('#saveHistoryPolicy').onclick=async()=>{const hc=parseChoice(host.querySelector('#humanRetention').value),ac=parseChoice(host.querySelector('#agentRetention').value);await call('/v1/history-policy',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({human_mode:hc.mode,human_days:hc.days,agent_mode:ac.mode,agent_days:ac.days,onboarding_complete:true})});if(typeof window.toast==='function')window.toast('History retention updated.');await refresh();};
+    host.querySelector('#saveHistoryPolicy').onclick=async()=>{const hc=parseChoice(host.querySelector('#humanRetention').value),ac=parseChoice(host.querySelector('#agentRetention').value);await call('/v1/history-policy',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({human_mode:hc.mode,human_days:hc.days,agent_mode:ac.mode,agent_days:ac.days,onboarding_complete:true})});clearReconstructionEvidence('History retention changed. Reload authorized evidence.');if(typeof window.toast==='function')window.toast('History retention updated.');await refresh();};
   }
 
   function renderAccess(){
@@ -77,7 +77,7 @@
     host.innerHTML=`<div class="filter-row"><select id="historyAccessMode" style="min-height:42px;border:1px solid #cfd3cb;border-radius:9px;padding:8px"><option value="off" ${mode==='off'?'selected':''}>Off</option><option value="selected_range" ${mode==='selected_range'?'selected':''}>Selected dates</option><option value="all_saved" ${mode==='all_saved'?'selected':''}>All saved history</option></select><input type="date" id="historySince" value="${esc((access.since||'').slice(0,10))}" style="min-height:42px;border:1px solid #cfd3cb;border-radius:9px;padding:8px"><input type="date" id="historyUntil" value="${esc((access.until||'').slice(0,10))}" style="min-height:42px;border:1px solid #cfd3cb;border-radius:9px;padding:8px"><select id="historyExpiry" style="min-height:42px;border:1px solid #cfd3cb;border-radius:9px;padding:8px"><option value="60">1 hour</option><option value="480">8 hours</option><option value="1440">Today / 24h</option><option value="standing">Until I revoke access</option></select><button id="saveHistoryAccess" class="${mode==='off'?'secondary':'green'}">Apply</button></div><div class="muted">${mode==='off'?'Saved-history AI access is OFF.':`Access expires ${esc(access.expires_at||'when revoked')}.`} Turning normal AI access off also prevents all MCP reads.</div>`;
     if(mode!=='off'&&!access.expires_at)host.querySelector('#historyExpiry').value='standing';
     const sync=()=>{const selected=host.querySelector('#historyAccessMode').value==='selected_range';host.querySelector('#historySince').disabled=!selected;host.querySelector('#historyUntil').disabled=!selected;};host.querySelector('#historyAccessMode').onchange=sync;sync();
-    host.querySelector('#saveHistoryAccess').onclick=async()=>{const m=host.querySelector('#historyAccessMode').value;let since=null,until=null;if(m==='selected_range'){const a=host.querySelector('#historySince').value,b=host.querySelector('#historyUntil').value;if(!a||!b){if(typeof window.toast==='function')window.toast('Choose both history dates.');return;}since=new Date(a+'T00:00:00Z').toISOString();until=new Date(b+'T00:00:00Z').toISOString();}await call('/v1/history/ai-access',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:m,since,until,expires_minutes:host.querySelector('#historyExpiry').value==='standing'?null:Number(host.querySelector('#historyExpiry').value)})});if(typeof window.toast==='function')window.toast('Saved-history AI access updated.');await refresh();};
+    host.querySelector('#saveHistoryAccess').onclick=async()=>{const m=host.querySelector('#historyAccessMode').value;let since=null,until=null;if(m==='selected_range'){const a=host.querySelector('#historySince').value,b=host.querySelector('#historyUntil').value;if(!a||!b){if(typeof window.toast==='function')window.toast('Choose both history dates.');return;}since=new Date(a+'T00:00:00Z').toISOString();until=new Date(b+'T00:00:00Z').toISOString();}await call('/v1/history/ai-access',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:m,since,until,expires_minutes:host.querySelector('#historyExpiry').value==='standing'?null:Number(host.querySelector('#historyExpiry').value)})});clearReconstructionEvidence('History access changed. Reload authorized evidence.');if(typeof window.toast==='function')window.toast('Saved-history AI access updated.');await refresh();};
   }
 
   function memoryLine(r){const w=r.work_summary||{},bits=[];if(w.tests)bits.push(`tests ${w.tests.ended}`);if(w.git)bits.push(Object.keys(w.git).map(k=>'git '+k).join(', '));if(w.files&&w.files.edited)bits.push(`${w.files.edited} file${w.files.edited===1?'':'s'} edited`);if(w.total_tokens)bits.push(`${w.total_tokens} tokens`);const b=((r.human_context||{}).after||{}).between_turns;if(b&&b.agent_files_changed)bits.push(`you changed ${b.agent_files_changed} of its files after`);const d=r.delivery_outcome;if(d&&d.prs)bits.push(`PR ${d.merged?'merged':d.closed_unmerged?'closed unmerged':d.open?'open':'unknown'}${d.ci&&d.ci!=='none'?`, CI ${d.ci}`:''}`);return bits.join(' · ');}
@@ -122,7 +122,7 @@
     const host=document.querySelector('#historySessions');if(!host||!history)return;const rows=history.sessions||[];
     if(!rows.length){host.innerHTML='<div class="empty"><strong>No saved sessions yet</strong>Sessions you keep appear here once a recording run ends, so you can export or delete them.</div>';return;}
     host.innerHTML=`<div class="table-wrap"><table><thead><tr><th>Session</th><th>When</th><th>Evidence</th><th>Retention</th><th></th></tr></thead><tbody>${rows.map((s,i)=>`<tr><td><strong>${esc(sessionLabel(s))}</strong>${s.surfaces?.length?`<div class="muted">${esc(s.surfaces.slice(0,5).join(' · '))}</div>`:''}</td><td>${esc(String(s.started_at||'').replace('T',' ').slice(0,16))}<div class="muted">to ${esc(String(s.ended_at||'').replace('T',' ').slice(0,16))}</div></td><td>${Number(s.event_count||0)} events${s.activity_blocks?.length?` · ${s.activity_blocks.length} blocks`:''}</td><td>${esc(retentionLabel(s))} ${s.expires_at?`<div class="muted">deleted on ${esc(String(s.expires_at).slice(0,10))}</div>`:''}</td><td><div style="display:flex;gap:6px"><button class="secondary" data-export="${i}">Export</button><button class="danger-quiet small" data-delete="${i}">Delete</button></div></td></tr>`).join('')}</tbody></table></div>`;
-    host.querySelectorAll('[data-delete]').forEach(b=>b.onclick=async()=>{const s=rows[Number(b.dataset.delete)];if(!confirm('Delete this retained session from this computer? This cannot recall evidence already synchronized to an organization Gateway.'))return;await call('/v1/history/delete-session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({history_session_id:s.history_session_id})});if(typeof window.toast==='function')window.toast('Session deleted.');await refresh();});
+    host.querySelectorAll('[data-delete]').forEach(b=>b.onclick=async()=>{const s=rows[Number(b.dataset.delete)];if(!confirm('Delete this retained session from this computer? This cannot recall evidence already synchronized to an organization Gateway.'))return;await call('/v1/history/delete-session',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({history_session_id:s.history_session_id})});clearReconstructionEvidence('Saved history changed. Reload authorized evidence.');if(typeof window.toast==='function')window.toast('Session deleted.');await refresh();});
     host.querySelectorAll('[data-export]').forEach(b=>b.onclick=()=>{const s=rows[Number(b.dataset.export)];exportRange(s.started_at,s.ended_at);});
   }
 
@@ -154,4 +154,149 @@
   refresh=async function(){ensureUI();placeAgentCards();return baseRefresh();};
   window.refreshHistory=refresh;
   document.addEventListener('DOMContentLoaded',()=>{ensureUI();refresh();});
+  // R1/R2: local-only reviewer workbench. No labels are persisted or exported.
+  // Every event requires an explicit reviewer acknowledgement before scoring.
+  let reconstructionEvidence=null;
+  let reconstructionChoices=[];
+  let reconstructionRequestEpoch=0;
+  let reconstructionScoring=false;
+  let reconstructionLabelEpoch=0;
+  function reconstructionWorkbench(){
+    const panel=document.querySelector('#panel-history');
+    if(!panel||document.querySelector('#reconstructionWorkbench'))return;
+    const card=document.createElement('div');
+    card.className='card';card.id='reconstructionWorkbench';
+    card.innerHTML='<h2>Reconstruction evidence review</h2><p class="muted">Requires an explicit all-saved AI history grant. Candidate pairs are observations, not confirmed cases. Labels stay in this browser tab and are never saved. Scores cover only surfaced candidate pairs. Reviewers can add missed true pairs for surfaced events, but unseen events cannot be labeled here; complete case recall, case accuracy and held-out performance are not measured.</p><button type="button" id="reconstructionLoad">Load current evidence</button><div id="reconstructionStatus" role="status" aria-live="polite"></div><div id="reconstructionEvents"></div><button type="button" id="reconstructionScore" disabled>Score explicitly reviewed events</button><pre id="reconstructionMetrics" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>';
+    panel.appendChild(card);
+    card.querySelector('#reconstructionLoad').addEventListener('click',loadReconstructionEvidence);
+    card.querySelector('#reconstructionScore').addEventListener('click',scoreReconstructionEvidence);
+  }
+  function clearReconstructionEvidence(message){
+    reconstructionRequestEpoch++;
+    // Invalidate the in-flight score lease as well as the evidence. An older
+    // request must not lock a freshly loaded review after revocation/reload.
+    reconstructionScoring=false;
+    reconstructionLabelEpoch++;
+    reconstructionEvidence=null;reconstructionChoices=[];
+    const root=document.querySelector('#reconstructionWorkbench');if(!root)return;
+    root.querySelector('#reconstructionEvents').replaceChildren();
+    root.querySelector('#reconstructionMetrics').textContent='';
+    root.querySelector('#reconstructionScore').disabled=true;
+    root.querySelector('#reconstructionStatus').textContent=message||'';
+  }
+  async function loadReconstructionEvidence(){
+    clearReconstructionEvidence('Loading authorized local evidence…');
+    const epoch=reconstructionRequestEpoch;
+    const root=document.querySelector('#reconstructionWorkbench');
+    if(!root)return;
+    try{
+      await window.__owgAuthReady;
+      const response=await fetch('/v1/history/reconstruction-review',{cache:'no-store'});
+      const data=await response.json().catch(()=>({}));
+      if(epoch!==reconstructionRequestEpoch)return;
+      if(!response.ok)throw new Error(data.detail||'Evidence access denied');
+      const review=data.review;
+      if(!review||!Array.isArray(review.event_reviews)||!review.evidence_sha256)
+        throw new Error('Invalid reconstruction evidence');
+      reconstructionEvidence=review;
+      const host=root.querySelector('#reconstructionEvents');
+      review.event_reviews.forEach((row,index)=>{
+        const item=document.createElement('fieldset');
+        const legend=document.createElement('legend');
+        legend.textContent=(row.window||'')+' · '+(row.event_id||'')+' ('+(row.review_status||'review')+')';
+        item.appendChild(legend);
+        const selected=new Set();
+        const pairs=Array.isArray(row.candidate_resource_pairs)?row.candidate_resource_pairs:[];
+        pairs.forEach((pair,pairIndex)=>{
+          const label=document.createElement('label');
+          const check=document.createElement('input');check.type='checkbox';
+          check.addEventListener('change',()=>{if(check.checked)selected.add(pairIndex);else selected.delete(pairIndex);reconstructionLabelEpoch++;root.querySelector('#reconstructionMetrics').textContent='';});
+          label.append(check,document.createTextNode(' True pair: '+JSON.stringify(pair)));
+          item.appendChild(label);item.appendChild(document.createElement('div'));
+        });
+        // Candidate checkboxes alone cannot capture false negatives: allow
+        // independently observed true pairs absent from the candidate set.
+        const missed=document.createElement('textarea');
+        missed.rows=2;missed.placeholder='Optional missed true pairs as JSON: [[[provider, kind, ref], [provider, kind, ref]]]';
+        missed.setAttribute('aria-label','Additional true resource pairs missed by reconstruction for this event (JSON)');
+        missed.addEventListener('input',()=>{reconstructionLabelEpoch++;root.querySelector('#reconstructionMetrics').textContent='';});
+        item.appendChild(missed);
+        const acknowledge=document.createElement('label');
+        const done=document.createElement('input');done.type='checkbox';
+        done.addEventListener('change',()=>{reconstructionLabelEpoch++;root.querySelector('#reconstructionMetrics').textContent='';});
+        acknowledge.append(done,document.createTextNode(' I reviewed this event (unchecked pairs are negatives)'));
+        item.appendChild(acknowledge);host.appendChild(item);
+        reconstructionChoices[index]={row,pairs,selected,done,missed};
+      });
+      root.querySelector('#reconstructionScore').disabled=!!review.coverage_incomplete||!reconstructionChoices.length||reconstructionChoices.length>192;
+      root.querySelector('#reconstructionStatus').textContent=review.coverage_incomplete
+        ?'Source coverage is incomplete; scoring is disabled.'
+        :reconstructionChoices.length>192?'More than 192 surfaced events; scoring is unavailable for this bounded review. Narrow the evidence window.':review.event_reviews_count+' surfaced events. Review candidate and missed true pairs explicitly; absent events are not evaluated.';
+    }catch(error){if(epoch===reconstructionRequestEpoch)clearReconstructionEvidence(String(error.message||error));}
+  }
+  async function scoreReconstructionEvidence(){
+    const root=document.querySelector('#reconstructionWorkbench');
+    if(!root||!reconstructionEvidence||reconstructionScoring)return;
+    if(reconstructionChoices.some(c=>!c.done.checked)){
+      root.querySelector('#reconstructionStatus').textContent='Explicitly review every surfaced event before scoring.';
+      return;
+    }
+    // Include independently identified missing pairs in ground truth.
+    // Otherwise false negatives are structurally impossible and recall is
+    // misleadingly perfect whenever a candidate pair is accepted.
+    let annotations;
+    try{
+      annotations=reconstructionChoices.map(c=>{
+        const extra=c.missed.value.trim()?JSON.parse(c.missed.value):[];
+        if(!Array.isArray(extra)||extra.length>24||extra.some(pair=>
+          !Array.isArray(pair)||pair.length!==2||pair.some(identity=>
+            !Array.isArray(identity)||identity.length!==3||identity.some(part=>
+              typeof part!=='string'||!part||part.length>256))))
+          throw new Error('Additional true pairs must be JSON pairs of [provider, kind, ref] identities.');
+        const chosen=[...c.selected].sort((a,b)=>a-b).map(i=>c.pairs[i]);
+        return {window:c.row.window,event_id:c.row.event_id,true_resource_pairs:chosen.concat(extra)};
+      });
+    }catch(error){
+      root.querySelector('#reconstructionStatus').textContent='Invalid additional ground truth: '+String(error.message||error);
+      return;
+    }
+    const envelope={evidence_sha256:reconstructionEvidence.evidence_sha256,annotations};
+    root.querySelector('#reconstructionScore').disabled=true;
+    reconstructionScoring=true;
+    const epoch=reconstructionRequestEpoch;
+    const labelEpoch=reconstructionLabelEpoch;
+    try{
+      await window.__owgAuthReady;
+      const response=await fetch('/v1/history/reconstruction-review/score',{
+        method:'POST',cache:'no-store',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(envelope)});
+      const result=await response.json().catch(()=>({}));
+      if(epoch!==reconstructionRequestEpoch)return;
+      if(labelEpoch!==reconstructionLabelEpoch){
+        root.querySelector('#reconstructionStatus').textContent='Labels changed while scoring. Submit the current review again.';
+        return;
+      }
+      if(!response.ok)throw new Error(result.detail||'Review scoring refused');
+      root.querySelector('#reconstructionMetrics').textContent=JSON.stringify({
+        candidate_pair_precision:result.precision,candidate_pair_recall:result.recall,candidate_pair_f1:result.f1,
+        complete_case_recall_measured:result.complete_case_recall_measured,
+        missed_source_events_measured:result.missed_source_events_measured,
+        annotated_events:result.annotated_events,per_window_metrics:result.per_window_metrics,
+        event_disagreements:result.event_disagreements,
+        held_out_verified:result.held_out_verified,
+        cross_case_contamination_measured:result.cross_case_contamination_measured
+      },null,2);
+      root.querySelector('#reconstructionStatus').textContent='Local review scored. No case confirmed; no labels saved.';
+    }catch(error){
+      // Revocation or changed evidence invalidates all in-memory labels.
+      if(epoch===reconstructionRequestEpoch)clearReconstructionEvidence('Review refused: '+String(error.message||error)+'. Reload current evidence.');
+    }finally{
+      // A superseded score must never unlock or alter the newer review.
+      if(epoch===reconstructionRequestEpoch){
+        reconstructionScoring=false;
+        if(reconstructionEvidence)root.querySelector('#reconstructionScore').disabled=false;
+      }
+    }
+  }
+  document.addEventListener('DOMContentLoaded',reconstructionWorkbench);
 })();

@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from shared.evidence import rich_evidence_row
 from shared.history_policy import active_ai_history_access, read_policy, set_ai_history_access, update_retention, update_run_memory
@@ -186,6 +186,19 @@ async def inject_history_retention(request:Request,call_next):
 __all__=["get_history","get_history_policy"]
 
 
+@app.middleware("http")
+async def reconstruction_review_no_store(request: Request, call_next):
+    """Never allow a browser or intermediary to cache review evidence or errors.
+
+    This also covers validation (422), missing consent (403), and authentication
+    failures produced before the route handler executes.
+    """
+    response = await call_next(request)
+    if request.url.path.startswith("/v1/history/reconstruction-review"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @app.get("/v1/history/reconstruction-review")
 def get_reconstruction_review() -> Response:
     """Local, read-only event attribution under an explicit saved-history AI grant.
@@ -222,3 +235,47 @@ def get_reconstruction_review() -> Response:
         media_type="application/json",
         headers={"Cache-Control": "no-store"},
     )
+
+
+class ReconstructionReviewSubmission(BaseModel):
+    # Reject malformed/stale evidence IDs and unbounded annotation batches at the
+    # request boundary, before any retained-history database access.
+    evidence_sha256: str = Field(pattern=r"^[0-9a-f]{64}$", min_length=64, max_length=64)
+    annotations: list[dict[str, Any]] = Field(max_length=192)
+
+
+@app.post("/v1/history/reconstruction-review/score")
+def score_reconstruction_review_submission(request: ReconstructionReviewSubmission) -> Response:
+    """Score explicit labels against fresh local evidence; never persist or confirm cases.
+
+    The trusted history lease comes exclusively from local policy, not the
+    caller. Secure-app middleware authenticates this route independently.
+    """
+    from shared.history_policy import history_generation
+    from .work_resumption import score_live_reconstruction_review
+
+    grant = active_ai_history_access()
+    if grant.get("mode") != "all_saved":
+        raise HTTPException(status_code=403, detail="Explicit all-saved history access required")
+    generation = history_generation()
+
+    def still_authorized() -> bool:
+        return active_ai_history_access() == grant and history_generation() == generation
+
+    try:
+        with connect() as connection:
+            result = score_live_reconstruction_review(
+                connection,
+                request.model_dump(),
+                lease=grant,
+                authorize_review=still_authorized,
+            )
+        payload = json.dumps(result, allow_nan=False)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="History access changed during review") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not still_authorized():
+        raise HTTPException(status_code=403, detail="History access changed during review")
+    return Response(content=payload, media_type="application/json",
+                    headers={"Cache-Control": "no-store"})

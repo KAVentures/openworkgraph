@@ -366,3 +366,76 @@ def test_unlabeled_event_does_not_taint_labeled_identity_provenance():
     assert all(p["resource_ref"] != REF["b"] for c in result["candidates"]
                for p in c["shared_pointers"])
     assert all(t["pointer"]["resource_ref"] != REF["b"] for t in result["identity_timelines"])
+
+
+def test_pointer_label_collision_with_nonpointer_activity_is_not_case_evidence():
+    """A duplicated external event ID is unsafe even if only one row has pointers."""
+    db = _database([
+        (_day(12, "09:00"), _ref("a")),
+        (_day(12, "09:01"), {}),
+        (_day(14, "10:00"), _ref("a")),
+    ])
+    # The duplicate is an ordinary activity row; a pointer-only scan misses it.
+    db.execute("UPDATE events SET event_id = 'e1' WHERE id = 2")
+    result = resumption_candidates(db, lease=ALL)
+    assert result["coverage"]["ambiguous_event_id_collisions"] == 1
+    assert result["coverage"]["excluded_colliding_pointer_rows"] == 1
+    assert result["coverage"]["scan_truncated"] is True
+    assert result["candidates"] == []
+    assert result["current_session"]["pointer_count"] == 1
+
+
+def test_embedded_review_queue_sees_finalized_continuity(monkeypatch):
+    """The queue must bind the same complete evidence as live inspection."""
+    from server import reconstruction_review_cli
+
+    original = reconstruction_review_cli.build_review_queue
+    observed = []
+
+    def inspect_complete_response(response):
+        assert "observed_group_continuity" in response
+        assert "observed_group_continuity_truncated" in response
+        observed.append(response["observed_group_continuity"])
+        return original(response)
+
+    monkeypatch.setattr(reconstruction_review_cli, "build_review_queue", inspect_complete_response)
+    db = _database([
+        (_day(12, "09:00"), {
+            "resource_reference": _ref("a")["resource_reference"],
+            "file_reference": {"file_ref": FILE},
+        }),
+        (_day(14, "10:00"), {
+            "resource_reference": _ref("a")["resource_reference"],
+            "file_reference": {"file_ref": FILE},
+        }),
+    ])
+    response = resumption_candidates(db, lease=ALL)
+    assert observed and observed[0]
+    assert response["event_assignment_review"]
+
+
+def test_transitive_group_reports_missing_direct_edge_without_inventing_case():
+    """A-B and B-C in distinct events never establishes A-C co-reference."""
+    def both(left, right):
+        return {"resource_reference": _ref(left)["resource_reference"],
+                "file_reference": {"file_ref": FILE}} if right == "file" else None
+
+    # Two different source events share B but never co-observe A and C.
+    # Use the local file identity as B so both links are representable by
+    # the event schema's independent pointer fields.
+    rows = [
+        (_day(12, "09:00"), both("a", "file")),
+        (_day(12, "09:01"), both("c", "file")),
+        (_day(14, "10:00"), both("a", "file")),
+        (_day(14, "10:01"), both("c", "file")),
+    ]
+    result = resumption_candidates(_database(rows), lease=ALL)
+    groups = [g for g in result["observed_case_groups"]
+              if g["resource_count"] == 3]
+    assert groups, "expected connected A-file-C navigation component"
+    assert all(g["unobserved_transitive_pair_count"] == 1 for g in groups)
+    assert all(g["proves_same_case"] is False for g in groups)
+    assignments = result["observed_pair_event_assignments"]
+    assert all(not ({REF["a"], REF["c"]} <=
+                    {str(p.get("resource_ref")) for p in pair.get("resource_pointers", [])})
+               for pair in assignments)

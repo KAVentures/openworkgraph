@@ -1,7 +1,7 @@
 """Adversarial review queue tests; synthetic fixtures are not assignment-F1 evidence."""
 import unittest
 
-from server.reconstruction_review_cli import build_review_queue
+from server.reconstruction_review_cli import build_review_queue, score_review_annotations
 
 
 def pair(left, right, events, earlier=None, **extra):
@@ -16,6 +16,262 @@ def pair(left, right, events, earlier=None, **extra):
 def payload(pairs):
     return {"derived": True, "authoritative": False, "saved_history_access": "all_saved",
             "observed_pair_event_assignments": pairs, "coverage": {"scan_truncated": False}}
+
+
+
+
+class AnnotationCliTests(unittest.TestCase):
+    def test_operator_scoring_entrypoint_uses_explicit_labels(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from server.reconstruction_review_cli import main
+
+        source = payload([pair("A", "F", ["e1"])])
+        row = build_review_queue(source)["event_reviews"][0]
+        labels = [{"window": row["window"], "event_id": row["event_id"],
+                   "true_resource_pairs": row["candidate_resource_pairs"]}]
+        with tempfile.TemporaryDirectory() as directory:
+            source_path = Path(directory) / "source.json"
+            labels_path = Path(directory) / "labels.json"
+            source_path.write_text(json.dumps(source), encoding="utf-8")
+            labels_path.write_text(json.dumps({"evidence_sha256": build_review_queue(source)["evidence_sha256"], "annotations": labels}), encoding="utf-8")
+            output = StringIO()
+            with patch("sys.argv", ["review", str(source_path), "--annotations", str(labels_path)]):
+                with redirect_stdout(output):
+                    self.assertEqual(main(), 0)
+            result = json.loads(output.getvalue())
+            self.assertEqual(result["true_positive_pairs"], 1)
+            self.assertFalse(result["held_out_verified"])
+            self.assertFalse(result["real_work_accuracy_claim"])
+
+    def test_operator_scoring_refuses_same_file_and_revoked_source(self):
+        import json
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        from contextlib import redirect_stderr
+        from io import StringIO
+        from server.reconstruction_review_cli import main
+
+        with tempfile.TemporaryDirectory() as directory:
+            source_path = Path(directory) / "source.json"
+            labels_path = Path(directory) / "labels.json"
+            source = payload([pair("A", "F", ["e1"])])
+            source_path.write_text(json.dumps(source), encoding="utf-8")
+            labels_path.write_text("[]", encoding="utf-8")
+            with patch("sys.argv", ["review", str(source_path), "--annotations", str(source_path)]):
+                with redirect_stderr(StringIO()):
+                    self.assertEqual(main(), 2)
+            source["saved_history_access"] = "revoked"
+            source_path.write_text(json.dumps(source), encoding="utf-8")
+            with patch("sys.argv", ["review", str(source_path), "--annotations", str(labels_path)]):
+                with redirect_stderr(StringIO()):
+                    self.assertEqual(main(), 2)
+
+    def test_operator_scoring_refuses_hardlink_to_source(self):
+        import json
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        from contextlib import redirect_stderr
+        from io import StringIO
+        from server.reconstruction_review_cli import main
+
+        with tempfile.TemporaryDirectory() as directory:
+            source_path = Path(directory) / "source.json"
+            alias_path = Path(directory) / "labels.json"
+            source_path.write_text(json.dumps(payload([pair("A", "F", ["e1"])])), encoding="utf-8")
+            os.link(source_path, alias_path)
+            with patch("sys.argv", ["review", str(source_path), "--annotations", str(alias_path)]):
+                with redirect_stderr(StringIO()) as errors:
+                    self.assertEqual(main(), 2)
+            self.assertIn("must be distinct", errors.getvalue())
+
+class TruncatedNavigationEvidenceTests(unittest.TestCase):
+    def test_group_or_continuity_truncation_blocks_scoring(self):
+        # Pair rows may be complete even when case navigation is not.
+        # A reviewer must not score that partial evidence as a complete cohort.
+        for flag in ("observed_case_groups_truncated",
+                     "observed_group_continuity_truncated"):
+            with self.subTest(flag=flag):
+                source = payload([pair("A", "F", ["e1"])])
+                source[flag] = True
+                queue = build_review_queue(source)
+                self.assertTrue(queue["coverage_incomplete"])
+                row = queue["event_reviews"][0]
+                labels = [{"window": row["window"], "event_id": row["event_id"],
+                           "true_resource_pairs": row["candidate_resource_pairs"]}]
+                with self.assertRaisesRegex(ValueError, "incomplete source evidence"):
+                    score_review_annotations(source, labels)
+
+    def test_complete_navigation_remains_scoreable(self):
+        source = payload([pair("A", "F", ["e1"])])
+        source["observed_case_groups_truncated"] = False
+        source["observed_group_continuity_truncated"] = False
+        row = build_review_queue(source)["event_reviews"][0]
+        labels = [{"window": row["window"], "event_id": row["event_id"],
+                   "true_resource_pairs": row["candidate_resource_pairs"]}]
+        self.assertEqual(score_review_annotations(source, labels)["true_positive_pairs"], 1)
+
+
+class EvidenceBoundAnnotationTests(unittest.TestCase):
+    def test_bound_annotations_accept_exact_export_and_reject_stale_export(self):
+        from server.reconstruction_review_cli import score_bound_review_annotations
+        source = payload([pair("A", "F", ["a"])])
+        queue = build_review_queue(source)
+        row = queue["event_reviews"][0]
+        envelope = {"evidence_sha256": queue["evidence_sha256"],
+                    "annotations": [{"window": row["window"], "event_id": row["event_id"],
+                                     "true_resource_pairs": row["candidate_resource_pairs"]}]}
+        self.assertEqual(score_bound_review_annotations(source, envelope)["true_positive_pairs"], 1)
+        changed = payload([pair("B", "G", ["a"])])
+        with self.assertRaisesRegex(ValueError, "digest mismatch"):
+            score_bound_review_annotations(changed, envelope)
+
+    def test_changed_group_continuity_invalidates_review_labels(self):
+        from server.reconstruction_review_cli import score_bound_review_annotations
+        source = payload([pair("A", "F", ["e1"])])
+        source["observed_group_continuity"] = [{"group_id": "g1", "evidence_event_ids": ["e1"]}]
+        source["observed_group_continuity_truncated"] = False
+        queue = build_review_queue(source)
+        row = queue["event_reviews"][0]
+        envelope = {"evidence_sha256": queue["evidence_sha256"],
+                    "annotations": [{"window": row["window"], "event_id": row["event_id"],
+                                     "true_resource_pairs": row["candidate_resource_pairs"]}]}
+        self.assertEqual(score_bound_review_annotations(source, envelope)["true_positive_pairs"], 1)
+        changed = dict(source, observed_group_continuity=[
+            {"group_id": "g2", "evidence_event_ids": ["e1"]}])
+        with self.assertRaisesRegex(ValueError, "digest mismatch"):
+            score_bound_review_annotations(changed, envelope)
+        changed = dict(source, observed_group_continuity_truncated=True)
+        with self.assertRaisesRegex(ValueError, "digest mismatch"):
+            score_bound_review_annotations(changed, envelope)
+
+    def test_unbound_or_invalid_annotation_envelopes_are_refused(self):
+        from server.reconstruction_review_cli import score_bound_review_annotations
+        source = payload([pair("A", "F", ["a"])])
+        for envelope in ([], {}, {"annotations": []},
+                         {"evidence_sha256": "x" * 64, "annotations": []},
+                         {"evidence_sha256": build_review_queue(source)["evidence_sha256"],
+                          "annotations": [], "reviewer": "unverified"}):
+            with self.subTest(envelope=envelope), self.assertRaises(ValueError):
+                score_bound_review_annotations(source, envelope)
+
+
+class ExplicitAnnotationScoreTests(unittest.TestCase):
+    def test_empty_review_cohort_cannot_report_zero_f1(self):
+        with self.assertRaisesRegex(ValueError, "no surfaced review events"):
+            score_review_annotations(payload([]), [{"window": "current", "event_id": "fake", "true_resource_pairs": []}])
+
+    def test_interleaved_cases_score_only_exact_annotated_event_pair(self):
+        data = payload([pair("A", "F", ["a"]), pair("B", "G", ["b"])])
+        review = build_review_queue(data)
+        labels = [{"window": row["window"], "event_id": row["event_id"],
+                   "true_resource_pairs": row["candidate_resource_pairs"]}
+                  for row in review["event_reviews"]]
+        score = score_review_annotations(data, labels)
+        self.assertEqual((score["precision"], score["recall"], score["f1"]), (1.0, 1.0, 1.0))
+        self.assertFalse(score["held_out_verified"])
+        self.assertFalse(score["real_work_accuracy_claim"])
+
+    def test_ambiguous_assignment_counts_false_positive_not_silent_case_merge(self):
+        data = payload([pair("A", "F", ["shared"]), pair("B", "G", ["shared"])])
+        row = build_review_queue(data)["event_reviews"][0]
+        label = {"window": row["window"], "event_id": row["event_id"],
+                 "true_resource_pairs": row["candidate_resource_pairs"][:1]}
+        score = score_review_annotations(data, [label])
+        self.assertEqual(score["ambiguous_annotated_events"], 1)
+        self.assertEqual(score["false_positive_pairs"], 1)
+        self.assertEqual(score["precision"], 0.5)
+        self.assertFalse(score["confirmed_case"])
+
+    def test_window_errors_expose_interleaved_false_pair_without_claiming_case_metric(self):
+        earlier = [{"session_started_at": "2026-10-12T09:00:00Z", "evidence_event_ids": ["old"]}]
+        data = payload([pair("A", "F", ["new"], earlier=earlier)])
+        rows = build_review_queue(data)["event_reviews"]
+        labels = [{"window": row["window"], "event_id": row["event_id"],
+                   "true_resource_pairs": row["candidate_resource_pairs"] if row["event_id"] == "old" else []}
+                  for row in rows]
+        score = score_review_annotations(data, labels)
+        self.assertEqual(score["per_window_counts"]["current"], {"tp": 0, "fp": 1, "fn": 0, "events": 1})
+        self.assertEqual(score["per_window_counts"]["earlier:2026-10-12T09:00:00+00:00"],
+                         {"tp": 1, "fp": 0, "fn": 0, "events": 1})
+        self.assertFalse(score["cross_case_contamination_measured"])
+        disagreements = score["event_disagreements"]
+        self.assertEqual(len(disagreements), 1)
+        self.assertEqual(disagreements[0]["event_id"], "earlier-1")
+        self.assertEqual(len(disagreements[0]["false_positive_resource_pairs"]), 1)
+        self.assertEqual(disagreements[0]["false_negative_resource_pairs"], [])
+        self.assertTrue(score["event_disagreements_are_review_evidence_not_confirmed_cases"])
+
+    def test_disagreement_rows_distinguish_false_negative_from_false_positive(self):
+        source = payload([pair("A", "F", ["e1"])])
+        row = build_review_queue(source)["event_reviews"][0]
+        other = [["github", "issue", "unrelated-1"], ["github", "issue", "unrelated-2"]]
+        score = score_review_annotations(source, [{
+            "window": row["window"], "event_id": row["event_id"],
+            "true_resource_pairs": [other],
+        }])
+        self.assertEqual((score["true_positive_pairs"], score["false_positive_pairs"],
+                          score["false_negative_pairs"]), (0, 1, 1))
+        self.assertEqual(len(score["event_disagreements"]), 1)
+        disagreement = score["event_disagreements"][0]
+        self.assertEqual(disagreement["false_positive_resource_pairs"], row["candidate_resource_pairs"])
+        self.assertEqual(disagreement["false_negative_resource_pairs"], [other])
+        self.assertFalse(score["complete_case_recall_measured"])
+        self.assertFalse(score["held_out_verified"])
+
+    def test_unlabeled_events_are_not_assumed_negative(self):
+        data = payload([pair("A", "F", ["a", "b"])])
+        row = build_review_queue(data)["event_reviews"][0]
+        with self.assertRaisesRegex(ValueError, "all surfaced review events"):
+            score_review_annotations(data, [{"window": row["window"],
+                "event_id": row["event_id"], "true_resource_pairs": []}])
+
+    def test_fail_closed_on_revocation_truncation_duplicate_and_unknown_event(self):
+        data = payload([pair("A", "F", ["a"])])
+        label = {"window": "current", "event_id": "a", "true_resource_pairs": []}
+        for changed, labels in (
+            ({**data, "saved_history_access": "revoked"}, [label]),
+            ({**data, "coverage": {"scan_truncated": True}}, [label]),
+            (data, [label, label]),
+            (data, [{**label, "event_id": "unseen"}]),
+        ):
+            with self.assertRaises(ValueError):
+                score_review_annotations(changed, labels)
+
+
+class DuplicatePairProvenanceTests(unittest.TestCase):
+    def test_duplicate_pair_rows_rejected_even_with_distinct_events(self):
+        source = payload([pair("A", "F", ["first"]), pair("A", "F", ["second"])])
+        with self.assertRaisesRegex(ValueError, "duplicate resource pair assignment"):
+            build_review_queue(source)
+
+    def test_duplicate_event_id_in_one_source_pair_is_rejected(self):
+        # A repeated label is not two independent observations.
+        with self.assertRaisesRegex(ValueError, "duplicate evidence event ID"):
+            build_review_queue(payload([pair("A", "F", ["same", "same"])]))
+
+    def test_duplicate_earlier_window_with_different_timezone_is_rejected(self):
+        # Equivalent instants must not be represented as separate corroborations.
+        earlier = [
+            {"session_started_at": "2026-11-01T09:00:00Z", "evidence_event_ids": ["old1"]},
+            {"session_started_at": "2026-11-01T10:00:00+01:00", "evidence_event_ids": ["old2"]},
+        ]
+        with self.assertRaisesRegex(ValueError, "duplicate earlier session window"):
+            build_review_queue(payload([pair("A", "F", ["new"], earlier)]))
+
+    def test_reversed_duplicate_pair_identity_is_rejected(self):
+        first = pair("A", "F", ["first"])
+        reversed_pair = {**first, "resource_pointers": list(reversed(first["resource_pointers"])),
+                         "current_evidence_event_ids": ["second"]}
+        with self.assertRaisesRegex(ValueError, "duplicate resource pair assignment"):
+            build_review_queue(payload([first, reversed_pair]))
 
 
 class ReviewQueueTests(unittest.TestCase):
@@ -46,11 +302,19 @@ class ReviewQueueTests(unittest.TestCase):
         self.assertEqual(out["event_reviews"][0]["review_status"], "ambiguous_multiple_pairs")
         self.assertEqual(len(out["event_reviews"][0]["candidate_resource_pairs"]), 2)
 
-    def test_same_id_in_different_windows_is_not_a_collision(self):
-        out = build_review_queue(payload([pair("A", "F", ["id"], [
-            {"session_started_at": "2026-11-01", "evidence_event_ids": ["id"]}])]))
+    def test_same_id_in_different_windows_is_rejected(self):
+        # A single source event cannot independently corroborate two sessions.
+        with self.assertRaisesRegex(ValueError, "reused across session windows"):
+            build_review_queue(payload([pair("A", "F", ["id"], [
+                {"session_started_at": "2026-11-01", "evidence_event_ids": ["id"]}])]))
+
+    def test_distinct_ids_in_different_windows_remain_separate(self):
+        out = build_review_queue(payload([pair("A", "F", ["current-id"], [
+            {"session_started_at": "2026-11-01", "evidence_event_ids": ["earlier-id"]}])]))
         self.assertEqual(out["event_reviews_count"], 2)
-        self.assertTrue(all(x["review_status"] == "observed_pair_needs_review" for x in out["event_reviews"]))
+        self.assertEqual({row["event_id"] for row in out["event_reviews"]},
+                         {"earlier-id", "current-id"})
+        self.assertTrue(all(not row["confirmed_case"] for row in out["event_reviews"]))
 
     def test_equivalent_timezone_windows_cannot_hide_multi_pair_ambiguity(self):
         a = {"session_started_at": "2026-11-01T09:00:00Z",
@@ -333,6 +597,221 @@ class ReviewQueueTests(unittest.TestCase):
                                     for pointer in row["candidate_resource_pairs"][0]))
                 self.assertFalse(row["confirmed_case"])
             db.close()
+
+
+
+class FingerprintScopeTests(unittest.TestCase):
+    def test_same_rows_different_access_modes_have_different_digest(self):
+        source = payload([pair("A", "F", ["e1"])])
+        first = build_review_queue(source)
+        changed = dict(source, saved_history_access="current_run")
+        second = build_review_queue(changed)
+        self.assertEqual(first["event_reviews"], second["event_reviews"])
+        self.assertNotEqual(first["evidence_sha256"], second["evidence_sha256"])
+
+    def test_truncated_evidence_changes_digest_and_cannot_be_scored(self):
+        from server.reconstruction_review_cli import score_bound_review_annotations
+        source = payload([pair("A", "F", ["e1"])])
+        queue = build_review_queue(source)
+        row = queue["event_reviews"][0]
+        envelope = {"evidence_sha256": queue["evidence_sha256"], "annotations": [
+            {"window": row["window"], "event_id": row["event_id"],
+             "true_resource_pairs": row["candidate_resource_pairs"]}
+        ]}
+        changed = dict(source, coverage={"scan_truncated": True})
+        self.assertNotEqual(queue["evidence_sha256"], build_review_queue(changed)["evidence_sha256"])
+        with self.assertRaisesRegex(ValueError, "digest mismatch"):
+            score_bound_review_annotations(changed, envelope)
+
+class LiveReconstructionServiceTests(unittest.TestCase):
+    def test_live_service_rebuilds_evidence_and_refuses_stale_envelope(self):
+        from unittest.mock import patch
+        from server.work_resumption import score_live_reconstruction_review
+        source = payload([pair("A", "F", ["e1"])])
+        queue = build_review_queue(source)
+        row = queue["event_reviews"][0]
+        envelope = {"evidence_sha256": queue["evidence_sha256"], "annotations": [
+            {"window": row["window"], "event_id": row["event_id"],
+             "true_resource_pairs": row["candidate_resource_pairs"]}]}
+        lease = {"mode": "all_saved"}
+        with patch("server.work_resumption.resumption_candidates", return_value=source) as rebuild:
+            scored = score_live_reconstruction_review(
+                object(), envelope, lease=lease, authorize_review=lambda: True)
+            self.assertEqual(scored["true_positive_pairs"], 1)
+            self.assertFalse(scored["held_out_verified"])
+            self.assertEqual(rebuild.call_args.kwargs["lease"], lease)
+        changed = payload([pair("A", "F", ["different-event"])])
+        with patch("server.work_resumption.resumption_candidates", return_value=changed):
+            with self.assertRaisesRegex(ValueError, "digest mismatch"):
+                score_live_reconstruction_review(
+                    object(), envelope, lease=lease, authorize_review=lambda: True)
+
+    def test_revocation_during_reconstruction_or_scoring_refuses_result(self):
+        from unittest.mock import patch
+        from server.work_resumption import score_live_reconstruction_review
+        source = payload([pair("A", "F", ["e1"])])
+        queue = build_review_queue(source)
+        row = queue["event_reviews"][0]
+        envelope = {"evidence_sha256": queue["evidence_sha256"], "annotations": [
+            {"window": row["window"], "event_id": row["event_id"],
+             "true_resource_pairs": row["candidate_resource_pairs"]}]}
+        checks = iter([True, False])
+        with patch("server.work_resumption.resumption_candidates", return_value=source) as rebuild:
+            with self.assertRaisesRegex(PermissionError, "revoked during scoring"):
+                score_live_reconstruction_review(
+                    object(), envelope, lease={"mode": "all_saved"},
+                    authorize_review=lambda: next(checks))
+            rebuild.assert_called_once()
+
+    def test_revocation_after_scoring_does_not_leak_result(self):
+        from unittest.mock import patch
+        from server.work_resumption import score_live_reconstruction_review
+        source = payload([pair("A", "F", ["e1"])])
+        row = build_review_queue(source)["event_reviews"][0]
+        envelope = {"evidence_sha256": build_review_queue(source)["evidence_sha256"],
+                    "annotations": [{"window": row["window"], "event_id": row["event_id"],
+                                     "true_resource_pairs": row["candidate_resource_pairs"]}]}
+        decisions = iter([True, False])
+        with patch("server.work_resumption.resumption_candidates", return_value=source):
+            with self.assertRaises(PermissionError):
+                score_live_reconstruction_review(
+                    object(), envelope, lease={"mode": "all_saved"},
+                    authorize_review=lambda: next(decisions))
+
+    def test_live_service_requires_reviewable_history_scope_before_database_access(self):
+        from unittest.mock import patch
+        from server.work_resumption import score_live_reconstruction_review
+        with patch("server.work_resumption.resumption_candidates") as rebuild:
+            for lease in ({"mode": "off"}, {"mode": "unexpected"},
+                          {"mode": "selected_range", "since": "bad", "until": "bad"}, {}):
+                with self.subTest(lease=lease):
+                    with self.assertRaisesRegex(PermissionError, "reviewable saved-history grant"):
+                        score_live_reconstruction_review(
+                            object(), {}, lease=lease, authorize_review=lambda: True,
+                            run_started_at=None)
+            rebuild.assert_not_called()
+
+    def test_live_service_denial_precedes_database_reconstruction(self):
+        from unittest.mock import patch
+        from server.work_resumption import score_live_reconstruction_review
+        with patch("server.work_resumption.resumption_candidates") as rebuild:
+            for denied in (None, False, 1, {"authorized": True}):
+                with self.assertRaises(PermissionError):
+                    score_live_reconstruction_review(
+                        object(), {}, lease={}, authorize_review=lambda d=denied: d)
+            with self.assertRaises(PermissionError):
+                score_live_reconstruction_review(
+                    object(), {}, lease={}, authorize_review=None)
+            rebuild.assert_not_called()
+
+
+    def test_live_service_rejects_lease_scope_change_mid_scan(self):
+        from unittest.mock import patch
+        from server.work_resumption import score_live_reconstruction_review
+        source = payload([pair("A", "F", ["e1"])])
+        queue = build_review_queue(source)
+        row = queue["event_reviews"][0]
+        envelope = {"evidence_sha256": queue["evidence_sha256"],
+                    "annotations": [{"window": row["window"], "event_id": row["event_id"],
+                                     "true_resource_pairs": row["candidate_resource_pairs"]}]}
+        lease = {"mode": "all_saved"}
+        def change_lease(*args, **kwargs):
+            lease["mode"] = "off"
+            return source
+        with patch("server.work_resumption.resumption_candidates", side_effect=change_lease) as rebuild:
+            with self.assertRaisesRegex(PermissionError, "lease changed"):
+                score_live_reconstruction_review(
+                    object(), envelope, lease=lease, authorize_review=lambda: True)
+            self.assertEqual(rebuild.call_args.kwargs["lease"], {"mode": "all_saved"})
+
+    def test_offline_adapter_rechecks_revocation_after_scoring(self):
+        from unittest.mock import patch
+        from server.work_resumption import score_authorized_reconstruction_review
+        source = payload([pair("A", "F", ["e1"])])
+        queue = build_review_queue(source)
+        row = queue["event_reviews"][0]
+        envelope = {"evidence_sha256": queue["evidence_sha256"],
+                    "annotations": [{"window": row["window"], "event_id": row["event_id"],
+                                     "true_resource_pairs": row["candidate_resource_pairs"]}]}
+        decisions = iter([True, False])
+        with self.assertRaisesRegex(PermissionError, "revoked during scoring"):
+            score_authorized_reconstruction_review(
+                source, envelope, authorize_review=lambda: next(decisions))
+
+class WindowMetricsTests(unittest.TestCase):
+    def test_separate_earlier_window_failure_is_not_hidden_by_current_success(self):
+        source = payload([pair(
+            "A", "F", ["current-1"],
+            earlier=[{"session_started_at": "2026-11-01T08:00:00+00:00",
+                      "evidence_event_ids": ["earlier-1"]}],
+        )])
+        queue = build_review_queue(source)
+        annotations = []
+        for row in queue["event_reviews"]:
+            annotations.append({
+                "window": row["window"], "event_id": row["event_id"],
+                "true_resource_pairs": row["candidate_resource_pairs"]
+                if row["window"] == "current" else [],
+            })
+        score = score_review_annotations(source, annotations)
+        windows = score["per_window_metrics"]
+        self.assertEqual(windows["current"]["f1"], 1.0)
+        earlier = [v for k, v in windows.items() if k.startswith("earlier:")]
+        self.assertEqual(len(earlier), 1)
+        self.assertEqual(earlier[0]["false_positive_pairs"] if "false_positive_pairs" in earlier[0] else earlier[0]["fp"], 1)
+        self.assertEqual(earlier[0]["f1"], 0.0)
+        self.assertFalse(score["held_out_verified"])
+        self.assertFalse(score["cross_case_contamination_measured"])
+
+
+
+class LiveQueueAdapterTests(unittest.TestCase):
+    def test_queue_uses_trusted_lease_and_matches_offline_review(self):
+        from unittest.mock import patch
+        from server.work_resumption import build_live_reconstruction_review_queue
+        source = payload([pair("A", "F", ["e1"])])
+        lease = {"mode": "all_saved"}
+        with patch("server.work_resumption.resumption_candidates", return_value=source) as rebuild:
+            result = build_live_reconstruction_review_queue(
+                object(), lease=lease, authorize_review=lambda: True)
+        self.assertEqual(result, build_review_queue(source))
+        self.assertEqual(rebuild.call_args.kwargs["lease"], lease)
+
+    def test_queue_denies_before_database_read_without_history_grant(self):
+        from unittest.mock import patch
+        from server.work_resumption import build_live_reconstruction_review_queue
+        with patch("server.work_resumption.resumption_candidates") as rebuild:
+            for lease, authorize in [({"mode": "off"}, lambda: True),
+                                     ({"mode": "all_saved"}, lambda: False)]:
+                with self.assertRaises(PermissionError):
+                    build_live_reconstruction_review_queue(
+                        object(), lease=lease, authorize_review=authorize)
+            rebuild.assert_not_called()
+
+    def test_queue_rejects_revocation_during_build(self):
+        from unittest.mock import patch
+        from server.work_resumption import build_live_reconstruction_review_queue
+        decisions = iter([True, False])
+        with patch("server.work_resumption.resumption_candidates",
+                   return_value=payload([pair("A", "F", ["e1"])])):
+            with self.assertRaisesRegex(PermissionError, "revoked"):
+                build_live_reconstruction_review_queue(
+                    object(), lease={"mode": "all_saved"},
+                    authorize_review=lambda: next(decisions))
+
+    def test_queue_rejects_mid_scan_scope_change(self):
+        from unittest.mock import patch
+        from server.work_resumption import build_live_reconstruction_review_queue
+        lease = {"mode": "all_saved"}
+        def change_scope(*args, **kwargs):
+            lease["mode"] = "off"
+            return payload([pair("A", "F", ["e1"])])
+        with patch("server.work_resumption.resumption_candidates",
+                   side_effect=change_scope):
+            with self.assertRaisesRegex(PermissionError, "lease changed"):
+                build_live_reconstruction_review_queue(
+                    object(), lease=lease, authorize_review=lambda: True)
+
 
 if __name__ == "__main__":
     unittest.main()

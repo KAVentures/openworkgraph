@@ -13,6 +13,7 @@ however close in time it is. No titles, URLs, paths or contents are read.
 from __future__ import annotations
 
 from bisect import bisect_right
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -160,6 +161,14 @@ def _observed_case_groups(bucket: dict[str, Any]) -> list[dict[str, Any]]:
             "evidence_event_ids": events[:12],
             "evidence_truncated": len(events) > 12,
             "observed_co_reference": len(component) > 1,
+            # Explicitly expose the missing edges in transitive A-B-C groups.
+            # A connected component is only navigation; A-C is not evidence
+            # unless one actual event directly co-observed A and C.
+            "unobserved_transitive_pair_count": sum(
+                1 for i, left in enumerate(component) for right in component[i + 1:]
+                if (left, right) not in bucket.get("pair_events", {})
+                and (right, left) not in bucket.get("pair_events", {})
+            ),
             "proves_same_case": False,
             "assignment_status": "observed_co_reference" if len(component) > 1 else "independent_resource",
         })
@@ -251,6 +260,18 @@ def resumption_candidates(
         if event_id:
             event_id_counts[event_id] = event_id_counts.get(event_id, 0) + 1
     colliding_event_ids = {eid for eid, count in event_id_counts.items() if count > 1}
+    # A pointer-bearing row can share its external event label with an ordinary
+    # activity row. The pointer-only query cannot see that collision.
+    # Check all authorized activity within the scanned window before using
+    # event IDs as case-assignment evidence.
+    duplicate_labels = connection.execute(
+        "SELECT substr(event_id, 1, 120) AS evidence_id FROM events "
+        "WHERE julianday(observed_at) BETWEEN ? AND ? AND (" + where + ") "
+        "AND event_id IS NOT NULL AND event_id != '' "
+        "GROUP BY substr(event_id, 1, 120) HAVING COUNT(*) > 1",
+        tuple([instants[0], instants[-1]] + args),
+    ).fetchall()
+    colliding_event_ids.update(str(row[0]) for row in duplicate_labels)
     unlabeled_pointer_rows = sum(1 for row in pointer_rows if not str(row["event_id"] or "")[:120])
     if unlabeled_pointer_rows:
         result["coverage"]["excluded_unlabeled_pointer_rows"] = unlabeled_pointer_rows
@@ -378,13 +399,14 @@ def resumption_candidates(
         })
     result["observed_pair_event_assignments"] = pair_assignments[:24]
     result["observed_pair_event_assignments_truncated"] = len(pair_assignments) > 24
-    # Review-only event attribution under the same grant; never a confirmed case.
+    result["observed_group_continuity"] = group_matches[:24]
+    result["observed_group_continuity_truncated"] = len(group_matches) > 24
+    # Bind reviewer evidence only after the full continuity result is populated.
+    # A partial response must not be fingerprinted as a complete inspection.
     # Denied, revoked or unknown history access gets no review queue at all.
     from .reconstruction_review_cli import REVIEWABLE_ACCESS, build_review_queue
     if result.get("saved_history_access") in REVIEWABLE_ACCESS:
         result["event_assignment_review"] = build_review_queue(result)
-    result["observed_group_continuity"] = group_matches[:24]
-    result["observed_group_continuity_truncated"] = len(group_matches) > 24
     if not current["refs"]:
         result["notice"] = ("The latest session has no observed stable pointer, so resumption "
                             "cannot be assessed; this does not mean the work is new.")
@@ -511,4 +533,110 @@ def resumption_candidates(
     return result
 
 
-__all__ = ["resumption_candidates"]
+def score_authorized_reconstruction_review(
+    response: dict[str, Any],
+    annotation_envelope: dict[str, Any],
+    *,
+    authorize_review: Any,
+) -> dict[str, Any]:
+    """Fail-closed adapter for scoring a freshly authorized reconstruction review.
+
+    The host must supply a live authorization decision bound to the same tenant,
+    reviewer, history scope and grant as the response. An exported response or
+    digest is not an authorization credential. This adapter neither stores
+    reviewer decisions nor certifies independent ground truth.
+    """
+    if not callable(authorize_review):
+        raise PermissionError("live reconstruction review authorization required")
+    # Authorization precedes parsing or scoring sensitive event evidence.
+    # Explicit True avoids accepting truthy metadata or expired grant objects.
+    if authorize_review() is not True:
+        raise PermissionError("reconstruction review authorization denied")
+    from .reconstruction_review_cli import score_bound_review_annotations
+    score = score_bound_review_annotations(response, annotation_envelope)
+    if authorize_review() is not True:
+        raise PermissionError("reconstruction review authorization revoked during scoring")
+    return score
+
+
+
+def build_live_reconstruction_review_queue(
+    connection: Any,
+    *,
+    lease: dict[str, Any],
+    authorize_review: Any,
+    run_started_at: str | None = None,
+) -> dict[str, Any]:
+    """Build a bounded reviewer queue from live grant-scoped history.
+
+    This service adapter is for authenticated hosts, not an HTTP endpoint.
+    The host must supply a trusted lease and a fresh authorization callback;
+    neither may be accepted from client-provided JSON. The returned event
+    identifiers remain sensitive and must not be cached beyond the grant.
+    """
+    if not callable(authorize_review) or authorize_review() is not True:
+        raise PermissionError("live reconstruction review authorization denied")
+    if not isinstance(lease, dict):
+        raise PermissionError("trusted saved-history lease required")
+    lease_snapshot = deepcopy(lease)
+    from .recent_resource_references import lease_window
+    from .reconstruction_review_cli import REVIEWABLE_ACCESS, build_review_queue
+    access_mode, scope_where, _ = lease_window(lease_snapshot, run_started_at)
+    if access_mode not in REVIEWABLE_ACCESS or scope_where is None:
+        raise PermissionError("reviewable saved-history grant required")
+    response = resumption_candidates(
+        connection, lease=lease_snapshot, run_started_at=run_started_at
+    )
+    queue = build_review_queue(response)
+    if authorize_review() is not True:
+        raise PermissionError("reconstruction review authorization revoked during queue build")
+    if lease != lease_snapshot:
+        raise PermissionError("reconstruction review lease changed during queue build")
+    return queue
+
+
+def score_live_reconstruction_review(
+    connection: Any,
+    annotation_envelope: dict[str, Any],
+    *,
+    lease: dict[str, Any],
+    authorize_review: Any,
+    run_started_at: str | None = None,
+) -> dict[str, Any]:
+    """Score against a freshly reconstructed, grant-scoped response, not client JSON.
+
+    The authenticated host supplies the database connection, active lease and
+    a live reviewer authorization callback. Never accept those from request
+    payloads. Revocation must be checked on each call; a fingerprint alone
+    cannot authorize saved-history access. This is a service entrypoint, not
+    an HTTP route or durable reviewer-decision store.
+    """
+    if not callable(authorize_review) or authorize_review() is not True:
+        raise PermissionError("live reconstruction review authorization denied")
+    # Freeze the host-owned lease used for the scan. A concurrent grant-scope
+    # change must not allow a result built under the old scope to escape.
+    if not isinstance(lease, dict):
+        raise PermissionError("trusted saved-history lease required")
+    lease_snapshot = deepcopy(lease)
+    # A reviewer permission is not itself a saved-history grant. Reject
+    # disabled, unknown and malformed scopes before touching the event store.
+    from .recent_resource_references import lease_window
+    from .reconstruction_review_cli import REVIEWABLE_ACCESS
+    access_mode, scope_where, _scope_args = lease_window(lease_snapshot, run_started_at)
+    if access_mode not in REVIEWABLE_ACCESS or scope_where is None:
+        raise PermissionError("reviewable saved-history grant required")
+    response = resumption_candidates(
+        connection, lease=lease_snapshot, run_started_at=run_started_at
+    )
+    from .reconstruction_review_cli import score_bound_review_annotations
+    score = score_bound_review_annotations(response, annotation_envelope)
+    # The grant can be revoked while a large history scan or scoring is running.
+    # Never return derived evidence after a failed final live authorization check.
+    if authorize_review() is not True:
+        raise PermissionError("reconstruction review authorization revoked during scoring")
+    if lease != lease_snapshot:
+        raise PermissionError("reconstruction review lease changed during scoring")
+    return score
+
+
+__all__ = ["resumption_candidates", "score_authorized_reconstruction_review", "score_live_reconstruction_review", "build_live_reconstruction_review_queue"]
