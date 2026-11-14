@@ -40,10 +40,12 @@ const path=require('node:path');
   await loadGraph();assert.match(await page.locator('#dependencyGraphStatus').textContent(),/current declared basis/);
   await page.locator('#dependencyFocus').selectOption(c.workflow_id);await page.locator('#dependencyInspect').click();
   const consumers=page.locator('#dependencyGraphResult section').filter({hasText:'Potential consumers to review'});await consumers.waitFor();
-  assert.match(await consumers.textContent(),/Customer activation · distance 2/);assert.match(await consumers.textContent(),/Account setup · distance 1/);assert.match(await consumers.textContent(),/Billing profile · distance 2/);
+  assert.match(await consumers.textContent(),/Customer activation · distance 2/);
+  assert.match(await consumers.textContent(),/Declared path:/);assert.match(await consumers.textContent(),/declared links:/);
+  assert.doesNotMatch(await consumers.textContent(),/Uses account output <script>/);assert.match(await consumers.textContent(),/Account setup · distance 1/);assert.match(await consumers.textContent(),/Billing profile · distance 2/);
   const node=page.locator('svg').getByRole('button',{name:'Inspect impact of Account setup',exact:true});await node.focus();await node.press('Enter');await page.waitForFunction(id=>document.querySelector('#dependencyFocus').value===id,b.workflow_id);
   const [download]=await Promise.all([page.waitForEvent('download'),page.locator('#dependencyGraphExport').click()]);const report=JSON.parse(await fs.readFile(await download.path(),'utf8'));
-  assert.equal(report.impact.focus,b.workflow_id);assert.equal(report.graph.edges.length,3);assert.equal(report.current_basis,true);assert.equal(report.business_dependency_completeness_verified,false);assert.equal(JSON.stringify(report).includes('<script>'),false);
+  assert.equal(report.impact.focus,b.workflow_id);assert.equal(report.graph.edges.length,3);assert.equal(report.impact.declared_paths.permissions_granted,false);assert.ok(report.impact.declared_paths.potential_consumers.paths.length);assert.equal(report.current_basis,true);assert.equal(report.business_dependency_completeness_verified,false);assert.equal(JSON.stringify(report).includes('<script>'),false);
   // Drafts clear sharing and graph/export state; exact history retains the earlier reason.
   await reason.fill('Updated relationship explanation');assert.equal(await page.locator('#dependencyExport').isDisabled(),true);assert.equal(await page.locator('#dependencyGraphResult').textContent(),'');await save();
   await page.locator('#dependencyRevision').selectOption('1');await page.locator('#dependencyHistory').click();await page.locator('#dependencyStatus').filter({hasText:'Opened dependency revision 1.'}).waitFor();
