@@ -207,3 +207,11 @@ def test_reconstruction_submission_rejects_unbounded_annotation_batch():
     assert len(history_routes.ReconstructionReviewSubmission(
         evidence_sha256="a" * 64, annotations=[{}] * 192
     ).annotations) == 192
+
+
+def test_dashboard_refuses_unscorable_review_batch():
+    """Operator must not invite a submission the scoring engine cannot accept."""
+    from server.main import ROOT
+    source = (ROOT / "dashboard" / "history_retention.js").read_text(encoding="utf-8")
+    assert "||reconstructionChoices.length>192" in source
+    assert "More than 192 surfaced events; scoring is unavailable" in source
