@@ -391,13 +391,14 @@ def resumption_candidates(
         })
     result["observed_pair_event_assignments"] = pair_assignments[:24]
     result["observed_pair_event_assignments_truncated"] = len(pair_assignments) > 24
-    # Review-only event attribution under the same grant; never a confirmed case.
+    result["observed_group_continuity"] = group_matches[:24]
+    result["observed_group_continuity_truncated"] = len(group_matches) > 24
+    # Bind reviewer evidence only after the full continuity result is populated.
+    # A partial response must not be fingerprinted as a complete inspection.
     # Denied, revoked or unknown history access gets no review queue at all.
     from .reconstruction_review_cli import REVIEWABLE_ACCESS, build_review_queue
     if result.get("saved_history_access") in REVIEWABLE_ACCESS:
         result["event_assignment_review"] = build_review_queue(result)
-    result["observed_group_continuity"] = group_matches[:24]
-    result["observed_group_continuity_truncated"] = len(group_matches) > 24
     if not current["refs"]:
         result["notice"] = ("The latest session has no observed stable pointer, so resumption "
                             "cannot be assessed; this does not mean the work is new.")
