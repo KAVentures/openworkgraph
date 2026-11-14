@@ -1062,6 +1062,64 @@ async def analysis_sharing_freshness(request: Request, log_id: str):
     return JSONResponse(result, headers={'Cache-Control': 'no-store'})
 
 
+def _analysis_grant_digest(body: dict) -> str:
+    """Bind a grant to the complete canonical reviewed analysis request."""
+    import hashlib
+    import json
+    return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":"),
+                                     ensure_ascii=True, allow_nan=False).encode("utf-8")).hexdigest()
+
+
+@router.post("/v1/event-logs/{log_id}/analysis-sharing-authorize")
+async def analysis_sharing_authorize(request: Request, log_id: str):
+    """Issue one short-lived grant only after a fresh, explicit review."""
+    _require_dashboard(request)
+    if request.headers.get("x-owg-analysis-sharing-preview") != "true":
+        raise HTTPException(403, "Explicit sharing-preview confirmation required")
+    body = await _json_body(request, "source-bound analysis authorization", strict=True)
+    from . import local_auth
+    session = str(request.headers.get("authorization") or "")[len("OWG-Session "):].strip()
+    try:
+        await run_in_threadpool(analysis_snapshot_export.export_if_source_current, log_id, body)
+        grant = local_auth.issue_analysis_grant(session, log_id, _analysis_grant_digest(body))
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(409, str(exc)) from None
+    except (ValueError, TypeError):
+        raise HTTPException(422, "Invalid bounded analysis authorization") from None
+    return JSONResponse(grant, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/event-logs/{log_id}/analysis-sharing-download")
+async def analysis_sharing_download(request: Request, log_id: str):
+    """Atomically burn the session-bound grant before recomputing source lineage."""
+    _require_dashboard(request)
+    if request.headers.get("x-owg-analysis-sharing-preview") != "true":
+        raise HTTPException(403, "Explicit sharing-preview confirmation required")
+    body = await _json_body(request, "source-bound analysis download", strict=True)
+    from . import local_auth
+    if not isinstance(body, dict):
+        raise HTTPException(422, "Invalid analysis download")
+    ticket = body.pop("ticket", None)
+    session = str(request.headers.get("authorization") or "")[len("OWG-Session "):].strip()
+    try:
+        digest = _analysis_grant_digest(body)
+    except (ValueError, TypeError):
+        raise HTTPException(422, "Invalid analysis download") from None
+    if not isinstance(ticket, str) or not local_auth.consume_analysis_grant(ticket, session, log_id, digest):
+        raise HTTPException(403, "Expired, consumed or mismatched analysis authorization")
+    try:
+        result = await run_in_threadpool(analysis_snapshot_export.export_if_source_current, log_id, body)
+    except workspace.EventLogWorkspaceError as exc:
+        raise HTTPException(409, str(exc)) from None
+    except ValueError:
+        raise HTTPException(422, "Analysis cannot fit the bounded sharing format") from None
+    # Revocation can happen while the expensive source recomputation runs in a
+    # thread. Do not release numeric rows to a session revoked in that interval.
+    if not local_auth.dashboard_session_valid(session):
+        raise HTTPException(403, "Dashboard session revoked during analysis download")
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/v1/event-logs/{log_id}/analyses")
 def event_log_saved_analyses(request: Request, log_id: str):
     _require_dashboard(request)
