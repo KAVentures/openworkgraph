@@ -383,3 +383,32 @@ def test_pointer_label_collision_with_nonpointer_activity_is_not_case_evidence()
     assert result["coverage"]["scan_truncated"] is True
     assert result["candidates"] == []
     assert result["current_session"]["pointer_count"] == 1
+
+
+def test_embedded_review_queue_sees_finalized_continuity(monkeypatch):
+    """The queue must bind the same complete evidence as live inspection."""
+    from server import reconstruction_review_cli
+
+    original = reconstruction_review_cli.build_review_queue
+    observed = []
+
+    def inspect_complete_response(response):
+        assert "observed_group_continuity" in response
+        assert "observed_group_continuity_truncated" in response
+        observed.append(response["observed_group_continuity"])
+        return original(response)
+
+    monkeypatch.setattr(reconstruction_review_cli, "build_review_queue", inspect_complete_response)
+    db = _database([
+        (_day(12, "09:00"), {
+            "resource_reference": _ref("a")["resource_reference"],
+            "file_reference": {"file_ref": FILE},
+        }),
+        (_day(14, "10:00"), {
+            "resource_reference": _ref("a")["resource_reference"],
+            "file_reference": {"file_ref": FILE},
+        }),
+    ])
+    response = resumption_candidates(db, lease=ALL)
+    assert observed and observed[0]
+    assert response["event_assignment_review"]
