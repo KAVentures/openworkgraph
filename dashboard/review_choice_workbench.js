@@ -155,6 +155,11 @@
                 if(token!==generation||choice.value!==projectId||input.value.trim()!==id)return;
                 if(!response.ok)throw new Error('Decision preflight refused ('+response.status+').');
                 const result=await response.json();
+                // Parsing a delayed response is another async boundary: the user may
+                // have changed the selected opportunity, review or consent meanwhile.
+                if(token!==generation||choice.value!==projectId||input.value.trim()!==id||
+                   consentEpoch!==startedConsentEpoch||notesEpoch!==startedNotesEpoch||
+                   !reviewTrusted||!consent.checked||!reviewStillSelected())return;
                 if(result.format!=='openworkgraph.reviewed-handoff-preflight.v1'||
                    result.idea_id!==id||result.project_id!==projectId||
                    result.idea_revision!==snapshot.idea.revision||
