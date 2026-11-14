@@ -112,8 +112,8 @@ test('selected batch comparison refuses gaps, changed or unknown mappings and in
   assert.match(compare([first,middle,middle,last]).status,/Duplicate batch/);
   assert.match(compare([{...first,batch:'0'},middle,last]).status,/outside the displayed/);
   const large=Array.from({length:102},(_,batch)=>({...report(batch,'same_transform',2,0.2,0),transform_sha256:digest}));
-  assert.match(compare(large,0,101).status,/exceeds the latest/);
-  assert.match(compare(large,1,101).status,/exceeds the latest/);
+  assert.match(compare(large,0,101).status,/exceeds the/);
+  assert.match(compare(large,1,101).status,/exceeds the/);
   assert.equal(compare(large,2,101).rows.length,5);
 });
 
@@ -172,7 +172,7 @@ test('on-demand local read renders counts as text and rejects stale log response
   assert.ok(run && download && output);
   assert.equal(requested,''); // no implicit data fetch
   const first=run.listeners.click();
-  assert.equal(requested,'/v1/event-logs/log_123/quality/batch-history');
+  assert.equal(requested,'/v1/event-logs/log_123/quality/batch-history/page');
   assert.equal(download.disabled,true);
   picker.value='log_other';
   resolveFetch({ok:true,json:async()=>({batch_trends:{batches:[report(0,'first_report',2,0.2,null)]}})});

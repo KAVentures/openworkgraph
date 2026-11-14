@@ -46,3 +46,14 @@ reports include mapping and source metadata; they do not include sample event
 values. The endpoint returns `Cache-Control: no-store`. It reads all retained
 batch reports, so its work and response still grow with the number of batches.
 The full quality endpoint remains available when a current snapshot is needed.
+
+The dashboard uses `GET /v1/event-logs/{log_id}/quality/batch-history/page`
+for at most 100 logical batches, including batches whose quality report is
+missing. `before` is an exclusive batch-number cursor; `window.next_before`
+provides the next older page. The newest and older controls navigate the stored
+history. The previous report is consulted to compute the earliest visible
+comparison, but is not returned with the page. The history is live, not a
+stable snapshot, and can change between requests. The database must still
+count and order batch identifiers; the bound applies to returned history and
+application memory, not constant-time database work. The original full-history
+and full-quality endpoints remain available.

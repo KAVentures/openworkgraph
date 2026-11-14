@@ -45,6 +45,7 @@ from . import event_log_process_map as process_maps
 from . import event_log_predictions as predictions
 from . import event_log_prediction_monitoring as prediction_monitoring
 from . import event_log_quality as quality
+from . import event_log_quality_pages as quality_pages
 from . import event_log_quarantine as quarantine
 from . import event_log_query as analysis
 from . import event_log_linked_attribute_analysis as linked_attribute_analysis
@@ -333,6 +334,14 @@ def event_log_quality(request: Request, log_id: str):
 def event_log_quality_batch_history(request: Request, log_id: str):
     _require_dashboard(request)
     return _respond(quality.batch_history, log_id)
+
+
+@router.get("/v1/event-logs/{log_id}/quality/batch-history/page")
+def event_log_quality_batch_history_page(request: Request, log_id: str,
+        before: int | None = Query(default=None, ge=0, le=2_147_483_647),
+        limit: int = Query(default=100, ge=1, le=100)):
+    _require_dashboard(request)
+    return _respond(quality_pages.page, log_id, before, limit)
 
 
 @router.post("/v1/event-logs/{log_id}/derive")
