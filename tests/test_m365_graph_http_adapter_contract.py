@@ -262,3 +262,28 @@ def test_real_delta_http_adapter_refuses_untrusted_transport_without_candidate(t
     assert len(transport.requests) == 1
     assert not (tmp_path / "events.csv").exists()
     assert not (tmp_path / "candidate.json").exists()
+
+
+def test_delta_private_artifact_reader_rejects_hardlinks(tmp_path):
+    """A second link can bypass the expected private artifact ownership boundary."""
+    import os
+    from server import m365_outlook_delta as delta
+
+    original = tmp_path / "source.csv"
+    original.write_bytes(b"private delta evidence")
+    os.chmod(original, 0o600)
+    linked = tmp_path / "linked.csv"
+    os.link(original, linked)
+    with pytest.raises(delta.DeltaError, match="Private artifact invalid"):
+        delta._private_read(linked, 8192)
+    assert original.read_bytes() == b"private delta evidence"
+
+
+def test_delta_private_artifact_reader_accepts_single_link(tmp_path):
+    import os
+    from server import m365_outlook_delta as delta
+
+    artifact = tmp_path / "private.csv"
+    artifact.write_bytes(b"owned delta evidence")
+    os.chmod(artifact, 0o600)
+    assert delta._private_read(artifact, 8192) == b"owned delta evidence"
