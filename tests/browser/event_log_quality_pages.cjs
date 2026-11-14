@@ -26,11 +26,22 @@ const path=require('node:path');
   const logId=await page.locator('#owgEventLogPick').inputValue();
   const owner={'Authorization':'OWG-Session '+(await fs.readFile(path.join(scratch,'session.txt'),'utf8')).trim()};
   const seeded=await page.request.post(base+'/test-seed-quality-batches/'+encodeURIComponent(logId),{headers:owner});assert.equal(seeded.status(),200,await seeded.text());
-  const [overview]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/quality/overview')),page.locator('#owgEventLogAnalyze').click()]);
-  const initial=await overview.json();assert.equal(initial.reports.length,100);assert.equal(initial.first_report.batch,0);
+  let overviewRequests=0;page.on('request',request=>{if(request.url().endsWith('/quality/overview'))overviewRequests++;});
+  await page.locator('#owgEventLogAnalyze').click();await page.locator('#owgQualityTrendsRun').waitFor();
+  assert.equal(overviewRequests,0,'whole-log diagnostics wait until the quality details are opened');
+  const pattern='**/v1/event-logs/*/quality/overview';let failOnce=true;
+  await page.route(pattern,async route=>{if(failOnce){failOnce=false;await route.fulfill({status:503,body:'Unavailable'});}else await route.continue();});
   await page.locator('#owgQuality summary').click();
+  await page.getByRole('button',{name:'Retry quality diagnostics'}).waitFor();
+  const [overview]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/quality/overview')&&r.status()===200),page.getByRole('button',{name:'Retry quality diagnostics'}).click()]);
+  const initial=await overview.json();assert.equal(initial.reports.length,100);assert.equal(initial.first_report.batch,0);
+  await page.unroute(pattern);
   await page.locator('#owgQualityResults').getByText('Showing 100 of 205 batches.',{exact:false}).waitFor();
   await page.locator('#owgQualityResults').getByText('Case column',{exact:true}).waitFor();
+  await page.locator('#owgQuality summary').click();await page.locator('#owgQuality summary').click();
+  assert.equal(overviewRequests,2,'reopening a loaded panel reuses the snapshot');
+  await Promise.all([page.waitForResponse(r=>r.url().endsWith('/quality/overview')&&r.status()===200),page.getByRole('button',{name:'Refresh quality diagnostics'}).click()]);
+  assert.equal(overviewRequests,3,'refresh explicitly reads a current snapshot');
   await page.locator('#owgQualityTrendsRun').waitFor();
   const [response]=await Promise.all([
     page.waitForResponse(r=>r.url().endsWith('/quality/batch-history/page')),
