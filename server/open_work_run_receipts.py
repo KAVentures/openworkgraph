@@ -72,7 +72,7 @@ def _mac(secret: str, fields: tuple) -> str:
                     hashlib.sha256).hexdigest()
 
 
-def _check_rows(db, secret, actor_key, scope, case_ref, run_ref, now):
+def _check_rows(db, secret, actor_key, scope, case_ref, run_ref, now, cutoff):
     rows = db.execute("""SELECT id, actor_key, scope, case_ref, run_ref, fingerprint,
         revision, action, evidence_digest, supersedes, created_at, expires_at, mac
         FROM receipts WHERE actor_key=? AND scope=? AND case_ref=? AND run_ref=?
@@ -83,15 +83,20 @@ def _check_rows(db, secret, actor_key, scope, case_ref, run_ref, now):
     for row in rows:
         if not hmac.compare_digest(row[-1], _mac(secret, row[:-1])):
             raise CaseDeclarationError("run receipt integrity check failed")
-    return [row for row in rows if row[11] > now]
+    return [row for row in rows if row[11] > now and row[10] > cutoff]
 
 
 def review(*, scope: str, actor: str, secret: str, case_ref: str, run_ref: str,
            fingerprint: str, revision: int, guard=None, now=None):
     _validate(scope, case_ref, run_ref, fingerprint, revision)
     key = _actor_key(secret, scope, actor)
-    _retention()
-    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()
+    retention = _retention()
+    clock = now or datetime.now(timezone.utc)
+    if not isinstance(clock, datetime) or clock.tzinfo is None:
+        raise CaseDeclarationError("timezone-aware receipt clock required")
+    clock = clock.astimezone(timezone.utc)
+    current = clock.isoformat()
+    cutoff = (clock - retention).isoformat()
     if guard:
         guard()
     db = _db(False)
@@ -99,7 +104,7 @@ def review(*, scope: str, actor: str, secret: str, case_ref: str, run_ref: str,
         rows = []
     else:
         try:
-            rows = _check_rows(db, secret, key, scope, case_ref, run_ref, current)
+            rows = _check_rows(db, secret, key, scope, case_ref, run_ref, current, cutoff)
         except sqlite3.Error:
             raise CaseDeclarationError("run receipt journal unavailable") from None
         finally:
@@ -144,7 +149,8 @@ def append(*, scope: str, actor: str, secret: str, case_ref: str, run_ref: str,
         db.execute("BEGIN IMMEDIATE")
         if guard:
             guard()
-        rows = _check_rows(db, secret, key, scope, case_ref, run_ref, current.isoformat())
+        rows = _check_rows(db, secret, key, scope, case_ref, run_ref, current.isoformat(),
+                           (current - _retention()).isoformat())
         if len(rows) >= _LIMIT:
             raise CaseDeclarationError("run receipt capacity reached")
         if supersedes:
