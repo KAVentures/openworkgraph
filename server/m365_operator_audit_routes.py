@@ -534,14 +534,17 @@ def operator_identity_folder_preflight(
             output=Path(values[5]), token=token,
             consent_graph_read=True, consent_private_report=True,
         )
-        if (identity.get("status") != "mailbox_identity_observed"\n                or identity.get("mailbox_identifier_matched") is not True\n                or identity.get("tenant_id_verified") is not False):
+        if (identity.get("status") != "mailbox_identity_observed"
+                or identity.get("mailbox_identifier_matched") is not True
+                or identity.get("tenant_id_verified") is not False):
             raise ValueError("Identity preflight refused")
         folder = folder_preflight(
             tenant=values[0], mailbox=values[1], folder=values[2],
             grant_file=Path(values[4]), output=Path(values[6]),
             token=token, consent_graph_read=True, consent_private_report=True,
         )
-        if (folder.get("status") != "folder_metadata_observed"\n                or folder.get("folder_id_matched") is not True):
+        if (folder.get("status") != "folder_metadata_observed"
+                or folder.get("folder_id_matched") is not True):
             raise ValueError("Folder preflight refused")
     except (OSError, ValueError, TypeError, KeyError, RecursionError):
         raise HTTPException(
