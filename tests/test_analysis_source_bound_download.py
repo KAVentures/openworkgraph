@@ -91,6 +91,23 @@ with TestClient(app) as client:
     assert client.post(endpoint, json=request).status_code == 403
     assert client.post(endpoint, json=request, headers=dashboard).status_code == 403
     assert client.post(endpoint, json=request, headers=bearer).status_code == 403
+    assert client.post(base + '/analysis-sharing-authorize', json=request, headers=bearer).status_code == 403
+    grant_response = client.post(base + '/analysis-sharing-authorize', json=request, headers=preview_headers)
+    assert grant_response.status_code == 200, grant_response.text
+    ticket = grant_response.json()['ticket']
+    other_session = {'Authorization': 'OWG-Session ' + local_auth.create_dashboard_session(),
+                     'X-OWG-Analysis-Sharing-Preview': 'true'}
+    wrong_session = client.post(endpoint, json={**request, 'ticket': ticket}, headers=other_session)
+    assert wrong_session.status_code == 403 and 'rows' not in wrong_session.text
+    burned = client.post(endpoint, json={**request, 'ticket': ticket}, headers=preview_headers)
+    assert burned.status_code == 403
+    valid_grant = client.post(base + '/analysis-sharing-authorize', json=request, headers=preview_headers)
+    assert valid_grant.status_code == 200
+    token = valid_grant.json()['ticket']
+    first = client.post(endpoint, json={**request, 'ticket': token}, headers=preview_headers)
+    assert first.status_code == 200
+    replay = client.post(endpoint, json={**request, 'ticket': token}, headers=preview_headers)
+    assert replay.status_code == 403 and 'rows' not in replay.text
     ok = authorized_download(request)
     assert ok.status_code == 200, ok.text
     assert ok.headers['cache-control'] == 'no-store'
