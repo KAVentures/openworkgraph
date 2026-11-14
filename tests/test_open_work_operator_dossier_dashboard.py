@@ -14,7 +14,7 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 class E {
   constructor(tag) { this.tagName=tag; this.children=[]; this.listeners={};
-    this.textContent=''; this.value=''; this.checked=false; this.disabled=false; }
+    this.textContent=''; this.value=''; this.checked=false; this.disabled=false; this.style={}; }
   append(...children) { this.children.push(...children); }
   appendChild(child) { this.children.push(child); return child; }
   replaceChildren(...children) { this.children=[...children]; }
