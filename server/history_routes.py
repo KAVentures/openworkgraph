@@ -186,6 +186,19 @@ async def inject_history_retention(request:Request,call_next):
 __all__=["get_history","get_history_policy"]
 
 
+@app.middleware("http")
+async def reconstruction_review_no_store(request: Request, call_next):
+    """Never allow a browser or intermediary to cache review evidence or errors.
+
+    This also covers validation (422), missing consent (403), and authentication
+    failures produced before the route handler executes.
+    """
+    response = await call_next(request)
+    if request.url.path.startswith("/v1/history/reconstruction-review"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @app.get("/v1/history/reconstruction-review")
 def get_reconstruction_review() -> Response:
     """Local, read-only event attribution under an explicit saved-history AI grant.
