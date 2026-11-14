@@ -686,22 +686,22 @@ const path=require('node:path');
    await page.locator('#owgAnalysisFreshness').click();
    await page.getByText('Current source, specification, metric lineage and minimized values match.',{exact:false}).waitFor();
    assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),false);
-   // Revoke consent while the authenticated recheck is in flight.
-   let releaseRecheck,seenRecheck;
-   const recheckStarted=new Promise(resolve=>seenRecheck=resolve);
-   await page.route('**/analysis-sharing-freshness',async route=>{
-     seenRecheck();
-     await new Promise(resolve=>releaseRecheck=resolve);
-     await route.fulfill({status:200,contentType:'application/json',
-       body:JSON.stringify({format:'openworkgraph.analysis-snapshot-freshness.v1',lineage_current:true,current_results_match:true})});
+   // Consent withdrawal while server authorization is pending must keep
+   // the download disabled, even if the pending request subsequently resolves.
+   let releaseAuthorization,seenAuthorization;
+   const authorizationStarted=new Promise(resolve=>seenAuthorization=resolve);
+   await page.route('**/analysis-sharing-authorize',async route=>{
+     seenAuthorization();
+     await new Promise(resolve=>releaseAuthorization=resolve);
+     await route.fulfill({status:409,contentType:'application/json',
+       body:JSON.stringify({detail:'Authorization no longer valid.'})});
    },{times:1});
    await page.locator('#owgAnalysisSharingDownload').click();
-   await recheckStarted;
+   await authorizationStarted;
    await page.locator('#owgAnalysisSharingConsent').uncheck();
-   releaseRecheck();
-   await page.waitForTimeout(100); // allow the in-flight response handler to settle
+   releaseAuthorization();
    assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),true);
-   await page.unroute('**/analysis-sharing-freshness');
+   await page.unroute('**/analysis-sharing-authorize');
    await page.locator('#owgAnalysisSharingConsent').check();
    await page.locator('#owgAnalysisFreshness').click();
    await page.getByText('Current source, specification, metric lineage and minimized values match.',{exact:false}).waitFor();
