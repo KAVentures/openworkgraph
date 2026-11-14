@@ -506,6 +506,54 @@ document.addEventListener('DOMContentLoaded', () => {
       checkpointConsent.checked = false;
     }
   });
+  // Recovery triage is an explicit read-only authenticated OWG inventory check.
+  // It cannot authorize an append retry or checkpoint advancement.
+  const recoveryControls = document.createElement('div');
+  const recoveryReadLabel = document.createElement('label');
+  const recoveryRead = document.createElement('input');
+  recoveryRead.type = 'checkbox';
+  recoveryReadLabel.append(recoveryRead, document.createTextNode(' I consent to read local Microsoft 365 recovery evidence and authenticated OWG inventory'));
+  const recoveryRemovalLabel = document.createElement('label');
+  const recoveryRemoval = document.createElement('input');
+  recoveryRemoval.type = 'checkbox';
+  recoveryRemovalLabel.append(recoveryRemoval, document.createTextNode(' I have reviewed the previous candidate removal markers for recovery'));
+  const recoveryButton = document.createElement('button');
+  recoveryButton.type = 'button';
+  recoveryButton.textContent = 'Inspect uncertain Microsoft 365 append';
+  const recoveryResult = document.createElement('p');
+  recoveryResult.setAttribute('role', 'status');
+  recoveryResult.setAttribute('aria-live', 'polite');
+  recoveryResult.textContent = 'Recovery has not been inspected. Never automatically retry an uncertain append.';
+  recoveryControls.append(recoveryReadLabel, recoveryRemovalLabel, recoveryButton, recoveryResult);
+  card.insertBefore(recoveryControls, card.querySelector('#owgM365AuditRefresh'));
+  recoveryButton.addEventListener('click', async () => {
+    if (!recoveryRead.checked || !recoveryRemoval.checked) {
+      recoveryResult.textContent = 'Both independent approvals are required. No recovery inspection performed.';
+      return;
+    }
+    recoveryButton.disabled = true;
+    recoveryResult.textContent = 'Inspecting recovery evidence…';
+    try {
+      await window.__owgAuthReady;
+      const response = await fetch('/v1/m365/operator-recovery-triage?consent_local_read=true&confirm_removals_reviewed=true', {
+        method: 'POST', cache: 'no-store', credentials: 'same-origin'
+      });
+      if (!response.ok) throw Error('Recovery inspection unavailable (' + response.status + '). Manual reconciliation required.');
+      const result = await response.json();
+      const decisions = {
+        receipt_verified: 'Authenticated receipt verified. Separately review and approve any handoff.',
+        handoff_verified: 'Authenticated handoff verified. Separately approve any further extraction.',
+        manual_reconciliation_required: 'Manual reconciliation required: inspect grant, append history and local receipts.'
+      };
+      recoveryResult.textContent = (decisions[result.status] || 'Unrecognized recovery decision. Manual reconciliation required.') + ' No automatic retry.';
+    } catch (error) {
+      recoveryResult.textContent = String(error.message || 'Recovery failed') + ' No automatic retry.';
+    } finally {
+      recoveryButton.disabled = false;
+      recoveryRead.checked = false;
+      recoveryRemoval.checked = false;
+    }
+  });
   // Candidate review is independently consented and read-only. No approval
   // token, provider credential or private path is accepted from the browser.
   const reviewControls = document.createElement('div');
