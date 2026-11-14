@@ -430,3 +430,98 @@ def test_review_mutation_uncertain_result_fails_closed_browser_contract():
     assert script.count("try{await refreshReview();}") == 2
     assert script.count("Review state uncertain. Inspect again before editing:") == 2
     assert script.count("if(!reviewStillSelected())for(const b of [saveDraft,approve,revoke])b.disabled=true;") == 2
+
+
+def test_reviewed_handoff_real_api_approval_denial_stale_revocation_and_recovery(monkeypatch, tmp_path):
+    """Exercise the mounted HTTP routes and durable review DB, not just browser mocks.
+
+    A saved approval permits navigation only, never action execution. Revocation
+    remains available after provenance becomes stale, and a fresh explicit
+    approval is required after recovery.
+    """
+    import sqlite3
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    app.include_router(routes.router)
+    client = TestClient(app)
+    db = tmp_path / "reviewed-handoff-acceptance.sqlite3"
+    monkeypatch.setattr(routes.pipeline, "_connect", lambda: sqlite3.connect(db))
+    monkeypatch.setattr(routes, "dashboard_session_valid", lambda token: token == "local-owner")
+    evidence = {"digest": "d" * 64, "current": True}
+
+    def journey(idea_id):
+        return {
+            "idea": {"idea_id": idea_id, "revision": 3, "state": "approved"},
+            "process_status": {"status": "current", "process_reference": {
+                "workflow_id": "wf", "revision": 2, "content_sha256": "a" * 64}},
+            "projects": [{"project_id": "project-1", "idea_revision": 3,
+                          "idea_revision_is_current": True,
+                          "spec_sha256": "b" * 64, "archive_sha256": "c" * 64,
+                          "reported_specifications": [{
+                              "status": "matching_reported_specification",
+                              "report_sha256": evidence["digest"]}]}],
+            "projects_truncated": False,
+            "dataset_origins": [{"status": "current", "source_content_sha256": "e" * 64,
+                                 "selection_sha256": "f" * 64}],
+            "dataset_origin_check_available": evidence["current"],
+        }
+
+    monkeypatch.setattr(routes.opportunity_journey, "journey", journey)
+    root = "/v1/review-choice-workbench/idea-1"
+    headers = {"Authorization": "OWG-Session local-owner"}
+    inspection = client.get(root, headers=headers)
+    assert inspection.status_code == 200
+    snap = inspection.json()
+    assert snap["projects"][0]["blockers"] == []
+    basis = {
+        "project_id": "project-1", "project_set_sha256": snap["project_set_sha256"],
+        "idea_revision": 3, "idea_state": "approved",
+        "spec_sha256": "b" * 64, "archive_sha256": "c" * 64,
+        "process_status": "current", "process_reference": snap["process_reference"],
+        "dataset_origins": snap["dataset_origins"],
+        "dataset_origin_check_available": True, "blockers": [],
+    }
+    gate = root + "/reviewed-handoff-preflight"
+    assert client.post(gate, json=basis).status_code == 403
+    assert client.post(gate, headers=headers, json=basis).status_code == 409
+    saved = client.post(root + "/review", headers=headers, json={
+        "basis": basis, "expected_review_revision": 0,
+        "decision": "approved", "reviewer_notes": "Reviewed export and evidence",
+    })
+    assert saved.status_code == 200
+    assert saved.json()["execution_authorized"] is False
+    allowed = client.post(gate, headers=headers, json=basis)
+    assert allowed.status_code == 200
+    assert allowed.json()["human_review_approved"] is True
+    assert allowed.json()["execution_authorized"] is False
+    assert allowed.json()["source_read_authorized"] is False
+    assert allowed.headers["cache-control"] == "no-store"
+
+    # Even an unchanged set of blocker labels cannot conceal changed evidence.
+    evidence["digest"] = "1" * 64
+    assert client.post(gate, headers=headers, json=basis).status_code == 409
+    evidence["current"] = False
+    assert client.post(gate, headers=headers, json=basis).status_code == 409
+    revoke = client.post(root + "/review/project-1/revoke", headers=headers,
+                         json={"expected_review_revision": 1})
+    assert revoke.status_code == 200
+    assert revoke.json()["revision"] == 2
+    assert client.post(gate, headers=headers, json=basis).status_code == 409
+
+    # Restoring provenance does not resurrect the withdrawn approval.
+    evidence["digest"] = "d" * 64
+    evidence["current"] = True
+    assert client.post(gate, headers=headers, json=basis).status_code == 409
+    reapprove = client.post(root + "/review", headers=headers, json={
+        "basis": basis, "expected_review_revision": 2,
+        "decision": "approved", "reviewer_notes": "Fresh explicit approval",
+    })
+    assert reapprove.status_code == 200
+    assert reapprove.json()["revision"] == 3
+    assert client.post(gate, headers=headers, json=basis).status_code == 200
+    assert client.post(root + "/review", headers=headers, json={
+        "basis": basis, "expected_review_revision": 2,
+        "decision": "approved", "reviewer_notes": "Stale writer",
+    }).status_code == 409
