@@ -94,3 +94,27 @@ def test_preflight_refuses_contradictory_adapter_evidence(monkeypatch, identity_
             operator_identity_folder_preflight(request(), True, True)
     assert exc.value.status_code == 409
     assert "Do not retry" in str(exc.value.detail)
+
+
+@pytest.mark.parametrize("provider_failure", [
+    PermissionError("expired Graph credential: secret-token"),
+    OSError("Graph HTTP 401 unauthorized: secret-token"),
+    ValueError("revoked local grant /private/grant.json"),
+    KeyError("missing mailbox scope"),
+])
+def test_provider_credential_and_grant_failures_stop_before_folder_read(
+        monkeypatch, provider_failure):
+    """Never continue Graph reads or expose provider diagnostics after a failed identity check."""
+    configure(monkeypatch)
+    with (patch("server.m365_operator_audit_routes.dashboard_session_valid", return_value=True),
+          patch("server.m365_outlook_mailbox_identity.preflight",
+                side_effect=provider_failure) as identity,
+          patch("server.m365_outlook_folder_preflight.preflight") as folder):
+        with pytest.raises(HTTPException) as exc:
+            operator_identity_folder_preflight(request(), True, True)
+    assert exc.value.status_code == 409
+    assert "Do not retry" in str(exc.value.detail)
+    assert "secret-token" not in str(exc.value.detail)
+    assert "/private/grant.json" not in str(exc.value.detail)
+    identity.assert_called_once()
+    folder.assert_not_called()
