@@ -715,7 +715,11 @@ const path=require('node:path');
    await page.locator('#owgAnalysisFreshness').click();
    await page.getByText('Current source, specification, metric lineage and minimized values match.',{exact:false}).waitFor();
    const [sharingFile]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisSharingDownload').click()]);
-   const sharingText=await fs.readFile(await sharingFile.path(),'utf8');assert.deepEqual(JSON.parse(sharingText),sharingDoc);
+   const sharingText=await fs.readFile(await sharingFile.path(),'utf8');
+   const downloadedSharingDoc=JSON.parse(sharingText);
+   // Download recomputes the minimized snapshot; generation time is intentionally fresh.
+   assert.match(downloadedSharingDoc.generated_at,/^\d{4}-\d{2}-\d{2}T/);
+   assert.deepEqual({...downloadedSharingDoc,generated_at:sharingDoc.generated_at},sharingDoc);
    if(process.env.OWG_ANALYSIS_SNAPSHOT_OUTPUT)await fs.writeFile(process.env.OWG_ANALYSIS_SNAPSHOT_OUTPUT,sharingText);
    assert.equal(await page.locator('#owgAnalysisSharingConsent').isChecked(),false);
    // A stale freshness result must not be bypassed by toggling sharing consent.
