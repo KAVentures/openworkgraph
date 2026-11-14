@@ -108,6 +108,33 @@ const getControls=results=>[results.children.find(x=>x.tagName==='select'),resul
        assert.match(status.textContent,/Decision review expired/);
      },true);
  }
+ // A delayed JSON body must not revive a handoff after the operator switches
+ // opportunity, even when the HTTP status was already accepted.
+ {
+   let finishBody;
+   const delayedBody=new Promise(resolve=>{finishBody=resolve;});
+   const preflight={format:'openworkgraph.review-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
+     spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),blockers:[],review_required:true,
+     execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false};
+   const handoff={format:'openworkgraph.reviewed-handoff-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
+     spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),review_revision:1,human_review_approved:true,
+     execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false};
+   await scenario('selection changed while handoff body parses cannot navigate',
+     [basis(),basis(),preflight,{data:delayedBody}],async({input,results,details,opened})=>{
+       const [select,review]=getControls(results);select.value='p1';await review.onclick();
+       await details.children.find(x=>x.textContent==='Revalidate review basis on server').onclick();
+       await Promise.resolve();await Promise.resolve();
+       await details.children.find(x=>x.textContent==='Approve reviewed choice').onclick();
+       const consent=details.children.find(x=>x.tagName==='label'&&x.children.some(y=>y.tagName==='input')).children.find(x=>x.tagName==='input');
+       const proceed=details.children.find(x=>x.textContent==='Open opportunity decision and handoff');
+       consent.checked=true;consent.listeners.change();
+       const pending=proceed.onclick();
+       await Promise.resolve();await Promise.resolve();
+       input.value='another-idea';input.listeners.input();
+       finishBody(handoff);await pending;
+       assert.equal(opened(),0,'obsolete response body cannot navigate after selection changes');
+     },true);
+ }
  // A malformed save receipt cannot be treated as an approved, durable decision.
  // Reload the authoritative review revision instead of trusting a response
  // that echoes the wrong decision or a non-monotonic revision.
