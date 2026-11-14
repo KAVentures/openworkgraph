@@ -172,6 +172,9 @@
   }
   function clearReconstructionEvidence(message){
     reconstructionRequestEpoch++;
+    // Invalidate the in-flight score lease as well as the evidence. An older
+    // request must not lock a freshly loaded review after revocation/reload.
+    reconstructionScoring=false;
     reconstructionEvidence=null;reconstructionChoices=[];
     const root=document.querySelector('#reconstructionWorkbench');if(!root)return;
     root.querySelector('#reconstructionEvents').replaceChildren();
@@ -256,8 +259,11 @@
       // Revocation or changed evidence invalidates all in-memory labels.
       if(epoch===reconstructionRequestEpoch)clearReconstructionEvidence('Review refused: '+String(error.message||error)+'. Reload current evidence.');
     }finally{
-      reconstructionScoring=false;
-      if(epoch===reconstructionRequestEpoch&&reconstructionEvidence)root.querySelector('#reconstructionScore').disabled=false;
+      // A superseded score must never unlock or alter the newer review.
+      if(epoch===reconstructionRequestEpoch){
+        reconstructionScoring=false;
+        if(reconstructionEvidence)root.querySelector('#reconstructionScore').disabled=false;
+      }
     }
   }
   document.addEventListener('DOMContentLoaded',reconstructionWorkbench);
