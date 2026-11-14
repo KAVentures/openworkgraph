@@ -2627,6 +2627,9 @@ async def verify_local_bound_run_source(request: Request, response: Response):
     await _recheck_source(scope)
     persisted_history = None
     if persist:
+        # Session revocation during provider IO must deny the optional local
+        # evidence write, not merely hide its response after persistence.
+        _dashboard_only(request)
         # The case ledger records provider state, not independent run identity.
         # Recheck the run binding and case immediately before the guarded CAS.
         try:
@@ -2653,9 +2656,11 @@ async def verify_local_bound_run_source(request: Request, response: Response):
                 append_operation_evidence, refreshed, refreshed_signature,
                 scope=scope, secret=secret, resource_ref=resource_ref,
                 verification=verified,
-                guard=lambda: _operation_ledger_guard(
-                    scope, payload["work_item_ref"], payload["expected_revision"],
-                    payload["expected_edit_token"], signature),
+                guard=lambda: (
+                    _dashboard_only(request),
+                    _operation_ledger_guard(
+                        scope, payload["work_item_ref"], payload["expected_revision"],
+                        payload["expected_edit_token"], signature)),
                 expected_history=prior_evidence["events"])
         except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
             raise _safe_error(exc) from None
