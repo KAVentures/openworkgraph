@@ -220,7 +220,14 @@ def operator_candidate_review(request: Request, consent_local_read: bool = False
             tenant=values[0], mailbox=values[1], folder=values[2],
             grant_file=Path(values[3]), candidate=Path(values[4]),
             consent_local_read=True)
-        if result.get("status") != "review_ready":
+        if (type(result) is not dict
+                or result.get("status") != "review_ready"
+                or type(result.get("csv_sha256")) is not str
+                or not re.fullmatch(r"[0-9a-f]{64}", result["csv_sha256"])
+                or any(type(result.get(key)) is not int or result[key] < 0
+                       for key in ("event_snapshots", "removal_markers_for_review"))
+                or type(result.get("pages")) is not int
+                or not 1 <= result["pages"] <= 1000):
             raise ValueError("Candidate not reviewable")
     except (OSError, ValueError, TypeError, KeyError, RecursionError):
         raise HTTPException(409, "Candidate or current grant unavailable; manual review required") from None
