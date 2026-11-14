@@ -38,9 +38,28 @@ def _batch(value: Any) -> int | None:
     return value
 
 
-def _decisions(conn, log_id: str) -> list[dict[str, Any]]:
-    return [{"decided_at": at.isoformat() + "Z", **json.loads(d)} for at, d in conn.execute(
-        "SELECT decided_at, decision FROM quarantine_decisions WHERE log_id = ? ORDER BY decided_at", [log_id]).fetchall()]
+def _decision_page(conn, log_id: str, offset: int, limit: int) -> dict[str, Any]:
+    total = conn.execute("SELECT count(*) FROM quarantine_decisions WHERE log_id = ?", [log_id]).fetchone()[0]
+    rows = conn.execute(
+        "SELECT decided_at, decision FROM quarantine_decisions WHERE log_id = ? "
+        "ORDER BY decided_at, decision LIMIT ? OFFSET ?", [log_id, limit, offset]).fetchall()
+    decisions = [{"decided_at": at.isoformat() + "Z", **json.loads(d)} for at, d in rows]
+    next_offset = offset + len(decisions) if offset + len(decisions) < total else None
+    return {"format": "openworkgraph.quarantine-decisions.v1", "decisions": decisions,
+            "total": total, "offset": offset, "limit": limit, "next_offset": next_offset,
+            "stable_snapshot": False}
+
+
+def decision_history(log_id: str, offset: int = 0, limit: int = 100) -> dict[str, Any]:
+    if type(offset) is not int or not 0 <= offset <= 2_147_483_647 or type(limit) is not int or not 1 <= limit <= MAX_PAGE:
+        raise workspace.EventLogWorkspaceError("decision offset or page size is invalid")
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            workspace._check_log(conn, log_id)
+            return _decision_page(conn, log_id, offset, limit)
+        finally:
+            conn.close()
 
 
 def _record(conn, log_id: str, decision: dict[str, Any]) -> None:
@@ -64,14 +83,16 @@ def quarantine(log_id: str, batch: int | None = None, after: int = 0, limit: int
             rows = conn.execute(f"""SELECT batch, row_n, reasons, row FROM quarantine WHERE log_id = ? {scope}
                 AND (CAST(batch AS BIGINT) * 1000000000 + row_n) > ? ORDER BY batch, row_n LIMIT ?""",
                                 [log_id, *params, int(after), int(limit) + 1]).fetchall()
-            decisions = _decisions(conn, log_id)
+            decision_page = _decision_page(conn, log_id, 0, MAX_PAGE)
         finally:
             conn.close()
     page = [{"batch": b, "row": n, "position": b * 1_000_000_000 + n, "reasons": json.loads(r), **json.loads(v)}
             for b, n, r, v in rows[:int(limit)]]
     return {"batches": batches, "rows_kept": sum(b["rows"] for b in batches if batch is None or b["batch"] == batch), "reasons": reasons,
             "rows": page, "next_after": page[-1]["position"] if len(rows) > int(limit) else None,
-            "decisions": decisions, "max_rows_per_batch": workspace.MAX_QUARANTINED_ROWS, "note": REVIEW_NOTE}
+            "decisions": decision_page["decisions"], "decisions_total": decision_page["total"],
+            "decisions_next_offset": decision_page["next_offset"], "decisions_stable_snapshot": False,
+            "max_rows_per_batch": workspace.MAX_QUARANTINED_ROWS, "note": REVIEW_NOTE}
 
 
 def _selection(body: dict[str, Any]) -> tuple[int | None, int | None, int | None]:
