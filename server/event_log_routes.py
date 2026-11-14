@@ -1113,6 +1113,10 @@ async def analysis_sharing_download(request: Request, log_id: str):
         raise HTTPException(409, str(exc)) from None
     except ValueError:
         raise HTTPException(422, "Analysis cannot fit the bounded sharing format") from None
+    # Revocation can happen while the expensive source recomputation runs in a
+    # thread. Do not release numeric rows to a session revoked in that interval.
+    if not local_auth.dashboard_session_valid(session):
+        raise HTTPException(403, "Dashboard session revoked during analysis download")
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
