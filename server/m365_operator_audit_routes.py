@@ -439,3 +439,57 @@ def operator_next_round_prepare(
         "checkpoint_advanced": False, "owg_append_performed": False,
         "automatic_retry_allowed": False, "provider_validated": False,
     }, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/m365/operator-recovery-triage")
+def operator_recovery_triage(
+    request: Request, consent_local_read: bool = False,
+    confirm_removals_reviewed: bool = False,
+):
+    """Authenticated, read-only recovery decision after an uncertain append.
+
+    This never retries an append, contacts Graph or advances a checkpoint.
+    The underlying triage authenticates its OWG inventory readback.
+    """
+    authorization = str(request.headers.get("authorization") or "")
+    if (not authorization.lower().startswith("owg-session ")
+            or not dashboard_session_valid(authorization[len("owg-session "):].strip())):
+        raise HTTPException(403, "Local dashboard session required")
+    if consent_local_read is not True or confirm_removals_reviewed is not True:
+        raise HTTPException(403, "Independent local-read and removal-review approvals required")
+    names = (
+        "OWG_M365_TENANT", "OWG_M365_MAILBOX", "OWG_M365_FOLDER",
+        "OWG_M365_LOG_ID", "OWG_M365_GRANT_FILE",
+        "OWG_M365_CANDIDATE_FILE", "OWG_M365_CSV_PATH",
+        "OWG_M365_RECEIPT_FILE",
+    )
+    values = [os.environ.get(name, "") for name in names]
+    if not all(values):
+        raise HTTPException(409, "Microsoft 365 recovery configuration unavailable")
+    from .m365_outlook_recovery_triage import triage
+    from .m365_outlook_owg_receipt import ReceiptError
+    try:
+        result = triage(
+            tenant=values[0], mailbox=values[1], folder=values[2],
+            log_id=values[3], confirm_log_id=values[3],
+            grant_file=Path(values[4]), candidate=Path(values[5]),
+            csv_path=Path(values[6]), receipt_file=Path(values[7]),
+            port=8765, session=authorization[len("owg-session "):].strip(),
+            journal_dir=(Path(os.environ["OWG_M365_JOURNAL_DIR"])
+                         if os.environ.get("OWG_M365_JOURNAL_DIR") and os.environ.get("OWG_M365_HANDOFF_DIR") else None),
+            handoff_dir=(Path(os.environ["OWG_M365_HANDOFF_DIR"])
+                         if os.environ.get("OWG_M365_JOURNAL_DIR") and os.environ.get("OWG_M365_HANDOFF_DIR") else None),
+            consent_local_read=True, confirm_removals_reviewed=True,
+        )
+        if result.get("status") not in (
+                "receipt_verified", "handoff_verified", "manual_reconciliation_required"):
+            raise ReceiptError("Unrecognized recovery result")
+    except (ReceiptError, OSError, ValueError, TypeError, KeyError, RecursionError):
+        raise HTTPException(409, "Recovery unavailable; inspect local grant, receipt and OWG inventory manually. Do not retry.") from None
+    return JSONResponse({
+        "format": "openworkgraph.m365-dashboard-recovery-triage.v1",
+        "status": result["status"],
+        "next_action": result["next_action"],
+        "checkpoint_advanced": False, "owg_writes": 0,
+        "provider_requests": 0, "automatic_retry_allowed": False,
+    }, headers={"Cache-Control": "no-store"})
