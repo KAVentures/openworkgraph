@@ -33,6 +33,12 @@ def test_overview_preserves_original_mapping_and_current_digests_with_many_batch
     assert overview['current']['diagnostics']['events'] == full['current']['diagnostics']['events']
     assert 'batch_trends' not in overview
     assert quality.quality(log)['batch_trends'] == full['batch_trends']
+    conn = workspace._connect()
+    try:
+        conn.execute('DELETE FROM log_quality WHERE log_id = ? AND batch = 0', [log])
+    finally:
+        conn.close()
+    assert quality.overview(log)['first_report']['batch'] == 1
 
 
 def test_overview_owner_only_and_no_store(tmp_path):
