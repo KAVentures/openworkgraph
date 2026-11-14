@@ -154,7 +154,6 @@
   refresh=async function(){ensureUI();placeAgentCards();return baseRefresh();};
   window.refreshHistory=refresh;
   document.addEventListener('DOMContentLoaded',()=>{ensureUI();refresh();});
-}
   // R1/R2: local-only reviewer workbench. No labels are persisted or exported.
   // Every event requires an explicit reviewer acknowledgement before scoring.
   let reconstructionEvidence=null;
