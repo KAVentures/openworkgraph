@@ -266,6 +266,7 @@ def operator_transaction_preflight(request: Request, consent_local_read: bool = 
             "checkpoint_advanced": False, "automatic_retry_allowed": False,
         }, headers={"Cache-Control": "no-store"})
     from .m365_outlook_reviewed_transaction import preflight
+    from .m365_outlook_owg_receipt import ReceiptError
     previous = os.environ.get("OWG_M365_PREVIOUS_CANDIDATE_SHA256") or None
     try:
         result = preflight(
@@ -278,7 +279,7 @@ def operator_transaction_preflight(request: Request, consent_local_read: bool = 
             consent_local_read=True)
         if result.get("status") != "review_ready_for_explicit_commit":
             raise ValueError("Not ready")
-    except (OSError, ValueError, TypeError, KeyError, RecursionError, Exception):
+    except (ReceiptError, OSError, ValueError, TypeError, KeyError, RecursionError):
         raise HTTPException(409, "Preflight refused; inspect candidate, grant and checkpoint manually") from None
     return JSONResponse({
         "format": "openworkgraph.m365-dashboard-transaction-preflight.v1",
