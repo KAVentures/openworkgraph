@@ -89,3 +89,26 @@ def test_dashboard_requires_fresh_review_consent():
     assert "reviewConsent.checked = false" in page
     assert "/v1/m365/operator-candidate-review?consent_local_read=true" in page
     assert "Separate approval required." in page
+
+
+@pytest.mark.parametrize("candidate", [
+    None,
+    {"status": "review_ready", "event_snapshots": 1,
+     "removal_markers_for_review": 0, "pages": 1, "csv_sha256": "not-a-digest"},
+    {"status": "review_ready", "event_snapshots": True,
+     "removal_markers_for_review": 0, "pages": 1, "csv_sha256": "a" * 64},
+    {"status": "review_ready", "event_snapshots": 1,
+     "removal_markers_for_review": -1, "pages": 1, "csv_sha256": "a" * 64},
+    {"status": "review_ready", "event_snapshots": 1,
+     "removal_markers_for_review": 0, "pages": 0, "csv_sha256": "a" * 64},
+    {"status": "review_ready", "event_snapshots": 1,
+     "removal_markers_for_review": 0, "pages": 1001, "csv_sha256": "a" * 64},
+])
+def test_malformed_candidate_cannot_be_presented_for_commit(monkeypatch, candidate):
+    _configure(monkeypatch)
+    with (patch("server.m365_operator_audit_routes.dashboard_session_valid", return_value=True),
+          patch("server.m365_outlook_candidate_review.review", return_value=candidate)):
+        with pytest.raises(HTTPException) as error:
+            operator_candidate_review(_request(), consent_local_read=True)
+    assert error.value.status_code == 409
+    assert "Candidate or current grant unavailable" in error.value.detail
