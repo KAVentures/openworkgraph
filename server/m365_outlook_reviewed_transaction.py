@@ -38,11 +38,16 @@ def preflight(*, tenant, mailbox, folder, log_id, confirm_log_id,
         raise ReceiptError("Exact reviewed CSV SHA-256 required")
     scope = dict(tenant=tenant, mailbox=mailbox, folder=folder,
                  grant_file=Path(grant_file))
+    # Preflight is read-only: reject a checkpoint advanced during review.
+    initial_checkpoint = inspect_checkpoint(
+        **scope, ledger_dir=Path(ledger_dir), consent_local_read=True)
     checked = cycle.review(candidate=Path(candidate), consent_local_read=True, **scope)
     if checked.get("csv_sha256") != expected_review_csv_sha256:
         raise ReceiptError("Candidate changed since explicit review")
     predecessor = inspect_checkpoint(
         **scope, ledger_dir=Path(ledger_dir), consent_local_read=True)
+    if predecessor != initial_checkpoint:
+        raise ReceiptError("Checkpoint changed during candidate review")
     if predecessor is None:
         if expected_previous_candidate_sha256 is not None:
             raise ReceiptError("Missing predecessor checkpoint")
