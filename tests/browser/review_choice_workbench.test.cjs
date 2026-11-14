@@ -58,8 +58,6 @@ const getControls=results=>[results.children.find(x=>x.tagName==='select'),resul
  },true,()=>({ok:true,status:200,json:async()=>({project_id:'p1',revision:0,decision:'unreviewed',reviewer_notes:'',execution_authorized:false})}));
  // Editing notes while an approval is in flight must not authorize the newer text.
  {
-   let release;
-   const delayed=new Promise(resolve=>{release=resolve;});
    await scenario('in-flight edited notes cannot inherit earlier approval',[
      basis(),basis(),
      {format:'openworkgraph.review-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
