@@ -116,12 +116,12 @@ def read_operator_audit(directory: Path, *, limit: int = 50) -> dict:
                         "committed_predecessor_generation", "event_snapshots",
                         "removal_markers_for_review", "checkpoint_advanced",
                         "owg_append_performed") if key in obj}
-                    records.append(item)
+                    records.append((stamp, item))
                 finally:
                     os.close(child)
-            records.sort(key=lambda item: item["timestamp_utc"], reverse=True)
+            records.sort(key=lambda entry: entry[0], reverse=True)
             return {"format": "openworkgraph.m365-operator-audit-list.v1",
-                    "configured": True, "records": records[:limit],
+                    "configured": True, "records": [item for _, item in records[:limit]],
                     "total_receipts": len(records),
                     "truncated": len(records) > limit,
                     "provider_validated": False}
