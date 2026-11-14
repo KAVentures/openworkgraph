@@ -2750,6 +2750,32 @@
       };
       firstPage.onclick=()=>loadPage(0);nextPage.onclick=()=>{if(nextCursor!==null&&nextCursor!==undefined)loadPage(nextCursor);};
       renderPage(r);
+      const batchesHost=el('div'),batchesStatus=el('div',null,'muted');
+      const batchesFirst=button('First batches'),batchesNext=button('Next batches');
+      batchesFirst.id='owgQuarantineBatchesFirst';batchesNext.id='owgQuarantineBatchesNext';
+      let batchesTurn=0,batchesCursor=r.batches_next_after??null,batchesStart=0;
+      const renderBatches=(page,start)=>{
+        const batches=page.batches||[],total=Number(page.total??r.batches_total??batches.length);
+        batchesCursor=page.next_after??null;batchesStart=start;
+        const mapped=batches.map(item=>{
+          const selectBatch=button('Select batch','secondary');
+          selectBatch.setAttribute('aria-label','Select quarantine batch '+item.batch);
+          selectBatch.onclick=()=>{batch.value=String(item.batch);batch.dispatchEvent(new Event('input',{bubbles:true}));batch.focus();};
+          return [item.batch===0?'Import (0)':'Append '+item.batch,Number(item.rows).toLocaleString(),selectBatch];
+        });
+        batchesHost.replaceChildren(...(mapped.length?[table(['Batch','Rows kept','Review'],mapped)]:[]));
+        batchesStatus.textContent=total?(batches.length?'Showing '+(start+1).toLocaleString()+'–'+(start+batches.length).toLocaleString()+' of '+total.toLocaleString()+' batches':'No batches on this page; '+total.toLocaleString()+' in total')+'. History can change between pages.':'';
+        show(batchesFirst,total>100||start>0);show(batchesNext,total>100||start>0);
+        batchesFirst.disabled=start===0;batchesNext.disabled=batchesCursor===null;
+      };
+      const loadBatches=async(after,start)=>{
+        const request=++batchesTurn;batchesFirst.disabled=true;batchesNext.disabled=true;
+        try{const page=await getJSON(base+'/batches?after='+after+'&limit=100');
+          if(generation===state.generation&&request===batchesTurn)renderBatches(page,start);
+        }catch(error){if(generation===state.generation&&request===batchesTurn){batchesStatus.textContent=error.message;batchesFirst.disabled=false;batchesNext.disabled=batchesCursor===null;}}
+      };
+      batchesFirst.onclick=()=>loadBatches(-1,0);batchesNext.onclick=()=>{if(batchesCursor!==null)loadBatches(batchesCursor,batchesStart+100);};
+      renderBatches({batches:r.batches||[],total:r.batches_total??(r.batches||[]).length,next_after:r.batches_next_after??null},0);
       const decisionHost=el('div'),decisionStatus=el('div',null,'muted');
       const decisionFirst=button('First decisions'),decisionNext=button('Next decisions');
       decisionFirst.id='owgQuarantineDecisionsFirst';decisionNext.id='owgQuarantineDecisionsNext';
@@ -2775,7 +2801,7 @@
       row.append(field('UTC offset to assume for times written without one',offset),field('Batch (blank for all)',batch),field('First row (optional)',rowStart),field('Last row (optional)',rowEnd),preview,release,discard);
       wrap.append(el('h4','Rejected rows kept for review'),
         el('div',Number(r.rows_kept).toLocaleString()+' rows kept ('+reasonText(r.reasons)+'). '+r.note,'muted'),
-        pageHost,firstPage,nextPage,
+        batchesStatus,batchesHost,batchesFirst,batchesNext,pageHost,firstPage,nextPage,
         el('div','Batch and row range limit preview and release. Discard removes all kept rows.','muted'),row,message,
         decisionStatus,decisionHost,decisionFirst,decisionNext);
       for(const control of [offset,batch,rowStart,rowEnd])control.addEventListener('input',()=>{
