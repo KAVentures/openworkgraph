@@ -110,10 +110,12 @@ with TestClient(app) as client:
         local_auth._DASHBOARD_SESSIONS.pop(dashboard['Authorization'][len('OWG-Session '):], None)
     revoked = client.post(endpoint, json={**request, 'ticket': revoked_ticket}, headers=preview_headers)
     assert revoked.status_code in (401, 403) and 'rows' not in revoked.text
-    # Restore only the test's session, to ensure the revoked grant was burned.
-    with local_auth._LOCK:
-        local_auth._DASHBOARD_SESSIONS[dashboard['Authorization'][len('OWG-Session '):]] = None
-    assert client.post(endpoint, json={**request, 'ticket': revoked_ticket}, headers=preview_headers).status_code == 403
+    # Revocation is permanent: a fresh dashboard session must not inherit the
+    # revoked session's grant. Do not resurrect a revoked token in this test.
+    replacement_session = {'Authorization': 'OWG-Session ' + local_auth.create_dashboard_session(),
+                           'X-OWG-Analysis-Sharing-Preview': 'true'}
+    transferred = client.post(endpoint, json={**request, 'ticket': revoked_ticket}, headers=replacement_session)
+    assert transferred.status_code == 403 and 'rows' not in transferred.text
     # The old session must not mint a grant during the revocation interval.
     with local_auth._LOCK:
         local_auth._DASHBOARD_SESSIONS.pop(dashboard['Authorization'][len('OWG-Session '):], None)
