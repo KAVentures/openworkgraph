@@ -39,8 +39,8 @@ def test_requires_session_and_both_fresh_approvals(monkeypatch):
 def test_preflight_calls_real_adapters_without_leaking_identity(monkeypatch):
     configure(monkeypatch)
     with (patch("server.m365_operator_audit_routes.dashboard_session_valid", return_value=True),
-          patch("server.m365_outlook_mailbox_identity.preflight", return_value={"status": "mailbox_identity_observed"}) as identity,
-          patch("server.m365_outlook_folder_preflight.preflight", return_value={"status": "folder_metadata_observed"}) as folder):
+          patch("server.m365_outlook_mailbox_identity.preflight", return_value={"status": "mailbox_identity_observed", "mailbox_identifier_matched": True, "tenant_id_verified": False}) as identity,
+          patch("server.m365_outlook_folder_preflight.preflight", return_value={"status": "folder_metadata_observed", "folder_id_matched": True}) as folder):
         response = operator_identity_folder_preflight(request(), True, True)
     body = response.body.decode()
     assert response.status_code == 200
@@ -56,7 +56,7 @@ def test_preflight_calls_real_adapters_without_leaking_identity(monkeypatch):
 def test_partial_failure_requires_manual_reconciliation_without_retry(monkeypatch):
     configure(monkeypatch)
     with (patch("server.m365_operator_audit_routes.dashboard_session_valid", return_value=True),
-          patch("server.m365_outlook_mailbox_identity.preflight", return_value={"status": "mailbox_identity_observed"}),
+          patch("server.m365_outlook_mailbox_identity.preflight", return_value={"status": "mailbox_identity_observed", "mailbox_identifier_matched": True, "tenant_id_verified": False}),
           patch("server.m365_outlook_folder_preflight.preflight", side_effect=ValueError("secret-token revoked")) as folder):
         with pytest.raises(HTTPException) as exc:
             operator_identity_folder_preflight(request(), True, True)
@@ -75,3 +75,22 @@ def test_missing_token_never_calls_graph(monkeypatch):
             operator_identity_folder_preflight(request(), True, True)
     assert exc.value.status_code == 409
     identity.assert_not_called()
+
+
+@pytest.mark.parametrize("identity_result,folder_result", [
+    ({"status": "mailbox_identity_observed", "mailbox_identifier_matched": False,
+      "tenant_id_verified": False}, {"status": "folder_metadata_observed", "folder_id_matched": True}),
+    ({"status": "mailbox_identity_observed", "mailbox_identifier_matched": True,
+      "tenant_id_verified": True}, {"status": "folder_metadata_observed", "folder_id_matched": True}),
+    ({"status": "mailbox_identity_observed", "mailbox_identifier_matched": True,
+      "tenant_id_verified": False}, {"status": "folder_metadata_observed", "folder_id_matched": False}),
+])
+def test_preflight_refuses_contradictory_adapter_evidence(monkeypatch, identity_result, folder_result):
+    configure(monkeypatch)
+    with (patch("server.m365_operator_audit_routes.dashboard_session_valid", return_value=True),
+          patch("server.m365_outlook_mailbox_identity.preflight", return_value=identity_result),
+          patch("server.m365_outlook_folder_preflight.preflight", return_value=folder_result)):
+        with pytest.raises(HTTPException) as exc:
+            operator_identity_folder_preflight(request(), True, True)
+    assert exc.value.status_code == 409
+    assert "Do not retry" in str(exc.value.detail)
