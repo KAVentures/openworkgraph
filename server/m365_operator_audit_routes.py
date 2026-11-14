@@ -292,3 +292,74 @@ def operator_transaction_preflight(request: Request, consent_local_read: bool = 
         "provider_requests": 0, "owg_writes": 0,
         "checkpoint_advanced": False, "automatic_retry_allowed": False,
     }, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/v1/m365/operator-reviewed-commit")
+def operator_reviewed_commit(
+    request: Request, reviewed_csv_sha256: str = "",
+    consent_local_read: bool = False, consent_local_append: bool = False,
+    confirm_candidate_reviewed: bool = False,
+    confirm_removals_reviewed: bool = False,
+    confirm_checkpoint_commit: bool = False,
+):
+    """Single explicit reviewed transaction; never automatically retry a write.
+
+    All filesystem paths, Graph scope, and destination are trusted server
+    configuration. The authenticated local dashboard session is passed to the
+    existing OWG append adapter, which authenticates independently.
+    """
+    authorization = str(request.headers.get("authorization") or "")
+    if (not authorization.lower().startswith("owg-session ")
+            or not dashboard_session_valid(authorization[len("owg-session "):].strip())):
+        raise HTTPException(403, "Local dashboard session required")
+    if not all((consent_local_read is True, consent_local_append is True,
+                confirm_candidate_reviewed is True,
+                confirm_removals_reviewed is True,
+                confirm_checkpoint_commit is True)):
+        raise HTTPException(403, "Independent read, append, candidate, removal and checkpoint approvals required")
+    if not re.fullmatch(r"[0-9a-f]{64}", reviewed_csv_sha256):
+        raise HTTPException(422, "Exact reviewed CSV SHA-256 required")
+    names = (
+        "OWG_M365_TENANT", "OWG_M365_MAILBOX", "OWG_M365_FOLDER",
+        "OWG_M365_LOG_ID", "OWG_M365_GRANT_FILE", "OWG_M365_CANDIDATE_FILE",
+        "OWG_M365_LEDGER_DIR", "OWG_M365_CSV_PATH", "OWG_M365_RECEIPT_FILE",
+        "OWG_M365_JOURNAL_DIR", "OWG_M365_HANDOFF_DIR",
+        "OWG_M365_SUCCESSOR_LABEL",
+    )
+    values = [os.environ.get(name, "") for name in names]
+    if not all(values):
+        raise HTTPException(409, "Microsoft 365 reviewed transaction not configured")
+    from .m365_outlook_reviewed_transaction import execute
+    from .m365_outlook_owg_receipt import ReceiptError, UncertainReceipt
+    from .m365_outlook_delta import DeltaError
+    from .m365_operator_audit_writer import AuditWriteError
+    try:
+        result = execute(
+            tenant=values[0], mailbox=values[1], folder=values[2],
+            log_id=values[3], confirm_log_id=values[3],
+            grant_file=Path(values[4]), candidate=Path(values[5]),
+            ledger_dir=Path(values[6]), csv_path=Path(values[7]),
+            receipt_file=Path(values[8]), journal_dir=Path(values[9]),
+            handoff_dir=Path(values[10]), successor_label=values[11],
+            expected_review_csv_sha256=reviewed_csv_sha256,
+            expected_previous_candidate_sha256=(
+                os.environ.get("OWG_M365_PREVIOUS_CANDIDATE_SHA256") or None),
+            session=authorization[len("owg-session "):].strip(),
+            consent_local_read=True, consent_local_append=True,
+            confirm_candidate_reviewed=True,
+            confirm_removals_reviewed=True, confirm_checkpoint_commit=True,
+        )
+        if result.get("status") != "checkpoint_committed":
+            raise UncertainReceipt("Unconfirmed checkpoint")
+    except (ReceiptError, UncertainReceipt, DeltaError, AuditWriteError,
+            OSError, ValueError, TypeError, KeyError, RecursionError):
+        # The append may already have succeeded. NEVER retry automatically.
+        raise HTTPException(
+            409, "Outcome may be uncertain; inspect audit, membership and checkpoint manually. Do not retry."
+        ) from None
+    return JSONResponse({
+        "format": "openworkgraph.m365-dashboard-reviewed-commit.v1",
+        "status": "checkpoint_committed", "generation": result["generation"],
+        "idempotent_replay": result.get("idempotent_replay", False),
+        "automatic_retry_allowed": False, "provider_requests": 0,
+    }, headers={"Cache-Control": "no-store"})
