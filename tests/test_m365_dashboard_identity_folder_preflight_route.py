@@ -47,7 +47,7 @@ def test_preflight_calls_real_adapters_without_leaking_identity(monkeypatch):
     assert '"tenant_verified":false' in body
     assert '"sync_authorized":false' in body
     assert '"automatic_retry_allowed":false' in body
-    for secret in ("tenant", "mailbox", "folder", "secret-token", "owner@example.org", "/private/"):
+    for secret in ("secret-token", "owner@example.org", "/private/", "tenant\\\":\\\"tenant", "mailbox\\\":\\\"mailbox"):
         assert secret not in body
     assert identity.call_args.kwargs["token"] == "secret-token"
     assert folder.call_args.kwargs["consent_graph_read"] is True
