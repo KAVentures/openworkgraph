@@ -156,3 +156,92 @@ def test_next_round_rejects_malformed_or_stale_adapter_output(monkeypatch, bad_r
         assert "Do not retry" in str(error.value.detail)
         prepare.assert_called_once()
         commit.assert_not_called()
+
+
+@pytest.mark.parametrize("failure_phase", ["append", "handoff", "checkpoint"])
+def test_real_transaction_orchestrator_never_retries_uncertain_write(
+        monkeypatch, failure_phase):
+    """Exercise production execute orchestration, not a mocked dashboard route.
+
+    A failure at or after the OWG append boundary must not trigger a second
+    append, a speculative checkpoint, or a silent successful receipt.
+    """
+    from server import m365_outlook_reviewed_transaction as transaction
+    from server.m365_outlook_owg_receipt import UncertainReceipt
+
+    monkeypatch.delenv("OWG_M365_AUDIT_DIR", raising=False)
+    events = []
+    reviewed = {"csv_sha256": FIRST, "event_snapshots": 2,
+                "removal_markers_for_review": 1}
+
+    def phase(name, result=None, failure=False):
+        def run(**kwargs):
+            events.append(name)
+            if failure:
+                raise UncertainReceipt("manual reconciliation required")
+            return result
+        return run
+
+    kwargs = dict(
+        tenant="tenant", mailbox="mailbox", folder="folder", log_id="log",
+        confirm_log_id="log", grant_file="/private/grant",
+        candidate="/private/candidate", csv_path="/private/events.csv",
+        receipt_file="/private/receipt", journal_dir="/private/journal",
+        handoff_dir="/private/handoff", ledger_dir="/private/ledger",
+        successor_label="next", expected_review_csv_sha256=FIRST,
+        expected_previous_candidate_sha256=None,
+        consent_local_read=True, consent_local_append=True,
+        confirm_candidate_reviewed=True, confirm_removals_reviewed=True,
+        confirm_checkpoint_commit=True,
+    )
+    with (
+        patch.object(transaction.cycle, "review", side_effect=phase("review", reviewed)),
+        patch.object(transaction, "inspect_checkpoint", return_value=None),
+        patch.object(transaction.cycle, "append", side_effect=phase(
+            "append", {"status": "receipt_persisted"},
+            failure_phase == "append")),
+        patch.object(transaction.cycle, "handoff", side_effect=phase(
+            "handoff", {"status": "next_round_handoff_prepared"},
+            failure_phase == "handoff")),
+        patch.object(transaction.cycle, "checkpoint_commit", side_effect=phase(
+            "checkpoint", {"generation": 1},
+            failure_phase == "checkpoint")),
+        pytest.raises(UncertainReceipt),
+    ):
+        transaction.execute(**kwargs)
+    assert events.count("append") == 1
+    assert events.count("handoff") == (0 if failure_phase == "append" else 1)
+    assert events.count("checkpoint") == (1 if failure_phase == "checkpoint" else 0)
+
+
+@pytest.mark.parametrize("approval", [
+    "consent_local_read", "consent_local_append",
+    "confirm_candidate_reviewed", "confirm_removals_reviewed",
+    "confirm_checkpoint_commit",
+])
+def test_real_transaction_rejects_missing_independent_approval_before_any_io(
+        monkeypatch, approval):
+    from server import m365_outlook_reviewed_transaction as transaction
+    from server.m365_outlook_owg_receipt import ReceiptError
+
+    monkeypatch.delenv("OWG_M365_AUDIT_DIR", raising=False)
+    approvals = dict(COMMIT_APPROVALS)
+    approvals[approval] = False
+    with (
+        patch.object(transaction.cycle, "review") as review,
+        patch.object(transaction.cycle, "append") as append,
+        patch.object(transaction.cycle, "checkpoint_commit") as checkpoint,
+        pytest.raises(ReceiptError),
+    ):
+        transaction.execute(
+            tenant="tenant", mailbox="mailbox", folder="folder",
+            log_id="log", confirm_log_id="log", grant_file="/private/grant",
+            candidate="/private/candidate", csv_path="/private/events.csv",
+            receipt_file="/private/receipt", journal_dir="/private/journal",
+            handoff_dir="/private/handoff", ledger_dir="/private/ledger",
+            successor_label="next", expected_review_csv_sha256=FIRST,
+            **approvals,
+        )
+    review.assert_not_called()
+    append.assert_not_called()
+    checkpoint.assert_not_called()
