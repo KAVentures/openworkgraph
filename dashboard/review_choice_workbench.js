@@ -214,7 +214,7 @@
               if(!response.ok)throw new Error('Review state unavailable ('+response.status+').');
               const state=await response.json();
               if(!reviewStillSelected()||requestGeneration!==reviewRequestGeneration)return;
-              if(state.execution_authorized!==false||state.project_id!==projectId||!Number.isSafeInteger(state.revision)||state.revision<0||!['draft','approved','revoked'].includes(state.decision))throw new Error('Invalid review state');
+              if(state.execution_authorized!==false||state.project_id!==projectId||!Number.isSafeInteger(state.revision)||state.revision<0||!['unreviewed','draft','approved','revoked'].includes(state.decision))throw new Error('Invalid review state');
               reviewRevision=state.revision;notes.value=state.reviewer_notes||'';
               savedNotes=notes.value;currentDecision=state.decision;reviewPending=false;reviewTrusted=true;consent.checked=false;updateContinue();
               reviewState.textContent='Saved review: '+state.decision+' (revision '+state.revision+'). No agent access granted.';
