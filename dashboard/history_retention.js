@@ -221,10 +221,10 @@
         item.appendChild(acknowledge);host.appendChild(item);
         reconstructionChoices[index]={row,pairs,selected,done};
       });
-      root.querySelector('#reconstructionScore').disabled=!!review.coverage_incomplete||!reconstructionChoices.length;
+      root.querySelector('#reconstructionScore').disabled=!!review.coverage_incomplete||!reconstructionChoices.length||reconstructionChoices.length>192;
       root.querySelector('#reconstructionStatus').textContent=review.coverage_incomplete
         ?'Source coverage is incomplete; scoring is disabled.'
-        :review.event_reviews_count+' surfaced events. Review each event explicitly; absent events are not evaluated.';
+        :reconstructionChoices.length>192?'More than 192 surfaced events; scoring is unavailable for this bounded review. Narrow the evidence window.':review.event_reviews_count+' surfaced events. Review each event explicitly; absent events are not evaluated.';
     }catch(error){if(epoch===reconstructionRequestEpoch)clearReconstructionEvidence(String(error.message||error));}
   }
   async function scoreReconstructionEvidence(){
