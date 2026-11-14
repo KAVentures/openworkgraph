@@ -28,6 +28,63 @@ async function scenario(title,responses,check,withPipeline=false,reviewRead=null
 }
 const getControls=results=>[results.children.find(x=>x.tagName==='select'),results.children.find(x=>x.tagName==='button')];
 (async()=>{
+ // First-time review must accept the real API's unreviewed/revision-zero state.
+ await scenario('first unreviewed review can be approved only after explicit consent',[
+   basis(),basis(),
+   {format:'openworkgraph.review-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
+    spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),blockers:[],review_required:true,
+    execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false},
+   {format:'openworkgraph.reviewed-handoff-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
+    spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),review_revision:1,human_review_approved:true,
+    execution_authorized:false,source_read_authorized:false}
+ ],async({results,details,opened,lastEvent})=>{
+   const [select,review]=getControls(results);select.value='p1';await review.onclick();
+   await details.children.find(x=>x.textContent==='Revalidate review basis on server').onclick();
+   await Promise.resolve();await Promise.resolve();
+   const approve=details.children.find(x=>x.textContent==='Approve reviewed choice');
+   const state=details.children.find(x=>x.tagName==='p'&&/Saved review:/.test(x.textContent));
+   const consent=details.children.find(x=>x.tagName==='label'&&x.children.some(y=>y.tagName==='input')).children.find(x=>x.tagName==='input');
+   const proceed=details.children.find(x=>x.textContent==='Open opportunity decision and handoff');
+   assert.match(state.textContent,/unreviewed \(revision 0\)/);
+   assert.equal(approve.disabled,false);
+   assert.equal(proceed.disabled,true);
+   await approve.onclick();
+   assert.match(state.textContent,/Saved approved at revision 1/);
+   assert.equal(proceed.disabled,true,'approval alone is not consent');
+   consent.checked=true;consent.listeners.change();
+   await proceed.onclick();
+   assert.equal(opened(),1);
+   assert.equal(lastEvent().detail.review_revision,1);
+ },true,()=>({ok:true,status:200,json:async()=>({project_id:'p1',revision:0,decision:'unreviewed',reviewer_notes:'',execution_authorized:false})}));
+ // Editing notes while an approval is in flight must not authorize the newer text.
+ {
+   let release;
+   const delayed=new Promise(resolve=>{release=resolve;});
+   await scenario('in-flight edited notes cannot inherit earlier approval',[
+     basis(),basis(),
+     {format:'openworkgraph.review-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
+      spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),blockers:[],review_required:true,
+      execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false},
+     {project_id:'p1',revision:1,decision:'approved',execution_authorized:false}
+   ],async({results,details,opened})=>{
+     const [select,review]=getControls(results);select.value='p1';await review.onclick();
+     await details.children.find(x=>x.textContent==='Revalidate review basis on server').onclick();
+     await Promise.resolve();await Promise.resolve();
+     const notes=details.children.find(x=>x.tagName==='textarea');
+     const approve=details.children.find(x=>x.textContent==='Approve reviewed choice');
+     const state=details.children.find(x=>x.tagName==='p'&&/Saved review:/.test(x.textContent));
+     const consent=details.children.find(x=>x.tagName==='label'&&x.children.some(y=>y.tagName==='input')).children.find(x=>x.tagName==='input');
+     const proceed=details.children.find(x=>x.textContent==='Open opportunity decision and handoff');
+     notes.value='approved version';notes.listeners.input();
+     const saving=approve.onclick();
+     notes.value='edited while pending';notes.listeners.input();
+     await saving;
+     assert.match(state.textContent,/notes changed during save/);
+     consent.checked=true;consent.listeners.change();
+     assert.equal(proceed.disabled,true,'unsaved notes cannot be passed as approved');
+     await proceed.onclick();assert.equal(opened(),0);
+   },true);
+ }
  await scenario('successful read-only review',[basis(),basis()],async({results,details,status,calls})=>{const [select,review]=getControls(results);assert.ok(select&&review);select.value='p1';await review.onclick();assert.equal(calls(),2);assert.match(details.children.map(x=>x.textContent).join(' '),/Specification SHA-256/);const provenance=details.children.find(x=>x.tagName==='section');assert.ok(provenance,'review must show provenance before consent');assert.equal(provenance.children[0].textContent,'Recorded workflow provenance');assert.ok(provenance.children.some(x=>x.textContent==='Workflow revision: 1'));assert.ok(provenance.children.some(x=>x.textContent==='Dataset origin records: 0'));assert.ok(provenance.children.some(x=>x.tagName==='ul'&&x.children[0].textContent==='No dataset origin linked'));assert.match(status.textContent,/Read-only choice inspected/);});
  await scenario('decision navigation rechecks server and fails closed on stale review',[basis(),basis(),
    {format:'openworkgraph.review-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
