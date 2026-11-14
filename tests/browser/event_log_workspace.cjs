@@ -53,7 +53,7 @@ const path=require('node:path');
    assert.match(await page.locator('#owgEventLogStatus').textContent(),/1 rejected rows were kept for review/);
 
    const qualityResponsePromise=page.waitForResponse(response=>response.status()===200&&
-     response.url().includes('/v1/event-logs/')&&response.url().split('?')[0].endsWith('/quality'));
+     response.url().includes('/v1/event-logs/')&&response.url().split('?')[0].endsWith('/quality/overview'));
    await page.locator('#owgEventLogAnalyze').click();
    const qualityPayload=await (await qualityResponsePromise).json();
    await page.locator('#owgEventLogResults h3',{hasText:'Most common variants'}).waitFor();
@@ -128,7 +128,7 @@ const path=require('node:path');
 
    // Synthetic response only: exercise the capped-key disclosure without creating
    // a large source log. Backend DuckDB tests separately establish the real 35-key count.
-   const qualityPattern='**/v1/event-logs/*/quality';
+   const qualityPattern='**/v1/event-logs/*/quality/overview';
    await page.route(qualityPattern,async route=>{
      const response=await route.fetch(),payload=await response.json();
      payload.current.diagnostics.attribute_coverage=Array.from({length:32},(_,i)=>({
@@ -139,7 +139,7 @@ const path=require('node:path');
      await route.fulfill({response,json:payload});
    });
    const truncatedQuality=page.waitForResponse(response=>response.status()===200&&
-     response.url().includes('/v1/event-logs/')&&response.url().split('?')[0].endsWith('/quality'));
+     response.url().includes('/v1/event-logs/')&&response.url().split('?')[0].endsWith('/quality/overview'));
    await page.locator('#owgEventLogAnalyze').click();
    await truncatedQuality;
    await page.locator('#owgQuality summary').click();

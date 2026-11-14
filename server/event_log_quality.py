@@ -310,26 +310,56 @@ def batch_history(log_id: str) -> dict[str, Any]:
     return _with_batch_trends(history)
 
 
+def _current_snapshot(conn, log_id: str, info: dict[str, Any]) -> dict[str, Any]:
+    current = diagnostics(conn, log_id)
+    digest = content_digest(conn, log_id)
+    digest_v2 = content_digest_v2(conn, log_id)
+    relationships = workspace.object_relationships.metadata(conn, log_id, include_digest=True)
+    identity = ({'source_identity_map_sha256': source_identity_digest(conn, log_id)}
+                if info.get('source_identity') else {})
+    return {"content_sha256": digest, "content_sha256_v2": digest_v2,
+            "diagnostics": current, **identity, **relationships,
+            "completeness": {"historical_completeness": "unknown", "note": COMPLETENESS_NOTE}}
+
+
 def quality(log_id: str) -> dict[str, Any]:
-    """Stored reports, oldest first, and the current whole-log diagnostics and content digest."""
+    """Stored reports, oldest first, and current whole-log diagnostics and content digests."""
     with workspace._LOCK:
         conn = workspace._connect()
         try:
             info = workspace._check_log(conn, log_id)
             history = _stored_batch_history(conn, log_id)
-            current = diagnostics(conn, log_id)
-            digest = content_digest(conn, log_id)
-            digest_v2 = content_digest_v2(conn, log_id)
-            relationship_metadata=workspace.object_relationships.metadata(conn,log_id,include_digest=True)
-            identity_digest = ({'source_identity_map_sha256': source_identity_digest(conn,log_id)}
-                               if info.get('source_identity') else {})
+            current = _current_snapshot(conn, log_id, info)
         finally:
             conn.close()
-    return {"log": info, **_with_batch_trends(history),
-            "current": {"content_sha256": digest, "content_sha256_v2": digest_v2,
-                        "diagnostics": current, **identity_digest, **relationship_metadata,
-                        "completeness": {"historical_completeness": "unknown", "note": COMPLETENESS_NOTE}},
+    return {"log": info, **_with_batch_trends(history), "current": current,
             **workspace.DESCRIPTIVE_ONLY}
 
 
-__all__ = ["quality", "batch_history", "record", "transform", "content_digest", "content_digest_v2", "diagnostics", "MAPPING_VERSION"]
+def overview(log_id: str) -> dict[str, Any]:
+    """Current snapshot and latest batch page, plus the original mapping report."""
+    from . import event_log_quality_pages as pages
+    # Hold the shared lock across both reads, so local mutations cannot mix a
+    # history page with diagnostics from a different retained log state.
+    with workspace._LOCK:
+        history = pages.page(log_id)
+        conn = workspace._connect()
+        try:
+            info = workspace._check_log(conn, log_id)
+            first_rows = conn.execute(
+                "SELECT batch, report FROM log_quality WHERE log_id = ? ORDER BY batch LIMIT 2", [log_id]).fetchall()
+            if len(first_rows) > 1 and first_rows[0][0] == first_rows[1][0]:
+                raise workspace.EventLogWorkspaceError('Duplicate batch quality reports; overview unavailable')
+            first = json.loads(first_rows[0][1]) if first_rows else None
+            if first is not None and (type(first.get('batch')) is not int or first['batch'] != first_rows[0][0]):
+                raise workspace.EventLogWorkspaceError('Inconsistent batch quality report; overview unavailable')
+            current = _current_snapshot(conn, log_id, info)
+        finally:
+            conn.close()
+    return {"log": info, "reports": history['reports'],
+            "batches_without_report": history['batches_without_report'],
+            "window": history['window'], "first_report": first, "current": current,
+            **workspace.DESCRIPTIVE_ONLY}
+
+
+__all__ = ["quality", "overview", "batch_history", "record", "transform", "content_digest", "content_digest_v2", "diagnostics", "MAPPING_VERSION"]
