@@ -166,7 +166,7 @@
     if(!panel||document.querySelector('#reconstructionWorkbench'))return;
     const card=document.createElement('div');
     card.className='card';card.id='reconstructionWorkbench';
-    card.innerHTML='<h2>Reconstruction evidence review</h2><p class="muted">Requires an explicit all-saved AI history grant. Candidate pairs are observations, not confirmed cases. Labels stay in this browser tab and are never saved. Scores are for this review window only, not held-out accuracy.</p><button type="button" id="reconstructionLoad">Load current evidence</button><div id="reconstructionStatus" role="status" aria-live="polite"></div><div id="reconstructionEvents"></div><button type="button" id="reconstructionScore" disabled>Score explicitly reviewed events</button><pre id="reconstructionMetrics" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>';
+    card.innerHTML='<h2>Reconstruction evidence review</h2><p class="muted">Requires an explicit all-saved AI history grant. Candidate pairs are observations, not confirmed cases. Labels stay in this browser tab and are never saved. Scores cover only surfaced candidate pairs. This UI cannot label missed pairs or measure complete recall, case accuracy, or held-out performance.</p><button type="button" id="reconstructionLoad">Load current evidence</button><div id="reconstructionStatus" role="status" aria-live="polite"></div><div id="reconstructionEvents"></div><button type="button" id="reconstructionScore" disabled>Score explicitly reviewed events</button><pre id="reconstructionMetrics" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>';
     panel.appendChild(card);
     card.querySelector('#reconstructionLoad').addEventListener('click',loadReconstructionEvidence);
     card.querySelector('#reconstructionScore').addEventListener('click',scoreReconstructionEvidence);
@@ -256,7 +256,9 @@
       }
       if(!response.ok)throw new Error(result.detail||'Review scoring refused');
       root.querySelector('#reconstructionMetrics').textContent=JSON.stringify({
-        precision:result.precision,recall:result.recall,f1:result.f1,
+        candidate_pair_precision:result.precision,candidate_pair_recall:result.recall,candidate_pair_f1:result.f1,
+        complete_case_recall_measured:result.complete_case_recall_measured,
+        missed_source_events_measured:result.missed_source_events_measured,
         annotated_events:result.annotated_events,per_window_metrics:result.per_window_metrics,
         event_disagreements:result.event_disagreements,
         held_out_verified:result.held_out_verified,
