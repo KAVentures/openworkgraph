@@ -107,7 +107,8 @@ returns up to five matching mappings, newest first, each with its
 ### Excel workbooks
 
 Choosing an `.xlsx` file in the dashboard converts its first worksheet to CSV
-on this computer (`POST /v1/event-logs/xlsx-to-csv`, with `?sheet=` for another
+on this computer (a workbook with several sheets shows a "Worksheet" choice;
+picking another sheet converts that one from the same workbook) (`POST /v1/event-logs/xlsx-to-csv`, with `?sheet=` for another
 sheet). The response holds the CSV and is not stored. The dashboard then puts
 the CSV in place of the workbook, and you map columns, consent and import as
 usual. The first non-empty row is the header. Cells become text: strings as
