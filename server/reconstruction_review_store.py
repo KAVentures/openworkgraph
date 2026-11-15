@@ -49,12 +49,31 @@ def _retention_allowed() -> bool:
 def _load(grant: dict[str, Any], generation: int, evidence_sha256: str) -> dict[str, Any] | None:
     path = _path()
     try:
-        info = path.lstat()
-        if (not stat.S_ISREG(info.st_mode) or path.is_symlink()
-                or info.st_size > _MAX_BYTES or
-                (os.name == "posix" and info.st_mode & 0o077)):
-            return None
-        value = json.loads(path.read_text(encoding="utf-8"))
+        # Read through a bounded file descriptor rather than checking a path
+        # and reopening it: a replacement between lstat and read_text could
+        # otherwise redirect the read to a symlink or an oversized file.
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(path, flags)
+        try:
+            info = os.fstat(fd)
+            if (not stat.S_ISREG(info.st_mode) or info.st_size > _MAX_BYTES
+                    or (os.name == "posix" and info.st_mode & 0o077)):
+                return None
+            # On platforms without O_NOFOLLOW, compare the opened inode
+            # against the path and reject links rather than following them.
+            path_info = path.lstat()
+            if (not stat.S_ISREG(path_info.st_mode)
+                    or (hasattr(info, "st_ino") and info.st_ino != path_info.st_ino)):
+                return None
+            with os.fdopen(fd, "rb", closefd=False) as stream:
+                raw = stream.read(_MAX_BYTES + 1)
+            if len(raw) > _MAX_BYTES:
+                return None
+            value = json.loads(raw.decode("utf-8"))
+        finally:
+            os.close(fd)
     except (FileNotFoundError, OSError, ValueError, UnicodeError):
         return None
     if not isinstance(value, dict) or value.get("version") != 1:
