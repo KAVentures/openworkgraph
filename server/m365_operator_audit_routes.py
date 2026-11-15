@@ -596,6 +596,10 @@ def operator_identity_folder_preflight(
                 or folder.get("status") != "folder_metadata_observed"
                 or folder.get("folder_id_matched") is not True):
             raise ValueError("Folder preflight refused")
+        # The second provider read can also outlive dashboard authority.
+        # A revoked session must never receive a successful preflight receipt.
+        if not dashboard_session_valid(authorization[len("owg-session "):].strip()):
+            raise ValueError("Dashboard session revoked after folder preflight")
     except (OSError, ValueError, TypeError, KeyError, RecursionError):
         raise HTTPException(
             409, "Identity/folder preflight refused or partial; inspect private reports and grant manually. Do not retry."
