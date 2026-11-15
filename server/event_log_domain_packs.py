@@ -918,13 +918,15 @@ def resolve(pack: dict[str, Any], mapping: dict[str, dict[str, str]], params: di
             continue
         if resolved["object_type"] in modelled:
             arcs.append(resolved)
-    # Mark every unavailable optional role even if another missing role
-    # already excluded a multi-role definition from the report.
-    reported_missing = {row["unmapped_role"] for row in out["not_applicable"]}
-    for index, activity in enumerate(pack["activities"]):
-        role = activity["role"]
-        if not activity["required"] and role not in mapping["activities"] and role not in reported_missing:
-            out["not_applicable"].append({"section": "activities", "index": index, "unmapped_role": role})
+    # The claims pack explicitly discloses every unmapped optional intake/receipt
+    # activity. Preserve the existing per-definition not_applicable contract
+    # for previously shipped packs, whose consumers expect only omitted rules.
+    if pack["pack_id"] == "insurance_claims":
+        reported_missing = {row["unmapped_role"] for row in out["not_applicable"]}
+        for index, activity in enumerate(pack["activities"]):
+            role = activity["role"]
+            if not activity["required"] and role not in mapping["activities"] and role not in reported_missing:
+                out["not_applicable"].append({"section": "activities", "index": index, "unmapped_role": role})
     out["reference_model"] = {"version": object_model.VERSION, "types": types, "arcs": arcs}
     return out
 
