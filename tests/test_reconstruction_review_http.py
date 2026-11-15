@@ -283,3 +283,46 @@ def test_dashboard_exposes_live_provenance_without_persisting_it():
     assert "evidence.textContent=JSON.stringify(" in source
     assert "root.querySelector('#reconstructionProvenance')?.remove()" in source
     assert "localStorage.setItem('reconstruction" not in source
+
+
+def test_live_review_exposes_direct_pair_provenance_without_case_confirmation(monkeypatch):
+    """Operator sees observed event support, not an inferred transitive case."""
+    import json
+    _setup(monkeypatch)
+    from server import work_resumption, reconstruction_review_cli
+
+    direct = [{
+        "assignment_status": "observed_same_event_pair",
+        "proves_same_case": False,
+        "current_evidence_event_ids": ["event-1"],
+        "resource_pointers": [
+            {"provider": "github", "resource_kind": "issue", "resource_ref": "A"},
+            {"provider": "github", "resource_kind": "issue", "resource_ref": "B"},
+        ],
+    }]
+    continuity = [{"observed_only": True, "interruption": "context-switch"}]
+    monkeypatch.setattr(work_resumption, "resumption_candidates", lambda connection, *, lease: {
+        "coverage": {"scan_truncated": False}, "identity_timelines": [],
+        "observed_pair_event_assignments": direct,
+        "observed_group_continuity": continuity,
+    })
+    monkeypatch.setattr(reconstruction_review_cli, "build_review_queue", lambda result: {
+        "event_reviews": [], "evidence_sha256": "c" * 64,
+        "no_case_identity_inferred": True,
+    })
+    response = history_routes.get_reconstruction_review()
+    payload = json.loads(response.body)
+    assert payload["observed_pair_event_assignments"] == direct
+    assert payload["observed_group_continuity"] == continuity
+    assert payload["authoritative"] is False
+    assert payload["review"]["no_case_identity_inferred"] is True
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_reviewer_provenance_panel_shows_direct_support_as_inert_text():
+    from server.main import ROOT
+    source = (ROOT / "dashboard" / "history_retention.js").read_text(encoding="utf-8")
+    assert "observed_pair_event_assignments:Array.isArray(data.observed_pair_event_assignments)" in source
+    assert "observed_group_continuity:Array.isArray(data.observed_group_continuity)" in source
+    assert "evidence.textContent=JSON.stringify({" in source
+    assert "root.querySelector('#reconstructionProvenance')?.remove();" in source
