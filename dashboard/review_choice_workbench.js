@@ -363,6 +363,9 @@
         if(generation!==recoveryGeneration)return;
         if(!response.ok)throw new Error('Revocation refused ('+response.status+'). Reload the saved revision.');
         const state=await response.json();
+        // Parsing the response can finish after the operator switches recovery IDs.
+        // Never apply a stale revocation receipt to a different saved review.
+        if(generation!==recoveryGeneration)return;
         if(state.idea_id!==idea||state.project_id!==project||state.decision!=='revoked'||
            state.execution_authorized!==false||state.revision!==revision+1)
           throw new Error('Inconsistent revocation response; reload the saved review.');
