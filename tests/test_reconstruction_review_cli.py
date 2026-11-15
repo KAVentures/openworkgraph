@@ -884,6 +884,19 @@ class ProvisionalGroupAuthorityTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "provisional group must not assert case identity"):
                     build_review_queue(source)
 
+
+    def test_untrusted_group_evidence_is_bounded_before_digest(self):
+        source = payload([pair("A", "F", ["e1"])])
+        for group, error in (
+            ({"proves_same_case": False, "description": "x" * 70000}, "unbounded provisional group evidence"),
+            ({"proves_same_case": False, "description": float("nan")}, "invalid provisional group evidence"),
+            ({"proves_same_case": False, "description": object()}, "invalid provisional group evidence"),
+        ):
+            with self.subTest(error=error):
+                source["observed_case_groups"] = [group]
+                with self.assertRaisesRegex(ValueError, error):
+                    build_review_queue(source)
+
     def test_group_container_is_bounded_and_typed(self):
         source = payload([pair("A", "F", ["e1"])])
         for groups in (None, {}, [{"proves_same_case": False}] * 25):
