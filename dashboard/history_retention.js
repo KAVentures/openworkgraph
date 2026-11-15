@@ -212,6 +212,10 @@
       evidence.textContent=JSON.stringify({
         coverage:data.coverage||{},
         identity_timelines:Array.isArray(data.identity_timelines)?data.identity_timelines:[],
+        // Direct event-level support and interruption/continuity context are
+        // observed provenance only; never infer transitive case membership.
+        observed_pair_event_assignments:Array.isArray(data.observed_pair_event_assignments)?data.observed_pair_event_assignments:[],
+        observed_group_continuity:Array.isArray(data.observed_group_continuity)?data.observed_group_continuity:[],
         notice:data.notice||null,
         derived:data.derived,
         authoritative:data.authoritative
