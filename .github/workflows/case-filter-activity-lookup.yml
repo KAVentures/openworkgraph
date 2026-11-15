@@ -1,0 +1,61 @@
+name: case-filter-activity-lookup
+
+on:
+  pull_request:
+    paths:
+      - "server/event_log_activity_lookup.py"
+      - "server/event_log_routes.py"
+      - "tests/browser/process_logs_app.py"
+      - "dashboard/event_log_workspace.js"
+      - "tests/js/event_log_playback_filters.test.mjs"
+      - "docs/EVENT_LOG_CASE_FILTER_EXACT_ACTIVITIES.md"
+      - "tests/test_event_log_activity_lookup.py"
+      - "tests/browser/event_log_case_filter_lookup.cjs"
+      - ".github/workflows/case-filter-activity-lookup.yml"
+  push:
+    branches: ["main"]
+    paths:
+      - "server/event_log_activity_lookup.py"
+      - "server/event_log_routes.py"
+      - "tests/browser/process_logs_app.py"
+      - "dashboard/event_log_workspace.js"
+      - "tests/js/event_log_playback_filters.test.mjs"
+      - "docs/EVENT_LOG_CASE_FILTER_EXACT_ACTIVITIES.md"
+      - "tests/test_event_log_activity_lookup.py"
+      - "tests/browser/event_log_case_filter_lookup.cjs"
+      - ".github/workflows/case-filter-activity-lookup.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  case-filter-lookup-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install local app and tests
+        run: python -m pip install -e ".[dev,gateway]"
+      - name: Exercise lookup, mapping and saved filters
+        run: python -m pytest -q tests/test_event_log_activity_lookup.py tests/test_event_log_playback_filters.py tests/test_event_log_filter_sets.py tests/test_event_log_activity_mappings.py
+      - name: Validate literal rule behavior
+        run: node --test tests/js/event_log_playback_filters.test.mjs
+      - name: Install isolated Chromium and axe
+        run: |
+          npm install --prefix "$RUNNER_TEMP/owg-browser" playwright@1.64.1 axe-core@4.10.3
+          node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install --with-deps chromium || {
+            # The runner image already has Chromium's libraries; --with-deps only adds fonts and
+            # extras. When the apt mirror is unreachable, install the browser without them.
+            echo "::warning::apt packages unavailable; installing Chromium without --with-deps"
+            node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install chromium
+          }
+      - name: Validate real browser journey syntax
+        run: node --check tests/browser/event_log_case_filter_lookup.cjs
+      - name: Run case-filter lookup journey
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_case_filter_lookup.cjs
