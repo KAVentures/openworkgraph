@@ -103,7 +103,8 @@ def _case_filter(started_from: str = Query(default="", max_length=64),
                  attribute: str = Query(default="", max_length=200),
                  event_attribute: str = Query(default="", max_length=200),
                  tag: str = Query(default="", max_length=60),
-                 follows: str = Query(default="", max_length=4000)) -> dict[str, Any]:
+                 follows: str = Query(default="", max_length=4000),
+                 attribute_range: str = Query(default="", max_length=400)) -> dict[str, Any]:
     """The case filter shared by analysis views; ``follows`` is a JSON list of follower rules."""
     cohort: dict[str, Any] = {"started_from": started_from, "started_before": started_before, "resource": resource,
                               "activity": activity, "attribute": attribute, "event_attribute": event_attribute,
@@ -113,6 +114,11 @@ def _case_filter(started_from: str = Query(default="", max_length=64),
             cohort["follows"] = json.loads(follows)
         except ValueError:
             raise HTTPException(422, "follows must be a JSON list of rules") from None
+    if attribute_range:
+        try:
+            cohort["attribute_range"] = json.loads(attribute_range)
+        except ValueError:
+            raise HTTPException(422, "attribute_range must be a JSON object {name, min, max}") from None
     return cohort
 
 

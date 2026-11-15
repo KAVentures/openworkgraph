@@ -7,6 +7,8 @@ confidence intervals, never causal findings.
 """
 from __future__ import annotations
 
+import json
+
 from math import sqrt
 from statistics import NormalDist
 from typing import Any
@@ -239,6 +241,17 @@ def risk_difference(y1: int, n1: int, y0: int, n0: int, z: float = 1.959964) -> 
     return d, d - sqrt((p1 - l1) ** 2 + (u0 - p0) ** 2), d + sqrt((u1 - p1) ** 2 + (p0 - l0) ** 2)
 
 
+def _cohort_hint(kind: str, value: str, bounds: str | None) -> dict[str, Any] | None:
+    """The case filter that selects the cases with this feature, where one exists."""
+    if kind in ("activity", "resource") and len(value) <= 200:
+        return {kind: value}
+    if kind == "attribute" and len(value.partition("=")[2]) < 100 and len(value) <= 200:
+        return {"attribute": value}
+    if kind == "attribute_range" and bounds:
+        return {"attribute_range": json.loads(bounds)}
+    return None
+
+
 def root_cause(log_id: str, outcome: str, case_type: str | None = None, *, threshold_seconds: int | None = None,
                activity: str | None = None, limit: int = 30) -> dict[str, Any]:
     # A malformed direct-call outcome may be an unhashable list/dict; reject
@@ -301,15 +314,21 @@ def root_cause(log_id: str, outcome: str, case_type: str | None = None, *, thres
                 HAVING count(x) >= 0.9 * count(*) AND count(DISTINCT x) > $min_distinct),
             ranged AS (SELECT a.case_id, a.k, a.x, n.q FROM attrs a JOIN numeric n USING (k) WHERE a.x IS NOT NULL),
             f AS (
-              SELECT DISTINCT case_id, 'activity' AS kind, activity AS value FROM ce WHERE activity IS DISTINCT FROM $excluded
-              UNION SELECT DISTINCT case_id, 'resource', resource FROM ce WHERE resource <> ''
-              UNION SELECT DISTINCT case_id, 'attribute', k || '=' || left(v, 100) FROM attrs
+              SELECT DISTINCT case_id, 'activity' AS kind, activity AS value, NULL::VARCHAR AS bounds FROM ce
+                WHERE activity IS DISTINCT FROM $excluded
+              UNION SELECT DISTINCT case_id, 'resource', resource, NULL FROM ce WHERE resource <> ''
+              UNION SELECT DISTINCT case_id, 'attribute', k || '=' || left(v, 100), NULL FROM attrs
               UNION SELECT DISTINCT case_id, 'attribute_range', CASE
                   WHEN x < q[1] THEN k || ' < ' || printf('%.6g', q[1])
                   WHEN x < q[2] THEN printf('%.6g', q[1]) || ' ≤ ' || k || ' < ' || printf('%.6g', q[2])
                   WHEN x < q[3] THEN printf('%.6g', q[2]) || ' ≤ ' || k || ' < ' || printf('%.6g', q[3])
-                  ELSE k || ' ≥ ' || printf('%.6g', q[3]) END FROM ranged)
-            SELECT kind, value, count(*) AS n1, count(*) FILTER (WHERE co.y) AS y1
+                  ELSE k || ' ≥ ' || printf('%.6g', q[3]) END,
+                  -- The exact edges, so a filter selects exactly the cases counted here.
+                  CASE WHEN x < q[1] THEN to_json({'name': k, 'max': q[1]})
+                       WHEN x < q[2] THEN to_json({'name': k, 'min': q[1], 'max': q[2]})
+                       WHEN x < q[3] THEN to_json({'name': k, 'min': q[2], 'max': q[3]})
+                       ELSE to_json({'name': k, 'min': q[3]}) END::VARCHAR FROM ranged)
+            SELECT kind, value, count(*) AS n1, count(*) FILTER (WHERE co.y) AS y1, any_value(bounds) AS bounds
             FROM f JOIN co USING (case_id) GROUP BY 1, 2
             HAVING count(*) >= $min AND count(*) <= $max""",
                             {"excluded": excluded, "log_id": log_id, "min_distinct": NUMERIC_RANGE_MIN_DISTINCT,
@@ -317,7 +336,7 @@ def root_cause(log_id: str, outcome: str, case_type: str | None = None, *, thres
         tested = len(rows)
         z_adjusted = NormalDist().inv_cdf(1 - 0.05 / (2 * max(tested, 1)))
         found = []
-        for kind, value, n1, y1 in rows:
+        for kind, value, n1, y1, bounds in rows:
             n0, y0 = n - n1, y - y1
             d, low, high = risk_difference(y1, n1, y0, n0)
             _, adj_low, adj_high = risk_difference(y1, n1, y0, n0, z_adjusted)
@@ -327,6 +346,7 @@ def root_cause(log_id: str, outcome: str, case_type: str | None = None, *, thres
                 "cases_without_feature": n0, "outcome_rate_without": round(y0 / n0, 6),
                 "risk_difference": round(d, 6), "ci95": [round(low, 6), round(high, 6)],
                 "holds_after_bonferroni": adj_low > 0 or adj_high < 0,
+                **({"cohort": hint} if (hint := _cohort_hint(kind, value, bounds)) else {}),
             })
         found.sort(key=lambda r: (not r["holds_after_bonferroni"], -abs(r["risk_difference"]),
                                   r["feature"]["kind"], r["feature"]["value"]))

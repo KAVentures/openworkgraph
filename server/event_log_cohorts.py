@@ -17,7 +17,7 @@ from .event_log_analytics import risk_difference
 from .event_log_workspace import EventLogWorkspaceError
 
 _SEP = workspace._SEP
-_KEYS = {"label", "started_from", "started_before", "resource", "activity", "attribute", "event_attribute", "tag",
+_KEYS = {"label", "started_from", "started_before", "resource", "activity", "attribute", "attribute_range", "event_attribute", "tag",
          "follows", "variants"}
 MAX_FOLLOW_RULES = 5
 MAX_COHORT_VARIANTS = 500
@@ -38,7 +38,7 @@ def parse_cohort(spec: Any) -> dict[str, Any]:
         return {}
     if not isinstance(spec, dict) or set(spec) - _KEYS:
         raise EventLogWorkspaceError(
-            "cohort accepts label, started_from, started_before, resource, activity, attribute, event_attribute, "
+            "cohort accepts label, started_from, started_before, resource, activity, attribute, attribute_range, event_attribute, "
             "tag, follows, variants")
     cohort: dict[str, Any] = {}
     if spec.get("label") not in (None, ""):
@@ -61,6 +61,8 @@ def parse_cohort(spec: Any) -> dict[str, Any]:
             if not sep or not name.strip():
                 raise EventLogWorkspaceError(f"cohort {what} must look like name=value")
             cohort[key] = (name.strip(), value.strip())
+    if spec.get("attribute_range") not in (None, {}, ""):
+        cohort["attribute_range"] = _parse_range(spec["attribute_range"])
     if spec.get("follows") not in (None, [], ""):
         cohort["follows"] = _parse_follows(spec["follows"])
     if spec.get("variants") not in (None, []):
@@ -98,6 +100,26 @@ def _parse_variants(variants: Any) -> list[list[str]]:
     return parsed
 
 
+def _parse_range(spec: Any) -> dict[str, Any]:
+    """A numeric case-attribute range: ``min`` inclusive, ``max`` exclusive, either may be omitted."""
+    if not isinstance(spec, dict) or set(spec) - {"name", "min", "max"}:
+        raise EventLogWorkspaceError("cohort attribute_range is {name, min, max}")
+    name = _short(spec.get("name"), "attribute_range name").strip()
+    bounds = {}
+    for key in ("min", "max"):
+        value = spec.get(key)
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value != value or abs(value) == float("inf"):
+            raise EventLogWorkspaceError(f"cohort attribute_range {key} must be a finite number")
+        bounds[key] = float(value)
+    if not bounds:
+        raise EventLogWorkspaceError("cohort attribute_range needs min, max or both")
+    if "min" in bounds and "max" in bounds and bounds["min"] >= bounds["max"]:
+        raise EventLogWorkspaceError("cohort attribute_range min must be below max")
+    return {"name": name, **bounds}
+
+
 def describe(cohort: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for key, value in cohort.items():
@@ -105,6 +127,8 @@ def describe(cohort: dict[str, Any]) -> dict[str, Any]:
             out[key] = value.isoformat() + "Z"
         elif key in ("attribute", "event_attribute"):
             out[key] = f"{value[0]}={value[1]}"
+        elif key == "attribute_range":
+            out[key] = dict(value)
         else:
             out[key] = value
     return out
@@ -132,6 +156,13 @@ def _predicate(cohort: dict[str, Any], log_id: str) -> tuple[str, list[Any]]:
         clauses.append("""case_id IN (SELECT object_id FROM objects WHERE log_id = ?
             AND list_contains(map_extract(json_transform(attributes, '"MAP(VARCHAR, VARCHAR)"'), ?), ?))""")
         params += [log_id, *cohort["attribute"]]
+    if "attribute_range" in cohort:
+        # Values that are not numbers never match a range.
+        r = cohort["attribute_range"]
+        cond = ["x IS NOT NULL"] + (["x >= ?"] if "min" in r else []) + (["x < ?"] if "max" in r else [])
+        clauses.append(f"""case_id IN (SELECT object_id FROM (SELECT object_id, try_cast(json_extract_string(attributes,
+            '$."' || replace(?, '"', '\\"') || '"') AS DOUBLE) AS x FROM objects WHERE log_id = ?) WHERE {' AND '.join(cond)})""")
+        params += [r["name"], log_id] + ([r["min"]] if "min" in r else []) + ([r["max"]] if "max" in r else [])
     if "event_attribute" in cohort:
         # Values are compared as the stored text (imports keep attribute values as text).
         clauses.append("""case_id IN (SELECT case_id FROM ce, json_each(ce.attributes) j
