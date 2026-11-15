@@ -266,3 +266,20 @@ def test_dashboard_invalidates_review_after_both_retention_policy_paths():
         assert "await call('/v1/history-policy',{method:'PUT'" in section
         assert section.index("await call('/v1/history-policy'") < section.index(invalidation)
         assert section.index(invalidation) < section.index("await refresh()")
+
+
+def test_dashboard_exposes_live_provenance_without_persisting_it():
+    """Authorized reviewers need scan boundaries and interruption timelines.
+
+    Display as inert text, never HTML, and remove it on revocation/reload.
+    This does not assert that any resource pair is a confirmed case.
+    """
+    from server.main import ROOT
+    source = (ROOT / "dashboard" / "history_retention.js").read_text(encoding="utf-8")
+    assert "provenance.id='reconstructionProvenance'" in source
+    assert "identity_timelines:Array.isArray(data.identity_timelines)" in source
+    assert "coverage:data.coverage||{}" in source
+    assert "authoritative:data.authoritative" in source
+    assert "evidence.textContent=JSON.stringify(" in source
+    assert "root.querySelector('#reconstructionProvenance')?.remove()" in source
+    assert "localStorage.setItem('reconstruction" not in source
