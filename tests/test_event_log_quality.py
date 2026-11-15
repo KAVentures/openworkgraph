@@ -116,6 +116,33 @@ def test_single_batch_integrity_is_verified_and_detects_changed_report_digest():
     assert result["integrity"]["reason"] == "current_saved_content_differs_from_import_report"
 
 
+def test_missing_quality_report_is_not_misreported_as_verified():
+    made = _import()
+    log_id = made["log_id"]
+    conn = workspace._connect()
+    try:
+        conn.execute("DELETE FROM log_quality WHERE log_id = ? AND batch = 0", [log_id])
+    finally:
+        conn.close()
+    result = quality.quality(log_id)
+    assert result["batches_without_report"] == [0]
+    assert result["integrity"]["status"] == "not_verifiable"
+
+
+def test_malformed_quality_report_metadata_fails_closed_without_500():
+    made = _import()
+    log_id = made["log_id"]
+    conn = workspace._connect()
+    try:
+        conn.execute("UPDATE log_quality SET report = ? WHERE log_id = ? AND batch = 0",
+                     [json.dumps({"content_sha256_v2": "0" * 64}), log_id])
+    finally:
+        conn.close()
+    result = quality.quality(log_id)
+    assert result["batches_without_report"] == [0]
+    assert result["integrity"]["status"] == "not_verifiable"
+
+
 def test_future_event_reference_is_explicit_and_report_anchored():
     made = _import()
     result = quality.quality(made["log_id"])
