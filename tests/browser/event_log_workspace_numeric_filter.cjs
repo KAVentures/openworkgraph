@@ -31,7 +31,16 @@ const path=require('node:path');
   await page.locator('#owgCaseFilterApply').click();await page.locator('#owgCaseFilterCount').filter({hasText:'Filtered: 11 of 40 cases'}).waitFor();
   await page.locator('#owgFilterSetName').fill('Range only');await page.locator('#owgFilterSetSave').click();await page.getByRole('button',{name:'Apply saved filter Range only',exact:true}).waitFor();
   await page.locator('#owgCaseFilterAdd').click();await page.locator('#owgCaseFilterFromExact1').fill('Create');await page.locator('#owgCaseFilterToExact1').fill('Slow');
-  await page.locator('#owgCaseFilterApply').click();await page.locator('#owgCaseFilterCount').filter({hasText:'Filtered: 6 of 40 cases'}).waitFor();
+  const [summary,variants,map]=await Promise.all([
+    page.waitForResponse(r=>r.url().includes('/summary?')&&new URL(r.url()).searchParams.has('follows')&&r.status()===200),
+    page.waitForResponse(r=>r.url().includes('/variants?')&&new URL(r.url()).searchParams.has('follows')&&r.status()===200),
+    page.waitForResponse(r=>r.url().includes('/process-map?')&&new URL(r.url()).searchParams.has('follows')&&r.status()===200),
+    page.locator('#owgCaseFilterApply').click()]);
+  await page.locator('#owgCaseFilterCount').filter({hasText:'Filtered: 6 of 40 cases'}).waitFor();
+  for(const response of [summary,variants,map]){
+   const query=new URL(response.url()).searchParams;assert.deepEqual(JSON.parse(query.get('attribute_range')),{name,min:1000,max:1400});assert.equal(JSON.parse(query.get('follows')).length,1);
+  }
+  assert.equal((await summary.json()).cases,6);assert.equal((await variants.json()).cases,6);assert.ok((await map.json()).activities.every(a=>a.case_count===6));
   await page.locator('#owgFilterSetName').fill('Slow range');await page.locator('#owgFilterSetSave').click();await page.getByRole('button',{name:'Apply saved filter Slow range',exact:true}).waitFor();
   await page.locator('#owgCaseFilterClear').click();await page.getByRole('button',{name:'Apply saved filter Range only',exact:true}).click();
   await page.locator('#owgCaseFilterCount').filter({hasText:'Filtered: 11 of 40 cases'}).waitFor();
