@@ -55,6 +55,7 @@ const path=require('node:path');
    const qualityResponsePromise=page.waitForResponse(response=>response.status()===200&&
      response.url().includes('/v1/event-logs/')&&response.url().split('?')[0].endsWith('/quality/overview'));
    await page.locator('#owgEventLogAnalyze').click();
+   await page.locator('#owgQuality summary').click();
    const qualityPayload=await (await qualityResponsePromise).json();
    await page.locator('#owgEventLogResults h3',{hasText:'Most common variants'}).waitFor();
    // R9: real browser, authenticated saved-log aggregate, cohort filtering and safe error display.
@@ -92,7 +93,6 @@ const path=require('node:path');
 
 
    assert.match(await page.locator('#owgEventLogResults').textContent(),/Receive → Check → Approve → Close/);
-   await page.locator('#owgQuality summary').click();
    await page.locator('#owgQualityResults table').first().waitFor();
    const qualityText=await page.locator('#owgQualityResults').textContent();
    assert.match(qualityText,/Import\s*csv\s*274\s*1 \(1 time without a UTC offset\)/);
@@ -141,8 +141,8 @@ const path=require('node:path');
    const truncatedQuality=page.waitForResponse(response=>response.status()===200&&
      response.url().includes('/v1/event-logs/')&&response.url().split('?')[0].endsWith('/quality/overview'));
    await page.locator('#owgEventLogAnalyze').click();
-   await truncatedQuality;
    await page.locator('#owgQuality summary').click();
+   await truncatedQuality;
    await page.locator('#owgQualityResults').getByText('Showing 32 of 35 attribute keys; omitted keys are not absent.').waitFor();
    assert.match(await page.locator('#owgQualityResults').textContent(),/fixture_31/);
    await page.unroute(qualityPattern);
