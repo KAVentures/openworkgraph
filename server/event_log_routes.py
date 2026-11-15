@@ -391,16 +391,18 @@ async def add_case_attributes(
     _require_dashboard(request)
     if request.headers.get("x-owg-local-storage-confirmed") != "true":
         raise HTTPException(403, "Explicit confirmation to store these values on this computer is required")
-    with tempfile.NamedTemporaryFile(dir=str(DATA_DIR), suffix=".csv") as spool:
+    # A closed file in a private folder: Windows does not let DuckDB open a file this process holds open.
+    with tempfile.TemporaryDirectory(dir=str(DATA_DIR), prefix="owg-case-table-") as folder:
+        table = Path(folder) / "case-table.csv"
         size = 0
-        async for chunk in request.stream():
-            size += len(chunk)
-            if size > workspace.MAX_IMPORT_BYTES:
-                raise HTTPException(413, "the case table is larger than the supported limit")
-            spool.write(chunk)
-        spool.flush()
+        with table.open("wb") as spool:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > workspace.MAX_IMPORT_BYTES:
+                    raise HTTPException(413, "the case table is larger than the supported limit")
+                spool.write(chunk)
         try:
-            result = await run_in_threadpool(case_attributes.add, log_id, Path(spool.name), id_column=id_column,
+            result = await run_in_threadpool(case_attributes.add, log_id, table, id_column=id_column,
                                              columns=column[:64], delimiter="\t" if delimiter == "t" else delimiter,
                                              object_type=object_type, replace=replace)
         except workspace.EventLogWorkspaceError as exc:
