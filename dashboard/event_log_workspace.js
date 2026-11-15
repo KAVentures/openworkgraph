@@ -769,6 +769,9 @@
       return url.pathname+url.search;
     };
     const filters=cohortFields(prefix+'Filter','Select complete cases',activityNames);
+    const exactActivity=input(prefix+'ExactActivity','text','Exact activity label (optional)');exactActivity.maxLength=400;
+    const activityPicker=filters.node.querySelector('#'+prefix+'FilterActivity');
+    activityPicker.addEventListener('change',()=>{exactActivity.value='';});
     const browse=button('Browse cases','secondary');browse.id=prefix+'Browse';
     const first=button('First case page','secondary'),next=button('Next case page','secondary');
     first.disabled=true;next.disabled=true;
@@ -779,7 +782,7 @@
     const list=el('div');list.id=prefix+'List';
     const detail=el('div');detail.id=prefix==='owgEventLogCases'?'owgEventLogCaseEvents':prefix+'Events';
     const controls=el('div',null,'row');controls.append(browse,reset,first,next);
-    box.append(note,filters.node,chosen,controls,message,list,detail);
+    box.append(note,filters.node,el('div','Suggestions include up to 500 frequent activities. An exact label overrides the suggestion and is matched literally.','muted'),field('Exact activity to inspect',exactActivity),chosen,controls,message,list,detail);
     let path=null,transition=null,spec=null,nextAfter=null,listing=0,opening=0;
     async function load(after){
       const ticket=++listing;first.disabled=true;next.disabled=true;browse.disabled=true;
@@ -800,7 +803,9 @@
       finally{if(current()&&ticket===listing)browse.disabled=false;}
     }
     function start(){
-      try{const cohort=filters.read();if(options.caseType===undefined&&state.follows.length)cohort.follows=state.follows;
+      try{const cohort=filters.read();
+        if(exactActivity.value){if(Array.from(exactActivity.value).length>200)throw new Error('Activity labels must have at most 200 characters.');cohort.activity=exactActivity.value;}
+        if(options.caseType===undefined&&state.follows.length)cohort.follows=state.follows;
         spec={cohort,limit:30};if(path)spec.path=path;if(transition)spec.transition=transition;detail.replaceChildren();opening++;load(null);}
       catch(error){message.textContent=error.message;}
     }
@@ -831,9 +836,9 @@
     },activity(value){
       const picker=document.getElementById(prefix+'FilterActivity');
       if(!Array.from(picker.options).some(option=>option.value===value))picker.add(new Option(value,value));
-      path=null;transition=null;chosen.textContent='All paths.';picker.value=value;start();box.scrollIntoView({block:'nearest'});
+      exactActivity.value='';path=null;transition=null;chosen.textContent='All paths.';picker.value=value;start();box.scrollIntoView({block:'nearest'});
     },transition(value){
-      path=null;transition=value.slice();document.getElementById(prefix+'FilterActivity').value='';
+      exactActivity.value='';path=null;transition=value.slice();document.getElementById(prefix+'FilterActivity').value='';
       chosen.textContent='Adjacent transition: '+JSON.stringify(transition)+'. Timestamp ties do not verify order.';
       start();box.scrollIntoView({block:'nearest'});
     }};
