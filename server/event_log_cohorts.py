@@ -160,8 +160,9 @@ def _predicate(cohort: dict[str, Any], log_id: str) -> tuple[str, list[Any]]:
         # Values that are not numbers never match a range.
         r = cohort["attribute_range"]
         cond = ["isfinite(x)"] + (["x >= ?"] if "min" in r else []) + (["x < ?"] if "max" in r else [])
-        clauses.append(f"""case_id IN (SELECT object_id FROM (SELECT object_id, try_cast(json_extract_string(attributes,
-            '$."' || replace(?, '"', '\\"') || '"') AS DOUBLE) AS x FROM objects WHERE log_id = ?) WHERE {' AND '.join(cond)})""")
+        clauses.append(f"""case_id IN (SELECT object_id FROM (SELECT object_id,
+            try_cast(map_extract_value(json_transform(attributes, '"MAP(VARCHAR, VARCHAR)"'), ?) AS DOUBLE) AS x
+            FROM objects WHERE log_id = ?) WHERE {' AND '.join(cond)})""")
         params += [r["name"], log_id] + ([r["min"]] if "min" in r else []) + ([r["max"]] if "max" in r else [])
     if "event_attribute" in cohort:
         # Values are compared as the stored text (imports keep attribute values as text).
