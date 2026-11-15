@@ -315,9 +315,10 @@ def root_cause(log_id: str, outcome: str, case_type: str | None = None, *, thres
                 WHERE o.log_id = $log_id),
             -- Numeric attributes with many values (amounts, durations, counts) rarely repeat a value often
             -- enough to be tested; their quartiles are tested as ranges instead.
-            numeric AS (SELECT k, quantile_cont(x, [0.25, 0.5, 0.75]) AS q FROM attrs GROUP BY k
-                HAVING count(x) >= 0.9 * count(*) AND count(DISTINCT x) > $min_distinct),
-            ranged AS (SELECT a.case_id, a.k, a.x, n.q FROM attrs a JOIN numeric n USING (k) WHERE a.x IS NOT NULL),
+            numeric AS (SELECT k, quantile_cont(x, [0.25, 0.5, 0.75]) FILTER (WHERE isfinite(x)) AS q FROM attrs GROUP BY k
+                HAVING count(*) FILTER (WHERE isfinite(x)) >= 0.9 * count(*)
+                   AND count(DISTINCT x) FILTER (WHERE isfinite(x)) > $min_distinct),
+            ranged AS (SELECT a.case_id, a.k, a.x, n.q FROM attrs a JOIN numeric n USING (k) WHERE isfinite(a.x)),
             f AS (
               SELECT DISTINCT case_id, 'activity' AS kind, activity AS value, NULL::VARCHAR AS bounds FROM ce
                 WHERE activity IS DISTINCT FROM $excluded
