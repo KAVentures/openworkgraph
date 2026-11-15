@@ -120,6 +120,9 @@
             if(token!==generation||choice.value!==projectId||input.value.trim()!==id)return;
             if(!response.ok)throw new Error('Server review preflight refused ('+response.status+').');
             const result=await response.json();
+            // A JSON body may resolve after the operator changes the opportunity or export.
+            // Never mount review/approval controls from an obsolete preflight.
+            if(token!==generation||choice.value!==projectId||input.value.trim()!==id)return;
             if(result.format!=='openworkgraph.review-preflight.v1'||result.idea_id!==id||
                result.idea_revision!==snapshot.idea.revision||result.project_id!==projectId||
                result.project_set_sha256!==snapshot.project_set_sha256||

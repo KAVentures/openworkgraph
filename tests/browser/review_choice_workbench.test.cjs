@@ -28,6 +28,35 @@ async function scenario(title,responses,check,withPipeline=false,reviewRead=null
 }
 const getControls=results=>[results.children.find(x=>x.tagName==='select'),results.children.find(x=>x.tagName==='button')];
 (async()=>{
+ // Delayed preflight JSON must not resurrect approval controls after changing the ID.
+ {
+   const panel=new Node('section');
+   const doc={createElement:t=>new Node(t),getElementById:id=>id==='panel-evidence'?panel:null,addEventListener(k,fn){this[k]=fn;}};
+   let resolvePreflight;
+   const delayed=new Promise(resolve=>{resolvePreflight=resolve;});
+   let calls=0;
+   const context={document:doc,window:{__owgAuthReady:Promise.resolve()},fetch:async(url,options)=>{
+     calls++;
+     if(calls<=2)return {ok:true,json:async()=>basis()};
+     return {ok:true,json:()=>delayed};
+   }};
+   vm.runInNewContext(fs.readFileSync(path.resolve(__dirname,'../../dashboard/review_choice_workbench.js'),'utf8'),context);
+   doc.DOMContentLoaded();
+   const [input,load,status,results,details]=panel.children[0].children.slice(3);
+   input.value='idea-1';await load.onclick();
+   const [select,review]=getControls(results);select.value='p1';await review.onclick();
+   const pending=details.children.find(x=>x.textContent==='Revalidate review basis on server').onclick();
+   await Promise.resolve();await Promise.resolve();
+   input.value='idea-2';input.listeners.input();
+   resolvePreflight({format:'openworkgraph.review-preflight.v1',idea_id:'idea-1',idea_revision:3,
+     project_id:'p1',project_set_sha256:'d'.repeat(64),spec_sha256:'a'.repeat(64),
+     archive_sha256:'b'.repeat(64),blockers:[],review_required:true,
+     execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false});
+   await pending;
+   assert.equal(details.children.length,0,'stale preflight JSON cannot recreate approval UI');
+   assert.match(status.textContent,/Selection changed/);
+   console.log('PASS stale preflight JSON cannot mount approval controls');
+ }
  // First-time review must accept the real API's unreviewed/revision-zero state.
  await scenario('first unreviewed review can be approved only after explicit consent',[
    basis(),basis(),
