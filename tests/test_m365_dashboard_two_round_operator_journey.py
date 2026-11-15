@@ -426,7 +426,7 @@ def test_recovery_triage_requires_independent_approvals_before_io(
 
 @pytest.mark.parametrize("route_name,adapter_name,extra", [
     ("operator_identity_folder_preflight", "server.m365_outlook_mailbox_identity.preflight",
-     {"consent_identity_read": True, "consent_folder_read": True}),
+     {"consent_graph_read": True, "consent_private_report": True}),
     ("operator_candidate_review", "server.m365_outlook_candidate_review.review",
      {"consent_local_read": True}),
     ("operator_transaction_preflight", "server.m365_outlook_reviewed_transaction.preflight",
