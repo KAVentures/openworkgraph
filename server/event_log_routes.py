@@ -537,6 +537,15 @@ def event_log_variants(request: Request, log_id: str, case_type: str | None = Qu
     return _respond(workspace.variants, log_id, case_type, limit, cohort=cohort)
 
 
+@router.get("/v1/event-logs/{log_id}/variants/preview")
+def event_log_variant_preview(request: Request, log_id: str,
+        case_type: str | None = Query(default=None, max_length=200),
+        limit: int = Query(default=20, ge=1, le=200), cohort: dict[str, Any] = Depends(_case_filter)):
+    from . import event_log_variant_preview as variant_preview
+    _require_dashboard(request)
+    return _respond(variant_preview.preview, log_id, case_type, limit, cohort=cohort)
+
+
 @router.get("/v1/event-logs/{log_id}/duration-distribution")
 def event_log_duration_distribution(request: Request, log_id: str,
                                     case_type: str | None = Query(default=None, max_length=200),
