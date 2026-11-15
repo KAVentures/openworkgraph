@@ -99,7 +99,7 @@
     card.appendChild(el('h2','Large event logs'));
     card.appendChild(el('div','Import a CSV, XES or OCEL 2.0 event log exported from your own systems and analyse it on this computer. Imported logs are stored locally until you delete them and are never readable by connected AI apps. Results describe the log; they are not verified business policy or causes.','muted'));
 
-    const file=input('owgEventLogFile','file');file.accept='.csv,.tsv,.txt,.xes,.json,.jsonocel,.xmlocel,.xml';
+    const file=input('owgEventLogFile','file');file.accept='.csv,.tsv,.txt,.xlsx,.xes,.json,.jsonocel,.xmlocel,.xml';
     const format=select('owgEventLogFormat',[['csv','CSV'],['xes','XES'],['ocel','OCEL 2.0 JSON'],['ocelxml','OCEL 2.0 XML']]);
     const name=input('owgEventLogName','text','Log name');name.maxLength=120;
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('File',file),field('Format',format),field('Name',name));
@@ -108,7 +108,12 @@
     const delimiter=select('owgEventLogDelimiter',[[',','Comma'],[';','Semicolon'],['t','Tab'],['|','Pipe']]);
     const extras=select('owgEventLogAttributes',[]);extras.multiple=true;extras.size=3;
     extras.title='Only the columns you choose are stored, for example a lifecycle (start/complete) or end-time column.';
-    mapping.append(field('Case column',cols.case),field('Activity column',cols.activity),field('Timestamp column (with timezone)',cols.time),field('Resource column',cols.resource),field('Extra columns to keep (optional)',extras),field('Delimiter',delimiter));
+    // Times written without an offset (always the case for Excel dates) are read with this offset.
+    const naiveOffset=input('owgEventLogNaiveOffset','text','none: reject them');naiveOffset.maxLength=6;naiveOffset.size=8;naiveOffset.pattern='[+-][0-9]{2}:[0-9]{2}';
+    naiveOffset.title='For timestamps without a time zone, e.g. +01:00 or -05:00. Leave empty to reject such rows.';
+    // Times such as 03/04/2024 14:05 need a declared format; the dashboard suggests one from the first rows.
+    const timeFormat=select('owgEventLogTimeFormat',[['','ISO 8601 (2024-03-04T14:05:00Z)']]);
+    mapping.append(field('Case column',cols.case),field('Activity column',cols.activity),field('Timestamp column (with timezone)',cols.time),field('Timestamp format',timeFormat),field('Resource column',cols.resource),field('Extra columns to keep (optional)',extras),field('Delimiter',delimiter),field('Offset for times without one',naiveOffset));
     const identity=el('fieldset');identity.id='owgEventLogIdentity';identity.append(el('legend','Supplied source-event IDs (optional)'));
     const useIdentity=input('owgEventLogUseIdentity','checkbox');
     const identityFields=el('div',null,'row');identityFields.style.alignItems='end';
@@ -187,10 +192,13 @@
       q.set('case_column',cols.case.value);q.set('activity_column',cols.activity.value);q.set('timestamp_column',cols.time.value);q.set('resource_column',cols.resource.value);
       if(!(useIdentity.checked&&jsonColumn.value))[...extras.selectedOptions].forEach(o=>{if(![cols.case.value,cols.activity.value,cols.time.value,cols.resource.value].includes(o.value))q.append('attribute_column',o.value);});
       q.set('delimiter',delimiter.value);if(keep.checked)q.set('keep_rejected','true');
+      if(naiveOffset.value.trim())q.set('naive_timestamp_offset',naiveOffset.value.trim());
+      if(timeFormat.value)q.set('timestamp_format',timeFormat.value);
       if(useIdentity.checked)for(const [key,value] of Object.entries({event_id_column:eventId.value,source_namespace:sourceNamespace.value,source_namespace_column:sourceColumn.value,case_namespace:caseNamespace.value,case_namespace_column:caseColumn.value,attributes_json_column:jsonColumn.value}))if(value)q.set(key,value);
     }
     async function readColumns(){
       const sequence=++columnReadSequence;
+      const staleOffer=document.getElementById('owgEventLogReuse');if(staleOffer){staleOffer.hidden=true;staleOffer.replaceChildren();}
       const chosen=file.files&&file.files[0];
       columnsReady=false;
       if(!chosen||format.value!=='csv'){
@@ -221,15 +229,80 @@
         jsonColumn.value=columns.includes('attributes')?'attributes':'';
         columnsReady=!!(cols.case.value&&cols.activity.value&&cols.time.value);
         status(columnsReady?'File mapping ready. Review the selected columns before storing.':'Choose a CSV with case, activity and time columns.');
+        if(columnsReady)detectTimeFormat().then(()=>findReusableMapping(columns));
       }catch(_){
         if(sequence===columnReadSequence)status('Could not read the column names.');
       }finally{
         if(sequence===columnReadSequence){readingColumns=false;refreshImport();}
       }
     }
-    file.onchange=()=>{const chosen=file.files&&file.files[0];if(chosen){format.value=detectFormat(chosen.name);if(!name.value)name.value=chosen.name.replace(/\.[^.]+$/,'').slice(0,120);if(chosen.name.toLowerCase().endsWith('.tsv'))delimiter.value='t';}consent.checked=false;readColumns();};
+    // An Excel workbook is converted to CSV on this computer (nothing is stored), then imported like any CSV.
+    const localOffset=()=>{const m=-new Date().getTimezoneOffset(),a=Math.abs(m);return (m<0?'-':'+')+String(Math.floor(a/60)).padStart(2,'0')+':'+String(a%60).padStart(2,'0');};
+    // A workbook with several sheets: choose which one to import (the first by default).
+    const sheetSelect=select('owgEventLogSheet',[]),sheetField=field('Worksheet',sheetSelect);sheetField.hidden=true;mapping.prepend(sheetField);
+    let workbook=null;
+    async function convertWorkbook(chosen,sheet){
+      workbook=chosen;
+      columnReadSequence++;readingColumns=true;refreshImport();status('Reading '+(sheet?'worksheet \u201c'+sheet+'\u201d':'the first worksheet')+' of '+chosen.name+'…');
+      try{
+        const r=await (await api('/v1/event-logs/xlsx-to-csv'+(sheet?'?sheet='+encodeURIComponent(sheet):''),{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream'}})).json();
+        setOptions(sheetSelect,r.sheets.map(n=>[n,n]));sheetSelect.value=r.sheet;sheetField.hidden=r.sheets.length<2;
+        const transfer=new DataTransfer();transfer.items.add(new File([r.csv],chosen.name.replace(/\.xlsx$/i,'')+'.csv',{type:'text/csv'}));
+        file.files=transfer.files;format.value='csv';delimiter.value=',';
+        if(r.dates_have_no_offset&&!naiveOffset.value.trim())naiveOffset.value=localOffset();
+        readingColumns=false;await readColumns();
+        status('Read worksheet “'+r.sheet+'”'+(r.sheets.length>1?' ('+(r.sheets.indexOf(r.sheet)+1)+' of '+r.sheets.length+'; choose another under Worksheet)':'')+': '+Number(r.rows).toLocaleString()+' rows.'+(r.dates_have_no_offset?' Excel dates have no time zone; they will be read with offset '+naiveOffset.value+' (change it under Offset for times without one).':''));
+      }catch(error){readingColumns=false;file.value='';refreshImport();status(error.message);}
+    }
+    file.onchange=()=>{const chosen=file.files&&file.files[0];if(chosen){if(!name.value)name.value=chosen.name.replace(/\.[^.]+$/,'').slice(0,120);if(chosen.name.toLowerCase().endsWith('.xlsx')){consent.checked=false;convertWorkbook(chosen);return;}workbook=null;sheetField.hidden=true;format.value=detectFormat(chosen.name);if(chosen.name.toLowerCase().endsWith('.tsv'))delimiter.value='t';}consent.checked=false;readColumns();};
     format.onchange=()=>{consent.checked=false;readColumns();};
+    sheetSelect.onchange=()=>{if(workbook){consent.checked=false;convertWorkbook(workbook,sheetSelect.value);}};
     delimiter.onchange=()=>{consent.checked=false;readColumns();};
+    // Suggest a timestamp format from the first rows of the chosen time column (sent to this computer only).
+    let formatSequence=0;
+    async function detectTimeFormat(){
+      const sequence=++formatSequence,chosen=file.files&&file.files[0],column=cols.time.value;
+      setOptions(timeFormat,[['','ISO 8601 (2024-03-04T14:05:00Z)']]);timeFormat.value='';
+      if(!chosen||format.value!=='csv'||!column)return;
+      try{
+        const q=new URLSearchParams({column,delimiter:delimiter.value});
+        const r=await (await api('/v1/event-logs/timestamp-formats?'+q,{method:'POST',body:await chosen.slice(0,256*1024).text(),headers:{'Content-Type':'text/plain'}})).json();
+        if(sequence!==formatSequence)return;
+        setOptions(timeFormat,[['','ISO 8601 (2024-03-04T14:05:00Z)'],...r.candidates.map(c=>[c.pattern,c.pattern+' \u2014 '+c.order+': '+c.first_value+' reads as '+c.first_value_reads_as])]);
+        if(r.suggested){
+          timeFormat.value=r.suggested;
+          const pick=r.candidates.find(c=>c.pattern===r.suggested);
+          if(!pick.has_offset&&!naiveOffset.value.trim())naiveOffset.value=localOffset();
+          status('Times look like '+pick.first_value+', read as '+pick.first_value_reads_as+' with format '+r.suggested+(pick.has_offset?'.':' at offset '+naiveOffset.value+'. Change the format or offset if that is wrong.'));
+        }else if(r.ambiguous)status('Times such as '+r.candidates[0].first_value+' fit both day-first and month-first formats. Choose the one your system uses under Timestamp format.');
+        else if(r.samples&&!r.candidates.length&&r.iso_with_offset+r.iso_without_offset<r.samples)status('Some times in the first rows are not ISO 8601 and match no known format; those rows will be rejected.');
+      }catch(_){/* detection is a convenience; the import still validates every row */}
+    }
+    cols.time.addEventListener('change',detectTimeFormat);
+    // Offer the mapping recorded with an earlier import whose columns this file also has.
+    const reuseRow=el('div',null,'row');reuseRow.id='owgEventLogReuse';reuseRow.hidden=true;mapping.appendChild(reuseRow);
+    let reuseSequence=0;
+    function applyMapping(m){
+      cols.case.value=m.case_column;cols.activity.value=m.activity_column;cols.time.value=m.timestamp_column;cols.resource.value=m.resource_column||'';
+      [...extras.options].forEach(o=>{o.selected=(m.attribute_columns||[]).includes(o.value);});
+      naiveOffset.value=m.naive_timestamp_offset||'';
+      if(m.timestamp_format&&![...timeFormat.options].some(o=>o.value===m.timestamp_format))timeFormat.appendChild(new Option(m.timestamp_format,m.timestamp_format));
+      timeFormat.value=m.timestamp_format||'';
+      columnsReady=true;consent.checked=false;refreshImport();
+    }
+    async function findReusableMapping(columns){
+      const sequence=++reuseSequence;reuseRow.hidden=true;reuseRow.replaceChildren();
+      try{
+        const r=await (await api('/v1/event-logs/mapping-matches',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({columns,delimiter:delimiter.value})})).json();
+        if(sequence!==reuseSequence||!r.matches.length)return;
+        // Appending to the selected log: its own mapping first.
+        const match=r.matches.find(x=>x.log_id===state.logId)||r.matches[0];
+        const use=button('Use the mapping from \u201c'+match.name+'\u201d');use.onclick=()=>{applyMapping(match.mapping);reuseRow.replaceChildren(el('span','Mapping from \u201c'+match.name+'\u201d applied. '+r.note+(match.missing_attribute_columns.length?' Not in this file: '+match.missing_attribute_columns.join(', ')+'.':''),'muted'));status('Mapping applied. Review the selected columns before storing.');};
+        use.id='owgEventLogReuseMapping';
+        reuseRow.append(use,el('span',' This file has the columns mapped when \u201c'+match.name+'\u201d was imported.','muted'));reuseRow.hidden=false;
+      }catch(_){/* a convenience only */}
+    }
+    timeFormat.onchange=()=>{const fmt=timeFormat.value;if(fmt&&!fmt.includes('%z')&&!naiveOffset.value.trim())naiveOffset.value=localOffset();};
     consent.onchange=refreshImport;name.oninput=refreshImport;
     importButton.onclick=async()=>{
       const chosen=file.files&&file.files[0];if(!chosen||!consent.checked)return;
@@ -1486,7 +1559,38 @@
             s.onchange=()=>{exact.hidden=s.value!==custom;choices[kind][r.role]=selected();edited();};
             exact.oninput=()=>{choices[kind][r.role]=selected();edited();};
             choices[kind][r.role]=selected();
-            const control=el('span');control.append(s,exact);
+            const lookup=input('owgDomainPackLookup-'+r.role,'search');lookup.maxLength=400;
+            lookup.setAttribute('aria-label','Search labels for '+r.label);
+            const find=button('Find labels','secondary');find.setAttribute('aria-label','Find labels for '+r.label);
+            const more=button('More labels','secondary');more.hidden=true;more.setAttribute('aria-label','More labels for '+r.label);
+            const found=el('div');found.id='owgDomainPackMatches-'+r.role;
+            const hint=el('div',null,'muted');hint.setAttribute('role','status');
+            let lookupTurn=0,nextAfter=null;
+            const findPage=async after=>{
+              if(generation!==state.generation||!box.isConnected)return;
+              const q=lookup.value,request=++lookupTurn;find.disabled=true;more.hidden=true;
+              if(!q||Array.from(q).length>200){hint.textContent='Enter 1 to 200 characters.';find.disabled=false;return;}
+              hint.textContent='Searching…';found.replaceChildren();
+              try{
+                const url='/v1/event-logs/'+encodeURIComponent(logId)+'/domain-pack-labels';
+                const result=await (await post(url,{kind,search:q,after:after||''})).json();
+                if(!s.isConnected||generation!==state.generation||request!==lookupTurn)return;
+                for(const label of result.labels){
+                  const choose=button(label,'secondary');
+                  choose.onclick=()=>{s.value=custom;exact.value=label;exact.hidden=false;choices[kind][r.role]=label;edited();hint.textContent='Label selected.';};
+                  found.appendChild(choose);
+                }
+                nextAfter=result.next_after;more.hidden=!nextAfter;
+                hint.textContent=result.labels.length?result.labels.length+' labels found on this page.':'No labels found.';
+              }catch(error){if(s.isConnected&&generation===state.generation&&request===lookupTurn)hint.textContent=error.message;}
+              finally{if(s.isConnected&&generation===state.generation&&request===lookupTurn)find.disabled=false;}
+            };
+            lookup.oninput=()=>{lookupTurn++;find.disabled=false;more.hidden=true;nextAfter=null;found.replaceChildren();hint.textContent='';};
+            lookup.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();findPage('');}};
+            find.onclick=()=>findPage('');more.onclick=()=>findPage(nextAfter);
+            const finder=el('details');finder.id='owgDomainPackFinder-'+r.role;
+            finder.append(el('summary','Find a label'),lookup,find,more,hint,found);
+            const control=el('div');control.append(s,exact,finder);
             rows.push([kind==='object_types'?'Object type':'Activity',r.label+(r.required?'':' (optional)'),control]);
           }
           const params=pack.parameters.map(p=>{const i=input('owgDomainPackParam-'+p.name,'number');i.min=String(p.min);i.max=String(p.max);i.value=String(installed?installed.parameters[p.name]:p.default);inputs[p.name]=i;i.oninput=()=>edited();return field(p.label,i);});
@@ -2902,15 +3006,31 @@
         d.attribute_coverage_truncated===false&&totalKeys!==null?
         'Showing all '+totalKeys.toLocaleString()+' attribute keys in the supplied rows.':
         'Showing up to '+coverage.length.toLocaleString()+' attribute keys; whether more were omitted was not recorded (legacy server).';
-      const reports=r.reports.map(p=>[p.batch===0?'Import':'Append '+p.batch,p.transform.format,Number(p.rows.accepted).toLocaleString(),
-        Number(p.rows.rejected).toLocaleString()+(p.rows.rejected?' ('+reasonText(p.rows.rejected_by_reason)+')':''),
-        p.rows.duplicates_skipped_on_append===undefined?'—':Number(p.rows.duplicates_skipped_on_append).toLocaleString(),
-        el('code',short(p.transform.transform_sha256)),el('code',short(p.content_sha256)),el('code',short(p.content_sha256_v2))]);
-      const mapping=(r.reports[0]&&r.reports[0].transform.mapping)||{};
+      // Recovered or legacy report rows can lack metadata. Never hide the integrity
+      // verdict because a damaged historical report cannot populate this table.
+      const reports=(Array.isArray(r.reports)?r.reports:[]).map(p=>{
+        const report=p&&typeof p==='object'?p:{};
+        const transform=report.transform&&typeof report.transform==='object'?report.transform:{};
+        const rows=report.rows&&typeof report.rows==='object'?report.rows:{};
+        const count=v=>Number.isSafeInteger(v)&&v>=0?v.toLocaleString():'—';
+        return [report.batch===0?'Import':Number.isSafeInteger(report.batch)?'Append '+report.batch:'Unknown batch',
+          transform.format||'—',count(rows.accepted),count(rows.rejected)+(rows.rejected?' ('+reasonText(rows.rejected_by_reason)+')':''),
+          rows.duplicates_skipped_on_append===undefined?'—':count(rows.duplicates_skipped_on_append),
+          el('code',short(transform.transform_sha256)),el('code',short(report.content_sha256)),el('code',short(report.content_sha256_v2))];
+      });
+      const mapping=(r.reports&&r.reports[0]&&r.reports[0].transform&&r.reports[0].transform.mapping)||{};
+      const integrity=r.integrity&&typeof r.integrity==='object'?r.integrity:{};
+      const integrityLabel=integrity.status==='verified'?'Verified: current saved content matches the recorded import digest.':
+        integrity.status==='mismatch'?'Mismatch: saved content differs from the recorded import digest. Investigate before relying on this log.':
+        'Not verifiable: the available reports cannot establish current saved-content integrity.';
+      const integrityStatus=el('p',integrityLabel,'muted');integrityStatus.id='owgQualityIntegrity';
+      integrityStatus.setAttribute('role','status');
+      integrityStatus.dataset.status=['verified','mismatch'].includes(integrity.status)?integrity.status:'not_verifiable';
       const mapRows=mapping.case_column!==undefined?[['Case column',mapping.case_column],['Activity column',mapping.activity_column],['Timestamp column',mapping.timestamp_column],['Resource column',mapping.resource_column||'(none)'],['Extra columns kept',(mapping.attribute_columns||[]).join(', ')||'(none)'],['Mapping version',mapping.mapping_version]]:[['Standard',mapping.standard||'—'],['Mapping version',mapping.mapping_version||'—']];
       if(mapping.source_identity)for(const [key,value] of Object.entries(mapping.source_identity))if(value)mapRows.push(['Source identity: '+key,value]);
       out.replaceChildren(
         ...(r.log.source_identity?[el('p','Source-ID deduplication compares declared namespace and supplied event ID. The content-duplicate diagnostic below compares payloads; distinct source IDs with identical payloads remain separate events. Neither establishes verified provider identity or complete history.')]:[]),
+        integrityStatus,
         table(['Batch','Format','Accepted','Rejected','Duplicates skipped','Transform','Content v1','Content v2'],reports),
         ...(r.batches_without_report.length?[el('div','No report was stored for '+r.batches_without_report.map(b=>b?'append '+b:'the import').join(', ')+' (imported before reports existed, or the report could not be written).','muted')]:[]),
         table(['Mapping',''],mapRows),
