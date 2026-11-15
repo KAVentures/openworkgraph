@@ -18,7 +18,7 @@ const path=require('node:path');
   const objects=[],events=[],start=Date.UTC(2024,0,1);
   for(let i=0;i<40;i++){
    const id='o'+i,t=start+i*86400000;
-   objects.push({id,type:'order',attributes:[{name:'amount',time:new Date(t).toISOString(),value:100+i*37},{name:'region',time:new Date(t).toISOString(),value:i%2?'EU':'US'}]});
+   objects.push({id,type:'order',attributes:[{name:'cost\\"mixed 雪',time:new Date(t).toISOString(),value:100+i*37},{name:'region',time:new Date(t).toISOString(),value:i%2?'EU':'US'}]});
    for(const [j,activity,when] of [[0,'Create',t],[1,i>=30?'Slow':'Fast',t+(i>=30?10:1)*86400000]])
     events.push({id:`e${i}-${j}`,type:activity,time:new Date(when).toISOString(),attributes:[],relationships:[{objectId:id,qualifier:''}]});
   }
