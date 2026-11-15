@@ -1641,9 +1641,13 @@ async def event_log_cohort_metric(
     _require_dashboard(request)
     spec = await _json_body(request, "cohort metric", strict=True, limit=8192)
     from . import event_log_cohort_metrics
-    return await run_in_threadpool(
+    response = await run_in_threadpool(
         _respond, event_log_cohort_metrics.summarize, log_id, spec, case_type
     )
+    # A session can be revoked while DuckDB is computing the aggregate.
+    # Check again before releasing even aggregate-only numeric results.
+    _require_dashboard(request)
+    return response
 
 
 @router.get("/v1/event-logs/{log_id}/activity-mappings")
