@@ -70,3 +70,22 @@ def test_revoked_grant_is_not_reported_as_empty(monkeypatch):
             operator_checkpoint(_request(), consent_local_read=True)
     assert exc.value.status_code == 409
     assert "sensitive" not in str(exc.value.detail)
+
+
+def test_revoked_during_checkpoint_inspection_withholds_generation(monkeypatch):
+    for name in ("OWG_M365_TENANT", "OWG_M365_MAILBOX", "OWG_M365_FOLDER",
+                 "OWG_M365_GRANT_FILE", "OWG_M365_LEDGER_DIR"):
+        monkeypatch.setenv(name, "configured")
+    # The session is valid at entry, then revoked while the private ledger
+    # is being inspected. Never return the generation or cursor metadata.
+    with (patch("server.m365_operator_audit_routes.dashboard_session_valid",
+                side_effect=[True, False]) as session,
+          patch("server.m365_outlook_checkpoint.inspect_checkpoint",
+                return_value={"generation": 8, "cursor_url": "secret-cursor"}) as inspect):
+        with pytest.raises(HTTPException) as exc:
+            operator_checkpoint(_request(), consent_local_read=True)
+    assert exc.value.status_code == 409
+    assert "secret-cursor" not in str(exc.value.detail)
+    assert "generation" not in str(exc.value.detail)
+    inspect.assert_called_once()
+    assert session.call_count == 2
