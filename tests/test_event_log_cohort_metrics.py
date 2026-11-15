@@ -239,7 +239,7 @@ def test_composed_metric_rejects_unapproved_field(monkeypatch):
 
 def test_cohort_dashboard_exposes_bounded_expression_controls():
     from pathlib import Path
-    source = (Path(__file__).resolve().parents[1] / "dashboard" / "event_log_workspace.js").read_text()
+    source = (Path(__file__).resolve().parents[1] / "dashboard" / "event_log_workspace.js").read_text(encoding="utf-8")
     assert "owgCohortMetricOperation" in source
     assert "owgCohortMetricOther" in source
     assert "operation.value==='single'" in source
