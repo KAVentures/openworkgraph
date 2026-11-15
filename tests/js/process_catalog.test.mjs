@@ -5,7 +5,7 @@ import vm from 'node:vm';
 
 const source=fs.readFileSync(new URL('../../dashboard/process_catalog.js',import.meta.url),'utf8');
 class Element {
-  constructor(tag,document){this.tag=tag;this.document=document;this.children=[];this.handlers={};this.attrs={};this.style={};this.textContent='';}
+  constructor(tag,document){this.tag=tag;this.document=document;this.children=[];this.handlers={};this.attrs={};this.dataset={};this.style={};this.textContent='';}
   append(...nodes){this.children.push(...nodes);}
   appendChild(node){this.append(node);return node;}
   prepend(node){this.children.unshift(node);}
