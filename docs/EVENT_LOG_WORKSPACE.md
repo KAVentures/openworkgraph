@@ -1223,6 +1223,42 @@ In the dashboard, choose the file, confirm local storage and press "Add file to 
 Appending one million events, half of them already in the log, takes about 12 seconds locally
 (`OWG_SCALE_ACCEPTANCE=1 pytest tests/test_event_log_append.py`).
 
+
+### Folder feeds
+
+Many systems can only drop an export file into a folder every night or hour.
+A folder feed points a saved log at such a folder. Each run appends every new
+file that matches the pattern, using the column mapping of the log's latest
+CSV import or append (timestamp format and offset included). The log, its
+signals and its scheduled reports then stay current without re-importing by
+hand.
+
+- You create a feed for one absolute folder and one file pattern
+  (`orders-*.csv`; `.csv`, `.tsv` or `.txt`), and you confirm that the folder
+  may be read. Subfolders are not read.
+- The mapping is copied when the feed is created. A changed mapping needs a
+  new feed.
+- A file is appended once, identified by the SHA-256 of its content. A renamed
+  copy is not appended again; an edited file counts as new.
+- Files modified in the last minute are left for the next run, in case the
+  exporter is still writing them.
+- Events already in the log are skipped by the usual append rules, so
+  overlapping exports are safe.
+- A file that cannot be appended (wrong columns, for example) is recorded with
+  the reason and is not retried with the same content.
+- Each run appends at most 20 files. Files in the folder are never changed or
+  deleted.
+- "Run every day" schedules the feed on the local scheduler (job kind
+  `event_log_folder_feed`). Deleting the feed or the log removes the feed, its
+  file records and its schedule.
+
+| Route | Purpose |
+| --- | --- |
+| `POST /v1/event-logs/{log_id}/feeds` | `{"folder": "/abs/path", "pattern": "*.csv", "confirm_folder_reads": true}` |
+| `GET /v1/event-logs/{log_id}/feeds` | Feeds with counts and the 20 latest file results. |
+| `POST /v1/event-logs/feeds/{feed_id}/run` | Append new files now. Requires `X-OWG-Local-Storage-Confirmed: true`. |
+| `POST /v1/event-logs/feeds/{feed_id}/delete` | Delete the feed and its schedule. Appended events stay. |
+
 ## Compliance rules
 
 `POST /v1/event-logs/{log_id}/compliance` (dashboard session only) checks cases against up to 20

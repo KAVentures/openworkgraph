@@ -698,6 +698,7 @@
     results.appendChild(caseExplainSection());
     results.appendChild(discoverySection());
     results.appendChild(driftSection());
+    results.appendChild(folderFeedSection());
     results.appendChild(deriveSection(names));
     results.appendChild(dottedSection());
     results.appendChild(waitingSection());
@@ -1104,6 +1105,55 @@
   }
   // Analyst tags on cases: mark cases while investigating, then filter any analysis with "Tagged".
   // Explain one case: compare each of its gaps with the typical gap of the same transition.
+  // A local folder whose new CSV exports are appended to this log with its recorded mapping.
+  function folderFeedSection(){
+    const box=section('Folder feed');box.id='owgFolderFeed';
+    box.appendChild(el('div','Point this log at a folder where a system drops exports. Each run appends new files that match the pattern, using the column mapping of this log\u2019s latest CSV import. Files are read, never changed or deleted. A file is appended once, by its content.','muted'));
+    const list=el('div');list.id='owgFolderFeedList';list.setAttribute('role','status');
+    const folder=input('owgFolderFeedFolder','text','for example /Users/me/Exports/orders');folder.size=40;
+    const pattern=input('owgFolderFeedPattern','text');pattern.value='*.csv';pattern.maxLength=84;
+    const consent=input('owgFolderFeedConsent','checkbox');
+    const consentLabel=el('label',' Read files from this folder and store their events with the log on this computer');consentLabel.prepend(consent);
+    const create=button('Create feed','secondary');create.id='owgFolderFeedCreate';create.disabled=true;
+    const out=el('div');out.id='owgFolderFeedResult';out.setAttribute('role','status');
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Folder',folder),field('File pattern',pattern));
+    box.append(list,row,consentLabel,create,out);
+    const ready=()=>{create.disabled=!(folder.value.trim()&&pattern.value.trim()&&consent.checked);};
+    for(const control of [folder,pattern])control.addEventListener('input',ready);consent.addEventListener('change',ready);
+    const base='/v1/event-logs/'+encodeURIComponent(state.logId)+'/feeds';
+    const generation=state.generation;
+    const describe=r=>r.files_appended+' file(s) appended with '+Number(r.events_added).toLocaleString()+' new events'+(r.files_failed?', '+r.files_failed+' could not be appended':'')+(r.files_already_appended?', '+r.files_already_appended+' already appended':'')+(r.files_still_being_written?', '+r.files_still_being_written+' still being written (next run)':'')+'.';
+    const render=r=>{
+      if(!r.feeds.length){list.replaceChildren(el('div','No folder feed yet.','muted'));return;}
+      list.replaceChildren(table(['Folder','Pattern','Files appended','Failed','Latest file',''],r.feeds.map(f=>{
+        const wrap=el('div',null,'row');
+        const run=button('Run now','secondary');run.setAttribute('aria-label','Run feed for '+f.folder);
+        const schedule=button('Run every day','secondary');schedule.setAttribute('aria-label','Run feed for '+f.folder+' every day');
+        const remove=button('Delete feed','secondary');remove.setAttribute('aria-label','Delete feed for '+f.folder);
+        run.onclick=async()=>{run.disabled=true;out.replaceChildren(el('div','Reading the folder\u2026','muted'));
+          try{const r2=await (await api('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/run',{method:'POST',headers:{'X-OWG-Local-Storage-Confirmed':'true'}})).json();
+            out.replaceChildren(el('div',describe(r2)+(r2.events_added?' Analyse again to include them.':'')));render(await getJSON(base));}
+          catch(error){out.replaceChildren(el('div',error.message,'muted'));run.disabled=false;}};
+        schedule.onclick=async()=>{if(!window.confirm('Read '+f.folder+' and append new files every day while OpenWorkGraph is running?'))return;
+          try{await api('/v1/schedules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'event_log_folder_feed',target_id:f.feed_id,interval_minutes:1440,confirm_scheduled_runs:true})});
+            out.replaceChildren(el('div','Scheduled daily. Manage it under scheduled jobs.'));}
+          catch(error){out.replaceChildren(el('div',error.message,'muted'));}};
+        remove.onclick=async()=>{if(!window.confirm('Delete this feed? Events already appended stay in the log.'))return;
+          try{await api('/v1/event-logs/feeds/'+encodeURIComponent(f.feed_id)+'/delete',{method:'POST'});out.replaceChildren(el('div','Feed deleted.'));render(await getJSON(base));}
+          catch(error){out.replaceChildren(el('div',error.message,'muted'));}};
+        wrap.append(run,schedule,remove);
+        const latest=f.recent_files[0];
+        return [f.folder,f.pattern,Number(f.files_appended).toLocaleString(),Number(f.files_failed).toLocaleString(),
+          latest?latest.name+' \u2014 '+(latest.outcome==='appended'?Number(latest.added_events).toLocaleString()+' events added':'not appended: '+latest.error):'\u2014',wrap];})));
+    };
+    create.onclick=async()=>{create.disabled=true;
+      try{await api(base,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({folder:folder.value.trim(),pattern:pattern.value.trim(),confirm_folder_reads:true})});
+        consent.checked=false;out.replaceChildren(el('div','Feed created. Run it now or every day.'));render(await getJSON(base));}
+      catch(error){out.replaceChildren(el('div',error.message,'muted'));ready();}};
+    getJSON(base).then(r=>{if(generation===state.generation)render(r);}).catch(error=>list.replaceChildren(el('div',error.message,'muted')));
+    return box;
+  }
+
   function caseExplainSection(){
     const box=section('Explain a case');box.id='owgCaseExplain';
     box.appendChild(el('div','Pick one of the slowest cases or enter a case ID to see which steps took longer than usual in this log.','muted'));
