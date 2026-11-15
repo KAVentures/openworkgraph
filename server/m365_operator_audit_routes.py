@@ -363,7 +363,13 @@ def operator_reviewed_commit(
             confirm_candidate_reviewed=True,
             confirm_removals_reviewed=True, confirm_checkpoint_commit=True,
         )
-        if result.get("status") != "checkpoint_committed":
+        # The adapter may have performed an append before returning. Treat any
+        # malformed success receipt as uncertain, never as a confirmed commit.
+        if (type(result) is not dict
+                or result.get("status") != "checkpoint_committed"
+                or type(result.get("generation")) is not int
+                or result["generation"] < 1
+                or type(result.get("idempotent_replay", False)) is not bool):
             raise UncertainReceipt("Unconfirmed checkpoint")
     except (ReceiptError, UncertainReceipt, DeltaError, AuditWriteError,
             OSError, ValueError, TypeError, KeyError, RecursionError):
