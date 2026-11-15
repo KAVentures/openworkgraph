@@ -141,3 +141,22 @@ def test_review_digest_rejects_replay_when_source_pair_metadata_changes():
     assert build_review_queue(changed)["event_reviews"] == build_review_queue(source)["event_reviews"]
     with pytest.raises(ValueError, match="digest mismatch"):
         score_bound_review_annotations(changed, bound)
+
+
+def test_review_digest_rejects_replay_when_visible_identity_timeline_changes():
+    """A reviewer must not reuse labels after source identity context changes."""
+    import copy
+    import pytest
+    from server.reconstruction_review_cli import score_bound_review_annotations
+
+    source = _response("event-1")
+    source["identity_timelines"] = [{
+        "resource_ref": "A", "observed_event_ids": ["event-1"],
+        "interruption_count": 0,
+    }]
+    bound = _envelope(source)
+    changed = copy.deepcopy(source)
+    changed["identity_timelines"][0]["interruption_count"] = 1
+    assert build_review_queue(changed)["event_reviews"] == build_review_queue(source)["event_reviews"]
+    with pytest.raises(ValueError, match="digest mismatch"):
+        score_bound_review_annotations(changed, bound)
