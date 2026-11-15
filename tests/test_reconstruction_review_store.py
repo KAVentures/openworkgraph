@@ -120,3 +120,33 @@ def test_shutdown_retention_cleanup_purges_review_labels(local_store, monkeypatc
     monkeypatch.setattr(history_routes, "cleanup_expired_history", lambda startup: None)
     history_routes._history_shutdown()
     assert not local_store.exists()
+
+
+def test_saved_review_read_rejects_oversized_file_after_open(local_store, monkeypatch):
+    """A path size check must not authorize an unbounded later read."""
+    grant = {"mode": "all_saved"}
+    store.save_reconstruction_review(grant, 1, _envelope())
+    original = os.fstat
+
+    def report_small_size(fd):
+        info = original(fd)
+        # A file can grow after its metadata is observed; the reader must
+        # independently enforce the byte limit on the opened descriptor.
+        class SizeView:
+            st_mode = info.st_mode
+            st_size = 1
+            st_ino = info.st_ino
+        return SizeView()
+
+    local_store.write_bytes(b" " * (store._MAX_BYTES + 1))
+    monkeypatch.setattr(store.os, "fstat", report_small_size)
+    assert store.read_saved_reconstruction_review(grant, 1, "a" * 64) is None
+    assert not local_store.exists()
+
+
+def test_saved_review_read_rejects_symlink_without_reading_target(local_store, tmp_path):
+    target = tmp_path / "private-other-file"
+    target.write_text('{"secret":"unrelated"}')
+    local_store.symlink_to(target)
+    assert store.read_saved_reconstruction_review({"mode": "all_saved"}, 1, "a" * 64) is None
+    assert target.read_text() == '{"secret":"unrelated"}'
