@@ -177,7 +177,7 @@ class Node {
 
         # Revocation remains available despite stale or disappeared source data.
         revoke = endpoint + "/review/p1/revoke"
-        assert client.post(revoke, headers=headers, json={"expected_review_revision": 0}).status_code == 409
+        assert client.post(revoke, headers=headers, json={"expected_review_revision": 2}).status_code == 409
         assert client.post(revoke, json={"expected_review_revision": 1}).status_code == 403
         withdrawn = client.post(revoke, headers=headers, json={"expected_review_revision": 1})
         assert withdrawn.status_code == 200, withdrawn.text
