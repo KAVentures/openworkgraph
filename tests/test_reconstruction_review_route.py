@@ -216,3 +216,47 @@ def test_review_denies_revocation_during_json_serialization(monkeypatch):
     with pytest.raises(HTTPException) as error:
         history_routes.get_reconstruction_review()
     assert error.value.status_code == 403
+
+
+def test_review_never_infers_transitive_cross_case_pair(monkeypatch):
+    """A-B and B-C observed in separate events cannot imply A-C evidence."""
+    monkeypatch.setattr(history_routes, "active_ai_history_access",
+                        lambda: {"mode": "all_saved", "granted_at": "fixed"})
+    monkeypatch.setattr(history_policy, "history_generation", lambda: 7)
+    monkeypatch.setattr(history_routes, "connect", lambda: sqlite3.connect(":memory:"))
+
+    def pointer(ref):
+        return {"provider": "github", "resource_kind": "issue", "resource_ref": ref}
+
+    def observed_pair(left, right, event):
+        return {
+            "resource_pointers": [pointer(left), pointer(right)],
+            "assignment_status": "observed_same_event_pair",
+            "proves_same_case": False,
+            "current_evidence_event_ids": [event],
+            "earlier_corroborations": [],
+        }
+
+    monkeypatch.setattr(work_resumption, "resumption_candidates",
+                        lambda *_args, **_kwargs: {
+                            "derived": True,
+                            "authoritative": False,
+                            "saved_history_access": "all_saved",
+                            "observed_pair_event_assignments": [
+                                observed_pair("A", "B", "event-AB"),
+                                observed_pair("B", "C", "event-BC"),
+                            ],
+                            "coverage": {"scan_truncated": False},
+                        })
+    response = history_routes.get_reconstruction_review()
+    body = json.loads(response.body)
+    rows = body["review"]["event_reviews"]
+    assert {row["event_id"] for row in rows} == {"event-AB", "event-BC"}
+    observed = {
+        tuple(sorted(pair[2] for pair in row["candidate_resource_pairs"][0]))
+        for row in rows
+    }
+    assert observed == {("A", "B"), ("B", "C")}
+    assert ("A", "C") not in observed
+    assert all(row["confirmed_case"] is False for row in rows)
+    assert body["authoritative"] is False
