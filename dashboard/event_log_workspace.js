@@ -3,6 +3,7 @@
   'use strict';
   const MODEL_FORMAT='openworkgraph.reference-model.v1';
   const state={logs:[],logId:'',caseType:'',generation:0,refresh:0,follows:[],objectTypes:[]};
+  let activityLookupBusy=false;
   // Views that honour the workspace case filter; every other section uses all cases.
   const FILTERED=new Set(['summary','variants','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','waiting-time','drift','model-discovery','organization','report.html']);
 
@@ -902,6 +903,39 @@
     const message=el('div',state.follows.length?'Active: '+state.follows.map(followText).join('; ')+'.':'No case filter: every case is included.','muted');
     message.id='owgCaseFilterStatus';message.setAttribute('role','status');
     const names=activityNames.slice(0,500).map(a=>[a,a]);
+    const lookupGeneration=state.generation,lookupLog=state.logId,lookupCase=state.caseType;
+    function lookupControl(exact,side,n){
+      const wrap=el('div'),find=button('Find labels','secondary'),more=button('More matches','secondary'),use=button('Use label','secondary');
+      find.id='owgCaseFilter'+side+'Find'+n;more.id='owgCaseFilter'+side+'More'+n;use.id='owgCaseFilter'+side+'Use'+n;
+      const subject=side==='From'?'activity':'later activity';
+      find.setAttribute('aria-label','Find matching '+subject+' for rule '+n);
+      more.setAttribute('aria-label','More '+subject+' matches for rule '+n);
+      use.setAttribute('aria-label','Use selected '+subject+' for rule '+n);
+      const choices=select('owgCaseFilter'+side+'Matches'+n,[]),choiceField=field('Rule '+n+': '+(side==='From'?'activity':'later activity')+' matches',choices);
+      const status=el('div',null,'muted');status.setAttribute('role','status');status.id='owgCaseFilter'+side+'LookupStatus'+n;
+      show(choiceField,false);show(use,false);show(more,false);let turn=0,next=null;
+      const reset=()=>{turn++;next=null;choices.replaceChildren();show(choiceField,false);show(use,false);show(more,false);status.textContent='';};
+      const current=t=>wrap.isConnected&&lookupGeneration===state.generation&&lookupLog===state.logId&&lookupCase===state.caseType&&t===turn;
+      async function load(after){
+        const search=exact.value;
+        if(!search||Array.from(search).length>200){status.textContent='Enter 1 to 200 characters to search.';return;}
+        if(activityLookupBusy){status.textContent='Wait for the current activity lookup to finish.';return;}
+        const ticket=++turn;activityLookupBusy=true;find.disabled=true;more.disabled=true;use.disabled=true;status.textContent='Searching the current case notion…';
+        try{
+          const result=await (await api('/v1/event-logs/'+encodeURIComponent(lookupLog)+'/activity-labels/search',{
+            method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({search,after,case_type:lookupCase||null})})).json();
+          if(!current(ticket)||exact.value!==search)return;
+          const labels=Array.isArray(result.labels)?result.labels:[];
+          setOptions(choices,labels.map(label=>[label,label]));next=result.next_after??null;
+          show(choiceField,labels.length>0);show(use,labels.length>0);show(more,next!==null);
+          status.textContent=labels.length+' matching labels on this page. Search is case-sensitive; results can change between pages.';
+        }catch(error){if(current(ticket))status.textContent=error.message;}
+        finally{activityLookupBusy=false;if(wrap.isConnected&&lookupGeneration===state.generation&&lookupLog===state.logId&&lookupCase===state.caseType){find.disabled=false;more.disabled=false;use.disabled=false;}}
+      }
+      find.onclick=()=>load('');more.onclick=()=>{if(next!==null)load(next);};
+      use.onclick=()=>{if(!choices.value)return;exact.value=choices.value;exact.dispatchEvent(new Event('input',{bubbles:true}));exact.focus();};
+      wrap.append(find,choiceField,use,more,status);return {wrap,reset};
+    }
     function render(){
       rows.replaceChildren(...draft.map((rule,i)=>{
         const n=i+1;
@@ -914,13 +948,14 @@
         from.value=has(rule.from)?rule.from:(names[0]?.[0]||'');
         to.value=has(rule.to)?rule.to:(names[0]?.[0]||'');mode.value=rule.mode;
         exactFrom.value=has(rule.from)?'':rule.from;exactTo.value=has(rule.to)?'':rule.to;
-        from.onchange=()=>{exactFrom.value='';rule.from=from.value;};
-        to.onchange=()=>{exactTo.value='';rule.to=to.value;};
-        exactFrom.oninput=()=>{rule.from=exactFrom.value||from.value;};
-        exactTo.oninput=()=>{rule.to=exactTo.value||to.value;};mode.onchange=()=>{rule.mode=mode.value;};
+        from.onchange=()=>{exactFrom.value='';rule.from=from.value;fromLookup.reset();};
+        to.onchange=()=>{exactTo.value='';rule.to=to.value;toLookup.reset();};
+        const fromLookup=lookupControl(exactFrom,'From',n),toLookup=lookupControl(exactTo,'To',n);
+        exactFrom.oninput=()=>{rule.from=exactFrom.value||from.value;fromLookup.reset();};
+        exactTo.oninput=()=>{rule.to=exactTo.value||to.value;toLookup.reset();};mode.onchange=()=>{rule.mode=mode.value;};
         const remove=button('Remove','secondary');remove.setAttribute('aria-label','Remove rule '+n);remove.onclick=()=>{draft.splice(i,1);render();};
         const row=el('div',null,'row');row.style.alignItems='end';
-        row.append(field('Rule '+n+': activity',from),field('Rule '+n+': exact activity',exactFrom),field('Rule '+n+': order',mode),field('Rule '+n+': later activity',to),field('Rule '+n+': exact later activity',exactTo),remove);
+        row.append(field('Rule '+n+': activity',from),field('Rule '+n+': exact activity',exactFrom),fromLookup.wrap,field('Rule '+n+': order',mode),field('Rule '+n+': later activity',to),field('Rule '+n+': exact later activity',exactTo),toLookup.wrap,remove);
         return row;
       }));
       add.disabled=draft.length>=5;
