@@ -86,3 +86,37 @@ def test_symlink_is_not_followed(local_store, tmp_path):
     with pytest.raises(OSError):
         store.save_reconstruction_review({"mode": "all_saved"}, 1, _envelope())
     assert target.read_text() == "do not modify"
+
+
+def test_background_retention_cleanup_purges_review_labels(local_store, monkeypatch):
+    from server import history_routes
+
+    grant = {"mode": "all_saved"}
+    store.save_reconstruction_review(grant, 1, _envelope())
+    assert local_store.exists()
+    calls = []
+
+    class OnePass:
+        def __init__(self):
+            self.count = 0
+
+        def wait(self, seconds):
+            self.count += 1
+            assert seconds == 3600
+            return self.count > 1
+
+    monkeypatch.setattr(history_routes, "_retention_stop", OnePass())
+    monkeypatch.setattr(history_routes, "cleanup_expired_history", lambda startup: calls.append(startup))
+    history_routes._retention_loop()
+    assert calls == [False]
+    assert not local_store.exists()
+
+
+def test_shutdown_retention_cleanup_purges_review_labels(local_store, monkeypatch):
+    from server import history_routes
+
+    store.save_reconstruction_review({"mode": "all_saved"}, 1, _envelope())
+    monkeypatch.setattr(history_routes, "_retention_thread", None)
+    monkeypatch.setattr(history_routes, "cleanup_expired_history", lambda startup: None)
+    history_routes._history_shutdown()
+    assert not local_store.exists()
