@@ -463,3 +463,96 @@ def test_all_operator_boundaries_refuse_unauthenticated_provider_and_local_io(
     commit.assert_not_called()
     if authorization is None or not authorization.lower().startswith("owg-session "):
         validate.assert_not_called()
+
+
+def test_actual_http_operator_routes_preserve_review_commit_boundaries(monkeypatch):
+    """Exercise FastAPI request parsing, dashboard auth and real route wiring.
+
+    Adapter responses are provider-shaped fixtures, not real-tenant validation.
+    The HTTP boundary must not turn a read-only review into a write.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from server.m365_operator_audit_routes import router
+
+    configure(monkeypatch)
+    app = FastAPI()
+    app.include_router(router)
+    events = []
+    def adapter(name, result):
+        def invoke(**kwargs):
+            events.append(name)
+            assert kwargs["tenant"] == "secret-tenant"
+            assert kwargs["mailbox"] == "secret-mailbox"
+            return result
+        return invoke
+
+    headers = {"Authorization": "OWG-Session valid"}
+    with (
+        patch("server.m365_operator_audit_routes.dashboard_session_valid",
+              side_effect=lambda session: session == "valid"),
+        patch("server.m365_outlook_mailbox_identity.preflight",
+              side_effect=adapter("identity", {
+                  "status": "mailbox_identity_observed",
+                  "mailbox_identifier_matched": True, "tenant_id_verified": False})),
+        patch("server.m365_outlook_folder_preflight.preflight",
+              side_effect=adapter("folder", {
+                  "status": "folder_metadata_observed", "folder_id_matched": True})),
+        patch("server.m365_outlook_candidate_review.review",
+              side_effect=adapter("review", {
+                  "status": "review_ready", "csv_sha256": FIRST,
+                  "event_snapshots": 2, "removal_markers_for_review": 1,
+                  "pages": 1})),
+        patch("server.m365_outlook_reviewed_transaction.preflight",
+              side_effect=adapter("preflight", {
+                  "status": "review_ready_for_explicit_commit",
+                  "proposed_generation": 1,
+                  "checkpoint_predecessor_generation": 0,
+                  "reviewed_event_snapshots": 2,
+                  "removal_markers_for_review": 1})),
+        patch("server.m365_outlook_reviewed_transaction.execute",
+              side_effect=adapter("commit", {
+                  "status": "checkpoint_committed", "generation": 1})),
+        patch("server.m365_next_round_review.prepare",
+              side_effect=adapter("next", {
+                  "status": "operator_review_required",
+                  "reviewed_csv_sha256": SECOND, "proposed_generation": 2,
+                  "event_snapshots": 1, "removal_markers_for_review": 0})),
+        TestClient(app) as client,
+    ):
+        def post(path, params):
+            response = client.post("/v1/m365/" + path, params=params,
+                                   headers=headers)
+            assert response.headers.get("cache-control") == "no-store" or response.status_code != 200
+            assert "secret-token" not in response.text
+            assert "/private/" not in response.text
+            return response
+
+        assert post("operator-identity-folder-preflight", {
+            "consent_graph_read": True,
+            "consent_private_report": True}).json()["sync_authorized"] is False
+        assert post("operator-candidate-review", {
+            "consent_local_read": True}).json()["csv_sha256"] == FIRST
+        assert post("operator-transaction-preflight", {
+            "consent_local_read": True,
+            "reviewed_csv_sha256": FIRST}).json()["checkpoint_advanced"] is False
+        assert events == ["identity", "folder", "review", "preflight"]
+        assert post("operator-reviewed-commit", {
+            "reviewed_csv_sha256": FIRST, **{
+                **COMMIT_APPROVALS, "confirm_removals_reviewed": False}
+        }).status_code == 403
+        assert "commit" not in events
+        assert post("operator-reviewed-commit", {
+            "reviewed_csv_sha256": FIRST, **COMMIT_APPROVALS
+        }).json()["generation"] == 1
+        assert post("operator-next-round-prepare", {
+            "expected_generation": 1,
+            "expected_previous_candidate_sha256": FIRST,
+            **EXTRACT_APPROVALS
+        }).json()["reviewed_csv_sha256"] == SECOND
+        assert events == ["identity", "folder", "review", "preflight",
+                          "commit", "next"]
+        assert client.post("/v1/m365/operator-reviewed-commit",
+                           params={"reviewed_csv_sha256": FIRST, **COMMIT_APPROVALS}
+                           ).status_code == 403
+        assert events.count("commit") == 1
