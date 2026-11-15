@@ -159,7 +159,7 @@ def _predicate(cohort: dict[str, Any], log_id: str) -> tuple[str, list[Any]]:
     if "attribute_range" in cohort:
         # Values that are not numbers never match a range.
         r = cohort["attribute_range"]
-        cond = ["x IS NOT NULL"] + (["x >= ?"] if "min" in r else []) + (["x < ?"] if "max" in r else [])
+        cond = ["isfinite(x)"] + (["x >= ?"] if "min" in r else []) + (["x < ?"] if "max" in r else [])
         clauses.append(f"""case_id IN (SELECT object_id FROM (SELECT object_id, try_cast(json_extract_string(attributes,
             '$."' || replace(?, '"', '\\"') || '"') AS DOUBLE) AS x FROM objects WHERE log_id = ?) WHERE {' AND '.join(cond)})""")
         params += [r["name"], log_id] + ([r["min"]] if "min" in r else []) + ([r["max"]] if "max" in r else [])

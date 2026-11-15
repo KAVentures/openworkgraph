@@ -596,8 +596,8 @@ No exact attribute filter is offered for shortened values or names containing
 case filter can open the cases when a filter is present. Range filters are also accepted directly, as `attribute_range`
 in cohorts and as a JSON query parameter
 (`?attribute_range={"name":"amount","min":1000}`). `min` is inclusive, `max`
-is exclusive, and either can be left out. Values that are not numbers never
-match a range.
+is exclusive, and either can be left out. Non-numeric and non-finite values
+(including NaN and infinity) never contribute to the quartiles or match a range.
 
 These are associations in the imported log. They are not causes: a feature
 can be a consequence of the outcome (a fix step in slow cases, for example),

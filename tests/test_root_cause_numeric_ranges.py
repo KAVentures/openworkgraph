@@ -20,11 +20,11 @@ def _iso(t):
     return t.isoformat().replace("+00:00", "Z")
 
 
-def _log(orders=40, distinct=True, numeric_base=100, region_name="region"):
+def _log(orders=40, distinct=True, numeric_base=100, region_name="region", numeric_values=None):
     start = datetime(2024, 1, 1, tzinfo=timezone.utc)
     objects, events = [], []
     for i in range(orders):
-        amount = (numeric_base + i * 37) if distinct else (100 if i % 2 else 200)
+        amount = numeric_values[i] if numeric_values is not None else ((numeric_base + i * 37) if distinct else (100 if i % 2 else 200))
         objects.append({"id": f"o{i}", "type": "order",
                         "attributes": [{"name": "amount", "time": _iso(start), "value": amount},
                                        {"name": region_name, "time": _iso(start), "value": "EU" if i % 2 else "US"}]})
@@ -144,3 +144,15 @@ def test_attribute_name_with_equals_does_not_offer_an_inexact_filter():
     features = [a for a in result["associations"] if a["feature"]["kind"] == "attribute" and a["feature"]["value"].startswith("region=code=")]
     assert features
     assert all("cohort" not in a for a in features)
+
+
+def test_non_finite_text_values_are_excluded_from_numeric_ranges():
+    values = [100 + i * 37 for i in range(36)] + ["NaN", "Infinity", "-Infinity", "not a number"]
+    log = _log(numeric_values=values)
+    result = analytics.root_cause(log, "duration_over", "order", threshold_seconds=5 * 86400)
+    ranges = [a for a in result["associations"] if a["feature"]["kind"] == "attribute_range"]
+    assert len(ranges) == 4
+    assert sum(a["cases_with_feature"] for a in ranges) == 36
+    for a in ranges:
+        assert _cases(log, a["cohort"]) == a["cases_with_feature"] == 9
+    assert _cases(log, {"attribute_range": {"name": "amount", "min": 0}}) == 36
