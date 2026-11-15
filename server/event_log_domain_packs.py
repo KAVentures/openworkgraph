@@ -810,6 +810,13 @@ def resolve(pack: dict[str, Any], mapping: dict[str, dict[str, str]], params: di
             continue
         if resolved["object_type"] in modelled:
             arcs.append(resolved)
+    # An optional role remains explicitly unavailable even when another missing
+    # role excluded the shared compliance rule earlier in resolution.
+    reported_missing = {row["unmapped_role"] for row in out["not_applicable"]}
+    for index, activity in enumerate(pack["activities"]):
+        role = activity["role"]
+        if not activity["required"] and role not in mapping["activities"] and role not in reported_missing:
+            out["not_applicable"].append({"section": "activities", "index": index, "unmapped_role": role})
     out["reference_model"] = {"version": object_model.VERSION, "types": types, "arcs": arcs}
     return out
 
