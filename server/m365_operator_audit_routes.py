@@ -583,6 +583,10 @@ def operator_identity_folder_preflight(
                 or identity.get("mailbox_identifier_matched") is not True
                 or identity.get("tenant_id_verified") is not False):
             raise ValueError("Identity preflight refused")
+        # The dashboard grant may be revoked while the first provider request
+        # is in flight. Never start a second Graph request on a stale session.
+        if not dashboard_session_valid(authorization[len("owg-session "):].strip()):
+            raise ValueError("Dashboard session revoked during preflight")
         folder = folder_preflight(
             tenant=values[0], mailbox=values[1], folder=values[2],
             grant_file=Path(values[4]), output=Path(values[6]),
