@@ -893,7 +893,7 @@
   function caseFilterSection(activityNames){
     const box=section('Case filter');box.id='owgCaseFilter';
     box.appendChild(el('div','Keep only cases where one activity is (or is never) followed by another, directly or later. Every rule must hold. The filter applies to the overview, variants, activities, KPIs, process map and playback, dotted chart, waiting time, drift, discovery and organization; other sections use every case. Matching describes recorded order only.','muted'));
-    box.appendChild(el('div','Suggestions show up to 500 frequent activities. For another activity, enter its exact label; matching is literal and an unknown label may match no cases.','muted'));
+    box.appendChild(el('div','Suggestions show up to 500 frequent activities. Enter an exact label to override a suggestion; matching is literal and an unknown label may match no cases.','muted'));
     const draft=state.follows.map(followRow);
     const rows=el('div');rows.id='owgCaseFilterRules';
     const add=button('Add rule','secondary');add.id='owgCaseFilterAdd';
@@ -925,7 +925,7 @@
       }));
       add.disabled=draft.length>=5;
     }
-    add.onclick=()=>{draft.push({from:names[0]?.[0]||'',to:(names[1]||names[0])?.[0]||'',mode:'eventual'});render();const focus=document.getElementById('owgCaseFilterFrom'+draft.length);if(focus)focus.focus();};
+    add.onclick=()=>{draft.push({from:names[0]?.[0]||'',to:(names[1]||names[0])?.[0]||'',mode:'eventual'});render();const focus=document.getElementById((names.length?'owgCaseFilterFrom':'owgCaseFilterFromExact')+draft.length);if(focus)focus.focus();};
     apply.onclick=()=>{try{state.follows=followSpec(draft);analyse().catch(error=>status(error.message));}catch(error){message.textContent=error.message;}};
     clear.onclick=()=>{state.follows=[];analyse().catch(error=>status(error.message));};
     render();
