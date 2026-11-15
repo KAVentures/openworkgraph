@@ -101,6 +101,35 @@ def test_first_review_live_http_revision_zero_and_conflict_recovery(monkeypatch,
     assert persisted["revision"] == 1
     assert persisted["reviewer_notes"] == "first approval"
 
+    # The real handoff endpoint must accept only the durable matching approval.
+    handoff_url = root + "/reviewed-handoff-preflight"
+    handoff = client.post(handoff_url, json=basis, headers=headers)
+    assert handoff.status_code == 200
+    receipt = handoff.json()
+    assert receipt["format"] == "openworkgraph.reviewed-handoff-preflight.v1"
+    assert receipt["review_revision"] == 1
+    assert receipt["human_review_approved"] is True
+    assert receipt["execution_authorized"] is False
+    assert receipt["source_read_authorized"] is False
+
+    # Evidence changes invalidate navigation, but must not block revocation.
+    evidence["digest"] = "d" * 64
+    assert client.post(handoff_url, json=basis, headers=headers).status_code == 409
+    revoke_url = review_url + "/revoke"
+    revoked = client.post(revoke_url, json={"expected_review_revision": 1}, headers=headers)
+    assert revoked.status_code == 200
+    assert revoked.json()["revision"] == 2
+    assert revoked.json()["decision"] == "revoked"
+    evidence["digest"] = "b" * 64
+    assert client.post(handoff_url, json=basis, headers=headers).status_code == 409
+    assert client.post(revoke_url, json={"expected_review_revision": 1}, headers=headers).status_code == 409
+    # Recovery requires a fresh explicit approval at the current revision.
+    payload["expected_review_revision"] = 2
+    reapproved = client.post(root + "/review", json=payload, headers=headers)
+    assert reapproved.status_code == 200
+    assert reapproved.json()["revision"] == 3
+    assert client.post(handoff_url, json=basis, headers=headers).json()["review_revision"] == 3
+
     # A revoked local session must not read or mutate an approved review.
     # Restore the session only to inspect the persisted revision afterward.
     monkeypatch.setattr(routes, "dashboard_session_valid", lambda token: False)
@@ -108,6 +137,6 @@ def test_first_review_live_http_revision_zero_and_conflict_recovery(monkeypatch,
     assert client.post(root + "/review", json=payload, headers=headers).status_code == 403
     monkeypatch.setattr(routes, "dashboard_session_valid", lambda token: token == "owner")
     after_revocation = client.get(review_url, headers=headers).json()
-    assert after_revocation["revision"] == 1
+    assert after_revocation["revision"] == 3
     assert after_revocation["decision"] == "approved"
     assert after_revocation["execution_authorized"] is False
