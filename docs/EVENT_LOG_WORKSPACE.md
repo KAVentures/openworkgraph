@@ -580,6 +580,13 @@ contains an activity, or case ends with an activity. Every case feature
 - whether the interval still excludes zero after a Bonferroni correction for
   the number of features tested.
 
+A numeric case attribute rarely repeats one value in 5 cases. Amounts,
+quantities and scores therefore get a second test, when at least 90% of a
+case attribute's values are numbers and it has more than 10 distinct values.
+Its quartile ranges in this log (`amount < 460.75`, `460.75 ≤ amount < 821.5`,
+...) are tested as features of kind `attribute_range`. The edges describe this
+log; they are not thresholds anyone set.
+
 These are associations in the imported log. They are not causes: a feature
 can be a consequence of the outcome (a fix step in slow cases, for example),
 and temporal order is not checked.
@@ -973,6 +980,36 @@ text formatting would change a label or routing probability. Small observed
 weights retain their precision; a zero-weight route may be disabled when
 another route has positive weight. Activity labels are data keys, including
 names that also occur on JavaScript object prototypes.
+
+## Case attributes from a separate table
+
+Event exports rarely carry everything known about a case. Region, customer
+segment, contract value or channel usually sit in a separate table keyed by
+case ID. "Case attributes from a table" joins the columns you choose from such
+a CSV onto the log's cases. They then work like OCEL object attributes: in case
+filters (`attribute=Region=EU`), root-cause associations and attribute
+profiles.
+
+- Ids are matched exactly against the cases (for OCEL logs, the objects of the
+  current case notion). Rows whose id is not a case are counted and ignored.
+  Cases without a row are counted and keep their attributes.
+- A table that lists an id more than once is refused, because it would be
+  ambiguous.
+- Empty cells add nothing. Values are kept as text, trimmed, and at most as
+  long as other attribute values.
+- A column that cases already have is refused unless you choose to overwrite.
+- Every case keeps at most 32 attribute names, stored and timed, so the log
+  still exports as OCEL.
+- Events and the log's content digests do not change. Each upload is recorded
+  with its columns, counts and the SHA-256 of the file. Removing an upload
+  deletes those attribute names from every case of that object type. It
+  cannot restore values that an overwrite replaced.
+
+| Route | Purpose |
+| --- | --- |
+| `POST /v1/event-logs/{log_id}/case-attributes?id_column=...&column=...&delimiter=;&object_type=...&replace=true` | Join the CSV body. Requires `X-OWG-Local-Storage-Confirmed: true`. |
+| `GET /v1/event-logs/{log_id}/case-attributes` | Recorded uploads. |
+| `POST /v1/event-logs/{log_id}/case-attributes/remove` | `{"upload_id": "...", "columns": [...]}` (columns optional). |
 
 ## Case tags
 
@@ -1708,7 +1745,8 @@ and are deleted with the log.
 
 | Route | Purpose |
 | --- | --- |
-| `GET /v1/event-logs/{log_id}/quarantine?batch=&after=&limit=` | Kept rows by batch and reason, a page of rows, and every decision taken. |
+| `GET /v1/event-logs/{log_id}/quarantine?batch=&after=&limit=` | Kept rows by batch and reason, a page of rows, and the first 100 decisions with paging metadata. |
+| `GET /v1/event-logs/{log_id}/quarantine/decisions?offset=&limit=` | A page of up to 100 recorded decisions; history can change between pages. |
 | `POST /v1/event-logs/{log_id}/quarantine/release` | `{"naive_timestamp_offset": "+01:00", "batch": 0}` (batch optional). |
 | `POST /v1/event-logs/{log_id}/quarantine/discard` | `{"batch": 0}` (batch optional) deletes kept rows. |
 
