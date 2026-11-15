@@ -422,3 +422,44 @@ def test_recovery_triage_requires_independent_approvals_before_io(
             confirm_removals_reviewed=confirm_removals_reviewed)
     assert error.value.status_code == 403
     triage.assert_not_called()
+
+
+@pytest.mark.parametrize("route_name,adapter_name,extra", [
+    ("operator_identity_folder_preflight", "server.m365_outlook_mailbox_identity.preflight",
+     {"consent_identity_read": True, "consent_folder_read": True}),
+    ("operator_candidate_review", "server.m365_outlook_candidate_review.review",
+     {"consent_local_read": True}),
+    ("operator_transaction_preflight", "server.m365_outlook_reviewed_transaction.preflight",
+     {"consent_local_read": True, "reviewed_csv_sha256": FIRST}),
+    ("operator_reviewed_commit", "server.m365_outlook_reviewed_transaction.execute",
+     {"reviewed_csv_sha256": FIRST, **COMMIT_APPROVALS}),
+    ("operator_next_round_prepare", "server.m365_next_round_review.prepare",
+     {"expected_generation": 1, "expected_previous_candidate_sha256": FIRST,
+      **EXTRACT_APPROVALS}),
+    ("operator_recovery_triage", "server.m365_outlook_recovery_triage.triage",
+     {"consent_local_read": True, "confirm_removals_reviewed": True}),
+])
+@pytest.mark.parametrize("authorization", [
+    None, "Bearer valid", "OWG-Session invalid", "OWG-Session ",
+])
+def test_all_operator_boundaries_refuse_unauthenticated_provider_and_local_io(
+        monkeypatch, route_name, adapter_name, extra, authorization):
+    """Consent alone must never authorize Graph reads, OWG writes or recovery."""
+    from server import m365_operator_audit_routes as routes
+    configure(monkeypatch)
+    headers = [] if authorization is None else [
+        (b"authorization", authorization.encode("ascii"))]
+    untrusted = Request({"type": "http", "method": "POST", "headers": headers})
+    with (
+        patch.object(routes, "dashboard_session_valid",
+              return_value=False) as validate,
+        patch(adapter_name) as adapter,
+        patch("server.m365_outlook_reviewed_transaction.execute") as commit,
+    ):
+        with pytest.raises(HTTPException) as error:
+            getattr(routes, route_name)(untrusted, **extra)
+    assert error.value.status_code == 403
+    adapter.assert_not_called()
+    commit.assert_not_called()
+    if authorization is None or not authorization.lower().startswith("owg-session "):
+        validate.assert_not_called()
