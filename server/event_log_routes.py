@@ -395,6 +395,54 @@ async def event_log_activity_label_search(request: Request, log_id: str):
                                    body.get("after", ""), body.get("case_type"))
 
 
+@router.post("/v1/event-logs/{log_id}/case-attributes")
+async def add_case_attributes(
+    request: Request, log_id: str,
+    id_column: str = Query(min_length=1, max_length=200),
+    column: list[str] = Query(default=[], max_length=200),
+    delimiter: str = Query(default=",", max_length=1),
+    object_type: str | None = Query(default=None, max_length=200),
+    replace: bool = Query(default=False),
+):
+    """Join columns of a CSV case table onto the log's cases (body: the CSV)."""
+    from . import event_log_case_attributes as case_attributes
+    _require_dashboard(request)
+    if request.headers.get("x-owg-local-storage-confirmed") != "true":
+        raise HTTPException(403, "Explicit confirmation to store these values on this computer is required")
+    # A closed file in a private folder: Windows does not let DuckDB open a file this process holds open.
+    with tempfile.TemporaryDirectory(dir=str(DATA_DIR), prefix="owg-case-table-") as folder:
+        table = Path(folder) / "case-table.csv"
+        size = 0
+        with table.open("wb") as spool:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > workspace.MAX_IMPORT_BYTES:
+                    raise HTTPException(413, "the case table is larger than the supported limit")
+                spool.write(chunk)
+        try:
+            result = await run_in_threadpool(case_attributes.add, log_id, table, id_column=id_column,
+                                             columns=column[:64], delimiter="\t" if delimiter == "t" else delimiter,
+                                             object_type=object_type, replace=replace)
+        except workspace.EventLogWorkspaceError as exc:
+            raise HTTPException(422, str(exc)) from None
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/v1/event-logs/{log_id}/case-attributes")
+def list_case_attribute_uploads(request: Request, log_id: str):
+    from . import event_log_case_attributes as case_attributes
+    _require_dashboard(request)
+    return _respond(case_attributes.uploads, log_id)
+
+
+@router.post("/v1/event-logs/{log_id}/case-attributes/remove")
+async def remove_case_attributes(request: Request, log_id: str):
+    from . import event_log_case_attributes as case_attributes
+    _require_dashboard(request)
+    spec = await _json_body(request, "case attribute removal", strict=True, limit=16384)
+    return await run_in_threadpool(_respond, case_attributes.remove, log_id, spec)
+
+
 @router.get("/v1/event-logs/{log_id}/quality")
 def event_log_quality(request: Request, log_id: str):
     _require_dashboard(request)
@@ -433,6 +481,14 @@ def event_log_quarantine(request: Request, log_id: str, batch: int | None = Quer
                          after: int = Query(default=0, ge=0), limit: int = Query(default=50, ge=1, le=100)):
     _require_dashboard(request)
     return _respond(quarantine.quarantine, log_id, batch, after, limit)
+
+
+@router.get("/v1/event-logs/{log_id}/quarantine/decisions")
+def event_log_quarantine_decisions(request: Request, log_id: str,
+        offset: int = Query(default=0, ge=0, le=2_147_483_647),
+        limit: int = Query(default=100, ge=1, le=100)):
+    _require_dashboard(request)
+    return _respond(quarantine.decision_history, log_id, offset, limit)
 
 
 @router.post("/v1/event-logs/{log_id}/quarantine/preview")
@@ -621,6 +677,15 @@ def event_log_variants(request: Request, log_id: str, case_type: str | None = Qu
                        limit: int = Query(default=20, ge=1, le=200), cohort: dict[str, Any] = Depends(_case_filter)):
     _require_dashboard(request)
     return _respond(workspace.variants, log_id, case_type, limit, cohort=cohort)
+
+
+@router.get("/v1/event-logs/{log_id}/variants/preview")
+def event_log_variant_preview(request: Request, log_id: str,
+        case_type: str | None = Query(default=None, max_length=200),
+        limit: int = Query(default=20, ge=1, le=200), cohort: dict[str, Any] = Depends(_case_filter)):
+    from . import event_log_variant_preview as variant_preview
+    _require_dashboard(request)
+    return _respond(variant_preview.preview, log_id, case_type, limit, cohort=cohort)
 
 
 @router.get("/v1/event-logs/{log_id}/duration-distribution")
