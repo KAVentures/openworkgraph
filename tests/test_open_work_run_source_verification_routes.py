@@ -116,3 +116,206 @@ def test_source_change_during_provider_io_denies_result(monkeypatch, tmp_path):
         assert exc.value.status_code == 409
         assert source.call_count == 1
     asyncio.run(exercise())
+
+
+def test_ambiguous_run_case_binding_denies_provider_verification(monkeypatch, tmp_path):
+    """A run bound to two cases must not gain case-specific provider authority."""
+    async def exercise():
+        _, source = setup(monkeypatch, tmp_path)
+        import hashlib
+        actor = hashlib.sha256(Request.headers["authorization"].encode()).hexdigest()
+        for case in (CASE, "owg:w:" + "e" * 32):
+            ledger.bind_run(scope=SCOPE, actor=actor, secret="secret-at-least-16",
+                            case_ref=case, run_ref=RUN, fingerprint=FP, revision=1)
+        with pytest.raises(HTTPException):
+            await routes.verify_local_bound_run_source(Request(), SimpleNamespace(headers={}))
+        source.assert_not_called()
+    asyncio.run(exercise())
+
+
+def test_binding_becomes_ambiguous_during_source_read(monkeypatch, tmp_path):
+    """A second case binding appearing during provider I/O denies the response."""
+    async def exercise():
+        _, source = setup(monkeypatch, tmp_path)
+        import hashlib
+        actor = hashlib.sha256(Request.headers["authorization"].encode()).hexdigest()
+        ledger.bind_run(scope=SCOPE, actor=actor, secret="secret-at-least-16",
+                        case_ref=CASE, run_ref=RUN, fingerprint=FP, revision=1)
+        def provider(*args):
+            ledger.bind_run(scope=SCOPE, actor=actor, secret="secret-at-least-16",
+                            case_ref="owg:w:" + "e" * 32, run_ref=RUN,
+                            fingerprint=FP, revision=1)
+            return {"provider_reported_state": "paid"}
+        source.side_effect = provider
+        with pytest.raises(HTTPException):
+            await routes.verify_local_bound_run_source(Request(), SimpleNamespace(headers={}))
+        assert source.call_count == 1
+    asyncio.run(exercise())
+
+
+def test_session_revoked_during_provider_io_denies_verified_result(monkeypatch, tmp_path):
+    """Fresh provider evidence is not returned to a now-revoked operator."""
+    async def exercise():
+        _, source = setup(monkeypatch, tmp_path)
+        import hashlib
+        actor = hashlib.sha256(Request.headers["authorization"].encode()).hexdigest()
+        ledger.bind_run(scope=SCOPE, actor=actor, secret="secret-at-least-16",
+                        case_ref=CASE, run_ref=RUN, fingerprint=FP, revision=1)
+        checks = 0
+
+        def session_guard(_request):
+            nonlocal checks
+            checks += 1
+            if checks > 1:
+                raise HTTPException(403, "dashboard session revoked")
+
+        monkeypatch.setattr(routes, "_dashboard_only", session_guard)
+        with pytest.raises(HTTPException) as error:
+            await routes.verify_local_bound_run_source(
+                Request(), SimpleNamespace(headers={}))
+        assert error.value.status_code == 403
+        assert source.call_count == 1
+        assert checks >= 2
+    asyncio.run(exercise())
+
+
+def test_revoked_session_before_optional_persistence_never_appends(monkeypatch, tmp_path):
+    """A revoked session must not write a provider claim after source I/O."""
+    async def exercise():
+        payload, source = setup(monkeypatch, tmp_path)
+        payload["persist_provider_check"] = True
+        import hashlib
+        from unittest.mock import Mock
+        actor = hashlib.sha256(Request.headers["authorization"].encode()).hexdigest()
+        ledger.bind_run(scope=SCOPE, actor=actor, secret="secret-at-least-16",
+                        case_ref=CASE, run_ref=RUN, fingerprint=FP, revision=1)
+        monkeypatch.setattr(routes, "read_operation_evidence",
+                            lambda *a, **kw: {"events": []})
+        append = Mock(return_value={"events": []})
+        monkeypatch.setattr(routes, "append_operation_evidence", append)
+        checks = 0
+
+        def session_guard(_request):
+            nonlocal checks
+            checks += 1
+            if source.call_count:
+                raise HTTPException(403, "dashboard session revoked")
+
+        monkeypatch.setattr(routes, "_dashboard_only", session_guard)
+        with pytest.raises(HTTPException) as error:
+            await routes.verify_local_bound_run_source(
+                Request(), SimpleNamespace(headers={}))
+        assert error.value.status_code == 403
+        assert source.call_count == 1
+        append.assert_not_called()
+    asyncio.run(exercise())
+
+
+def test_revocation_inside_optional_persistence_guard_denies_commit(monkeypatch, tmp_path):
+    """The storage guard must recheck session even after pre-append admission."""
+    async def exercise():
+        payload, source = setup(monkeypatch, tmp_path)
+        payload["persist_provider_check"] = True
+        import hashlib
+        from unittest.mock import Mock
+        actor = hashlib.sha256(Request.headers["authorization"].encode()).hexdigest()
+        ledger.bind_run(scope=SCOPE, actor=actor, secret="secret-at-least-16",
+                        case_ref=CASE, run_ref=RUN, fingerprint=FP, revision=1)
+        monkeypatch.setattr(routes, "read_operation_evidence",
+                            lambda *a, **kw: {"events": []})
+        attempted = Mock()
+
+        def append(*args, **kwargs):
+            attempted()
+            kwargs["guard"]()
+            return {"events": []}
+
+        monkeypatch.setattr(routes, "append_operation_evidence", append)
+        checks = 0
+
+        def session_guard(_request):
+            nonlocal checks
+            checks += 1
+            # Initial admission and pre-append admission pass; the guarded
+            # storage operation observes the revocation.
+            if checks >= 3:
+                raise HTTPException(403, "dashboard session revoked")
+
+        monkeypatch.setattr(routes, "_dashboard_only", session_guard)
+        with pytest.raises(HTTPException) as error:
+            await routes.verify_local_bound_run_source(
+                Request(), SimpleNamespace(headers={}))
+        assert error.value.status_code == 403
+        assert source.call_count == 1
+        attempted.assert_called_once()
+        assert checks >= 3
+    asyncio.run(exercise())
+
+
+def test_receipt_journal_write_denied_when_session_revoked_inside_transaction(monkeypatch, tmp_path):
+    """An in-flight operator review cannot persist after session revocation."""
+    async def exercise():
+        setup(monkeypatch, tmp_path)
+        import hashlib
+        from server import open_work_run_receipts
+        actor = hashlib.sha256(Request.headers["authorization"].encode()).hexdigest()
+        ledger.bind_run(scope=SCOPE, actor=actor, secret="secret-at-least-16",
+                        case_ref=CASE, run_ref=RUN, fingerprint=FP, revision=1)
+        monkeypatch.setattr(routes, "read_operation_evidence", lambda *a, **kw: [])
+        monkeypatch.setattr(routes, "read_human_outcomes", lambda *a, **kw: [])
+        payload = dict(work_item_ref=CASE, expected_revision=1, expected_edit_token="edit",
+                       confirm_historical_review=True, confirm_run_comparison=True,
+                       max_cases=1, deployment_id="dep_" + "a" * 16, run_id="run",
+                       record_link={}, action="reviewed", confirm_receipt_write=True)
+        monkeypatch.setattr(routes, "_body", AsyncMock(return_value=payload))
+        revoked = False
+        def session_check(_request):
+            if revoked:
+                raise HTTPException(401, "session revoked")
+        monkeypatch.setattr(routes, "_dashboard_only", session_check)
+        writes = []
+        def append_after_revocation(**kwargs):
+            nonlocal revoked
+            revoked = True
+            kwargs["guard"]()
+            writes.append(kwargs)
+            return {}
+        monkeypatch.setattr(open_work_run_receipts, "append", append_after_revocation)
+        with pytest.raises(HTTPException) as exc:
+            await routes.bound_run_receipt_journal(Request(), SimpleNamespace(headers={}))
+        assert exc.value.status_code == 401
+        assert writes == []
+    asyncio.run(exercise())
+
+
+def test_receipt_journal_read_denied_if_session_revoked_before_response(monkeypatch, tmp_path):
+    """A successful journal read must not disclose evidence after session revocation."""
+    async def exercise():
+        setup(monkeypatch, tmp_path)
+        import hashlib
+        from server import open_work_run_receipts
+        actor = hashlib.sha256(Request.headers["authorization"].encode()).hexdigest()
+        ledger.bind_run(scope=SCOPE, actor=actor, secret="secret-at-least-16",
+                        case_ref=CASE, run_ref=RUN, fingerprint=FP, revision=1)
+        monkeypatch.setattr(routes, "read_operation_evidence", lambda *a, **kw: [])
+        monkeypatch.setattr(routes, "read_human_outcomes", lambda *a, **kw: [])
+        payload = dict(work_item_ref=CASE, expected_revision=1, expected_edit_token="edit",
+                       confirm_historical_review=True, confirm_run_comparison=True,
+                       max_cases=1, deployment_id="dep_" + "a" * 16, run_id="run",
+                       record_link={})
+        monkeypatch.setattr(routes, "_body", AsyncMock(return_value=payload))
+        monkeypatch.setattr(open_work_run_receipts, "review",
+                            lambda **kwargs: {"entries": [], "active_review_count": 0})
+        revoked = False
+        def session_check(_request):
+            if revoked:
+                raise HTTPException(401, "session revoked")
+        monkeypatch.setattr(routes, "_dashboard_only", session_check)
+        async def source_check(_scope):
+            nonlocal revoked
+            revoked = True
+        monkeypatch.setattr(routes, "_recheck_source", source_check)
+        with pytest.raises(HTTPException) as exc:
+            await routes.bound_run_receipt_journal(Request(), SimpleNamespace(headers={}))
+        assert exc.value.status_code == 401
+    asyncio.run(exercise())

@@ -130,7 +130,9 @@
     const statusLine=el('div',null,'muted');statusLine.id='owgEventLogStatus';statusLine.setAttribute('role','status');statusLine.setAttribute('aria-live','polite');
     const appendButton=button('Add file to selected log','secondary');appendButton.id='owgEventLogAppend';appendButton.disabled=true;
     appendButton.title='Adds events from a newer export to the stored log chosen below; events it already holds are skipped.';
-    const importRow=el('div',null,'row');importRow.append(importButton,appendButton);
+    const sampleButton=button('Try with a sample log','secondary');sampleButton.id='owgEventLogSample';
+    sampleButton.title='Stores a synthetic order-to-cash log (no real data) on this computer and analyses it';
+    const importRow=el('div',null,'row');importRow.append(importButton,appendButton,sampleButton);
     card.append(row,mapping,identity,consentLabel,keepLabel,importRow,statusLine);
 
     const pick=select('owgEventLogPick',[]);const caseType=select('owgEventLogCaseType',[]);
@@ -307,6 +309,18 @@
         consent.checked=false;keep.checked=false;file.value='';name.value='';
         await refreshLogs(log.log_id);
       }catch(error){status(error.message);}finally{refreshImport();}
+    };
+    sampleButton.onclick=async()=>{
+      sampleButton.disabled=true;status('Creating the synthetic sample log…');
+      try{
+        const r=await (await api('/v1/event-logs/sample',{method:'POST',headers:{'X-OWG-Local-Storage-Confirmed':'true'}})).json();
+        await refreshLogs(r.log.log_id);
+        const caseType=document.getElementById('owgEventLogCaseType');
+        if(r.suggested_case_notion&&[...caseType.options].some(o=>o.value===r.suggested_case_notion)){caseType.value=r.suggested_case_notion;state.caseType=r.suggested_case_notion;}
+        else if([...caseType.options].some(o=>o.value==='order')){caseType.value='order';state.caseType='order';}
+        await analyse();
+        status((r.already_present?'Opened the sample log you already have. ':'Created the sample log: ')+'synthetic order-to-cash data with no real customers or people, analysed by order.');
+      }catch(error){status(error.message);}finally{sampleButton.disabled=false;}
     };
     appendButton.onclick=async()=>{
       const chosen=file.files&&file.files[0];const target=state.logs.find(l=>l.log_id===state.logId);if(!chosen||!consent.checked||!target)return;
@@ -642,6 +656,7 @@
     if(summary.cases_before_filter!==undefined){const note=el('div','Filtered: '+Number(summary.cases).toLocaleString()+' of '+Number(summary.cases_before_filter).toLocaleString()+' cases match the case filter.','muted');note.id='owgCaseFilterCount';overview.appendChild(note);}
     if(summary.activity_mapping){const m=summary.activity_mapping;const note=el('div','Activities are grouped by the mapping “'+m.name+'”: '+Number(m.events_relabeled).toLocaleString()+' events relabelled'+(m.repeats_collapsed?', '+Number(m.repeats_collapsed).toLocaleString()+' consecutive repeats collapsed':'')+'. The stored events are unchanged; remove the mapping under Group activities to see the original activities.','note');note.id='owgActivityMappingNotice';overview.appendChild(note);}
     results.appendChild(overview);
+    results.appendChild(insightSection());
     results.appendChild(activityMappingSection());
     results.appendChild(qualitySection());
     results.appendChild(attributeProfileSection());
@@ -674,6 +689,7 @@
     results.appendChild(conformanceSection((variants.variants||[])[0]));
     results.appendChild(clusterSection());
     results.appendChild(caseTagSection(names));
+    results.appendChild(caseExplainSection());
     results.appendChild(discoverySection());
     results.appendChild(driftSection());
     results.appendChild(deriveSection(names));
@@ -902,6 +918,39 @@
     if(rules.length>5)throw new Error('Use at most 5 rules.');
     return rules;
   }
+  // "Where to look first": ranked, descriptive pointers computed automatically after Analyse.
+  function insightSection(){
+    const box=section('Where to look first');box.id='owgEventLogInsights';
+    const out=el('div');out.id='owgInsightResults';out.setAttribute('role','status');out.setAttribute('aria-live','polite');
+    out.appendChild(el('div','Looking for where case time and repetition concentrate…','muted'));
+    box.appendChild(out);
+    const generation=state.generation;
+    const spec={limit:6};if(state.caseType)spec.case_type=state.caseType;if(state.follows.length)spec.cohort={follows:state.follows};
+    api('/v1/event-logs/'+encodeURIComponent(state.logId)+'/insights',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(spec)})
+      .then(r=>r.json()).then(r=>{
+        if(generation!==state.generation)return;
+        if(r.too_few_cases){out.replaceChildren(el('div','At least '+r.minimum_cases+' cases are needed for automatic insights.','muted'));return;}
+        if(!r.findings.length){out.replaceChildren(el('div','Nothing stands out: no step, loop or detour holds a large share of case time.','muted'));return;}
+        const list=el('ol');list.style.paddingLeft='1.2em';
+        r.findings.forEach(f=>{
+          const item=el('li');item.style.marginBottom='8px';
+          const title=el('strong',f.title);
+          const meta=el('div',Number(f.cases).toLocaleString()+' cases ('+pct(f.case_share)+')'+(f.impact_seconds?' · about '+duration(f.impact_seconds)+' of case time involved':'')+'. '+f.caveat,'muted');
+          item.append(title,meta);
+          if(f.follows&&f.follows.length&&!state.follows.length){
+            const go=button('Filter to these cases','secondary');go.setAttribute('aria-label','Filter to these cases: '+f.title);
+            go.onclick=()=>{state.follows=f.follows;analyse().catch(error=>status(error.message));};
+            item.appendChild(go);
+          }else if(f.cohort&&f.cohort.activity){
+            item.appendChild(el('div','To see these cases, choose “'+f.cohort.activity+'” under Contains activity in any filter.','muted'));
+          }
+          list.appendChild(item);
+        });
+        out.replaceChildren(list,el('div',r.interpretation,'muted'));
+      }).catch(error=>{if(generation===state.generation)out.replaceChildren(el('div',error.message,'muted'));});
+    return box;
+  }
+
   function followText(rule){
     return rule.from+(rule.negate?' is never ':' is ')+(rule.mode==='direct'?'directly':'eventually')+' followed by '+rule.to;
   }
@@ -1048,6 +1097,46 @@
     setTimeout(()=>URL.revokeObjectURL(url),1000);
   }
   // Analyst tags on cases: mark cases while investigating, then filter any analysis with "Tagged".
+  // Explain one case: compare each of its gaps with the typical gap of the same transition.
+  function caseExplainSection(){
+    const box=section('Explain a case');box.id='owgCaseExplain';
+    box.appendChild(el('div','Pick one of the slowest cases or enter a case ID to see which steps took longer than usual in this log.','muted'));
+    const caseId=input('owgCaseExplainId','text','case ID');caseId.maxLength=500;caseId.autocomplete='off';
+    const run=button('Explain case','secondary');run.id='owgCaseExplainRun';
+    const slowList=el('div');slowList.id='owgCaseExplainSlowest';
+    const out=el('div');out.id='owgCaseExplainResult';out.setAttribute('role','status');out.setAttribute('aria-live','polite');
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Case',caseId),run);
+    box.append(slowList,row,out);
+    const generation=state.generation;
+    const base='/v1/event-logs/'+encodeURIComponent(state.logId)+'/cases/';
+    const post=(path,body)=>api(base+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json());
+    const explainCase=async id=>{
+      run.disabled=true;
+      try{
+        const spec={case_id:id};if(state.caseType)spec.case_type=state.caseType;
+        const r=await post('explain',spec);if(generation!==state.generation)return;
+        const lines=[el('div','Case '+r.case_id+' took '+duration(r.duration_seconds)+' (log median '+duration(r.log_median_seconds)+', 90th percentile '+duration(r.log_p90_seconds)+'); it is slower than '+pct(r.slower_than_share_of_cases)+' of cases.')];
+        if(r.biggest_excess.length)lines.push(el('div','Most of the extra time: '+r.biggest_excess.slice(0,3).map(g=>g.from+' → '+g.to+' ('+duration(g.excess_seconds)+(g.typical_gap_seconds===null?', a path few cases take':' over the usual '+duration(g.typical_gap_seconds))+')').join('; ')+'.'));
+        else lines.push(el('div','No step took longer than usual for its transition.','muted'));
+        if(r.repeated_activities.length)lines.push(el('div','Repeated: '+r.repeated_activities.map(a=>a.activity+' ×'+a.times).join(', ')+'.'));
+        if(r.uncommon_activities.length)lines.push(el('div','Uncommon steps (in under 10% of cases): '+r.uncommon_activities.join(', ')+'.'));
+        const rows=r.gaps.map(g=>[g.from+' → '+g.to,duration(g.gap_seconds),g.typical_gap_seconds===null?'too few cases':duration(g.typical_gap_seconds),g.excess_seconds>0?'+'+duration(g.excess_seconds):'—']);
+        out.replaceChildren(...lines,table(['Step','This case','Typical (median)','Above typical'],rows),el('div',r.interpretation,'muted'));
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
+      finally{run.disabled=false;}
+    };
+    run.onclick=()=>{const id=caseId.value.trim();if(!id){out.replaceChildren(el('div','Enter a case ID.','muted'));return;}explainCase(id);};
+    const spec={limit:5};if(state.caseType)spec.case_type=state.caseType;if(state.follows.length)spec.cohort={follows:state.follows};
+    post('slowest',spec).then(r=>{
+      if(generation!==state.generation||!r.cases.length)return;
+      const wrap=el('div',null,'row');wrap.appendChild(el('span','Slowest cases:','muted'));
+      r.cases.forEach(c=>{const b=button(c.case_id+' ('+duration(c.duration_seconds)+')','secondary');b.setAttribute('aria-label','Explain case '+c.case_id);
+        b.onclick=()=>{caseId.value=c.case_id;explainCase(c.case_id);};wrap.appendChild(b);});
+      slowList.replaceChildren(wrap);
+    }).catch(()=>{});
+    return box;
+  }
+
   function caseTagSection(activityNames){
     const box=section('Case tags');box.id='owgCaseTags';
     box.appendChild(el('div','Tag cases you have looked at, such as “checked” or “root cause: missing PO”, then choose the tag under “Tagged” in any filter. Tags are your judgement, stored on this computer; the log itself is not changed.','muted'));
@@ -1410,13 +1499,15 @@
     const status=el('div',null,'muted');status.id='owgDomainPackStatus';status.setAttribute('role','status');
     const form=el('div');form.id='owgDomainPackForm';
     const out=el('div');out.id='owgDomainPackReport';
+    const historyOut=el('div');historyOut.id='owgDomainPackConfigurations';
+    let historyTurn=0;
     const setup=button('Set up a domain pack','secondary');setup.id='owgDomainPackSetup';
-    box.append(setup,form,status,out);
+    box.append(setup,form,status,out,historyOut);
     const generation=state.generation,logId=state.logId,base='/v1/event-logs/'+encodeURIComponent(logId)+'/domain-packs';
     let turn=0;const current=t=>generation===state.generation&&box.isConnected&&t===turn;
     const post=(url,body)=>api(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     setup.onclick=async()=>{
-      const t=++turn;setup.disabled=true;form.replaceChildren();out.replaceChildren();status.textContent='Loading…';
+      const t=++turn;setup.disabled=true;historyTurn++;historyOut.replaceChildren();form.replaceChildren();out.replaceChildren();status.textContent='Loading…';
       try{
         const [catalog,installs]=await Promise.all([getJSON('/v1/event-log-domain-packs'),getJSON(base)]);
         if(!current(t))return;
@@ -1446,12 +1537,35 @@
             download('owg-domain-pack-'+pack.pack_id+'-'+reportSnapshot.report.pack.version+'.json',
               JSON.stringify(reportSnapshot,null,2),'application/json');
           };
-          const actions=el('div',null,'row');actions.append(install,run,remove,exportReport);
+          const reviewHistory=button('Review saved configurations','secondary');reviewHistory.id='owgDomainPackHistory';reviewHistory.disabled=!installed;
+          reviewHistory.onclick=async()=>{
+            const t2=turn,h=++historyTurn;reviewHistory.disabled=true;
+            historyOut.replaceChildren(el('div','Loading saved configurations…','muted'));
+            try{
+              const r=await getJSON(base+'/'+pack.pack_id+'/configurations');
+              if(!current(t2)||h!==historyTurn)return;
+              historyOut.replaceChildren(el('h4','Saved configurations'),el('div',
+                'Setup snapshots only. Older entries may be unavailable. These do not reproduce historical events or verified outcomes.','muted'));
+              for(const entry of [...r.entries].reverse()){
+                const details=el('details');
+                details.appendChild(el('summary',(entry.current?'Current':'Earlier')+' '+entry.version+' — '+entry.installed_at));
+                details.appendChild(el('div','Definitions: '+entry.definitions_sha256,'muted'));
+                if(entry.configuration_available){
+                  const rows=[];
+                  for(const [kind,roles] of Object.entries(entry.mapping))for(const [role,name] of Object.entries(roles))rows.push([kind==='object_types'?'Object type':'Activity',role,name]);
+                  details.append(table(['Kind','Role','Mapped label'],rows),table(['Parameter','Value'],Object.entries(entry.parameters)));
+                }else details.appendChild(el('div','Configuration unavailable: this older entry retained only version, date and digest.','muted'));
+                historyOut.appendChild(details);
+              }
+            }catch(error){if(current(t2)&&h===historyTurn)historyOut.replaceChildren(el('div',error.message,'muted'));}
+            finally{if(reviewHistory.isConnected)reviewHistory.disabled=!installs.installs.some(i=>i.pack_id===pack.pack_id);}
+          };
+          const actions=el('div',null,'row');actions.append(install,run,remove,exportReport,reviewHistory);
           const assumptions=el('ul');assumptions.className='muted';pack.assumptions.forEach(a=>assumptions.appendChild(el('li',a)));
           form.replaceChildren(field('Domain pack',chooser),el('h4',pack.title+' '+pack.latest_version),el('div',pack.description,'muted'),table(['Kind','Role','Name in this log'],rows),paramRow,actions,el('div','Report downloads include supplied case/object examples and mapped labels. Save and share them only where authorized.','muted'),el('h4','Assumptions'),assumptions);
           status.textContent=(installed?'Installed: '+installed.version+' on '+String(installed.installed_at).slice(0,10)+'.':'Not installed on this log.')+(installs.names_truncated?' Only the 1,000 most frequent object types and activities are offered.':'');
           install.onclick=async()=>{
-            invalidate();const t2=++turn;install.disabled=true;run.disabled=true;
+            invalidate();const t2=++turn;install.disabled=true;run.disabled=true;historyTurn++;historyOut.replaceChildren();
             try{
               const parameters={};for(const [k,i] of Object.entries(inputs))parameters[k]=Number(i.value);
               const basis=installs.installs.find(i=>i.pack_id===pack.pack_id);
@@ -1460,7 +1574,7 @@
               // Keep the completed save's basis even if later inputs invalidated its display.
               installs.installs=[...installs.installs.filter(i=>i.pack_id!==pack.pack_id),r];
               if(!current(t2))return;
-              run.disabled=remove.disabled=false;
+              run.disabled=remove.disabled=reviewHistory.disabled=false;
               status.textContent=({installed:'Installed',upgraded:'Upgraded from '+r.previous_version+' to',reconfigured:'Reinstalled'}[r.change])+' '+r.version+'. '+r.metric_ids.length+' case metrics were added to this log’s metric library.'+(r.not_applicable.length?' '+r.not_applicable.length+' definitions do not apply without their optional roles.':'');
             }catch(error){if(current(t2))status.textContent=error.message;}
             finally{if(install.isConnected)install.disabled=false;}
@@ -1488,19 +1602,19 @@
             finally{if(current(t2))run.disabled=false;}
           };
           remove.onclick=async()=>{
-            invalidate();const t2=++turn;remove.disabled=true;run.disabled=true;
+            invalidate();const t2=++turn;remove.disabled=true;run.disabled=true;historyTurn++;historyOut.replaceChildren();
             try{
               const basis=installs.installs.find(i=>i.pack_id===pack.pack_id);
               if(!basis||!/^[a-f0-9]{64}$/.test(basis.installation_token||''))throw new Error('Installation review is unavailable. Reload setup before removing.');
               const r=await (await api(base+'/'+pack.pack_id+'?expected_installation='+encodeURIComponent(basis.installation_token),{method:'DELETE'})).json();
               if(!current(t2))return;
               installs.installs=installs.installs.filter(i=>i.pack_id!==pack.pack_id);
-            run.disabled=true;out.replaceChildren();status.textContent='Uninstalled '+r.version+'; '+r.metrics_removed+' pack case metrics were removed.';
+            run.disabled=reviewHistory.disabled=true;out.replaceChildren();status.textContent='Uninstalled '+r.version+'; '+r.metrics_removed+' pack case metrics were removed.';
             }catch(error){if(current(t2)){status.textContent=error.message;remove.disabled=false;}}
           };
         };
         // Switching packs drops any answer still on its way for the previous one.
-        chooser.onchange=()=>{turn++;out.replaceChildren();show();};
+        chooser.onchange=()=>{turn++;historyTurn++;historyOut.replaceChildren();out.replaceChildren();show();};
         show();
       }catch(error){if(current(t))status.textContent=error.message;}
       finally{if(current(t))setup.disabled=false;}
@@ -3374,7 +3488,7 @@
     const out=el('div');out.id='owgAnalysisResults';
     const savedList=el('div');savedList.id='owgAnalysisSaved';
     let last=null,lastSpec=null;
-    let sharingAttempt=0,sharingSnapshot=null,casePacket=null;
+    let sharingAttempt=0,sharingSnapshot=null,casePacket=null,caseDownloadReady=false;
     const prepareShare=button('Prepare sharing snapshot','secondary');prepareShare.id='owgAnalysisPrepareShare';prepareShare.disabled=true;
     const prepareCases=button('Prepare case sharing files','secondary');prepareCases.id='owgAnalysisPrepareCases';prepareCases.disabled=true;
     const sharing=el('div');sharing.id='owgAnalysisSharingPreview';sharing.hidden=true;
@@ -3389,8 +3503,10 @@
     const casePane=el('div');casePane.hidden=true;const caseTable=el('div');caseTable.style.overflowX='auto';
     const caseConsent=input('owgAnalysisCaseConsent','checkbox');const caseDownload=button('Download reviewed case dataset','secondary');caseDownload.id='owgAnalysisCaseDownload';caseDownload.disabled=true;
     casePane.append(el('p','This separate case file contains complete coded cases and within-case elapsed microseconds. Original case/activity/person labels, resources, attributes and absolute dates are omitted. Codes, topology and timings are still sensitive and are not anonymization. Codes apply only to this file; no group-row mapping or cross-case time order is disclosed. Review every timeline below. A separate case-read scope and explicit revision grant are required at the Gateway.'),caseTable,field('I reviewed the complete coded case timelines and intend this case-level disclosure',caseConsent),caseDownload);sharing.append(casePane);
-    function resetSharing(){casePacket=null;casePane.hidden=true;caseTable.replaceChildren();caseConsent.checked=false;caseDownload.disabled=true;sharingAttempt++;sharingSnapshot=null;sharing.hidden=true;sharingConsent.checked=false;sharingDownload.disabled=true;freshness.disabled=true;freshnessStatus.textContent='Freshness not checked.';freshnessStatus.dataset.stale='true';}
-    sharingConsent.onchange=()=>{sharingDownload.disabled=!sharingConsent.checked||!sharingSnapshot||freshnessStatus.dataset.stale==='true';};
+    function resetSharing(){caseDownloadReady=false;casePacket=null;casePane.hidden=true;caseTable.replaceChildren();caseConsent.checked=false;caseDownload.disabled=true;sharingAttempt++;sharingSnapshot=null;sharing.hidden=true;sharingConsent.checked=false;sharingDownload.disabled=true;freshness.disabled=true;freshnessStatus.textContent='Freshness not checked.';freshnessStatus.dataset.stale='true';}
+    // A consent withdrawal invalidates an in-flight authorization even if the box is rechecked before HTTP completes.
+    let sharingConsentRevision=0;
+    sharingConsent.onchange=()=>{sharingConsentRevision++;sharingDownload.disabled=!sharingConsent.checked||!sharingSnapshot||freshnessStatus.dataset.stale==='true';};
     async function prepareSharing(withCases=false){
       if(!lastSpec)return;
       resetSharing();const attempt=sharingAttempt;prepareShare.disabled=true;prepareCases.disabled=true;
@@ -3399,7 +3515,7 @@
         const r=withCases?result.aggregate_snapshot:result;
         if(generation!==state.generation||attempt!==sharingAttempt)return;
         sharingSnapshot=r;sharing.hidden=false;freshness.disabled=withCases;freshnessStatus.dataset.stale=String(!withCases);freshnessStatus.textContent=withCases?'Paired preview was recomputed; review both files before download.':'Freshness not checked. Check current source, metric definitions and numeric results before downloading.';
-        if(withCases){casePacket=result.case_dataset;casePane.hidden=false;caseTable.replaceChildren(...casePacket.cases.map(c=>{const details=el('details'),summary=el('summary',c.code+' · '+c.events.length+' events'),list=el('ol');for(const e of c.events)list.append(el('li',e.activity+' · '+e.elapsed_microseconds/1000000+' seconds since case start'));details.append(summary,list);return details;}));}
+        if(withCases){casePacket=result.case_dataset;caseDownloadReady=true;casePane.hidden=false;caseTable.replaceChildren(...casePacket.cases.map(c=>{const details=el('details'),summary=el('summary',c.code+' · '+c.events.length+' events'),list=el('ol');for(const e of c.events)list.append(el('li',e.activity+' · '+e.elapsed_microseconds/1000000+' seconds since case start'));details.append(summary,list);return details;}));}
         sharingTable.replaceChildren(table(r.columns.map(c=>c.heading+(c.aggregation?' · '+c.aggregation:'')+(c.value_basis?' · '+c.value_basis:'')+(c.metric_slot?' '+c.metric_slot:'')+(c.unit?' ('+c.unit+')':'')),r.rows),
           ...r.metric_coverage.map(c=>el('p','Metric '+c.slot+': '+c.with_value+' cases with a value; '+c.without_value+' without; '+c.missing_operand+' missing operand; '+c.zero_divisor+' zero divisor; '+c.non_finite+' nonfinite.')));
         sharingInfo.textContent=r.matching_cases+' selected cases; '+r.matching_rows+' selected '+r.level+' rows. '+(r.rows_truncated?'Only the bounded result rows are included. ':'')+r.non_finite_results_withheld+' output results withheld as nonfinite. Generated '+r.generated_at+'. Source fingerprint: '+r.source_content_sha256+'. Analysis fingerprint: '+r.analysis_spec_sha256+'. Group codes apply only within this snapshot; source freshness after export is unknown.';
@@ -3422,30 +3538,89 @@
       finally{if(generation===state.generation&&attempt===sharingAttempt)freshness.disabled=false;}
     };
     prepareShare.onclick=()=>prepareSharing();prepareCases.onclick=()=>prepareSharing(true);
-    caseConsent.onchange=()=>{caseDownload.disabled=!caseConsent.checked||!casePacket;};
-    caseDownload.onclick=()=>{if(!caseConsent.checked||!casePacket||generation!==state.generation)return;download('owg-analysis-case-dataset.json',JSON.stringify(casePacket),'application/json');caseConsent.checked=false;caseDownload.disabled=true;};
+    caseConsent.onchange=()=>{caseDownload.disabled=!caseConsent.checked||!casePacket||!caseDownloadReady;};
+    caseDownload.onclick=async()=>{
+      if(!caseConsent.checked||!casePacket||!sharingSnapshot||!lastSpec||!caseDownloadReady||generation!==state.generation||caseDownload.disabled)return;
+      // The preview is not a download authorization. Recompute both files under
+      // the server's case-sharing lock and reject any changed case sequence,
+      // elapsed timing, source/spec fingerprint or aggregate numeric result.
+      const attempt=sharingAttempt,selectedGeneration=state.generation;
+      const packet=casePacket,snapshot=sharingSnapshot,spec=lastSpec;
+      // Single-use reviewed preview: a failed, cancelled or revoked attempt
+      // cannot be rearmed by toggling the consent checkbox.
+      caseDownloadReady=false;
+      caseDownload.disabled=true;
+      try{
+        const response=await api(base()+'/case-sharing-preview',{method:'POST',
+          headers:{'Content-Type':'application/json','X-OWG-Case-Sharing-Preview':'true'},
+          body:JSON.stringify(spec)});
+        if(!response.ok)throw new Error('Case revalidation failed ('+response.status+').');
+        const current=await response.json();
+        if(attempt!==sharingAttempt||selectedGeneration!==state.generation||
+           packet!==casePacket||snapshot!==sharingSnapshot||!caseConsent.checked)return;
+        const freshPacket=current.case_dataset, freshAggregate=current.aggregate_snapshot;
+        // generated_at is intentionally excluded: a fresh recomputation has a
+        // different clock time even when the complete minimized data is equal.
+        const stablePacket=p=>JSON.stringify([p?.source_content_sha256,p?.analysis_spec_sha256,p?.cases]);
+        const stableAggregate=p=>JSON.stringify([p?.source_content_sha256,p?.analysis_spec_sha256,
+          p?.columns,p?.rows,p?.metric_coverage,p?.matching_cases,p?.matching_rows,
+          p?.rows_truncated,p?.non_finite_results_withheld]);
+        if(!freshPacket||!freshAggregate||stablePacket(packet)!==stablePacket(freshPacket)||
+           stableAggregate(snapshot)!==stableAggregate(freshAggregate)){
+          throw new Error('Case dataset or aggregate changed; prepare and review a new paired preview.');
+        }
+        download('owg-analysis-case-dataset.json',JSON.stringify(packet),'application/json');
+        caseConsent.checked=false;
+        freshnessStatus.textContent='Case download revalidated against the current saved log. Later changes cannot be ruled out.';
+      }catch(error){
+        if(attempt===sharingAttempt&&selectedGeneration===state.generation)
+          freshnessStatus.textContent=error.message+' Case download refused.';
+      }finally{
+        // A fresh preview and explicit review are required before another download.
+        if(attempt===sharingAttempt&&selectedGeneration===state.generation)caseDownload.disabled=true;
+      }
+    };
     sharingDownload.onclick=async()=>{
       if(!sharingConsent.checked||!sharingSnapshot||!lastSpec||freshnessStatus.dataset.stale==='true'||generation!==state.generation||sharingDownload.disabled)return;
-      // The earlier preview/check is not a download authorization: a saved log
-      // can change between checking freshness and pressing Download.
-      const attempt=sharingAttempt,snapshot=sharingSnapshot,spec=lastSpec,selectedGeneration=state.generation;
+      const attempt=sharingAttempt,snapshot=sharingSnapshot,spec=lastSpec,selectedGeneration=state.generation,consentRevision=sharingConsentRevision;
+      // A reviewed preview is single-use, even if the HTTP request fails or consent changes.
       sharingDownload.disabled=true;freshness.disabled=true;freshnessStatus.dataset.stale='true';
-      freshnessStatus.textContent='Revalidating the current saved log before download…';
+      freshnessStatus.textContent='Authorizing the reviewed export against the current saved log…';
       try{
-        const result=await(await api(base()+'/analysis-sharing-freshness',{method:'POST',headers:{'Content-Type':'application/json','X-OWG-Analysis-Sharing-Preview':'true'},body:JSON.stringify({spec,snapshot})})).json();
-        if(attempt!==sharingAttempt||selectedGeneration!==state.generation||snapshot!==sharingSnapshot||!sharingConsent.checked)return;
-        if(result.format!=='openworkgraph.analysis-snapshot-freshness.v1'||result.lineage_current!==true||result.current_results_match!==true){
-          freshnessStatus.textContent='Source, metric lineage or values changed. Prepare and review a new snapshot.';
-          return;
+        const reviewed={spec,source_content_sha256:snapshot.source_content_sha256,
+          analysis_spec_sha256:snapshot.analysis_spec_sha256,
+          metric_definition_sha256:snapshot.metric_definition_sha256};
+        const headers={'Content-Type':'application/json','X-OWG-Analysis-Sharing-Preview':'true'};
+        const authorization=await api(base()+'/analysis-sharing-authorize',{method:'POST',
+          headers,body:JSON.stringify(reviewed)});
+        if(!authorization.ok)throw new Error('Analysis authorization refused ('+authorization.status+').');
+        const grant=await authorization.json();
+        if(!grant.ticket||attempt!==sharingAttempt||selectedGeneration!==state.generation||
+           snapshot!==sharingSnapshot||!sharingConsent.checked||consentRevision!==sharingConsentRevision)return;
+        const response=await api(base()+'/analysis-sharing-download',{method:'POST',
+          headers,body:JSON.stringify({...reviewed,ticket:grant.ticket})});
+        if(!response.ok)throw new Error('Source-bound download refused ('+response.status+').');
+        const current=await response.json();
+        if(attempt!==sharingAttempt||selectedGeneration!==state.generation||snapshot!==sharingSnapshot||!sharingConsent.checked||consentRevision!==sharingConsentRevision)return;
+        // The server recomputes under the workspace lock; do not release changed
+        // minimized values even if their lineage is unexpectedly identical.
+        if(current.source_content_sha256!==snapshot.source_content_sha256||
+           current.analysis_spec_sha256!==snapshot.analysis_spec_sha256||
+           JSON.stringify(current.metric_definition_sha256)!==JSON.stringify(snapshot.metric_definition_sha256)||
+           JSON.stringify(current.columns)!==JSON.stringify(snapshot.columns)||
+           JSON.stringify(current.rows)!==JSON.stringify(snapshot.rows)){
+          throw new Error('Reviewed snapshot differs from the current recomputation.');
         }
-        // No local download is offered after failed/unknown server validation.
-        download('owg-analysis-snapshot.json',JSON.stringify(snapshot,null,2),'application/json');
+        download('owg-analysis-snapshot.json',JSON.stringify(current,null,2),'application/json');
         sharingConsent.checked=false;
-        freshnessStatus.textContent='Download validated against the current saved log. Source changes after this check cannot be ruled out.';
+        freshnessStatus.textContent='Downloaded the server-recomputed, source-bound snapshot. Prepare and review again for another export.';
       }catch(error){
-        if(attempt===sharingAttempt&&selectedGeneration===state.generation){freshnessStatus.textContent=error.message+' Download refused; recheck the snapshot.';}
+        if(attempt===sharingAttempt&&selectedGeneration===state.generation)
+          freshnessStatus.textContent=error.message+' Prepare and review a new snapshot.';
       }finally{
-        if(attempt===sharingAttempt&&selectedGeneration===state.generation){sharingDownload.disabled=true;freshness.disabled=false;}
+        if(attempt===sharingAttempt&&selectedGeneration===state.generation){
+          sharingDownload.disabled=true;freshness.disabled=true;
+        }
       }
     };
     const exports=exportButtons('owgAnalysis',()=>last,r=>[r.columns,...r.rows]);

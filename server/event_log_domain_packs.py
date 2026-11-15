@@ -649,6 +649,113 @@ EXPENSE_REIMBURSEMENT_1_0_0: dict[str, Any] = {
     ],
 }
 
+EMPLOYEE_ONBOARDING_1_0_0: dict[str, Any] = {
+    "format": FORMAT, "pack_id": "employee_onboarding", "version": "1.0.0",
+    "title": "Employee onboarding and access readiness",
+    "reference_goal": "Recorded onboarding request to provisioning, start and review milestones",
+    "description": (
+        "Inspect a selected onboarding case log for elapsed request-to-provision and "
+        "request-to-start times, missing or repeated identity provisioning events, "
+        "optional manager approval, training, access review and closure. "
+        "These are logged activity claims, not identity-system entitlement checks."
+    ),
+    "object_types": [
+        {"role": "onboarding_case", "label": "Onboarding case", "required": True},
+    ],
+    "activities": [
+        {"role": "onboarding_started", "label": "Open onboarding request", "required": True},
+        {"role": "manager_approved", "label": "Record manager approval", "required": False},
+        {"role": "identity_provisioned", "label": "Record access provisioning", "required": True},
+        {"role": "training_completed", "label": "Record training completion", "required": False},
+        {"role": "access_reviewed", "label": "Record access review", "required": False},
+        {"role": "work_started", "label": "Record start of work", "required": True},
+        {"role": "case_closed", "label": "Close onboarding case", "required": False},
+    ],
+    "parameters": [
+        {"name": "provisioning_hours", "label": "Record provisioning within (elapsed hours of request)",
+         "unit": "hours", "default": 48, "min": 0.25, "max": 8760},
+        {"name": "start_days", "label": "Record work start within (elapsed days of request)",
+         "unit": "days", "default": 14, "min": 1, "max": 365},
+    ],
+    "metrics": [
+        {"case_type": "@onboarding_case", "metric": {
+            "name": "onboarding_request_to_provision", "kind": "time_between",
+            "from_activity": "@onboarding_started", "to_activity": "@identity_provisioned"}},
+        {"case_type": "@onboarding_case", "metric": {
+            "name": "onboarding_request_to_start", "kind": "time_between",
+            "from_activity": "@onboarding_started", "to_activity": "@work_started"}},
+        {"case_type": "@onboarding_case", "metric": {
+            "name": "onboarding_provision_to_start", "kind": "time_between",
+            "from_activity": "@identity_provisioned", "to_activity": "@work_started"}},
+        {"case_type": "@onboarding_case", "metric": {
+            "name": "onboarding_provision_records", "kind": "activity_count",
+            "activity": "@identity_provisioned"}},
+        {"case_type": "@onboarding_case", "metric": {
+            "name": "onboarding_training_records", "kind": "activity_count",
+            "activity": "@training_completed"}},
+    ],
+    "compliance": [
+        {"case_type": "@onboarding_case", "rule": {
+            "template": "response_within", "a": "@onboarding_started",
+            "b": "@identity_provisioned", "seconds": "$provisioning_hours"}},
+        {"case_type": "@onboarding_case", "rule": {
+            "template": "response_within", "a": "@onboarding_started",
+            "b": "@work_started", "seconds": "$start_days"}},
+        {"case_type": "@onboarding_case", "rule": {
+            "template": "precedence", "a": "@onboarding_started", "b": "@identity_provisioned"}},
+        {"case_type": "@onboarding_case", "rule": {
+            "template": "precedence", "a": "@identity_provisioned", "b": "@work_started"}},
+        {"case_type": "@onboarding_case", "rule": {
+            "template": "existence", "a": "@identity_provisioned", "min": 1, "max": 1}},
+        {"case_type": "@onboarding_case", "rule": {
+            "template": "precedence", "a": "@manager_approved", "b": "@identity_provisioned"}},
+        {"case_type": "@onboarding_case", "rule": {
+            "template": "precedence", "a": "@training_completed", "b": "@work_started"}},
+        {"case_type": "@onboarding_case", "rule": {
+            "template": "precedence", "a": "@access_reviewed", "b": "@work_started"}},
+        {"case_type": "@onboarding_case", "rule": {
+            "template": "precedence", "a": "@work_started", "b": "@case_closed"}},
+        {"case_type": "@onboarding_case", "rule": {
+            "template": "segregation_of_duties", "a": "@onboarding_started",
+            "b": "@manager_approved"}},
+    ],
+    "object_rules": [],
+    "reference_model": {
+        "types": [{"object_type": "@onboarding_case", "steps": [
+            "@onboarding_started", {"optional": "@manager_approved"},
+            "@identity_provisioned", {"optional": "@training_completed"},
+            {"optional": "@access_reviewed"}, "@work_started",
+            {"optional": "@case_closed"}]}],
+        "arcs": [
+            {"activity": "@" + role, "object_type": "@onboarding_case", "variable": False}
+            for role in ("onboarding_started", "manager_approved", "identity_provisioned",
+                         "training_completed", "access_reviewed", "work_started", "case_closed")
+        ],
+    },
+    "assumptions": [
+        "Each case ID represents a single selected onboarding sequence in the supplied source. "
+        "The mapping cannot verify unique employees, subsidiaries or accounts.",
+        "A recorded access-provisioning step does NOT verify that the employee can actually sign in, "
+        "that entitlements are correct, that MFA exists, or that access is appropriately restricted. "
+        "No identity provider, HRIS, HR record or source account is queried by this pack.",
+        "The provisioning and work-start targets are configurable elapsed wall-clock windows, "
+        "not calendar-aware working hours, contractual service levels or an adopted company policy.",
+        "Training completion and access review are optional evidence types and are only checked "
+        "if explicitly mapped. A completed training record does not prove real-world competence.",
+        "One logged provisioning event per case is a review assumption. Different application "
+        "accounts, retries or partial provisioning can legitimately create more than one event.",
+        "An absent or delayed event can reflect a partial export, a legitimately unfinished case "
+        "or integration latency. The report must not be used as an employee performance score.",
+        "Optional manager approval and separation of duties only use recorded events/resources. "
+        "Unknown resource or missing approval evidence is not verified authorization.",
+        "Sequence checks on onboarding and access review are advisory: emergency access, "
+        "contractors, role changes and prior accounts may need different reviewed models.",
+        "No automatic account creation, hiring decision, action permission, evidence export "
+        "or verified compliance is implied by installing this pack.",
+    ],
+}
+
+
 PACKS: dict[str, dict[str, dict[str, Any]]] = {"returns_refunds": {"1.0.0": RETURNS_REFUNDS_1_0_0},
                                               "order_to_cash": {"1.0.0": ORDER_TO_CASH_1_0_0},
                                               "procure_to_pay": {"1.0.0": PROCURE_TO_PAY_1_0_0},
@@ -656,6 +763,7 @@ PACKS: dict[str, dict[str, dict[str, Any]]] = {"returns_refunds": {"1.0.0": RETU
                                               "sales_lead_management": {"1.0.0": SALES_LEAD_1_0_0},
                                               "customer_onboarding": {"1.0.0": CUSTOMER_ONBOARDING_1_0_0},
                                               "employee_offboarding": {"1.0.0": EMPLOYEE_OFFBOARDING_1_0_0},
+                                              "employee_onboarding": {"1.0.0": EMPLOYEE_ONBOARDING_1_0_0},
                                               "expense_reimbursement": {"1.0.0": EXPENSE_REIMBURSEMENT_1_0_0}}
 
 
@@ -850,8 +958,15 @@ def _parse_install(pack_id: str, spec: Any) -> tuple[dict[str, Any], InstallSpec
 
 
 def _check_names(conn, log_id: str, mapping: Mapping) -> None:
-    types = {r[0] for r in conn.execute("SELECT DISTINCT object_type FROM objects WHERE log_id = ?", [log_id]).fetchall()}
-    activities = {r[0] for r in conn.execute("SELECT DISTINCT activity FROM events WHERE log_id = ?", [log_id]).fetchall()}
+    # Bound returned rows to the explicitly mapped labels; an event log can
+    # contain far more distinct names than a pack can map. Values remain bound
+    # parameters, and the log predicate prevents cross-log matches.
+    types = {r[0] for r in conn.execute(
+        "SELECT DISTINCT object_type FROM objects WHERE log_id = ? AND object_type IN (SELECT unnest(?))",
+        [log_id, list(mapping.object_types.values())]).fetchall()}
+    activities = {r[0] for r in conn.execute(
+        "SELECT DISTINCT activity FROM events WHERE log_id = ? AND activity IN (SELECT unnest(?))",
+        [log_id, list(mapping.activities.values())]).fetchall()}
     for role, name in mapping.object_types.items():
         if name not in types:
             raise workspace.EventLogWorkspaceError(f"{role} is mapped to {name!r}, which is not an object type of this log")
@@ -921,7 +1036,10 @@ def install(log_id: str, pack_id: str, spec: Any) -> dict[str, Any]:
                        if previous else [])[-MAX_HISTORY:]
             record = {"format": INSTALL_FORMAT, "pack_id": pack_id, "version": parsed.version,
                       "installed_at": now.isoformat() + "Z", "mapping": mapping, "parameters": params,
-                      "definitions_sha256": _digest(definitions), "metric_ids": metric_ids, "history": history}
+                      "definitions_sha256": _digest(definitions), "metric_ids": metric_ids, "history": history,
+                      "configuration_history": ([*previous.get("configuration_history", []),
+                          {k: copy.deepcopy(previous[k]) for k in ("version", "installed_at", "definitions_sha256", "mapping", "parameters")} ]
+                          if previous else [])[-MAX_HISTORY:]}
             conn.execute("DELETE FROM domain_pack_installs WHERE log_id = ? AND pack_id = ?", [log_id, pack_id])
             conn.execute("INSERT INTO domain_pack_installs VALUES (?, ?, ?, ?)",
                          [log_id, pack_id, now, json.dumps(record, sort_keys=True)])
@@ -931,7 +1049,8 @@ def install(log_id: str, pack_id: str, spec: Any) -> dict[str, Any]:
             raise
         finally:
             conn.close()
-    return {**record, "installation_token": _installation_token(record), "change": change, "previous_version": previous["version"] if previous else None,
+    return {**{k: v for k, v in record.items() if k != "configuration_history"},
+            "installation_token": _installation_token(record), "change": change, "previous_version": previous["version"] if previous else None,
             "not_applicable": definitions["not_applicable"]}
 
 
@@ -952,11 +1071,46 @@ def installed(log_id: str) -> dict[str, Any]:
     installs = [json.loads(d) for (d,) in rows]
     for record in installs:
         record["installation_token"] = _installation_token(record)
+        record.pop("configuration_history", None)
         record["latest_version"] = _pack(record["pack_id"])["version"] if record["pack_id"] in PACKS else None
         record["upgrade_available"] = bool(record["latest_version"]) and \
             _version_key(record["latest_version"]) > _version_key(record["version"])
     return {"installs": installs, "log_object_types": types[:MAX_NAMES], "log_activities": activities[:MAX_NAMES],
             "names_truncated": len(types) > MAX_NAMES or len(activities) > MAX_NAMES}
+
+
+def configuration_history(log_id: str, pack_id: str) -> dict[str, Any]:
+    """Review retained setup only; never reconstruct historical events or outcomes."""
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            workspace._check_log(conn, log_id)
+            record = _record(conn, log_id, pack_id)
+        finally:
+            conn.close()
+    if record is None:
+        raise workspace.EventLogWorkspaceError("this domain pack is not installed on the log")
+    history = record.get("history", [])[-MAX_HISTORY:]
+    snapshots = record.get("configuration_history", [])[-len(history):] if history else []
+    offset = len(history) - len(snapshots)
+    entries = []
+    for index, metadata in enumerate(history):
+        snapshot = snapshots[index - offset] if index >= offset else None
+        available = (isinstance(snapshot, dict)
+                     and all(snapshot.get(k) == metadata.get(k) for k in
+                             ("version", "installed_at", "definitions_sha256"))
+                     and isinstance(snapshot.get("mapping"), dict)
+                     and isinstance(snapshot.get("parameters"), dict))
+        entries.append({"entry": index, "current": False, **metadata,
+                        "configuration_available": available,
+                        **({k: copy.deepcopy(snapshot[k]) for k in ("mapping", "parameters")} if available else {})})
+    entries.append({"entry": len(history), "current": True, "configuration_available": True,
+                    **{k: copy.deepcopy(record[k]) for k in
+                       ("version", "installed_at", "definitions_sha256", "mapping", "parameters")}})
+    return {"format": "openworkgraph.domain-pack-configurations.v1", "pack_id": pack_id,
+            "entries": entries, "max_previous": MAX_HISTORY, "complete_installation_history": False,
+            "historical_events_retained": False, "historical_outcomes_verified": False,
+            "execution_authorized": False}
 
 
 def uninstall(log_id: str, pack_id: str, *, expected_installation: str | None = None) -> dict[str, Any]:
