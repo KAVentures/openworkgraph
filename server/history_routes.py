@@ -14,6 +14,7 @@ from shared.lifespan import extend_lifespan
 from .db import connect
 from . import run_memory
 from .open_work_reviews import clear_review_intentions
+from .reconstruction_review_store import clear_saved_reconstruction_review, read_saved_reconstruction_review, save_reconstruction_review
 from .open_work_dispatch import clear as clear_dispatch_offers
 from .history_retention import cleanup_expired_history, delete_history_session, initialize_history_retention, list_history
 from .main import ROOT
@@ -88,6 +89,7 @@ def set_history_policy(request: RetentionChoice) -> dict[str, Any]:
         value=update_retention(human_mode=request.human_mode,human_days=request.human_days,agent_mode=request.agent_mode,agent_days=request.agent_days,onboarding_complete=request.onboarding_complete)
         cleanup=cleanup_expired_history(startup=False)
         if request.human_mode == "ephemeral":
+            clear_saved_reconstruction_review()
             # A user who chooses "This session only" must not unknowingly
             # keep saved Open Work review intentions for another seven days.
             clear_review_intentions()
@@ -131,7 +133,11 @@ def get_ai_history_access()->dict[str,Any]:
 
 @app.post("/v1/history/ai-access")
 def change_ai_history_access(request:AIHistoryAccessRequest)->dict[str,Any]:
-    try: access=set_ai_history_access(mode=request.mode,since=request.since,until=request.until,expires_minutes=request.expires_minutes)
+    try:
+        # Any access change invalidates prior saved labels, even if the next
+        # grant happens to have the same fields as the previous one.
+        clear_saved_reconstruction_review()
+        access=set_ai_history_access(mode=request.mode,since=request.since,until=request.until,expires_minutes=request.expires_minutes)
     except ValueError as exc: raise HTTPException(status_code=400,detail=str(exc)) from exc
     return {"status":"updated","access":access}
 
@@ -287,4 +293,70 @@ def score_reconstruction_review_submission(request: ReconstructionReviewSubmissi
     if not still_authorized():
         raise HTTPException(status_code=403, detail="History access changed during review")
     return Response(content=payload, media_type="application/json",
+                    headers={"Cache-Control": "no-store"})
+
+
+@app.get("/v1/history/reconstruction-review/saved")
+def get_saved_reconstruction_review() -> Response:
+    """Resume only labels whose current source evidence and grant still match."""
+    from shared.history_policy import history_generation
+    from .work_resumption import resumption_candidates
+    from .reconstruction_review_cli import build_review_queue
+
+    grant = active_ai_history_access()
+    if grant.get("mode") != "all_saved":
+        raise HTTPException(status_code=403, detail="Explicit all-saved history access required")
+    generation = history_generation()
+    with connect() as connection:
+        queue = build_review_queue(resumption_candidates(connection, lease=grant))
+    saved = read_saved_reconstruction_review(grant, generation, queue["evidence_sha256"])
+    if active_ai_history_access() != grant or history_generation() != generation:
+        raise HTTPException(status_code=403, detail="History access changed during review")
+    return Response(content=json.dumps({"saved": saved}), media_type="application/json",
+                    headers={"Cache-Control": "no-store"})
+
+
+@app.post("/v1/history/reconstruction-review/save")
+def save_reconstruction_review_submission(request: ReconstructionReviewSubmission) -> Response:
+    """Explicitly persist verified reviewer labels for at most one hour locally.
+
+    Never promotes labels to case identity or independent ground truth.
+    """
+    from shared.history_policy import history_generation
+    from .work_resumption import score_live_reconstruction_review
+
+    grant = active_ai_history_access()
+    if grant.get("mode") != "all_saved":
+        raise HTTPException(status_code=403, detail="Explicit all-saved history access required")
+    generation = history_generation()
+
+    def still_authorized() -> bool:
+        return active_ai_history_access() == grant and history_generation() == generation
+
+    try:
+        with connect() as connection:
+            # Exact evidence digest, complete annotation coverage, identity
+            # structure and consent are validated by the same live scorer.
+            score_live_reconstruction_review(
+                connection, request.model_dump(), lease=grant,
+                authorize_review=still_authorized,
+            )
+        if not still_authorized():
+            raise PermissionError("History access changed during review")
+        saved = save_reconstruction_review(grant, generation, request.model_dump())
+        if not still_authorized():
+            clear_saved_reconstruction_review()
+            raise PermissionError("History access changed during review")
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return Response(content=json.dumps(saved), media_type="application/json",
+                    headers={"Cache-Control": "no-store"})
+
+
+@app.delete("/v1/history/reconstruction-review/saved")
+def delete_saved_reconstruction_review() -> Response:
+    clear_saved_reconstruction_review()
+    return Response(content='{"status":"deleted"}', media_type="application/json",
                     headers={"Cache-Control": "no-store"})
