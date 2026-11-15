@@ -30,6 +30,21 @@ class AuditEvidenceError(ValueError):
     pass
 
 
+def _configured_owg_port() -> int:
+    """Use the actual local OWG listener, refusing invalid operator configuration.
+
+    Never accept a destination host/port from the HTTP request. Loopback
+    transport is enforced by the underlying authenticated OWG adapters.
+    """
+    raw = os.environ.get("OWG_M365_OWG_PORT", "8765")
+    if not re.fullmatch(r"[0-9]{1,5}", raw):
+        raise ValueError("Invalid configured OWG port")
+    port = int(raw)
+    if not 1 <= port <= 65535:
+        raise ValueError("Invalid configured OWG port")
+    return port
+
+
 def read_operator_audit(directory: Path, *, limit: int = 50) -> dict:
     """Bounded fail-closed inspection; no network or mutation."""
     if type(limit) is not int or not 1 <= limit <= 50:
@@ -359,6 +374,7 @@ def operator_reviewed_commit(
             expected_previous_candidate_sha256=(
                 os.environ.get("OWG_M365_PREVIOUS_CANDIDATE_SHA256") or None),
             session=authorization[len("owg-session "):].strip(),
+            port=_configured_owg_port(),
             consent_local_read=True, consent_local_append=True,
             confirm_candidate_reviewed=True,
             confirm_removals_reviewed=True, confirm_checkpoint_commit=True,
@@ -439,6 +455,7 @@ def operator_next_round_prepare(
             expected_generation=expected_generation,
             expected_previous_candidate_sha256=expected_previous_candidate_sha256,
             token=token, session=authorization[len("owg-session "):].strip(),
+            port=_configured_owg_port(),
             consent_local_read=True, consent_delta_read=True,
             consent_local_export=True, confirm_previous_removals_reviewed=True,
             require_event_membership=True)
@@ -501,7 +518,7 @@ def operator_recovery_triage(
             log_id=values[3], confirm_log_id=values[3],
             grant_file=Path(values[4]), candidate=Path(values[5]),
             csv_path=Path(values[6]), receipt_file=Path(values[7]),
-            port=8765, session=authorization[len("owg-session "):].strip(),
+            port=_configured_owg_port(), session=authorization[len("owg-session "):].strip(),
             journal_dir=(Path(os.environ["OWG_M365_JOURNAL_DIR"])
                          if os.environ.get("OWG_M365_JOURNAL_DIR") and os.environ.get("OWG_M365_HANDOFF_DIR") else None),
             handoff_dir=(Path(os.environ["OWG_M365_HANDOFF_DIR"])
