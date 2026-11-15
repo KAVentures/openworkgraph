@@ -480,7 +480,11 @@ def operator_next_round_prepare(
         # A bounded Graph read may have written private candidate artifacts.
         # Do not retry or imply they are safe to commit without new review.
         raise HTTPException(409, "Extraction refused or uncertain; inspect grant, checkpoint and private artifacts manually. Do not retry.") from None
-    # A revoked dashboard session must not disclose a newly prepared private\n    # candidate digest. Artifacts may exist; require manual review, never retry.\n    if not dashboard_session_valid(authorization[len("owg-session "):].strip()):\n        raise HTTPException(409, "Dashboard session expired during extraction; inspect private artifacts manually. Do not retry.")\n    return JSONResponse({
+    # A revoked dashboard session must not disclose a newly prepared private
+    # candidate digest. Artifacts may exist; require manual review, never retry.
+    if not dashboard_session_valid(authorization[len("owg-session "):].strip()):
+        raise HTTPException(409, "Dashboard session expired during extraction; inspect private artifacts manually. Do not retry.")
+    return JSONResponse({
         "format": "openworkgraph.m365-dashboard-next-round-prepare.v1",
         "status": "operator_review_required",
         "reviewed_csv_sha256": result["reviewed_csv_sha256"],
