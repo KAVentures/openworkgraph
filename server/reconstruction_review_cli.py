@@ -81,6 +81,14 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
     for group in groups:
         if not isinstance(group, dict) or group.get("proves_same_case") is not False:
             raise ValueError("provisional group must not assert case identity")
+        # The digest includes navigation evidence. Bound untrusted records
+        # before hashing so forged metadata cannot exhaust review requests.
+        try:
+            encoded = json.dumps(group, sort_keys=True, allow_nan=False).encode("utf-8")
+        except (TypeError, ValueError, RecursionError) as exc:
+            raise ValueError("invalid provisional group evidence") from exc
+        if len(encoded) > 65536:
+            raise ValueError("unbounded provisional group evidence")
     pairs = response.get("observed_pair_event_assignments")
     if not isinstance(pairs, list) or len(pairs) > MAX_PAIRS:
         raise ValueError("missing or unbounded pair assignments")
