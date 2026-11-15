@@ -284,8 +284,15 @@ def operator_transaction_preflight(request: Request, consent_local_read: bool = 
             expected_review_csv_sha256=reviewed_csv_sha256,
             expected_previous_candidate_sha256=previous,
             consent_local_read=True)
-        if result.get("status") != "review_ready_for_explicit_commit":
-            raise ValueError("Not ready")
+        if (type(result) is not dict
+                or result.get("status") != "review_ready_for_explicit_commit"
+                or any(type(result.get(key)) is not int or result[key] < 0
+                       for key in ("proposed_generation",
+                                   "checkpoint_predecessor_generation",
+                                   "reviewed_event_snapshots",
+                                   "removal_markers_for_review"))
+                or result["proposed_generation"] != result["checkpoint_predecessor_generation"] + 1):
+            raise ValueError("Invalid checkpoint transition proposal")
     except (ReceiptError, OSError, ValueError, TypeError, KeyError, RecursionError):
         raise HTTPException(409, "Preflight refused; inspect candidate, grant and checkpoint manually") from None
     return JSONResponse({
