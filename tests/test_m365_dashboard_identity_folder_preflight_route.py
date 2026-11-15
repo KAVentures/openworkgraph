@@ -118,3 +118,26 @@ def test_provider_credential_and_grant_failures_stop_before_folder_read(
     assert "/private/grant.json" not in str(exc.value.detail)
     identity.assert_called_once()
     folder.assert_not_called()
+
+@pytest.mark.parametrize("identity_result,folder_result,folder_called", [
+    (None, {"status": "folder_metadata_observed", "folder_id_matched": True}, False),
+    ([], {"status": "folder_metadata_observed", "folder_id_matched": True}, False),
+    ({"status": "mailbox_identity_observed", "mailbox_identifier_matched": True,
+      "tenant_id_verified": False}, None, True),
+    ({"status": "mailbox_identity_observed", "mailbox_identifier_matched": True,
+      "tenant_id_verified": False}, [], True),
+])
+def test_malformed_provider_receipt_is_recoverable_and_never_authorizes_sync(
+        monkeypatch, identity_result, folder_result, folder_called):
+    configure(monkeypatch)
+    with (patch("server.m365_operator_audit_routes.dashboard_session_valid", return_value=True),
+          patch("server.m365_outlook_mailbox_identity.preflight",
+                return_value=identity_result),
+          patch("server.m365_outlook_folder_preflight.preflight",
+                return_value=folder_result) as folder):
+        with pytest.raises(HTTPException) as exc:
+            operator_identity_folder_preflight(request(), True, True)
+    assert exc.value.status_code == 409
+    assert "Do not retry" in str(exc.value.detail)
+    assert "secret-token" not in str(exc.value.detail)
+    assert folder.called is folder_called
