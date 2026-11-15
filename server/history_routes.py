@@ -123,7 +123,9 @@ def get_history(since:str|None=None,until:str|None=None,limit:int=200)->dict[str
 
 @app.post("/v1/history/delete-session")
 def delete_session(request:HistoryDeleteRequest)->dict[str,Any]:
-    try: result=delete_history_session(request.history_session_id)
+    try:
+        result=delete_history_session(request.history_session_id)
+        clear_saved_reconstruction_review()
     except ValueError as exc: raise HTTPException(status_code=404,detail=str(exc)) from exc
     return {"status":"deleted",**result}
 
@@ -142,7 +144,12 @@ def change_ai_history_access(request:AIHistoryAccessRequest)->dict[str,Any]:
     return {"status":"updated","access":access}
 
 @app.post("/v1/history/cleanup")
-def run_history_cleanup()->dict[str,Any]: return cleanup_expired_history(startup=False)
+def run_history_cleanup()->dict[str,Any]:
+    result = cleanup_expired_history(startup=False)
+    # Cleanup may remove source observations; never retain labels whose
+    # source evidence may no longer exist.
+    clear_saved_reconstruction_review()
+    return result
 
 @app.get("/v1/history/export-json")
 def export_history_json(since:str|None=None,until:str|None=None,include_raw:bool=False,redact_names:bool=False)->Response:
