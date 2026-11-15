@@ -28,7 +28,15 @@ body{font:16px/1.5 system-ui,sans-serif;max-width:1050px;margin:auto;padding:20p
 <label>Retention for a new publication (days, 1–90) <input id="days" type="number" min="1" max="90" value="7"></label>
 <p>Revisions keep the current expiry. Only the owner can renew it under Access.</p>
 <label><input id="confirm" type="checkbox"> I reviewed this numeric snapshot and am authorized to publish it to this organization</label>
-<button id="publish" disabled>Publish</button></section>
+<button id="publish" disabled>Publish</button>
+<div id="pairedSection" hidden>
+<h3>Publish an aggregate revision + coded-case dataset atomically</h3>
+<p>Use both separately reviewed files from <strong>Prepare case sharing files</strong> in the local event-log workspace. Publishing both together is all-or-nothing, whether starting a publication or publishing a new owner-controlled revision. Each revision requires separate case sharing: existing case-viewer grants never carry over. This does not upload the local log, publish identities, or grant case access to coworkers. Review the coded case timelines below and explicitly confirm their separate disclosure. Requires analysis and case read/write scopes.</p>
+<label>Matching coded-case file <input id="pairedCaseFile" type="file" accept="application/json,.json"></label>
+<div id="pairedCasePreview" class="scroll"></div>
+<label><input id="pairedCaseConfirm" type="checkbox"> I reviewed the complete coded-case disclosure and separately authorize case-level sharing</label>
+<button id="publishPaired" disabled>Publish both atomically</button>
+</div></section>
 <section id="access" hidden><h2>Access and retention</h2><p>Members need the corresponding company analysis scope as well as this role. Revocation stops future reads and exports; it cannot recall copies already downloaded. Clearing this list removes all members.</p>
 <div id="members"></div><button id="addMember">Add member</button>
 <label>Renew retention (days, 1–90; blank keeps the current expiry) <input id="renew" type="number" min="1" max="90"></label>
@@ -43,7 +51,7 @@ body{font:16px/1.5 system-ui,sans-serif;max-width:1050px;margin:auto;padding:20p
 (()=>{'use strict';
 const $=id=>document.getElementById(id),base='/v1/human/analyses';
 let identityScopes=[],identityActor='';
-let credential='',credentialScheme='Bearer',epoch=0,selected=null,snapshot=null,canPublish=false,next=null,fileAttempt=0,viewAttempt=0,listAttempt=0;
+let credential='',credentialScheme='Bearer',epoch=0,selected=null,snapshot=null,caseDataset=null,canPublish=false,next=null,fileAttempt=0,pairedCaseFileAttempt=0,viewAttempt=0,listAttempt=0;
 const text=(tag,value)=>{const n=document.createElement(tag);n.textContent=value;return n;};
 function table(node,doc){
  node.replaceChildren();const t=document.createElement('table'),head=document.createElement('tr');
@@ -51,11 +59,18 @@ function table(node,doc){
  const thead=document.createElement('thead');thead.append(head);t.append(thead);const body=document.createElement('tbody');
  for(const row of doc.rows){const tr=document.createElement('tr');for(const v of row)tr.append(text('td',v===null?'—':String(v)));body.append(tr);}t.append(body);node.append(t);
 }
-function clearFile(){fileAttempt++;snapshot=null;$('file').value='';$('preview').replaceChildren();$('confirm').checked=false;sync();}
+function clearCaseFile(){pairedCaseFileAttempt++;caseDataset=null;$('pairedCaseFile').value='';$('pairedCasePreview').replaceChildren();$('pairedCaseConfirm').checked=false;sync();}
+function clearFile(){fileAttempt++;snapshot=null;$('file').value='';$('preview').replaceChildren();$('confirm').checked=false;clearCaseFile();sync();}
 function clearSelection(){caseUI.clear();viewAttempt++;selected=null;$('revisionCompare').hidden=true;$('compareResult').replaceChildren();$('compareOther').value='';$('table').replaceChildren();$('coverage').replaceChildren();$('viewTitle').textContent='';$('basis').textContent='';$('revision').value='';$('detail').hidden=true;$('access').hidden=true;$('members').replaceChildren();$('renew').value='';$('title').value='';clearFile();}
 function sync(){
  $('publisher').hidden=!credential||!canPublish;
  $('publish').disabled=!snapshot||!$('confirm').checked||!!(selected&&!selected.permissions.edit);
+ const canShareCases=identityScopes.includes('org:analysis:cases:read')&&identityScopes.includes('org:analysis:cases:write');
+ const canPair=!selected||(selected.owner_actor_id===identityActor&&selected.viewing_revision===selected.revision&&selected.permissions.edit);
+ $('pairedSection').hidden=!credential||!canPublish||!canShareCases||!canPair;
+ $('publishPaired').disabled=!snapshot||!caseDataset||!$('confirm').checked||!$('pairedCaseConfirm').checked||
+   !canShareCases||!canPair||!credential;
+ $('publishPaired').textContent=selected?'Publish revised pair atomically':'Publish both atomically';
  $('publish').textContent=selected?'Publish new revision':'Publish privately';
  $('days').disabled=!!selected;
  $('saveAccess').disabled=!$('accessConfirm').checked;$('delete').disabled=!$('deleteConfirm').checked;
@@ -148,7 +163,49 @@ $('file').onchange=()=>run(async()=>{
  if(doc.format!=='openworkgraph.aggregate-analysis-snapshot.v1'||!Array.isArray(doc.columns)||!Array.isArray(doc.rows)||doc.columns.length>6||doc.rows.length>100||doc.rows.some(r=>!Array.isArray(r)||r.length!==doc.columns.length))throw new Error('Choose a bounded OWG analysis snapshot.');
  snapshot=doc;table($('preview'),doc);$('preview').append(text('p',doc.matching_cases+' selected cases; '+doc.matching_rows+' '+doc.level+' rows; '+doc.non_finite_results_withheld+' nonfinite output results withheld; generated '+doc.generated_at+'. Source fingerprint '+doc.source_content_sha256+'. Analysis fingerprint '+doc.analysis_spec_sha256+'. '+(doc.rows_truncated?'Bounded result rows only. ':'')));for(const c of doc.metric_coverage)$('preview').append(text('p','Metric '+c.slot+': '+c.with_value+' cases with a value; '+c.without_value+' without; '+c.missing_operand+' missing operand; '+c.zero_divisor+' zero divisor; '+c.non_finite+' nonfinite.'));sync();
 });
-$('confirm').onchange=sync;
+$('confirm').onchange=$('pairedCaseConfirm').onchange=sync;
+$('pairedCaseFile').onchange=()=>run(async()=>{
+ const selectedFile=$('pairedCaseFile').files[0];clearCaseFile();if(!selectedFile)return;
+ if(selectedFile.size>512*1024)throw new Error('Coded case file exceeds 512 KiB.');
+ const attempt=pairedCaseFileAttempt,revision=viewAttempt,login=epoch,sourceVersion=fileAttempt;
+ const raw=await selectedFile.text();
+ if(attempt!==pairedCaseFileAttempt||revision!==viewAttempt||login!==epoch||sourceVersion!==fileAttempt)return;
+ const doc=window.owgAnalysisCases.validate(JSON.parse(raw));
+ if(!snapshot||snapshot.level!=='cases'||snapshot.matching_cases!==doc.cases.length||
+    snapshot.matching_rows!==doc.cases.length||
+    !['source_content_sha256','analysis_spec_sha256','fingerprint_algorithm'].every(key=>snapshot[key]===doc[key]))
+   throw new Error('Coded case file must match the reviewed aggregate source, selection and complete case count.');
+ caseDataset=doc;
+ const events=doc.cases.reduce((n,one)=>n+one.events.length,0);
+ const view=$('pairedCasePreview');
+ view.replaceChildren(text('p','Review '+doc.cases.length+' coded cases and '+events+' events. Codes and elapsed times can still identify work. These are publisher-supplied values, not independently verified source facts.'));
+ for(const item of doc.cases){
+   const detail=document.createElement('details'),summary=text('summary',item.code+' · '+item.events.length+' events'),list=document.createElement('ol');
+   for(const event of item.events){
+     list.append(text('li',event.activity+' · '+(event.elapsed_microseconds/1000000)+' seconds since case start'));
+   }
+   detail.append(summary,list);view.append(detail);
+ }
+ sync();
+});
+$('publishPaired').onclick=()=>run(async()=>{
+ if(!snapshot||!caseDataset||!$('confirm').checked||!$('pairedCaseConfirm').checked||
+    !identityScopes.includes('org:analysis:cases:read')||!identityScopes.includes('org:analysis:cases:write')||
+    (selected&&(selected.owner_actor_id!==identityActor||selected.viewing_revision!==selected.revision||!selected.permissions.edit)))return;
+ if([...$('title').value.trim()].length>240)throw new Error('Use at most 240 characters in the title.');
+ const attempt=viewAttempt,sourceVersion=fileAttempt,caseVersion=pairedCaseFileAttempt;
+ const selectedId=selected?.view_id||null;
+ const pair=await post(base+(selectedId?'/'+selectedId:'')+'/with-cases',{
+   title:$('title').value.trim(),snapshot,case_dataset:caseDataset,
+   expected_revision:selected?.revision||0,
+   expected_parent_access_revision:selected?.access_revision||1,
+   expires_in_days:Number($('days').value),
+   user_confirmed:true,organization_sharing_confirmed:true,case_sharing_confirmed:true
+ });
+ if(attempt!==viewAttempt||sourceVersion!==fileAttempt||caseVersion!==pairedCaseFileAttempt)return;
+ const id=pair.publication.view_id;clearFile();await inventory();if(attempt!==viewAttempt)return;
+ await open(id);$('status').textContent='Aggregate and case revision published atomically. Existing case viewers were not carried forward; separate grants remain required.';
+});
 $('publish').onclick=()=>run(async()=>{
  if(!snapshot||!$('confirm').checked)return;
  if([...$('title').value.trim()].length>240)throw new Error('Use at most 240 characters in the title.');
