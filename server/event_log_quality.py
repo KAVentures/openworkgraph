@@ -320,7 +320,8 @@ def quality(log_id: str) -> dict[str, Any]:
         else:
             integrity = {"status": "not_verifiable", "reason": "legacy_or_invalid_digest"}
     # Logs imported before reports existed, or whose report could not be written, have none.
-    return {"log": info, "reports": reports, "batches_without_report": missing_reports,\n            "integrity": integrity,
+    return {"log": info, "reports": reports, "batches_without_report": missing_reports,
+            "integrity": integrity,
             "batch_trends": quality_trends.build(reports, missing_reports),
             "current": {"content_sha256": digest, "content_sha256_v2": digest_v2,
                         "diagnostics": current, **identity_digest, **relationship_metadata,
