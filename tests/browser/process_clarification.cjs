@@ -39,7 +39,7 @@ const {tmpdir}=require('node:os'),path=require('node:path');
   await page.getByRole('button',{name:'Reconcile refund SOPs · r1',exact:true}).click();
   const panel=page.locator('#owgCatalogClarification');
   const titles=panel.locator('[data-clarify-title]'),texts=panel.locator('[data-clarify-text]');
-  // Wait for the asynchronously loaded saved-design clarification panel.
+  // The clarification panel renders after the saved design loads; wait for it before counting.
   await texts.first().waitFor();
   assert.equal(await texts.count(),1);
   await titles.first().fill('SOP 2025');
