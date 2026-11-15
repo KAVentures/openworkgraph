@@ -245,3 +245,35 @@ def test_real_transaction_rejects_missing_independent_approval_before_any_io(
     review.assert_not_called()
     append.assert_not_called()
     checkpoint.assert_not_called()
+
+
+@pytest.mark.parametrize("bad_result", [
+    {"status": "review_ready_for_explicit_commit", "proposed_generation": 1,
+     "checkpoint_predecessor_generation": 1, "reviewed_event_snapshots": 2,
+     "removal_markers_for_review": 0},
+    {"status": "review_ready_for_explicit_commit", "proposed_generation": 2,
+     "checkpoint_predecessor_generation": 0, "reviewed_event_snapshots": 2,
+     "removal_markers_for_review": 0},
+    {"status": "review_ready_for_explicit_commit", "proposed_generation": True,
+     "checkpoint_predecessor_generation": 0, "reviewed_event_snapshots": 2,
+     "removal_markers_for_review": 0},
+    {"status": "review_ready_for_explicit_commit", "proposed_generation": 1,
+     "checkpoint_predecessor_generation": 0, "reviewed_event_snapshots": -1,
+     "removal_markers_for_review": 0},
+    {"status": "review_ready_for_explicit_commit", "proposed_generation": 1,
+     "checkpoint_predecessor_generation": 0, "reviewed_event_snapshots": 2,
+     "removal_markers_for_review": True},
+    None,
+])
+def test_transaction_preflight_rejects_invalid_transition_without_commit(monkeypatch, bad_result):
+    configure(monkeypatch)
+    with (
+        patch("server.m365_operator_audit_routes.dashboard_session_valid", return_value=True),
+        patch("server.m365_outlook_reviewed_transaction.preflight", return_value=bad_result),
+        patch("server.m365_outlook_reviewed_transaction.execute") as commit,
+    ):
+        with pytest.raises(HTTPException) as error:
+            operator_transaction_preflight(request(), True, FIRST)
+        assert error.value.status_code == 409
+        assert "secret-" not in str(error.value.detail)
+        commit.assert_not_called()
