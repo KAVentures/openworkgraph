@@ -100,3 +100,14 @@ def test_first_review_live_http_revision_zero_and_conflict_recovery(monkeypatch,
     persisted = client.get(review_url, headers=headers).json()
     assert persisted["revision"] == 1
     assert persisted["reviewer_notes"] == "first approval"
+
+    # A revoked local session must not read or mutate an approved review.
+    # Restore the session only to inspect the persisted revision afterward.
+    monkeypatch.setattr(routes, "dashboard_session_valid", lambda token: False)
+    assert client.get(review_url, headers=headers).status_code == 403
+    assert client.post(root + "/review", json=payload, headers=headers).status_code == 403
+    monkeypatch.setattr(routes, "dashboard_session_valid", lambda token: token == "owner")
+    after_revocation = client.get(review_url, headers=headers).json()
+    assert after_revocation["revision"] == 1
+    assert after_revocation["decision"] == "approved"
+    assert after_revocation["execution_authorized"] is False
