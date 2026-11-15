@@ -216,6 +216,8 @@
         // observed provenance only; never infer transitive case membership.
         observed_pair_event_assignments:Array.isArray(data.observed_pair_event_assignments)?data.observed_pair_event_assignments:[],
         observed_group_continuity:Array.isArray(data.observed_group_continuity)?data.observed_group_continuity:[],
+        observed_case_groups:Array.isArray(data.observed_case_groups)?data.observed_case_groups:[],
+        observed_case_groups_truncated:data.observed_case_groups_truncated===true,
         observed_pair_event_assignments_truncated:data.observed_pair_event_assignments_truncated===true,
         observed_group_continuity_truncated:data.observed_group_continuity_truncated===true,
         notice:data.notice||null,
