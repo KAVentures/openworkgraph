@@ -181,6 +181,10 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         # such as confidence, interruption context, and corroboration detail.
         # A reviewer must not replay a label after that source evidence changes.
         "observed_pair_event_assignments": pairs,
+        # Identity timelines are shown alongside the review queue by the live
+        # inspection API. Their provenance is part of the reviewer decision
+        # context even when the event/pair projection is unchanged.
+        "identity_timelines": response.get("identity_timelines"),
         "event_reviews": rows,
     }
     evidence_digest = hashlib.sha256(json.dumps(
