@@ -88,14 +88,15 @@ const results=card.children[card.children.indexOf(form)+2];
   assert.equal(payload.max_pages,1);
   assert.equal(consent.checked,true,'source consent remains visibly active while evidence is shown');
   assert.match(status.textContent,/not business success/);
-  await form.listeners.submit({preventDefault(){}});
-  assert.equal(requests.length,3,'a single approval cannot silently trigger another scan');
-  assert.match(status.textContent,/explicitly approve the source read/);
   assert.ok(results.children.some(x=>/Customer outcome: unknown/.test(x.textContent)));
   assert.ok(results.children.some(x=>/Prerequisite owg:w:/.test(x.textContent)));
   assert.ok(results.children.some(x=>/Durable direct dependencies: 1/.test(x.textContent)));
   assert.ok(results.children.some(x=>/Observed record owg:r:/.test(x.textContent)));
   assert.ok(results.children.some(x=>/Source unavailable/.test(x.textContent)));
+  await form.listeners.submit({preventDefault(){}});
+  assert.equal(requests.length,3,'a single approval cannot silently trigger another scan');
+  assert.match(status.textContent,/explicitly approve the source read/);
+  assert.equal(results.children.length,0,'rejected repeat scan must not retain stale evidence');
   // A completed response must not persist after explicit withdrawal.
   consent.checked=false;
   consent.listeners.change();
