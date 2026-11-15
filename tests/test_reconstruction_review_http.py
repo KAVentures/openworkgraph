@@ -326,3 +326,37 @@ def test_reviewer_provenance_panel_shows_direct_support_as_inert_text():
     assert "observed_group_continuity:Array.isArray(data.observed_group_continuity)" in source
     assert "evidence.textContent=JSON.stringify({" in source
     assert "root.querySelector('#reconstructionProvenance')?.remove();" in source
+
+
+def test_review_exposes_provisional_case_groups_without_confirmation(monkeypatch):
+    """Navigation components must be inspectable but remain non-authoritative."""
+    import json
+    _setup(monkeypatch)
+    from server import work_resumption, reconstruction_review_cli
+
+    groups = [{"resource_pointers": [{"provider": "github", "resource_kind": "issue", "resource_ref": "A"}], "proves_same_case": False}]
+    monkeypatch.setattr(work_resumption, "resumption_candidates", lambda connection, *, lease: {
+        "coverage": {"scan_truncated": False},
+        "observed_case_groups": groups,
+        "observed_case_groups_truncated": True,
+    })
+    monkeypatch.setattr(reconstruction_review_cli, "build_review_queue", lambda result: {
+        "event_reviews": [], "evidence_sha256": "d" * 64,
+        "no_case_identity_inferred": True,
+    })
+    response = history_routes.get_reconstruction_review()
+    payload = json.loads(response.body)
+    assert payload["observed_case_groups"] == groups
+    assert payload["observed_case_groups_truncated"] is True
+    assert payload["authoritative"] is False
+    assert payload["review"]["no_case_identity_inferred"] is True
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_review_workbench_shows_provisional_groups_as_inert_evidence():
+    from server.main import ROOT
+    source = (ROOT / "dashboard" / "history_retention.js").read_text(encoding="utf-8")
+    assert "observed_case_groups:Array.isArray(data.observed_case_groups)" in source
+    assert "observed_case_groups_truncated:data.observed_case_groups_truncated===true" in source
+    assert "evidence.textContent=JSON.stringify({" in source
+    assert "root.querySelector('#reconstructionProvenance')?.remove()" in source
