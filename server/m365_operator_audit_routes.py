@@ -321,6 +321,10 @@ def operator_transaction_preflight(request: Request, consent_local_read: bool = 
             raise ValueError("Invalid checkpoint transition proposal")
     except (ReceiptError, OSError, ValueError, TypeError, KeyError, RecursionError):
         raise HTTPException(409, "Preflight refused; inspect candidate, grant and checkpoint manually") from None
+    # The preflight reads private checkpoint and candidate evidence. A session
+    # revoked during that read must not receive its generation or event counts.
+    if not dashboard_session_valid(authorization[len("owg-session "):].strip()):
+        raise HTTPException(409, "Dashboard session expired during transaction preflight; inspect private artifacts manually. Do not retry.")
     return JSONResponse({
         "format": "openworkgraph.m365-dashboard-transaction-preflight.v1",
         "configured": True, "review_ready": True,
