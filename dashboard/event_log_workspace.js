@@ -4,7 +4,7 @@
   const MODEL_FORMAT='openworkgraph.reference-model.v1';
   const state={logs:[],logId:'',caseType:'',generation:0,refresh:0,follows:[],objectTypes:[]};
   // Views that honour the workspace case filter; every other section uses all cases.
-  const FILTERED=new Set(['summary','variants','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','waiting-time','drift','model-discovery','organization','report.html']);
+  const FILTERED=new Set(['summary','variants','variants/preview','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','waiting-time','drift','model-discovery','organization','report.html']);
 
   const el=(tag,text,cls)=>{
     const node=document.createElement(tag);
@@ -652,7 +652,7 @@
     const generation=++state.generation;
     const results=document.getElementById('owgEventLogResults');results.replaceChildren();
     status('Analysing…');
-    const [summary,variants,activities]=await Promise.all([getJSON(logPath('summary')),getJSON(logPath('variants',{limit:10})),getJSON(logPath('activities'))]);
+    const [summary,variants,activities]=await Promise.all([getJSON(logPath('summary')),getJSON(logPath('variants/preview',{limit:10})),getJSON(logPath('activities'))]);
     if(generation!==state.generation)return;
     const names=(activities.activities||[]).map(a=>a.activity);
     const inspection=caseInspector(names);
@@ -670,7 +670,11 @@
     results.appendChild(cohortMetricSection(names));
 
     const variantBox=section('Most common variants');
-    variantBox.appendChild(table(['Path','Cases','Share','Median time','Evidence'],(variants.variants||[]).map(v=>{const open=button('Inspect cases','secondary');open.onclick=()=>inspection.path(v.path);return [v.path.join(' → '),Number(v.cases).toLocaleString(),pct(v.share),duration(v.median_duration_seconds),open];})));
+    variantBox.appendChild(table(['Path','Cases','Share','Median time','Evidence'],(variants.variants||[]).map(v=>{
+      const open=button('Inspect cases','secondary');open.disabled=!!v.path_truncated;
+      if(v.path_truncated)open.title='This path is shortened; browse cases by activity instead.';
+      else open.onclick=()=>inspection.path(v.path);
+      return [v.path.join(' → ')+(v.path_truncated?' … ('+Number(v.path_activity_count).toLocaleString()+' activities; shortened)':''),Number(v.cases).toLocaleString(),pct(v.share),duration(v.median_duration_seconds),open];})));
     variantBox.appendChild(el('div',Number(variants.distinct_variants).toLocaleString()+' distinct variants.','muted'));
     results.appendChild(variantBox);
     results.appendChild(variantCoverageSection(names));
@@ -2731,7 +2735,7 @@
     const box=section('Compare with a reference process');
     const model=document.createElement('textarea');model.id='owgEventLogModel';model.rows=3;model.style.width='100%';
     model.placeholder='One accepted path per line, e.g. Receive > Review > Close, or reference-model JSON for exact labels';
-    if(topVariant&&topVariant.path.length<=100)model.value=JSON.stringify({format:MODEL_FORMAT,paths:[topVariant.path]});
+    if(topVariant&&!topVariant.path_truncated&&topVariant.path.length<=100)model.value=JSON.stringify({format:MODEL_FORMAT,paths:[topVariant.path]});
     const run=button('Check conformance','secondary');run.id='owgEventLogConformanceRun';
     const out=el('div');box.append(field('Reference paths or exact-label JSON',model),run,out);
     run.onclick=async()=>{
