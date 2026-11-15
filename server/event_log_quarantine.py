@@ -62,6 +62,29 @@ def decision_history(log_id: str, offset: int = 0, limit: int = 100) -> dict[str
             conn.close()
 
 
+def _batch_page(conn, log_id: str, after: int, limit: int) -> dict[str, Any]:
+    total = conn.execute("SELECT count(DISTINCT batch) FROM quarantine WHERE log_id = ?", [log_id]).fetchone()[0]
+    rows = conn.execute("SELECT batch, count(*) FROM quarantine WHERE log_id = ? AND batch > ? "
+                        "GROUP BY batch ORDER BY batch LIMIT ?", [log_id, after, limit + 1]).fetchall()
+    batches = [{"batch": batch, "rows": count} for batch, count in rows[:limit]]
+    return {"format": "openworkgraph.quarantine-batches.v1", "batches": batches, "total": total,
+            "after": after, "limit": limit,
+            "next_after": batches[-1]["batch"] if len(rows) > limit else None,
+            "stable_snapshot": False}
+
+
+def batch_history(log_id: str, after: int = -1, limit: int = 100) -> dict[str, Any]:
+    if type(after) is not int or not -1 <= after <= 2_147_483_647 or type(limit) is not int or not 1 <= limit <= MAX_PAGE:
+        raise workspace.EventLogWorkspaceError("batch cursor or page size is invalid")
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            workspace._check_log(conn, log_id)
+            return _batch_page(conn, log_id, after, limit)
+        finally:
+            conn.close()
+
+
 def _record(conn, log_id: str, decision: dict[str, Any]) -> None:
     conn.execute("INSERT INTO quarantine_decisions VALUES (?, ?, ?)",
                  [log_id, datetime.now(timezone.utc).replace(tzinfo=None), json.dumps(decision, sort_keys=True)])
@@ -76,8 +99,9 @@ def quarantine(log_id: str, batch: int | None = None, after: int = 0, limit: int
         conn = workspace._connect()
         try:
             workspace._check_log(conn, log_id)
-            batches = [{"batch": b, "rows": n} for b, n in conn.execute(
-                "SELECT batch, count(*) FROM quarantine WHERE log_id = ? GROUP BY batch ORDER BY batch", [log_id]).fetchall()]
+            batch_page = _batch_page(conn, log_id, -1, MAX_PAGE)
+            rows_kept = conn.execute(f"SELECT count(*) FROM quarantine WHERE log_id = ? {scope}",
+                                     [log_id, *params]).fetchone()[0]
             reasons = dict(conn.execute(f"""SELECT r, count(*) FROM (SELECT unnest(from_json(reasons, '["VARCHAR"]')) AS r
                 FROM quarantine WHERE log_id = ? {scope}) GROUP BY r ORDER BY r""", [log_id, *params]).fetchall())
             rows = conn.execute(f"""SELECT batch, row_n, reasons, row FROM quarantine WHERE log_id = ? {scope}
@@ -88,7 +112,9 @@ def quarantine(log_id: str, batch: int | None = None, after: int = 0, limit: int
             conn.close()
     page = [{"batch": b, "row": n, "position": b * 1_000_000_000 + n, "reasons": json.loads(r), **json.loads(v)}
             for b, n, r, v in rows[:int(limit)]]
-    return {"batches": batches, "rows_kept": sum(b["rows"] for b in batches if batch is None or b["batch"] == batch), "reasons": reasons,
+    return {"batches": batch_page["batches"], "batches_total": batch_page["total"],
+            "batches_next_after": batch_page["next_after"], "batches_stable_snapshot": False,
+            "rows_kept": rows_kept, "reasons": reasons,
             "rows": page, "next_after": page[-1]["position"] if len(rows) > int(limit) else None,
             "decisions": decision_page["decisions"], "decisions_total": decision_page["total"],
             "decisions_next_offset": decision_page["next_offset"], "decisions_stable_snapshot": False,
