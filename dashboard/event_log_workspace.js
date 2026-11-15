@@ -1107,7 +1107,9 @@
     for(const key of ['resource','activity'])if(values[key]&&values[key].trim())spec[key]=values[key];
     if(values.attribute&&values.attribute.trim()){if(!/^[^=]+=.*/.test(values.attribute.trim()))throw new Error('Attribute must look like name=value.');spec.attribute=values.attribute.trim();}
     if(values.eventAttribute&&values.eventAttribute.trim()){if(!/^[^=]+=.*/.test(values.eventAttribute.trim()))throw new Error('Event attribute must look like name=value.');spec.event_attribute=values.eventAttribute.trim();}
-    const rangeName=(values.rangeName||'').trim(),minimum=String(values.rangeMin??''),maximum=String(values.rangeMax??'');
+    // Match the server's whitespace normalization; JS trim() would also
+    // remove U+FEFF, which can be part of a stored attribute name.
+    const rangeName=(values.rangeName||'').replace(/^[\p{White_Space}\u001c-\u001f]+|[\p{White_Space}\u001c-\u001f]+$/gu,''),minimum=String(values.rangeMin??''),maximum=String(values.rangeMax??'');
     if(rangeName||minimum||maximum){
       if(!rangeName||Array.from(rangeName).length>200)throw new Error('Enter a numeric case attribute name of at most 200 characters.');
       if(!minimum&&!maximum)throw new Error('Enter at least one numeric range bound.');

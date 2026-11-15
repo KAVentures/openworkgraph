@@ -18,7 +18,7 @@ const path=require('node:path');
   const objects=[],events=[],start=Date.UTC(2024,0,1);
   for(let i=0;i<40;i++){
    const id='o'+i,t=start+i*86400000;
-   objects.push({id,type:'order',attributes:[{name:'cost\\"mixed 雪',time:new Date(t).toISOString(),value:100+i*37},{name:'region',time:new Date(t).toISOString(),value:i%2?'EU':'US'}]});
+   objects.push({id,type:'order',attributes:[{name:'\ufeffcost\\"mixed 雪',time:new Date(t).toISOString(),value:100+i*37},{name:'region',time:new Date(t).toISOString(),value:i%2?'EU':'US'}]});
    for(const [j,activity,when] of [[0,'Create',t],[1,i>=30?'Slow':'Fast',t+(i>=30?10:1)*86400000]])
     events.push({id:`e${i}-${j}`,type:activity,time:new Date(when).toISOString(),attributes:[],relationships:[{objectId:id,qualifier:''}]});
   }
@@ -29,19 +29,19 @@ const path=require('node:path');
   await page.locator('#owgCaseFilterAdd').click();await page.locator('#owgCaseFilterFromExact1').fill('Create');await page.locator('#owgCaseFilterToExact1').fill('Slow');await page.locator('#owgCaseFilterApply').click();
   await page.locator('#owgCaseFilterCount').filter({hasText:'Filtered: 10 of 40 cases'}).waitFor();
   const prefix='#owgEventLogCasesFilter';
-  await page.locator(prefix+'RangeName').fill('cost\\"mixed 雪');
+  await page.locator(prefix+'RangeName').fill('\ufeffcost\\"mixed 雪');
   await page.locator(prefix+'RangeMin').fill('1000');await page.locator(prefix+'RangeMax').fill('1400');
   const [cases]=await Promise.all([page.waitForResponse(r=>r.url().includes('/cases/query')&&r.request().method()==='POST'),page.locator('#owgEventLogCasesBrowse').click()]);
-  assert.deepEqual(cases.request().postDataJSON().cohort.attribute_range,{name:'cost\\"mixed 雪',min:1000,max:1400});
+  assert.deepEqual(cases.request().postDataJSON().cohort.attribute_range,{name:'\ufeffcost\\"mixed 雪',min:1000,max:1400});
   assert.equal((await cases.json()).selected_cases,6); // intersects the active follower filter
   await page.locator('#owgEventLogCasesStatus').filter({hasText:'6 matching cases'}).waitFor();
   await page.locator(prefix+'RangeMax').fill('900');await page.locator('#owgEventLogCasesBrowse').click();
   await page.locator('#owgEventLogCasesStatus').filter({hasText:'minimum must be below'}).waitFor();
   const first='#owgEventLogCohortA',second='#owgEventLogCohortB';
-  for(const selector of [first,second])await page.locator(selector+'RangeName').fill('cost\\"mixed 雪');
+  for(const selector of [first,second])await page.locator(selector+'RangeName').fill('\ufeffcost\\"mixed 雪');
   await page.locator(first+'RangeMax').fill('1000');await page.locator(second+'RangeMin').fill('1000');
   const [comparison]=await Promise.all([page.waitForResponse(r=>r.url().includes('/benchmark')&&r.request().method()==='POST'),page.locator('#owgEventLogBenchRun').click()]);
-  const sent=comparison.request().postDataJSON();assert.deepEqual(sent.cohorts.map(c=>c.attribute_range),[{name:'cost\\"mixed 雪',max:1000},{name:'cost\\"mixed 雪',min:1000}]);
+  const sent=comparison.request().postDataJSON();assert.deepEqual(sent.cohorts.map(c=>c.attribute_range),[{name:'\ufeffcost\\"mixed 雪',max:1000},{name:'\ufeffcost\\"mixed 雪',min:1000}]);
   assert.deepEqual((await comparison.json()).cohorts.map(c=>c.cases),[25,15]);
   await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
   const audits=await page.evaluate(async()=>{const opts={runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']};return [await window.axe.run(document.querySelector('#owgEventLogCases'),opts),await window.axe.run(document.querySelector('#owgEventLogCohortA'),opts)];});
