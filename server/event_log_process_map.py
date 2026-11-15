@@ -35,11 +35,17 @@ def process_map(log_id: str, case_type: str | None = None, *, activities: float 
 
     def run(conn):
         cohorts.restrict(conn, chosen, log_id)
-        ranked = conn.execute("""SELECT activity, count(*) AS events, count(DISTINCT case_id) AS cases
-            FROM ce GROUP BY activity ORDER BY events DESC, activity""").fetchall()
-        total_events = sum(row[1] for row in ranked)
+        # The map can draw only MAX_MAP_ACTIVITIES, but the frequency share
+        # must still use every event, including events of hidden activities.
+        ranked = conn.execute("""SELECT activity, events, cases, count(*) OVER () AS activity_count,
+            sum(events) OVER () AS total_events FROM (
+                SELECT activity, count(*) AS events, count(DISTINCT case_id) AS cases
+                FROM ce GROUP BY activity)
+            ORDER BY events DESC, activity LIMIT ?""", [MAX_MAP_ACTIVITIES]).fetchall()
+        activity_count = ranked[0][3] if ranked else 0
+        total_events = ranked[0][4] if ranked else 0
         kept, covered = [], 0
-        for activity, events, cases in ranked:
+        for activity, events, cases, _, _ in ranked:
             if kept and (covered >= activities * total_events or len(kept) >= MAX_MAP_ACTIVITIES):
                 break
             kept.append((activity, events, cases))
@@ -81,7 +87,7 @@ def process_map(log_id: str, case_type: str | None = None, *, activities: float 
                 keep.add((src, dst))
         shown = [e for e in edges if (e[0], e[1]) in keep][:MAX_MAP_TRANSITIONS]
         shown_real = sum(e[2] for e in shown if e[0] != START and e[1] != END)
-        hidden = len(ranked) - len(kept)
+        hidden = activity_count - len(kept)
         return {
             "activities": [{"activity": a, "event_count": e, "case_count": c} for a, e, c in kept],
             "transitions": [{"from": s, "to": d, "transition_count": n, "case_count": c,

@@ -31,10 +31,16 @@ def playback(log_id: str, case_type: str | None = None, *, activities: float = 1
 
     def run(conn):
         cohorts.restrict(conn, chosen, log_id)
-        ranked = conn.execute("SELECT activity, count(*) FROM ce GROUP BY 1 ORDER BY 2 DESC, 1").fetchall()
-        total = sum(n for _, n in ranked)
+        # Only the most frequent MAX_ACTIVITIES can be drawn. Obtain the full
+        # count and total as window aggregates without fetching every distinct
+        # activity label into application memory.
+        ranked = conn.execute("""SELECT activity, n, count(*) OVER () AS activity_count,
+            sum(n) OVER () AS total_events FROM (SELECT activity, count(*) AS n FROM ce GROUP BY activity)
+            ORDER BY n DESC, activity LIMIT ?""", [MAX_ACTIVITIES]).fetchall()
+        activity_count = ranked[0][2] if ranked else 0
+        total = ranked[0][3] if ranked else 0
         kept, covered = [], 0
-        for activity, n in ranked:      # the same selection as the process map
+        for activity, n, _, _ in ranked:      # the same selection as the process map
             if kept and (covered >= activities * total or len(kept) >= MAX_ACTIVITIES):
                 break
             kept.append(activity)
@@ -47,22 +53,28 @@ def playback(log_id: str, case_type: str | None = None, *, activities: float = 1
         cases_total = conn.execute("SELECT count(*) FROM pcases").fetchone()[0]
         shown = min(int(max_cases), cases_total)
         per_case = max(2, MAX_POINTS // max(shown, 1))
+        # Limit each sampled case *before* building the list returned to Python.
+        # A selected case can contain millions of events; slicing its fully
+        # materialized list after fetch would defeat the playback point budget.
         rows = conn.execute("""WITH pick AS (SELECT DISTINCT CAST(floor(i * ? / ?) AS BIGINT) AS rank FROM range(?) t(i)),
-              chosen AS (SELECT c.* FROM pcases c JOIN pick USING (rank))
-            SELECT c.rank, c.case_id, c.n, list(struct_pack(ts := e.ts, activity := e.activity) ORDER BY e.ts, e.event_id)
-            FROM chosen c JOIN pe e USING (case_id) GROUP BY c.rank, c.case_id, c.n ORDER BY c.rank""",
-                            [cases_total, max(shown, 1), shown]).fetchall()
+              chosen AS (SELECT c.* FROM pcases c JOIN pick USING (rank)),
+              numbered AS (SELECT c.rank, c.case_id, c.n, e.ts, e.event_id, e.activity,
+                  row_number() OVER (PARTITION BY c.rank ORDER BY e.ts, e.event_id) AS point_number
+                  FROM chosen c JOIN pe e USING (case_id))
+            SELECT rank, case_id, n, list(struct_pack(ts := ts, activity := activity) ORDER BY ts, event_id)
+            FROM numbered WHERE point_number <= ? GROUP BY rank, case_id, n ORDER BY rank""",
+                            [cases_total, max(shown, 1), shown, per_case]).fetchall()
         cases, points, tied, truncated = [], 0, 0, 0
         for _, case_id, n, items in rows:
-            if len(items) > per_case:
-                items, truncated = items[:per_case], truncated + 1
+            if len(items) < n:
+                truncated += 1
             steps = [[(item["ts"] - origin).total_seconds(), index[item["activity"]]] for item in items]
             tied += sum(1 for a, b in zip(steps, steps[1:]) if a[0] == b[0])
             points += len(steps)
             cases.append({"case_id": case_id, "events": steps, "events_truncated": len(steps) < n})
         return {
             "activities": kept,
-            "activities_hidden": len(ranked) - len(kept),
+            "activities_hidden": activity_count - len(kept),
             "origin": origin.isoformat() + "Z" if origin else None,
             "span_seconds": (last - origin).total_seconds() if origin else 0,
             "cases": cases,

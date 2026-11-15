@@ -29,6 +29,50 @@ case disclosure, not a live log connection, independent source verification or e
    JSON export. Queries use only this bounded immutable dataset. They cannot join private logs,
    read another attachment or derive counts from an inaccessible dataset.
 
+## Publish a new aggregate and case attachment atomically (R4)
+
+The company **Shared analyses** portal also supports **Publish both atomically**.
+Prepare the two separate files with **Prepare case sharing files** in the local
+event-log workspace as above, then upload the aggregate snapshot and matching
+coded-case dataset together. Review the numeric aggregate and **every coded
+case timeline** in the separate previews. Two independent confirmation checkboxes
+are mandatory. Both case-read and case-write permissions are required in addition
+to aggregate read/write.
+
+The one-click submission calls
+`POST /v1/human/analyses/with-cases` with a strictly validated,
+max-720-KiB JSON body for a new publication, or
+`POST /v1/human/analyses/{view_id}/with-cases` for an owner-controlled successor
+revision. For a successor the caller must supply the **current exact revision**
+and **parent access revision**; stale edits, unauthorized editor/admin attempts
+and invalid historical revision updates are refused before any lasting write.
+Each operation creates its aggregate revision
+and immutable coded-case attachment in **one database transaction**. The
+same source fingerprint, analysis fingerprint, case count, retention, ownership,
+audit and capacity checks as the original two-step flow apply. A mismatch,
+missing consent, insufficient permission, full quota, or failure during either
+write rolls back the **whole request**, including its audit entries. No
+half-published aggregate remains.
+
+This improves convenience; it **does not weaken case isolation**. Only the
+publication owner has case access initially, with the explicit case scopes.
+Aggregate membership, administrator status and the initial paired submission
+do not create a case-viewer grant. The owner must still set aggregate members,
+then separately grant exact-revision case viewers using **Case viewers**.
+Everything is immutable and expires/deletes with the parent, as in the
+existing flow. It does not upload the private local log, original labels,
+absolute event times or resources, but codes and elapsed times can still
+identify work and must not be treated as anonymized.
+
+The original separate aggregate upload, revision publishing and later case
+attachment remain available without any change in permissions or semantics.
+Paired publishing never overwrites a prior revision. Authorized aggregate
+members retain access to their existing eligible revisions, but new case
+attachments have **no inherited case-viewer grants**, even when a previous
+revision had approved viewers. Each successor case dataset must be separately
+reviewed/granted. Retention remains tied to the existing parent's expiry and
+cannot be extended by a paired update; only the owner can renew under Access.
+
 ## What is disclosed
 
 `openworkgraph.analysis-case-dataset.v1` contains 1–500 complete cases, at most5,000 events and

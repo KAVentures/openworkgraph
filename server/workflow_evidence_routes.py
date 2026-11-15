@@ -1080,7 +1080,8 @@ async def clarify_process_design(request: Request, workflow_id: str = Query(patt
 async def decide_process_clarification(request: Request, workflow_id: str = Query(pattern=_PROCESS_ID),
                                        revision: int = Query(ge=1)) -> Response:
     """Record one human decision; a confirm returns a proposed model change, never applied here."""
-    from shared.process_clarification import ClarificationRequest, Decision, clarify, documents_sha256, proposed_change
+    from shared.process_clarification import (ClarificationRequest, Decision, clarify,
+        documents_sha256, proposed_change, validate_decision_evidence)
     from .local_source_routes import _require_dashboard
     from . import process_clarification_store as ledger
     _require_dashboard(request)
@@ -1102,6 +1103,10 @@ async def decide_process_clarification(request: Request, workflow_id: str = Quer
         by_id.update({c['statement_id']: c for c in conflict['statements']})
     if any(sid not in by_id for sid in decision.cited_statement_ids):
         raise HTTPException(422, 'cite only statements shown with this question')
+    try:
+        validate_decision_evidence(question, decision)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
     entry = ledger.record(workflow_id, revision, record['content_sha256'], question, decision.model_dump(),
                           [by_id[sid] for sid in decision.cited_statement_ids], source_pin)
     return JSONResponse({'decision': entry, 'proposed_change': proposed_change(record, question, decision)},

@@ -127,3 +127,43 @@ def test_refuses_duplicate_json_fields(tmp_path):
                                         '"event_snapshots": 3, "event_snapshots": 999'))
     with pytest.raises(AuditEvidenceError):
         read_operator_audit(directory)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX-only audit receipts")
+def test_dashboard_reads_every_production_audit_phase(tmp_path):
+    """Writer/reader contract: handoff must not hide the entire timeline."""
+    from server.m365_operator_audit_writer import record_operator_phase
+
+    directory = tmp_path / "private"
+    directory.mkdir(mode=0o700)
+    for phase, status in (
+        ("review", "review_ready"),
+        ("extract", "review_required"),
+        ("append", "receipt_persisted"),
+        ("handoff", "next_round_handoff_prepared"),
+        ("checkpoint-commit", "checkpoint_committed"),
+    ):
+        record_operator_phase(phase, {"status": status, "generation": 2},
+                              directory=directory, tenant="tenant", mailbox="mailbox",
+                              folder="folder", log_id="log")
+    result = read_operator_audit(directory)
+    assert result["total_receipts"] == 5
+    assert {item["action"] for item in result["records"]} == {
+        "readiness", "extract", "append", "handoff", "commit"
+    }
+    assert all("scope_sha256" not in item and "log_id_sha256" not in item
+               for item in result["records"])
+    assert result["provider_validated"] is False
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX-only audit receipts")
+def test_dashboard_rejects_forged_handoff_status(tmp_path):
+    directory = tmp_path / "private"
+    directory.mkdir(mode=0o700)
+    receipt = _receipt(directory)
+    data = json.loads(receipt.read_text())
+    data["action"] = "handoff"
+    data["status"] = "checkpoint_committed"
+    receipt.write_text(json.dumps(data))
+    with pytest.raises(AuditEvidenceError):
+        read_operator_audit(directory)

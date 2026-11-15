@@ -39,7 +39,13 @@ const path=require('node:path');
   const established=['Customer onboarding and activation','Employee offboarding and access revocation',
     'Expense reimbursement','Order to cash','Procure to pay','Sales lead qualification','IT service management'];
   assert.deepEqual(titles.filter(title=>established.includes(title)),established);
+  assert.ok(titles.includes('Employee onboarding and access readiness'));
   assert.ok(titles.includes('Returns and refunds'));
+  await page.locator('#owgDomainPackChoice').selectOption('employee_onboarding');
+  await page.locator('#owgDomainPackRole-onboarding_case').waitFor();
+  await page.locator('#owgDomainPackRole-identity_provisioned').waitFor();
+  await page.locator('#owgDomainPackRole-work_started').waitFor();
+  assert.equal(await page.locator('#owgDomainPackRole-order').count(),0);
   assert.equal(new Set(titles).size,titles.length,'no duplicate domain-pack titles');
   await page.locator('#owgDomainPackChoice').selectOption('returns_refunds');
   await page.locator('#owgDomainPackRole-return_case').waitFor();
