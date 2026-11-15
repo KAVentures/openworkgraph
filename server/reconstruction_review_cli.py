@@ -275,6 +275,10 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
     tp = fp = fn = ambiguous = 0
     # Window-level counts reveal regressions hidden by aggregate accuracy.
     by_window: dict[str, dict[str, int]] = {}
+    by_ambiguity: dict[str, dict[str, int]] = {
+        "ambiguous_multiple_pairs": {"tp": 0, "fp": 0, "fn": 0, "events": 0},
+        "single_pair": {"tp": 0, "fp": 0, "fn": 0, "events": 0},
+    }
     disagreements: list[dict[str, Any]] = []
     for key, true_pairs in labels.items():
         row = observed[key]
@@ -299,6 +303,11 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
         counts["fp"] += extra
         counts["fn"] += missed
         counts["events"] += 1
+        cohort = by_ambiguity["ambiguous_multiple_pairs" if row["review_status"] == "ambiguous_multiple_pairs" else "single_pair"]
+        cohort["tp"] += correct
+        cohort["fp"] += extra
+        cohort["fn"] += missed
+        cohort["events"] += 1
     precision = tp / (tp + fp) if tp + fp else 0.0
     recall = tp / (tp + fn) if tp + fn else 0.0
     # Report window-level quality as rates as well as counts. Aggregated micro
@@ -311,6 +320,14 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
             **counts, "precision": wp, "recall": wr,
             "f1": 2 * wp * wr / (wp + wr) if wp + wr else 0.0,
         }
+    ambiguity_metrics = {}
+    for cohort_name, counts in by_ambiguity.items():
+        cp = counts["tp"] / (counts["tp"] + counts["fp"]) if counts["tp"] + counts["fp"] else 0.0
+        cr = counts["tp"] / (counts["tp"] + counts["fn"]) if counts["tp"] + counts["fn"] else 0.0
+        ambiguity_metrics[cohort_name] = {
+            **counts, "precision": cp, "recall": cr,
+            "f1": 2 * cp * cr / (cp + cr) if cp + cr else 0.0,
+        }
     return {
         "evidence_sha256": queue["evidence_sha256"],
         "annotated_events": len(labels), "source_review_events": len(observed),
@@ -320,6 +337,7 @@ def score_review_annotations(response: dict[str, Any], annotations: list[dict[st
         "precision": precision, "recall": recall,
         "per_window_counts": {window: by_window[window] for window in sorted(by_window)},
         "per_window_metrics": per_window_metrics,
+        "per_ambiguity_metrics": ambiguity_metrics,
         "event_disagreements": sorted(disagreements, key=lambda item: (item["window"], item["event_id"])),
         "event_disagreements_are_review_evidence_not_confirmed_cases": True,
         "cross_case_contamination_measured": False,
