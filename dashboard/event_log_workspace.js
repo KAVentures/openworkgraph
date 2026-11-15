@@ -702,7 +702,7 @@
     results.appendChild(deriveSection(names));
     results.appendChild(dottedSection());
     results.appendChild(waitingSection());
-    results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity)));
+    results.appendChild(rootCauseSection((activities.activities||[]).map(a=>a.activity),inspection));
     results.appendChild(organizationSection());
     results.appendChild(logComparisonSection());
     results.appendChild(analysisSection(names));
@@ -860,7 +860,7 @@
     const detail=el('div');detail.id=prefix==='owgEventLogCases'?'owgEventLogCaseEvents':prefix+'Events';
     const controls=el('div',null,'row');controls.append(browse,reset,first,next);
     box.append(note,filters.node,el('div','Suggestions include up to 500 frequent activities. An exact label overrides the suggestion and is matched literally.','muted'),field('Exact activity to inspect',exactActivity),activityLookup.wrap,chosen,controls,message,list,detail);
-    let path=null,transition=null,spec=null,nextAfter=null,listing=0,opening=0;
+    let path=null,transition=null,spec=null,nextAfter=null,listing=0,opening=0,association=false;
     async function load(after){
       const ticket=++listing;first.disabled=true;next.disabled=true;browse.disabled=true;
       message.textContent='Loading cases…';
@@ -883,6 +883,7 @@
       try{const cohort=filters.read();
         if(exactActivity.value){if(Array.from(exactActivity.value).length>200)throw new Error('Activity labels must have at most 200 characters.');cohort.activity=exactActivity.value;}
         if(options.caseType===undefined&&state.follows.length)cohort.follows=state.follows;
+        if(association){chosen.textContent='All paths.';association=false;}
         spec={cohort,limit:30};if(path)spec.path=path;if(transition)spec.transition=transition;detail.replaceChildren();opening++;load(null);}
       catch(error){message.textContent=error.message;}
     }
@@ -909,15 +910,21 @@
     }
     return {node:box,path(value){
       if(value.length>500){message.textContent='This path exceeds the 500-step case selector limit. Browse by activity or cohort instead.';box.scrollIntoView({block:'nearest'});return;}
-      path=value.slice();transition=null;chosen.textContent='Exact path: '+JSON.stringify(path);start();box.scrollIntoView({block:'nearest'});
+      association=false;path=value.slice();transition=null;chosen.textContent='Exact path: '+JSON.stringify(path);start();box.scrollIntoView({block:'nearest'});
     },activity(value){
       const picker=document.getElementById(prefix+'FilterActivity');
       if(!Array.from(picker.options).some(option=>option.value===value))picker.add(new Option(value,value));
-      exactActivity.value='';activityLookup.reset();path=null;transition=null;chosen.textContent='All paths.';picker.value=value;start();box.scrollIntoView({block:'nearest'});
+      association=false;exactActivity.value='';activityLookup.reset();path=null;transition=null;chosen.textContent='All paths.';picker.value=value;start();box.scrollIntoView({block:'nearest'});
     },transition(value){
-      exactActivity.value='';activityLookup.reset();path=null;transition=value.slice();document.getElementById(prefix+'FilterActivity').value='';
+      association=false;exactActivity.value='';activityLookup.reset();path=null;transition=value.slice();document.getElementById(prefix+'FilterActivity').value='';
       chosen.textContent='Adjacent transition: '+JSON.stringify(transition)+'. Timestamp ties do not verify order.';
       start();box.scrollIntoView({block:'nearest'});
+    },cohort(value){
+      // Root-cause associations cover the full case notion, independently of
+      // the follower filter and any previous evidence fields or path.
+      path=null;transition=null;association=true;spec={cohort:value,limit:30};
+      chosen.textContent='Association cases: '+JSON.stringify(value)+'. This selection uses all cases in the current case notion. Browse cases uses the fields above instead.';
+      detail.replaceChildren();opening++;load(null);box.scrollIntoView({block:'nearest'});
     }};
   }
 
@@ -2736,7 +2743,7 @@
     return box;
   }
 
-  function rootCauseSection(activityNames){
+  function rootCauseSection(activityNames,inspection){
     const box=section('What is associated with an outcome');
     const outcome=select('owgEventLogOutcome',[['duration_over','Case takes longer than'],['rework','Case has rework'],['contains_activity','Case contains activity'],['ends_with','Case ends with activity']]);
     const hours=input('owgEventLogOutcomeHours','number','hours');hours.min='0';hours.step='any';
@@ -2759,10 +2766,14 @@
         if(!activityField.hidden){const label=exact.value||activity.value;
           if(!label||Array.from(label).length>200)throw new Error('Choose an activity label of at most 200 characters.');params.activity=label;}
         const r=await getJSON(logPath('root-cause',params));
-        const rows=(r.associations||[]).map(a=>[a.feature.kind+': '+a.feature.value,Number(a.cases_with_feature).toLocaleString(),pct(a.outcome_rate_with),pct(a.outcome_rate_without),(a.risk_difference>0?'+':'')+(a.risk_difference*100).toFixed(1)+' pts ['+(a.ci95[0]*100).toFixed(1)+', '+(a.ci95[1]*100).toFixed(1)+']',a.holds_after_bonferroni?'yes':'no']);
+        const rows=(r.associations||[]).map(a=>{
+          let evidence='—';
+          if(a.cohort){evidence=button('Inspect cases','secondary');evidence.setAttribute('aria-label','Inspect cases with '+a.feature.kind+': '+a.feature.value);evidence.onclick=()=>inspection.cohort(a.cohort);}
+          return [a.feature.kind+': '+a.feature.value,Number(a.cases_with_feature).toLocaleString(),pct(a.outcome_rate_with),pct(a.outcome_rate_without),(a.risk_difference>0?'+':'')+(a.risk_difference*100).toFixed(1)+' pts ['+(a.ci95[0]*100).toFixed(1)+', '+(a.ci95[1]*100).toFixed(1)+']',a.holds_after_bonferroni?'yes':'no',evidence];
+        });
         out.replaceChildren(
           el('div','Outcome in '+pct(r.outcome_rate)+' of '+Number(r.cases).toLocaleString()+' cases; '+Number(r.features_tested)+' features tested.','muted'),
-          table(['Feature','Cases with it','Outcome with','Outcome without','Difference (95% CI)','Holds after correction'],rows),
+          table(['Feature','Cases with it','Outcome with','Outcome without','Difference (95% CI)','Holds after correction','Evidence'],rows),
           el('div',r.note||'These are associations in this log, not causes. A step can be a consequence of the outcome rather than its reason.','muted'));
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
     };
