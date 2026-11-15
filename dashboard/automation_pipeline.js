@@ -2282,12 +2282,19 @@
       const generation=++handoffGeneration;
       const current=()=>generation===handoffGeneration;
       const handoff=event.detail||{},id=handoff.idea_id;
-      if(typeof id!=='string')return;
+      // Reject incomplete or synthetic navigation before any authenticated read.
+      // This client guard is not execution authorization; server preflight remains authoritative.
+      detail.replaceChildren();
+      if(typeof id!=='string'||!id||id.length>128||
+         typeof handoff.project_id!=='string'||!handoff.project_id||handoff.project_id.length>128||
+         !Number.isSafeInteger(handoff.review_revision)||handoff.review_revision<1){
+        status.textContent='Incomplete reviewed handoff. Inspect the approved project again.';
+        return;
+      }
       // Carry the exact inspected export as a navigation hint, never as approval.
       // Recheck it against the authenticated journey before opening the evidence UI.
       // Clear any previous decision surface before an asynchronous verification.
       // A rejected handoff must never leave an unrelated approval visible.
-      detail.replaceChildren();
       refresh().then(async()=>{
         if(!current())return;
         if(!handoff.project_id){await show(id);return;}
