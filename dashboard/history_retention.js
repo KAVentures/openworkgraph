@@ -181,6 +181,7 @@
     const root=document.querySelector('#reconstructionWorkbench');if(!root)return;
     root.querySelector('#reconstructionEvents').replaceChildren();
     root.querySelector('#reconstructionMetrics').textContent='';
+    root.querySelector('#reconstructionProvenance')?.remove();
     root.querySelector('#reconstructionScore').disabled=true;
     root.querySelector('#reconstructionStatus').textContent=message||'';
   }
@@ -199,6 +200,24 @@
       if(!review||!Array.isArray(review.event_reviews)||!review.evidence_sha256)
         throw new Error('Invalid reconstruction evidence');
       reconstructionEvidence=review;
+      // Display actual scan boundaries and interruption timelines as inert text.
+      // This is observed provenance, not evidence of a confirmed case.
+      const provenance=document.createElement('details');
+      provenance.id='reconstructionProvenance';
+      const summary=document.createElement('summary');
+      summary.textContent='Inspect scan coverage and identity timelines (observed, not confirmed cases)';
+      const evidence=document.createElement('pre');
+      evidence.style.whiteSpace='pre-wrap';
+      evidence.style.overflowWrap='anywhere';
+      evidence.textContent=JSON.stringify({
+        coverage:data.coverage||{},
+        identity_timelines:Array.isArray(data.identity_timelines)?data.identity_timelines:[],
+        notice:data.notice||null,
+        derived:data.derived,
+        authoritative:data.authoritative
+      },null,2);
+      provenance.append(summary,evidence);
+      root.querySelector('#reconstructionStatus').insertAdjacentElement('afterend',provenance);
       const host=root.querySelector('#reconstructionEvents');
       review.event_reviews.forEach((row,index)=>{
         const item=document.createElement('fieldset');
