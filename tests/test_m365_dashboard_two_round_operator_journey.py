@@ -301,3 +301,57 @@ def test_reviewed_commit_rejects_untrusted_success_receipt_without_retry(monkeyp
         assert "Do not retry" in str(error.value.detail)
         assert "secret-" not in str(error.value.detail)
         execute.assert_called_once()
+
+
+@pytest.mark.parametrize("route_name,adapter_name,extra,adapter_result", [
+    ("operator_reviewed_commit", "server.m365_outlook_reviewed_transaction.execute",
+     {"reviewed_csv_sha256": FIRST, **COMMIT_APPROVALS},
+     {"status": "checkpoint_committed", "generation": 1}),
+    ("operator_next_round_prepare", "server.m365_next_round_review.prepare",
+     {"expected_generation": 1, "expected_previous_candidate_sha256": FIRST,
+      **EXTRACT_APPROVALS},
+     {"status": "operator_review_required", "reviewed_csv_sha256": SECOND,
+      "proposed_generation": 2, "event_snapshots": 1,
+      "removal_markers_for_review": 0}),
+    ("operator_recovery_triage", "server.m365_outlook_recovery_triage.triage",
+     {"consent_local_read": True, "confirm_removals_reviewed": True},
+     {"status": "manual_reconciliation_required"}),
+])
+def test_dashboard_routes_use_configured_local_owg_port(
+        monkeypatch, route_name, adapter_name, extra, adapter_result):
+    """The local authenticated OWG adapter must not silently use port 8765."""
+    from server import m365_operator_audit_routes as routes
+    configure(monkeypatch)
+    monkeypatch.setenv("OWG_M365_OWG_PORT", "9876")
+    with (
+        patch("server.m365_operator_audit_routes.dashboard_session_valid", return_value=True),
+        patch(adapter_name, return_value=adapter_result) as adapter,
+    ):
+        body(getattr(routes, route_name)(request(), **extra))
+        assert adapter.call_count == 1
+        assert adapter.call_args.kwargs["port"] == 9876
+
+
+@pytest.mark.parametrize("invalid_port", ["0", "65536", "-1", "1.5", "http://host", ""])
+@pytest.mark.parametrize("route_name,adapter_name,extra", [
+    ("operator_reviewed_commit", "server.m365_outlook_reviewed_transaction.execute",
+     {"reviewed_csv_sha256": FIRST, **COMMIT_APPROVALS}),
+    ("operator_next_round_prepare", "server.m365_next_round_review.prepare",
+     {"expected_generation": 1, "expected_previous_candidate_sha256": FIRST,
+      **EXTRACT_APPROVALS}),
+    ("operator_recovery_triage", "server.m365_outlook_recovery_triage.triage",
+     {"consent_local_read": True, "confirm_removals_reviewed": True}),
+])
+def test_invalid_configured_owg_port_fails_closed_without_adapter_io(
+        monkeypatch, invalid_port, route_name, adapter_name, extra):
+    from server import m365_operator_audit_routes as routes
+    configure(monkeypatch)
+    monkeypatch.setenv("OWG_M365_OWG_PORT", invalid_port)
+    with (
+        patch("server.m365_operator_audit_routes.dashboard_session_valid", return_value=True),
+        patch(adapter_name) as adapter,
+    ):
+        with pytest.raises(HTTPException) as error:
+            getattr(routes, route_name)(request(), **extra)
+        assert error.value.status_code == 409
+        adapter.assert_not_called()
