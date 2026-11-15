@@ -150,3 +150,12 @@ def test_saved_review_read_rejects_symlink_without_reading_target(local_store, t
     local_store.symlink_to(target)
     assert store.read_saved_reconstruction_review({"mode": "all_saved"}, 1, "a" * 64) is None
     assert target.read_text() == '{"secret":"unrelated"}'
+
+
+def test_retention_revoked_between_validation_and_atomic_write(local_store, monkeypatch):
+    """A revocation during serialization must not persist reviewer labels."""
+    calls = iter([True, False])
+    monkeypatch.setattr(store, "_retention_allowed", lambda: next(calls))
+    with pytest.raises(PermissionError, match="revoked"):
+        store.save_reconstruction_review({"mode": "all_saved"}, 1, _envelope())
+    assert not local_store.exists()
