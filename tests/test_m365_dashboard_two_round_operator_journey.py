@@ -600,3 +600,25 @@ def test_identity_preflight_session_revocation_during_folder_read_refuses_succes
     assert session_valid.call_count == 3
     identity.assert_called_once()
     folder.assert_called_once()
+
+
+def test_candidate_digest_not_disclosed_if_session_revoked_during_review(monkeypatch):
+    """A read-only review cannot publish a digest after the dashboard session expires."""
+    configure(monkeypatch)
+    reviewed = {"status": "review_ready", "event_snapshots": 2,
+                "removal_markers_for_review": 0, "pages": 1,
+                "csv_sha256": FIRST}
+    with (
+        patch("server.m365_operator_audit_routes.dashboard_session_valid",
+              side_effect=[True, False]) as valid,
+        patch("server.m365_outlook_candidate_review.review",
+              return_value=reviewed) as review,
+        patch("server.m365_outlook_reviewed_transaction.execute") as commit,
+    ):
+        with pytest.raises(HTTPException) as error:
+            operator_candidate_review(request(), True)
+    assert error.value.status_code == 409
+    assert FIRST not in str(error.value.detail)
+    assert valid.call_count == 2
+    review.assert_called_once()
+    commit.assert_not_called()
