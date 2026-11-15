@@ -648,3 +648,41 @@ def test_next_round_revoked_after_adapter_refuses_candidate_disclosure(monkeypat
         assert session_valid.call_count == 2
         prepare.assert_called_once()
         commit.assert_not_called()
+
+
+def test_recovery_session_revoked_during_inventory_read_blocks_decision(monkeypatch):
+    """An in-flight local read cannot authorize a new operator phase after revocation."""
+    configure(monkeypatch)
+    with (
+        patch("server.m365_operator_audit_routes.dashboard_session_valid",
+              side_effect=[True, False]) as session,
+        patch("server.m365_outlook_recovery_triage.triage",
+              return_value={"status": "handoff_verified"}) as triage,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            operator_recovery_triage(
+                request(), consent_local_read=True,
+                confirm_removals_reviewed=True)
+    assert exc.value.status_code == 409
+    assert "handoff_verified" not in str(exc.value.detail)
+    assert session.call_count == 2
+    triage.assert_called_once()
+
+
+def test_recovery_valid_session_can_read_manual_next_action(monkeypatch):
+    configure(monkeypatch)
+    with (
+        patch("server.m365_operator_audit_routes.dashboard_session_valid",
+              return_value=True) as session,
+        patch("server.m365_outlook_recovery_triage.triage",
+              return_value={"status": "manual_reconciliation_required"}) as triage,
+    ):
+        result = body(operator_recovery_triage(
+            request(), consent_local_read=True,
+            confirm_removals_reviewed=True))
+    assert result["next_action"] == "inspect_local_evidence_and_authenticated_owg_history"
+    assert result["automatic_retry_allowed"] is False
+    assert result["checkpoint_advanced"] is False
+    assert result["owg_writes"] == 0
+    assert session.call_count == 2
+    triage.assert_called_once()
