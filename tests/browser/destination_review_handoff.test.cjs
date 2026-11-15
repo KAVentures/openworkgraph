@@ -41,7 +41,12 @@ async function scenario(name,options={}){
  assert.ok(listener);
  listener({detail:{...handoff,...options.handoff}});
  for(let i=0;i<30;i++)await Promise.resolve();
- if(options.denied||options.approved||options.handoff){
+ if(options.invalid){
+   assert.equal(shown,0,name+' must not show a decision surface');
+   assert.equal(journeyOpened,0,name+' must not open a journey');
+   assert.equal(calls.length,0,name+' must not fetch even the journey');
+   assert.match(status.textContent,/Incomplete reviewed handoff/);
+ }else if(options.denied||options.approved||options.handoff){
    assert.equal(shown,0,name+' must not show a decision surface');
    assert.equal(journeyOpened,0,name+' must not open a journey');
    assert.match(status.textContent,/Unable to open reviewed evidence|Inspect again|refused/);
@@ -61,4 +66,7 @@ async function scenario(name,options={}){
  await scenario('wrong project denied',{approved:{project_id:'other'}});
  await scenario('execution authority cannot be smuggled in',{approved:{execution_authorized:true}});
  await scenario('missing saved approval revision denied',{handoff:{review_revision:undefined}});
+ await scenario('missing project cannot open generic pipeline',{handoff:{project_id:undefined},invalid:true});
+ await scenario('synthetic empty opportunity denied before fetching',{handoff:{idea_id:''},invalid:true});
+ await scenario('oversized project identifier denied before fetching',{handoff:{project_id:'x'.repeat(129)},invalid:true});
 })().catch(e=>{console.error(e);process.exitCode=1;});
