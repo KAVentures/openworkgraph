@@ -277,3 +277,27 @@ def test_transaction_preflight_rejects_invalid_transition_without_commit(monkeyp
         assert error.value.status_code == 409
         assert "secret-" not in str(error.value.detail)
         commit.assert_not_called()
+
+
+@pytest.mark.parametrize("receipt", [
+    None,
+    {},
+    {"status": "checkpoint_committed", "generation": 0},
+    {"status": "checkpoint_committed", "generation": True},
+    {"status": "checkpoint_committed", "generation": "1"},
+    {"status": "checkpoint_committed", "generation": 1, "idempotent_replay": 1},
+    {"status": "append_succeeded", "generation": 1},
+])
+def test_reviewed_commit_rejects_untrusted_success_receipt_without_retry(monkeypatch, receipt):
+    """A malformed result after append is uncertain, never a confirmed checkpoint."""
+    configure(monkeypatch)
+    with (
+        patch("server.m365_operator_audit_routes.dashboard_session_valid", return_value=True),
+        patch("server.m365_outlook_reviewed_transaction.execute", return_value=receipt) as execute,
+    ):
+        with pytest.raises(HTTPException) as error:
+            operator_reviewed_commit(request(), FIRST, **COMMIT_APPROVALS)
+        assert error.value.status_code == 409
+        assert "Do not retry" in str(error.value.detail)
+        assert "secret-" not in str(error.value.detail)
+        execute.assert_called_once()
