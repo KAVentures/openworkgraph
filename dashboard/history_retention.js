@@ -304,7 +304,8 @@
         return;
       }
       if(!response.ok)throw new Error(result.detail||'Review scoring refused');
-      root.querySelector('#reconstructionMetrics').textContent=JSON.stringify({
+      const metrics=root.querySelector('#reconstructionMetrics');
+      metrics.textContent=JSON.stringify({
         candidate_pair_precision:result.precision,candidate_pair_recall:result.recall,candidate_pair_f1:result.f1,
         complete_case_recall_measured:result.complete_case_recall_measured,
         missed_source_events_measured:result.missed_source_events_measured,
@@ -313,6 +314,31 @@
         held_out_verified:result.held_out_verified,
         cross_case_contamination_measured:result.cross_case_contamination_measured
       },null,2);
+      // Link each scored disagreement back to its exact event/window review.
+      // Never navigate by resource similarity: interleaved cases may share
+      // resources and must not inherit one another's reviewer decisions.
+      const disagreements=Array.isArray(result.event_disagreements)?result.event_disagreements:[];
+      if(disagreements.length){
+        const navigation=document.createElement('div');
+        navigation.setAttribute('aria-label','Review event-level disagreements');
+        const heading=document.createElement('p');
+        heading.textContent=disagreements.length+' event-level disagreements (not confirmed cases)';
+        navigation.appendChild(heading);
+        disagreements.slice(0,192).forEach(item=>{
+          const index=reconstructionChoices.findIndex(choice=>
+            choice.row.window===item.window&&choice.row.event_id===item.event_id);
+          if(index<0)return;
+          const button=document.createElement('button');
+          button.type='button';
+          button.textContent='Inspect '+String(item.window)+' · '+String(item.event_id);
+          button.addEventListener('click',()=>{
+            const target=root.querySelector('#reconstructionEvents').children[index];
+            if(target){target.scrollIntoView({block:'center'});target.querySelector('input')?.focus();}
+          });
+          navigation.appendChild(button);
+        });
+        metrics.appendChild(navigation);
+      }
       root.querySelector('#reconstructionStatus').textContent='Local review scored. No case confirmed; no labels saved.';
     }catch(error){
       // Revocation or changed evidence invalidates all in-memory labels.
