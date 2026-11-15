@@ -149,7 +149,7 @@ def copy_append_keys(conn,log_id,staging,prefix):
     conn.execute('''INSERT INTO event_source_keys SELECT ?,?||s.event_id,s.source_namespace,s.source_event_id FROM event_source_keys s
         JOIN keep k ON k.event_id=s.event_id WHERE s.log_id=?''',[log_id,prefix,staging])
 
-def export_csv(conn,log_id,case_type,out):
+def export_csv(conn,log_id,case_type,out,*,spreadsheet_review=False):
     if case_type!=CASE_TYPE:raise EventLogFormatError('Choose the source_case notion for identity-preserving source CSV export')
     validate_index(conn,log_id)
     if conn.execute('''SELECT k.event_id FROM event_source_keys k
@@ -159,7 +159,9 @@ def export_csv(conn,log_id,case_type,out):
         WHERE k.log_id=? GROUP BY k.event_id,n.case_namespace
         HAVING count(DISTINCT o.object_id)!=1 OR NOT bool_and(coalesce(starts_with(o.object_id,'src:'||n.case_namespace||':'),false)) LIMIT 1''',[CASE_TYPE,log_id]).fetchone():
         raise EventLogFormatError('Source CSV requires exactly one consistent declared source case per event')
-    writer=csv.writer(out);writer.writerow(['source_namespace','source_event_id','case_namespace','case_id','activity','timestamp','resource','attributes'])
+    from shared.spreadsheet_review import review_cell
+    fields=['source_namespace','source_event_id','case_namespace','case_id','activity','timestamp','resource','attributes']
+    writer=csv.writer(out);writer.writerow([name+'_review' for name in fields] if spreadsheet_review else fields)
     cursor=conn.execute('''SELECT k.source_namespace,k.source_event_id,n.case_namespace,
         substring(o.object_id,length('src:'||n.case_namespace||':')+1),e.activity,e.ts,e.resource,e.attributes
         FROM event_source_keys k JOIN event_source_namespaces n ON n.log_id=k.log_id AND n.source_namespace=k.source_namespace
@@ -169,4 +171,5 @@ def export_csv(conn,log_id,case_type,out):
         WHERE k.log_id=? ORDER BY o.object_id,e.ts,e.event_id''',[CASE_TYPE,log_id])
     while rows:=cursor.fetchmany(10000):
         for ns,event,case,key,activity,stamp,resource,attributes in rows:
-            writer.writerow([ns,event,case,key,activity,stamp.isoformat()+'Z',resource,attributes])
+            row=[ns,event,case,key,activity,stamp.isoformat()+'Z',resource,attributes]
+            writer.writerow([review_cell(value) for value in row] if spreadsheet_review else row)

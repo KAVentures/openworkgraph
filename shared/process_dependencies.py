@@ -98,19 +98,97 @@ def topology(declarations):
             'prerequisite_first_order':ordered}
 
 
-def impact(graph,focus):
-    """Reachability/distances in the complete saved graph, not causal business impact."""
-    if focus not in graph['process_ids']:raise ValueError('Choose a process from the declared graph')
-    outgoing={node:[] for node in graph['process_ids']};incoming={node:[] for node in graph['process_ids']}
-    for edge in graph['edges']:
-        outgoing[edge['consumer']].append(edge['prerequisite']);incoming[edge['prerequisite']].append(edge['consumer'])
+MAX_EXPLAINED_PATHS = 30
+MAX_EXPLANATION_HOPS = 12
+
+
+def impact(graph, focus):
+    """Full declared reachability plus bounded, deterministic shortest-path reasons.
+
+    The existing distance lists are NOT shortened. Optional path explanations
+    expose only the already-shared structural link IDs and relationship kinds;
+    owner-entered reason text stays in the per-root declaration manifest.
+    Neither reachability nor a path establishes business causality or permission.
+    """
+    if focus not in graph["process_ids"]:
+        raise ValueError("Choose a process from the declared graph")
+    outgoing = {node: [] for node in graph["process_ids"]}
+    incoming = {node: [] for node in graph["process_ids"]}
+    for edge in graph["edges"]:
+        outgoing[edge["consumer"]].append((edge["prerequisite"], edge))
+        incoming[edge["prerequisite"]].append((edge["consumer"], edge))
+
     def reach(adjacency):
-        pending=deque([focus]);distance={focus:0}
+        pending = deque([focus])
+        distance = {focus: 0}
+        parents = {}
         while pending:
-            node=pending.popleft()
-            for neighbor in sorted(adjacency[node]):
-                if neighbor not in distance:distance[neighbor]=distance[node]+1;pending.append(neighbor)
-        return [{'workflow_id':node,'distance':distance[node]} for node in sorted(distance,key=lambda n:(distance[n],n)) if node!=focus]
-    return {'focus':focus,'prerequisites':reach(outgoing),'potential_consumers':reach(incoming),
-            'basis':'saved_human_dependency_declarations','causal_impact_verified':False,
-            'complete_business_dependencies_verified':False,'execution_authorized':False}
+            node = pending.popleft()
+            # Stable tie-breaking for diamonds and equivalent shortest routes,
+            # independent of database scan and declaration insertion order.
+            for neighbor, edge in sorted(adjacency[node], key=lambda item: (item[0], item[1]["link_id"])):
+                if neighbor not in distance:
+                    distance[neighbor] = distance[node] + 1
+                    parents[neighbor] = (node, edge)
+                    pending.append(neighbor)
+        rows = [
+            {"workflow_id": node, "distance": distance[node]}
+            for node in sorted(distance, key=lambda name: (distance[name], name))
+            if node != focus
+        ]
+        paths = []
+        withheld_for_length = 0
+        withheld_for_count = 0
+        for row in rows:
+            if len(paths) >= MAX_EXPLAINED_PATHS:
+                withheld_for_count += 1
+                continue
+            if row["distance"] > MAX_EXPLANATION_HOPS:
+                withheld_for_length += 1
+                continue
+            chain = [row["workflow_id"]]
+            edges = []
+            cursor = row["workflow_id"]
+            while cursor != focus:
+                previous, edge = parents[cursor]
+                edges.append({key: edge[key] for key in ("consumer", "prerequisite", "link_id", "relationship")})
+                chain.append(previous)
+                cursor = previous
+            chain.reverse()
+            edges.reverse()
+            paths.append({
+                "workflow_id": row["workflow_id"],
+                "distance": row["distance"],
+                "nodes_from_focus": chain,
+                "declared_links_from_focus": edges,
+            })
+        return rows, {
+            "paths": paths,
+            "matched_processes": len(rows),
+            "explained_processes": len(paths),
+            "withheld_for_path_limit": withheld_for_count,
+            "withheld_for_hop_limit": withheld_for_length,
+            "complete": not (withheld_for_count or withheld_for_length),
+        }
+
+    prerequisites, forward_paths = reach(outgoing)
+    potential_consumers, reverse_paths = reach(incoming)
+    return {
+        "focus": focus,
+        "prerequisites": prerequisites,
+        "potential_consumers": potential_consumers,
+        "declared_paths": {
+            "prerequisites": forward_paths,
+            "potential_consumers": reverse_paths,
+            "max_explanations_per_direction": MAX_EXPLAINED_PATHS,
+            "max_hops_per_explanation": MAX_EXPLANATION_HOPS,
+            "direction": "nodes_from_focus follows the selected traversal; each link retains consumer_to_prerequisite direction",
+            "basis": "saved_human_dependency_declarations",
+            "business_causality_verified": False,
+            "permissions_granted": False,
+        },
+        "basis": "saved_human_dependency_declarations",
+        "causal_impact_verified": False,
+        "complete_business_dependencies_verified": False,
+        "execution_authorized": False,
+    }
