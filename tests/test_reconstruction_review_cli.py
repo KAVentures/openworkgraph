@@ -813,5 +813,46 @@ class LiveQueueAdapterTests(unittest.TestCase):
                     object(), lease=lease, authorize_review=lambda: True)
 
 
+
+class CompletenessMetadataValidationTests(unittest.TestCase):
+    def test_malformed_top_level_and_coverage_flags_are_rejected(self):
+        for scope, field in [
+            ("source", "observed_pair_event_assignments_truncated"),
+            ("source", "observed_group_continuity_truncated"),
+            ("source", "observed_case_groups_truncated"),
+            ("coverage", "scan_truncated"),
+        ]:
+            for invalid in ("false", "true", 0, 1, None, []):
+                source = payload([pair("A", "F", ["e1"])])
+                target = source if scope == "source" else source.setdefault("coverage", {})
+                target[field] = invalid
+                with self.subTest(scope=scope, field=field, invalid=invalid):
+                    with self.assertRaisesRegex(ValueError, "completeness flag"):
+                        build_review_queue(source)
+
+    def test_malformed_pair_and_session_flags_are_rejected(self):
+        for field in ("current_evidence_truncated", "earlier_sessions_truncated"):
+            source = payload([pair("A", "F", ["e1"])])
+            source["observed_pair_event_assignments"][0][field] = "false"
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "completeness flag"):
+                build_review_queue(source)
+        source = payload([pair("A", "F", ["e1"], earlier=[{
+            "session_started_at": "2026-11-01T08:00:00+00:00",
+            "evidence_event_ids": ["earlier-e1"], "evidence_truncated": "false",
+        }])])
+        with self.assertRaisesRegex(ValueError, "completeness flag"):
+            build_review_queue(source)
+
+    def test_real_boolean_truncation_refuses_scoring(self):
+        source = payload([pair("A", "F", ["e1"])])
+        source["coverage"]["scan_truncated"] = True
+        queue = build_review_queue(source)
+        self.assertTrue(queue["coverage_incomplete"])
+        with self.assertRaisesRegex(ValueError, "incomplete source evidence"):
+            score_review_annotations(source, [{
+                "window": "current", "event_id": "e1", "true_resource_pairs": [],
+            }])
+
+
 if __name__ == "__main__":
     unittest.main()
