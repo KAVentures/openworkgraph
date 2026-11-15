@@ -13,6 +13,33 @@ Nothing is uploaded anywhere. Imported logs are written to
 `<data dir>/event_logs.duckdb` (owner-only permissions) and stay there until you
 delete them.
 
+## Try it with a sample log
+
+No export of your own yet? **Try with a sample log** stores and analyses a
+synthetic order-to-cash log (`POST /v1/event-logs/sample`). It needs the
+dashboard session and the same "store on this computer" confirmation as an
+import.
+
+**What's in it:**
+
+* 400 orders with items, deliveries, invoices and payments, as an OCEL 2.0
+  object-centric log;
+* the activity names of the order-to-cash domain pack;
+* patterns to find:
+  * waiting for payment after the invoice;
+  * order changes (rework);
+  * credit holds that add days;
+  * slower picking in the most recent orders;
+  * some invoices still unpaid.
+
+**Where it comes from:** it is generated on this computer from a fixed seed,
+so it is the same every time and contains no real customers, people or
+amounts.
+
+**How it is stored:** it is saved as *Sample: order to cash (synthetic)* and
+opened with *order* as the case notion. Asking again opens the existing
+sample rather than adding a copy. It is deleted like any other log.
+
 ## Formats
 
 | Format | Import | Export | Notes |
@@ -267,6 +294,8 @@ file to attach to an email or ticket. It holds:
   `sla_seconds`, the share of cases over the SLA;
 * the most frequent variants (15 by default; `variants` takes 1–50), with their
   share of cases and median duration;
+* **Where to look first**: the five highest-ranked automatic insights (see
+  *Where to look first* below), using the report's case filter and SLA;
 * activity frequencies;
 * the slowest transitions: the median and 90th-percentile time between one
   activity and the next, for up to 10 transitions seen in at least 3 cases
@@ -314,6 +343,34 @@ next to the HTML. The panel then shows **Changes since the previous copy**:
 copies, or the two given as `older` and `newer`. A change can come from
 appended events, an applied activity mapping or edited prices as much as from
 the process itself.
+
+## Where to look first (automatic insights)
+
+After **Analyse**, **Where to look first** lists up to six findings, ranked by the
+case time they involve. The same list comes from
+`POST /v1/event-logs/{log_id}/insights` with
+`{"limit": 8, "sla_seconds": null, "cohort": {}, "case_type": null}`.
+
+| Kind | Shown when |
+| --- | --- |
+| `slow_transition` | One step-to-step gap accounts for at least 15% of all recorded case time. |
+| `repeated_activity` | An activity recurs within at least 5% of cases. It shows the median duration with and without the repeat. |
+| `costly_detour` | Cases with a minority activity take at least 1.5× as long as the rest. |
+| `long_tail` | Always shown: the slowest tenth of cases and their share of case time. |
+| `variant_spread` | Always shown: how many paths cover 80% of cases. |
+| `slowing_down` | The newer half of cases (by start) has a median at least 1.25× the older half's. |
+| `sla_breaches` | With `sla_seconds`: the cases over that duration. |
+
+Each finding carries its numbers, the cases it touches, a caveat, and the case
+filter that reproduces it:
+
+* `cohort` for API use;
+* `follows` rules for the dashboard's case filter, so **Filter to these
+  cases** applies it to every analysis.
+
+Logs with fewer than 5 cases get no findings. Insights are descriptive: they
+show where recorded time and repetition concentrate, not why. A 300,000-event
+log takes about half a second.
 
 ## Analytics
 
@@ -928,6 +985,31 @@ and the log's events are never changed.
 
 A log keeps at most 100 tags and 200,000 tagged cases. Deleting the log deletes
 its tags. A log saved from matching cases does not copy them.
+
+## Explain a case
+
+**Explain a case** offers the five slowest cases (honouring the case notion and
+filter), or takes any case ID, and shows where that case's time went:
+
+* each step-to-step gap next to the median gap of the same transition across
+  the log;
+* the steps that took longest above typical, with their share of the case's
+  extra time;
+* activities the case repeats, and steps that fewer than 10% of cases take;
+* the case's duration against the log's median and 90th percentile.
+
+A transition that fewer than 3 cases take has no typical gap, so all of its
+time counts as above typical.
+
+API:
+
+* `POST /v1/event-logs/{log_id}/cases/explain` with `{"case_id": "…",
+  "case_type": null}`;
+* `POST /v1/event-logs/{log_id}/cases/slowest` with `{"limit": 10, "cohort":
+  {}, "case_type": null}`.
+
+Both need the dashboard session. Gaps are elapsed time between recorded
+events, not measured work or verified waiting.
 
 ## Organizational mining (handovers)
 

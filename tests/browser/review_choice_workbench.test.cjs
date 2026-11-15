@@ -8,14 +8,15 @@ class Node {
  addEventListener(k,fn){this.listeners[k]=fn;}
 }
 const basis=()=>({format:'openworkgraph.review-choices.v1',idea:{idea_id:'idea-1',revision:3,state:'approved'},process_status:'current',process_reference:{revision:1},dataset_origins:[],dataset_origin_check_available:true,project_set_sha256:'d'.repeat(64),projects_truncated:false,projects:[{project_id:'p1',idea_revision:3,spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),blockers:[],execution_authorized:false,review_required:true}],execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false});
-async function scenario(title,responses,check,withPipeline=false){
+async function scenario(title,responses,check,withPipeline=false,reviewRead=null){
  const panel=new Node('section'),pipeline=new Node('section');pipeline.scrollIntoView=()=>{};
  const doc={createElement:t=>new Node(t),getElementById:id=>id==='panel-evidence'?panel:(withPipeline&&id==='owgPipelineCard'?pipeline:null),addEventListener(k,fn){this[k]=fn;}};
  let opened=0, lastEvent=null;
- let calls=0;
+ let calls=0,reviewReads=0;
  const context={document:doc,CustomEvent:class {constructor(type,init){this.type=type;this.detail=init.detail;}},window:{__owgAuthReady:Promise.resolve(),dispatchEvent:e=>{opened++;lastEvent=e;}},fetch:async(url,options)=>{assert.equal(options.cache,'no-store');
    // The saved-review read is answered separately so scenarios keep counting their decision calls.
-   if(!options.method&&/\/review\/[^/]+$/.test(String(url)))return {ok:true,status:200,json:async()=>({project_id:'p1',revision:0,decision:'draft',reviewer_notes:'',execution_authorized:false})};
+   if(!options.method&&/\/review\/[^/]+$/.test(String(url))){const result=reviewRead?reviewRead(++reviewReads):null;return result||{ok:true,status:200,json:async()=>({project_id:'p1',revision:0,decision:'draft',reviewer_notes:'',execution_authorized:false})};}
+   if(options.method==='POST'&&/\/review$/.test(String(url))){const b=JSON.parse(options.body);const x=responses[calls++];if(x&&x.project_id)return {ok:true,status:200,json:async()=>x};calls--;return {ok:true,status:200,json:async()=>({project_id:'p1',revision:b.expected_review_revision+1,decision:b.decision,execution_authorized:false})};}
    const x=responses[calls++];if(x instanceof Error)throw x;return {ok:x.ok!==false,status:x.status||200,json:async()=>x.data||x};}};
  vm.runInNewContext(fs.readFileSync(path.resolve(__dirname,'../../dashboard/review_choice_workbench.js'),'utf8'),context);
  doc.DOMContentLoaded();
@@ -27,7 +28,7 @@ async function scenario(title,responses,check,withPipeline=false){
 }
 const getControls=results=>[results.children.find(x=>x.tagName==='select'),results.children.find(x=>x.tagName==='button')];
 (async()=>{
- await scenario('successful read-only review',[basis(),basis()],async({results,details,status,calls})=>{const [select,review]=getControls(results);assert.ok(select&&review);select.value='p1';await review.onclick();assert.equal(calls(),2);assert.match(details.children.map(x=>x.textContent).join(' '),/Specification SHA-256/);assert.match(status.textContent,/Read-only choice inspected/);});
+ await scenario('successful read-only review',[basis(),basis()],async({results,details,status,calls})=>{const [select,review]=getControls(results);assert.ok(select&&review);select.value='p1';await review.onclick();assert.equal(calls(),2);assert.match(details.children.map(x=>x.textContent).join(' '),/Specification SHA-256/);const provenance=details.children.find(x=>x.tagName==='section');assert.ok(provenance,'review must show provenance before consent');assert.equal(provenance.children[0].textContent,'Recorded workflow provenance');assert.ok(provenance.children.some(x=>x.textContent==='Workflow revision: 1'));assert.ok(provenance.children.some(x=>x.textContent==='Dataset origin records: 0'));assert.ok(provenance.children.some(x=>x.tagName==='ul'&&x.children[0].textContent==='No dataset origin linked'));assert.match(status.textContent,/Read-only choice inspected/);});
  await scenario('decision navigation rechecks server and fails closed on stale review',[basis(),basis(),
    {format:'openworkgraph.review-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
     spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),blockers:[],review_required:true,
@@ -37,6 +38,7 @@ const getControls=results=>[results.children.find(x=>x.tagName==='select'),resul
    const confirm=details.children.find(x=>x.textContent==='Revalidate review basis on server');
    assert.ok(confirm);await confirm.onclick();
    const proceed=details.children.find(x=>x.textContent==='Open opportunity decision and handoff');
+   await Promise.resolve();await Promise.resolve();await details.children.find(x=>x.textContent==='Approve reviewed choice').onclick();
    assert.ok(proceed);const consent=details.children.find(x=>x.tagName==='label'&&x.children.some(y=>y.tagName==='input'))?.children.find(x=>x.tagName==='input');assert.ok(consent);assert.equal(proceed.disabled,true);consent.checked=true;consent.listeners.change();await proceed.onclick();
    assert.equal(calls(),4);assert.equal(opened(),0);
    assert.equal(results.children.length,0);assert.match(status.textContent,/Decision review expired/);
@@ -47,7 +49,7 @@ const getControls=results=>[results.children.find(x=>x.tagName==='select'),resul
     execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false},
    // The decision handoff now requires a durable human approval (reviewed-handoff preflight).
    {format:'openworkgraph.reviewed-handoff-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
-    spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),review_revision:0,human_review_approved:true,
+    spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),review_revision:1,human_review_approved:true,
     execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false}],
    async({results,details,opened,lastEvent,calls})=>{
      const [select,review]=getControls(results);select.value='p1';await review.onclick();
@@ -57,11 +59,15 @@ const getControls=results=>[results.children.find(x=>x.tagName==='select'),resul
      assert.ok(consent,'explicit inspection consent must be visible');
      assert.equal(proceed.disabled,true,'navigation is disabled without consent');
      await proceed.onclick();assert.equal(opened(),0,'programmatic click cannot bypass consent');
+     await Promise.resolve();await Promise.resolve();
+     assert.equal(proceed.disabled,true,'consent alone cannot bypass durable approval');
+     await details.children.find(x=>x.textContent==='Approve reviewed choice').onclick();
      consent.checked=true;consent.listeners.change();assert.equal(proceed.disabled,false);
      await proceed.onclick();
      assert.equal(calls(),4);assert.equal(opened(),1);
      assert.equal(lastEvent().type,'owg-pipeline-open');
      assert.equal(lastEvent().detail.idea_revision,3);
+     assert.equal(lastEvent().detail.review_revision,1,'destination receives exact server-approved review revision');
      assert.equal(lastEvent().detail.idea_state,basis().idea.state,'handoff must pin inspected opportunity state');
      assert.equal(lastEvent().detail.project_id,'p1');
      assert.equal(lastEvent().detail.review_basis.project_set_sha256,'d'.repeat(64));
@@ -72,6 +78,114 @@ const getControls=results=>[results.children.find(x=>x.tagName==='select'),resul
      assert.equal(lastEvent().detail.archive_sha256,'b'.repeat(64));
    },true);
 
+
+ // Consent withdrawn during the authenticated handoff request must invalidate
+ // that request even if the checkbox is reselected before the server replies.
+ {
+   let finish;
+   const pending=new Promise(resolve=>{finish=resolve;});
+   const preflight={format:'openworkgraph.review-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
+     spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),blockers:[],review_required:true,
+     execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false};
+   const handoff={format:'openworkgraph.reviewed-handoff-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
+     spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),review_revision:1,human_review_approved:true,
+     execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false};
+   await scenario('withdrawn and rechecked consent invalidates in-flight handoff',
+     [basis(),basis(),preflight,{data:pending}],async({results,details,opened,status})=>{
+       const [select,review]=getControls(results);select.value='p1';await review.onclick();
+       await details.children.find(x=>x.textContent==='Revalidate review basis on server').onclick();
+       await Promise.resolve();await Promise.resolve();
+       await details.children.find(x=>x.textContent==='Approve reviewed choice').onclick();
+       const consent=details.children.find(x=>x.tagName==='label'&&x.children.some(y=>y.tagName==='input')).children.find(x=>x.tagName==='input');
+       const proceed=details.children.find(x=>x.textContent==='Open opportunity decision and handoff');
+       consent.checked=true;consent.listeners.change();
+       const inFlight=proceed.onclick();
+       await Promise.resolve();await Promise.resolve();
+       consent.checked=false;consent.listeners.change();
+       consent.checked=true;consent.listeners.change();
+       finish(handoff);await inFlight;
+       assert.equal(opened(),0,'rechecked consent cannot revive an in-flight request');
+       assert.match(status.textContent,/Decision review expired/);
+     },true);
+ }
+ // A delayed JSON body must not revive a handoff after the operator switches
+ // opportunity, even when the HTTP status was already accepted.
+ {
+   let finishBody;
+   const delayedBody=new Promise(resolve=>{finishBody=resolve;});
+   const preflight={format:'openworkgraph.review-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
+     spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),blockers:[],review_required:true,
+     execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false};
+   const handoff={format:'openworkgraph.reviewed-handoff-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
+     spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),review_revision:1,human_review_approved:true,
+     execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false};
+   await scenario('selection changed while handoff body parses cannot navigate',
+     [basis(),basis(),preflight,{data:delayedBody}],async({input,results,details,opened})=>{
+       const [select,review]=getControls(results);select.value='p1';await review.onclick();
+       await details.children.find(x=>x.textContent==='Revalidate review basis on server').onclick();
+       await Promise.resolve();await Promise.resolve();
+       await details.children.find(x=>x.textContent==='Approve reviewed choice').onclick();
+       const consent=details.children.find(x=>x.tagName==='label'&&x.children.some(y=>y.tagName==='input')).children.find(x=>x.tagName==='input');
+       const proceed=details.children.find(x=>x.textContent==='Open opportunity decision and handoff');
+       consent.checked=true;consent.listeners.change();
+       const pending=proceed.onclick();
+       await Promise.resolve();await Promise.resolve();
+       input.value='another-idea';input.listeners.input();
+       finishBody(handoff);await pending;
+       assert.equal(opened(),0,'obsolete response body cannot navigate after selection changes');
+     },true);
+ }
+ // A malformed save receipt cannot be treated as an approved, durable decision.
+ // Reload the authoritative review revision instead of trusting a response
+ // that echoes the wrong decision or a non-monotonic revision.
+ for(const [label,receipt] of [
+   ['wrong decision',{decision:'draft',revision:1}],
+   ['non-monotonic revision',{decision:'approved',revision:0}],
+   ['missing revision',{decision:'approved'}]
+ ]){
+   await scenario('reject '+label+' in saved approval receipt',[
+     basis(),basis(),
+     {format:'openworkgraph.review-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
+       spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),blockers:[],review_required:true,
+       execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false},
+     {project_id:'p1',execution_authorized:false,...receipt}
+   ],async({results,details,opened})=>{
+     const [select,review]=getControls(results);select.value='p1';await review.onclick();
+     await details.children.find(x=>x.textContent==='Revalidate review basis on server').onclick();
+     // Saved-review GET is the authoritative draft (revision zero).
+     await Promise.resolve();await Promise.resolve();
+     const approve=details.children.find(x=>x.textContent==='Approve reviewed choice');
+     const state=details.children.find(x=>x.tagName==='p'&&/Saved review:/.test(x.textContent));
+     assert.ok(approve);assert.ok(state);assert.equal(approve.disabled,false);
+     await approve.onclick();
+     assert.match(state.textContent,/Saved review: draft/);
+     assert.doesNotMatch(state.textContent,/Saved approved/);
+     assert.equal(opened(),0);
+   },true);
+ }
+ // A failed save followed by denied authoritative refresh must not reuse
+ // an earlier approved state, even if the operator checks consent again.
+ await scenario('denied review refresh cannot resurrect prior approval',[
+   basis(),basis(),
+   {format:'openworkgraph.review-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
+     spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),blockers:[],review_required:true,
+     execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false},
+   {project_id:'p1',decision:'draft',revision:2,execution_authorized:false}
+ ],async({results,details,opened})=>{
+   const [select,review]=getControls(results);select.value='p1';await review.onclick();
+   await details.children.find(x=>x.textContent==='Revalidate review basis on server').onclick();
+   await Promise.resolve();await Promise.resolve();
+   const approve=details.children.find(x=>x.textContent==='Approve reviewed choice');
+   const consent=details.children.find(x=>x.tagName==='label'&&x.children.some(y=>y.tagName==='input'))?.children.find(x=>x.tagName==='input');
+   const proceed=details.children.find(x=>x.textContent==='Open opportunity decision and handoff');
+   assert.equal(proceed.disabled,true);
+   await approve.onclick();
+   consent.checked=true;consent.listeners.change();
+   assert.equal(proceed.disabled,true,'unverified review must never enable handoff');
+   await proceed.onclick();assert.equal(opened(),0);
+ },true,(read)=>read===1?
+   {ok:true,status:200,json:async()=>({project_id:'p1',revision:1,decision:'approved',reviewer_notes:'',execution_authorized:false})}:
+   {ok:false,status:403,json:async()=>({})});
  // A server response approving another revision or export must never open a handoff.
  for(const [label,override] of [
    ['different review revision',{review_revision:1}],
@@ -84,7 +198,7 @@ const getControls=results=>[results.children.find(x=>x.tagName==='select'),resul
      spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),blockers:[],review_required:true,
      execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false};
    const handoff={format:'openworkgraph.reviewed-handoff-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
-     spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),review_revision:0,human_review_approved:true,
+     spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),review_revision:1,human_review_approved:true,
      execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false,...override};
    await scenario('handoff denies '+label,[basis(),basis(),preflight,handoff],async({results,details,opened,status})=>{
      const [select,review]=getControls(results);select.value='p1';await review.onclick();
@@ -94,6 +208,9 @@ const getControls=results=>[results.children.find(x=>x.tagName==='select'),resul
      assert.ok(consent,'explicit inspection consent must be visible');
      assert.equal(proceed.disabled,true,'navigation is disabled without consent');
      await proceed.onclick();assert.equal(opened(),0,'programmatic click cannot bypass consent');
+     await Promise.resolve();await Promise.resolve();
+     assert.equal(proceed.disabled,true,'consent alone cannot bypass durable approval');
+     await details.children.find(x=>x.textContent==='Approve reviewed choice').onclick();
      consent.checked=true;consent.listeners.change();assert.equal(proceed.disabled,false);
      await proceed.onclick();
      assert.equal(opened(),0,'stale review or export must not navigate');

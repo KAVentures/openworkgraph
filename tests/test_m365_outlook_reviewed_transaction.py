@@ -91,6 +91,20 @@ class ReviewedTransactionTests(unittest.TestCase):
             append.assert_not_called()
             commit.assert_not_called()
 
+    def test_preflight_refuses_checkpoint_change_during_review(self):
+        values = inputs(expected_previous_candidate_sha256="b" * 64)
+        allowed = ("tenant", "mailbox", "folder", "log_id", "confirm_log_id",
+                   "grant_file", "candidate", "ledger_dir", "expected_review_csv_sha256",
+                   "expected_previous_candidate_sha256", "consent_local_read")
+        old = {"candidate_sha256": "b" * 64, "log_id": "log", "generation": 3}
+        new = {"candidate_sha256": "c" * 64, "log_id": "log", "generation": 4}
+        with patch.object(tx.cycle, "review", return_value={"csv_sha256": DIGEST}), \
+             patch.object(tx, "inspect_checkpoint", side_effect=[old, new]), \
+             patch.object(tx.cycle, "append") as append:
+            with self.assertRaisesRegex(ReceiptError, "Checkpoint changed"):
+                tx.preflight(**{k: values[k] for k in allowed})
+            append.assert_not_called()
+
     def test_read_only_preflight_surfaces_bounded_review_summary(self):
         values = inputs()
         allowed = ("tenant", "mailbox", "folder", "log_id", "confirm_log_id",
