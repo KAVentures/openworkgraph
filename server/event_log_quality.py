@@ -285,8 +285,16 @@ def record(conn, log_id: str, *, batch: int, kind: str, source_format: str, mapp
 
 def _stored_batch_history(conn, log_id: str) -> dict[str, Any]:
     """Read retained batch metadata without recomputing whole-log diagnostics."""
-    reports = [json.loads(row[0]) for row in conn.execute(
-        "SELECT report FROM log_quality WHERE log_id = ? ORDER BY batch", [log_id]).fetchall()]
+    reports = []
+    for (raw,) in conn.execute(
+            "SELECT report FROM log_quality WHERE log_id = ? ORDER BY batch", [log_id]).fetchall():
+        try:
+            report = json.loads(raw)
+        except (TypeError, ValueError):
+            continue  # Corrupt metadata is missing evidence, never a valid report.
+        if (isinstance(report, dict) and type(report.get("batch")) is int
+                and report["batch"] >= 0):
+            reports.append(report)
     batches = [0] + [row[0] for row in conn.execute(
         "SELECT batch FROM log_appends WHERE log_id = ? ORDER BY batch", [log_id]).fetchall()]
     present = {report["batch"] for report in reports}
@@ -327,7 +335,22 @@ def quality(log_id: str) -> dict[str, Any]:
                                if info.get('source_identity') else {})
         finally:
             conn.close()
-    return {"log": info, **_with_batch_trends(history),
+    reports = history["reports"]
+    missing = history["batches_without_report"]
+    integrity = {"status": "not_verifiable", "reason": "historical_batches_or_missing_report"}
+    if not missing and len(reports) == 1 and reports[0].get("batch") == 0:
+        expected = reports[0].get("content_sha256_v2")
+        if (isinstance(expected, str) and len(expected) == 64
+                and all(c in "0123456789abcdef" for c in expected)):
+            integrity = {
+                "status": "verified" if expected == digest_v2 else "mismatch",
+                "algorithm": "content_sha256_v2",
+                "reason": ("current_saved_content_matches_import_report" if expected == digest_v2
+                           else "current_saved_content_differs_from_import_report"),
+            }
+        else:
+            integrity = {"status": "not_verifiable", "reason": "legacy_or_invalid_digest"}
+    return {"log": info, **_with_batch_trends(history), "integrity": integrity,
             "current": {"content_sha256": digest, "content_sha256_v2": digest_v2,
                         "diagnostics": current, **identity_digest, **relationship_metadata,
                         "completeness": {"historical_completeness": "unknown", "note": COMPLETENESS_NOTE}},
