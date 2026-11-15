@@ -355,3 +355,70 @@ def test_invalid_configured_owg_port_fails_closed_without_adapter_io(
             getattr(routes, route_name)(request(), **extra)
         assert error.value.status_code == 409
         adapter.assert_not_called()
+
+
+@pytest.mark.parametrize("status,next_action", [
+    ("receipt_verified", "operator_may_separately_prepare_handoff"),
+    ("handoff_verified", "operator_may_separately_authorize_next_extraction"),
+    ("manual_reconciliation_required", "inspect_local_evidence_and_authenticated_owg_history"),
+])
+def test_recovery_triage_exposes_only_reviewed_manual_next_action(
+        monkeypatch, status, next_action):
+    """Authenticated readback is advisory, never a second append or checkpoint."""
+    from server import m365_operator_audit_routes as routes
+    configure(monkeypatch)
+    with (
+        patch.object(routes, "dashboard_session_valid", return_value=True),
+        patch("server.m365_outlook_recovery_triage.triage",
+              return_value={"status": status, "token": "secret-token"}) as triage,
+        patch("server.m365_outlook_reviewed_transaction.execute") as commit,
+    ):
+        result = body(routes.operator_recovery_triage(
+            request(), consent_local_read=True, confirm_removals_reviewed=True))
+    assert result["next_action"] == next_action
+    assert result["automatic_retry_allowed"] is False
+    assert result["checkpoint_advanced"] is False
+    assert result["owg_writes"] == 0
+    assert result["provider_requests"] == 0
+    triage.assert_called_once()
+    commit.assert_not_called()
+
+
+@pytest.mark.parametrize("receipt", [
+    None, [], "receipt_verified", {}, {"status": "unknown"},
+    {"status": None}, {"status": 1},
+])
+def test_recovery_triage_refuses_malformed_receipt_without_retry(monkeypatch, receipt):
+    from server import m365_operator_audit_routes as routes
+    configure(monkeypatch)
+    with (
+        patch.object(routes, "dashboard_session_valid", return_value=True),
+        patch("server.m365_outlook_recovery_triage.triage", return_value=receipt) as triage,
+        patch("server.m365_outlook_reviewed_transaction.execute") as commit,
+    ):
+        with pytest.raises(HTTPException) as error:
+            routes.operator_recovery_triage(
+                request(), consent_local_read=True, confirm_removals_reviewed=True)
+    assert error.value.status_code == 409
+    assert "Do not retry" in str(error.value.detail)
+    triage.assert_called_once()
+    commit.assert_not_called()
+
+
+@pytest.mark.parametrize("consent_local_read,confirm_removals_reviewed", [
+    (False, False), (False, True), (True, False),
+])
+def test_recovery_triage_requires_independent_approvals_before_io(
+        monkeypatch, consent_local_read, confirm_removals_reviewed):
+    from server import m365_operator_audit_routes as routes
+    configure(monkeypatch)
+    with (
+        patch.object(routes, "dashboard_session_valid", return_value=True),
+        patch("server.m365_outlook_recovery_triage.triage") as triage,
+        pytest.raises(HTTPException) as error,
+    ):
+        routes.operator_recovery_triage(
+            request(), consent_local_read=consent_local_read,
+            confirm_removals_reviewed=confirm_removals_reviewed)
+    assert error.value.status_code == 403
+    triage.assert_not_called()
