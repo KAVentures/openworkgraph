@@ -3044,15 +3044,31 @@
         d.attribute_coverage_truncated===false&&totalKeys!==null?
         'Showing all '+totalKeys.toLocaleString()+' attribute keys in the supplied rows.':
         'Showing up to '+coverage.length.toLocaleString()+' attribute keys; whether more were omitted was not recorded (legacy server).';
-      const reports=r.reports.map(p=>[p.batch===0?'Import':'Append '+p.batch,p.transform.format,Number(p.rows.accepted).toLocaleString(),
-        Number(p.rows.rejected).toLocaleString()+(p.rows.rejected?' ('+reasonText(p.rows.rejected_by_reason)+')':''),
-        p.rows.duplicates_skipped_on_append===undefined?'—':Number(p.rows.duplicates_skipped_on_append).toLocaleString(),
-        el('code',short(p.transform.transform_sha256)),el('code',short(p.content_sha256)),el('code',short(p.content_sha256_v2))]);
-      const mapping=(r.reports[0]&&r.reports[0].transform.mapping)||{};
+      // Recovered or legacy report rows can lack metadata. Never hide the integrity
+      // verdict because a damaged historical report cannot populate this table.
+      const reports=(Array.isArray(r.reports)?r.reports:[]).map(p=>{
+        const report=p&&typeof p==='object'?p:{};
+        const transform=report.transform&&typeof report.transform==='object'?report.transform:{};
+        const rows=report.rows&&typeof report.rows==='object'?report.rows:{};
+        const count=v=>Number.isSafeInteger(v)&&v>=0?v.toLocaleString():'—';
+        return [report.batch===0?'Import':Number.isSafeInteger(report.batch)?'Append '+report.batch:'Unknown batch',
+          transform.format||'—',count(rows.accepted),count(rows.rejected)+(rows.rejected?' ('+reasonText(rows.rejected_by_reason)+')':''),
+          rows.duplicates_skipped_on_append===undefined?'—':count(rows.duplicates_skipped_on_append),
+          el('code',short(transform.transform_sha256)),el('code',short(report.content_sha256)),el('code',short(report.content_sha256_v2))];
+      });
+      const mapping=(r.reports&&r.reports[0]&&r.reports[0].transform&&r.reports[0].transform.mapping)||{};
+      const integrity=r.integrity&&typeof r.integrity==='object'?r.integrity:{};
+      const integrityLabel=integrity.status==='verified'?'Verified: current saved content matches the recorded import digest.':
+        integrity.status==='mismatch'?'Mismatch: saved content differs from the recorded import digest. Investigate before relying on this log.':
+        'Not verifiable: the available reports cannot establish current saved-content integrity.';
+      const integrityStatus=el('p',integrityLabel,'muted');integrityStatus.id='owgQualityIntegrity';
+      integrityStatus.setAttribute('role','status');
+      integrityStatus.dataset.status=['verified','mismatch'].includes(integrity.status)?integrity.status:'not_verifiable';
       const mapRows=mapping.case_column!==undefined?[['Case column',mapping.case_column],['Activity column',mapping.activity_column],['Timestamp column',mapping.timestamp_column],['Resource column',mapping.resource_column||'(none)'],['Extra columns kept',(mapping.attribute_columns||[]).join(', ')||'(none)'],['Mapping version',mapping.mapping_version]]:[['Standard',mapping.standard||'—'],['Mapping version',mapping.mapping_version||'—']];
       if(mapping.source_identity)for(const [key,value] of Object.entries(mapping.source_identity))if(value)mapRows.push(['Source identity: '+key,value]);
       out.replaceChildren(
         ...(r.log.source_identity?[el('p','Source-ID deduplication compares declared namespace and supplied event ID. The content-duplicate diagnostic below compares payloads; distinct source IDs with identical payloads remain separate events. Neither establishes verified provider identity or complete history.')]:[]),
+        integrityStatus,
         table(['Batch','Format','Accepted','Rejected','Duplicates skipped','Transform','Content v1','Content v2'],reports),
         ...(r.batches_without_report.length?[el('div','No report was stored for '+r.batches_without_report.map(b=>b?'append '+b:'the import').join(', ')+' (imported before reports existed, or the report could not be written).','muted')]:[]),
         table(['Mapping',''],mapRows),
