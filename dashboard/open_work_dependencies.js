@@ -61,6 +61,18 @@
     dossierForm.append(dossierLabel, scanLabel, dossierButton);
     card.append(dossierForm, dossierStatus, dossierResults);
     let dossierRequest = null;
+    // Withdrawal is effective immediately in this view, including while the
+    // declaration lookup or source scan is pending. Server-side grants remain
+    // independently enforced by the authenticated route.
+    scanConsent.addEventListener('change', () => {
+      if (!scanConsent.checked && dossierRequest) {
+        dossierRequest.abort();
+        dossierRequest = null;
+        dossierButton.disabled = false;
+        dossierResults.replaceChildren();
+        dossierStatus.textContent = 'Source read approval withdrawn; no result displayed.';
+      }
+    });
     dossierForm.addEventListener('submit', async event => {
       event.preventDefault();
       if (dossierRequest) dossierRequest.abort();
@@ -76,7 +88,7 @@
       dossierRequest = controller;
       dossierButton.disabled = true;
       dossierStatus.textContent = 'Checking current declaration and authorization…';
-      const current = () => dossierRequest === controller && !controller.signal.aborted;
+      const current = () => dossierRequest === controller && !controller.signal.aborted && scanConsent.checked;
       const show = value => {
         const item = document.createElement('li');
         item.textContent = value;
@@ -127,12 +139,49 @@
             dossier.declared_prerequisite_count < 0) {
           throw new Error('unexpected dossier response');
         }
+        // Treat the complete server projection as untrusted before rendering.
+        const prereqs = dossier.declared_prerequisites;
+        const observations = dossier.retained_observation_summary;
+        const validRef = value => typeof value === 'string' && /^owg:w:[0-9a-f]{32}$/.test(value);
+        const validRecord = value => typeof value === 'string' && /^owg:r:[0-9a-f]{32}$/.test(value);
+        const validCount = value => Number.isSafeInteger(value) && value >= 0 && value <= 10000000;
+        if (!Array.isArray(prereqs) || prereqs.length !== dossier.declared_prerequisite_count ||
+            prereqs.length > 10000 || !prereqs.every(p => p && validRef(p.work_item_ref) &&
+              Number.isSafeInteger(p.revision) && p.revision >= 1 &&
+              p.provenance === 'explicit_owner_declaration_not_source_verified' &&
+              p.expected_outcome_verified === false &&
+              p.source_state === 'unknown_until_explicit_recheck') ||
+            !Array.isArray(observations) || observations.length > 8 ||
+            !observations.every(o => o && validRecord(o.resource_ref) &&
+              ['observed_event_count','observed_session_count','observed_actor_count'].every(k => validCount(o[k])) &&
+              o.observed_not_verified_handoff === true) ||
+            dossier.business_obligation_verified !== false ||
+            dossier.absence_of_observation_proves_no_work !== false ||
+            source.provider_status_not_customer_outcome !== true ||
+            !['open','unknown'].includes(source.state) ||
+            (source.availability === 'unknown' && source.state !== 'unknown')) {
+          throw new Error('invalid case evidence projection');
+        }
         dossierStatus.textContent = 'Case reviewed. Provider status is not business success.';
         show('Owner goal: ' + String(dossier.owner_declaration?.goal_code || 'unknown').slice(0,80));
         show('Expected outcome: ' + String(dossier.owner_declaration?.expected_outcome_code || 'unknown').slice(0,80));
         show('Reviewed prerequisites: ' + dossier.declared_prerequisite_count);
+        prereqs.forEach(p => show('Prerequisite ' + p.work_item_ref +
+          ' (revision ' + p.revision + '): owner-declared; outcome unverified'));
+        show('Retained observation references: ' + observations.length +
+          ' (observations are not verified handoffs)');
+        observations.forEach(o => show('Observed record ' + o.resource_ref +
+          ': ' + o.observed_event_count + ' events, ' + o.observed_session_count +
+          ' sessions; not proof of outcome'));
         show('Provider status: ' + (source.availability === 'source_reported' && source.state === 'open'
           ? 'open (source-reported)' : 'unknown'));
+        if (source.availability === 'unknown') {
+          show('Source unavailable or incomplete: ' +
+            String(source.reason || 'unknown').slice(0,80));
+        } else {
+          show('Source checked at: ' + String(source.verified_at || 'unknown').slice(0,40) +
+            '; inventory complete: ' + (source.bounded_inventory_complete === true ? 'yes' : 'no'));
+        }
         show('Customer outcome: unknown; no agent action authorized.');
       } catch (_) {
         if (current()) dossierStatus.textContent =
