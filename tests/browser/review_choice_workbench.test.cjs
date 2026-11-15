@@ -28,6 +28,61 @@ async function scenario(title,responses,check,withPipeline=false,reviewRead=null
 }
 const getControls=results=>[results.children.find(x=>x.tagName==='select'),results.children.find(x=>x.tagName==='button')];
 (async()=>{
+ // First-time review must accept the real API's unreviewed/revision-zero state.
+ await scenario('first unreviewed review can be approved only after explicit consent',[
+   basis(),basis(),
+   {format:'openworkgraph.review-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
+    spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),blockers:[],review_required:true,
+    execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false},
+   {format:'openworkgraph.reviewed-handoff-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
+    spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),review_revision:1,human_review_approved:true,
+    execution_authorized:false,source_read_authorized:false}
+ ],async({results,details,opened,lastEvent})=>{
+   const [select,review]=getControls(results);select.value='p1';await review.onclick();
+   await details.children.find(x=>x.textContent==='Revalidate review basis on server').onclick();
+   await Promise.resolve();await Promise.resolve();
+   const approve=details.children.find(x=>x.textContent==='Approve reviewed choice');
+   const state=details.children.find(x=>x.tagName==='p'&&/Saved review:/.test(x.textContent));
+   const consent=details.children.find(x=>x.tagName==='label'&&x.children.some(y=>y.tagName==='input')).children.find(x=>x.tagName==='input');
+   const proceed=details.children.find(x=>x.textContent==='Open opportunity decision and handoff');
+   assert.match(state.textContent,/unreviewed \(revision 0\)/);
+   assert.equal(approve.disabled,false);
+   assert.equal(proceed.disabled,true);
+   await approve.onclick();
+   assert.match(state.textContent,/Saved approved at revision 1/);
+   assert.equal(proceed.disabled,true,'approval alone is not consent');
+   consent.checked=true;consent.listeners.change();
+   await proceed.onclick();
+   assert.equal(opened(),1);
+   assert.equal(lastEvent().detail.review_revision,1);
+ },true,()=>({ok:true,status:200,json:async()=>({project_id:'p1',revision:0,decision:'unreviewed',reviewer_notes:'',execution_authorized:false})}));
+ // Editing notes while an approval is in flight must not authorize the newer text.
+ {
+   await scenario('in-flight edited notes cannot inherit earlier approval',[
+     basis(),basis(),
+     {format:'openworkgraph.review-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
+      spec_sha256:'a'.repeat(64),archive_sha256:'b'.repeat(64),blockers:[],review_required:true,
+      execution_authorized:false,source_read_authorized:false,verified_business_outcomes:false},
+     {project_id:'p1',revision:1,decision:'approved',execution_authorized:false}
+   ],async({results,details,opened})=>{
+     const [select,review]=getControls(results);select.value='p1';await review.onclick();
+     await details.children.find(x=>x.textContent==='Revalidate review basis on server').onclick();
+     await Promise.resolve();await Promise.resolve();
+     const notes=details.children.find(x=>x.tagName==='textarea');
+     const approve=details.children.find(x=>x.textContent==='Approve reviewed choice');
+     const state=details.children.find(x=>x.tagName==='p'&&/Saved review:/.test(x.textContent));
+     const consent=details.children.find(x=>x.tagName==='label'&&x.children.some(y=>y.tagName==='input')).children.find(x=>x.tagName==='input');
+     const proceed=details.children.find(x=>x.textContent==='Open opportunity decision and handoff');
+     notes.value='approved version';notes.listeners.input();
+     const saving=approve.onclick();
+     notes.value='edited while pending';notes.listeners.input();
+     await saving;
+     assert.match(state.textContent,/notes changed during save/);
+     consent.checked=true;consent.listeners.change();
+     assert.equal(proceed.disabled,true,'unsaved notes cannot be passed as approved');
+     await proceed.onclick();assert.equal(opened(),0);
+   },true);
+ }
  await scenario('successful read-only review',[basis(),basis()],async({results,details,status,calls})=>{const [select,review]=getControls(results);assert.ok(select&&review);select.value='p1';await review.onclick();assert.equal(calls(),2);assert.match(details.children.map(x=>x.textContent).join(' '),/Specification SHA-256/);const provenance=details.children.find(x=>x.tagName==='section');assert.ok(provenance,'review must show provenance before consent');assert.equal(provenance.children[0].textContent,'Recorded workflow provenance');assert.ok(provenance.children.some(x=>x.textContent==='Workflow revision: 1'));assert.ok(provenance.children.some(x=>x.textContent==='Dataset origin records: 0'));assert.ok(provenance.children.some(x=>x.tagName==='ul'&&x.children[0].textContent==='No dataset origin linked'));assert.match(status.textContent,/Read-only choice inspected/);});
  await scenario('decision navigation rechecks server and fails closed on stale review',[basis(),basis(),
    {format:'openworkgraph.review-preflight.v1',idea_id:'idea-1',idea_revision:3,project_id:'p1',project_set_sha256:'d'.repeat(64),
@@ -301,6 +356,35 @@ const getControls=results=>[results.children.find(x=>x.tagName==='select'),resul
    await pending;
    assert.match(status.textContent,/IDs changed/);
    console.log('PASS recovery identity change during revoke');
+ }
+ // Revocation HTTP headers can arrive before its JSON body. Switching recovery IDs
+ // while that body is pending must not apply the old review's receipt.
+ {
+   const panel=new Node('section');
+   const doc={createElement:t=>new Node(t),getElementById:id=>id==='panel-evidence'?panel:null,
+     addEventListener(k,fn){this[k]=fn;}};
+   let finishBody;
+   const bodyPending=new Promise(resolve=>{finishBody=resolve;});
+   const context={document:doc,window:{__owgAuthReady:Promise.resolve()},fetch:async(url,options)=>{
+     if(options.method==='POST')return {ok:true,json:()=>bodyPending};
+     return {ok:true,json:async()=>({format:'openworkgraph.human-review.v1',
+       idea_id:'idea-1',project_id:'p1',revision:2,decision:'approved',execution_authorized:false})};
+   }};
+   vm.runInNewContext(fs.readFileSync(path.resolve(__dirname,'../../dashboard/review_choice_workbench.js'),'utf8'),context);
+   doc.DOMContentLoaded();
+   const recovery=panel.children[0].children.at(-1);
+   const [ideaLabel,projectLabel,load,revoke,status]=recovery.children.slice(2);
+   const idea=ideaLabel.children[0],project=projectLabel.children[0];
+   idea.value='idea-1';project.value='p1';await load.onclick();
+   const pending=revoke.onclick();
+   await Promise.resolve();await Promise.resolve();await Promise.resolve();
+   project.value='p2';project.listeners.input();
+   assert.equal(load.disabled,false);
+   finishBody({idea_id:'idea-1',project_id:'p1',revision:3,decision:'revoked',execution_authorized:false});
+   await pending;
+   assert.match(status.textContent,/IDs changed/,'obsolete JSON body must not overwrite current recovery state');
+   assert.equal(revoke.disabled,true);
+   console.log('PASS delayed recovery revoke body respects changed identity');
  }
  await scenario('stale revision invalidates choice',[basis(),{...basis(),idea:{...basis().idea,revision:4}}],async({results,details,status})=>{const [select,review]=getControls(results);select.value='p1';await review.onclick();assert.equal(review.disabled,true);assert.equal(results.children.length,0);assert.equal(details.children.length,0);assert.match(status.textContent,/Review basis changed/);});
  await scenario('403 denies review and clears choice',[basis(),{ok:false,status:403}],async({results,details,status})=>{const [select,review]=getControls(results);select.value='p1';await review.onclick();assert.equal(review.disabled,true);assert.equal(results.children.length,0);assert.equal(details.children.length,0);assert.match(status.textContent,/Review failed/);});
