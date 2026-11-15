@@ -200,6 +200,10 @@ def operator_checkpoint(request: Request, consent_local_read: bool = False):
     except (OSError, ValueError, TypeError, KeyError):
         # Revoked/expired grants and corrupt ledger entries are not empty state.
         raise HTTPException(409, "Checkpoint or current grant unavailable; manual review required") from None
+    # A revoked dashboard session must not disclose checkpoint generation
+    # after potentially slow private ledger/grant inspection.
+    if not dashboard_session_valid(authorization[len("owg-session "):].strip()):
+        raise HTTPException(409, "Dashboard session changed during checkpoint inspection; reauthenticate and review manually")
     return JSONResponse({
         "format": "openworkgraph.m365-dashboard-checkpoint.v1",
         "configured": True, "checkpoint_present": entry is not None,
