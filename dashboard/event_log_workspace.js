@@ -80,7 +80,7 @@
     return response;
   }
   const getJSON=async path=>(await api(path)).json();
-  const logPath=(suffix,params)=>{const q=new URLSearchParams();for(const [key,value] of Object.entries(params||{})){if(Array.isArray(value))value.forEach(v=>q.append(key,v));else q.set(key,value);}if(state.caseType)q.set('case_type',state.caseType);if(state.follows.length&&FILTERED.has(suffix))q.set('follows',JSON.stringify(state.follows));const s=q.toString();return '/v1/event-logs/'+encodeURIComponent(state.logId)+'/'+suffix+(s?'?'+s:'');};
+  const logPath=(suffix,params)=>{const q=new URLSearchParams();for(const [key,value] of Object.entries(params||{})){if(key==='attribute_range')q.set(key,JSON.stringify(value));else if(Array.isArray(value))value.forEach(v=>q.append(key,v));else q.set(key,value);}if(state.caseType)q.set('case_type',state.caseType);if(state.follows.length&&FILTERED.has(suffix))q.set('follows',JSON.stringify(state.follows));const s=q.toString();return '/v1/event-logs/'+encodeURIComponent(state.logId)+'/'+suffix+(s?'?'+s:'');};
 
   function table(headers,rows){
     const wrap=el('div',null,'table-wrap');const t=el('table');const head=el('thead');const hr=el('tr');
