@@ -591,3 +591,80 @@ def test_streamed_set_digest_matches_legacy_bucket_contract():
             assert quality._set_digest(conn, sql, []) == expected.hexdigest()
     finally:
         conn.close()
+
+
+def test_single_batch_integrity_is_verified_and_detects_changed_report_digest():
+    made = _import()
+    log_id = made["log_id"]
+    initial = quality.quality(log_id)
+    assert initial["integrity"]["status"] == "verified"
+    assert initial["integrity"]["algorithm"] == "content_sha256_v2"
+    conn = workspace._connect()
+    try:
+        report = initial["reports"][0]
+        report["content_sha256_v2"] = "0" * 64 if report["content_sha256_v2"] != "0" * 64 else "1" * 64
+        conn.execute("UPDATE log_quality SET report = ? WHERE log_id = ? AND batch = 0",
+                     [json.dumps(report), log_id])
+    finally:
+        conn.close()
+    result = quality.quality(log_id)
+    assert result["integrity"]["status"] == "mismatch"
+    assert result["integrity"]["reason"] == "current_saved_content_differs_from_import_report"
+
+
+def test_missing_quality_report_is_not_misreported_as_verified():
+    made = _import()
+    log_id = made["log_id"]
+    conn = workspace._connect()
+    try:
+        conn.execute("DELETE FROM log_quality WHERE log_id = ? AND batch = 0", [log_id])
+    finally:
+        conn.close()
+    result = quality.quality(log_id)
+    assert result["batches_without_report"] == [0]
+    assert result["integrity"]["status"] == "not_verifiable"
+
+
+def test_malformed_quality_report_metadata_fails_closed_without_500():
+    made = _import()
+    log_id = made["log_id"]
+    conn = workspace._connect()
+    try:
+        conn.execute("UPDATE log_quality SET report = ? WHERE log_id = ? AND batch = 0",
+                     [json.dumps({"content_sha256_v2": "0" * 64}), log_id])
+    finally:
+        conn.close()
+    result = quality.quality(log_id)
+    assert result["batches_without_report"] == [0]
+    assert result["integrity"]["status"] == "not_verifiable"
+
+
+def test_corrupt_saved_quality_json_is_missing_not_verified():
+    """A damaged report must not crash the review or count as provenance."""
+    made = _import()
+    log_id = made["log_id"]
+    conn = workspace._connect()
+    try:
+        conn.execute("UPDATE log_quality SET report = ? WHERE log_id = ? AND batch = 0",
+                     ["{invalid json", log_id])
+    finally:
+        conn.close()
+    result = quality.quality(log_id)
+    assert result["reports"] == []
+    assert result["batches_without_report"] == [0]
+    assert result["integrity"]["status"] == "not_verifiable"
+    assert result["batch_trends"]["review_queue"][0]["status"] == "missing_report"
+
+
+def test_appended_history_integrity_stays_unverifiable_even_with_valid_digests():
+    """A single import digest cannot attest to the later appended history."""
+    made = _import()
+    log_id = made["log_id"]
+    assert quality.quality(log_id)["integrity"]["status"] == "verified"
+    newer = "case,activity,time,who,region,amount\nc9,Close,2024-01-04T12:00:00Z,bob,south,5\n"
+    workspace.append_log(log_id, BytesIO(newer.encode()), source_format="csv", mapping=MAPPING)
+    result = quality.quality(log_id)
+    assert [report["batch"] for report in result["reports"]] == [0, 1]
+    assert result["batches_without_report"] == []
+    assert result["integrity"]["status"] == "not_verifiable"
+    assert result["integrity"]["reason"] == "historical_batches_or_missing_report"
