@@ -654,3 +654,17 @@ def test_corrupt_saved_quality_json_is_missing_not_verified():
     assert result["batches_without_report"] == [0]
     assert result["integrity"]["status"] == "not_verifiable"
     assert result["batch_trends"]["review_queue"][0]["status"] == "missing_report"
+
+
+def test_appended_history_integrity_stays_unverifiable_even_with_valid_digests():
+    """A single import digest cannot attest to the later appended history."""
+    made = _import()
+    log_id = made["log_id"]
+    assert quality.quality(log_id)["integrity"]["status"] == "verified"
+    newer = "case,activity,time,who,region,amount\nc9,Close,2024-01-04T12:00:00Z,bob,south,5\n"
+    workspace.append_log(log_id, BytesIO(newer.encode()), source_format="csv", mapping=MAPPING)
+    result = quality.quality(log_id)
+    assert [report["batch"] for report in result["reports"]] == [0, 1]
+    assert result["batches_without_report"] == []
+    assert result["integrity"]["status"] == "not_verifiable"
+    assert result["integrity"]["reason"] == "historical_batches_or_missing_report"
