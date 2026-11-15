@@ -2820,42 +2820,79 @@
       if(generation!==state.generation||(!r.rows_kept&&!r.decisions.length))return;
       show(wrap,true);
       const offset=input('owgQuarantineOffset','text','+01:00');offset.maxLength=6;
+      const batch=input('owgQuarantineBatch','number');batch.min='0';batch.max='2147483647';batch.step='1';
+      const rowStart=input('owgQuarantineRowStart','number');rowStart.min='0';rowStart.max='999999999';rowStart.step='1';
+      const rowEnd=input('owgQuarantineRowEnd','number');rowEnd.min='0';rowEnd.max='999999999';rowEnd.step='1';
+      const readScope=()=>{
+        const raw=[batch.value.trim(),rowStart.value.trim(),rowEnd.value.trim()];
+        if(raw.some(x=>x&&!/^\d+$/.test(x)))throw new Error('Use whole numbers for batch and row range.');
+        const nums=raw.map(x=>x?Number(x):null);
+        if(nums.some(x=>x!==null&&!Number.isSafeInteger(x))||nums[0]>2147483647||nums[1]>999999999||nums[2]>999999999)throw new Error('Use whole numbers within the allowed batch and row limits.');
+        if((nums[1]!==null||nums[2]!==null)&&(nums[0]===null||nums[1]===null||nums[2]===null||nums[2]<nums[1]))
+          throw new Error('Select a batch and both ends of an inclusive row range.');
+        return {...(nums[0]!==null?{batch:nums[0]}:{}),...(nums[1]!==null?{row_start:nums[1],row_end:nums[2]}:{})};
+      };
       const preview=button('Preview release','secondary');preview.id='owgQuarantinePreview';
       const release=button('Release rows','secondary');release.id='owgQuarantineRelease';
-      const discard=button('Discard kept rows','secondary');discard.id='owgQuarantineDiscard';
+      const discard=button('Discard all kept rows','secondary');discard.id='owgQuarantineDiscard';
       const message=el('div',null,'muted');message.id='owgQuarantineStatus';message.setAttribute('role','status');
       let reviewed=null;
       let previewGeneration=0;
       preview.disabled=discard.disabled=!r.rows_kept;
       release.disabled=true;
+      const pageHost=el('div');pageHost.id='owgQuarantineRows';
+      const firstPage=button('First rows','secondary');firstPage.id='owgQuarantineFirst';
+      const nextPage=button('Next rows','secondary');nextPage.id='owgQuarantineNext';
+      let pageTurn=0,nextCursor=null;
+      const renderPage=page=>{
+        pageHost.replaceChildren(...(page.rows.length?[table(['Batch','Row','Case','Activity','Time as supplied','Why rejected'],
+          page.rows.map(x=>[x.batch===0?'import (0)':x.batch,x.row,x.case,x.activity,x.time,x.reasons.map(k=>REASON_LABELS[k]||k).join(', ')]))]:[el('div','No retained rows in this batch.','muted')]));
+        nextCursor=page.next_after;nextPage.disabled=nextCursor===null||nextCursor===undefined;
+      };
+      const loadPage=async after=>{
+        const request=++pageTurn;nextPage.disabled=firstPage.disabled=true;
+        try{
+          const chosen=batch.value.trim();
+          if(chosen&&(!/^\d+$/.test(chosen)||!Number.isSafeInteger(Number(chosen))||Number(chosen)>2147483647))throw new Error('Use a valid batch number.');
+          const params=new URLSearchParams({limit:'20',after:String(after)});
+          if(chosen)params.set('batch',chosen);
+          const page=await getJSON(base+'?'+params);
+          if(generation!==state.generation||request!==pageTurn)return;
+          renderPage(page);
+        }catch(error){if(generation===state.generation&&request===pageTurn)message.textContent=error.message;}
+        finally{if(generation===state.generation&&request===pageTurn){firstPage.disabled=false;nextPage.disabled=nextCursor===null||nextCursor===undefined;}}
+      };
+      firstPage.onclick=()=>loadPage(0);nextPage.onclick=()=>{if(nextCursor!==null&&nextCursor!==undefined)loadPage(nextCursor);};
+      renderPage(r);
       const row=el('div',null,'row');row.style.alignItems='end';
-      row.append(field('UTC offset to assume for times written without one',offset),preview,release,discard);
+      row.append(field('UTC offset to assume for times written without one',offset),field('Batch (blank for all)',batch),field('First row (optional)',rowStart),field('Last row (optional)',rowEnd),preview,release,discard);
       wrap.append(el('h4','Rejected rows kept for review'),
         el('div',Number(r.rows_kept).toLocaleString()+' rows kept ('+reasonText(r.reasons)+'). '+r.note,'muted'),
-        ...(r.rows.length?[table(['Batch','Case','Activity','Time as supplied','Why rejected'],r.rows.map(x=>[x.batch||'import',x.case,x.activity,x.time,x.reasons.map(k=>REASON_LABELS[k]||k).join(', ')]))]:[]),
-        ...(r.rows_kept>r.rows.length?[el('div','Showing the first '+r.rows.length+'.','muted')]:[]),
-        row,message,
+        pageHost,firstPage,nextPage,
+        el('div','Batch and row range limit preview and release. Discard removes all kept rows.','muted'),row,message,
         ...(r.decisions.length?[table(['Decision','When','Result'],r.decisions.map(d=>[d.kind==='release'?'Released with offset '+d.naive_timestamp_offset:'Discarded',d.decided_at.slice(0,16).replace('T',' ')+' UTC',
           d.kind==='release'?d.rows_released+' of '+d.rows_considered+' rows released, '+(d.events_added||0)+' events added, '+(d.duplicates_skipped||0)+' already in the log':d.rows_discarded+' rows discarded']))]:[]));
-      offset.addEventListener('input',()=>{
+      for(const control of [offset,batch,rowStart,rowEnd])control.addEventListener('input',()=>{
         previewGeneration++;reviewed=null;release.disabled=true;
-        message.textContent='Offset changed. Preview again before releasing.';
+        message.textContent='Selection changed. Preview again before releasing.';
       });
+      batch.addEventListener('input',()=>{pageTurn++;nextCursor=null;nextPage.disabled=true;firstPage.disabled=false;if(!batch.value.trim()||/^\d+$/.test(batch.value.trim()))loadPage(0);});
       preview.onclick=async()=>{
         const requestId=++previewGeneration;
         reviewed=null;release.disabled=true;
         const chosen=offset.value.trim();
+        let scope;try{scope=readScope();}catch(error){message.textContent=error.message;return;}
         message.textContent='Checking retained rows without changing the log…';
         try{
           const result=await (await api(base+'/preview',{method:'POST',
             headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({naive_timestamp_offset:chosen})})).json();
+            body:JSON.stringify({naive_timestamp_offset:chosen,...scope})})).json();
           if(generation!==state.generation||requestId!==previewGeneration||offset.value.trim()!==chosen)return;
           if(result.naive_timestamp_offset!==chosen){
             message.textContent='Offset was normalized to '+result.naive_timestamp_offset+'. Enter that offset and preview again.';
             return;
           }
-          reviewed=result;
+          reviewed={...result,scope};
           release.disabled=!(Number.isSafeInteger(result.rows_eligible)&&result.rows_eligible>0);
           message.textContent='Preview: '+result.rows_eligible+' of '+result.rows_considered+
             ' retained rows parseable with UTC'+result.naive_timestamp_offset+'; '+
@@ -2871,7 +2908,7 @@
           const result=await (await api(base+'/release',{method:'POST',
             headers:{'Content-Type':'application/json'},
             body:JSON.stringify({naive_timestamp_offset:selected.naive_timestamp_offset,
-              expected_preview_sha256:selected.expected_preview_sha256})})).json();
+              ...selected.scope,expected_preview_sha256:selected.expected_preview_sha256})})).json();
           if(generation!==state.generation)return;
           const d=result.decision;
           await refreshLogs(state.logId);await analyse();

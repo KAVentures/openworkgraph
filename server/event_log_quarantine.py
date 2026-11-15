@@ -23,6 +23,8 @@ from typing import Any
 from . import event_log_workspace as workspace
 
 MAX_PAGE = 100
+MAX_WORK_ROWS = 10_000
+MAX_WORK_BYTES = 32 * 1024 * 1024
 REVIEW_NOTE = ("Rejected rows are kept only because this was chosen at import or append. They hold the mapped "
                "values as supplied and are deleted with the log. Releasing assumes the chosen UTC offset for "
                "times without one; it does not verify that the assumption is right.")
@@ -31,8 +33,8 @@ REVIEW_NOTE = ("Rejected rows are kept only because this was chosen at import or
 def _batch(value: Any) -> int | None:
     if value is None:
         return None
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise workspace.EventLogWorkspaceError("batch must be a non-negative whole number")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0 or value > 2_147_483_647:
+        raise workspace.EventLogWorkspaceError("batch must be a non-negative 32-bit whole number")
     return value
 
 
@@ -60,7 +62,7 @@ def quarantine(log_id: str, batch: int | None = None, after: int = 0, limit: int
             reasons = dict(conn.execute(f"""SELECT r, count(*) FROM (SELECT unnest(from_json(reasons, '["VARCHAR"]')) AS r
                 FROM quarantine WHERE log_id = ? {scope}) GROUP BY r ORDER BY r""", [log_id, *params]).fetchall())
             rows = conn.execute(f"""SELECT batch, row_n, reasons, row FROM quarantine WHERE log_id = ? {scope}
-                AND (batch * 1000000000 + row_n) > ? ORDER BY batch, row_n LIMIT ?""",
+                AND (CAST(batch AS BIGINT) * 1000000000 + row_n) > ? ORDER BY batch, row_n LIMIT ?""",
                                 [log_id, *params, int(after), int(limit) + 1]).fetchall()
             decisions = _decisions(conn, log_id)
         finally:
@@ -72,8 +74,30 @@ def quarantine(log_id: str, batch: int | None = None, after: int = 0, limit: int
             "decisions": decisions, "max_rows_per_batch": workspace.MAX_QUARANTINED_ROWS, "note": REVIEW_NOTE}
 
 
-def _rows(conn, log_id: str, batch: int | None) -> list[tuple[int, int, dict[str, Any]]]:
+def _selection(body: dict[str, Any]) -> tuple[int | None, int | None, int | None]:
+    batch = _batch(body.get("batch"))
+    start, end = body.get("row_start"), body.get("row_end")
+    if start is None and end is None:
+        return batch, None, None
+    if (batch is None or type(start) is not int or type(end) is not int
+            or start < 0 or end < start or end > 999_999_999):
+        raise workspace.EventLogWorkspaceError("select a batch and a valid inclusive row range")
+    return batch, start, end
+
+
+def _rows(conn, log_id: str, batch: int | None, start: int | None = None,
+          end: int | None = None) -> list[tuple[int, int, dict[str, Any]]]:
     scope, params = ("AND batch = ?", [batch]) if batch is not None else ("", [])
+    if start is not None:
+        scope += " AND row_n >= ? AND row_n <= ?"
+        params.extend([start, end])
+    # Check both count and serialized UTF-8 size before fetching raw values.
+    count, size = conn.execute(
+        f"SELECT count(*), coalesce(sum(octet_length(encode(row))), 0) FROM quarantine WHERE log_id = ? {scope}",
+        [log_id, *params]).fetchone()
+    if count > MAX_WORK_ROWS or size > MAX_WORK_BYTES:
+        raise workspace.EventLogWorkspaceError(
+            "too many retained rows or bytes for one review; select a batch and narrower row range")
     return [(b, n, json.loads(v)) for b, n, v in conn.execute(
         f"SELECT batch, row_n, row FROM quarantine WHERE log_id = ? {scope} ORDER BY batch, row_n",
         [log_id, *params]).fetchall()]
@@ -89,19 +113,22 @@ def _eligible(conn, rows: list[tuple[int, int, dict[str, Any]]], offset: str) ->
 
 
 def _fingerprint(log_id: str, batch: int | None, offset: str,
-                 rows: list[tuple[int, int, dict[str, Any]]]) -> str:
+                 rows: list[tuple[int, int, dict[str, Any]]],
+                 start: int | None = None, end: int | None = None) -> str:
     """Counts-only optimistic concurrency token; not an authentication credential."""
-    payload = json.dumps({"version": 1, "log_id": log_id, "batch": batch,
-                          "naive_timestamp_offset": offset, "rows": rows},
-                         sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    content = {"version": 1, "log_id": log_id, "batch": batch,
+               "naive_timestamp_offset": offset, "rows": rows}
+    if start is not None:
+        content.update(row_start=start, row_end=end)
+    payload = json.dumps(content, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def preview(log_id: str, body: Any) -> dict[str, Any]:
     """Read-only, session-gated release preview; never expose row contents."""
-    if not isinstance(body, dict) or set(body) - {"naive_timestamp_offset", "batch"}:
-        raise workspace.EventLogWorkspaceError("a preview accepts naive_timestamp_offset and an optional batch")
-    batch = _batch(body.get("batch"))
+    if not isinstance(body, dict) or set(body) - {"naive_timestamp_offset", "batch", "row_start", "row_end"}:
+        raise workspace.EventLogWorkspaceError("a preview accepts naive_timestamp_offset, optional batch and optional row range")
+    batch, start, end = _selection(body)
     try:
         offset = workspace.naive_offset({"naive_timestamp_offset": body.get("naive_timestamp_offset") or ""})
     except workspace.EventLogFormatError as exc:
@@ -112,15 +139,15 @@ def preview(log_id: str, body: Any) -> dict[str, Any]:
         conn = workspace._connect()
         try:
             workspace._check_log(conn, log_id)
-            rows = _rows(conn, log_id, batch)
+            rows = _rows(conn, log_id, batch, start, end)
             if not rows:
                 raise workspace.EventLogWorkspaceError("no rejected rows are kept for this log or batch")
             eligible = _eligible(conn, rows, offset)
-            fingerprint = _fingerprint(log_id, batch, offset, rows)
+            fingerprint = _fingerprint(log_id, batch, offset, rows, start, end)
         finally:
             conn.close()
     return {"format": "openworkgraph.quarantine-release-preview.v1",
-            "batch": batch, "naive_timestamp_offset": offset,
+            "batch": batch, "row_start": start, "row_end": end, "naive_timestamp_offset": offset,
             "rows_considered": len(rows), "rows_eligible": len(eligible),
             "rows_still_rejected": len(rows) - len(eligible),
             "expected_preview_sha256": fingerprint,
@@ -132,9 +159,9 @@ def preview(log_id: str, body: Any) -> dict[str, Any]:
 
 
 def release(log_id: str, body: Any) -> dict[str, Any]:
-    if not isinstance(body, dict) or set(body) - {"naive_timestamp_offset", "batch", "expected_preview_sha256"}:
-        raise workspace.EventLogWorkspaceError("a release accepts naive_timestamp_offset, optional batch and preview SHA-256")
-    batch = _batch(body.get("batch"))
+    if not isinstance(body, dict) or set(body) - {"naive_timestamp_offset", "batch", "row_start", "row_end", "expected_preview_sha256"}:
+        raise workspace.EventLogWorkspaceError("a release accepts naive_timestamp_offset, optional batch, row range and preview SHA-256")
+    batch, start, end = _selection(body)
     expected = body.get("expected_preview_sha256")
     if expected is not None and (not isinstance(expected, str) or len(expected) != 64
                                  or any(c not in "0123456789abcdef" for c in expected)):
@@ -149,15 +176,16 @@ def release(log_id: str, body: Any) -> dict[str, Any]:
         conn = workspace._connect()
         try:
             workspace._check_log(conn, log_id)
-            rows = _rows(conn, log_id, batch)
+            rows = _rows(conn, log_id, batch, start, end)
             if not rows:
                 raise workspace.EventLogWorkspaceError("no rejected rows are kept for this log or batch")
-            if expected is not None and expected != _fingerprint(log_id, batch, offset, rows):
+            if expected is not None and expected != _fingerprint(log_id, batch, offset, rows, start, end):
                 raise workspace.EventLogWorkspaceError("quarantine changed since preview; preview again before release")
             valid = _eligible(conn, rows, offset)
         finally:
             conn.close()
         decision = {"kind": "release", "naive_timestamp_offset": offset, "batch": batch,
+                    **({"row_start": start, "row_end": end} if start is not None else {}),
                     "rows_considered": len(rows), "rows_released": len(valid)}
         result: dict[str, Any] = {}
         if valid:
