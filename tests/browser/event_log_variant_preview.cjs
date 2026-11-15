@@ -1,0 +1,46 @@
+const {chromium}=require('playwright');
+const assert=require('node:assert/strict');
+const fs=require('node:fs/promises');
+const {spawn}=require('node:child_process');
+const {tmpdir}=require('node:os');
+const path=require('node:path');
+(async()=>{
+ const scratch=await fs.mkdtemp(path.join(tmpdir(),'owg-variant-preview-'));
+ const base='http://127.0.0.1:8787',python=process.env.OWG_BROWSER_PYTHON||'python';
+ const server=spawn(python,['-m','uvicorn','variant_preview_app:app','--app-dir','tests/browser','--host','127.0.0.1','--port','8787'],{env:{...process.env,OWG_BROWSER_TEST_DIR:scratch},stdio:['ignore','pipe','pipe']});
+ let logs='',browser,spawnError;server.on('error',e=>{spawnError=e;});for(const stream of [server.stdout,server.stderr])stream.on('data',c=>{logs=(logs+c).slice(-10000);});
+ try{
+  let ready=false;for(let i=0;i<100;i++){if(spawnError)throw spawnError;if(server.exitCode!==null)throw Error(logs);try{await fs.access(path.join(scratch,'session.txt'));if((await fetch(base+'/')).ok){ready=true;break;}}catch{}await new Promise(r=>setTimeout(r,200));}assert.ok(ready,logs);
+  browser=await chromium.launch({...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE}:{}),headless:true,args:['--no-sandbox']});
+  const page=await browser.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.goto(base+'/#session='+(await fs.readFile(path.join(scratch,'session.txt'),'utf8')).trim());
+  await page.locator('[role=tab][data-tab=evidence]').click();await page.locator('#owgEventLogCard').waitFor();
+  const csv='case,activity,time\nc1,A,2024-01-01T00:00:00Z\nc1,B,2024-01-01T01:00:00Z\nc1,C,2024-01-01T02:00:00Z\nc1,X,2024-01-01T03:00:00Z\nc2,A,2024-01-02T00:00:00Z\nc2,B,2024-01-02T01:00:00Z\nc2,C,2024-01-02T02:00:00Z\nc2,Y,2024-01-02T03:00:00Z\n';
+  await page.locator('#owgEventLogFile').setInputFiles({name:'synthetic.csv',mimeType:'text/csv',buffer:Buffer.from(csv)});
+  await page.locator('#owgEventLogStatus').filter({hasText:'File mapping ready.'}).waitFor();
+  await page.locator('#owgEventLogCase').selectOption('case');await page.locator('#owgEventLogActivity').selectOption('activity');await page.locator('#owgEventLogTime').selectOption('time');
+  await page.locator('#owgEventLogConsent').check();await page.locator('#owgEventLogImport').click();
+  await page.locator('#owgEventLogStatus').filter({hasText:'Imported'}).waitFor();
+  await page.waitForFunction(()=>document.querySelector('#owgEventLogCaseType')?.value);
+  const [response]=await Promise.all([page.waitForResponse(r=>r.url().includes('/variants/preview')&&r.status()===200),page.locator('#owgEventLogAnalyze').click()]);
+  const data=await response.json();assert.equal(data.distinct_variants,2);assert.equal(data.variants.length,2);
+  assert.ok(data.variants.every(v=>v.path_truncated&&v.path_activity_count===4));
+  const section=page.locator('#owgEventLogResults h3',{hasText:'Most common variants'}).locator('..');
+  await section.getByText('2 distinct variants.',{exact:false}).waitFor();
+  assert.equal(await section.getByRole('button',{name:'Inspect cases'}).count(),2);
+  for(const btn of await section.getByRole('button',{name:'Inspect cases'}).all())assert.equal(await btn.isDisabled(),true);
+  assert.match(await section.textContent(),/4 activities; shortened/);
+  assert.equal(await page.locator('#owgEventLogModel').inputValue(),'','a shortened prefix must not seed a reference model');
+  await page.locator('#owgCaseFilterAdd').click();
+  await page.locator('#owgCaseFilterFrom1').selectOption('C');await page.locator('#owgCaseFilterTo1').selectOption('X');
+  const [filtered]=await Promise.all([page.waitForResponse(r=>r.url().includes('/variants/preview')&&r.url().includes('follows=')&&r.status()===200),page.locator('#owgCaseFilterApply').click()]);
+  const filteredData=await filtered.json();assert.equal(filteredData.cases,1);assert.equal(filteredData.cases_before_filter,2);
+  assert.equal(filteredData.distinct_variants,1);assert.equal(filteredData.variants[0].path_truncated,true);
+  await page.locator('#owgCaseFilterCount').filter({hasText:'Filtered: 1 of 2 cases'}).waitFor();
+  await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
+  const audit=await page.evaluate(async()=>window.axe.run([...document.querySelectorAll('#owgEventLogResults h3')].find(h=>h.textContent==='Most common variants').parentElement,{runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));
+  assert.deepEqual(audit.violations.map(v=>v.id),[]);await page.setViewportSize({width:390,height:900});
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth+1));assert.deepEqual(errors,[]);
+  console.log('Variant preview browser passed: distinct full paths, truncation disclosure, safe actions, axe/mobile.');
+ }finally{if(browser)await browser.close();server.kill('SIGTERM');await Promise.race([new Promise(r=>server.once('exit',r)),new Promise(r=>setTimeout(r,5000))]);if(server.exitCode===null)server.kill('SIGKILL');await fs.rm(scratch,{recursive:true,force:true});}
+})().catch(e=>{console.error(e);process.exit(1);});
