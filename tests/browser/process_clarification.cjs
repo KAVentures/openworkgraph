@@ -39,6 +39,8 @@ const {tmpdir}=require('node:os'),path=require('node:path');
   await page.getByRole('button',{name:'Reconcile refund SOPs · r1',exact:true}).click();
   const panel=page.locator('#owgCatalogClarification');
   const titles=panel.locator('[data-clarify-title]'),texts=panel.locator('[data-clarify-text]');
+  // Wait for the async saved-design load to render its source editor before asserting the count.
+  await texts.first().waitFor();
   assert.equal(await texts.count(),1);
   await titles.first().fill('SOP 2025');
   await texts.first().fill('A refund amount above 500 EUR must get manager approval.');
