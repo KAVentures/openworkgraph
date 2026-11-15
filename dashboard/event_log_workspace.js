@@ -792,15 +792,29 @@
   // R9: read-only, bounded metrics for selected saved logs.
   function cohortMetricSection(activityNames){
     const box=section('Cohort metrics');box.id='owgCohortMetricSection';
-    box.appendChild(el('p','Calculate descriptive metrics across matching cases. Aggregate results only; maximum 1,000 cases.','muted'));
+    box.appendChild(el('p','Calculate descriptive metrics or combine two approved case metrics across matching cases. Division by zero and missing values are excluded from numeric summaries. Aggregate results only; maximum 1,000 cases.','muted'));
     const metric=select('owgCohortMetricField',[
       ['duration_seconds','Case duration (seconds)'],['event_count','Events per case'],
       ['resource_count','Distinct resources per case'],['duration_hours','Case duration (hours)']
     ]);
+    // Only approved, non-identifying numeric fields can enter these expressions.
+    // The authenticated server independently validates every expression.
+    const operation=select('owgCohortMetricOperation',[
+      ['single','Single metric'],['add','Add'],['subtract','Subtract'],
+      ['multiply','Multiply'],['divide','Divide (zero denominator is missing)']
+    ]);
+    const other=select('owgCohortMetricOther',[
+      ['duration_seconds','Case duration (seconds)'],['event_count','Events per case'],
+      ['resource_count','Distinct resources per case']
+    ]);
+    const otherWrap=field('Second metric',other);
+    const updateOperation=()=>show(otherWrap,operation.value!=='single');
+    operation.addEventListener('change',updateOperation);
+    updateOperation();
     const filters=cohortFields('owgCohortMetricFilter','Choose matching cases',activityNames);
     const run=button('Calculate cohort metric','secondary');run.id='owgCohortMetricRun';
     const out=el('div');out.id='owgCohortMetricResult';out.setAttribute('role','status');out.setAttribute('aria-live','polite');
-    const controls=el('div',null,'row');controls.append(field('Metric',metric),run);
+    const controls=el('div',null,'row');controls.append(field('Metric',metric),field('Calculation',operation),otherWrap,run);
     box.append(controls,filters.node,out);
     let turn=0;
     run.onclick=async()=>{
@@ -809,9 +823,11 @@
       try{
         const cohort=filters.read();
         if(state.follows.length)cohort.follows=state.follows;
-        const expression=metric.value==='duration_hours'
+        const first=metric.value==='duration_hours'
           ?{divide:[{field:'duration_seconds'},{literal:3600}]}
           :{field:metric.value};
+        const expression=operation.value==='single'
+          ?first:{[operation.value]:[first,{field:other.value}]};
         const url=new URL('/v1/event-logs/'+encodeURIComponent(logId)+'/cohort-metric',window.location.origin);
         if(caseType)url.searchParams.set('case_type',caseType);
         const response=await api(url.pathname+url.search,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({definition:{version:1,expression},cohort})});
