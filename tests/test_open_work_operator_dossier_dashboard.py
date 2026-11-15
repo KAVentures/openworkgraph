@@ -88,7 +88,7 @@ const results=card.children[card.children.indexOf(form)+2];
   assert.match(status.textContent,/Review unavailable/);
   assert.equal(results.children.length,0,'malformed source evidence is not partially disclosed');
   await form.listeners.submit({preventDefault(){}});
-  assert.equal(requests.length,2,'no implicit second scan');
+  assert.equal(requests.length,4,'no implicit third scan after two explicitly approved reviews');
 })().catch(e=>{console.error(e);process.exitCode=1;});
 """
     result = subprocess.run(["node","-e",js],cwd=ROOT,capture_output=True,text=True,timeout=15)
