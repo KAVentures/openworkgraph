@@ -244,3 +244,61 @@ def test_cohort_dashboard_exposes_bounded_expression_controls():
     assert "owgCohortMetricOther" in source
     assert "operation.value==='single'" in source
     assert "cohort-metric" in source
+
+
+
+def test_real_duckdb_composed_metric_authenticated_and_cohort_scoped(monkeypatch):
+    """Exercise composed arithmetic through the actual REST route and cohort SQL."""
+    import duckdb
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from server import event_log_routes
+
+    conn = duckdb.connect(":memory:")
+    try:
+        conn.execute("""
+            CREATE TEMP TABLE ce (
+                case_id VARCHAR, event_id VARCHAR, ts TIMESTAMP,
+                activity VARCHAR, resource VARCHAR
+            )
+        """)
+        conn.executemany(
+            "INSERT INTO ce VALUES (?, ?, ?, ?, ?)",
+            [
+                ("a", "a1", "2026-01-01 10:00:00", "start", "team-a"),
+                ("a", "a2", "2026-01-01 10:00:10", "end", "team-a"),
+                ("b", "b1", "2026-01-01 11:00:00", "start", "team-b"),
+                ("b", "b2", "2026-01-01 11:00:00", "end", "team-b"),
+                ("c", "c1", "2026-01-01 12:00:00", "start", "team-a"),
+                ("c", "c2", "2026-01-01 12:00:20", "end", "team-a"),
+            ],
+        )
+        monkeypatch.setattr(workspace, "_query", lambda log_id, case_type, callback: callback(conn))
+        monkeypatch.setattr(
+            event_log_routes, "dashboard_session_valid", lambda token: token == "valid"
+        )
+        app = FastAPI()
+        app.include_router(event_log_routes.router)
+        client = TestClient(app)
+        path = "/v1/event-logs/log_0123456789abcdef/cohort-metric"
+        request = {
+            "definition": {"version": 1, "expression": {"divide": [
+                {"field": "event_count"}, {"field": "duration_seconds"}
+            ]}},
+            "cohort": {"resource": "team-a"},
+        }
+        assert client.post(path, json=request).status_code == 403
+        response = client.post(
+            path, json=request, headers={"Authorization": "OWG-Session valid"}
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["metric"]["rows"] == 2
+        assert body["metric"]["sum"] == "0.3"
+        assert body["metric"]["mean"] == "0.15"
+        assert body["cases_before_filter"] == 3
+        assert body["raw_cases_returned"] is False
+        assert response.headers["cache-control"] == "no-store"
+        assert all(value not in str(body) for value in ('"a"', '"b"', '"c"', "team-b"))
+    finally:
+        conn.close()
