@@ -1,0 +1,354 @@
+"""Explicit customer-controlled OWG run-report delivery with replay-safe outbox.
+
+Nothing is sent unless the operator invokes 'send --confirm-network'.
+The outbox contains report bytes but never bearer tokens or HMAC secrets.
+It is a client reliability aid, not an agent permission or business executor.
+"""
+from __future__ import annotations
+
+import argparse
+import base64
+from contextlib import contextmanager
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import tempfile
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+
+from owg_report_signing import headers as signing_headers, MAX_SEQUENCE
+
+FORMAT = "openworkgraph.customer-report-outbox.v1"
+ENVELOPE = "openworkgraph.signed-run-report.v1"
+REPORT_FORMAT = "openworkgraph.automation-run-report.v1"
+CHANNEL = re.compile(r"^chn_[0-9a-f]{16}$")
+PATH = re.compile(r"^/v1/automation-monitoring/channels/(chn_[0-9a-f]{16})/reports$")
+MAX_REPORT_BYTES = 2 * 1024 * 1024
+MAX_OUTBOX_BYTES = 16 * 1024 * 1024
+MAX_PENDING = 100
+
+
+class DeliveryError(ValueError):
+    pass
+
+
+def _pairs(items):
+    out = {}
+    for key, value in items:
+        if key in out:
+            raise DeliveryError("Duplicate JSON fields are not accepted")
+        out[key] = value
+    return out
+
+
+def _constant(_):
+    raise DeliveryError("Non-finite JSON values are not accepted")
+
+
+def _json(raw: bytes):
+    try:
+        return json.loads(raw.decode("utf-8"), object_pairs_hook=_pairs, parse_constant=_constant)
+    except (UnicodeError, ValueError) as exc:
+        raise DeliveryError("Malformed or duplicate-field JSON") from None
+
+
+def _canonical(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"),
+                      ensure_ascii=False, allow_nan=False).encode("utf-8")
+
+
+def _bounded(path: Path, limit: int):
+    if path.is_symlink() or not path.is_file():
+        raise DeliveryError("Select a regular, non-symlink local file")
+    with path.open("rb") as f:
+        raw = f.read(limit + 1)
+    if len(raw) > limit:
+        raise DeliveryError("Selected file exceeds the local size limit")
+    return raw
+
+
+def _validate_report(doc):
+    """Strict local allowlist before ANY report bytes may be sent.
+
+    The receiver independently validates again. This deliberately refuses
+    unknown keys before network transmission, to avoid leaking extra case
+    fields, tool arguments, credentials or unreviewed provider payloads.
+    """
+    from datetime import datetime
+
+    def obj(value, allowed, what):
+        if not isinstance(value, dict) or set(value) - set(allowed):
+            raise DeliveryError(what + " contains unsupported fields")
+        return value
+
+    def label(value, what, limit):
+        if (not isinstance(value, str) or not 0 < len(value.strip()) <= limit or
+                any(ord(ch) < 32 or 127 <= ord(ch) <= 159 for ch in value)):
+            raise DeliveryError(what + " must be a short printable label")
+
+    def stamp(value, what, optional=False):
+        if optional and value in (None, ""):
+            return None
+        if not isinstance(value, str) or len(value) > 80:
+            raise DeliveryError(what + " must be an ISO timestamp")
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            raise DeliveryError(what + " must be an ISO timestamp") from None
+        if parsed.utcoffset() is None:
+            raise DeliveryError(what + " needs an explicit timezone")
+        return parsed
+
+    obj(doc, {"format", "deployment", "runs"}, "Report")
+    if doc.get("format") != REPORT_FORMAT:
+        raise DeliveryError("Wrong run-report format")
+    deployment = obj(doc.get("deployment"), {"name", "runtime", "workflow_spec_sha256"},
+                     "Deployment")
+    label(deployment.get("name", "Automation"), "Deployment name", 120)
+    if deployment.get("runtime", "other") not in {
+            "n8n", "ai-sdk", "openai-agents", "claude-agent-sdk", "other"}:
+        raise DeliveryError("Unsupported runtime")
+    spec_hash = deployment.get("workflow_spec_sha256")
+    if spec_hash is not None and (not isinstance(spec_hash, str) or
+                                  not re.fullmatch(r"[0-9a-f]{64}", spec_hash)):
+        raise DeliveryError("Invalid workflow specification digest")
+    runs = doc.get("runs")
+    if not isinstance(runs, list) or not 1 <= len(runs) <= 50000:
+        raise DeliveryError("Report must include a bounded, nonempty run list")
+    run_ids = set()
+    for run in runs:
+        obj(run, {"run_id", "started_at", "finished_at", "status", "steps", "outcome"}, "Run")
+        label(run.get("run_id"), "Run ID", 128)
+        if not all(32 <= ord(ch) <= 126 for ch in run["run_id"]) or run["run_id"] in run_ids:
+            raise DeliveryError("Run IDs must be unique printable ASCII")
+        run_ids.add(run["run_id"])
+        state = run.get("status")
+        if state not in {"succeeded", "failed", "handed_to_human", "cancelled", "running"}:
+            raise DeliveryError("Invalid run status")
+        started = stamp(run.get("started_at"), "Run start")
+        finished = stamp(run.get("finished_at"), "Run finish", optional=True)
+        if finished is not None and (finished < started or state == "running"):
+            raise DeliveryError("Run completion time and status disagree")
+        outcome = obj(run.get("outcome") or {}, {"verified", "source"}, "Outcome")
+        if outcome.get("verified") is not None and type(outcome["verified"]) is not bool:
+            raise DeliveryError("Invalid reported verification flag")
+        if outcome.get("source") not in (None, ""):
+            label(outcome["source"], "Outcome source", 80)
+        steps = run.get("steps") or []
+        if not isinstance(steps, list) or len(steps) > 100:
+            raise DeliveryError("Too many reported steps")
+        for step in steps:
+            obj(step, {"step_id", "activity", "status", "at"}, "Step")
+            label(step.get("step_id"), "Step ID", 128)
+            if not all(32 <= ord(ch) <= 126 for ch in step["step_id"]):
+                raise DeliveryError("Step ID must be printable ASCII")
+            label(step.get("activity"), "Step activity", 200)
+            if step.get("status") not in {"completed", "failed", "skipped", "handed_to_human"}:
+                raise DeliveryError("Invalid reported step status")
+            stamp(step.get("at"), "Step observation")
+    return doc
+
+
+def _state(path: Path):
+    value = _json(_bounded(path, MAX_OUTBOX_BYTES))
+    if not isinstance(value, dict) or set(value) != {
+            "format", "channel_id", "next_sequence", "pending", "delivered"}:
+        raise DeliveryError("Outbox format is invalid")
+    if value["format"] != FORMAT or not isinstance(value["channel_id"], str) or not CHANNEL.fullmatch(value["channel_id"]):
+        raise DeliveryError("Outbox channel is invalid")
+    next_seq = value["next_sequence"]
+    if type(next_seq) is not int or not 1 <= next_seq <= MAX_SEQUENCE + 1:
+        raise DeliveryError("Outbox sequence state is invalid")
+    if type(value["delivered"]) is not int or value["delivered"] < 0:
+        raise DeliveryError("Outbox delivery count is invalid")
+    pending = value["pending"]
+    if not isinstance(pending, list) or len(pending) > MAX_PENDING:
+        raise DeliveryError("Outbox queue is invalid")
+    numbers = []
+    for item in pending:
+        if not isinstance(item, dict) or set(item) != {"sequence", "sha256", "body"}:
+            raise DeliveryError("Outbox entry is invalid")
+        seq = item["sequence"]
+        if type(seq) is not int or not 1 <= seq < next_seq:
+            raise DeliveryError("Outbox sequence is invalid")
+        if not isinstance(item["sha256"], str) or not re.fullmatch(r"[a-f0-9]{64}", item["sha256"]):
+            raise DeliveryError("Outbox digest is invalid")
+        try:
+            body = base64.b64decode(item["body"], validate=True)
+        except (ValueError, TypeError):
+            raise DeliveryError("Outbox body encoding is invalid") from None
+        if len(body) > MAX_REPORT_BYTES + 1024 or hashlib.sha256(body).hexdigest() != item["sha256"]:
+            raise DeliveryError("Outbox bytes no longer match their committed digest")
+        numbers.append(seq)
+    if numbers != sorted(set(numbers)):
+        raise DeliveryError("Outbox sequence order is invalid")
+    return value
+
+
+@contextmanager
+def _lock(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    marker = path.with_name(path.name + ".lock")
+    try:
+        fd = os.open(str(marker), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        raise DeliveryError("Outbox is in use; retry after the other sender finishes") from None
+    try:
+        os.close(fd)
+        yield
+    finally:
+        marker.unlink(missing_ok=True)
+
+
+def _write(path: Path, state: dict):
+    raw = _canonical(state)
+    if len(raw) > MAX_OUTBOX_BYTES:
+        raise DeliveryError("Outbox storage limit reached")
+    if path.is_symlink():
+        raise DeliveryError("Outbox cannot be a symlink")
+    fd, temp = tempfile.mkstemp(prefix=".owg-report-", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(raw)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if os.name == "posix":
+            os.chmod(temp, 0o600)
+        os.replace(temp, path)
+    finally:
+        try:
+            os.unlink(temp)
+        except FileNotFoundError:
+            pass
+
+
+def queue(report_file: str, outbox: str, channel: str, version_label: str, start_sequence: int | None = None):
+    if not isinstance(channel, str) or not CHANNEL.fullmatch(channel):
+        raise DeliveryError("Choose the report channel ID shown by OWG")
+    if (not isinstance(version_label, str) or len(version_label) > 64 or
+            any(ord(c) < 32 or ord(c) >= 127 for c in version_label)):
+        raise DeliveryError("Use a short printable version label")
+    raw = _bounded(Path(report_file), MAX_REPORT_BYTES)
+    doc = _json(raw)
+    _validate_report(doc)
+    body = _canonical({"format": ENVELOPE, "version_label": version_label, "report": doc})
+    if len(body) > MAX_REPORT_BYTES + 1024:
+        raise DeliveryError("Report envelope exceeds 2 MiB")
+    selected = Path(outbox)
+    with _lock(selected):
+        if selected.exists():
+            state = _state(selected)
+            if state["channel_id"] != channel:
+                raise DeliveryError("Outbox belongs to another channel; choose its separate file")
+            if start_sequence is not None and start_sequence != state["next_sequence"]:
+                raise DeliveryError("Requested starting sequence differs from existing outbox")
+        else:
+            if type(start_sequence) is not int or not 1 <= start_sequence <= MAX_SEQUENCE:
+                raise DeliveryError("New outbox requires the next sequence displayed by OWG (first channel: 1)")
+            state = {"format": FORMAT, "channel_id": channel,
+                     "next_sequence": start_sequence, "pending": [], "delivered": 0}
+        if len(state["pending"]) >= MAX_PENDING or state["next_sequence"] > MAX_SEQUENCE:
+            raise DeliveryError("Outbox is full or sequence range exhausted")
+        digest = hashlib.sha256(body).hexdigest()
+        if any(p["sha256"] == digest for p in state["pending"]):
+            raise DeliveryError("Identical report is already pending; retry that delivery instead")
+        sequence = state["next_sequence"]
+        state["pending"].append({"sequence": sequence, "sha256": digest,
+                                 "body": base64.b64encode(body).decode("ascii")})
+        state["next_sequence"] = sequence + 1
+        _write(selected, state)
+    return {"queued_sequence": sequence, "pending": len(state["pending"]),
+            "sent": False, "credentials_saved": False}
+
+
+class _NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        return None
+
+
+def _destination(url: str, channel: str):
+    if not url or any(c in url for c in "\r\n\x00"):
+        raise DeliveryError("Set OWG_REPORT_RECEIVER_URL to the exact channel report endpoint")
+    try:
+        target = urlsplit(url)
+        hostname, port = target.hostname, target.port
+    except ValueError:
+        raise DeliveryError("Receiver URL is invalid") from None
+    match = PATH.fullmatch(target.path)
+    if (not match or match.group(1) != channel or target.username is not None or
+            target.password is not None or target.query or target.fragment or
+            not hostname or not target.netloc or (port is not None and not 1 <= port <= 65535)):
+        raise DeliveryError("Receiver must be the exact path for this report channel")
+    if target.scheme == "http" and hostname not in ("127.0.0.1", "localhost", "::1"):
+        raise DeliveryError("Unencrypted HTTP is allowed only for local loopback")
+    if target.scheme not in ("http", "https"):
+        raise DeliveryError("Receiver must use HTTPS or loopback HTTP")
+    return url
+
+
+def send(outbox: str, *, confirm_network: bool = False, transport=None):
+    if not confirm_network:
+        raise DeliveryError("Sending requires an explicit --confirm-network action")
+    selected = Path(outbox)
+    with _lock(selected):
+        state = _state(selected)
+        if not state["pending"]:
+            return {"pending": 0, "sent": False, "reason": "no_pending_reports"}
+        entry = state["pending"][0]
+        endpoint = _destination(os.getenv("OWG_REPORT_RECEIVER_URL", ""), state["channel_id"])
+        token = os.getenv("OWG_REPORT_API_TOKEN", "")
+        secret = os.getenv("OWG_REPORT_CHANNEL_SECRET", "")
+        if (not token or len(token) > 4096 or any(c in token for c in "\r\n") or
+                not re.fullmatch(r"[a-fA-F0-9]{64}", secret)):
+            raise DeliveryError("Configure the API token and 64-hex channel secret as environment variables")
+        body = base64.b64decode(entry["body"], validate=True)
+        signed = signing_headers(secret, entry["sequence"], body)
+        request = Request(endpoint, data=body, method="POST", headers={
+            "Authorization": "Bearer " + token, "Content-Type": "application/json", **signed})
+        opener = transport or build_opener(ProxyHandler({}), _NoRedirect())
+        try:
+            with opener.open(request, timeout=15) as response:
+                if response.status != 200:
+                    raise DeliveryError("Receiver did not acknowledge this report; pending bytes retained")
+                result = _json(response.read(8193))
+        except (HTTPError, URLError, TimeoutError, OSError):
+            raise DeliveryError("Report delivery failed; exact pending bytes retained for explicit retry") from None
+        if (not isinstance(result, dict) or type(result.get("sequence")) is not int or
+                result["sequence"] != entry["sequence"] or
+                result.get("outcome") != "imported" or
+                type(result.get("duplicate")) is not bool):
+            raise DeliveryError("Unverified receiver acknowledgement; pending bytes retained")
+        state["pending"].pop(0)
+        state["delivered"] += 1
+        _write(selected, state)
+    return {"sequence": entry["sequence"], "duplicate": result["duplicate"],
+            "pending": len(state["pending"]), "delivered": state["delivered"],
+            "credentials_saved": False, "business_outcome_verified": False}
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Local-first, explicit signed report delivery")
+    commands = parser.add_subparsers(dest="command", required=True)
+    queue_p = commands.add_parser("queue", help="Stage one report locally without network access")
+    queue_p.add_argument("--report", required=True)
+    queue_p.add_argument("--outbox", required=True)
+    queue_p.add_argument("--channel", required=True)
+    queue_p.add_argument("--version", default="")
+    queue_p.add_argument("--start-sequence", type=int, default=None)
+    send_p = commands.add_parser("send", help="Deliver the oldest staged report once")
+    send_p.add_argument("--outbox", required=True)
+    send_p.add_argument("--confirm-network", action="store_true")
+    args = parser.parse_args(argv)
+    try:
+        result = (queue(args.report, args.outbox, args.channel, args.version, args.start_sequence)
+                  if args.command == "queue" else send(args.outbox, confirm_network=args.confirm_network))
+        print(json.dumps(result, sort_keys=True))
+    except DeliveryError as exc:
+        parser.exit(2, "Delivery refused: " + str(exc) + "\n")
+
+
+if __name__ == "__main__":
+    main()

@@ -293,3 +293,40 @@ def test_durable_route_isolates_independent_dashboard_sessions(monkeypatch, tmp_
     assert first["context"]["direct"] == [b]
     assert second["context"]["direct"] == []
     assert actor("first") != actor("second")
+
+
+def test_source_change_revokes_all_session_receipts(monkeypatch, tmp_path):
+    """Source replacement clears every actor's old-scope receipts, not just caller."""
+    from server import local_auth
+    from server import open_work_dependency_store as deps
+    from server import open_work_run_receipts as run_receipts
+    from server import open_work_attempt_receipts as receipts
+    from server import open_work_run_case_binding as bindings
+
+    old_scope = "owg:scope:" + "a" * 32
+    new_scope = "owg:scope:" + "b" * 32
+    path = str(tmp_path / ".open_work_attempt_receipts.sqlite3")
+    verdict = {"status": "unknown", "provider_operation": "unknown",
+               "customer_outcome": "unknown"}
+    for tenant, actor in ((old_scope, "session_a"), (old_scope, "session_b"),
+                          (new_scope, "session_c")):
+        receipts.append_receipt(path, tenant=tenant, actor=actor,
+                                attempt="attempt_1", verdict=verdict)
+    monkeypatch.setattr(local_auth, "auth_dir", lambda: tmp_path)
+    monkeypatch.setattr(routes, "_source_scope", lambda: new_scope)
+    for name in ("clear_operation_evidence", "clear_human_outcome_reviews",
+                 "clear_case_declarations"):
+        monkeypatch.setattr(routes, name, lambda: None)
+    monkeypatch.setattr(bindings, "clear_binding_scope", lambda scope: None)
+    monkeypatch.setattr(run_receipts, "clear_scope", lambda scope: None)
+    monkeypatch.setattr(deps, "purge_scope", lambda path, scope: None)
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(routes._recheck_source(old_scope))
+    assert exc.value.status_code == 409
+    assert receipts.list_receipts(path, tenant=old_scope, actor="session_a",
+                                  attempt="attempt_1") == []
+    assert receipts.list_receipts(path, tenant=old_scope, actor="session_b",
+                                  attempt="attempt_1") == []
+    assert len(receipts.list_receipts(path, tenant=new_scope, actor="session_c",
+                                     attempt="attempt_1")) == 1

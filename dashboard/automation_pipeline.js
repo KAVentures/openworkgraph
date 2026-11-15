@@ -754,7 +754,95 @@
       }catch(e){benefitOverlapHost.replaceChildren(el('p',e.message,'muted'));}
       finally{benefitOverlapButton.disabled=false;}
     };
-    card.append(row,resumeSection,auditSection,tools,status,counts,portfolioButton,portfolioHost,benefitOverlapButton,benefitOverlapHost,viewCount,list,comparison,detail);
+    const benefitReadinessButton=button('Review benefit evidence readiness','secondary');
+    benefitReadinessButton.id='owgPipelineBenefitReadiness';
+    const benefitReadinessHost=el('div');
+    benefitReadinessHost.id='owgPipelineBenefitReadinessResult';
+    benefitReadinessHost.setAttribute('role','status');
+    benefitReadinessHost.setAttribute('aria-live','polite');
+    benefitReadinessButton.onclick=async()=>{
+      benefitReadinessButton.disabled=true;
+      try{
+        const r=await (await api('/v1/automation-pipeline/benefit-readiness')).json();
+        if(r.format!=='openworkgraph.automation-portfolio-benefit-readiness.v1'||
+           !Array.isArray(r.ideas)||typeof r.implemented_ideas_reviewed!=='number')
+          throw new Error('Unexpected portfolio evidence readiness report.');
+        const filter=select('owgPipelineBenefitReadinessFilter',[
+          ['all','All implemented ideas'],...Object.keys(r.ideas_by_readiness).map(k=>[k,k.replaceAll('_',' ')])
+        ]);
+        const search=input('owgPipelineBenefitReadinessSearch','search','Find title or idea ID');
+        const display=el('div');display.id='owgPipelineBenefitReadinessRows';
+        const show=()=>{
+          const term=search.value.trim().toLowerCase();
+          const matched=r.ideas.filter(i=>(filter.value==='all'||i.readiness===filter.value)&&
+            (!term||(i.title+' '+i.idea_id).toLowerCase().includes(term)));
+          const t=el('table'),thead=el('thead'),tr=el('tr');
+          ['Idea','Evidence readiness','Baseline / after','Source links missing',
+            'Reported per-case effort change (hours/month)','Next human review'].forEach(v=>{
+            const th=el('th',v);th.scope='col';tr.append(th);
+          });thead.append(tr);const body=el('tbody');
+          matched.slice(0,150).forEach(i=>{
+            const row=el('tr'),th=el('th',i.title+' · '+i.idea_id);th.scope='row';row.append(th);
+            const change=i.reported_effort_change_hours_per_month_at_after_volume;
+            [i.readiness.replaceAll('_',' '),i.baseline_periods+' / '+i.after_periods,
+             i.missing_source_references,
+             change==null?'Not comparable':Number(change).toFixed(3),
+             i.next_review_action].forEach(v=>row.append(el('td',String(v))));
+            body.append(row);
+          });t.append(thead,body);
+          const wrap=el('div',null,'table-wrap');wrap.append(t);
+          display.replaceChildren(el('p',matched.length+' matching ideas; displaying '+Math.min(150,matched.length)+
+            '. Unlisted or filtered ideas were not marked complete.','muted'),
+            ...(matched.length?[wrap]:[el('p','No matching ideas.','muted')]));
+        };
+        filter.onchange=search.oninput=show;
+        const counts=Object.entries(r.ideas_by_readiness).map(([kind,n])=>n+' '+kind.replaceAll('_',' ')).join(' · ');
+        const warning=r.comparison_complete?
+          'This inventory reports entered evidence coverage, not independently verified savings or distinct cases.':
+          'The evidence is unreadable, truncated or incomplete. No missing claims are certified clear.';
+        benefitReadinessHost.replaceChildren(el('h4','Benefit evidence readiness'),
+          el('p',r.implemented_ideas_reviewed+' implemented ideas. '+counts+'.'),
+          el('p',r.candidate_overlap_pairs+' possible cross-idea overlap pairs; '+warning,'muted'),
+          field('Readiness category',filter),field('Search implemented ideas',search),
+          display,el('p',r.interpretation,'muted'));
+        show();
+      }catch(e){benefitReadinessHost.replaceChildren(el('p',e.message,'muted'));}
+      finally{benefitReadinessButton.disabled=false;}
+    };
+    const dependencyScheduleButton=button('Review dependency schedule risks','secondary');
+    dependencyScheduleButton.id='owgPipelineDependencySchedule';
+    const dependencyScheduleHost=el('div');
+    dependencyScheduleHost.id='owgPipelineDependencyScheduleResult';
+    dependencyScheduleHost.setAttribute('role','status');
+    dependencyScheduleHost.setAttribute('aria-live','polite');
+    dependencyScheduleButton.onclick=async()=>{
+      dependencyScheduleButton.disabled=true;
+      try{
+        const r=await (await api('/v1/automation-pipeline/dependency-schedule')).json();
+        if(!Array.isArray(r.risk_candidates)||typeof r.active_ideas!=='number')
+          throw new Error('Unexpected dependency schedule review');
+        const name=id=>(latestIdeas.find(idea=>idea.idea_id===id)||{}).title||id;
+        const lines=el('ul');
+        for(const finding of r.risk_candidates){
+          const path=finding.path.map(name).join(' → ');
+          const basis='Target '+(finding.idea_target_quarter||'not set')+
+            '; prerequisite '+(finding.dependency_target_quarter||'not set')+
+            ' ('+finding.dependency_state.replaceAll('_',' ')+')';
+          lines.appendChild(el('li',finding.kind.replaceAll('_',' ')+': '+path+'. '+basis+'.'));
+        }
+        const caveat=r.risk_candidates_truncated||!r.review_complete?
+          'The review was truncated or reached a depth boundary: unlisted issues remain unknown.':
+          'No live source was queried. These are plan consistency candidates, not forecast delivery dates.';
+        dependencyScheduleHost.replaceChildren(el('h4','Dependency schedule review'),
+          el('p',r.active_ideas+' active ideas; '+r.active_ideas_with_dependencies+
+            ' declare dependencies, '+r.active_ideas_with_target_quarter+
+            ' have target quarters; '+r.risk_candidates.length+' candidates shown.','muted'),
+          ...(r.risk_candidates.length?[lines]:[]),
+          el('p',caveat,'muted'),el('p',r.interpretation,'muted'));
+      }catch(e){dependencyScheduleHost.replaceChildren(el('p',e.message,'muted'));}
+      finally{dependencyScheduleButton.disabled=false;}
+    };
+    card.append(row,resumeSection,auditSection,tools,status,counts,portfolioButton,portfolioHost,benefitOverlapButton,benefitOverlapHost,benefitReadinessButton,benefitReadinessHost,dependencyScheduleButton,dependencyScheduleHost,viewCount,list,comparison,detail);
     panel.appendChild(card);
 
     let latestIdeas=[],refreshGeneration=0,resumeGeneration=0,auditGeneration=0,auditPageIndex=0,auditAbort=null;
@@ -2249,6 +2337,26 @@
            JSON.stringify(attestation.blockers)!==JSON.stringify(basis.blockers)){
           throw new Error('Destination review attestation inconsistent. Inspect again.');
         }
+        // Recheck durable human approval at the destination, independently of the
+        // originating workbench. A review-basis preflight alone is not approval.
+        if(!Number.isSafeInteger(handoff.review_revision)||handoff.review_revision<1)
+          throw new Error('Saved approval revision missing. Inspect again.');
+        const approvedResponse=await api('/v1/review-choice-workbench/'+encodeURIComponent(id)+'/reviewed-handoff-preflight',{
+          method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(basis)
+        });
+        if(!approvedResponse.ok)throw new Error('Destination saved approval refused ('+approvedResponse.status+').');
+        const approved=await approvedResponse.json();
+        if(!current())return;
+        if(approved.format!=='openworkgraph.reviewed-handoff-preflight.v1'||
+           approved.idea_id!==id||approved.project_id!==handoff.project_id||
+           approved.idea_revision!==handoff.idea_revision||
+           approved.project_set_sha256!==basis.project_set_sha256||
+           approved.spec_sha256!==handoff.spec_sha256||
+           approved.archive_sha256!==handoff.archive_sha256||
+           approved.review_revision!==handoff.review_revision||
+           approved.human_review_approved!==true||approved.execution_authorized!==false||
+           approved.source_read_authorized!==false)
+          throw new Error('Saved approval changed before destination opened. Inspect again.');
         // Only reveal the decision surface after authenticated exact-export checks.
         await show(id);
         if(!current())return;

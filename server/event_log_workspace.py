@@ -721,6 +721,10 @@ def delete_log(log_id: str) -> dict[str, Any]:
             from .local_scheduler import forget_target
             for kind in ("event_log_signals", "event_log_report"):
                 forget_target(kind, log_id)
+            # Revocation follows the source log itself. Remove stored webhook
+            # credentials, pending notifications and delivered-state hashes.
+            from .signal_notification_delivery import remove as remove_signal_delivery
+            remove_signal_delivery(log_id)
             # Cover a submission racing with the first erasure while deletion waited for this lock.
             jobs.erase_log(log_id)
             return {"deleted": True, "log_id": log_id}
@@ -896,18 +900,19 @@ def case_events(log_id: str, case_type: str | None = None) -> Iterator[tuple[str
 
 
 def export_log(log_id: str, export_format: str, out: IO[str], case_type: str | None = None) -> None:
-    if export_format == 'sourcecsv':
+    if export_format in ('sourcecsv', 'sourcecsv-review'):
         with _LOCK:
             conn=_connect()
             try:
                 _check_log(conn,log_id);notion=_case_type(conn,log_id,case_type)
-                source_identity.export_csv(conn,log_id,notion,out)
+                source_identity.export_csv(conn,log_id,notion,out,spreadsheet_review=export_format == 'sourcecsv-review')
             except EventLogFormatError as exc:raise EventLogWorkspaceError(str(exc)) from None
             finally:conn.close()
     elif export_format == "xes":
         write_xes(case_events(log_id, case_type), out)
-    elif export_format == "csv":
-        write_csv((event for _, events in case_events(log_id, case_type) for event in events), out)
+    elif export_format in ("csv", "csv-review"):
+        write_csv((event for _, events in case_events(log_id, case_type) for event in events), out,
+                  spreadsheet_review=export_format == "csv-review")
     elif export_format in ("ocel", "ocelxml"):
         with _LOCK:
             conn = _connect()

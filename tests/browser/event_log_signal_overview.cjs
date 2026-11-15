@@ -147,6 +147,43 @@ const path=require('node:path');
     await page.waitForFunction(id=>document.querySelector('#owgEventLogPick')?.value===id,setup.a);
     await page.locator('#owgSignalTimelineResults').filter({hasText:/Triggered/}).waitFor();
 
+    // R10: external alerts are OFF by default, and creating a receiver does
+    // not itself send any source material or silently schedule a source read.
+    await page.locator('#owgSignalDeliveryStatus').filter({hasText:'External alerts are disabled.'}).waitFor();
+    assert(await page.locator('#owgSignalDeliveryEnable').isDisabled());
+    await page.locator('#owgSignalDeliveryUrl').fill('https://example.com/hooks/owg-only');
+    await page.locator('#owgSignalDeliveryConsent').check();
+    await page.locator('#owgSignalCountsConsent').check();
+    await page.locator('#owgSignalDeliveryEnable').click();
+    await page.locator('#owgSignalDeliveryStatus').filter({hasText:'schedule this exact log'}).waitFor();
+    // The prerequisite is a separately authorized, pinned signal schedule.
+    const scheduled=await page.evaluate(async id=>{
+      const response=await fetch('/v1/schedules',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({kind:'event_log_signals',target_id:id,
+          interval_minutes:15,confirm_scheduled_runs:true})});
+      return {status:response.status,body:await response.json()};
+    },setup.a);
+    assert.equal(scheduled.status,200,JSON.stringify(scheduled.body));
+    await page.locator('#owgSignalDeliveryEnable').click();
+    await page.locator('#owgSignalDeliveryStatus').filter({hasText:'enabled for example.com'}).waitFor();
+    const secret=await page.locator('#owgSignalDeliverySecret').inputValue();
+    assert.match(secret,/^[a-f0-9]{64}$/,'one-time HMAC secret appears only after new consent');
+    const state=await page.evaluate(async id=>(await (await fetch(
+      '/v1/schedules/signal-delivery/'+id)).json()),setup.a);
+    assert.equal(state.configured,true);
+    assert.equal(state.pending_notifications,0);
+    assert.equal(state.delivered_notifications,0);
+    assert(!JSON.stringify(state).includes(secret));
+    assert(!JSON.stringify(state).includes('/hooks/owg-only'));
+    page.once('dialog',dialog=>dialog.accept());
+    await page.locator('#owgSignalDeliveryRemove').click();
+    await page.locator('#owgSignalDeliveryStatus').filter({hasText:'External alerts are disabled.'}).waitFor();
+    assert.equal(await page.locator('#owgSignalDeliverySecret').inputValue(),'');
+    const removed=await page.evaluate(async id=>(await (await fetch(
+      '/v1/schedules/signal-delivery/'+id)).json()),setup.a);
+    assert.equal(removed.configured,false,'removal revokes key and pending delivery');
+
     await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
     const audit=await page.evaluate(()=>window.axe.run(document.querySelector('#owgEventLogSignals'),{
       runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']}

@@ -281,16 +281,42 @@ def record(conn, log_id: str, *, batch: int, kind: str, source_format: str, mapp
     return report
 
 
+def _stored_batch_history(conn, log_id: str) -> dict[str, Any]:
+    """Read retained batch metadata without recomputing whole-log diagnostics."""
+    reports = [json.loads(row[0]) for row in conn.execute(
+        "SELECT report FROM log_quality WHERE log_id = ? ORDER BY batch", [log_id]).fetchall()]
+    batches = [0] + [row[0] for row in conn.execute(
+        "SELECT batch FROM log_appends WHERE log_id = ? ORDER BY batch", [log_id]).fetchall()]
+    present = {report["batch"] for report in reports}
+    missing = [batch for batch in batches if batch not in present]
+    return {"reports": reports, "batches_without_report": missing}
+
+
+def _with_batch_trends(history: dict[str, Any]) -> dict[str, Any]:
+    from . import event_log_quality_trends as quality_trends
+    return {**history, "batch_trends": quality_trends.build(
+        history["reports"], history["batches_without_report"])}
+
+
+def batch_history(log_id: str) -> dict[str, Any]:
+    """Stored report history only; no current event diagnostics or digests."""
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            workspace._check_log(conn, log_id)
+            history = _stored_batch_history(conn, log_id)
+        finally:
+            conn.close()
+    return _with_batch_trends(history)
+
+
 def quality(log_id: str) -> dict[str, Any]:
     """Stored reports, oldest first, and the current whole-log diagnostics and content digest."""
     with workspace._LOCK:
         conn = workspace._connect()
         try:
             info = workspace._check_log(conn, log_id)
-            reports = [json.loads(r[0]) for r in conn.execute(
-                "SELECT report FROM log_quality WHERE log_id = ? ORDER BY batch", [log_id]).fetchall()]
-            batches = [0] + [r[0] for r in conn.execute(
-                "SELECT batch FROM log_appends WHERE log_id = ? ORDER BY batch", [log_id]).fetchall()]
+            history = _stored_batch_history(conn, log_id)
             current = diagnostics(conn, log_id)
             digest = content_digest(conn, log_id)
             digest_v2 = content_digest_v2(conn, log_id)
@@ -299,16 +325,11 @@ def quality(log_id: str) -> dict[str, Any]:
                                if info.get('source_identity') else {})
         finally:
             conn.close()
-    from . import event_log_quality_trends as quality_trends
-    present = {r["batch"] for r in reports}
-    missing_reports = [b for b in batches if b not in present]
-    # Logs imported before reports existed, or whose report could not be written, have none.
-    return {"log": info, "reports": reports, "batches_without_report": missing_reports,
-            "batch_trends": quality_trends.build(reports, missing_reports),
+    return {"log": info, **_with_batch_trends(history),
             "current": {"content_sha256": digest, "content_sha256_v2": digest_v2,
                         "diagnostics": current, **identity_digest, **relationship_metadata,
                         "completeness": {"historical_completeness": "unknown", "note": COMPLETENESS_NOTE}},
             **workspace.DESCRIPTIVE_ONLY}
 
 
-__all__ = ["quality", "record", "transform", "content_digest", "content_digest_v2", "diagnostics", "MAPPING_VERSION"]
+__all__ = ["quality", "batch_history", "record", "transform", "content_digest", "content_digest_v2", "diagnostics", "MAPPING_VERSION"]

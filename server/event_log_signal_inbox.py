@@ -91,6 +91,14 @@ def _scheduled(log_id: str) -> bool:
     except Exception:
         return False
 
+def _delivering(log_id: str) -> bool:
+    try:
+        from .signal_notification_delivery import enabled_for
+        return enabled_for(log_id)
+    except Exception:
+        # An unreadable local channel store never implies delivery is enabled.
+        return False
+
 
 def list_inbox(log_id: str) -> dict:
     with workspace._LOCK:
@@ -124,7 +132,7 @@ def list_inbox(log_id: str) -> dict:
     return {
         "items": items,
         "unreviewed": sum(x["requires_review"] for x in items),
-        "delivery_enabled": False, "scheduled_checks_enabled": _scheduled(log_id),
+        "delivery_enabled": _delivering(log_id), "scheduled_checks_enabled": _scheduled(log_id),
         "actions_authorized": False,
         "interpretation": ("Acknowledgement records only a local human review of a specific "
                            "evaluated signal state; it neither verifies an outcome nor "
