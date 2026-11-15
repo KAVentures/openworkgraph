@@ -96,7 +96,7 @@
     if (baseline === target) return refuse('Select two different batches.');
     if (baseline > target) return refuse('Choose an earlier baseline and a later target.');
     if (target - baseline >= MAX_VISIBLE)
-      return refuse('Comparison exceeds the latest '+MAX_VISIBLE+' displayed batches.');
+      return refuse('Comparison exceeds the '+MAX_VISIBLE+' displayed batches.');
     const byId = new Map();
     for (const item of trends.batches.slice(-MAX_VISIBLE)) {
       if (!item || !Number.isSafeInteger(item.batch) || item.batch < 0) continue;
@@ -355,6 +355,9 @@
     const run=element('button','Compare batches');run.type='button';run.className='secondary';run.id='owgQualityTrendsRun';
     const download=element('button','Download shown batches CSV');download.type='button';download.className='secondary';
     download.id='owgQualityTrendsCsv';download.disabled=true;download.style.marginLeft='8px';
+    const newest=element('button','Newest batches'),older=element('button','Older batches');
+    newest.type=older.type='button';newest.className=older.className='secondary';
+    newest.id='owgQualityNewestBatches';older.id='owgQualityOlderBatches';newest.disabled=older.disabled=true;
     const message=element('div','Select Compare batches to inspect saved reports.');
     message.id='owgQualityTrendsStatus';message.className='muted';
     message.setAttribute('role','status');message.setAttribute('aria-live','polite');
@@ -416,9 +419,9 @@
     drillLabel.appendChild(drillSelect);
     const drillOutput=element('div');drillOutput.id='owgQualityBatchDetails';
     drill.append(element('h4','Batch rejection diagnostics'),drillLabel,drillOutput);
-    panel.append(element('h4','Import/append quality trends'),intro,run,download,message,pairPanel,increasePanel,reasonPanel,reviewPanel,output,drill);
+    panel.append(element('h4','Import/append quality trends'),intro,run,download,newest,older,message,pairPanel,increasePanel,reasonPanel,reviewPanel,output,drill);
     quality.appendChild(panel);
-    const selected=logId();let ticket=0,loaded=null,loadedReports=[];
+    const selected=logId();let ticket=0,loaded=null,loadedReports=[],nextBefore=null;
     const current=(id,n)=>panel.isConnected && logId()===id && ticket===n;
     function showPair() {
       pairOutput.replaceChildren();pairReasonOutput.replaceChildren();pairReasonCsv.disabled=true;
@@ -500,7 +503,7 @@
       for(const reason of d.reasons){const row=element('tr');row.append(element('td',reason.name),element('td',reason.count));body.appendChild(row);}
       table.append(head,body);const wrap=element('div');wrap.className='table-wrap';wrap.appendChild(table);
       drillOutput.appendChild(wrap);
-      if(d.omitted)drillOutput.appendChild(element('p',d.omitted+' additional categories omitted (latest '+MAX_REASONS+' shown by count).'));
+      if(d.omitted)drillOutput.appendChild(element('p',d.omitted+' additional categories omitted (top '+MAX_REASONS+' shown by count).'));
     }
     drillSelect.addEventListener('change',showDetail);
     function showIncreases() {
@@ -508,8 +511,8 @@
       if (!loaded || logId()!==selected || !panel.isConnected) return;
       const result=rankedIncreases(loaded,Number(increaseThreshold.value));
       increaseOutput.appendChild(element('p',result.total+' comparable rate increases at or above '+
-        increaseThreshold.value+' percentage points among the latest '+result.examined+
-        ' displayed reports; '+result.rows.length+' shown (maximum '+MAX_INCREASE_ROWS+').'));
+        increaseThreshold.value+' percentage points among '+result.examined+
+        ' reports on this page; '+result.rows.length+' shown (maximum '+MAX_INCREASE_ROWS+').'));
       if (!result.rows.length) return;
       const table=element('table');table.id='owgQualityIncreaseTable';
       const head=element('thead'),hr=element('tr');
@@ -540,8 +543,8 @@
       const result=rejectionReasonIncreases(loaded,loadedReports,Number(reasonThreshold.value));
       reasonOutput.appendChild(element('p',result.total+' recorded category increases at or above '+
         reasonThreshold.value+' percentage points across '+result.comparablePairs+
-        ' comparable adjacent pairs; '+result.skippedPairs+' pairs excluded among the latest '+
-        result.examined+' displayed reports; '+result.rows.length+' shown (maximum '+
+        ' comparable adjacent pairs; '+result.skippedPairs+' pairs excluded among '+
+        result.examined+' reports on this page; '+result.rows.length+' shown (maximum '+
         MAX_REASON_INCREASE_ROWS+').'));
       if (!result.rows.length) return;
       const table=element('table');table.id='owgQualityReasonTable';
@@ -569,7 +572,7 @@
     }
     reasonThreshold.addEventListener('change',showReasons);
     function clearState() {
-      ++ticket;loaded=null;loadedReports=[];download.disabled=true;run.disabled=false;
+      ++ticket;loaded=null;loadedReports=[];nextBefore=null;newest.disabled=older.disabled=true;download.disabled=true;run.disabled=false;
       output.replaceChildren();reviewOutput.replaceChildren();pairOutput.replaceChildren();pairReasonOutput.replaceChildren();pairReasonCsv.disabled=true;increaseOutput.replaceChildren();reasonOutput.replaceChildren();
       pairBaseline.disabled=true;pairTarget.disabled=true;
       pairBaseline.replaceChildren();pairTarget.replaceChildren();
@@ -580,20 +583,22 @@
     if(picker)picker.addEventListener('change',()=>{
       if(logId()!==selected){clearState();message.textContent='Select and analyse a log again.';}
     });
-    run.addEventListener('click',async()=>{
+    async function loadHistory(before){
       const id=logId();
       if(!id || id!==selected){clearState();message.textContent='Select and analyse a log again.';return;}
       clearState();const n=ticket;run.disabled=true;
       message.textContent='Reading local batch reports…';
       try{
         // Dashboard bootstrap injects the local session; no AI bearer or external URL.
-        const response=await fetch('/v1/event-logs/'+encodeURIComponent(id)+'/quality/batch-history',{cache:'no-store'});
+        const response=await fetch('/v1/event-logs/'+encodeURIComponent(id)+'/quality/batch-history/page'+(before===null?'':'?before='+encodeURIComponent(before)),{cache:'no-store'});
         if(!response.ok)throw new Error('Quality report unavailable (HTTP '+response.status+').');
         const data=await response.json();
         if(!current(id,n))return;
         const trends=data && data.batch_trends;
         if(!trends || !Array.isArray(trends.batches))throw new Error('Server does not provide batch trends yet.');
         loaded=trends;
+        const windowInfo=data.window||{};nextBefore=windowInfo.next_before??null;
+        newest.disabled=before===null;older.disabled=nextBefore===null;
         loadedReports=Array.isArray(data.reports)?data.reports:[];
         showIncreases();
         const available=trends.batches.slice(-MAX_VISIBLE).filter(b=>Number.isSafeInteger(b.batch)&&b.batch>=0);
@@ -641,8 +646,8 @@
             reviewOutput.appendChild(element('p','Latest '+MAX_VISIBLE+' review entries shown.'));
         } else reviewOutput.appendChild(element('p','No saved quality reports to review.'));
         const shown=rows(trends),missing=Array.isArray(trends.batches_without_report)?trends.batches_without_report.length:0;
-        message.textContent=trends.batches.length+' reports; '+missing+' missing; '+
-          (trends.batches.length>MAX_VISIBLE?'latest '+MAX_VISIBLE+' shown. ':'')+
+        message.textContent=trends.batches.length+' reports; '+missing+' missing on this page. '+
+          (Number.isSafeInteger(windowInfo.total_batches)?'Showing '+windowInfo.batch_count+' of '+windowInfo.total_batches+' batches. History can change between pages. ':'')+
           'Deltas require adjacent batches, identical transforms and known denominators.';
         if(!shown.length){output.appendChild(element('p','No batch reports available.'));return;}
         const table=element('table');table.id='owgQualityTrendsRows';
@@ -656,9 +661,12 @@
         const wrap=element('div');wrap.className='table-wrap';wrap.appendChild(table);
         output.append(wrap,element('p','Future-dated rates use different report times and are never compared. No provider completeness, causality or individual performance is inferred.'));
         download.disabled=false;
-      }catch(error){if(current(id,n))message.textContent=error?.message||'Batch trends unavailable.';}
+      }catch(error){if(current(id,n)){message.textContent=error?.message||'Batch trends unavailable.';newest.disabled=before===null;}}
       finally{if(panel.isConnected && ticket===n)run.disabled=false;}
-    });
+    }
+    run.addEventListener('click',()=>loadHistory(null));
+    newest.addEventListener('click',()=>loadHistory(null));
+    older.addEventListener('click',()=>{if(nextBefore!==null)loadHistory(nextBefore);});
     download.addEventListener('click',()=>{
       if(!loaded || !panel.isConnected || logId()!==selected)return;
       const url=URL.createObjectURL(new Blob([csv(loaded)],{type:'text/csv;charset=utf-8'}));
