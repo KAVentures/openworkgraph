@@ -686,3 +686,29 @@ def test_recovery_valid_session_can_read_manual_next_action(monkeypatch):
     assert result["owg_writes"] == 0
     assert session.call_count == 2
     triage.assert_called_once()
+
+
+def test_transaction_preflight_revocation_after_private_read_withholds_counts(monkeypatch):
+    """Revocation during the private preflight must not disclose generations."""
+    configure(monkeypatch)
+    with (
+        patch("server.m365_operator_audit_routes.dashboard_session_valid",
+              side_effect=[True, False]) as session_valid,
+        patch("server.m365_outlook_reviewed_transaction.preflight",
+              return_value={
+                  "status": "review_ready_for_explicit_commit",
+                  "proposed_generation": 2,
+                  "checkpoint_predecessor_generation": 1,
+                  "reviewed_event_snapshots": 9,
+                  "removal_markers_for_review": 1,
+              }) as preflight,
+        patch("server.m365_outlook_reviewed_transaction.execute") as execute,
+    ):
+        with pytest.raises(HTTPException) as error:
+            operator_transaction_preflight(request(), True, FIRST)
+        assert error.value.status_code == 409
+        assert "Do not retry" in str(error.value.detail)
+        assert "9" not in str(error.value.detail)
+        preflight.assert_called_once()
+        execute.assert_not_called()
+        assert session_valid.call_count == 2
