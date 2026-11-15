@@ -329,6 +329,12 @@ def event_log_quality(request: Request, log_id: str):
     return _respond(quality.quality, log_id)
 
 
+@router.get("/v1/event-logs/{log_id}/quality/batch-history")
+def event_log_quality_batch_history(request: Request, log_id: str):
+    _require_dashboard(request)
+    return _respond(quality.batch_history, log_id)
+
+
 @router.post("/v1/event-logs/{log_id}/derive")
 async def derive_event_log(request: Request, log_id: str):
     """Save the cases matching a filter as a new event log; the source log is unchanged."""
