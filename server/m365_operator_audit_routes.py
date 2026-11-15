@@ -18,9 +18,10 @@ from .local_auth import dashboard_session_valid
 
 router = APIRouter()
 _NAME = re.compile(r"m365-[0-9a-f]{32}\.json\Z")
-_ACTIONS = {"readiness", "extract", "append", "commit"}
+_ACTIONS = {"readiness", "extract", "append", "handoff", "commit"}
 _STATUSES = {"operator_review_ready", "review_ready", "review_required",
-             "append_review_verified", "receipt_persisted", "checkpoint_committed"}
+             "append_review_verified", "receipt_persisted",
+             "next_round_handoff_prepared", "checkpoint_committed"}
 _MAX_FILES = 1000
 _MAX_BYTES = 2048
 
@@ -80,6 +81,7 @@ def read_operator_audit(directory: Path, *, limit: int = 50) -> dict:
                                 "readiness": {"operator_review_ready", "review_ready"},
                                 "extract": {"review_required"},
                                 "append": {"append_review_verified", "receipt_persisted"},
+                                "handoff": {"next_round_handoff_prepared"},
                                 "commit": {"checkpoint_committed"},
                             }.get(obj.get("action"), set())
                             or type(obj.get("timestamp_utc")) is not str

@@ -109,7 +109,8 @@ def build_runtime_project(packet: dict) -> bytes:
     spec = build_runtime_spec(packet)
     model = ProcessModel.model_validate(spec['process_model'])
     files = {name: (_TEMPLATES / (name + '.txt')).read_text(encoding='utf-8')
-             for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py', 'monitor.py', 'test_monitor.py', 'configure.py', 'test_configuration.py', 'evaluate.py', 'test_evaluation.py', 'plan_sources.py', 'test_source_planning.py', 'evaluate_sources.py', 'test_source_evaluation.py')}
+             for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py', 'monitor.py', 'test_monitor.py', 'send_report.py', 'configure.py', 'test_configuration.py', 'evaluate.py', 'test_evaluation.py', 'plan_sources.py', 'test_source_planning.py', 'evaluate_sources.py', 'test_source_evaluation.py')}
+    files['owg_report_signing.py'] = (Path(__file__).parent/'automation_report_signing.py').read_text(encoding='utf-8')
     for name in ('process_source_state.py','process_rule_conditions.py'):
         files[name]=(Path(__file__).parent/name).read_text(encoding='utf-8')
     if model.decision_tables:
@@ -334,6 +335,32 @@ def build_runtime_project(packet: dict) -> bytes:
         'completed activity IDs against the saved graph, retaining branches and joins.\n'
         'Coverage limits and missing reports remain visible. Structural matches\n'
         'do not verify rules, human work, current approval or business outcomes.\n\n'
+        '## Optional signed delivery to an OWG monitoring report channel\n\n'
+        'This step is OFF by default and requires the operator to create a report\n'
+        'channel in OWG Automation monitoring. Keep its one-time 64-hex channel\n'
+        'secret and the separate local OWG API token outside this project ZIP.\n'
+        'Set a new outbox start sequence to one more than the channel\n'
+        'highest_sequence shown in the dashboard (new channel: 1):\n\n'
+        '```sh\n'
+        'python send_report.py queue --report new-run-report.json --outbox report-outbox.json '
+        '--channel chn_YOUR_ID --version v1 --start-sequence 1\n'
+        '```\n\n'
+        'Queue writes a private local report outbox, not a network request.\n'
+        'Set OWG_REPORT_RECEIVER_URL to the exact /v1/automation-monitoring/'
+        'channels/chn_YOUR_ID/reports endpoint, OWG_REPORT_API_TOKEN to the\n'
+        'separate local API bearer token, and OWG_REPORT_CHANNEL_SECRET to the\n'
+        'one-time HMAC channel secret. Then manually send only the oldest\n'
+        'staged report with:\n\n'
+        '```sh\npython send_report.py send --outbox report-outbox.json --confirm-network\n```\n\n'
+        'A failed/uncertain acknowledgement retains identical report bytes and\n'
+        'sequence for an explicit retry. A different report never reuses a\n'
+        'sequence while that outbox exists. Protect/retain/back up the outbox;\n'
+        'recreating it requires checking the current receiver sequence first.\n'
+        'Only HTTPS or loopback HTTP is permitted; redirects are rejected.\n'
+        'This is transport for customer-reported outcomes, not verification\n'
+        'of business effects, proof of delivery without an acknowledgement\n'
+        'or an authorization to execute an agent or provider write.\n\n'
+
         'Source checks use only exact customer-selected observed owg:r: references\n'
         'and the existing separately enabled local OWG source adapters. A fresh\n'
         'matching operational receipt does not establish case association, agent\n'

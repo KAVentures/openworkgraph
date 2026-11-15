@@ -149,3 +149,30 @@ def test_run_receipt_wal_mode_refused(store):
     os.chmod(target, 0o600)
     with pytest.raises(CaseDeclarationError, match="mode"):
         receipts.review(**args())
+
+
+def test_shortened_retention_immediately_hides_old_receipts(store, monkeypatch):
+    """A later shorter history policy must override stored expiry."""
+    start = datetime(2026, 11, 10, tzinfo=timezone.utc)
+    later = start + timedelta(days=2)
+    receipts.append(**args(), action="reviewed", evidence_digest=DIGEST, now=start)
+    assert len(receipts.review(**args(), now=later)["entries"]) == 1
+
+    monkeypatch.setattr(binding, "read_policy", lambda: {
+        "human_retention": {"mode": "days", "days": 1}})
+    assert receipts.review(**args(), now=later)["entries"] == []
+    # An expired receipt cannot be corrected after retention is shortened.
+    old_id = receipts.review(**args(), now=start)["entries"][0]["id"]
+    with pytest.raises(CaseDeclarationError, match="target missing"):
+        receipts.append(**args(), action="disputed", evidence_digest=DIGEST,
+                        supersedes=old_id, now=later)
+    # A newly reviewed receipt is allowed, but must not resurrect old history.
+    new = receipts.append(**args(), action="reviewed",
+                          evidence_digest=DIGEST, now=later)
+    assert len(new["entries"]) == 1
+    assert new["entries"][0]["id"] != old_id
+
+
+def test_receipt_review_rejects_naive_clock(store):
+    with pytest.raises(CaseDeclarationError, match="timezone-aware"):
+        receipts.review(**args(), now=datetime(2026, 11, 14))

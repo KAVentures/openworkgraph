@@ -126,3 +126,16 @@ def test_slowest_transitions_need_enough_cases_and_honour_the_filter():
     html = report.report_html(log)
     assert "<h2>Slowest transitions</h2>" in html and "Approve → Pay" in html
     assert "not measured work or verified waiting" in html
+
+
+def test_report_leads_with_where_to_look_first():
+    log = _log("plain")
+    data = report.build(log, sla_seconds=3 * 3600 + 1)
+    kinds = [f["kind"] for f in data["insights"]["findings"]]
+    assert kinds and len(kinds) <= 5 and "sla_breaches" in kinds
+    html = report.render(data)
+    assert "<h2>Where to look first</h2>" in html and html.index("Where to look first") < html.index("Most frequent variants")
+    assert "not causes" in html
+    # Logs too small for insights simply leave the section out.
+    data["insights"] = {"findings": [], "interpretation": ""}
+    assert "Where to look first" not in report.render(data)
