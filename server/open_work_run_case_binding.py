@@ -116,7 +116,8 @@ def bind_run(*, scope: str, actor: str, secret: str, case_ref: str, run_ref: str
     expiry = current + _retention()
     with _database(True) as db:
         db.execute("BEGIN IMMEDIATE")
-        db.execute("DELETE FROM bindings WHERE expires_at <= ?", (current.isoformat(),))
+        db.execute("DELETE FROM bindings WHERE expires_at <= ? OR created_at <= ?",
+                   (current.isoformat(), (current - _retention()).isoformat()))
         count = db.execute("SELECT COUNT(*) FROM bindings").fetchone()[0]
         existing = db.execute("""SELECT fingerprint, revision FROM bindings
             WHERE actor_key=? AND scope=? AND case_ref=? AND run_ref=?""",
@@ -140,18 +141,19 @@ def get_binding(*, scope: str, actor: str, secret: str, case_ref: str, run_ref: 
     """Fail closed on changed source snapshot, declaration revision or expiry."""
     _validate(scope, case_ref, run_ref, fingerprint, revision)
     key = _actor_key(secret, scope, actor)
-    current = _now(now).isoformat()
-    _retention()  # Deny access when policy is unavailable/revoked.
+    current_time = _now(now)
+    current = current_time.isoformat()
+    cutoff = (current_time - _retention()).isoformat()  # Current policy may shrink.
     with _database(False) as db:
         if db is None:
             return None
         try:
-            row = db.execute("""SELECT fingerprint, revision, expires_at FROM bindings
+            row = db.execute("""SELECT fingerprint, revision, expires_at, created_at FROM bindings
                 WHERE actor_key=? AND scope=? AND case_ref=? AND run_ref=?""",
                 (key, scope, case_ref, run_ref)).fetchone()
         except sqlite3.Error:
             raise CaseDeclarationError("binding ledger unavailable") from None
-    if not row or row[2] <= current or row[:2] != (fingerprint, revision):
+    if not row or row[2] <= current or row[3] <= cutoff or row[:2] != (fingerprint, revision):
         return None
     return {"case_ref": case_ref, "run_ref": run_ref, "association": "operator_confirmed",
             "run_case_identity_independently_verified": False,
@@ -238,8 +240,9 @@ def list_case_bindings(*, scope: str, actor: str, secret: str, case_ref: str,
     """
     _validate(scope, case_ref, "owg:run:" + "0" * 32, "0" * 64, revision)
     key = _actor_key(secret, scope, actor)
-    current = _now(now).isoformat()
-    _retention()
+    current_time = _now(now)
+    current = current_time.isoformat()
+    cutoff = (current_time - _retention()).isoformat()
     with _database(False) as db:
         if db is None:
             rows = []
@@ -247,8 +250,8 @@ def list_case_bindings(*, scope: str, actor: str, secret: str, case_ref: str,
             try:
                 rows = db.execute("""SELECT run_ref, revision
                     FROM bindings WHERE actor_key=? AND scope=? AND case_ref=?
-                    AND expires_at > ? ORDER BY run_ref LIMIT ?""",
-                    (key, scope, case_ref, current, _MAX_ROWS + 1)).fetchall()
+                    AND expires_at > ? AND created_at > ? ORDER BY run_ref LIMIT ?""",
+                    (key, scope, case_ref, current, cutoff, _MAX_ROWS + 1)).fetchall()
             except sqlite3.Error:
                 raise CaseDeclarationError("binding ledger unavailable") from None
     if len(rows) > _MAX_ROWS:
@@ -278,15 +281,16 @@ def require_exclusive_run_case_binding(*, scope: str, actor: str, secret: str,
     """
     _validate(scope, case_ref, run_ref, fingerprint, revision)
     key = _actor_key(secret, scope, actor)
-    current = _now(None).isoformat()
-    _retention()
+    current_time = _now(None)
+    current = current_time.isoformat()
+    cutoff = (current_time - _retention()).isoformat()
     with _database(False) as db:
         if db is None:
             raise CaseDeclarationError("current run/case binding required")
         try:
             rows = db.execute("""SELECT case_ref, fingerprint, revision FROM bindings
                 WHERE actor_key=? AND scope=? AND run_ref=? AND expires_at>?
-                LIMIT 2""", (key, scope, run_ref, current)).fetchall()
+                AND created_at>? LIMIT 2""", (key, scope, run_ref, current, cutoff)).fetchall()
         except sqlite3.Error:
             raise CaseDeclarationError("binding ledger unavailable") from None
     if len(rows) != 1 or rows[0] != (case_ref, fingerprint, revision):

@@ -14,6 +14,7 @@ _LOCK = threading.RLock()
 _DASHBOARD_SESSIONS: dict[str, None] = {}
 _CONSUMED_DASHBOARD_BOOTSTRAPS: set[str] = set()
 _EXPORT_TICKETS: dict[str, tuple[float, str, str, bool, bool, str, str]] = {}
+_ANALYSIS_GRANTS: dict[str, tuple[float, str, str, str]] = {}
 _PAIRING_CODE: tuple[str, float, int] | None = None
 _BROWSER_PAIR_REQUESTS: dict[str, tuple[float, str, bool]] = {}
 _SEEN_BROWSER_NONCES: dict[str, float] = {}
@@ -230,6 +231,42 @@ def consume_export_ticket(
             and hmac.compare_digest((since or "").encode("utf-8"), expected_since.encode("utf-8"))
             and hmac.compare_digest((until or "").encode("utf-8"), expected_until.encode("utf-8"))
         )
+
+
+
+def issue_analysis_grant(session: str, log_id: str, lineage_digest: str, ttl_seconds: int = 30) -> dict[str, int | str]:
+    """Issue a bounded, session- and lineage-bound local authorization primitive.
+
+    Callers must independently validate the reviewed preview and consent.
+    """
+    if not session or not log_id or not lineage_digest:
+        raise ValueError("valid dashboard session and reviewed analysis required")
+    ttl = max(1, min(int(ttl_seconds), 60))
+    token = secrets.token_urlsafe(32)
+    with _LOCK:
+        # Validate and insert under one lock: a revoked session cannot acquire
+        # a new grant between a separate validity check and issuance.
+        if session not in _DASHBOARD_SESSIONS:
+            raise ValueError("valid dashboard session and reviewed analysis required")
+        now = time.time()
+        for key, value in list(_ANALYSIS_GRANTS.items()):
+            if value[0] <= now:
+                _ANALYSIS_GRANTS.pop(key, None)
+        _ANALYSIS_GRANTS[token] = (now + ttl, session, log_id, lineage_digest)
+    return {"ticket": token, "expires_in_seconds": ttl}
+
+
+def consume_analysis_grant(token: str, session: str, log_id: str, lineage_digest: str) -> bool:
+    """Atomically burn a grant, including on mismatch or concurrent replay."""
+    if not token:
+        return False
+    with _LOCK:
+        grant = _ANALYSIS_GRANTS.pop(str(token), None)
+        if not grant or grant[0] <= time.time() or session not in _DASHBOARD_SESSIONS:
+            return False
+        return all(hmac.compare_digest(str(actual), str(expected))
+                   for actual, expected in zip((session, log_id, lineage_digest), grant[1:]))
+
 
 
 def new_pairing_code(ttl_seconds: int = 120) -> dict[str, int | str]:

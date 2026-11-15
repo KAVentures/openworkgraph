@@ -2544,7 +2544,7 @@ async def verify_local_bound_run_source(request: Request, response: Response):
         raise HTTPException(403, "explicit run, history and source review required")
     if type(payload["max_cases"]) is not int or not 1 <= payload["max_cases"] <= 4:
         raise HTTPException(422, "max_cases must be between 1 and 4")
-    from .open_work_run_case_binding import get_binding
+    from .open_work_run_case_binding import get_binding, require_exclusive_run_case_binding
 
     # Admit the entire declared graph, both retained histories, signed record
     # link, imported run and actor-owned binding BEFORE provider network IO.
@@ -2563,6 +2563,11 @@ async def verify_local_bound_run_source(request: Request, response: Response):
             revision=payload["expected_revision"])
         if binding is None:
             raise CaseDeclarationError("explicit current run/case binding review required")
+        await asyncio.to_thread(
+            require_exclusive_run_case_binding, scope=scope, actor=actor,
+            secret=secret, case_ref=payload["work_item_ref"],
+            run_ref=run["run_ref"], fingerprint=run["run_snapshot_fingerprint"],
+            revision=payload["expected_revision"])
         await asyncio.to_thread(
             _operation_ledger_guard, scope, payload["work_item_ref"],
             payload["expected_revision"], payload["expected_edit_token"], signature)
@@ -2606,6 +2611,12 @@ async def verify_local_bound_run_source(request: Request, response: Response):
             revision=payload["expected_revision"])
         if second_run != run or second_binding != binding:
             raise CaseDeclarationError("run binding changed during source verification")
+        await asyncio.to_thread(
+            require_exclusive_run_case_binding, scope=scope, actor=actor,
+            secret=secret, case_ref=payload["work_item_ref"],
+            run_ref=second_run["run_ref"],
+            fingerprint=second_run["run_snapshot_fingerprint"],
+            revision=payload["expected_revision"])
         verified = project_case_operation_verification(refreshed, resource_ref, receipt)
         triage = compose_fresh_outcome_triage(refreshed_history, verified)
         await asyncio.to_thread(
@@ -2616,6 +2627,9 @@ async def verify_local_bound_run_source(request: Request, response: Response):
     await _recheck_source(scope)
     persisted_history = None
     if persist:
+        # Session revocation during provider IO must deny the optional local
+        # evidence write, not merely hide its response after persistence.
+        _dashboard_only(request)
         # The case ledger records provider state, not independent run identity.
         # Recheck the run binding and case immediately before the guarded CAS.
         try:
@@ -2632,17 +2646,28 @@ async def verify_local_bound_run_source(request: Request, response: Response):
                 revision=payload["expected_revision"])
             if latest_run != run or latest_binding != binding:
                 raise CaseDeclarationError("run binding changed before evidence append")
+            await asyncio.to_thread(
+                require_exclusive_run_case_binding, scope=scope, actor=actor,
+                secret=secret, case_ref=payload["work_item_ref"],
+                run_ref=latest_run["run_ref"],
+                fingerprint=latest_run["run_snapshot_fingerprint"],
+                revision=payload["expected_revision"])
             persisted_history = await asyncio.to_thread(
                 append_operation_evidence, refreshed, refreshed_signature,
                 scope=scope, secret=secret, resource_ref=resource_ref,
                 verification=verified,
-                guard=lambda: _operation_ledger_guard(
-                    scope, payload["work_item_ref"], payload["expected_revision"],
-                    payload["expected_edit_token"], signature),
+                guard=lambda: (
+                    _dashboard_only(request),
+                    _operation_ledger_guard(
+                        scope, payload["work_item_ref"], payload["expected_revision"],
+                        payload["expected_edit_token"], signature)),
                 expected_history=prior_evidence["events"])
         except (CaseDeclarationError, OSError, sqlite3.DatabaseError, TypeError, KeyError) as exc:
             raise _safe_error(exc) from None
         await _recheck_source(scope)
+    # A dashboard session can be revoked while the provider request is in flight.
+    # Source authorization alone does not renew the caller session.
+    _dashboard_only(request)
     response.headers["Cache-Control"] = "no-store"
     return {
         "format": "openworkgraph.local-bound-run-source-verification.v1",
@@ -2815,6 +2840,10 @@ async def bound_run_receipt_journal(request: Request, response: Response):
     actor = hashlib.sha256(request.headers["authorization"].encode("utf-8")).hexdigest()
 
     def guard():
+        # The receipt journal can perform SQLite I/O on a worker thread after
+        # the HTTP session has been revoked. Check inside its transactional
+        # guard, not only at route entry or before returning the response.
+        _dashboard_only(request)
         _operation_ledger_guard(scope, payload["work_item_ref"],
                                 payload["expected_revision"],
                                 payload["expected_edit_token"], signature)
@@ -2899,6 +2928,7 @@ async def bound_run_receipt_journal(request: Request, response: Response):
             KeyError, ValueError) as exc:
         raise _safe_error(exc) from None
     await _recheck_source(scope)
+    _dashboard_only(request)
     response.headers["Cache-Control"] = "no-store"
     return result
 
@@ -3057,6 +3087,8 @@ async def read_local_bound_attempt_receipts(request: Request, response: Response
             KeyError, ValueError, OverflowError) as exc:
         raise _safe_error(exc) from None
     await _recheck_source(scope)
+    _dashboard_only(request)
+    # Fail closed if this session was revoked during the retained journal read.
     _dashboard_only(request)
     response.headers["Cache-Control"] = "no-store"
     return {

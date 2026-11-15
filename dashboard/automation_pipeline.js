@@ -2337,6 +2337,26 @@
            JSON.stringify(attestation.blockers)!==JSON.stringify(basis.blockers)){
           throw new Error('Destination review attestation inconsistent. Inspect again.');
         }
+        // Recheck durable human approval at the destination, independently of the
+        // originating workbench. A review-basis preflight alone is not approval.
+        if(!Number.isSafeInteger(handoff.review_revision)||handoff.review_revision<1)
+          throw new Error('Saved approval revision missing. Inspect again.');
+        const approvedResponse=await api('/v1/review-choice-workbench/'+encodeURIComponent(id)+'/reviewed-handoff-preflight',{
+          method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(basis)
+        });
+        if(!approvedResponse.ok)throw new Error('Destination saved approval refused ('+approvedResponse.status+').');
+        const approved=await approvedResponse.json();
+        if(!current())return;
+        if(approved.format!=='openworkgraph.reviewed-handoff-preflight.v1'||
+           approved.idea_id!==id||approved.project_id!==handoff.project_id||
+           approved.idea_revision!==handoff.idea_revision||
+           approved.project_set_sha256!==basis.project_set_sha256||
+           approved.spec_sha256!==handoff.spec_sha256||
+           approved.archive_sha256!==handoff.archive_sha256||
+           approved.review_revision!==handoff.review_revision||
+           approved.human_review_approved!==true||approved.execution_authorized!==false||
+           approved.source_read_authorized!==false)
+          throw new Error('Saved approval changed before destination opened. Inspect again.');
         // Only reveal the decision surface after authenticated exact-export checks.
         await show(id);
         if(!current())return;

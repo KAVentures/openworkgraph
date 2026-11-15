@@ -89,3 +89,28 @@ def check_snapshot_freshness(log_id, request):
         "execution_authorized": False,
         "warning": "Current recomputation is not proof of original publication, source authenticity or authorization.",
     }
+
+
+def export_if_source_current(log_id, request):
+    """Return freshly computed minimized rows only for the exact reviewed lineage.
+
+    The workspace lock in export_snapshot covers the query and source digest.
+    This is a fail-closed source-bound export, NOT a durable single-use grant.
+    """
+    import re
+    if not isinstance(request, dict) or set(request) != {"spec", "source_content_sha256", "analysis_spec_sha256", "metric_definition_sha256"}:
+        raise workspace.EventLogWorkspaceError("export requires spec and exact reviewed lineage")
+    if any(not isinstance(request[k], str) or re.fullmatch(r"[0-9a-f]{64}", request[k]) is None
+           for k in ("source_content_sha256", "analysis_spec_sha256")):
+        raise workspace.EventLogWorkspaceError("invalid reviewed lineage")
+    metric_hashes = request["metric_definition_sha256"]
+    if not isinstance(metric_hashes, list) or len(metric_hashes) > 32 or any(
+        not isinstance(h, str) or re.fullmatch(r"[0-9a-f]{64}", h) is None for h in metric_hashes
+    ):
+        raise workspace.EventLogWorkspaceError("invalid reviewed metric lineage")
+    current = export_snapshot(log_id, request["spec"])
+    if any(current[k] != request[k] for k in (
+        "source_content_sha256", "analysis_spec_sha256", "metric_definition_sha256"
+    )):
+        raise workspace.EventLogWorkspaceError("source or analysis changed; prepare and review a new preview")
+    return current
