@@ -21,6 +21,7 @@ MAX_ALIGNED_VARIANTS = 2000
 MAX_ALIGNED_TRACE_LENGTH = 300
 MAX_AUTOMATION_RESOURCES = 50
 MIN_GROUP_CASES = 5
+NUMERIC_RANGE_MIN_DISTINCT = 10  # numeric case attributes with more distinct values are also tested by quartile
 _OUTCOMES = {"duration_over", "contains_activity", "ends_with", "rework"}
 
 
@@ -289,17 +290,29 @@ def root_cause(log_id: str, outcome: str, case_type: str | None = None, *, thres
                     "associations_are_not_causes": True,
                     "temporal_order_not_checked": True}
         excluded = activity if outcome in {"contains_activity", "ends_with"} else None
-        rows = conn.execute("""WITH f AS (
-              SELECT DISTINCT case_id, 'activity' AS kind, activity AS value FROM ce WHERE activity IS DISTINCT FROM $excluded
-              UNION SELECT DISTINCT case_id, 'resource', resource FROM ce WHERE resource <> ''
-              UNION SELECT DISTINCT o.object_id, 'attribute', left(kv.key, 100) || '=' || left(kv.value, 100)
+        rows = conn.execute("""WITH attrs AS (
+              SELECT o.object_id AS case_id, left(kv.key, 100) AS k, kv.value AS v, try_cast(kv.value AS DOUBLE) AS x
                 FROM objects o JOIN co ON co.case_id = o.object_id,
                   unnest(map_entries(json_transform(o.attributes, '"MAP(VARCHAR, VARCHAR)"'))) AS m(kv)
-                WHERE o.log_id = $log_id)
+                WHERE o.log_id = $log_id),
+            -- Numeric attributes with many values (amounts, durations, counts) rarely repeat a value often
+            -- enough to be tested; their quartiles are tested as ranges instead.
+            numeric AS (SELECT k, quantile_cont(x, [0.25, 0.5, 0.75]) AS q FROM attrs GROUP BY k
+                HAVING count(x) >= 0.9 * count(*) AND count(DISTINCT x) > $min_distinct),
+            ranged AS (SELECT a.case_id, a.k, a.x, n.q FROM attrs a JOIN numeric n USING (k) WHERE a.x IS NOT NULL),
+            f AS (
+              SELECT DISTINCT case_id, 'activity' AS kind, activity AS value FROM ce WHERE activity IS DISTINCT FROM $excluded
+              UNION SELECT DISTINCT case_id, 'resource', resource FROM ce WHERE resource <> ''
+              UNION SELECT DISTINCT case_id, 'attribute', k || '=' || left(v, 100) FROM attrs
+              UNION SELECT DISTINCT case_id, 'attribute_range', CASE
+                  WHEN x < q[1] THEN k || ' < ' || printf('%.6g', q[1])
+                  WHEN x < q[2] THEN printf('%.6g', q[1]) || ' ≤ ' || k || ' < ' || printf('%.6g', q[2])
+                  WHEN x < q[3] THEN printf('%.6g', q[2]) || ' ≤ ' || k || ' < ' || printf('%.6g', q[3])
+                  ELSE k || ' ≥ ' || printf('%.6g', q[3]) END FROM ranged)
             SELECT kind, value, count(*) AS n1, count(*) FILTER (WHERE co.y) AS y1
             FROM f JOIN co USING (case_id) GROUP BY 1, 2
             HAVING count(*) >= $min AND count(*) <= $max""",
-                            {"excluded": excluded, "log_id": log_id,
+                            {"excluded": excluded, "log_id": log_id, "min_distinct": NUMERIC_RANGE_MIN_DISTINCT,
                              "min": MIN_GROUP_CASES, "max": n - MIN_GROUP_CASES}).fetchall()
         tested = len(rows)
         z_adjusted = NormalDist().inv_cdf(1 - 0.05 / (2 * max(tested, 1)))
@@ -319,6 +332,9 @@ def root_cause(log_id: str, outcome: str, case_type: str | None = None, *, thres
                                   r["feature"]["kind"], r["feature"]["value"]))
         return {**base, "features_tested": tested, "associations": found[:limit],
                 "method": "risk difference with Newcombe hybrid-score 95% interval; Bonferroni over features tested",
+                "numeric_attributes": ("case attributes whose values are numbers, with more than "
+                                       f"{NUMERIC_RANGE_MIN_DISTINCT} distinct values, are also tested as quartile ranges "
+                                       "of this log (attribute_range); the edges describe this log, not targets"),
                 "associations_are_not_causes": True,
                 "temporal_order_not_checked": True}
 
