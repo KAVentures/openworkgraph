@@ -132,6 +132,10 @@ def save_reconstruction_review(
     if len(payload) > _MAX_BYTES:
         raise ValueError("review exceeds private storage limit")
     with _LOCK:
+        # Retention can change while the payload is serialized. Recheck at
+        # the atomic persistence boundary under the same store lock.
+        if grant.get("mode") != "all_saved" or not _retention_allowed():
+            raise PermissionError("Review retention was revoked before persistence")
         path = _path()
         if path.is_symlink():
             raise OSError("unsafe review storage path")
