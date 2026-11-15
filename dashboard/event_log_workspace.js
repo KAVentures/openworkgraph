@@ -2,7 +2,7 @@
 (() => {
   'use strict';
   const MODEL_FORMAT='openworkgraph.reference-model.v1';
-  const state={logs:[],logId:'',caseType:'',generation:0,refresh:0,follows:[],attributeRange:null,objectTypes:[]};
+  const state={logs:[],logId:'',caseType:'',generation:0,refresh:0,follows:[],attributeRange:null,caseActivity:'',objectTypes:[]};
   let activityLookupBusy=false;
   // Views that honour the workspace case filter; every other section uses all cases.
   const FILTERED=new Set(['summary','variants','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','waiting-time','drift','model-discovery','organization','report.html']);
@@ -350,7 +350,7 @@
       }catch(error){status(error.message);}finally{refreshImport();}
     };
     pick.onchange=()=>{selectLog(pick.value);refreshImport();};
-    caseType.onchange=()=>{state.generation++;state.caseType=caseType.value;state.follows=[];state.attributeRange=null;results.replaceChildren();};
+    caseType.onchange=()=>{state.generation++;state.caseType=caseType.value;state.follows=[];state.attributeRange=null;state.caseActivity='';results.replaceChildren();};
     analyze.onclick=()=>analyse().catch(error=>status(error.message));
     const relationshipExportNote=()=>{const log=state.logs.find(l=>l.log_id===state.logId);return log&&log.object_relationships&&!['ocel','ocelxml'].includes(exportFormat.value)?' This format omits supplied object relationships; OCEL JSON/XML preserve the retained assertions.':'';};
     exportFormat.onchange=()=>{const note=relationshipExportNote();const review=exportFormat.value.endsWith('-review')?'Review CSV changes formula-like text and column names; use the regular export for re-import.':'';if(review||note)status((review+note).trim());};
@@ -596,7 +596,7 @@
 
   async function selectLog(logId){
     const savedPanel=document.getElementById('owgEventLogSavedList');if(savedPanel){show(savedPanel,false);document.getElementById('owgEventLogSavedReports')?.setAttribute('aria-expanded','false');}
-    const generation=++state.generation;state.logId=logId;state.caseType='';state.follows=[];state.attributeRange=null;state.objectTypes=[];
+    const generation=++state.generation;state.logId=logId;state.caseType='';state.follows=[];state.attributeRange=null;state.caseActivity='';state.objectTypes=[];
     document.getElementById('owgEventLogResults').replaceChildren();
     const types=await getJSON('/v1/event-logs/'+encodeURIComponent(logId)+'/object-types');
     if(generation!==state.generation)return;
@@ -891,7 +891,7 @@
       try{const cohort=filters.read();
         if(exactActivity.value){if(Array.from(exactActivity.value).length>200)throw new Error('Activity labels must have at most 200 characters.');cohort.activity=exactActivity.value;}
         if(options.caseType===undefined)applyActiveCohort(cohort);
-        filterApplied=options.caseType===undefined&&Boolean(state.follows.length||state.attributeRange);
+        filterApplied=options.caseType===undefined&&Boolean(state.follows.length||state.attributeRange||state.caseActivity);
         if(association){chosen.textContent='All paths.';association=false;}
         spec={cohort,limit:30};if(path)spec.path=path;if(transition)spec.transition=transition;detail.replaceChildren();opening++;load(null);}
       catch(error){message.textContent=error.message;}
@@ -989,9 +989,13 @@
   }
   const followRow=rule=>({from:rule.from,to:rule.to,mode:(rule.negate?'not-':'')+rule.mode});
 
-  function activeCohort(){const cohort={};if(state.follows.length)cohort.follows=state.follows;if(state.attributeRange)cohort.attribute_range=state.attributeRange;return cohort;}
+  function activeCohort(){const cohort={};if(state.follows.length)cohort.follows=state.follows;if(state.attributeRange)cohort.attribute_range=state.attributeRange;if(state.caseActivity)cohort.activity=state.caseActivity;return cohort;}
   function mergeActiveCohort(cohort,active){
     const result={...cohort};if(active.follows)result.follows=active.follows;
+    if(active.activity){
+      if(result.activity&&result.activity!==active.activity)throw new Error('This operation selects a different activity from the active case filter. Clear one activity to continue.');
+      result.activity=active.activity;
+    }
     if(active.attribute_range){
       const base=active.attribute_range,extra=result.attribute_range;
       if(extra&&extra.name!==base.name)throw new Error('This operation has a different numeric attribute range from the active case filter. Clear one range to continue.');
@@ -1043,7 +1047,7 @@
 
   function caseFilterSection(activityNames){
     const box=section('Case filter');box.id='owgCaseFilter';
-    box.appendChild(el('div','Keep cases matching a numeric case-attribute range, follower rules, or both. Every selected condition must hold. The filter applies to the overview, variants, activities, KPIs, process map and playback, dotted chart, waiting time, drift, discovery and organization; other sections use every case. Follower matching describes recorded order only.','muted'));
+    box.appendChild(el('div','Keep cases containing an activity, matching a numeric case-attribute range, following the selected rules, or any combination. Every selected condition must hold. The filter applies to the overview, variants, activities, KPIs, process map and playback, dotted chart, waiting time, drift, discovery and organization; other sections use every case. Follower matching describes recorded order only.','muted'));
     box.appendChild(el('div','Suggestions show up to 500 frequent activities. Enter an exact label to override a suggestion; matching is literal and an unknown label may match no cases.','muted'));
     const draft=state.follows.map(followRow);
     const rows=el('div');rows.id='owgCaseFilterRules';
@@ -1051,10 +1055,12 @@
     const apply=button('Apply filter');apply.id='owgCaseFilterApply';
     const clear=button('Clear filter','secondary');clear.id='owgCaseFilterClear';
     const rangeName=input('owgCaseFilterRangeName','text','Case attribute name'),rangeMin=input('owgCaseFilterRangeMin','number','No minimum'),rangeMax=input('owgCaseFilterRangeMax','number','No maximum');
+    const contains=input('owgCaseFilterContainsActivity','text','Exact activity label (optional)');contains.maxLength=400;contains.value=state.caseActivity;
+    const containsLookup=activityLabelLookup(contains,{id:part=>'owgCaseFilterContainsActivity'+part,subject:'case filter activity'});contains.addEventListener('input',containsLookup.reset);
     rangeName.maxLength=400;rangeMin.step=rangeMax.step='any';
     if(state.attributeRange){rangeName.value=state.attributeRange.name;rangeMin.value=state.attributeRange.min??'';rangeMax.value=state.attributeRange.max??'';}
     const rangeRow=el('div',null,'row');rangeRow.style.alignItems='end';rangeRow.append(field('Numeric case attribute',rangeName),field('Minimum (inclusive)',rangeMin),field('Maximum (exclusive)',rangeMax));
-    const activeText=[...state.follows.map(followText),...(state.attributeRange?['numeric range '+JSON.stringify(state.attributeRange)]:[])];
+    const activeText=[...state.follows.map(followText),...(state.caseActivity?['contains activity '+JSON.stringify(state.caseActivity)]:[]),...(state.attributeRange?['numeric range '+JSON.stringify(state.attributeRange)]:[])];
     const message=el('div',activeText.length?'Active: '+activeText.join('; ')+'.':'No case filter: every case is included.','muted');
     message.id='owgCaseFilterStatus';message.setAttribute('role','status');message.tabIndex=-1;
     const names=activityNames.slice(0,500).map(a=>[a,a]);
@@ -1085,13 +1091,14 @@
     add.onclick=()=>{draft.push({from:names[0]?.[0]||'',to:(names[1]||names[0])?.[0]||'',mode:'eventual'});render();const focus=document.getElementById((names.length?'owgCaseFilterFrom':'owgCaseFilterFromExact')+draft.length);if(focus)focus.focus();};
     apply.onclick=()=>{try{
       if(rangeMin.validity.badInput||rangeMax.validity.badInput)throw new Error('Numeric range bounds must be finite numbers.');
+      if(contains.value&&(/^[\p{White_Space}\u001c-\u001f]*$/u.test(contains.value)||Array.from(contains.value).length>200))throw new Error('Enter an activity label of at most 200 characters.');
       const follows=followSpec(draft),range=cohortSpec({rangeName:rangeName.value,rangeMin:rangeMin.value,rangeMax:rangeMax.value}).attribute_range||null;
-      state.follows=follows;state.attributeRange=range;analyse().catch(error=>status(error.message));
+      state.follows=follows;state.attributeRange=range;state.caseActivity=contains.value;analyse().catch(error=>status(error.message));
     }catch(error){message.textContent=error.message;}};
-    clear.onclick=()=>{state.follows=[];state.attributeRange=null;analyse().catch(error=>status(error.message));};
+    clear.onclick=()=>{state.follows=[];state.attributeRange=null;state.caseActivity='';analyse().catch(error=>status(error.message));};
     render();
     const controls=el('div',null,'row');controls.append(add,apply,clear);
-    box.append(rows,rangeRow,controls,message,filterSetBlock(activityNames));
+    box.append(rows,field('Case contains exact activity',contains),containsLookup.wrap,rangeRow,controls,message,filterSetBlock(activityNames));
     return box;
   }
 
@@ -1099,7 +1106,7 @@
   function filterSetBlock(activityNames){
     const wrap=el('div');wrap.id='owgFilterSets';
     const name=input('owgFilterSetName','text','Filter name');name.maxLength=120;
-    const hasActive=state.follows.length||state.attributeRange;
+    const hasActive=state.follows.length||state.attributeRange||state.caseActivity;
     const save=button('Save active filter','secondary');save.id='owgFilterSetSave';save.disabled=!hasActive;
     const message=el('div',hasActive?'':'Apply a filter to save it.','muted');message.id='owgFilterSetStatus';message.setAttribute('role','status');
     const list=el('div');list.id='owgFilterSetList';
@@ -1110,16 +1117,16 @@
     async function refresh(){
       const r=await getJSON(base());if(generation!==state.generation)return;
       list.replaceChildren(r.filter_sets.length?table(['Filter','Rules','Notes',''],r.filter_sets.map(set=>{
-        const follows=set.cohort.follows||[],range=set.cohort.attribute_range||null,other=Object.keys(set.cohort).filter(k=>k!=='follows'&&k!=='attribute_range');
-        const use=button('Apply','secondary');use.setAttribute('aria-label','Apply saved filter '+set.name);use.disabled=(!follows.length&&!range)||other.length>0;
-        use.onclick=()=>{state.follows=follows;state.attributeRange=range;analyse().catch(error=>status(error.message));};
+        const follows=set.cohort.follows||[],range=set.cohort.attribute_range||null,activity=set.cohort.activity||'',other=Object.keys(set.cohort).filter(k=>k!=='follows'&&k!=='attribute_range'&&k!=='activity');
+        const use=button('Apply','secondary');use.setAttribute('aria-label','Apply saved filter '+set.name);use.disabled=(!follows.length&&!range&&!activity)||other.length>0;
+        use.onclick=()=>{state.follows=follows;state.attributeRange=range;state.caseActivity=activity;analyse().catch(error=>status(error.message));};
         const del=button('Delete','secondary');del.setAttribute('aria-label','Delete saved filter '+set.name);
         del.onclick=async()=>{try{await api(base()+'/'+encodeURIComponent(set.set_id)+'/delete',{method:'POST'});message.textContent='Saved filter deleted.';await refresh();}catch(error){message.textContent=error.message;}};
         const notes=[...(set.activities_not_in_log.length?['Not in this log: '+set.activities_not_in_log.join(', ')]:[]),
           ...(set.log_appended_since_saved?['Newer exports were appended since it was saved']:[]),
           ...(other.length?['Also filters by '+other.join(', ')+', which this panel cannot apply']:[])];
         const actions=el('span');actions.append(use,' ',del);
-        return [set.name,[...follows.map(followText),...(range?['numeric range '+JSON.stringify(range)]:[])].join('; ')||'—',notes.join('. ')||'—',actions];
+        return [set.name,[...follows.map(followText),...(activity?['contains activity '+JSON.stringify(activity)]:[]),...(range?['numeric range '+JSON.stringify(range)]:[])].join('; ')||'—',notes.join('. ')||'—',actions];
       })):el('div','No saved filters yet.','muted'));
     }
     save.onclick=async()=>{
@@ -2819,10 +2826,10 @@
           let evidence='—';
           if(a.cohort){
             evidence=el('span');const inspect=button('Inspect cases','secondary');inspect.setAttribute('aria-label','Inspect cases with '+a.feature.kind+': '+a.feature.value);inspect.onclick=()=>inspection.cohort(a.cohort);evidence.appendChild(inspect);
-            if(a.cohort.attribute_range){
+            if(a.cohort.attribute_range||a.cohort.activity){
               const filter=button('Filter views','secondary');filter.setAttribute('aria-label','Filter views to '+a.feature.value+'; replace the case filter');
               filter.onclick=async()=>{
-                state.follows=[];state.attributeRange={...a.cohort.attribute_range};const expected=state.generation+1;
+                state.follows=[];state.attributeRange=a.cohort.attribute_range?{...a.cohort.attribute_range}:null;state.caseActivity=a.cohort.activity||'';const expected=state.generation+1;
                 try{await analyse();if(state.generation===expected){const target=document.getElementById('owgCaseFilterStatus');if(target){target.scrollIntoView({block:'nearest'});target.focus();}}}
                 catch(error){status(error.message);}
               };
@@ -2834,7 +2841,7 @@
         out.replaceChildren(
           el('div','Outcome in '+pct(r.outcome_rate)+' of '+Number(r.cases).toLocaleString()+' cases; '+Number(r.features_tested)+' features tested.','muted'),
           table(['Feature','Cases with it','Outcome with','Outcome without','Difference (95% CI)','Holds after correction','Evidence'],rows),
-          ...((r.associations||[]).some(a=>a.cohort?.attribute_range)?[el('div','Filter views replaces the current case filter with the selected numeric range. Save the current filter first if you want to return to it.','muted')]:[]),
+          ...((r.associations||[]).some(a=>a.cohort?.attribute_range||a.cohort?.activity)?[el('div','Filter views replaces the current case filter with the selected activity or numeric range. Save the current filter first if you want to return to it.','muted')]:[]),
           el('div',r.note||'These are associations in this log, not causes. A step can be a consequence of the outcome rather than its reason.','muted'));
       }catch(error){out.replaceChildren(el('div',error.message,'muted'));}
     };

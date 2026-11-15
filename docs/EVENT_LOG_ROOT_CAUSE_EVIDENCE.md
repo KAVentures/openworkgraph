@@ -14,8 +14,8 @@ fields. Selecting **Browse cases** again uses those fields and the active
 workspace filter. Association still does not establish causation, ordering or a
 verified business outcome.
 
-For a numeric range, **Filter views** replaces the workspace case filter with
-the exact range from the association and refreshes the views that support that
+For a numeric range or activity, **Filter views** replaces the workspace case filter with
+the exact condition from the association and refreshes the views that support that
 filter. Save the current case filter first if you may want to restore it. This
 action does not apply to associations that cannot be represented as a numeric
-range.
+range or exact activity.
