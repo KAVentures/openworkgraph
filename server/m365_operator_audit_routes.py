@@ -163,6 +163,10 @@ def operator_audit(request: Request):
         result = read_operator_audit(Path(configured))
     except AuditEvidenceError:
         raise HTTPException(409, "Private operator audit evidence unavailable") from None
+    # Private receipts may take time to inspect. A session revoked during the
+    # read must not receive even the redacted evidence timeline.
+    if not dashboard_session_valid(authorization[len("owg-session "):].strip()):
+        raise HTTPException(409, "Dashboard session changed during audit inspection; retry manually")
     return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
