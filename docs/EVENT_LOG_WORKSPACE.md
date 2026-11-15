@@ -580,6 +580,13 @@ contains an activity, or case ends with an activity. Every case feature
 - whether the interval still excludes zero after a Bonferroni correction for
   the number of features tested.
 
+A numeric case attribute rarely repeats one value in 5 cases. Amounts,
+quantities and scores therefore get a second test, when at least 90% of a
+case attribute's values are numbers and it has more than 10 distinct values.
+Its quartile ranges in this log (`amount < 460.75`, `460.75 ≤ amount < 821.5`,
+...) are tested as features of kind `attribute_range`. The edges describe this
+log; they are not thresholds anyone set.
+
 These are associations in the imported log. They are not causes: a feature
 can be a consequence of the outcome (a fix step in slow cases, for example),
 and temporal order is not checked.
