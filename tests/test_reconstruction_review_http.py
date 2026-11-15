@@ -133,7 +133,7 @@ def test_dashboard_rejects_scores_from_superseded_reviewer_labels():
     assert "const labelEpoch=reconstructionLabelEpoch;" in source
     assert "if(labelEpoch!==reconstructionLabelEpoch){" in source
     assert source.index("if(labelEpoch!==reconstructionLabelEpoch){") < source.index(
-        "root.querySelector('#reconstructionMetrics').textContent=JSON.stringify({"
+        "metrics.textContent=JSON.stringify({"
     )
     assert "Labels changed while scoring. Submit the current review again." in source
     assert "root.querySelector('#reconstructionMetrics').textContent='';" in source
@@ -360,3 +360,15 @@ def test_review_workbench_shows_provisional_groups_as_inert_evidence():
     assert "observed_case_groups_truncated:data.observed_case_groups_truncated===true" in source
     assert "evidence.textContent=JSON.stringify({" in source
     assert "root.querySelector('#reconstructionProvenance')?.remove()" in source
+
+
+def test_reviewer_disagreement_navigation_uses_exact_event_and_window():
+    """Disagreement links must not use transitive resource similarity as identity."""
+    from server.main import ROOT
+    source = (ROOT / "dashboard" / "history_retention.js").read_text(encoding="utf-8")
+    assert "choice.row.window===item.window&&choice.row.event_id===item.event_id" in source
+    assert "disagreements.slice(0,192).forEach(item=>" in source
+    assert "target.scrollIntoView({block:'center'})" in source
+    assert "button.textContent='Inspect '+String(item.window)+' · '+String(item.event_id)" in source
+    assert "navigation.setAttribute('aria-label','Review event-level disagreements')" in source
+    assert "metrics.appendChild(navigation)" in source
