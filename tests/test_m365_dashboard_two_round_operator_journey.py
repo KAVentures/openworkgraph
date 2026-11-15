@@ -577,3 +577,26 @@ def test_identity_preflight_session_revocation_blocks_second_graph_read(monkeypa
     assert session_valid.call_count == 2
     identity.assert_called_once()
     folder.assert_not_called()
+
+
+def test_identity_preflight_session_revocation_during_folder_read_refuses_success(monkeypatch):
+    """A second Graph read completing after session revocation cannot report success."""
+    configure(monkeypatch)
+    with (
+        patch("server.m365_operator_audit_routes.dashboard_session_valid",
+              side_effect=[True, True, False]) as session_valid,
+        patch("server.m365_outlook_mailbox_identity.preflight",
+              return_value={"status": "mailbox_identity_observed",
+                            "mailbox_identifier_matched": True,
+                            "tenant_id_verified": False}) as identity,
+        patch("server.m365_outlook_folder_preflight.preflight",
+              return_value={"status": "folder_metadata_observed",
+                            "folder_id_matched": True}) as folder,
+    ):
+        with pytest.raises(HTTPException) as error:
+            operator_identity_folder_preflight(request(), True, True)
+    assert error.value.status_code == 409
+    assert "Do not retry" in str(error.value.detail)
+    assert session_valid.call_count == 3
+    identity.assert_called_once()
+    folder.assert_called_once()
