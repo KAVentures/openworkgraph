@@ -3,6 +3,7 @@
   'use strict';
   const MODEL_FORMAT='openworkgraph.reference-model.v1';
   const state={logs:[],logId:'',caseType:'',generation:0,refresh:0,follows:[],objectTypes:[]};
+  let activityLookupBusy=false;
   // Views that honour the workspace case filter; every other section uses all cases.
   const FILTERED=new Set(['summary','variants','variant-coverage','duration-distribution','activities','kpis','process-map','playback','dotted-chart','waiting-time','drift','model-discovery','organization','report.html']);
 
@@ -841,6 +842,13 @@
       return url.pathname+url.search;
     };
     const filters=cohortFields(prefix+'Filter','Select complete cases',activityNames);
+    const exactActivity=input(prefix+'ExactActivity','text','Exact activity label (optional)');exactActivity.maxLength=400;
+    const activityPicker=filters.node.querySelector('#'+prefix+'FilterActivity');
+    const activityLookup=activityLabelLookup(exactActivity,{id:part=>prefix+'Activity'+part,
+      subject:prefix==='owgVariantCoverageCases'?'variant coverage case activity':
+        prefix==='owgEventLogObjectCases'?'object case activity':'case evidence activity',caseType:options.caseType});
+    exactActivity.addEventListener('input',activityLookup.reset);
+    activityPicker.addEventListener('change',()=>{exactActivity.value='';activityLookup.reset();});
     const browse=button('Browse cases','secondary');browse.id=prefix+'Browse';
     const first=button('First case page','secondary'),next=button('Next case page','secondary');
     first.disabled=true;next.disabled=true;
@@ -851,7 +859,7 @@
     const list=el('div');list.id=prefix+'List';
     const detail=el('div');detail.id=prefix==='owgEventLogCases'?'owgEventLogCaseEvents':prefix+'Events';
     const controls=el('div',null,'row');controls.append(browse,reset,first,next);
-    box.append(note,filters.node,chosen,controls,message,list,detail);
+    box.append(note,filters.node,el('div','Suggestions include up to 500 frequent activities. An exact label overrides the suggestion and is matched literally.','muted'),field('Exact activity to inspect',exactActivity),activityLookup.wrap,chosen,controls,message,list,detail);
     let path=null,transition=null,spec=null,nextAfter=null,listing=0,opening=0;
     async function load(after){
       const ticket=++listing;first.disabled=true;next.disabled=true;browse.disabled=true;
@@ -872,7 +880,9 @@
       finally{if(current()&&ticket===listing)browse.disabled=false;}
     }
     function start(){
-      try{const cohort=filters.read();if(options.caseType===undefined&&state.follows.length)cohort.follows=state.follows;
+      try{const cohort=filters.read();
+        if(exactActivity.value){if(Array.from(exactActivity.value).length>200)throw new Error('Activity labels must have at most 200 characters.');cohort.activity=exactActivity.value;}
+        if(options.caseType===undefined&&state.follows.length)cohort.follows=state.follows;
         spec={cohort,limit:30};if(path)spec.path=path;if(transition)spec.transition=transition;detail.replaceChildren();opening++;load(null);}
       catch(error){message.textContent=error.message;}
     }
@@ -903,9 +913,9 @@
     },activity(value){
       const picker=document.getElementById(prefix+'FilterActivity');
       if(!Array.from(picker.options).some(option=>option.value===value))picker.add(new Option(value,value));
-      path=null;transition=null;chosen.textContent='All paths.';picker.value=value;start();box.scrollIntoView({block:'nearest'});
+      exactActivity.value='';activityLookup.reset();path=null;transition=null;chosen.textContent='All paths.';picker.value=value;start();box.scrollIntoView({block:'nearest'});
     },transition(value){
-      path=null;transition=value.slice();document.getElementById(prefix+'FilterActivity').value='';
+      exactActivity.value='';activityLookup.reset();path=null;transition=value.slice();document.getElementById(prefix+'FilterActivity').value='';
       chosen.textContent='Adjacent transition: '+JSON.stringify(transition)+'. Timestamp ties do not verify order.';
       start();box.scrollIntoView({block:'nearest'});
     }};
@@ -918,6 +928,7 @@
     const rules=(rows||[]).map(r=>{
       const from=String(r.from||''),to=String(r.to||'');const mode=FOLLOW_MODES[r.mode];
       if(!from||!to)throw new Error('Choose both activities for every rule.');
+      if(Array.from(from).length>200||Array.from(to).length>200)throw new Error('Activity labels must have at most 200 characters.');
       if(!mode)throw new Error('Choose how the activities follow each other.');
       return {from,to,mode:mode[0],negate:mode[1]};
     });
@@ -962,9 +973,46 @@
   }
   const followRow=rule=>({from:rule.from,to:rule.to,mode:(rule.negate?'not-':'')+rule.mode});
 
+  function activityLabelLookup(exact,options){
+    const lookupGeneration=state.generation,lookupLog=state.logId,activeCase=state.caseType;
+    const lookupCase=options.caseType===undefined?activeCase:options.caseType;
+    const wrap=el('div'),find=button('Find labels','secondary'),more=button('More matches','secondary'),use=button('Use label','secondary');
+    find.id=options.id('Find');more.id=options.id('More');use.id=options.id('Use');
+    const subject=options.subject;
+    find.setAttribute('aria-label','Find matching '+subject);
+    more.setAttribute('aria-label','More matches for '+subject);
+    use.setAttribute('aria-label','Use selected '+subject);
+    const choices=select(options.id('Matches'),[]),choiceField=field('Matches for '+subject,choices);
+    const status=el('div',null,'muted');status.setAttribute('role','status');status.id=options.id('LookupStatus');
+    show(choiceField,false);show(use,false);show(more,false);let turn=0,next=null;
+    const reset=()=>{turn++;next=null;choices.replaceChildren();show(choiceField,false);show(use,false);show(more,false);status.textContent='';};
+    const current=t=>wrap.isConnected&&lookupGeneration===state.generation&&lookupLog===state.logId&&activeCase===state.caseType&&t===turn;
+    async function load(after){
+      const search=exact.value;
+      if(!search||Array.from(search).length>200){status.textContent='Enter 1 to 200 characters to search.';return;}
+      if(activityLookupBusy){status.textContent='Wait for the current activity lookup to finish.';return;}
+      const ticket=++turn;activityLookupBusy=true;find.disabled=true;more.disabled=true;use.disabled=true;status.textContent='Searching the current case notion…';
+      try{
+        const result=await (await api('/v1/event-logs/'+encodeURIComponent(lookupLog)+'/activity-labels/search',{
+          method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({search,after,case_type:lookupCase||null})})).json();
+        if(!current(ticket)||exact.value!==search)return;
+        const labels=Array.isArray(result.labels)?result.labels:[];
+        setOptions(choices,labels.map(label=>[label,label]));next=result.next_after??null;
+        show(choiceField,labels.length>0);show(use,labels.length>0);show(more,next!==null);
+        status.textContent=labels.length+' matching labels on this page. Search is case-sensitive; results can change between pages.';
+      }catch(error){if(current(ticket))status.textContent=error.message;}
+      finally{activityLookupBusy=false;if(wrap.isConnected&&lookupGeneration===state.generation&&lookupLog===state.logId&&activeCase===state.caseType){find.disabled=false;more.disabled=false;use.disabled=false;}}
+    }
+    find.onclick=()=>load('');more.onclick=()=>{if(next!==null)load(next);};
+    use.onclick=()=>{if(!choices.value)return;exact.value=choices.value;exact.dispatchEvent(new Event('input',{bubbles:true}));exact.focus();};
+    wrap.append(find,choiceField,use,more,status);return {wrap,reset};
+  }
+
+
   function caseFilterSection(activityNames){
     const box=section('Case filter');box.id='owgCaseFilter';
     box.appendChild(el('div','Keep only cases where one activity is (or is never) followed by another, directly or later. Every rule must hold. The filter applies to the overview, variants, activities, KPIs, process map and playback, dotted chart, waiting time, drift, discovery and organization; other sections use every case. Matching describes recorded order only.','muted'));
+    box.appendChild(el('div','Suggestions show up to 500 frequent activities. Enter an exact label to override a suggestion; matching is literal and an unknown label may match no cases.','muted'));
     const draft=state.follows.map(followRow);
     const rows=el('div');rows.id='owgCaseFilterRules';
     const add=button('Add rule','secondary');add.id='owgCaseFilterAdd';
@@ -977,16 +1025,27 @@
       rows.replaceChildren(...draft.map((rule,i)=>{
         const n=i+1;
         const from=select('owgCaseFilterFrom'+n,names),mode=select('owgCaseFilterMode'+n,[['eventual','is eventually followed by'],['direct','is directly followed by'],['not-eventual','is never eventually followed by'],['not-direct','is never directly followed by']]),to=select('owgCaseFilterTo'+n,names);
-        from.value=rule.from;mode.value=rule.mode;to.value=rule.to;
-        from.onchange=()=>{rule.from=from.value;};mode.onchange=()=>{rule.mode=mode.value;};to.onchange=()=>{rule.to=to.value;};
+        const exactFrom=input('owgCaseFilterFromExact'+n,'text','Exact label (optional)'),exactTo=input('owgCaseFilterToExact'+n,'text','Exact label (optional)');
+        // 400 UTF-16 units allow 200 supplementary Unicode characters; the
+        // literal rule validator enforces 200 Unicode code points.
+        exactFrom.maxLength=exactTo.maxLength=400;
+        const has=value=>names.some(option=>option[0]===value);
+        from.value=has(rule.from)?rule.from:(names[0]?.[0]||'');
+        to.value=has(rule.to)?rule.to:(names[0]?.[0]||'');mode.value=rule.mode;
+        exactFrom.value=has(rule.from)?'':rule.from;exactTo.value=has(rule.to)?'':rule.to;
+        from.onchange=()=>{exactFrom.value='';rule.from=from.value;fromLookup.reset();};
+        to.onchange=()=>{exactTo.value='';rule.to=to.value;toLookup.reset();};
+        const fromLookup=activityLabelLookup(exactFrom,{id:part=>'owgCaseFilterFrom'+part+n,subject:'activity for rule '+n}),toLookup=activityLabelLookup(exactTo,{id:part=>'owgCaseFilterTo'+part+n,subject:'later activity for rule '+n});
+        exactFrom.oninput=()=>{rule.from=exactFrom.value||from.value;fromLookup.reset();};
+        exactTo.oninput=()=>{rule.to=exactTo.value||to.value;toLookup.reset();};mode.onchange=()=>{rule.mode=mode.value;};
         const remove=button('Remove','secondary');remove.setAttribute('aria-label','Remove rule '+n);remove.onclick=()=>{draft.splice(i,1);render();};
         const row=el('div',null,'row');row.style.alignItems='end';
-        row.append(field('Rule '+n+': activity',from),field('Rule '+n+': order',mode),field('Rule '+n+': later activity',to),remove);
+        row.append(field('Rule '+n+': activity',from),field('Rule '+n+': exact activity',exactFrom),fromLookup.wrap,field('Rule '+n+': order',mode),field('Rule '+n+': later activity',to),field('Rule '+n+': exact later activity',exactTo),toLookup.wrap,remove);
         return row;
       }));
-      add.disabled=draft.length>=5||!names.length;
+      add.disabled=draft.length>=5;
     }
-    add.onclick=()=>{draft.push({from:names[0][0],to:(names[1]||names[0])[0],mode:'eventual'});render();const focus=document.getElementById('owgCaseFilterFrom'+draft.length);if(focus)focus.focus();};
+    add.onclick=()=>{draft.push({from:names[0]?.[0]||'',to:(names[1]||names[0])?.[0]||'',mode:'eventual'});render();const focus=document.getElementById((names.length?'owgCaseFilterFrom':'owgCaseFilterFromExact')+draft.length);if(focus)focus.focus();};
     apply.onclick=()=>{try{state.follows=followSpec(draft);analyse().catch(error=>status(error.message));}catch(error){message.textContent=error.message;}};
     clear.onclick=()=>{state.follows=[];analyse().catch(error=>status(error.message));};
     render();
@@ -2682,17 +2741,23 @@
     const outcome=select('owgEventLogOutcome',[['duration_over','Case takes longer than'],['rework','Case has rework'],['contains_activity','Case contains activity'],['ends_with','Case ends with activity']]);
     const hours=input('owgEventLogOutcomeHours','number','hours');hours.min='0';hours.step='any';
     const activity=select('owgEventLogOutcomeActivity',activityNames.slice(0,500).map(a=>[a,a]));
+    const exact=input('owgEventLogOutcomeActivityExact','text','Exact activity label (optional)');exact.maxLength=400;
+    const lookup=activityLabelLookup(exact,{id:part=>'owgEventLogOutcomeActivity'+part,subject:'outcome activity'});
+    exact.addEventListener('input',lookup.reset);activity.onchange=()=>{exact.value='';lookup.reset();};
     const run=button('Find associations','secondary');run.id='owgEventLogRootCauseRun';
-    const hoursField=field('Hours',hours),activityField=field('Activity',activity);
-    const sync=()=>{show(hoursField,outcome.value==='duration_over');show(activityField,['contains_activity','ends_with'].includes(outcome.value));};
+    const hoursField=field('Hours',hours),activityField=field('Activity',activity),exactField=field('Exact outcome activity',exact);
+    const activityNote=el('div','An exact label overrides the suggestion. Matching is literal; an unknown label may match no cases.','muted');
+    const sync=()=>{const needsActivity=['contains_activity','ends_with'].includes(outcome.value);
+      show(hoursField,outcome.value==='duration_over');show(activityField,needsActivity);show(exactField,needsActivity);show(lookup.wrap,needsActivity);show(activityNote,needsActivity);};
     outcome.onchange=sync;sync();
-    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Outcome',outcome),hoursField,activityField,run);
-    const out=el('div');box.append(row,out);
+    const row=el('div',null,'row');row.style.alignItems='end';row.append(field('Outcome',outcome),hoursField,activityField,exactField,lookup.wrap,run);
+    const out=el('div');out.id='owgEventLogRootCauseResults';box.append(row,activityNote,out);
     run.onclick=async()=>{
       try{
         const params={outcome:outcome.value};
         if(outcome.value==='duration_over'){const h=Number(hours.value);if(!(h>0))throw new Error('Enter the number of hours.');params.threshold_seconds=String(Math.round(h*3600));}
-        if(!activityField.hidden)params.activity=activity.value;
+        if(!activityField.hidden){const label=exact.value||activity.value;
+          if(!label||Array.from(label).length>200)throw new Error('Choose an activity label of at most 200 characters.');params.activity=label;}
         const r=await getJSON(logPath('root-cause',params));
         const rows=(r.associations||[]).map(a=>[a.feature.kind+': '+a.feature.value,Number(a.cases_with_feature).toLocaleString(),pct(a.outcome_rate_with),pct(a.outcome_rate_without),(a.risk_difference>0?'+':'')+(a.risk_difference*100).toFixed(1)+' pts ['+(a.ci95[0]*100).toFixed(1)+', '+(a.ci95[1]*100).toFixed(1)+']',a.holds_after_bonferroni?'yes':'no']);
         out.replaceChildren(

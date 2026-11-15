@@ -383,6 +383,18 @@ async def append_event_log(
         return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
+@router.post("/v1/event-logs/{log_id}/activity-labels/search")
+async def event_log_activity_label_search(request: Request, log_id: str):
+    """Search activity labels in the current case notion, never source events."""
+    from . import event_log_activity_lookup as activity_lookup
+    _require_dashboard(request)
+    body = await _json_body(request, "activity label search", strict=True, limit=4096)
+    if not isinstance(body, dict) or set(body) - {"search", "after", "case_type"} or "search" not in body:
+        raise HTTPException(422, "activity label search needs search text")
+    return await run_in_threadpool(_respond, activity_lookup.search, log_id, body["search"],
+                                   body.get("after", ""), body.get("case_type"))
+
+
 @router.get("/v1/event-logs/{log_id}/quality")
 def event_log_quality(request: Request, log_id: str):
     _require_dashboard(request)
