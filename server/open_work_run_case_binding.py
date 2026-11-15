@@ -84,11 +84,30 @@ def _database(create: bool) -> Iterator[sqlite3.Connection | None]:
             os.close(fd)
         info = path.lstat()
     if (not stat.S_ISREG(info.st_mode) or path.is_symlink()
-            or info.st_nlink != 1 or info.st_size > _MAX_BYTES):
+            or info.st_nlink != 1 or info.st_size > _MAX_BYTES
+            or (os.name == "posix" and info.st_mode & 0o077)):
         raise CaseDeclarationError("unsafe binding ledger")
+    # Reject SQLite sidecars before opening: WAL/SHM can preserve revoked
+    # associations, while an unsafe rollback journal can be read by SQLite
+    # before application-level retention and scope checks run.
+    for suffix in ("-wal", "-shm", "-journal"):
+        sidecar = path.with_name(path.name + suffix)
+        try:
+            sidecar_info = sidecar.lstat()
+        except FileNotFoundError:
+            continue
+        if suffix != "-journal":
+            raise CaseDeclarationError("unsupported binding ledger sidecar")
+        if (not stat.S_ISREG(sidecar_info.st_mode) or sidecar.is_symlink()
+                or sidecar_info.st_nlink != 1
+                or sidecar_info.st_size > 2 * _MAX_BYTES
+                or (os.name == "posix" and sidecar_info.st_mode & 0o077)):
+            raise CaseDeclarationError("unsafe binding ledger rollback journal")
     conn = sqlite3.connect(str(path), timeout=3)
     try:
         conn.execute("PRAGMA busy_timeout=3000")
+        if conn.execute("PRAGMA journal_mode").fetchone()[0].lower() != "delete":
+            raise CaseDeclarationError("unsupported binding ledger journal mode")
         if create:
             conn.execute("""CREATE TABLE IF NOT EXISTS bindings (
                 actor_key TEXT NOT NULL, scope TEXT NOT NULL, case_ref TEXT NOT NULL,
