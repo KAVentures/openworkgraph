@@ -217,6 +217,8 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("unbounded review evidence context")
     evidence_digest = hashlib.sha256(evidence_bytes).hexdigest()
     return {"evidence_sha256": evidence_digest, "event_reviews": rows, "event_reviews_count": len(rows),
+            "ambiguous_event_reviews_count": sum(row["review_status"] == "ambiguous_multiple_pairs" for row in rows),
+            "single_pair_event_reviews_count": sum(row["review_status"] == "observed_pair_needs_review" for row in rows),
             "coverage_incomplete": incomplete,
             "unlisted_events_are_unassigned": False,
             "no_case_identity_inferred": True, "requires_human_review": True}
