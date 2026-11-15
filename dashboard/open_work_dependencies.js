@@ -170,10 +170,34 @@
             (source.availability === 'unknown' && source.state !== 'unknown')) {
           throw new Error('invalid case evidence projection');
         }
+        // Join the reviewed durable dependency projection into this same operator
+        // review. This read is separately authorized by the server and must not
+        // confer source or execution permissions. Fail closed on malformed data.
+        const graphResponse = await fetch('/v1/open-work/declarations/durable-dependencies?work_item_ref=' +
+          encodeURIComponent(ref), opts);
+        if (!current()) return;
+        if (!graphResponse.ok) throw new Error('dependency read denied');
+        const graph = await graphResponse.json();
+        if (!current()) return;
+        const graphContext = graph && graph.context;
+        const graphRefs = values => Array.isArray(values) && values.length <= 10000 &&
+          values.every(validRef) && new Set(values).size === values.length;
+        if (!graph || graph.format !== 'openworkgraph.reviewed-durable-dependencies.v1' ||
+            graph.agent_execution_authorized !== false ||
+            graph.customer_outcome !== 'unknown' ||
+            !graphContext || !graphRefs(graphContext.direct) ||
+            !graphRefs(graphContext.prerequisites) ||
+            typeof graphContext.truncated !== 'boolean' ||
+            !graphContext.direct.every(x => graphContext.prerequisites.includes(x))) {
+          throw new Error('invalid durable case graph');
+        }
         dossierStatus.textContent = 'Case reviewed. Provider status is not business success.';
         show('Owner goal: ' + String(dossier.owner_declaration?.goal_code || 'unknown').slice(0,80));
         show('Expected outcome: ' + String(dossier.owner_declaration?.expected_outcome_code || 'unknown').slice(0,80));
         show('Reviewed prerequisites: ' + dossier.declared_prerequisite_count);
+        show('Durable direct dependencies: ' + graphContext.direct.length);
+        show('Durable transitive dependencies: ' + graphContext.prerequisites.length);
+        if (graphContext.truncated) show('Dependency graph truncated; no completeness claim.');
         prereqs.forEach(p => show('Prerequisite ' + p.work_item_ref +
           ' (revision ' + p.revision + '): owner-declared; outcome unverified'));
         show('Retained observation references: ' + observations.length +
