@@ -300,14 +300,17 @@ def quality(log_id: str) -> dict[str, Any]:
         finally:
             conn.close()
     from . import event_log_quality_trends as quality_trends
-    present = {r["batch"] for r in reports}
+    # Stored reports may be missing or damaged after an interrupted import or
+    # manual database recovery. Never let malformed metadata produce a 500 or
+    # turn an incomplete history into a verified integrity result.
+    present = {r.get("batch") for r in reports if isinstance(r, dict)}
     missing_reports = [b for b in batches if b not in present]
     # A single-batch report can be verified against the entire saved log. For
     # appended logs, batch digests describe historical batch scopes and must
     # not be compared to the current whole-log digest: doing so would produce
     # false corruption warnings. Missing or legacy digests are not verified.
     integrity = {"status": "not_verifiable", "reason": "historical_batches_or_missing_report"}
-    if len(batches) == 1 and not missing_reports and len(reports) == 1:
+    if len(batches) == 1 and not missing_reports and len(reports) == 1 and isinstance(reports[0], dict):
         expected = reports[0].get("content_sha256_v2")
         if isinstance(expected, str) and len(expected) == 64 and all(c in "0123456789abcdef" for c in expected):
             integrity = {"status": "verified" if expected == digest_v2 else "mismatch",
