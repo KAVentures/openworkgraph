@@ -82,6 +82,18 @@ const results=card.children[card.children.indexOf(form)+2];
   assert.ok(results.children.some(x=>/Prerequisite owg:w:/.test(x.textContent)));
   assert.ok(results.children.some(x=>/Observed record owg:r:/.test(x.textContent)));
   assert.ok(results.children.some(x=>/Source unavailable/.test(x.textContent)));
+  // A completed response must not persist after explicit withdrawal.
+  consent.listeners.change();
+  assert.equal(results.children.length,0,'withdrawal clears completed source evidence');
+  assert.match(status.textContent,/withdrawn/);
+  // Case selection changes revoke the previous consent and invalidate evidence.
+  consent.checked=true;
+  refField.value='owg:w:'+'e'.repeat(32);
+  refField.listeners.input();
+  assert.equal(consent.checked,false);
+  assert.equal(results.children.length,0);
+  assert.match(status.textContent,/Case changed/);
+  refField.value=ref;
   malformed=true;
   consent.checked=true;
   await form.listeners.submit({preventDefault(){}});
