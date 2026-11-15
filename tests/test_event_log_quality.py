@@ -97,6 +97,25 @@ def test_bad_data_produces_reason_counts_and_sample_free_diagnostics():
 
 
 
+def test_single_batch_integrity_is_verified_and_detects_changed_report_digest():
+    made = _import()
+    log_id = made["log_id"]
+    initial = quality.quality(log_id)
+    assert initial["integrity"]["status"] == "verified"
+    assert initial["integrity"]["algorithm"] == "content_sha256_v2"
+    conn = workspace._connect()
+    try:
+        report = initial["reports"][0]
+        report["content_sha256_v2"] = "0" * 64 if report["content_sha256_v2"] != "0" * 64 else "1" * 64
+        conn.execute("UPDATE log_quality SET report = ? WHERE log_id = ? AND batch = 0",
+                     [json.dumps(report), log_id])
+    finally:
+        conn.close()
+    result = quality.quality(log_id)
+    assert result["integrity"]["status"] == "mismatch"
+    assert result["integrity"]["reason"] == "current_saved_content_differs_from_import_report"
+
+
 def test_future_event_reference_is_explicit_and_report_anchored():
     made = _import()
     result = quality.quality(made["log_id"])
