@@ -57,7 +57,7 @@ def test_export_includes_offline_manifest_verifier_and_exact_workflow_identity(t
     assert result["manifest_sha256"] == digest
     assert result["workflow_reference"] == {
         "workflow_id": "synthetic_release", "revision": 3, "content_sha256": "b" * 64}
-    assert result["verified_generated_file_count"] == 30
+    assert result["verified_generated_file_count"] == 31
     assert result["independently_signed"] is False
     assert result["remote_deployment_verified"] is False
     assert result["remote_execution_or_outcome_verified"] is False
