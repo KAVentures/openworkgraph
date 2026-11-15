@@ -1107,6 +1107,15 @@
     for(const key of ['resource','activity'])if(values[key]&&values[key].trim())spec[key]=values[key];
     if(values.attribute&&values.attribute.trim()){if(!/^[^=]+=.*/.test(values.attribute.trim()))throw new Error('Attribute must look like name=value.');spec.attribute=values.attribute.trim();}
     if(values.eventAttribute&&values.eventAttribute.trim()){if(!/^[^=]+=.*/.test(values.eventAttribute.trim()))throw new Error('Event attribute must look like name=value.');spec.event_attribute=values.eventAttribute.trim();}
+    const rangeName=(values.rangeName||'').trim(),minimum=String(values.rangeMin??''),maximum=String(values.rangeMax??'');
+    if(rangeName||minimum||maximum){
+      if(!rangeName||Array.from(rangeName).length>200)throw new Error('Enter a numeric case attribute name of at most 200 characters.');
+      if(!minimum&&!maximum)throw new Error('Enter at least one numeric range bound.');
+      const range={name:rangeName};
+      for(const [key,value] of [['min',minimum],['max',maximum]])if(value){const n=Number(value);if(!Number.isFinite(n))throw new Error('Numeric range bounds must be finite numbers.');range[key]=n;}
+      if(range.min!==undefined&&range.max!==undefined&&range.min>=range.max)throw new Error('The numeric range minimum must be below its maximum.');
+      spec.attribute_range=range;
+    }
     if(values.tag&&values.tag.trim())spec.tag=values.tag.trim().slice(0,60);
     return spec;
   }
@@ -1120,10 +1129,13 @@
     const attribute=input(prefix+'Attribute','text','name=value');
     const eventAttribute=input(prefix+'EventAttribute','text','name=value');eventAttribute.title='Cases with at least one event carrying this value, such as a column kept from a CSV import';
     const tag=input(prefix+'Tag','text','any');tag.maxLength=60;tag.title='Cases you tagged under Case tags';
+    const rangeName=input(prefix+'RangeName','text','Case attribute name'),rangeMin=input(prefix+'RangeMin','number','No minimum'),rangeMax=input(prefix+'RangeMax','number','No maximum');
+    rangeName.maxLength=400;rangeMin.step=rangeMax.step='any';
     const row=el('div',null,'row');row.style.alignItems='end';
     row.append(field('Name',label),field('Started from (UTC)',from),field('Started before (UTC)',before),field('Resource',resource),field('Contains activity',activity),field('Case attribute',attribute),field('Event attribute',eventAttribute),field('Tagged',tag));
-    box.appendChild(row);
-    return {node:box,read:()=>cohortSpec({label:label.value,from:from.value,before:before.value,resource:resource.value,activity:activity.value,attribute:attribute.value,eventAttribute:eventAttribute.value,tag:tag.value})};
+    const rangeRow=el('div',null,'row');rangeRow.style.alignItems='end';rangeRow.append(field('Numeric case attribute',rangeName),field('Minimum (inclusive)',rangeMin),field('Maximum (exclusive)',rangeMax));
+    box.append(row,rangeRow);
+    return {node:box,read:()=>{if(rangeMin.validity.badInput||rangeMax.validity.badInput)throw new Error('Numeric range bounds must be finite numbers.');return cohortSpec({label:label.value,from:from.value,before:before.value,resource:resource.value,activity:activity.value,attribute:attribute.value,eventAttribute:eventAttribute.value,tag:tag.value,rangeName:rangeName.value,rangeMin:rangeMin.value,rangeMax:rangeMax.value});}};
   }
   function variantCoverageSection(activityNames){
     const box=section('Variant coverage');
