@@ -177,6 +177,10 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         # basis even when direct pair assignments remain unchanged.
         "observed_case_groups": response.get("observed_case_groups"),
         "observed_case_groups_truncated": response.get("observed_case_groups_truncated"),
+        # The event-level rows are a projection: they omit source pair metadata
+        # such as confidence, interruption context, and corroboration detail.
+        # A reviewer must not replay a label after that source evidence changes.
+        "observed_pair_event_assignments": pairs,
         "event_reviews": rows,
     }
     evidence_digest = hashlib.sha256(json.dumps(
