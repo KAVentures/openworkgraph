@@ -174,3 +174,27 @@ def test_review_digest_fails_closed_on_malformed_or_unbounded_visible_context():
         response["coverage"] = context
         with pytest.raises(ValueError, match=error):
             build_review_queue(response)
+
+
+def test_interleaved_unrelated_event_is_not_assigned_to_other_case_pair():
+    """An ambiguous shared event is exposed, never promoted to a case merge."""
+    from copy import deepcopy
+    response = _response("event-shared")
+    unrelated = deepcopy(response["observed_pair_event_assignments"][0])
+    unrelated["resource_pointers"] = [
+        {"provider": "github", "resource_kind": "issue", "resource_ref": "C"},
+        {"provider": "github", "resource_kind": "issue", "resource_ref": "D"},
+    ]
+    unrelated["current_evidence_event_ids"] = ["event-shared", "event-cd-only"]
+    response["observed_pair_event_assignments"].append(unrelated)
+    review = build_review_queue(response)
+    by_event = {row["event_id"]: row for row in review["event_reviews"]}
+    assert review["ambiguous_event_reviews_count"] == 1
+    assert review["single_pair_event_reviews_count"] == 1
+    assert by_event["event-shared"]["review_status"] == "ambiguous_multiple_pairs"
+    assert len(by_event["event-shared"]["candidate_resource_pairs"]) == 2
+    assert by_event["event-cd-only"]["candidate_resource_pairs"] == [
+        [["github", "issue", "C"], ["github", "issue", "D"]]
+    ]
+    assert all(not row["confirmed_case"] for row in review["event_reviews"])
+    assert review["no_case_identity_inferred"] is True
