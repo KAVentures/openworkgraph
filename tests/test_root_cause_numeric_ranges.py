@@ -20,14 +20,14 @@ def _iso(t):
     return t.isoformat().replace("+00:00", "Z")
 
 
-def _log(orders=40, distinct=True):
+def _log(orders=40, distinct=True, numeric_base=100, region_name="region"):
     start = datetime(2024, 1, 1, tzinfo=timezone.utc)
     objects, events = [], []
     for i in range(orders):
-        amount = (100 + i * 37) if distinct else (100 if i % 2 else 200)
+        amount = (numeric_base + i * 37) if distinct else (100 if i % 2 else 200)
         objects.append({"id": f"o{i}", "type": "order",
                         "attributes": [{"name": "amount", "time": _iso(start), "value": amount},
-                                       {"name": "region", "time": _iso(start), "value": "EU" if i % 2 else "US"}]})
+                                       {"name": region_name, "time": _iso(start), "value": "EU" if i % 2 else "US"}]})
         t = start + timedelta(days=i)
         # The largest quarter of orders takes ten days; the rest take one.
         took = timedelta(days=10 if i >= orders * 3 // 4 else 1)
@@ -125,3 +125,22 @@ print("ok")
     done = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1], env=env,
                           capture_output=True, text=True, timeout=120)
     assert done.returncode == 0 and done.stdout.strip().endswith("ok"), f"stdout={done.stdout}\nstderr={done.stderr}"
+
+
+def test_close_quartile_edges_select_their_exact_cases():
+    # Six significant digits collapse the two middle labels to the same text.
+    log = _log(numeric_base=1_000_000_000)
+    result = analytics.root_cause(log, "duration_over", "order", threshold_seconds=5 * 86400)
+    ranges = [a for a in result["associations"] if a["feature"]["kind"] == "attribute_range"]
+    assert len(ranges) == 4
+    assert len({a["feature"]["value"] for a in ranges}) == 4
+    for a in ranges:
+        assert _cases(log, a["cohort"]) == a["cases_with_feature"] == 10
+
+
+def test_attribute_name_with_equals_does_not_offer_an_inexact_filter():
+    log = _log(region_name="region=code")
+    result = analytics.root_cause(log, "duration_over", "order", threshold_seconds=5 * 86400)
+    features = [a for a in result["associations"] if a["feature"]["kind"] == "attribute" and a["feature"]["value"].startswith("region=code=")]
+    assert features
+    assert all("cohort" not in a for a in features)
