@@ -133,3 +133,64 @@ def test_metric_route_rejects_duplicate_json_keys(monkeypatch):
         content='{"cohort":{},"cohort":{},"definition":{}}',
     )
     assert response.status_code == 422
+
+
+def test_real_duckdb_cohort_filter_through_authenticated_rest(monkeypatch):
+    """Exercise the real cohort SQL and metric projection through the REST route.
+
+    Earlier route tests mocked out cohort restriction, so they could not detect
+    accidental pre-filter aggregation or leaking cases from another cohort.
+    """
+    import duckdb
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from server import event_log_routes
+
+    conn = duckdb.connect(":memory:")
+    try:
+        conn.execute("""
+            CREATE TEMP TABLE ce (
+                case_id VARCHAR, event_id VARCHAR, ts TIMESTAMP,
+                activity VARCHAR, resource VARCHAR
+            )
+        """)
+        conn.executemany(
+            "INSERT INTO ce VALUES (?, ?, ?, ?, ?)",
+            [
+                ("alpha", "a1", "2026-01-01 10:00:00", "start", "team-a"),
+                ("alpha", "a2", "2026-01-01 10:00:10", "finish", "team-a"),
+                ("beta", "b1", "2026-01-01 11:00:00", "start", "team-b"),
+                ("beta", "b2", "2026-01-01 11:01:40", "finish", "team-b"),
+                ("gamma", "c1", "2026-01-01 12:00:00", "start", "team-a"),
+                ("gamma", "c2", "2026-01-01 12:00:20", "finish", "team-a"),
+            ],
+        )
+        monkeypatch.setattr(workspace, "_query", lambda log_id, case_type, callback: callback(conn))
+        monkeypatch.setattr(
+            event_log_routes, "dashboard_session_valid", lambda token: token == "valid"
+        )
+        app = FastAPI()
+        app.include_router(event_log_routes.router)
+        client = TestClient(app)
+        path = "/v1/event-logs/log_0123456789abcdef/cohort-metric"
+        request = {"definition": DEFINITION, "cohort": {"resource": "team-a"}}
+
+        denied = client.post(path, json=request)
+        assert denied.status_code == 403
+
+        allowed = client.post(
+            path, json=request, headers={"Authorization": "OWG-Session valid"}
+        )
+        assert allowed.status_code == 200, allowed.text
+        body = allowed.json()
+        assert body["metric"]["rows"] == 2
+        assert body["metric"]["sum"] == "30.0"
+        assert body["metric"]["mean"] == "15.0"
+        assert body["cases_before_filter"] == 3
+        assert body["cohort"] == {"resource": "team-a"}
+        assert body["raw_cases_returned"] is False
+        assert body["complete_cohort"] is True
+        assert allowed.headers["cache-control"] == "no-store"
+        assert all(key not in str(body) for key in ("alpha", "beta", "gamma", "team-b"))
+    finally:
+        conn.close()

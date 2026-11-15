@@ -14,6 +14,7 @@ are deleted with it.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 import json
 import math
 import secrets
@@ -718,6 +719,12 @@ class SavedMetric(_Strict):
     metric: Metric
 
 
+def _metric_lineage(definition: dict[str, Any]) -> dict[str, Any]:
+    """Stable content identity for a saved metric; not an authorization token."""
+    canonical = json.dumps(definition, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    return {"definition_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest()}
+
+
 def list_metrics(log_id: str) -> dict[str, Any]:
     with workspace._LOCK:
         conn = workspace._connect()
@@ -727,7 +734,7 @@ def list_metrics(log_id: str) -> dict[str, Any]:
                                 "ORDER BY created_at, metric_id", [log_id]).fetchall()
         finally:
             conn.close()
-    return {"metrics": [{"metric_id": m, "created_at": c.isoformat() + "Z", **json.loads(d)} for m, c, d in rows],
+    return {"metrics": [{"metric_id": m, "created_at": c.isoformat() + "Z", **json.loads(d), **_metric_lineage(json.loads(d))} for m, c, d in rows],
             "max_saved": MAX_SAVED, "format": METRIC_FORMAT}
 
 
@@ -757,7 +764,7 @@ def save_metric(log_id: str, body: Any) -> dict[str, Any]:
                          [log_id, metric_id, created, json.dumps(definition, sort_keys=True)])
         finally:
             conn.close()
-    return {"metric_id": metric_id, "created_at": created.isoformat() + "Z", **definition}
+    return {"metric_id": metric_id, "created_at": created.isoformat() + "Z", **definition, **_metric_lineage(definition)}
 
 
 def delete_metric(log_id: str, metric_id: str) -> dict[str, Any]:

@@ -178,12 +178,15 @@ def read_csv(stream: IO[str], *, case_column: str, activity_column: str, timesta
                           _attributes((name, row.get(name)) for name in extra), [(case_id, CASE_TYPE)])
 
 
-def write_csv(events: Iterable[dict[str, Any]], out: IO[str]) -> None:
+def write_csv(events: Iterable[dict[str, Any]], out: IO[str], *, spreadsheet_review: bool = False) -> None:
     """Flat CSV for one case notion: case_id, activity, timestamp, resource."""
+    from .spreadsheet_review import review_cell
     writer = csv.writer(out)
-    writer.writerow(["case_id", "activity", "timestamp", "resource"])
+    fields = ["case_id", "activity", "timestamp", "resource"]
+    writer.writerow([name + "_review" for name in fields] if spreadsheet_review else fields)
     for event in events:
-        writer.writerow([event["case_id"], event["activity"], _iso(event["timestamp"]), event.get("resource") or ""])
+        row = [event["case_id"], event["activity"], _iso(event["timestamp"]), event.get("resource") or ""]
+        writer.writerow([review_cell(value) for value in row] if spreadsheet_review else row)
 
 
 # ---------------------------------------------------------------- XES

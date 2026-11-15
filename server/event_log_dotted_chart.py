@@ -34,9 +34,11 @@ def dotted_chart(log_id: str, case_type: str | None = None, *, time: str = "abso
 
     def run(conn):
         # Colours come from the whole log, before any cohort, so they stay put.
+        # Only seven colours can be drawn; avoid returning every distinct
+        # activity label from a high-cardinality log to the application.
         ranked = conn.execute("""SELECT activity, count(*) AS n FROM ce GROUP BY activity
-            ORDER BY n DESC, activity""").fetchall()
-        slots = {a: i for i, (a, _) in enumerate(ranked[:COLOURED_ACTIVITIES])}
+            ORDER BY n DESC, activity LIMIT ?""", [COLOURED_ACTIVITIES]).fetchall()
+        slots = {a: i for i, (a, _) in enumerate(ranked)}
         cohorts.restrict(conn, chosen, log_id)
         sort = "min(ts), case_id" if order == "start" else "max(ts) - min(ts) DESC, min(ts), case_id"
         conn.execute(f"""CREATE OR REPLACE TEMP TABLE dc AS SELECT case_id, min(ts) AS start_ts, max(ts) AS end_ts, count(*) AS events,
@@ -76,12 +78,18 @@ def dotted_chart(log_id: str, case_type: str | None = None, *, time: str = "abso
             cases.append({"case_id": case_id, "start": start.isoformat() + "Z",
                           "duration_seconds": (end - start).total_seconds(), "events": events,
                           "points": dots})
-        counts = dict(conn.execute("SELECT activity, count(*) FROM ce GROUP BY activity").fetchall())
+        # Report exact counts for the filtered cohort without materializing
+        # every hidden activity label. The palette remains from the whole log.
+        names = list(slots)
+        counts = dict(conn.execute("SELECT activity, count(*) FROM ce WHERE list_contains(?, activity) GROUP BY activity",
+                                   [names]).fetchall())
+        other_events, other_activities = conn.execute(
+            "SELECT count(*), count(DISTINCT activity) FROM ce WHERE NOT list_contains(?, activity)",
+            [names]).fetchone()
         activities = [{"activity": a, "slot": i, "events": counts.get(a, 0)} for a, i in slots.items()]
-        other_events = sum(n for a, n in counts.items() if a not in slots)
         if other_events:
             activities.append({"activity": None, "slot": other, "events": other_events,
-                               "activities": sum(1 for a in counts if a not in slots)})
+                               "activities": other_activities})
         span = max((d[0] for c in cases for d in c["points"]), default=0)
         # Separate omitted case rows from within-case dot thinning. These
         # counts describe the selected cohort, not the unfiltered log.

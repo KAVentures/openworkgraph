@@ -1,0 +1,5 @@
+# Microsoft 365 reviewed append digest (R3/R20)
+
+The existing `server.m365_outlook_operator_cycle review` command returns `csv_sha256` after verifying the private candidate and current scoped grant. When separately approving an append, pass that exact lowercase digest using `--expected-review-csv-sha256` alongside the existing read, append and candidate-review consent flags. The append phase re-runs the production review validator immediately before the durable single-attempt OWG append; changed CSV bytes, mismatched scope, expired grants or a different digest refuse before the append latch is created.
+
+This optional additional binding is not a substitute for examining the removal markers, confirming the destination log, or explicitly approving checkpoint commit. It does not make uncertain append retries safe: inspect authenticated OWG membership and receipt state before any recovery. Never copy a token, Graph cursor or raw private candidate into a ticket or audit report. Full dashboard operator transaction and real-tenant validation remain separate acceptance work.

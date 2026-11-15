@@ -9,6 +9,8 @@ from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from shared.process_model import ProcessModel
 from shared.process_parallel import parallel_regions, replay_node_ids
+from shared import process_agent_release as release_integrity
+from shared.process_agent_release import create_manifest
 
 _TEMPLATES = Path(__file__).parent / 'process_agent_templates'
 
@@ -107,7 +109,8 @@ def build_runtime_project(packet: dict) -> bytes:
     spec = build_runtime_spec(packet)
     model = ProcessModel.model_validate(spec['process_model'])
     files = {name: (_TEMPLATES / (name + '.txt')).read_text(encoding='utf-8')
-             for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py', 'monitor.py', 'test_monitor.py', 'configure.py', 'test_configuration.py', 'evaluate.py', 'test_evaluation.py', 'plan_sources.py', 'test_source_planning.py', 'evaluate_sources.py', 'test_source_evaluation.py')}
+             for name in ('agent.py', 'runtime.py', 'test_shadow.py', 'test_agent_sdk.py', 'execute.py', 'test_execution.py', 'monitor.py', 'test_monitor.py', 'send_report.py', 'stop.py', 'configure.py', 'test_configuration.py', 'evaluate.py', 'test_evaluation.py', 'plan_sources.py', 'test_source_planning.py', 'evaluate_sources.py', 'test_source_evaluation.py')}
+    files['owg_report_signing.py'] = (Path(__file__).parent/'automation_report_signing.py').read_text(encoding='utf-8')
     for name in ('process_source_state.py','process_rule_conditions.py'):
         files[name]=(Path(__file__).parent/name).read_text(encoding='utf-8')
     if model.decision_tables:
@@ -321,6 +324,22 @@ def build_runtime_project(packet: dict) -> bytes:
         'OWG Automation monitoring. It makes no model, tool or OWG calls. It\n'
         'requires this exact exported specification and a newly generated journal\n'
         'with its spec hash. Older journals without that binding are refused.\n'
+        '## Emergency stop: future customer tool attempts\n\n'
+        'From the generated project directory, to stop all future tool calls\n'
+        'using the normal local execution journal directory:\n\n'
+        '```sh\npython stop.py --stop --confirm-stop\npython stop.py --status\n```\n\n'
+        'To target a separately configured journal directory, supply the exact\n'
+        '--journal-directory path to both execute.py and stop.py. The durable\n'
+        'private .owg-stop marker prevents new executions and stops future\n'
+        'attempts within running executions at the next local safety check.\n'
+        'It does NOT cancel a tool request already submitted to a provider,\n'
+        'and cannot roll back effects of prior writes. Stop status is not an\n'
+        'independent statement about remote business state. The runtime logs\n'
+        'when it observes the stop. There is intentionally no automatic\n'
+        'resume command: stop the process and inspect provider outcomes and\n'
+        'journal first; a new human review and new execution intent are\n'
+        'required before manually clearing the marker. Never reuse a prior\n'
+        'intent or retry uncertain actions merely because the marker cleared.\n\n'
         'Only actual tool attempt IDs, statuses, timestamps and the opaque intent\n'
         'digest are exported. Case inputs, arguments, results, source references\n'
         'and credentials are excluded; no planned human or gateway steps are invented.\n'
@@ -332,6 +351,32 @@ def build_runtime_project(packet: dict) -> bytes:
         'completed activity IDs against the saved graph, retaining branches and joins.\n'
         'Coverage limits and missing reports remain visible. Structural matches\n'
         'do not verify rules, human work, current approval or business outcomes.\n\n'
+        '## Optional signed delivery to an OWG monitoring report channel\n\n'
+        'This step is OFF by default and requires the operator to create a report\n'
+        'channel in OWG Automation monitoring. Keep its one-time 64-hex channel\n'
+        'secret and the separate local OWG API token outside this project ZIP.\n'
+        'Set a new outbox start sequence to one more than the channel\n'
+        'highest_sequence shown in the dashboard (new channel: 1):\n\n'
+        '```sh\n'
+        'python send_report.py queue --report new-run-report.json --outbox report-outbox.json '
+        '--channel chn_YOUR_ID --version v1 --start-sequence 1\n'
+        '```\n\n'
+        'Queue writes a private local report outbox, not a network request.\n'
+        'Set OWG_REPORT_RECEIVER_URL to the exact /v1/automation-monitoring/'
+        'channels/chn_YOUR_ID/reports endpoint, OWG_REPORT_API_TOKEN to the\n'
+        'separate local API bearer token, and OWG_REPORT_CHANNEL_SECRET to the\n'
+        'one-time HMAC channel secret. Then manually send only the oldest\n'
+        'staged report with:\n\n'
+        '```sh\npython send_report.py send --outbox report-outbox.json --confirm-network\n```\n\n'
+        'A failed/uncertain acknowledgement retains identical report bytes and\n'
+        'sequence for an explicit retry. A different report never reuses a\n'
+        'sequence while that outbox exists. Protect/retain/back up the outbox;\n'
+        'recreating it requires checking the current receiver sequence first.\n'
+        'Only HTTPS or loopback HTTP is permitted; redirects are rejected.\n'
+        'This is transport for customer-reported outcomes, not verification\n'
+        'of business effects, proof of delivery without an acknowledgement\n'
+        'or an authorization to execute an agent or provider write.\n\n'
+
         'Source checks use only exact customer-selected observed owg:r: references\n'
         'and the existing separately enabled local OWG source adapters. A fresh\n'
         'matching operational receipt does not establish case association, agent\n'
@@ -384,6 +429,26 @@ def build_runtime_project(packet: dict) -> bytes:
             'Reads/writes are non-atomic; changing decisions stop later work but cannot undo effects.\n'
             'Existing exact customer intent, shared review, service permissions, conditional writes, idempotency and\n'
             'independent outcome checks still apply. Monitor imports remain customer reports, not verified business value.\n')
+    files['README.md'] += (
+        "\n## Verify the exported release files before configuring business tools\n\n"
+        "The ZIP includes release-manifest.json and a standalone, standard-library-only\n"
+        "verify_release.py. After extracting into a dedicated folder, run:\n\n"
+        "```sh\npython verify_release.py --root .\n```\n\n"
+        "The verifier checks the exact generated bytes, spec and process-model hash,\n"
+        "and rejects missing/edited generated files and symbolic links. It never\n"
+        "imports the agent runner, contacts a provider or grants permissions.\n"
+        "Record the printed manifest SHA-256 OUTSIDE the archive (in your trusted\n"
+        "release record). Later, compare that recorded digest with:\n\n"
+        "```sh\npython verify_release.py --root . --manifest-sha256 PINNED_HEX_DIGEST\n```\n\n"
+        "This manifest is unsigned: an attacker who replaces both the archive and\n"
+        "manifest can forge a new self-consistent release. The separately pinned\n"
+        "digest is necessary to detect replacement. Integrity does NOT prove what\n"
+        "was deployed to a remote runtime or whether a business action succeeded.\n"
+        "Files added later by a customer (cases, credentials, bindings, journals)\n"
+        "are not in this generated-file manifest and require separate review.\n"
+    )
+    files['verify_release.py'] = Path(release_integrity.__file__).read_text(encoding='utf-8')
+    files['release-manifest.json'] = create_manifest(files, spec)
     memory = BytesIO()
     with ZipFile(memory, 'w', compression=ZIP_DEFLATED) as archive:
         for name, content in files.items():

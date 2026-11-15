@@ -393,8 +393,16 @@ def delete_deployment(deployment_id: str) -> dict[str, Any]:
         conn = _connect()
         try:
             _check(conn, deployment_id)
-            for table in ("steps", "runs", "deployments"):
-                conn.execute(f"DELETE FROM {table} WHERE deployment_id = ?", [deployment_id])
+            from . import automation_release_inventory as release_inventory
+            conn.execute("BEGIN")
+            try:
+                release_inventory.forget(conn, deployment_id)
+                for table in ("steps", "runs", "deployments"):
+                    conn.execute(f"DELETE FROM {table} WHERE deployment_id = ?", [deployment_id])
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
             conn.execute("CHECKPOINT")
             return {"deleted": deployment_id}
         finally:

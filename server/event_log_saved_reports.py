@@ -9,6 +9,7 @@ is sent anywhere.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -38,7 +39,7 @@ def _known(log_id: str) -> None:
 
 def _describe(path: Path) -> dict[str, Any]:
     stat = path.stat()
-    return {"name": path.name, "bytes": stat.st_size,
+    return {"name": path.name, "bytes": stat.st_size, "has_figures": _sidecar(path).is_file(),
             "saved_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")}
 
 
@@ -55,7 +56,8 @@ def _copies(folder: Path) -> list[Path]:
 def save(log_id: str) -> dict[str, Any]:
     """Write a new copy of the report and keep the newest ``KEEP``."""
     _known(log_id)
-    html = report.report_html(log_id)
+    data = report.build(log_id)
+    html = report.render(data)
     folder = _folder(log_id)
     folder.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -71,10 +73,97 @@ def save(log_id: str) -> dict[str, Any]:
     except BaseException:
         Path(temp).unlink(missing_ok=True)
         raise
+    # The figures behind the copy, so two copies can be compared without parsing HTML.
+    _write_atomic(folder, _sidecar(folder / name), json.dumps(figures(data), sort_keys=True))
     copies = _copies(folder)
     for old in copies[:-KEEP]:
         old.unlink(missing_ok=True)
+        _sidecar(old).unlink(missing_ok=True)
     return {"format": FORMAT, "log_id": log_id, "saved": _describe(folder / name), "kept": min(len(copies), KEEP)}
+
+
+def _sidecar(copy: Path) -> Path:
+    return copy.with_suffix(".json")
+
+
+def _write_atomic(folder: Path, target: Path, text: str) -> None:
+    handle, temp = tempfile.mkstemp(dir=folder, prefix=".writing-", suffix=".json")
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as out:
+            out.write(text)
+        os.replace(temp, target)
+    except BaseException:
+        Path(temp).unlink(missing_ok=True)
+        raise
+
+
+MAX_ACTIVITIES = 500
+
+
+def figures(data: dict[str, Any]) -> dict[str, Any]:
+    """The headline figures of one report, as stored next to its saved copy."""
+    summary, kpis, variants = data["summary"], data["kpis"], data["variants"]
+    top = variants["variants"][0] if variants["variants"] else None
+    costs = data.get("costs")
+    return {
+        "generated_at": data["generated_at"],
+        "cases": summary["cases"], "events": summary["events"], "activities": summary["activities"],
+        "median_case_seconds": summary["case_duration_seconds"]["median"],
+        "p90_case_seconds": summary["case_duration_seconds"]["p90"],
+        "events_per_case": kpis.get("events_per_case"), "repeat_rate": kpis.get("rework_rate"),
+        "distinct_variants": variants["distinct_variants"],
+        "top_variant": None if top is None else {"path": top["path"], "share": top["share"]},
+        "activity_cases": {a["activity"]: a["cases"] for a in data["activities"]["activities"][:MAX_ACTIVITIES]},
+        "total_cost": None if not costs else costs["total_cost"],
+        "currency": None if not costs else costs["currency"],
+    }
+
+
+def _delta(a: Any, b: Any, digits: int = 6) -> Any:
+    return None if a is None or b is None else round(b - a, digits)
+
+
+def changes(log_id: str, older: str | None = None, newer: str | None = None) -> dict[str, Any]:
+    """Compare the figures of two saved copies; by default the two newest that have figures."""
+    _known(log_id)
+    folder = _folder(log_id)
+    with_figures = [p for p in _copies(folder) if _sidecar(p).is_file()]
+    if (older is None) != (newer is None):
+        raise workspace.EventLogWorkspaceError("give both copies to compare, or neither")
+    if older is None:
+        if len(with_figures) < 2:
+            return {"format": FORMAT, "log_id": log_id, "available": False,
+                    "reason": "two saved copies with figures are needed"}
+        first, second = with_figures[-2], with_figures[-1]
+    else:
+        first, second = path(log_id, older), path(log_id, newer)
+        if not _sidecar(first).is_file() or not _sidecar(second).is_file():
+            raise workspace.EventLogWorkspaceError("that copy was saved without figures")
+    a = json.loads(_sidecar(first).read_text(encoding="utf-8"))
+    b = json.loads(_sidecar(second).read_text(encoding="utf-8"))
+    acts_a, acts_b = a["activity_cases"], b["activity_cases"]
+    moved = sorted(({"activity": k, "older_cases": acts_a[k], "newer_cases": acts_b[k], "change": acts_b[k] - acts_a[k]}
+                    for k in set(acts_a) & set(acts_b) if acts_a[k] != acts_b[k]),
+                   key=lambda r: (-abs(r["change"]), r["activity"]))[:10]
+    same_currency = a.get("currency") and a.get("currency") == b.get("currency")
+    return {
+        "format": FORMAT, "log_id": log_id, "available": True,
+        "older": {"name": first.name, "generated_at": a["generated_at"]},
+        "newer": {"name": second.name, "generated_at": b["generated_at"]},
+        "figures": {key: {"older": a.get(key), "newer": b.get(key), "change": _delta(a.get(key), b.get(key))}
+                    for key in ("cases", "events", "activities", "distinct_variants", "median_case_seconds",
+                                "p90_case_seconds", "events_per_case", "repeat_rate")},
+        "top_variant": {"older": a.get("top_variant"), "newer": b.get("top_variant"),
+                        "same_path": (a.get("top_variant") or {}).get("path") == (b.get("top_variant") or {}).get("path")},
+        "activities_added": sorted(set(acts_b) - set(acts_a)),
+        "activities_gone": sorted(set(acts_a) - set(acts_b)),
+        "largest_activity_changes": moved,
+        "cost": ({"currency": b["currency"], "older": a["total_cost"], "newer": b["total_cost"],
+                  "change": _delta(a["total_cost"], b["total_cost"], 2)} if same_currency else None),
+        "interpretation": ("Differences between two saved snapshots of the same log. A change can come from new or "
+                           "appended events, an applied activity mapping or edited prices as much as from the process "
+                           "itself."),
+    }
 
 
 def listing(log_id: str) -> dict[str, Any]:

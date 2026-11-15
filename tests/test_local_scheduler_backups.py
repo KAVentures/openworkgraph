@@ -162,6 +162,7 @@ def test_background_backup_failure_has_fixed_diagnostic_and_backoff(store, monke
 
 def test_other_existing_schedule_kinds_unchanged_and_no_unencrypted_ack_needed(store, monkeypatch):
     monkeypatch.setattr(scheduler, "_check_target", lambda k, t: None)
+    monkeypatch.setattr(scheduler, "_signal_rule_set_pin", lambda log_id: {"fingerprint": "a" * 64, "count": 1})
     task = scheduler.create("event_log_signals", "log_sample",
                             interval_minutes=15, confirm_scheduled_runs=True)
     assert task["kind"] == "event_log_signals"

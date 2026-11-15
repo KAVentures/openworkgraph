@@ -25,3 +25,11 @@ test('a token is between recorded events, jumps across shared timestamps and is 
   assert.deepEqual({...tokenAt(events,40)},{i:3,f:0});
   assert.equal(tokenAt([],0),null);
 });
+
+test('follower rules preserve exact unicode labels and reject overlength values',()=>{
+  const label='  rare 雪 😀  ';
+  const rule=followSpec([{from:label,to:'😀'.repeat(200),mode:'eventual'}])[0];
+  assert.equal(rule.from,label);
+  assert.equal(rule.to,'😀'.repeat(200));
+  assert.throws(()=>followSpec([{from:'😀'.repeat(201),to:'A',mode:'direct'}]),/at most 200/);
+});

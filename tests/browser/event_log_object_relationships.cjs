@@ -64,6 +64,33 @@ const path=require('node:path');
   await page.locator('#owgObjectRelationRun').click();
   await page.locator('#owgObjectRelationEvidence table').waitFor();assert.match(await page.locator('#owgObjectRelationEvidence').textContent(),/Open/);
   assert.match(await page.locator('#owgObjectRelationDrawing').textContent(),/12 of 25 neighbor/);
+  // The new trace traverses exact stored O2O assertions for two hops; it
+  // never merges case histories, imports new data or interprets HTML labels.
+  // Both directions include two independently asserted reverse links.
+  await page.locator('#owgObjectRelationDirection').selectOption('both');
+  await page.locator('#owgObjectRelationRun').click();
+  await page.locator('#owgObjectRelationStatus').filter({hasText:'25 of 33'}).waitFor();
+  await page.locator('#owgObjectRelationTraceHops').selectOption('2');
+  const [traceReply]=await Promise.all([
+    page.waitForResponse(response=>response.url().endsWith('/object-relationships/trace')&&
+      response.request().method()==='POST'),
+    page.locator('#owgObjectRelationTraceRun').click()
+  ]);
+  assert.equal(traceReply.status(),200,await traceReply.text());
+  const traceData=await traceReply.json();
+  await page.locator('#owgObjectRelationTraceStatus').filter({hasText:'32 objects and 34 original relationship assertions through 2 hop(s)'}).waitFor();
+  assert.equal(await page.locator('#owgObjectRelationTraceResult table').count(),2);
+  assert.equal(await page.locator('#owgObjectRelationTraceResult table').first().locator('tbody tr').count(),32);
+  assert.equal(await page.locator('#owgObjectRelationTraceResult table').last().locator('tbody tr').count(),34);
+  assert.equal(await page.locator('#owgObjectRelationTraceResult img').count(),0);
+  assert.equal(await page.evaluate(()=>window.o2oInjected),undefined);
+  assert.equal(traceData.case_membership_inferred,false);
+  assert.equal(traceData.shared_event_correlation_performed,false);
+  assert.equal(traceData.execution_authorized,false);
+  assert.equal(traceData.truncated,false);
+  assert.equal(traceData.shown_edges,34);
+  assert.match(await page.locator('#owgObjectRelationTraceStatus').textContent(),/does not verify case membership or causality/);
+
   const node=page.locator('#owgObjectRelationDrawing [data-owg-object="item01"]');await node.focus();await page.keyboard.press('Enter');
   await page.locator('#owgObjectRelationEvidence').filter({hasText:'No retained events are linked'}).waitFor();
   await page.locator('#owgQuality summary').click();await page.locator('#owgQualityResults').filter({hasText:'Retained supplied object assertions: 34'}).waitFor();

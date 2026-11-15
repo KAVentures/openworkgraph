@@ -17,24 +17,56 @@ from .m365_outlook_candidate_review import review as review_candidate
 from .m365_outlook_recovery_triage import triage as recovery_triage
 from .m365_outlook_event_membership import reconcile as reconcile_membership
 from .m365_outlook_owg_receipt import ReceiptError, UncertainReceipt
-from .m365_outlook_delta import DeltaError
+from .m365_outlook_delta import DeltaError, _private_read, MAX_CANDIDATE_BYTES
+from .m365_outlook_owg_receipt import _unique
 from .m365_outlook_checkpoint import commit_checkpoint, inspect_checkpoint
+from .m365_operator_audit_writer import (record_operator_phase, preflight_operator_audit, AuditWriteError)
 
 FORMAT = "openworkgraph.m365-operator-cycle.v1"
 
 
 def extract(*, consent_local_read=False, consent_delta_read=False,
             consent_local_export=False, confirm_removals_reviewed=False,
-            require_event_membership=False, **kwargs):
+            require_event_membership=False, ledger_dir=None,
+            expected_generation=None, **kwargs):
     """Perform only the next bounded Graph GET and write review artifacts."""
     if not all((consent_local_read is True, consent_delta_read is True,
                 consent_local_export is True,
                 confirm_removals_reviewed is True)):
         raise ReceiptError("Explicit extraction and previous-removal review consent required")
+    # Snapshot the committed predecessor, then compare it again after the
+    # bounded Graph read. A concurrent checkpoint advance must not be shown
+    # as a safe successor to an obsolete generation.
+    predecessor = None
+    if ledger_dir is not None or expected_generation is not None:
+        if ledger_dir is None or type(expected_generation) is not int or expected_generation < 1:
+            raise ReceiptError("Checkpoint-bound extraction requires a positive exact generation")
+        predecessor = inspect_checkpoint(
+            tenant=kwargs["tenant"], mailbox=kwargs["mailbox"],
+            folder=kwargs["folder"], ledger_dir=Path(ledger_dir),
+            grant_file=Path(kwargs["grant_file"]), consent_local_read=True)
+        if predecessor is None or predecessor["generation"] != expected_generation:
+            raise ReceiptError("Missing or stale committed checkpoint generation")
+        raw = json.loads(
+            _private_read(Path(kwargs["previous_candidate"]), MAX_CANDIDATE_BYTES),
+            object_pairs_hook=_unique)
+        if (type(raw) is not dict
+                or raw.get("csv_sha256") != predecessor["candidate_sha256"]
+                or predecessor["log_id"] != kwargs["log_id"]):
+            raise ReceiptError("Previous candidate does not match committed checkpoint")
     result = run_verified_next_round(
         consent_local_read=True, consent_delta_read=True,
         consent_local_export=True, confirm_removals_reviewed=True,
         require_event_membership=require_event_membership, **kwargs)
+    if predecessor is not None:
+        current = inspect_checkpoint(
+            tenant=kwargs["tenant"], mailbox=kwargs["mailbox"],
+            folder=kwargs["folder"], ledger_dir=Path(ledger_dir),
+            grant_file=Path(kwargs["grant_file"]), consent_local_read=True)
+        if current != predecessor:
+            # Graph may already have written private review artifacts. Never
+            # claim them as the next safe round or retry automatically.
+            raise ReceiptError("Checkpoint changed during Graph extraction; manual review required")
     if result.get("status") != "next_round_review_ready":
         raise ReceiptError("Extraction not ready for human review")
     return {"format": FORMAT, "phase": "extract", "status": "review_required",
@@ -56,11 +88,24 @@ def review(*, consent_local_read=False, **kwargs):
 
 
 def append(*, consent_local_read=False, consent_local_append=False,
-           confirm_candidate_reviewed=False, **kwargs):
+           confirm_candidate_reviewed=False, expected_review_csv_sha256=None, **kwargs):
     """Append only a separately reviewed existing candidate, with durable latch."""
     if not all((consent_local_read is True, consent_local_append is True,
                 confirm_candidate_reviewed is True)):
         raise ReceiptError("Separate read, append and candidate-review confirmation required")
+    if expected_review_csv_sha256 is not None:
+        if (type(expected_review_csv_sha256) is not str
+                or len(expected_review_csv_sha256) != 64
+                or any(c not in "0123456789abcdef"
+                       for c in expected_review_csv_sha256)):
+            raise ReceiptError("Invalid reviewed CSV digest")
+        checked = review_candidate(
+            tenant=kwargs["tenant"], mailbox=kwargs["mailbox"],
+            folder=kwargs["folder"], grant_file=kwargs["grant_file"],
+            candidate=kwargs["candidate"], consent_local_read=True)
+        if (checked.get("status") != "review_ready"
+                or checked.get("csv_sha256") != expected_review_csv_sha256):
+            raise ReceiptError("Candidate differs from explicitly reviewed CSV")
     result = append_and_record(
         consent_local_read=True, consent_local_append=True, **kwargs)
     if result.get("status") != "receipt_persisted":
@@ -166,6 +211,10 @@ def main(argv=None):
                          "journal-dir", "handoff-dir", "output", "candidate"):
                 p.add_argument("--" + flag, type=Path, required=True)
             p.add_argument("--successor-label", required=True)
+            p.add_argument("--ledger-dir", type=Path,
+                           help="Require a committed predecessor before Graph GET")
+            p.add_argument("--expected-generation", type=int,
+                           help="Exact committed predecessor generation")
             p.add_argument("--require-event-membership", action="store_true",
                            help="Require fresh authenticated source-event membership before Graph GET")
             for flag in ("confirm-removals-reviewed", "consent-delta-read",
@@ -190,6 +239,7 @@ def main(argv=None):
                 p.add_argument("--" + flag, type=Path, required=True)
             p.add_argument("--consent-local-append", action="store_true")
             p.add_argument("--confirm-candidate-reviewed", action="store_true")
+            p.add_argument("--expected-review-csv-sha256")
         else:
             for flag in ("candidate", "csv-path", "receipt-file",
                          "journal-dir", "handoff-dir"):
@@ -200,7 +250,20 @@ def main(argv=None):
     phase = args.pop("phase")
     if phase not in ("review", "checkpoint-inspect"):
         args["session"] = os.environ.get("OWG_DASHBOARD_SESSION")
+    # Audit-enabled mutations must refuse on unsupported platforms BEFORE
+    # contacting Graph or writing OWG/checkpoint state, not after the mutation.
+    if (os.environ.get("OWG_M365_AUDIT_DIR")
+            and phase in ("extract", "append", "checkpoint-commit")
+            and os.name != "posix"):
+        print(json.dumps({"format": FORMAT, "phase": phase,
+                          "status": "refused", "retry_allowed": False}, sort_keys=True))
+        return 2
     try:
+        # Validate the configured destination before Graph reads or local mutations.
+        # The writer revalidates it after execution; races remain uncertain.
+        if os.environ.get("OWG_M365_AUDIT_DIR") and phase in (
+                "review", "extract", "append", "checkpoint-commit"):
+            preflight_operator_audit(Path(os.environ["OWG_M365_AUDIT_DIR"]))
         if phase == "checkpoint-inspect":
             result = checkpoint_inspect(**args)
         elif phase == "checkpoint-commit":
@@ -218,13 +281,27 @@ def main(argv=None):
             result = membership(**args)
         else:
             result = handoff(**args)
+        audit_dir = os.environ.get("OWG_M365_AUDIT_DIR", "")
+        if audit_dir and phase in ("review", "extract", "append", "checkpoint-commit"):
+            try:
+                record_operator_phase(
+                    phase, result, directory=Path(audit_dir),
+                    tenant=args["tenant"], mailbox=args["mailbox"],
+                    folder=args["folder"], log_id=args.get("log_id"))
+            except AuditWriteError:
+                # The underlying operation may already have committed. Never
+                # encourage a retry when its audit outcome is uncertain.
+                print(json.dumps({"format": FORMAT, "phase": phase,
+                                  "status": "audit_uncertain",
+                                  "retry_allowed": False}, sort_keys=True))
+                return 3
         print(json.dumps(result, sort_keys=True))
         return 3 if phase in ("recover", "membership") and result["status"] == "manual_reconciliation_required" else 0
     except UncertainReceipt:
         print(json.dumps({"format": FORMAT, "phase": phase,
                           "status": "uncertain", "retry_allowed": False}, sort_keys=True))
         return 3
-    except (ReceiptError, DeltaError, ValueError, TypeError, OSError, KeyError):
+    except (ReceiptError, AuditWriteError, DeltaError, ValueError, TypeError, OSError, KeyError):
         print(json.dumps({"format": FORMAT, "phase": phase,
                           "status": "refused", "retry_allowed": False}, sort_keys=True))
         return 2

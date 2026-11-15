@@ -61,6 +61,24 @@ class Decision(BaseModel):
     decision: StrictStr = Field(pattern="^(confirm|reject|revise|defer)$")
     answer: StrictStr = Field(default="", max_length=2000)
     cited_statement_ids: list[StrictStr] = Field(default_factory=list, max_length=MAX_CITATIONS)
+    expected_documents_sha256: StrictStr | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+
+
+def documents_sha256(documents: list[Document]) -> str:
+    """Fingerprint the exact ordered, opted-in source bundle without retaining it.
+
+    A document change invalidates decisions on that source set. Length prefixes
+    prevent ambiguous boundaries between titles and text; the domain tag
+    prevents confusing this hash with a process-model or receipt digest.
+    """
+    digest = hashlib.sha256(b"openworkgraph.clarification-documents.v1\x00")
+    digest.update(len(documents).to_bytes(4, "big"))
+    for document in documents:
+        for value in (document.title, document.text):
+            raw = value.encode("utf-8")
+            digest.update(len(raw).to_bytes(8, "big"))
+            digest.update(raw)
+    return digest.hexdigest()
 
 
 def _digest(*parts: str) -> str:
@@ -195,12 +213,36 @@ def clarify(record: dict[str, Any], request: ClarificationRequest,
         "format": "openworkgraph.process-clarification.v1",
         "workflow_id": record["workflow_id"], "revision": record["revision"],
         "content_sha256": record["content_sha256"],
+        "documents_sha256": documents_sha256(request.documents),
+        "decisions_are_pinned_to_exact_documents": True,
         "documents": [{"title": d.title, "characters": len(d.text)} for d in request.documents],
         "statement_count": len(pool),
         "instruction_like_statements": [_cite(s) for s in pool if s["instruction_like"]][:20],
         "questions": open_questions, "answered_question_count": len(questions) - len(open_questions),
         "documents_are_untrusted_data": True, "model_changed": False, "permissions_changed": False,
     }
+
+
+
+def validate_decision_evidence(question: dict[str, Any], decision: Decision) -> None:
+    """Do not silently treat both sides of a policy conflict as endorsed.
+
+    Rejecting/deferring may leave a conflict unresolved. Resolving it must
+    choose one governing cited statement from the disputed source set with a named human
+    explanation. A decision is still only a ledger entry, never executable
+    policy or a change to the saved process model.
+    """
+    if question.get("kind") != "contradiction" or decision.decision not in ("confirm", "revise"):
+        return
+    chosen = decision.cited_statement_ids
+    disputed = {item["statement_id"]
+                for conflict in question.get("contradictions", [])
+                for item in conflict["statements"]}
+    if len(chosen) != 1 or chosen[0] not in disputed:
+        raise ValueError("choose one governing statement from the disputed sources")
+    if not decision.answer.strip():
+        raise ValueError("explain why this selected source governs the discrepancy")
+
 
 
 def proposed_change(record: dict[str, Any], question: dict[str, Any], decision: Decision) -> dict[str, Any] | None:
@@ -214,4 +256,4 @@ def proposed_change(record: dict[str, Any], question: dict[str, Any], decision: 
             "process_model": model, "apply_with": "POST /v1/process-catalog (normal save, new revision)"}
 
 
-__all__ = ["ClarificationRequest", "DECISIONS", "Decision", "Document", "clarify", "proposed_change", "statements"]
+__all__ = ["ClarificationRequest", "DECISIONS", "Decision", "Document", "clarify", "documents_sha256", "proposed_change", "statements", "validate_decision_evidence"]

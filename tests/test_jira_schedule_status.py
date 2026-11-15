@@ -48,6 +48,7 @@ def test_schedule_create_pause_resume_delete_project_accurate_flags(scoped):
 def test_unrelated_job_or_deleted_profile_cannot_claim_scheduled_jira(scoped, monkeypatch):
     first, second = scoped
     monkeypatch.setattr(scheduler, '_check_target', lambda kind, target: None)
+    monkeypatch.setattr(scheduler, "_signal_rule_set_pin", lambda log_id: {"fingerprint": "a" * 64, "count": 1})
     scheduler.create('event_log_signals', first, interval_minutes=15, confirm_scheduled_runs=True)
     assert profiles.status()['scheduled_runs_enabled'] is False
     scheduler.create('retained_jira_profile', first, interval_minutes=15, confirm_scheduled_runs=True)

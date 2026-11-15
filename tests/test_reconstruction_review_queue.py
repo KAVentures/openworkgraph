@@ -35,10 +35,24 @@ class RiskReviewQueueTest(unittest.TestCase):
         first = prioritized_review_queue(events)
         self.assertEqual(first, prioritized_review_queue(events))
         self.assertTrue(first["requires_explicit_review"])
+        self.assertEqual(first["ordering"], "conflicts_first_then_risk_count_then_relation_priority")
+        self.assertEqual(first["conflicted_candidates"], sum(bool(x["risk_reasons"]) for x in first["queue"]))
         self.assertTrue(first["canonical_membership_unchanged"])
         for item in first["queue"]:
             self.assertFalse(item["automatic_merge"])
             self.assertIn(item["review_status"], ("inspect", "conflicted"))
+
+    def test_conflicts_come_before_inspection_only_candidates(self):
+        events = [event("a", 0, ref="AAA", tab="mixed"),
+                  event("loose", 1, tab="mixed"),
+                  event("b", 2, ref="BBB", tab="mixed"),
+                  event("plain1", 3, tab="other"),
+                  event("plain2", 4, tab="other")]
+        result = prioritized_review_queue(events)
+        risk = [bool(item["risk_reasons"]) for item in result["queue"]]
+        self.assertEqual(risk, sorted(risk, reverse=True))
+        self.assertEqual(result["conflicted_candidates"], sum(risk))
+        self.assertFalse(any(item["automatic_merge"] for item in result["queue"]))
 
     def test_pagination_discloses_truncation(self):
         events = [event(f"e{i}", i, tab="tab-1") for i in range(10)]

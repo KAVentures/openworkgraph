@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import os
 import sqlite3
 
 import pytest
@@ -97,3 +98,81 @@ def test_symlink_denied(store):
     (store / receipts._NAME).symlink_to(outside)
     with pytest.raises(CaseDeclarationError, match="unsafe"):
         receipts.review(**args())
+
+
+def test_existing_permissive_receipt_ledger_rejected_without_chmod(store):
+    import os
+    if os.name != "posix":
+        pytest.skip("POSIX permissions only")
+    target = store / receipts._NAME
+    target.write_bytes(b"sentinel")
+    target.chmod(0o644)
+    with pytest.raises(CaseDeclarationError, match="unsafe"):
+        receipts.review(**args())
+    assert target.stat().st_mode & 0o777 == 0o644
+    assert target.read_bytes() == b"sentinel"
+
+
+def test_hardlinked_receipt_ledger_rejected_without_touching_target(store):
+    outside = store.parent / (store.name + "-hardlink")
+    outside.write_bytes(b"sentinel")
+    (store / receipts._NAME).hardlink_to(outside)
+    with pytest.raises(CaseDeclarationError, match="unsafe"):
+        receipts.review(**args())
+    assert outside.read_bytes() == b"sentinel"
+
+
+@pytest.mark.parametrize("suffix", ["-wal", "-shm"])
+@pytest.mark.parametrize("sidecar_type", ["regular", "dangling_symlink"])
+def test_run_receipt_sidecar_rejected_without_mutation(store, suffix, sidecar_type):
+    target = store / receipts._NAME
+    target.touch(mode=0o600)
+    sidecar = store / (receipts._NAME + suffix)
+    if sidecar_type == "regular":
+        sidecar.write_bytes(b"retained-evidence")
+    else:
+        sidecar.symlink_to(store / "missing-sidecar-target")
+    with pytest.raises(CaseDeclarationError, match="sidecar"):
+        receipts.review(**args())
+    if sidecar_type == "regular":
+        assert sidecar.read_bytes() == b"retained-evidence"
+    else:
+        assert sidecar.is_symlink()
+
+
+def test_run_receipt_wal_mode_refused(store):
+    target = store / receipts._NAME
+    with sqlite3.connect(str(target)) as db:
+        assert db.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+    # Owner-only like the real journal, so the refusal comes from the WAL mode rather than from
+    # the permission check (SQLite creates the file 0644 under a default umask, e.g. on macOS).
+    os.chmod(target, 0o600)
+    with pytest.raises(CaseDeclarationError, match="mode"):
+        receipts.review(**args())
+
+
+def test_shortened_retention_immediately_hides_old_receipts(store, monkeypatch):
+    """A later shorter history policy must override stored expiry."""
+    start = datetime(2026, 11, 10, tzinfo=timezone.utc)
+    later = start + timedelta(days=2)
+    receipts.append(**args(), action="reviewed", evidence_digest=DIGEST, now=start)
+    assert len(receipts.review(**args(), now=later)["entries"]) == 1
+
+    monkeypatch.setattr(binding, "read_policy", lambda: {
+        "human_retention": {"mode": "days", "days": 1}})
+    assert receipts.review(**args(), now=later)["entries"] == []
+    # An expired receipt cannot be corrected after retention is shortened.
+    old_id = receipts.review(**args(), now=start)["entries"][0]["id"]
+    with pytest.raises(CaseDeclarationError, match="target missing"):
+        receipts.append(**args(), action="disputed", evidence_digest=DIGEST,
+                        supersedes=old_id, now=later)
+    # A newly reviewed receipt is allowed, but must not resurrect old history.
+    new = receipts.append(**args(), action="reviewed",
+                          evidence_digest=DIGEST, now=later)
+    assert len(new["entries"]) == 1
+    assert new["entries"][0]["id"] != old_id
+
+
+def test_receipt_review_rejects_naive_clock(store):
+    with pytest.raises(CaseDeclarationError, match="timezone-aware"):
+        receipts.review(**args(), now=datetime(2026, 11, 14))

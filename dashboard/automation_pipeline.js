@@ -720,7 +720,129 @@
       }catch(e){status.textContent=e.message;}
       finally{portfolioButton.disabled=false;}
     };
-    card.append(row,resumeSection,auditSection,tools,status,counts,portfolioButton,portfolioHost,viewCount,list,comparison,detail);
+    const benefitOverlapButton=button('Review overlapping benefit evidence','secondary');
+    benefitOverlapButton.id='owgPipelineBenefitOverlap';
+    const benefitOverlapHost=el('div');
+    benefitOverlapHost.id='owgPipelineBenefitOverlapResult';
+    benefitOverlapHost.setAttribute('role','status');
+    benefitOverlapHost.setAttribute('aria-live','polite');
+    benefitOverlapButton.onclick=async()=>{
+      benefitOverlapButton.disabled=true;
+      try{
+        const r=await (await api('/v1/automation-pipeline/benefit-overlap')).json();
+        if(!Array.isArray(r.candidate_pairs)||typeof r.after_measurements!=='number')
+          throw new Error('Unexpected benefit-overlap report');
+        const count=el('p',r.candidate_pairs.length+
+          ' cross-idea review candidates shown from '+r.after_measurements+
+          ' recorded after-period measurements. '+r.unlinked_after_measurements+
+          ' lack an exact source reference.','muted');
+        const title=id=>(latestIdeas.find(idea=>idea.idea_id===id)||{}).title||id;
+        const items=el('ul');
+        for(const pair of r.candidate_pairs){
+          items.appendChild(el('li',title(pair.first_idea_id)+' ('+pair.first_measurement_id+
+            ') and '+title(pair.second_idea_id)+' ('+pair.second_measurement_id+
+            '): '+pair.overlap_start+' to '+pair.overlap_end+
+            ' · '+pair.source_kind+' · '+pair.source_group));
+        }
+        const note=r.rows_truncated||r.candidate_pairs_truncated||r.unreadable_measurements?
+          'Some evidence could not be fully reviewed; do not infer non-overlap from omitted rows.':
+          r.candidate_pairs.length?'Review the underlying case populations before attributing or adding benefits.':
+          'No exact source overlap was found; different or missing references may still cover the same work.';
+        benefitOverlapHost.replaceChildren(el('h4','Potential benefit overlap'),count,
+          ...(r.candidate_pairs.length?[items]:[]),el('p',note,'muted'),
+          el('p',r.interpretation,'muted'));
+      }catch(e){benefitOverlapHost.replaceChildren(el('p',e.message,'muted'));}
+      finally{benefitOverlapButton.disabled=false;}
+    };
+    const benefitReadinessButton=button('Review benefit evidence readiness','secondary');
+    benefitReadinessButton.id='owgPipelineBenefitReadiness';
+    const benefitReadinessHost=el('div');
+    benefitReadinessHost.id='owgPipelineBenefitReadinessResult';
+    benefitReadinessHost.setAttribute('role','status');
+    benefitReadinessHost.setAttribute('aria-live','polite');
+    benefitReadinessButton.onclick=async()=>{
+      benefitReadinessButton.disabled=true;
+      try{
+        const r=await (await api('/v1/automation-pipeline/benefit-readiness')).json();
+        if(r.format!=='openworkgraph.automation-portfolio-benefit-readiness.v1'||
+           !Array.isArray(r.ideas)||typeof r.implemented_ideas_reviewed!=='number')
+          throw new Error('Unexpected portfolio evidence readiness report.');
+        const filter=select('owgPipelineBenefitReadinessFilter',[
+          ['all','All implemented ideas'],...Object.keys(r.ideas_by_readiness).map(k=>[k,k.replaceAll('_',' ')])
+        ]);
+        const search=input('owgPipelineBenefitReadinessSearch','search','Find title or idea ID');
+        const display=el('div');display.id='owgPipelineBenefitReadinessRows';
+        const show=()=>{
+          const term=search.value.trim().toLowerCase();
+          const matched=r.ideas.filter(i=>(filter.value==='all'||i.readiness===filter.value)&&
+            (!term||(i.title+' '+i.idea_id).toLowerCase().includes(term)));
+          const t=el('table'),thead=el('thead'),tr=el('tr');
+          ['Idea','Evidence readiness','Baseline / after','Source links missing',
+            'Reported per-case effort change (hours/month)','Next human review'].forEach(v=>{
+            const th=el('th',v);th.scope='col';tr.append(th);
+          });thead.append(tr);const body=el('tbody');
+          matched.slice(0,150).forEach(i=>{
+            const row=el('tr'),th=el('th',i.title+' · '+i.idea_id);th.scope='row';row.append(th);
+            const change=i.reported_effort_change_hours_per_month_at_after_volume;
+            [i.readiness.replaceAll('_',' '),i.baseline_periods+' / '+i.after_periods,
+             i.missing_source_references,
+             change==null?'Not comparable':Number(change).toFixed(3),
+             i.next_review_action].forEach(v=>row.append(el('td',String(v))));
+            body.append(row);
+          });t.append(thead,body);
+          const wrap=el('div',null,'table-wrap');wrap.append(t);
+          display.replaceChildren(el('p',matched.length+' matching ideas; displaying '+Math.min(150,matched.length)+
+            '. Unlisted or filtered ideas were not marked complete.','muted'),
+            ...(matched.length?[wrap]:[el('p','No matching ideas.','muted')]));
+        };
+        filter.onchange=search.oninput=show;
+        const counts=Object.entries(r.ideas_by_readiness).map(([kind,n])=>n+' '+kind.replaceAll('_',' ')).join(' · ');
+        const warning=r.comparison_complete?
+          'This inventory reports entered evidence coverage, not independently verified savings or distinct cases.':
+          'The evidence is unreadable, truncated or incomplete. No missing claims are certified clear.';
+        benefitReadinessHost.replaceChildren(el('h4','Benefit evidence readiness'),
+          el('p',r.implemented_ideas_reviewed+' implemented ideas. '+counts+'.'),
+          el('p',r.candidate_overlap_pairs+' possible cross-idea overlap pairs; '+warning,'muted'),
+          field('Readiness category',filter),field('Search implemented ideas',search),
+          display,el('p',r.interpretation,'muted'));
+        show();
+      }catch(e){benefitReadinessHost.replaceChildren(el('p',e.message,'muted'));}
+      finally{benefitReadinessButton.disabled=false;}
+    };
+    const dependencyScheduleButton=button('Review dependency schedule risks','secondary');
+    dependencyScheduleButton.id='owgPipelineDependencySchedule';
+    const dependencyScheduleHost=el('div');
+    dependencyScheduleHost.id='owgPipelineDependencyScheduleResult';
+    dependencyScheduleHost.setAttribute('role','status');
+    dependencyScheduleHost.setAttribute('aria-live','polite');
+    dependencyScheduleButton.onclick=async()=>{
+      dependencyScheduleButton.disabled=true;
+      try{
+        const r=await (await api('/v1/automation-pipeline/dependency-schedule')).json();
+        if(!Array.isArray(r.risk_candidates)||typeof r.active_ideas!=='number')
+          throw new Error('Unexpected dependency schedule review');
+        const name=id=>(latestIdeas.find(idea=>idea.idea_id===id)||{}).title||id;
+        const lines=el('ul');
+        for(const finding of r.risk_candidates){
+          const path=finding.path.map(name).join(' → ');
+          const basis='Target '+(finding.idea_target_quarter||'not set')+
+            '; prerequisite '+(finding.dependency_target_quarter||'not set')+
+            ' ('+finding.dependency_state.replaceAll('_',' ')+')';
+          lines.appendChild(el('li',finding.kind.replaceAll('_',' ')+': '+path+'. '+basis+'.'));
+        }
+        const caveat=r.risk_candidates_truncated||!r.review_complete?
+          'The review was truncated or reached a depth boundary: unlisted issues remain unknown.':
+          'No live source was queried. These are plan consistency candidates, not forecast delivery dates.';
+        dependencyScheduleHost.replaceChildren(el('h4','Dependency schedule review'),
+          el('p',r.active_ideas+' active ideas; '+r.active_ideas_with_dependencies+
+            ' declare dependencies, '+r.active_ideas_with_target_quarter+
+            ' have target quarters; '+r.risk_candidates.length+' candidates shown.','muted'),
+          ...(r.risk_candidates.length?[lines]:[]),
+          el('p',caveat,'muted'),el('p',r.interpretation,'muted'));
+      }catch(e){dependencyScheduleHost.replaceChildren(el('p',e.message,'muted'));}
+      finally{dependencyScheduleButton.disabled=false;}
+    };
+    card.append(row,resumeSection,auditSection,tools,status,counts,portfolioButton,portfolioHost,benefitOverlapButton,benefitOverlapHost,benefitReadinessButton,benefitReadinessHost,dependencyScheduleButton,dependencyScheduleHost,viewCount,list,comparison,detail);
     panel.appendChild(card);
 
     let latestIdeas=[],refreshGeneration=0,resumeGeneration=0,auditGeneration=0,auditPageIndex=0,auditAbort=null;
@@ -1224,8 +1346,44 @@
               const cell=el('td');cell.appendChild(del);tr.appendChild(cell);body.appendChild(tr);});
             t.append(thead,body);wrap.appendChild(t);parts.push(wrap);
           }else parts.push(el('div','No measurements yet. Record a baseline from before the change, then periods after it.','muted'));
+          const adjusted=r.coverage_adjusted;
+          if(adjusted){
+            const analysis=el('section');analysis.id='owgRealizedCoverageAdjusted';
+            analysis.setAttribute('aria-label','Coverage-aware benefit comparison');
+            analysis.appendChild(el('h5','Coverage-aware comparison'));
+            if(adjusted.status==='ready'&&adjusted.comparison){
+              const cc=adjusted.comparison,stats=el('ul');stats.id='owgRealizedWeightedComparison';
+              stats.append(
+                el('li','Pooled baseline: '+fmt(cc.baseline_minutes_per_case)+' min/case across '+
+                  fmt(adjusted.coverage.baseline.calendar_days_reported)+' days; after: '+
+                  fmt(cc.after_minutes_per_case)+' min/case across '+
+                  fmt(adjusted.coverage.after.calendar_days_reported)+' days.'),
+                el('li','Effort change at after-volume: '+
+                  fmt(cc.hours_per_month_from_per_case_change_at_after_volume)+
+                  ' hours/month (entered model: '+fmt(cc.modeled_hours_per_month)+').'),
+                el('li','Duration-weighted total hours/month: baseline '+fmt(cc.baseline_hours_per_month)+
+                  ', after '+fmt(cc.after_hours_per_month)+'; monthly case-volume change '+
+                  fmt(cc.case_volume_change_per_month)+'.')
+              );
+              analysis.appendChild(stats);
+            }else{
+              const reasons={
+                missing_periods:'Record both a baseline and an after period to compare.',
+                overlapping_periods:'Overlapping dates within one period type. Correct duplicate calendar coverage before interpreting adjusted results.',
+                zero_case_period:'At least one measurement has zero cases. Verify the case-exposure denominator before comparing.'
+              };
+              const warning=el('p',reasons[adjusted.status]||'Coverage-adjusted comparison unavailable.','muted');
+              warning.id='owgRealizedCoverageWarning';warning.setAttribute('role','status');
+              analysis.appendChild(warning);
+              if(adjusted.status==='overlapping_periods')analysis.appendChild(el('p',
+                fmt(adjusted.overlap_pairs.length)+' overlapping measurement pair(s); remove or replace conflicting rows.','muted'));
+            }
+            analysis.appendChild(el('p','Coverage-aware figures pool entered hours and cases across non-overlapping days. Source labels are not independently verified; this is not causal impact, certified savings or a confidence interval.','muted'));
+            parts.push(analysis);
+          }
           const c=r.comparison;
           if(c){
+            parts.push(el('h5','Legacy equal-weight-period comparison'));
             const list=el('ul');list.id='owgRealizedComparison';
             list.append(el('li','Minutes per case: '+fmt(c.minutes_per_case_change)+' fewer after (baseline '+fmt(r.baseline.minutes_per_case)+', after '+fmt(r.after.minutes_per_case)+').'),
               el('li','At the after volume that is '+fmt(c.hours_per_month_from_per_case_change_at_after_volume)+' hours a month; the assessment modeled '+fmt(c.modeled_hours_per_month)+(c.observed_vs_modeled_ratio!==null?' (ratio '+c.observed_vs_modeled_ratio+').':'.')),
@@ -2124,19 +2282,22 @@
       const generation=++handoffGeneration;
       const current=()=>generation===handoffGeneration;
       const handoff=event.detail||{},id=handoff.idea_id;
-      // A synthetic or incomplete navigation event must not open even a
-      // generic decision surface. Only the inspected, revision-bound reviewed
-      // choice may enter this path; the server remains authoritative.
+      // A synthetic or incomplete handoff must never display a decision surface.
+      // Validate the exact project and saved approval revision before any network read.
+      detail.replaceChildren();
       if(typeof id!=='string'||!id||id.length>128||
          typeof handoff.project_id!=='string'||!handoff.project_id||handoff.project_id.length>128||
-         !Number.isSafeInteger(handoff.review_revision)||handoff.review_revision<1)return;
+         !Number.isSafeInteger(handoff.review_revision)||handoff.review_revision<1){
+        status.textContent='Incomplete reviewed handoff. Inspect the approved project again.';
+        return;
+      }
       // Carry the exact inspected export as a navigation hint, never as approval.
       // Recheck it against the authenticated journey before opening the evidence UI.
       // Clear any previous decision surface before an asynchronous verification.
       // A rejected handoff must never leave an unrelated approval visible.
-      detail.replaceChildren();
       refresh().then(async()=>{
         if(!current())return;
+        if(!handoff.project_id){await show(id);return;}
         const journeyResponse=await api('/v1/automation-pipeline/'+encodeURIComponent(id)+'/journey');
         if(!journeyResponse.ok)throw new Error('Authenticated journey refused ('+journeyResponse.status+').');
         const journey=await journeyResponse.json();
@@ -2183,29 +2344,27 @@
            JSON.stringify(attestation.blockers)!==JSON.stringify(basis.blockers)){
           throw new Error('Destination review attestation inconsistent. Inspect again.');
         }
-        // The destination must also independently confirm the durable human
-        // approval, not merely the (non-authorizing) export inspection.
-        // A revoked or concurrently edited review must fail closed here.
-        const reviewed=await api('/v1/review-choice-workbench/'+encodeURIComponent(id)+'/reviewed-handoff-preflight',{
+        // Recheck durable human approval at the destination, independently of the
+        // originating workbench. A review-basis preflight alone is not approval.
+        if(!Number.isSafeInteger(handoff.review_revision)||handoff.review_revision<1)
+          throw new Error('Saved approval revision missing. Inspect again.');
+        const approvedResponse=await api('/v1/review-choice-workbench/'+encodeURIComponent(id)+'/reviewed-handoff-preflight',{
           method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(basis)
         });
-        if(!reviewed.ok)throw new Error('Destination approved-review preflight refused ('+reviewed.status+').');
-        const approval=await reviewed.json();
+        if(!approvedResponse.ok)throw new Error('Destination saved approval refused ('+approvedResponse.status+').');
+        const approved=await approvedResponse.json();
         if(!current())return;
-        if(approval.format!=='openworkgraph.reviewed-handoff-preflight.v1'||
-           approval.idea_id!==id||approval.project_id!==handoff.project_id||
-           approval.idea_revision!==handoff.idea_revision||
-           approval.project_set_sha256!==basis.project_set_sha256||
-           approval.spec_sha256!==handoff.spec_sha256||
-           approval.archive_sha256!==handoff.archive_sha256||
-           approval.human_review_approved!==true||
-           !Number.isSafeInteger(handoff.review_revision)||handoff.review_revision<1||
-           approval.review_revision!==handoff.review_revision||
-           approval.execution_authorized!==false||approval.source_read_authorized!==false){
-          throw new Error('Destination approval changed or is inconsistent. Inspect again.');
-        }
-        // Only reveal the decision surface after authenticated exact-export
-        // AND approved-review checks. Neither preflight authorizes execution.
+        if(approved.format!=='openworkgraph.reviewed-handoff-preflight.v1'||
+           approved.idea_id!==id||approved.project_id!==handoff.project_id||
+           approved.idea_revision!==handoff.idea_revision||
+           approved.project_set_sha256!==basis.project_set_sha256||
+           approved.spec_sha256!==handoff.spec_sha256||
+           approved.archive_sha256!==handoff.archive_sha256||
+           approved.review_revision!==handoff.review_revision||
+           approved.human_review_approved!==true||approved.execution_authorized!==false||
+           approved.source_read_authorized!==false)
+          throw new Error('Saved approval changed before destination opened. Inspect again.');
+        // Only reveal the decision surface after authenticated exact-export checks.
         await show(id);
         if(!current())return;
         const button=document.getElementById('owgPipelineJourney');

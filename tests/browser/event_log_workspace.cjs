@@ -430,6 +430,29 @@ const path=require('node:path');
 
    await page.locator('#owgEventLogSimLoad').click();
    await page.locator('#owgEventLogSimRun').waitFor();
+   // R14 shared-calibration portfolio: several staffing levels are tested
+   // against one static local calibration, not independently refitted logs.
+   await page.locator('#owgEventLogSimPortfolio').waitFor();
+   await page.locator('#owgEventLogSimPortfolioCases').fill('150');
+   await page.locator('#owgEventLogSimPortfolioActivity1').selectOption('Check');
+   await page.locator('#owgEventLogSimPortfolioStaff1').fill('1');
+   await page.locator('#owgEventLogSimPortfolioActivity2').selectOption('Check');
+   await page.locator('#owgEventLogSimPortfolioStaff2').fill('4');
+   const [portfolioResponse]=await Promise.all([
+     page.waitForResponse(r=>r.url().includes('/simulation/portfolio')&&r.request().method()==='POST'),
+     page.locator('#owgEventLogSimPortfolioRun').click()
+   ]);
+   assert.equal(portfolioResponse.status(),200,await portfolioResponse.text());
+   const portfolio=await portfolioResponse.json();
+   assert.equal(portfolio.single_calibration_used,true);
+   assert.equal(portfolio.identical_case_count_and_seed,true);
+   assert.equal(portfolio.baseline.cases_simulated,150);
+   assert.deepEqual(portfolio.alternatives.map(x=>x.label),['Alternative 1','Alternative 2']);
+   assert.equal(portfolio.execution_authorized,false);
+   assert.equal(portfolio.auto_selected_recommended_alternative,false);
+   await page.locator('#owgEventLogSimPortfolioResults table').waitFor();
+   assert.equal(await page.locator('#owgEventLogSimPortfolioResults tbody tr').count(),3);
+   assert.match(await page.locator('#owgEventLogSimPortfolioResults').textContent(),/no winning option|No winning option/i);
    assert.match(await page.locator('#owgEventLogSimForm').textContent(),/Calibrated 60 of 60 complete cases/);
    const measuredPaths=await page.evaluate(()=>window.__owgEventLogModel.parseWeightedPaths(document.querySelector('#owgEventLogSimPaths').value));
    assert.deepEqual(measuredPaths[0],{activities:['Receive','Check','Approve','Close'],weight:0.6});
@@ -643,7 +666,7 @@ const path=require('node:path');
    await reviewPanel.getByText('unreviewed',{exact:true}).waitFor();
    await reviewPanel.getByRole('button',{name:'Acknowledge signal Skipped approval'}).click();
    await reviewPanel.getByText('acknowledged',{exact:true}).waitFor();
-   assert.match(await reviewPanel.textContent(),/No automatic actions or delivery/);
+   assert.match(await reviewPanel.textContent(),/No business actions/);
    await reviewPanel.getByRole('button',{name:'Reopen signal Skipped approval'}).click();
    await reviewPanel.getByText('unreviewed',{exact:true}).waitFor();
    await page.locator('#owgSignalReviewRefresh').click();
@@ -666,22 +689,163 @@ const path=require('node:path');
    assert.equal(sharingDoc.matching_cases,60);assert.equal(sharingDoc.group_labels_included,false);
    for(const secret of ['C0','ann','bob','has_rework','resource','cohort'])assert.ok(!JSON.stringify(sharingDoc).includes('"'+secret+'"'));
    await page.locator('#owgAnalysisSharingConsent').check();
+   assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),true,'consent alone cannot bypass required freshness validation');
+   await page.locator('#owgAnalysisFreshness').click();
+   await page.getByText('Current source, specification, metric lineage and minimized values match.',{exact:false}).waitFor();
+   assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),false);
+   // Download authorization is server-side and must fail closed even after a
+   // successful preview/freshness check. The legacy client-side freshness
+   // interception no longer exercises the production download path.
+   let authorizationAttempts=0;
+   await page.route('**/analysis-sharing-authorize',route=>{
+     authorizationAttempts++;
+     return route.fulfill({status:409,contentType:'application/json',
+       body:JSON.stringify({detail:'Source, metric lineage or values changed.'})});
+   });
+   await page.locator('#owgAnalysisSharingDownload').click();
+   await page.waitForFunction(()=>document.querySelector('#owgAnalysisSharingDownload')?.disabled===true || document.querySelector('#owgAnalysisSharingPreview')?.textContent?.includes('changed'),null,{timeout:5000}).catch(()=>{});
+   assert.equal(authorizationAttempts,1,'download must request fresh server authorization');
+   await page.unroute('**/analysis-sharing-authorize');
+   // A rejected authorization invalidates the reviewed preview; refresh it
+   // before attempting another freshness check or download.
+   await page.locator('#owgAnalysisPrepareShare').click();
+   await page.locator('#owgAnalysisSharingPreview').waitFor();
+   await page.locator('#owgAnalysisSharingConsent').check();
+   await page.locator('#owgAnalysisFreshness').click();
+   await page.getByText('Current source, specification, metric lineage and minimized values match.',{exact:false}).waitFor();
+   assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),false);
+   // Consent withdrawal while server authorization is pending must keep
+   // the download disabled, even if the pending request subsequently resolves.
+   let releaseAuthorization,seenAuthorization;
+   const authorizationStarted=new Promise(resolve=>seenAuthorization=resolve);
+   await page.route('**/analysis-sharing-authorize',async route=>{
+     seenAuthorization();
+     await new Promise(resolve=>releaseAuthorization=resolve);
+     await route.fulfill({status:409,contentType:'application/json',
+       body:JSON.stringify({detail:'Authorization no longer valid.'})});
+   },{times:1});
+   await page.locator('#owgAnalysisSharingDownload').click();
+   await authorizationStarted;
+   await page.locator('#owgAnalysisSharingConsent').uncheck();
+   releaseAuthorization();
+   assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),true);
+   await page.unroute('**/analysis-sharing-authorize');
+   // A rejected in-flight authorization invalidates the reviewed preview.
+   // Re-prepare it before rechecking freshness; consent alone cannot restore it.
+   await page.locator('#owgAnalysisPrepareShare').click();
+   await page.locator('#owgAnalysisSharingPreview').waitFor();
+   await page.locator('#owgAnalysisSharingConsent').check();
+   await page.locator('#owgAnalysisFreshness').click();
+   await page.getByText('Current source, specification, metric lineage and minimized values match.',{exact:false}).waitFor();
    const [sharingFile]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisSharingDownload').click()]);
-   const sharingText=await fs.readFile(await sharingFile.path(),'utf8');assert.deepEqual(JSON.parse(sharingText),sharingDoc);
+   const sharingText=await fs.readFile(await sharingFile.path(),'utf8');
+   const downloadedSharingDoc=JSON.parse(sharingText);
+   // Download recomputes the minimized snapshot; generation time is intentionally fresh.
+   assert.match(downloadedSharingDoc.generated_at,/^\d{4}-\d{2}-\d{2}T/);
+   assert.deepEqual({...downloadedSharingDoc,generated_at:sharingDoc.generated_at},sharingDoc);
    if(process.env.OWG_ANALYSIS_SNAPSHOT_OUTPUT)await fs.writeFile(process.env.OWG_ANALYSIS_SNAPSHOT_OUTPUT,sharingText);
    assert.equal(await page.locator('#owgAnalysisSharingConsent').isChecked(),false);
+   // A successful download consumes the reviewed snapshot and clears consent.
+   // Start a new review before exercising stale-lineage responses; otherwise
+   // the freshness control is intentionally disabled and this test never
+   // reaches the server-side freshness validation.
+   await page.locator('#owgAnalysisPrepareShare').click();
+   await page.locator('#owgAnalysisSharingPreview').waitFor();
+   // A stale freshness result must not be bypassed by toggling sharing consent.
+   await page.route('**/analysis-sharing-freshness',route=>route.fulfill({
+     status:200,contentType:'application/json',
+     body:JSON.stringify({format:'openworkgraph.analysis-snapshot-freshness.v1',lineage_current:false,current_results_match:false})
+   }));
+   await page.locator('#owgAnalysisSharingConsent').check();
+   await page.locator('#owgAnalysisFreshness').click();
+   await assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),true);
+   await page.getByText('Snapshot lineage is stale.',{exact:false}).waitFor();
+   await page.locator('#owgAnalysisSharingConsent').uncheck();
+   await page.locator('#owgAnalysisSharingConsent').check();
+   assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),true);
+   await page.unroute('**/analysis-sharing-freshness');
+   // A contradictory freshness response cannot authorize download: both lineage and values must match.
+   await page.route('**/analysis-sharing-freshness',route=>route.fulfill({
+     status:200,contentType:'application/json',
+     body:JSON.stringify({format:'openworkgraph.analysis-snapshot-freshness.v1',lineage_current:false,current_results_match:true})
+   }));
+   await page.locator('#owgAnalysisFreshness').click();
+   await page.getByText('Snapshot lineage is stale.',{exact:false}).waitFor();
+   assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),true);
+   await page.locator('#owgAnalysisSharingConsent').uncheck();
+   await page.locator('#owgAnalysisSharingConsent').check();
+   assert.equal(await page.locator('#owgAnalysisSharingDownload').isDisabled(),true);
+   await page.unroute('**/analysis-sharing-freshness');
    const [pairResponse]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/case-sharing-preview')),page.locator('#owgAnalysisPrepareCases').click()]);
    const pair=await pairResponse.json();assert.equal(pairResponse.status(),200,JSON.stringify(pair));
    assert.equal(pair.case_dataset.cases.length,60);assert.equal(pair.case_dataset.source_content_sha256,pair.aggregate_snapshot.source_content_sha256);
    assert.equal(await page.locator('#owgAnalysisCaseDownload').isDisabled(),true);
    await page.locator('#owgAnalysisCaseConsent').check();
+   // Download must independently revalidate the full paired source, not trust
+   // the earlier prepared case file or merely a matching aggregate.
+   await page.route('**/case-sharing-preview',async route=>{
+     const changed=structuredClone(pair);
+     changed.case_dataset.cases[0]={...changed.case_dataset.cases[0],tampered_timeline:true};
+     await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(changed)});
+   },{times:1});
+   await page.locator('#owgAnalysisCaseDownload').click();
+   await page.getByText('Case dataset or aggregate changed; prepare and review a new paired preview.',{exact:false}).waitFor();
+   assert.equal(await page.locator('#owgAnalysisCaseDownload').isDisabled(),true);
+   await page.unroute('**/case-sharing-preview');
+   // Reprepare to obtain a fresh review grant after a refused download.
+   await page.locator('#owgAnalysisPrepareCases').click();
+   await page.locator('#owgAnalysisCaseConsent').check();
+   await page.route('**/case-sharing-preview',route=>route.fulfill({status:403,
+     contentType:'application/json',body:JSON.stringify({error:'sharing revoked'})}),{times:1});
+   await page.locator('#owgAnalysisCaseDownload').click();
+   await page.getByText('Case download refused.',{exact:false}).waitFor();
+   assert.equal(await page.locator('#owgAnalysisCaseDownload').isDisabled(),true);
+   await page.unroute('**/case-sharing-preview');
+   // A saved log deleted after preparation must fail closed at download time.
+   // Recovery requires a new preview; an old consent checkbox cannot retry.
+   await page.locator('#owgAnalysisPrepareCases').click();
+   await page.locator('#owgAnalysisCaseConsent').check();
+   await page.route('**/case-sharing-preview',route=>route.fulfill({status:404,
+     contentType:'application/json',body:JSON.stringify({error:'saved log not found'})}),{times:1});
+   await page.locator('#owgAnalysisCaseDownload').click();
+   await page.getByText('Case download refused.',{exact:false}).waitFor();
+   assert.equal(await page.locator('#owgAnalysisCaseDownload').isDisabled(),true);
+   await page.locator('#owgAnalysisCaseConsent').uncheck();
+   await page.locator('#owgAnalysisCaseConsent').check();
+   assert.equal(await page.locator('#owgAnalysisCaseDownload').isDisabled(),true);
+   await page.unroute('**/case-sharing-preview');
+   await page.locator('#owgAnalysisPrepareCases').click();
+   await page.locator('#owgAnalysisCaseConsent').check();
+   let releaseCaseCheck,signalCaseCheck;
+   const caseCheckStarted=new Promise(resolve=>signalCaseCheck=resolve);
+   await page.route('**/case-sharing-preview',async route=>{
+     signalCaseCheck();
+     await new Promise(resolve=>releaseCaseCheck=resolve);
+     await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(pair)});
+   },{times:1});
+   await page.locator('#owgAnalysisCaseDownload').click();
+   await caseCheckStarted;
+   await page.locator('#owgAnalysisCaseConsent').uncheck();
+   releaseCaseCheck();
+   await page.waitForTimeout(100);
+   assert.equal(await page.locator('#owgAnalysisCaseDownload').isDisabled(),true);
+   await page.unroute('**/case-sharing-preview');
+   await page.locator('#owgAnalysisPrepareCases').click();
+   await page.locator('#owgAnalysisCaseConsent').check();
    const [caseDownload]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisCaseDownload').click()]);
-   assert.deepEqual(JSON.parse(await fs.readFile(await caseDownload.path(),'utf8')),pair.case_dataset);
+   const downloadedCases=JSON.parse(await fs.readFile(await caseDownload.path(),'utf8'));
+   // Download-time recomputation legitimately regenerates the audit timestamp;
+   // compare the complete source-bound payload without that volatile field.
+   assert.equal(typeof downloadedCases.generated_at,'string');
+   assert.deepEqual({...downloadedCases,generated_at:pair.case_dataset.generated_at},pair.case_dataset);
    assert.equal(await page.locator('#owgAnalysisCaseConsent').isChecked(),false);
    assert.equal(await page.locator('#owgAnalysisSharingConsent').isChecked(),false);
    await page.locator('#owgAnalysisSharingConsent').check();
    const [pairedAggregate]=await Promise.all([page.waitForEvent('download'),page.locator('#owgAnalysisSharingDownload').click()]);
-   assert.deepEqual(JSON.parse(await fs.readFile(await pairedAggregate.path(),'utf8')),pair.aggregate_snapshot);
+   const downloadedAggregate=JSON.parse(await fs.readFile(await pairedAggregate.path(),'utf8'));
+   // The independently revalidated aggregate also receives a fresh audit timestamp.
+   assert.equal(typeof downloadedAggregate.generated_at,'string');
+   assert.deepEqual({...downloadedAggregate,generated_at:pair.aggregate_snapshot.generated_at},pair.aggregate_snapshot);
    if(process.env.OWG_SHARED_CASE_PAIR_OUTPUT)await fs.writeFile(process.env.OWG_SHARED_CASE_PAIR_OUTPUT,JSON.stringify(pair));
    // An older prepare response cannot re-open a sharing preview after a new analysis runs.
    let releaseSharing,sharingHeld;const sharingSeen=new Promise(resolve=>sharingHeld=resolve);

@@ -59,6 +59,8 @@ def transform(source_format: str, mapping: dict[str, Any] | None) -> dict[str, A
         if mapping.get("naive_timestamp_offset"):
             # An explicit decision changes what is stored, so it is part of the transform.
             declared["mapping"]["naive_timestamp_offset"] = mapping["naive_timestamp_offset"]
+        if mapping.get("timestamp_format"):
+            declared["mapping"]["timestamp_format"] = mapping["timestamp_format"]
         identity=workspace.source_identity.settings(mapping)
         if identity:
             declared['mapping']['source_identity']={'format':workspace.source_identity.FORMAT,**vars(identity)}
@@ -83,13 +85,28 @@ def _scope(prefix: str | None) -> tuple[str, list[Any]]:
 
 
 def _set_digest(conn, sql: str, params: list[Any]) -> str:
-    """SHA-256 over the sorted per-row hashes of ``sql`` (one text column), bucketed so it stays bounded."""
-    buckets = conn.execute(f"""WITH r AS ({sql})
-        SELECT left(h, 2) AS b, count(*), sha256(string_agg(h, '' ORDER BY h)) FROM r GROUP BY b ORDER BY b""",
-                           params).fetchall()
+    """SHA-256 over sorted row hashes, streaming bounded batches without string aggregation."""
+    # Stream sorted hashes rather than materializing a potentially enormous
+    # string_agg per bucket. Preserve the exact v1/v2 bucket digest contract.
+    cursor = conn.execute(f"""WITH r AS ({sql})
+        SELECT left(h, 2) AS b, h FROM r ORDER BY b, h""", params)
     digest = hashlib.sha256()
-    for b, n, h in buckets:
-        digest.update(f"{b}:{n}:{h};".encode())
+    bucket = None
+    count = 0
+    bucket_digest = hashlib.sha256()
+
+    def finish_bucket() -> None:
+        if bucket is not None:
+            digest.update(f"{bucket}:{count}:{bucket_digest.hexdigest()};".encode())
+
+    while rows := cursor.fetchmany(4096):
+        for b, h in rows:
+            if b != bucket:
+                finish_bucket()
+                bucket, count, bucket_digest = b, 0, hashlib.sha256()
+            bucket_digest.update(h.encode("ascii"))
+            count += 1
+    finish_bucket()
     return digest.hexdigest()
 
 
@@ -266,16 +283,50 @@ def record(conn, log_id: str, *, batch: int, kind: str, source_format: str, mapp
     return report
 
 
+def _stored_batch_history(conn, log_id: str) -> dict[str, Any]:
+    """Read retained batch metadata without recomputing whole-log diagnostics."""
+    reports = []
+    for (raw,) in conn.execute(
+            "SELECT report FROM log_quality WHERE log_id = ? ORDER BY batch", [log_id]).fetchall():
+        try:
+            report = json.loads(raw)
+        except (TypeError, ValueError):
+            continue  # Corrupt metadata is missing evidence, never a valid report.
+        if (isinstance(report, dict) and type(report.get("batch")) is int
+                and report["batch"] >= 0):
+            reports.append(report)
+    batches = [0] + [row[0] for row in conn.execute(
+        "SELECT batch FROM log_appends WHERE log_id = ? ORDER BY batch", [log_id]).fetchall()]
+    present = {report["batch"] for report in reports}
+    missing = [batch for batch in batches if batch not in present]
+    return {"reports": reports, "batches_without_report": missing}
+
+
+def _with_batch_trends(history: dict[str, Any]) -> dict[str, Any]:
+    from . import event_log_quality_trends as quality_trends
+    return {**history, "batch_trends": quality_trends.build(
+        history["reports"], history["batches_without_report"])}
+
+
+def batch_history(log_id: str) -> dict[str, Any]:
+    """Stored report history only; no current event diagnostics or digests."""
+    with workspace._LOCK:
+        conn = workspace._connect()
+        try:
+            workspace._check_log(conn, log_id)
+            history = _stored_batch_history(conn, log_id)
+        finally:
+            conn.close()
+    return _with_batch_trends(history)
+
+
 def quality(log_id: str) -> dict[str, Any]:
     """Stored reports, oldest first, and the current whole-log diagnostics and content digest."""
     with workspace._LOCK:
         conn = workspace._connect()
         try:
             info = workspace._check_log(conn, log_id)
-            reports = [json.loads(r[0]) for r in conn.execute(
-                "SELECT report FROM log_quality WHERE log_id = ? ORDER BY batch", [log_id]).fetchall()]
-            batches = [0] + [r[0] for r in conn.execute(
-                "SELECT batch FROM log_appends WHERE log_id = ? ORDER BY batch", [log_id]).fetchall()]
+            history = _stored_batch_history(conn, log_id)
             current = diagnostics(conn, log_id)
             digest = content_digest(conn, log_id)
             digest_v2 = content_digest_v2(conn, log_id)
@@ -284,16 +335,26 @@ def quality(log_id: str) -> dict[str, Any]:
                                if info.get('source_identity') else {})
         finally:
             conn.close()
-    from . import event_log_quality_trends as quality_trends
-    present = {r["batch"] for r in reports}
-    missing_reports = [b for b in batches if b not in present]
-    # Logs imported before reports existed, or whose report could not be written, have none.
-    return {"log": info, "reports": reports, "batches_without_report": missing_reports,
-            "batch_trends": quality_trends.build(reports, missing_reports),
+    reports = history["reports"]
+    missing = history["batches_without_report"]
+    integrity = {"status": "not_verifiable", "reason": "historical_batches_or_missing_report"}
+    if not missing and len(reports) == 1 and reports[0].get("batch") == 0:
+        expected = reports[0].get("content_sha256_v2")
+        if (isinstance(expected, str) and len(expected) == 64
+                and all(c in "0123456789abcdef" for c in expected)):
+            integrity = {
+                "status": "verified" if expected == digest_v2 else "mismatch",
+                "algorithm": "content_sha256_v2",
+                "reason": ("current_saved_content_matches_import_report" if expected == digest_v2
+                           else "current_saved_content_differs_from_import_report"),
+            }
+        else:
+            integrity = {"status": "not_verifiable", "reason": "legacy_or_invalid_digest"}
+    return {"log": info, **_with_batch_trends(history), "integrity": integrity,
             "current": {"content_sha256": digest, "content_sha256_v2": digest_v2,
                         "diagnostics": current, **identity_digest, **relationship_metadata,
                         "completeness": {"historical_completeness": "unknown", "note": COMPLETENESS_NOTE}},
             **workspace.DESCRIPTIVE_ONLY}
 
 
-__all__ = ["quality", "record", "transform", "content_digest", "content_digest_v2", "diagnostics", "MAPPING_VERSION"]
+__all__ = ["quality", "batch_history", "record", "transform", "content_digest", "content_digest_v2", "diagnostics", "MAPPING_VERSION"]

@@ -83,12 +83,42 @@ class DerivedMetricTests(unittest.TestCase):
         with self.assertRaises(MetricDefinitionError):
             summarize_rows(metric({"field": "x"}), [{"x": "1e18"}] * 11, {"x"})
 
+    def test_cancelling_cohort_is_order_invariant(self):
+        from itertools import permutations
+        expr = metric({"field": "x"})
+        values = ["1e18", "1e-18", "-1e18"]
+        results = [summarize_rows(expr, [{"x": x} for x in order], {"x"})
+                   for order in permutations(values)]
+        self.assertEqual({r["sum"] for r in results}, {"1E-18"})
+        self.assertEqual(len({r["mean"] for r in results}), 1)
+
+    def test_mean_precision_independent_of_ambient_context(self):
+        from decimal import localcontext
+        expr = metric({"field": "x"})
+        with localcontext() as context:
+            context.prec = 6
+            result = summarize_rows(expr, [{"x": 1}, {"x": 0}, {"x": 0}], {"x"})
+        self.assertEqual(result["mean"], "0." + "3" * 100)
+
     def test_mutation_requires_revalidation(self):
         expr = metric({"field": "public"})
         self.assertEqual(evaluate(expr, {"public": 1}, {"public"}), "1")
         expr["expression"] = {"field": "private"}
         with self.assertRaises(MetricDefinitionError):
             evaluate(expr, {"private": 2}, {"public"})
+
+    def test_expression_precision_is_independent_of_ambient_context(self):
+        from decimal import localcontext
+        definition = metric({"multiply": [{"field": "x"}, {"field": "x"}]})
+        row = {"x": "1.000000000000000001"}
+        with localcontext() as context:
+            context.prec = 6
+            low = evaluate(definition, row, {"x"})
+        with localcontext() as context:
+            context.prec = 50
+            high = evaluate(definition, row, {"x"})
+        self.assertEqual(low, high)
+        self.assertEqual(low, "1.000000000000000002000000000000000001")
 
 
 if __name__ == "__main__":

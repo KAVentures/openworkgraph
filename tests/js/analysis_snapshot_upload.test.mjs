@@ -19,3 +19,13 @@ test('coverage, units and timestamps have explicit bounds',()=>{
 });
 
 test('unit limits count Unicode scalars and refuse unpaired surrogates before transfer',()=>{const d=doc();d.columns[1].unit='🦉'.repeat(256);assert.equal(validate(d).columns[1].unit,d.columns[1].unit);d.columns[1].unit='\ud800';assert.throws(()=>validate(d));});
+
+test('optional metric lineage preserves legacy snapshots and rejects malformed fingerprints',()=>{
+ const legacy=doc();
+ assert.deepEqual(JSON.parse(JSON.stringify(validate(legacy))),legacy);
+ const withLineage={...legacy,metric_definition_sha256:['c'.repeat(64)]};
+ assert.deepEqual(JSON.parse(JSON.stringify(validate(withLineage))),withLineage);
+ for(const invalid of [['A'.repeat(64)],['short'],Array(5).fill('c'.repeat(64)),null,'c'.repeat(64)]){
+  assert.throws(()=>validate({...legacy,metric_definition_sha256:invalid}),/cannot be uploaded/);
+ }
+});

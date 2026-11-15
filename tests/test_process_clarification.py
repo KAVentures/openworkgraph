@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-from shared.process_clarification import ClarificationRequest, Decision, clarify, proposed_change, statements
+from shared.process_clarification import ClarificationRequest, Decision, clarify, documents_sha256, proposed_change, statements
 from shared.process_model import ProcessModel
 
 
@@ -39,6 +39,18 @@ def _docs(*texts):
         {"documents": [{"title": f"Doc {i}", "text": t} for i, t in enumerate(texts, 1)]})
 
 
+def test_document_fingerprint_pins_exact_source_revision_without_exposing_text():
+    first = _docs("The agent must review refunds.").documents
+    assert documents_sha256(first) == documents_sha256(_docs("The agent must review refunds.").documents)
+    assert len(documents_sha256(first)) == 64
+    assert "agent" not in documents_sha256(first)
+    assert documents_sha256(first) != documents_sha256(_docs("The agent must review refunds now.").documents)
+    assert documents_sha256(first) != documents_sha256(
+        ClarificationRequest.model_validate({"documents": [{"title": "New Title", "text": "The agent must review refunds."}]}).documents)
+    assert documents_sha256(_docs("First policy.", "Second policy.").documents) != documents_sha256(
+        _docs("Second policy.", "First policy.").documents)
+
+
 def test_statements_carry_exact_offsets():
     text = "Intro line.  A refund above 500 EUR must get manager approval."
     pool = statements(_docs(text).documents)
@@ -60,6 +72,96 @@ def test_threshold_and_requirement_contradictions_are_cited_once():
              for q in result["questions"] for c in q["contradictions"]]
     assert len(pairs) == len(set(pairs))
     assert result["model_changed"] is False and result["permissions_changed"] is False
+
+
+def test_multiway_conflict_requires_one_explicit_governing_statement():
+    from shared.process_clarification import validate_decision_evidence
+    import pytest
+    docs = _docs(
+        "A refund amount above 500 EUR must get manager approval.",
+        "A refund amount above 1000 EUR requires manager approval.",
+        "Manager approval is never required for a refund amount.")
+    result = clarify(RECORD, docs)
+    assert result["documents_sha256"] == documents_sha256(docs.documents)
+    question = next(q for q in result["questions"]
+                    if q["kind"] == "contradiction" and q["target_id"] == "big")
+    statements_in_conflicts = {c["statement_id"]
+        for conflict in question["contradictions"] for c in conflict["statements"]}
+    assert len(statements_in_conflicts) == 3
+    sha = result["documents_sha256"]
+    for ids, answer in [([], "Reviewed"), (list(statements_in_conflicts)[:2], "Reviewed"),
+                        ([next(iter(statements_in_conflicts))], "   "),
+                        (["s_" + "0" * 16], "Reviewed")]:
+        decision = Decision(question_id=question["question_id"], decision="confirm",
+                            answer=answer, cited_statement_ids=ids,
+                            expected_documents_sha256=sha)
+        with pytest.raises(ValueError):
+            validate_decision_evidence(question, decision)
+    chosen = sorted(statements_in_conflicts)[0]
+    decision = Decision(question_id=question["question_id"], decision="confirm",
+                        answer="This source was approved by the policy owner for this effective rule.",
+                        cited_statement_ids=[chosen], expected_documents_sha256=sha)
+    assert validate_decision_evidence(question, decision) is None
+    assert validate_decision_evidence(question, decision.model_copy(update={"decision": "revise"})) is None
+    # Refuse/deferral may leave disputed sources open without a false endorsement.
+    assert validate_decision_evidence(question, decision.model_copy(update={
+        "decision": "defer", "cited_statement_ids": [], "answer": ""})) is None
+    assert len(clarify(RECORD, docs)["questions"]) >= 1
+
+
+def test_http_multiway_conflict_refuses_unselected_and_dual_policy_source(tmp_path):
+    code = r'''
+import json
+from fastapi.testclient import TestClient
+from server.secure_app import app
+from server import local_auth
+from server.local_process_catalog import catalog
+from shared.process_catalog import CatalogWrite
+model = json.loads(MODEL)
+saved = catalog.save(CatalogWrite(title="Refunds", process_model=model, user_confirmed=True))
+wid, rev = saved["workflow_id"], saved["revision"]
+q = f"?workflow_id={wid}&revision={rev}"
+owner = {"Authorization": "OWG-Session " + local_auth.create_dashboard_session()}
+docs = [{"title": "Version 2", "text": "A refund amount above 500 EUR must get manager approval."},
+        {"title": "Version 3", "text": "A refund amount above 1000 EUR requires manager approval."},
+        {"title": "Override", "text": "Manager approval is never required for a refund amount."}]
+with TestClient(app) as client:
+    result = client.post("/v1/process-catalog/clarify" + q, json={"documents": docs},
+                         headers=owner)
+    assert result.status_code == 200, result.text
+    body = result.json()
+    question = next(x for x in body["questions"]
+                    if x["kind"] == "contradiction" and x["target_id"] == "big")
+    ids = sorted({s["statement_id"] for c in question["contradictions"] for s in c["statements"]})
+    def decide(chosen, explanation, source_docs=docs):
+        return client.post("/v1/process-catalog/clarify/decide" + q, headers=owner,
+            json={"documents": source_docs, "decision": {
+                "question_id": question["question_id"], "decision": "confirm",
+                "answer": explanation, "cited_statement_ids": chosen,
+                "expected_documents_sha256": body["documents_sha256"]}})
+    assert decide([], "Owner approved").status_code == 422
+    assert decide(ids[:2], "Owner approved").status_code == 422
+    assert decide(ids[:1], "").status_code == 422
+    assert decide(ids[:1], "Owner approved", [{**docs[0], "text": docs[0]["text"]+" Change."}, *docs[1:]]).status_code == 409
+    assert client.get("/v1/process-catalog/clarify/decisions?workflow_id="+wid,
+                      headers=owner).json()["decisions"] == []
+    accepted = decide(ids[:1], "This version takes precedence by owner decision.")
+    assert accepted.status_code == 200, accepted.text
+    assert len(accepted.json()["decision"]["cited_statements"]) == 1
+    assert accepted.json()["proposed_change"] is None
+    again = client.post("/v1/process-catalog/clarify" + q,
+                        json={"documents": docs}, headers=owner).json()
+    assert question["question_id"] not in {x["question_id"] for x in again["questions"]}
+    assert catalog.get(wid)["revision"] == rev
+'''
+    env = os.environ.copy()
+    env.update(WORKFLOW_OBSERVER_DATA=str(tmp_path / "data"),
+               WORKFLOW_OBSERVER_AUTH_DIR=str(tmp_path / "auth"),
+               WORKFLOW_OBSERVER_CONFIG=str(tmp_path / "config.json"))
+    script = f"MODEL = {json.dumps(json.dumps(_model()))}\n" + code
+    result = subprocess.run([sys.executable, "-c", script], env=env,
+        cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_only_open_items_are_asked():
@@ -113,10 +215,11 @@ with TestClient(app) as client:
     result = client.post("/v1/process-catalog/clarify" + q, json={"documents": docs}, headers=owner).json()
     question = next(x for x in result["questions"] if x["kind"] == "unconfirmed_rule")
     bad = client.post("/v1/process-catalog/clarify/decide" + q, headers=owner, json={"documents": docs,
-        "decision": {"question_id": question["question_id"], "decision": "confirm", "cited_statement_ids": ["s_" + "0" * 16]}})
+        "decision": {"question_id": question["question_id"], "decision": "confirm", "expected_documents_sha256": result["documents_sha256"], "cited_statement_ids": ["s_" + "0" * 16]}})
     assert bad.status_code == 422
     ok = client.post("/v1/process-catalog/clarify/decide" + q, headers=owner, json={"documents": docs,
         "decision": {"question_id": question["question_id"], "decision": "confirm", "answer": "Team lead approves",
+                     "expected_documents_sha256": result["documents_sha256"],
                      "cited_statement_ids": [question["citations"][0]["statement_id"]]}})
     assert ok.status_code == 200, ok.text
     body = ok.json()
@@ -125,6 +228,29 @@ with TestClient(app) as client:
     assert question["question_id"] not in {x["question_id"] for x in again["questions"]}
     ledger = client.get(f"/v1/process-catalog/clarify/decisions?workflow_id={wid}", headers=owner).json()
     assert [d["decision"] for d in ledger["decisions"]] == ["confirm"]
+    assert ledger["decisions"][0]["documents_sha256"] == result["documents_sha256"]
+    changed_docs = [{"title": "SOP", "text": "Refund amount above 600 EUR needs manager approval."}]
+    stale = client.post("/v1/process-catalog/clarify/decide" + q, headers=owner,
+        json={"documents": changed_docs, "decision": {
+            "question_id": question["question_id"], "decision": "confirm",
+            "expected_documents_sha256": result["documents_sha256"]}})
+    assert stale.status_code == 409
+    changed = client.post("/v1/process-catalog/clarify" + q, headers=owner,
+        json={"documents": changed_docs}).json()
+    assert changed["documents_sha256"] != result["documents_sha256"]
+    assert question["question_id"] in {item["question_id"] for item in changed["questions"]}
+    confirmed = client.post("/v1/process-catalog/clarify/decide" + q, headers=owner,
+        json={"documents": changed_docs, "decision": {"question_id": question["question_id"],
+            "decision": "confirm", "expected_documents_sha256": changed["documents_sha256"],
+            "cited_statement_ids": [changed["questions"][0]["citations"][0]["statement_id"]]}})
+    assert confirmed.status_code == 200, confirmed.text
+    assert client.post("/v1/process-catalog/clarify" + q, headers=owner,
+        json={"documents": changed_docs}).json()["answered_question_count"] >= 1
+    past = client.get(f"/v1/process-catalog/clarify/decisions?workflow_id={wid}",
+                      headers=owner).json()["decisions"]
+    assert len(past) == 2
+    assert {row["documents_sha256"] for row in past} == {
+        changed["documents_sha256"], result["documents_sha256"]}
     assert catalog.get(wid)["revision"] == rev
 '''
     env = os.environ.copy()
@@ -139,3 +265,4 @@ with TestClient(app) as client:
 def test_catalog_ui_offers_clarification():
     script = (Path(__file__).resolve().parents[1] / "dashboard" / "process_catalog.js").read_text(encoding="utf-8")
     assert "renderClarification(host)" in script and "/v1/process-catalog/clarify/decide" in script
+    assert "expected_documents_sha256:result.documents_sha256" in script

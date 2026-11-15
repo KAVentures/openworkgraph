@@ -3,6 +3,22 @@ let lastHref = location.href;
 let lastNavAt = 0;
 let lastPointer = {at: 0, key: ""};
 let lastFocus = {at: 0, key: ""};
+const OWG_BROWSER_PAUSE_KEY = "openworkgraph_browser_paused_v1";
+let owgBrowserPaused = true;
+function owgBrowserNeverRecord() {
+  return globalThis.OWGBrowserExclusions?.isExcluded?.(location.hostname, document.title) === true;
+}
+ext.storage.local.get(OWG_BROWSER_PAUSE_KEY).then(async saved => {
+  await globalThis.OWGBrowserExclusions?.ready;
+  owgBrowserPaused = saved?.[OWG_BROWSER_PAUSE_KEY] === true;
+  if (!owgBrowserPaused) sendNavigation("capture_ready");
+}).catch(() => { owgBrowserPaused = true; });
+ext.storage.onChanged?.addListener((changes, area) => {
+  if (area !== "local" || !changes?.[OWG_BROWSER_PAUSE_KEY]) return;
+  const wasPaused = owgBrowserPaused;
+  owgBrowserPaused = changes[OWG_BROWSER_PAUSE_KEY].newValue === true;
+  if (wasPaused && !owgBrowserPaused) sendNavigation("capture_resumed");
+});
 
 const FALLBACK_LABEL_MAX_CHARS = 60;
 const FALLBACK_LABEL_MAX_WORDS = 8;
@@ -135,6 +151,7 @@ function targetKey(target) {
 }
 
 function send(action, target = {}, metadata = {}) {
+  if (owgBrowserPaused || owgBrowserNeverRecord()) return;
   try {
     const topFrame = isTopFrame();
     const maybePromise = ext.runtime.sendMessage({

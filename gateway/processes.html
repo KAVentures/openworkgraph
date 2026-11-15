@@ -69,6 +69,9 @@
       #opportunityDetail fieldset { min-inline-size: 0; max-width: 100%; box-sizing: border-box; }
       #opportunityDetail select, #opportunityDetail button, #opportunityPipeline button { max-width: 100%; min-width: 0; overflow-wrap: anywhere; }
       #benefitDetail, #benefitInventory { min-width: 0; overflow-wrap: anywhere; }
+      #valueMeasurementDetail { min-width: 0; overflow-wrap: anywhere; }
+      #valueMeasurementDetail fieldset { min-inline-size: 0; max-width: 100%; box-sizing: border-box; }
+      #valueMeasurementDetail select, #valueMeasurementDetail button { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
       #benefitDetail fieldset, #benefitInventory fieldset { min-inline-size: 0; max-width: 100%; box-sizing: border-box; }
       #benefitDetail select, #benefitInventory select, #benefitDetail button, #benefitInventory button { max-width: 100%; min-width: 0; box-sizing: border-box; overflow-wrap: anywhere; }
       #dependencyInventory, #dependencyDetail { min-width: 0; overflow-wrap: anywhere; }
@@ -269,6 +272,7 @@
       <div id="design"></div>
       <div id="repositoryDetail"></div>
       <div id="benefitDetail"></div>
+      <div id="valueMeasurementDetail"></div>
       <div id="opportunityDetail"></div>
       <div id="sharedProjectDetail"></div>
       <div id="dependencyDetail"></div>
@@ -348,6 +352,7 @@
     </section>
     <script nonce="__NONCE__" src="/process-hierarchy-client.js"></script>
     <script nonce="__NONCE__" src="/process-benefit-client.js"></script>
+    <script nonce="__NONCE__" src="/process-value-measurement-client.js"></script>
     <script nonce="__NONCE__" src="/process-opportunity-client.js"></script>
     <script nonce="__NONCE__" src="/shared-opportunity-project-client.js"></script>
     <script nonce="__NONCE__" src="/process-dependency-client.js"></script>
@@ -571,6 +576,7 @@
         }
         const repository = window.owgProcessHierarchy.create({inventoryHost:$("repositoryInventory"),detailHost:$("repositoryDetail"),call,open,onDenied:()=>{clear();note("Repository access changed; sign in again to refresh your permissions.");}});
         const benefits=window.owgProcessBenefits.create({inventoryHost:$("benefitInventory"),detailHost:$("benefitDetail"),call,open,onDenied:()=>{clear();note("Benefit access changed; sign in again to refresh permissions.");}});
+        const valueMeasurements=window.owgProcessValueMeasurements.create({detailHost:$("valueMeasurementDetail"),call,onDenied:()=>{clear();note("Value measurement access changed; sign in again to refresh permissions.");}});
         const opportunity=window.owgSharedOpportunity.create({inventoryHost:$("opportunityPipeline"),detailHost:$("opportunityDetail"),call,open,onDenied:()=>{clear();note("Opportunity access changed; sign in again to refresh permissions.");}});
         const sharedProjects=window.owgSharedOpportunityProjects.create({detailHost:$("sharedProjectDetail"),call,onDenied:()=>{clear();note("Project access changed; sign in again to refresh permissions.");}});
         const dependencies=window.owgProcessDependencies.create({inventoryHost:$("dependencyInventory"),detailHost:$("dependencyDetail"),call,open,onDenied:()=>{clear();note("Dependency access changed; sign in again to refresh permissions.");}});
@@ -584,6 +590,7 @@
           if(releaseBusy){operation++;busy=false;}
           repository.clear();
           benefits.clear();
+          valueMeasurements.clear();
           opportunity.clear();
           sharedProjects.clear();
           dependencies.clear();
@@ -1712,6 +1719,7 @@
           resetHandoff("Process selection changed. Check latest revision.");
           repository.select(data);
           benefits.select(data);
+          valueMeasurements.select(data);
           opportunity.select(data);
           sharedProjects.select(data);
           dependencies.select(data);
@@ -2093,6 +2101,7 @@
             );
             repository.clear();
             benefits.clear();
+            valueMeasurements.clear();
             opportunity.clear();
             sharedProjects.clear();
             dependencies.clear();

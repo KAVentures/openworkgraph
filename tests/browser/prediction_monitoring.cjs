@@ -54,8 +54,37 @@ const path=require('node:path');
   const qualityText=await quality.textContent();
   assert.match(qualityText,/Open/);assert.match(qualityText,/Work/);
   assert.match(await out.textContent(),/At least 20 completed cases per activity/);
+  // Even a log with no unfinished cases needs an explicit absence disclosure.
+  const coverage=(await watched.json()).open_case_coverage;
+  assert.equal(coverage.still_open_cases_not_scored,0);
+  assert.equal(coverage.completed_cases_in_selected_cohort,1200);
+  assert.equal(coverage.censoring_adjustment_applied,false);
+  await out.getByText('Still-open cases excluded from monitoring').waitFor();
+  assert.match(await out.textContent(),/0 of 1,200 cases \(0\.0%\)/);
+  assert.match(await out.textContent(),/No unfinished cases in this selected cohort/);
+
 
   assert.match(await out.textContent(),/Proposal, not applied: scale each range around its median by \d\.\d\d×/);
+  await page.locator('#owgPredictOutcome').selectOption('duration_over');
+  await page.locator('#owgPredictHours').fill('24');
+  const [outcomeChecked]=await Promise.all([
+    page.waitForResponse(r=>r.url().endsWith('/predictions/monitoring')),
+    page.locator('#owgPredictMonitor').click()
+  ]);
+  assert.equal(outcomeChecked.status(),200,await outcomeChecked.text());
+  const outcomeData=await outcomeChecked.json();
+  const caseQuality=outcomeData.outcome_case_reliability;
+  assert.ok(caseQuality&&caseQuality.total_distinct_scored_cases>20);
+  assert.ok(caseQuality.total_scored_prediction_points>caseQuality.total_distinct_scored_cases);
+  assert.equal(caseQuality.minimum_distinct_completed_cases_per_displayed_bin,20);
+  await out.getByText('Outcome calibration by independent completed cases').waitFor();
+  assert.match(await out.textContent(),/independent completed cases, compared with/);
+  assert.match(await out.textContent(),/No case or resource identities are shown/);
+  assert.match(await out.textContent(),/not independently verified source receipts/);
+  if(caseQuality.bins.length){
+    const byCases=out.locator('table').last();
+    assert.equal(await byCases.locator('tbody tr').count(),caseQuality.bins.length);
+  }else assert.match(await out.textContent(),/No case-level calibration table is shown/);
   await page.addScriptTag({content:await fs.readFile(require.resolve('axe-core/axe.min.js'),'utf8')});
   const audit=await page.evaluate(async()=>window.axe.run(document.querySelector('#owgEventLogPredictions'),{
    runOnly:{type:'tag',values:['wcag2a','wcag2aa','wcag21a','wcag21aa']},resultTypes:['violations']}));

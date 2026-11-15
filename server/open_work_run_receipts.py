@@ -38,10 +38,24 @@ def _db(create: bool):
         os.close(fd)
         info = path.lstat()
     if (not stat.S_ISREG(info.st_mode) or path.is_symlink()
-            or info.st_nlink != 1 or info.st_size > _BYTES):
+            or info.st_nlink != 1 or info.st_size > _BYTES
+            or (os.name == "posix" and info.st_mode & 0o077)):
         raise CaseDeclarationError("unsafe run receipt journal")
+    # SQLite WAL and shared-memory files can outlive a consent revocation or
+    # retention purge. This local evidence ledger supports DELETE mode only.
+    # Check dangling symlinks as well as existing sidecars before opening.
+    for suffix in ("-wal", "-shm"):
+        sidecar = path.with_name(path.name + suffix)
+        if sidecar.exists() or sidecar.is_symlink():
+            raise CaseDeclarationError("unsafe run receipt journal sidecar")
     db = sqlite3.connect(str(path), timeout=3)
-    db.execute("PRAGMA busy_timeout=3000")
+    try:
+        db.execute("PRAGMA busy_timeout=3000")
+        if db.execute("PRAGMA journal_mode").fetchone()[0].lower() != "delete":
+            raise CaseDeclarationError("unsupported run receipt journal mode")
+    except Exception:
+        db.close()
+        raise
     if create:
         db.execute("""CREATE TABLE IF NOT EXISTS receipts (
             id TEXT PRIMARY KEY, actor_key TEXT NOT NULL, scope TEXT NOT NULL,
@@ -58,7 +72,7 @@ def _mac(secret: str, fields: tuple) -> str:
                     hashlib.sha256).hexdigest()
 
 
-def _check_rows(db, secret, actor_key, scope, case_ref, run_ref, now):
+def _check_rows(db, secret, actor_key, scope, case_ref, run_ref, now, cutoff):
     rows = db.execute("""SELECT id, actor_key, scope, case_ref, run_ref, fingerprint,
         revision, action, evidence_digest, supersedes, created_at, expires_at, mac
         FROM receipts WHERE actor_key=? AND scope=? AND case_ref=? AND run_ref=?
@@ -69,15 +83,20 @@ def _check_rows(db, secret, actor_key, scope, case_ref, run_ref, now):
     for row in rows:
         if not hmac.compare_digest(row[-1], _mac(secret, row[:-1])):
             raise CaseDeclarationError("run receipt integrity check failed")
-    return [row for row in rows if row[11] > now]
+    return [row for row in rows if row[11] > now and row[10] > cutoff]
 
 
 def review(*, scope: str, actor: str, secret: str, case_ref: str, run_ref: str,
            fingerprint: str, revision: int, guard=None, now=None):
     _validate(scope, case_ref, run_ref, fingerprint, revision)
     key = _actor_key(secret, scope, actor)
-    _retention()
-    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()
+    retention = _retention()
+    clock = now or datetime.now(timezone.utc)
+    if not isinstance(clock, datetime) or clock.tzinfo is None:
+        raise CaseDeclarationError("timezone-aware receipt clock required")
+    clock = clock.astimezone(timezone.utc)
+    current = clock.isoformat()
+    cutoff = (clock - retention).isoformat()
     if guard:
         guard()
     db = _db(False)
@@ -85,7 +104,7 @@ def review(*, scope: str, actor: str, secret: str, case_ref: str, run_ref: str,
         rows = []
     else:
         try:
-            rows = _check_rows(db, secret, key, scope, case_ref, run_ref, current)
+            rows = _check_rows(db, secret, key, scope, case_ref, run_ref, current, cutoff)
         except sqlite3.Error:
             raise CaseDeclarationError("run receipt journal unavailable") from None
         finally:
@@ -130,7 +149,8 @@ def append(*, scope: str, actor: str, secret: str, case_ref: str, run_ref: str,
         db.execute("BEGIN IMMEDIATE")
         if guard:
             guard()
-        rows = _check_rows(db, secret, key, scope, case_ref, run_ref, current.isoformat())
+        rows = _check_rows(db, secret, key, scope, case_ref, run_ref, current.isoformat(),
+                           (current - _retention()).isoformat())
         if len(rows) >= _LIMIT:
             raise CaseDeclarationError("run receipt capacity reached")
         if supersedes:
@@ -155,7 +175,8 @@ def append(*, scope: str, actor: str, secret: str, case_ref: str, run_ref: str,
     finally:
         db.close()
     return review(scope=scope, actor=actor, secret=secret, case_ref=case_ref,
-                  run_ref=run_ref, fingerprint=fingerprint, revision=revision, guard=guard)
+                  run_ref=run_ref, fingerprint=fingerprint, revision=revision, guard=guard,
+                  now=current)
 
 
 def clear_scope(scope: str):

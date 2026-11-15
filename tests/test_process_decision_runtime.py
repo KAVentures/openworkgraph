@@ -55,7 +55,7 @@ def test_crlf_source_checkout_produces_identical_portable_project(tmp_path,monke
     source=tmp_path/'shared';source.mkdir()
     original=Path(project.__file__).parent
     names=('process_source_state.py','process_rule_conditions.py','process_model.py',
-           'process_parallel.py','process_opportunities.py','process_decision_tables.py')
+           'process_parallel.py','process_opportunities.py','process_decision_tables.py','automation_report_signing.py')
     for name in names:
         data=(original/name).read_text(encoding='utf-8').replace('\n','\r\n').encode('utf-8')
         assert b'\r\n' in data

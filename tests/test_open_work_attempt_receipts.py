@@ -35,3 +35,138 @@ def test_refuses_manufactured_customer_outcome_and_invalid_scope(tmp_path):
         append_receipt(path, tenant="org", actor="actor", attempt="run",
                        verdict={"status": "unknown", "provider_operation": "succeeded",
                                 "customer_outcome": "unknown"})
+
+
+def test_receipt_journal_rejects_hardlink_without_changing_permissions(tmp_path):
+    import os
+    import stat
+    source = tmp_path / "other.sqlite"
+    source.write_text("unrelated private data")
+    source.chmod(0o644)
+    linked = tmp_path / "receipts.sqlite"
+    os.link(source, linked)
+    with pytest.raises(ValueError, match="unsafe receipt journal"):
+        list_receipts(str(linked), tenant="org", actor="alice", attempt="run")
+    assert source.read_text() == "unrelated private data"
+    if os.name == "posix":
+        assert stat.S_IMODE(source.stat().st_mode) == 0o644
+
+
+def test_receipt_journal_refuses_existing_permissive_file(tmp_path):
+    import os
+    import stat
+    path = tmp_path / "receipts.sqlite"
+    path.touch()
+    path.chmod(0o644)
+    if os.name == "posix":
+        with pytest.raises(ValueError, match="permissions too broad"):
+            list_receipts(str(path), tenant="org", actor="alice", attempt="run")
+        assert stat.S_IMODE(path.stat().st_mode) == 0o644
+
+
+def test_receipt_journal_rejects_symlink_and_directory(tmp_path):
+    target = tmp_path / "target.sqlite"
+    target.write_text("not a journal")
+    link = tmp_path / "linked.sqlite"
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    with pytest.raises(ValueError):
+        list_receipts(str(link), tenant="org", actor="alice", attempt="run")
+    with pytest.raises(ValueError, match="unsafe receipt journal"):
+        list_receipts(str(tmp_path), tenant="org", actor="alice", attempt="run")
+
+
+def test_receipt_journal_rejects_preexisting_sqlite_sidecars(tmp_path):
+    path = tmp_path / "receipts.sqlite"
+    path.touch(mode=0o600)
+    for suffix in ("-wal", "-shm"):
+        sidecar = tmp_path / ("receipts.sqlite" + suffix)
+        sidecar.write_bytes(b"untrusted data")
+        with pytest.raises(ValueError, match="unsupported receipt journal sidecar"):
+            list_receipts(str(path), tenant="org", actor="alice", attempt="run")
+        assert sidecar.read_bytes() == b"untrusted data"
+        sidecar.unlink()
+
+
+def test_receipt_journal_rejects_dangling_sidecar_symlink(tmp_path):
+    path = tmp_path / "receipts.sqlite"
+    path.touch(mode=0o600)
+    sidecar = tmp_path / "receipts.sqlite-wal"
+    try:
+        sidecar.symlink_to(tmp_path / "missing-target")
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    with pytest.raises(ValueError, match="unsupported receipt journal sidecar"):
+        list_receipts(str(path), tenant="org", actor="alice", attempt="run")
+    assert sidecar.is_symlink()
+
+@pytest.mark.parametrize("verdict", [
+    {"status": "verified_provider_operation", "provider_operation": "unknown",
+     "event_id": "evt_1", "customer_outcome": "unknown"},
+    {"status": "verified_provider_event", "provider_operation": "succeeded",
+     "event_id": "evt_1", "customer_outcome": "unknown"},
+    {"status": "verified_provider_event", "provider_operation": "unknown",
+     "customer_outcome": "unknown"},
+    {"status": "unknown", "provider_operation": "unknown",
+     "event_id": "evt_1", "customer_outcome": "unknown"},
+    {"status": "unknown", "provider_operation": "unknown",
+     "customer_outcome": "unknown", "provider_token": "secret"},
+])
+def test_receipt_journal_rejects_inconsistent_provider_claims(tmp_path, verdict):
+    path = str(tmp_path / "receipts.sqlite")
+    with pytest.raises(ValueError):
+        append_receipt(path, tenant="org", actor="actor", attempt="run", verdict=verdict)
+    if (tmp_path / "receipts.sqlite").exists():
+        assert list_receipts(path, tenant="org", actor="actor", attempt="run") == []
+
+
+@pytest.mark.parametrize("source_checked", [
+    "not-a-date", "2026-11-13T12:00:00", 12345,
+    "x" * 65, "2026-13-99T12:00:00+00:00",
+])
+def test_receipt_journal_refuses_untrustworthy_verifier_timestamp(tmp_path, source_checked):
+    path = str(tmp_path / "receipts.sqlite")
+    with pytest.raises(ValueError, match="verification timestamp"):
+        append_receipt(
+            path, tenant="org", actor="actor", attempt="run",
+            verdict={"status": "verified_provider_event",
+                     "provider_operation": "unknown",
+                     "customer_outcome": "unknown", "event_id": "evt_1",
+                     "checked_at": source_checked},
+        )
+    if (tmp_path / "receipts.sqlite").exists():
+        assert list_receipts(path, tenant="org", actor="actor", attempt="run") == []
+
+
+def test_receipt_journal_accepts_timezone_aware_verifier_timestamp(tmp_path):
+    path = str(tmp_path / "receipts.sqlite")
+    append_receipt(
+        path, tenant="org", actor="actor", attempt="run",
+        verdict={"status": "verified_provider_event",
+                 "provider_operation": "unknown",
+                 "customer_outcome": "unknown", "event_id": "evt_1",
+                 "checked_at": "2026-11-13T11:00:00+00:00"},
+    )
+    rows = list_receipts(path, tenant="org", actor="actor", attempt="run")
+    assert len(rows) == 1
+    assert rows[0]["customer_outcome"] == "unknown"
+
+
+def test_source_revocation_purges_all_actors_but_not_other_tenants(tmp_path):
+    from server.open_work_attempt_receipts import purge_tenant
+    path = str(tmp_path / "receipts.sqlite")
+    unknown = {"status": "unknown", "reason": "provider_unavailable",
+               "provider_operation": "unknown", "customer_outcome": "unknown"}
+    for tenant, actor in (("source_a", "alice"), ("source_a", "bob"),
+                          ("source_b", "alice")):
+        append_receipt(path, tenant=tenant, actor=actor,
+                       attempt="attempt_1", verdict=unknown)
+    assert purge_tenant(path, tenant="source_a") == 2
+    assert list_receipts(path, tenant="source_a", actor="alice", attempt="attempt_1") == []
+    assert list_receipts(path, tenant="source_a", actor="bob", attempt="attempt_1") == []
+    assert len(list_receipts(path, tenant="source_b", actor="alice", attempt="attempt_1")) == 1
+    assert purge_tenant(path, tenant="source_a") == 0
+    with pytest.raises(ValueError):
+        purge_tenant(path, tenant="../source_b")

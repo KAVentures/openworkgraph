@@ -490,7 +490,10 @@ def browser_heartbeat(status: BrowserHeartbeat) -> dict[str, str]:
         hostname=str(safe_page.get("hostname") or ""),
         config=_runtime_config(),
     )
-    if excluded_page:
+    # A paused sensor deliberately omits page context. Never resurrect its last
+    # tab from the transient-tabs-query fallback below.
+    paused = str(status.status or "").lower() == "paused"
+    if excluded_page or paused:
         safe_page = {}
     BROWSER_STATUS.clear()
     BROWSER_STATUS.update(status.model_dump(exclude={"page"}))
@@ -509,7 +512,7 @@ def browser_heartbeat(status: BrowserHeartbeat) -> dict[str, str]:
             str(safe_page.get("pathname") or ""),
             str(safe_page.get("title") or ""),
         )
-    elif not excluded_page and previous.get("browser_session_id") == status.browser_session_id:
+    elif not paused and not excluded_page and previous.get("browser_session_id") == status.browser_session_id:
         # A transient tabs.query failure must not erase a still-valid active page.
         for key in ("hostname", "pathname", "page_title", "work_surface"):
             if previous.get(key):
@@ -531,6 +534,8 @@ def _apply_live_browser_surface(result: dict[str, Any]) -> None:
     current active-tab confirmation are left untouched, so switching tabs cannot
     retroactively relabel earlier desktop evidence.
     """
+    if str(BROWSER_STATUS.get("status") or "").lower() == "paused":
+        return
     hostname = str(BROWSER_STATUS.get("hostname") or "").strip()
     surface = str(BROWSER_STATUS.get("work_surface") or "").strip()
     confirmed_at = _parse_observed_at(BROWSER_STATUS.get("observed_at"))

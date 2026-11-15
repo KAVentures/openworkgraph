@@ -41,8 +41,24 @@ const path=require('node:path');
   assert.match(await coverageDetails.textContent(),/row_1 → accept · selected 1 case/);
   assert.match(await coverageDetails.textContent(),/row_2 → escalate · selected 1 case/);
   assert.match(await coverageDetails.textContent(),/not exhaustive rule coverage/);
+  // Synthetic boundary points are computed separately from the three
+  // caller-supplied cases and never contain their fact paths or identifiers.
+  const boundary=output.locator('details.owgDecisionBoundaryProbes');
+  await boundary.getByText(/Synthetic numeric boundaries · decision_table_1/).waitFor();
+  await boundary.locator('summary').click();
+  assert.match(await boundary.textContent(),/0 gaps · 0 overlaps/);
+  assert.match(await boundary.textContent(),/not proof of exhaustive domain coverage/);
+
   const [download]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Download minimized rule-check report',exact:true}).click()]);
   const report=JSON.parse(await fs.readFile(await download.path(),'utf8'));assert.equal(report.process_reference.revision,2);assert.equal(report.decision_table_as_of_date,'2026-10-26');assert.equal(JSON.stringify(report).includes('amount'),false);
+  const diagnostic=report.decision_table_boundary_probes[0];
+  assert.equal(diagnostic.status,'sampled');
+  assert.equal(diagnostic.status_counts.unique_match,diagnostic.sampled_numeric_points);
+  assert.deepEqual(diagnostic.gap_witnesses,[]);
+  assert.deepEqual(diagnostic.overlap_witnesses,[]);
+  assert.equal(diagnostic.source_case_facts_used,false);
+  assert.equal(diagnostic.whole_numeric_domain_coverage_verified,false);
+  assert.equal(report.decision_table_boundary_probes_basis,'generated_synthetic_numeric_threshold_points_only');
   assert.equal(await page.getByRole('button',{name:'Download OpenAI Agents project',exact:true}).isDisabled(),false);
   const [projectDownload]=await Promise.all([page.waitForEvent('download'),page.getByRole('button',{name:'Download OpenAI Agents project',exact:true}).click()]);
   assert.equal((await fs.readFile(await projectDownload.path())).subarray(0,2).toString(),'PK');

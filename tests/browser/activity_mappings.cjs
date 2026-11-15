@@ -45,7 +45,10 @@ const path=require('node:path');
    await page.getByRole('button',{name:'Apply Data entry'}).click();
    await page.locator('#owgActivityMappingNotice').waitFor();
    assert.match(await page.locator('#owgActivityMappingNotice').textContent(),/grouped by the mapping “Data entry”: 4 events relabelled, 1 consecutive repeats collapsed/);
-   const variants=await page.locator('#owgEventLogResults').textContent();
+   // Object-centric views keep the original activities by design (the notice says so), and that map
+   // renders asynchronously; check every other section.
+   const variants=await page.evaluate(()=>{const copy=document.querySelector('#owgEventLogResults').cloneNode(true);
+     copy.querySelector('#owgObjectCentricMap')?.remove();return copy.textContent;});
    assert.match(variants,/Open form → Enter data → Submit → Approve/);
    assert.doesNotMatch(variants,/Type name →/);
    await page.getByRole('button',{name:'Stop applying Data entry'}).click();

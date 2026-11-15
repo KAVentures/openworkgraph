@@ -549,6 +549,8 @@ class OrganizationProcessStore:
             erase_hierarchy(self,conn,p.organization_id,workflow_id)
             from .process_benefits import erase as erase_benefits
             erase_benefits(self,conn,p.organization_id,workflow_id)
+            from .process_value_measurements import erase as erase_measurements
+            erase_measurements(self,conn,p.organization_id,workflow_id)
             from .process_opportunity_review import erase as erase_opportunity
             erase_opportunity(self,conn,p.organization_id,workflow_id)
             cursor = self.db._execute(conn, 'DELETE FROM workflow_knowledge WHERE owner = ? AND workflow_id = ?', (namespace(p.organization_id), workflow_id))

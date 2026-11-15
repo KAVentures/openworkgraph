@@ -69,13 +69,15 @@ def prioritized_review_queue(events: list[dict[str, Any]], *, limit: int = 100) 
             "automatic_merge": False,
         })
     ranked.sort(key=lambda x: (
-        bool(x["risk_reasons"]), -x["priority"],
+        not bool(x["risk_reasons"]), -len(x["risk_reasons"]), -x["priority"],
         x["event_id"], x["toward_event_id"], x["relation"],
     ))
     return {
         "version": 1, "evidence_sha256": manifest["evidence_sha256"],
         "total_candidates": len(ranked), "shown_candidates": min(limit, len(ranked)),
         "truncated": len(ranked) > limit, "queue": ranked[:limit],
+        "conflicted_candidates": sum(bool(item["risk_reasons"]) for item in ranked),
+        "ordering": "conflicts_first_then_risk_count_then_relation_priority",
         "canonical_membership_unchanged": True, "requires_explicit_review": True,
         "authoritative": False,
     }

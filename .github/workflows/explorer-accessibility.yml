@@ -32,13 +32,20 @@ jobs:
       - name: Install isolated Chromium and axe-core
         run: |
           npm install --prefix "$RUNNER_TEMP/owg-browser" playwright@1.64.1 axe-core@4.10.3
-          node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install --with-deps chromium
+          node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install --with-deps chromium || {
+            # The runner image already has Chromium's libraries; --with-deps only adds fonts and
+            # extras. When the apt mirror is unreachable, install the browser without them.
+            echo "::warning::apt packages unavailable; installing Chromium without --with-deps"
+            node "$RUNNER_TEMP/owg-browser/node_modules/playwright/cli.js" install chromium
+          }
       - name: Verify explorer WCAG 2.1 AA and keyboard-only use
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/explorer_accessibility.cjs
       - name: Verify supplied OCEL relationship inspection and interchange
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/event_log_object_relationships.cjs
       - name: Verify session-only object relationship lead-time explorer and local-only UI
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/object_relationship_lead_times.cjs
+      - name: Verify same-event OCEL object pair binding continuity and browser accessibility
+        run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/object_binding_continuity.cjs
       - name: Verify supplied graph constraints, empty graphs and guarded exports
         run: NODE_PATH="$RUNNER_TEMP/owg-browser/node_modules" node tests/browser/supplied_object_constraints.cjs
       - name: Verify order-to-cash domain pack mapping, install, report and uninstall

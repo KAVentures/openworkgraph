@@ -36,6 +36,204 @@
     const list = document.createElement('ul');
     details.appendChild(list);
     card.append(heading, note, form, status, details);
+
+    // A deliberately separate, opt-in operator flow. Listing local owner
+    // declarations is not permission to scan the provider or execute work.
+    const dossierForm = document.createElement('form');
+    const dossierLabel = document.createElement('label');
+    dossierLabel.textContent = 'Reviewed case to inspect: ';
+    const dossierRef = document.createElement('input');
+    dossierRef.type = 'text';
+    dossierRef.maxLength = 38;
+    dossierRef.autocomplete = 'off';
+    dossierLabel.appendChild(dossierRef);
+    const scanLabel = document.createElement('label');
+    const scanConsent = document.createElement('input');
+    scanConsent.type = 'checkbox';
+    scanLabel.append(scanConsent, document.createTextNode(' I authorize a bounded live Stripe read for this case'));
+    const dossierButton = document.createElement('button');
+    dossierButton.type = 'submit';
+    dossierButton.textContent = 'Review case and verify source';
+    const dossierStatus = document.createElement('p');
+    dossierStatus.setAttribute('role', 'status');
+    dossierStatus.setAttribute('aria-live', 'polite');
+    const dossierResults = document.createElement('ul');
+    dossierForm.append(dossierLabel, scanLabel, dossierButton);
+    card.append(dossierForm, dossierStatus, dossierResults);
+    let dossierRequest = null;
+    let dossierApprovalConsumed = false;
+    // Withdrawal is effective immediately in this view, including while the
+    // declaration lookup or source scan is pending. Server-side grants remain
+    // independently enforced by the authenticated route.
+    function clearDossier(reason) {
+      if (dossierRequest) dossierRequest.abort();
+      dossierRequest = null;
+      dossierButton.disabled = false;
+      dossierResults.replaceChildren();
+      dossierStatus.textContent = reason;
+    }
+    // Revocation also clears completed source evidence, not only pending reads.
+    // Changing the selected case invalidates any previously displayed evidence.
+    scanConsent.addEventListener('change', () => {
+      if (scanConsent.checked) dossierApprovalConsumed = false;
+      else clearDossier('Source read approval withdrawn; no result displayed.');
+    });
+    dossierRef.addEventListener('input', () => {
+      scanConsent.checked = false;
+      dossierApprovalConsumed = false;
+      clearDossier('Case changed; explicitly approve a new source read.');
+    });
+    dossierForm.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (dossierRequest) dossierRequest.abort();
+      const ref = dossierRef.value.trim();
+      dossierResults.replaceChildren();
+      if (!/^owg:w:[0-9a-f]{32}$/.test(ref) || !scanConsent.checked || dossierApprovalConsumed) {
+        dossierRequest = null;
+        dossierButton.disabled = false;
+        dossierStatus.textContent = 'Select a valid opaque case and explicitly approve the source read.';
+        return;
+      }
+      const controller = new AbortController();
+      dossierRequest = controller;
+      dossierButton.disabled = true;
+      dossierStatus.textContent = 'Checking current declaration and authorization…';
+      const current = () => dossierRequest === controller && !controller.signal.aborted && scanConsent.checked;
+      const show = value => {
+        const item = document.createElement('li');
+        item.textContent = value;
+        dossierResults.appendChild(item);
+      };
+      try {
+        if (window.__owgAuthReady) await window.__owgAuthReady;
+        if (!current()) return;
+        const opts = {credentials:'same-origin', cache:'no-store',
+          headers:{Accept:'application/json'}, signal:controller.signal};
+        const declarationsResponse = await fetch('/v1/open-work/declarations', opts);
+        if (!current()) return;
+        if (!declarationsResponse.ok) throw new Error('declaration read denied');
+        const declarations = await declarationsResponse.json();
+        if (!current()) return;
+        if (declarations.format !== 'openworkgraph.local-case-declarations.v1' ||
+            declarations.available !== true || !Array.isArray(declarations.items) ||
+            declarations.items.length > 10000) throw new Error('invalid declaration inventory');
+        const matches = declarations.items.filter(item => item && item.work_item_ref === ref);
+        if (matches.length !== 1) throw new Error('case not currently reviewed');
+        const selected = matches[0];
+        if (!Number.isSafeInteger(selected.revision) || selected.revision < 1 ||
+            typeof selected.edit_token !== 'string' ||
+            !/^[0-9a-f]{32}$/.test(selected.edit_token)) {
+          throw new Error('invalid declaration revision');
+        }
+        if (!scanConsent.checked || !current()) return;
+        dossierStatus.textContent = 'Reading explicitly approved source evidence…';
+        // One approval permits one source scan; keep the checkbox visibly
+        // checked while its evidence is displayed so withdrawal is possible.
+        dossierApprovalConsumed = true;
+        const scanned = await fetch('/v1/open-work/declarations/dossier', {
+          ...opts, method:'POST',
+          headers:{...opts.headers, 'Content-Type':'application/json'},
+          body:JSON.stringify({work_item_ref:ref, expected_revision:selected.revision,
+            expected_edit_token:selected.edit_token, confirm_source_scan:true, max_pages:1})
+        });
+        if (!current()) return;
+        if (!scanned.ok) throw new Error('source review unavailable');
+        const dossier = await scanned.json();
+        if (!current()) return;
+        const source = dossier && dossier.source_reported_status;
+        if (dossier.format !== 'openworkgraph.local-reviewed-case-dossier.v1' ||
+            dossier.work_item_ref !== ref || !source ||
+            !['source_reported','unknown'].includes(source.availability) ||
+            dossier.agent_execution_authorized !== false ||
+            dossier.customer_outcome_verified !== false ||
+            dossier.expected_outcome_verified !== false ||
+            dossier.source_write_performed !== false ||
+            !Number.isSafeInteger(dossier.declared_prerequisite_count) ||
+            dossier.declared_prerequisite_count < 0) {
+          throw new Error('unexpected dossier response');
+        }
+        // Treat the complete server projection as untrusted before rendering.
+        const prereqs = dossier.declared_prerequisites;
+        const observations = dossier.retained_observation_summary;
+        const validRef = value => typeof value === 'string' && /^owg:w:[0-9a-f]{32}$/.test(value);
+        const validRecord = value => typeof value === 'string' && /^owg:r:[0-9a-f]{32}$/.test(value);
+        const validCount = value => Number.isSafeInteger(value) && value >= 0 && value <= 10000000;
+        if (!Array.isArray(prereqs) || prereqs.length !== dossier.declared_prerequisite_count ||
+            prereqs.length > 10000 || !prereqs.every(p => p && validRef(p.work_item_ref) &&
+              Number.isSafeInteger(p.revision) && p.revision >= 1 &&
+              p.provenance === 'explicit_owner_declaration_not_source_verified' &&
+              p.expected_outcome_verified === false &&
+              p.source_state === 'unknown_until_explicit_recheck') ||
+            !Array.isArray(observations) || observations.length > 8 ||
+            !observations.every(o => o && validRecord(o.resource_ref) &&
+              ['observed_event_count','observed_session_count','observed_actor_count'].every(k => validCount(o[k])) &&
+              o.observed_not_verified_handoff === true) ||
+            dossier.business_obligation_verified !== false ||
+            dossier.absence_of_observation_proves_no_work !== false ||
+            source.provider_status_not_customer_outcome !== true ||
+            !['open','unknown'].includes(source.state) ||
+            (source.availability === 'unknown' && source.state !== 'unknown')) {
+          throw new Error('invalid case evidence projection');
+        }
+        // Join the reviewed durable dependency projection into this same operator
+        // review. This read is separately authorized by the server and must not
+        // confer source or execution permissions. Fail closed on malformed data.
+        const graphResponse = await fetch('/v1/open-work/declarations/durable-dependencies?work_item_ref=' +
+          encodeURIComponent(ref), opts);
+        if (!current()) return;
+        if (!graphResponse.ok) throw new Error('dependency read denied');
+        const graph = await graphResponse.json();
+        if (!current()) return;
+        const graphContext = graph && graph.context;
+        const graphRefs = values => Array.isArray(values) && values.length <= 10000 &&
+          values.every(validRef) && new Set(values).size === values.length;
+        if (!graph || graph.format !== 'openworkgraph.reviewed-durable-dependencies.v1' ||
+            graph.agent_execution_authorized !== false ||
+            graph.customer_outcome !== 'unknown' ||
+            !graphContext || !graphRefs(graphContext.direct) ||
+            !graphRefs(graphContext.prerequisites) ||
+            typeof graphContext.truncated !== 'boolean' ||
+            !graphContext.direct.every(x => graphContext.prerequisites.includes(x))) {
+          throw new Error('invalid durable case graph');
+        }
+        dossierStatus.textContent = 'Case reviewed. Provider status is not business success.';
+        show('Owner goal: ' + String(dossier.owner_declaration?.goal_code || 'unknown').slice(0,80));
+        show('Expected outcome: ' + String(dossier.owner_declaration?.expected_outcome_code || 'unknown').slice(0,80));
+        show('Reviewed prerequisites: ' + dossier.declared_prerequisite_count);
+        show('Durable direct dependencies: ' + graphContext.direct.length);
+        show('Durable transitive dependencies: ' + graphContext.prerequisites.length);
+        if (graphContext.truncated) show('Dependency graph truncated; no completeness claim.');
+        prereqs.forEach(p => show('Prerequisite ' + p.work_item_ref +
+          ' (revision ' + p.revision + '): owner-declared; outcome unverified'));
+        show('Retained observation references: ' + observations.length +
+          ' (observations are not verified handoffs)');
+        observations.forEach(o => show('Observed record ' + o.resource_ref +
+          ': ' + o.observed_event_count + ' events, ' + o.observed_session_count +
+          ' sessions; not proof of outcome'));
+        show('Provider status: ' + (source.availability === 'source_reported' && source.state === 'open'
+          ? 'open (source-reported)' : 'unknown'));
+        if (source.availability === 'unknown') {
+          show('Source unavailable or incomplete: ' +
+            String(source.reason || 'unknown').slice(0,80));
+        } else {
+          show('Source checked at: ' + String(source.verified_at || 'unknown').slice(0,40) +
+            '; inventory complete: ' + (source.bounded_inventory_complete === true ? 'yes' : 'no'));
+        }
+        show('Customer outcome: unknown; no agent action authorized.');
+      } catch (_) {
+        if (current()) dossierStatus.textContent =
+          'Review unavailable, stale or revoked. No source or outcome conclusion can be drawn.';
+      } finally {
+        if (dossierRequest === controller) {
+          dossierRequest = null;
+          dossierButton.disabled = false;
+          // Do not silently uncheck while source evidence remains visible.
+          // On an unsuccessful review, require a fresh explicit approval.
+          if (!dossierResults.children.length) scanConsent.checked = false;
+        }
+      }
+    });
+
     host.appendChild(card);
     let requestController = null;
     function line(value) {

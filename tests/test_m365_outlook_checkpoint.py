@@ -77,7 +77,7 @@ def test_first_commit_replay_restart_and_successor(setup):
         assert recovered["generation"] == 1
         assert recovered["checkpoint_advanced"] is True
         assert recovered["provider_requests"] == 0
-        assert len(_entries(kwargs["ledger_dir"], _scope("tenant", "mailbox", "folder"))) == 1
+        assert len(_entries(kwargs["ledger_dir"], _scope("tenant", "mailbox", "folder"), "folder")) == 1
 
 
 def test_no_consent_no_commit(setup):

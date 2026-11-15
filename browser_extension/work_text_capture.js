@@ -6,6 +6,10 @@
   const ext = globalThis.browser ?? globalThis.chrome;
   const KEY = "openworkgraph_work_text_capture_v1";
   const EXCLUSIONS_KEY = "openworkgraph_work_text_exclusions_v1";
+  const LOCAL_SITE_EXCLUSIONS_KEY = "openworkgraph_browser_site_exclusions_v1";
+  const PAUSE_KEY = "openworkgraph_browser_paused_v1";
+  let consentEnabled = false;
+  let browserPaused = true;
   let exclusions = {hosts: [], titles: []};
   let enabled = false;
   let pageTimer = null;
@@ -27,6 +31,9 @@
   }
 
   function sensitiveSurface() {
+    // The separate browser-only Never record list must cover rich page/draft
+    // text as well as structural evidence, regardless of the server snapshot.
+    if (globalThis.OWGBrowserExclusions?.isExcluded?.(location.hostname, document.title) === true) return true;
     const host = location.hostname.toLowerCase();
     if (['accounts.google.com', 'login.microsoftonline.com', 'account.microsoft.com',
          '1177.se', 'paypal.com', 'stripe.com', 'bankid.se', 'bankid.com'].some(
@@ -198,13 +205,17 @@
   }
 
   if (!isTop()) return;
-  ext.storage.local.get([KEY, EXCLUSIONS_KEY]).then(result => {
+  ext.storage.local.get([KEY, EXCLUSIONS_KEY, PAUSE_KEY]).then(async result => {
+    // Do not start sensitive DOM reads before both exclusion sources load.
+    await globalThis.OWGBrowserExclusions?.ready;
     const value = result?.[EXCLUSIONS_KEY] || {};
     exclusions = {
       hosts: Array.isArray(value.hosts) ? value.hosts : [],
       titles: Array.isArray(value.titles) ? value.titles : []
     };
-    setEnabled(result?.[KEY] === true);
+    consentEnabled = result?.[KEY] === true;
+    browserPaused = result?.[PAUSE_KEY] === true;
+    setEnabled(consentEnabled && !browserPaused && !sensitiveSurface());
   }).catch(() => setEnabled(false));
   ext.storage.onChanged?.addListener((changes, area) => {
     if (area !== 'local') return;
@@ -215,7 +226,13 @@
         titles: Array.isArray(value.titles) ? value.titles : []
       };
     }
-    if (changes?.[KEY]) setEnabled(changes[KEY].newValue === true);
+    if (changes?.[KEY]) consentEnabled = changes[KEY].newValue === true;
+    if (changes?.[PAUSE_KEY]) browserPaused = changes[PAUSE_KEY].newValue === true;
+    if (changes?.[KEY] || changes?.[PAUSE_KEY] || changes?.[EXCLUSIONS_KEY] ||
+        changes?.[LOCAL_SITE_EXCLUSIONS_KEY]) {
+      // Clear any buffered draft or page timer as soon as a site is excluded.
+      setEnabled(consentEnabled && !browserPaused && !sensitiveSurface());
+    }
   });
   addEventListener('DOMContentLoaded', schedulePage);
   addEventListener('pageshow', schedulePage);

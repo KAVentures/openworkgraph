@@ -9,7 +9,7 @@ exported, compared with the source or deleted like any other.
 
 Not copied: the source's activity mapping, saved filters and analyses, signals,
 domain packs, source-identity keys, object-to-object relationships, quality
-reports and case tags. The derived log starts without them, and the response says so.
+reports, case tags and the cost model. The derived log starts without them, and the response says so.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from . import event_log_workspace as workspace
 
 FORMAT = "openworkgraph.event-log-derived.v1"
 NOT_COPIED = ("activity mapping", "saved filters and analyses", "signals", "domain packs", "source-identity keys",
-              "object-to-object relationships", "quality reports", "case tags")
+              "object-to-object relationships", "quality reports", "case tags", "cost model")
 
 
 class DeriveSpec(BaseModel):

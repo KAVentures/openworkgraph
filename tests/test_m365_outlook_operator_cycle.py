@@ -29,6 +29,69 @@ class OperatorCycleTests(unittest.TestCase):
             self.assertEqual(reader.call_args.kwargs["tenant"], "t")
             writer.assert_not_called()
 
+    def test_checkpoint_bound_extract_rechecks_after_graph_and_refuses_race(self):
+        import json
+        from pathlib import Path
+        from unittest.mock import call
+        prior = {"generation": 2, "candidate_sha256": "a" * 64,
+                 "log_id": "log", "cursor_url": "cursor"}
+        changed = {**prior, "generation": 3}
+        response = {"status": "next_round_review_ready", "event_snapshots": 1,
+                    "removal_markers_for_review": 0}
+        kwargs = dict(consent_local_read=True, consent_delta_read=True,
+                      consent_local_export=True, confirm_removals_reviewed=True,
+                      ledger_dir=Path("ledger"), expected_generation=2,
+                      tenant="tenant", mailbox="mailbox", folder="folder",
+                      grant_file=Path("grant"), previous_candidate=Path("previous"),
+                      log_id="log")
+        with patch.object(cycle, "inspect_checkpoint",
+                          side_effect=[prior, changed]) as inspect, \
+             patch.object(cycle, "_private_read",
+                          return_value=json.dumps({"csv_sha256": "a" * 64}).encode()), \
+             patch.object(cycle, "run_verified_next_round",
+                          return_value=response) as graph:
+            with self.assertRaisesRegex(ReceiptError, "changed during Graph"):
+                cycle.extract(**kwargs)
+            self.assertEqual(inspect.call_count, 2)
+            graph.assert_called_once()
+
+    def test_checkpoint_bound_extract_accepts_unchanged_generation(self):
+        import json
+        from pathlib import Path
+        prior = {"generation": 2, "candidate_sha256": "a" * 64,
+                 "log_id": "log", "cursor_url": "cursor"}
+        with patch.object(cycle, "inspect_checkpoint", return_value=prior) as inspect, \
+             patch.object(cycle, "_private_read",
+                          return_value=json.dumps({"csv_sha256": "a" * 64}).encode()), \
+             patch.object(cycle, "run_verified_next_round", return_value={
+                 "status": "next_round_review_ready", "event_snapshots": 1,
+                 "removal_markers_for_review": 0
+             }):
+            result = cycle.extract(
+                consent_local_read=True, consent_delta_read=True,
+                consent_local_export=True, confirm_removals_reviewed=True,
+                ledger_dir=Path("ledger"), expected_generation=2,
+                tenant="tenant", mailbox="mailbox", folder="folder",
+                grant_file=Path("grant"), previous_candidate=Path("previous"),
+                log_id="log")
+            self.assertEqual(result["status"], "review_required")
+            self.assertEqual(inspect.call_count, 2)
+
+    def test_checkpoint_bound_extract_fails_before_graph_when_stale(self):
+        from pathlib import Path
+        with patch.object(cycle, "inspect_checkpoint", return_value={
+            "generation": 3, "candidate_sha256": "a" * 64, "log_id": "log"
+        }), patch.object(cycle, "run_verified_next_round") as graph:
+            with self.assertRaisesRegex(ReceiptError, "stale"):
+                cycle.extract(
+                    consent_local_read=True, consent_delta_read=True,
+                    consent_local_export=True, confirm_removals_reviewed=True,
+                    ledger_dir=Path("ledger"), expected_generation=2,
+                    tenant="tenant", mailbox="mailbox", folder="folder",
+                    grant_file=Path("grant"), previous_candidate=Path("previous"),
+                    log_id="log")
+            graph.assert_not_called()
+
     def test_review_refuses_before_artifact_access_without_consent(self):
         with patch.object(cycle, "review_candidate") as delegate:
             with self.assertRaises(ReceiptError):
@@ -192,6 +255,46 @@ class OperatorCycleTests(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(cycle.main(argv[:-1]), 2)
             self.assertEqual(delegate.call_count, 1)
+
+    def test_digest_bound_append_refuses_mismatch_before_write(self):
+        digest = "a" * 64
+        with patch.object(cycle, "review_candidate", return_value={
+            "status": "review_ready", "csv_sha256": "b" * 64
+        }) as review, patch.object(cycle, "append_and_record") as writer:
+            with self.assertRaisesRegex(ReceiptError, "differs"):
+                cycle.append(consent_local_read=True, consent_local_append=True,
+                             confirm_candidate_reviewed=True,
+                             expected_review_csv_sha256=digest,
+                             tenant="t", mailbox="m", folder="f",
+                             grant_file="grant", candidate="candidate")
+            review.assert_called_once()
+            writer.assert_not_called()
+
+    def test_digest_bound_append_rechecks_and_delegates(self):
+        digest = "a" * 64
+        with patch.object(cycle, "review_candidate", return_value={
+            "status": "review_ready", "csv_sha256": digest
+        }), patch.object(cycle, "append_and_record", return_value={
+            "status": "receipt_persisted", "log_id": "log", "events_after": 2
+        }) as writer:
+            result = cycle.append(consent_local_read=True, consent_local_append=True,
+                                  confirm_candidate_reviewed=True,
+                                  expected_review_csv_sha256=digest,
+                                  tenant="t", mailbox="m", folder="f",
+                                  grant_file="grant", candidate="candidate",
+                                  log_id="log")
+            self.assertEqual(result["status"], "receipt_persisted")
+            self.assertNotIn("expected_review_csv_sha256", writer.call_args.kwargs)
+
+    def test_digest_bound_append_rejects_bad_digest_before_read_or_write(self):
+        with patch.object(cycle, "review_candidate") as review, patch.object(
+                cycle, "append_and_record") as writer:
+            with self.assertRaisesRegex(ReceiptError, "Invalid reviewed"):
+                cycle.append(consent_local_read=True, consent_local_append=True,
+                             confirm_candidate_reviewed=True,
+                             expected_review_csv_sha256="INVALID")
+            review.assert_not_called()
+            writer.assert_not_called()
 
 
 if __name__ == "__main__":

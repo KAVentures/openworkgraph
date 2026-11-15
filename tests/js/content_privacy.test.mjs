@@ -29,7 +29,13 @@ function makeContext() {
   const listeners = [];
   const context = vm.createContext({
     browser: undefined,
-    chrome: {runtime: {sendMessage() { return Promise.resolve(); }}},
+    chrome: {
+      runtime: {sendMessage() { return Promise.resolve(); }},
+      storage: {
+        local: {async get() { return {'openworkgraph_browser_paused_v1': false}; }},
+        onChanged: {addListener() {}}
+      }
+    },
     Element: FakeElement,
     location: {href: 'https://example.com/work'},
     window: null,

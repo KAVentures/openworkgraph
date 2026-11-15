@@ -19,6 +19,7 @@ STOCKHOLM = {"timezone": "Europe/Stockholm", "start": "22:00", "end": "07:00"}
 def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(scheduler, "DATA_DIR", tmp_path)
     monkeypatch.setattr(scheduler, "_check_target", lambda kind, target: None)
+    monkeypatch.setattr(scheduler, "_signal_rule_set_pin", lambda log_id: {"fingerprint": "a" * 64, "count": 1})
 
 
 def _epoch(value: str) -> int:

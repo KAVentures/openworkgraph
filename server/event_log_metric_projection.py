@@ -58,10 +58,12 @@ def summarize_projected(
         projected.append(row)
     # Exact bounded accumulation avoids source-order-dependent rounding and
     # intermediate overflow from otherwise cancelling valid cohort values.
-    values = [metrics._evaluate(definition["expression"], row) for row in projected]
-    present = [value for value in values if value is not None]
     with localcontext() as context:
         context.prec = 100
+        # Expression arithmetic must use the same fixed precision as the
+        # aggregate; otherwise ambient context silently changes the cohort.
+        values = [metrics._evaluate(definition["expression"], row) for row in projected]
+        present = [value for value in values if value is not None]
         total = sum(present, Decimal(0))
     if total and abs(total.adjusted()) > metrics.MAX_DECIMAL_MAGNITUDE:
         raise metrics.MetricDefinitionError("aggregate magnitude exceeds safe bound")

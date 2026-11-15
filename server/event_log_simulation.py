@@ -883,6 +883,11 @@ def simulate(model: dict[str, Any], samples: list[float] | None = None) -> dict[
         **({"pools": pool_rows} if pools else {}),
         "unstable": any(r["overloaded"] for r in activity_rows),
         **({"cases_waiting_in_unfilled_batches": stuck} if batched else {}),
+        **({"priority_completion_targets": priority_classes.completion_targets(
+            classes, klass, start, finish, abandoned, warm),
+            "completion_target_basis": "all_post_warmup_arrivals_in_modelled_priority_class",
+            "completion_target_rates_are_bounds_not_certified_slas": True}
+           if classes and any("completion_target_minutes" in item for item in classes) else {}),
         **({"priority_classes": priority_classes.summary(
             classes, {i: [finish[c] - start[c] for c in measured if klass[c] == i] for i in range(len(classes))},
             class_waits, _percentile)} if classes else {}),
@@ -976,7 +981,13 @@ def _with_priorities(scenario: dict[str, Any], lines: list[str]) -> list[str]:
     if abandonment:
         lines = [line.replace("no calendars, breaks are modeled", "neither calendars nor breaks are modeled")
                  for line in lines]
-    return lines + (priority_classes.ASSUMPTIONS if priorities else []) + \
+    target_assumptions = [
+        "Priority completion targets are user-entered elapsed-time thresholds, not observed SLAs. "
+        "Each class includes every post-warm-up arrival: completed late and abandoned cases are known "
+        "misses, while unresolved cases bound rather than inflate target attainment. "
+        "No fairness or causal effectiveness is inferred."
+    ] if priorities and any("completion_target_minutes" in item for item in scenario["priorities"]) else []
+    return lines + (priority_classes.ASSUMPTIONS if priorities else []) + target_assumptions + \
         (BATCH_ASSUMPTIONS if batching else []) + \
         (["Cases waiting for an explicitly configured queue_timeout_minutes may leave that activity before service. "
           "They do not complete the remaining route; abandonment rates are simulated assumptions, not observed "

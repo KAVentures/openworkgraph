@@ -564,6 +564,19 @@ async def local_capability_guard(request: Request, call_next):
         request._body = bytes(buffered)
         return await call_next(request)
 
+    # External agent grants are accepted only by these bounded dispatch routes.
+    # They never confer general API, dashboard or provider permissions.
+    if path in {
+        "/v1/open-work/dispatch/granted",
+        "/v1/open-work/dispatch/granted/claim",
+        "/v1/open-work/dispatch/granted/release",
+        "/v1/open-work/dispatch/granted/report",
+    }:
+        from .open_work_agent_grants import authenticate
+        if authenticate(request.headers.get("authorization")) is None:
+            return _json_error("active agent grant required", 401)
+        return await call_next(request)
+
     if path.startswith("/v1/"):
         if not _api_authenticated(request):
             return _json_error("authentication required", 401)
@@ -750,9 +763,14 @@ from .open_work_declaration_routes import router as _open_work_declaration_route
 app.include_router(_open_work_declaration_router)
 from .event_log_routes import router as _event_log_router  # noqa: E402
 app.include_router(_event_log_router)
+from .m365_operator_audit_routes import router as _m365_operator_audit_router  # noqa: E402
+app.include_router(_m365_operator_audit_router)
 # R24 cross-object lead time analysis uses the same dashboard-only event-log guard.
 from .event_log_object_lead_time_routes import router as _object_lead_time_router  # noqa: E402
 app.include_router(_object_lead_time_router)
+# R24 same-pair co-attached events are a separate local-only session-scoped read.
+from .event_log_object_binding_routes import router as _object_binding_router  # noqa: E402
+app.include_router(_object_binding_router)
 from .automation_monitoring_routes import router as _automation_monitoring_router  # noqa: E402
 app.include_router(_automation_monitoring_router)
 from .communications_routes import router as _communications_router  # noqa: E402

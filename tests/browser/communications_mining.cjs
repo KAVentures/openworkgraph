@@ -34,6 +34,17 @@ const path=require('node:path');
    const session=(await fs.readFile(path.join(scratch,'session.txt'),'utf8')).trim();
    await page.goto(base+'/#session='+session);await page.locator('[role=tab][data-tab=evidence]').click();
    await page.locator('#owgCommsCard').waitFor();
+   // The strict language holdout gate is opt-in, and never runs for keyword classification.
+   assert.equal(await page.locator('#owgCommsQualityControls').isHidden(),true);
+   await page.locator('#owgCommsClassifier').selectOption('learned');
+   assert.equal(await page.locator('#owgCommsQualityControls').isVisible(),true);
+   assert.equal(await page.locator('#owgCommsGateLang').isHidden(),true);
+   await page.locator('#owgCommsQualityGate').check();
+   assert.equal(await page.locator('#owgCommsGateLang').isVisible(),true);
+   await page.locator('#owgCommsGateLang').fill('sv');
+   await page.locator('#owgCommsClassifier').selectOption('keyword');
+   assert.equal(await page.locator('#owgCommsQualityControls').isHidden(),true);
+
    await page.locator('#owgCommsTaxonomyStatus').filter({hasText:'Default taxonomy.'}).waitFor({state:'attached'});
 
    await page.locator('#owgCommsFile').setInputFiles({name:'tickets.csv',mimeType:'text/csv',buffer:Buffer.from(rows.join('\n'))});
