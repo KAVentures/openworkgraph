@@ -64,14 +64,22 @@
     // Withdrawal is effective immediately in this view, including while the
     // declaration lookup or source scan is pending. Server-side grants remain
     // independently enforced by the authenticated route.
+    function clearDossier(reason) {
+      if (dossierRequest) dossierRequest.abort();
+      dossierRequest = null;
+      dossierButton.disabled = false;
+      dossierResults.replaceChildren();
+      dossierStatus.textContent = reason;
+    }
+    // Revocation also clears completed source evidence, not only pending reads.
+    // Changing the selected case invalidates any previously displayed evidence.
     scanConsent.addEventListener('change', () => {
-      if (!scanConsent.checked && dossierRequest) {
-        dossierRequest.abort();
-        dossierRequest = null;
-        dossierButton.disabled = false;
-        dossierResults.replaceChildren();
-        dossierStatus.textContent = 'Source read approval withdrawn; no result displayed.';
-      }
+      if (!scanConsent.checked) clearDossier(
+        'Source read approval withdrawn; no result displayed.');
+    });
+    dossierRef.addEventListener('input', () => {
+      scanConsent.checked = false;
+      clearDossier('Case changed; explicitly approve a new source read.');
     });
     dossierForm.addEventListener('submit', async event => {
       event.preventDefault();
