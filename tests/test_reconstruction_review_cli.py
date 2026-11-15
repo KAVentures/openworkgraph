@@ -843,6 +843,21 @@ class CompletenessMetadataValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "completeness flag"):
             build_review_queue(source)
 
+    def test_malformed_flags_cannot_hide_behind_true_truncation(self):
+        # All metadata must be validated, even if another flag already marks
+        # the scan incomplete. A short-circuiting OR used to skip these checks.
+        source = payload([pair("A", "F", ["e1"])])
+        source["observed_pair_event_assignments_truncated"] = True
+        source["observed_group_continuity_truncated"] = "false"
+        with self.assertRaisesRegex(ValueError, "completeness flag"):
+            build_review_queue(source)
+
+        source = payload([pair("A", "F", ["e1"])])
+        source["observed_pair_event_assignments"][0]["current_evidence_truncated"] = True
+        source["observed_pair_event_assignments"][0]["earlier_sessions_truncated"] = "false"
+        with self.assertRaisesRegex(ValueError, "completeness flag"):
+            build_review_queue(source)
+
     def test_real_boolean_truncation_refuses_scoring(self):
         source = payload([pair("A", "F", ["e1"])])
         source["coverage"]["scan_truncated"] = True
