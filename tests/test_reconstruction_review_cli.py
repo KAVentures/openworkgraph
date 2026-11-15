@@ -871,3 +871,23 @@ class CompletenessMetadataValidationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProvisionalGroupAuthorityTests(unittest.TestCase):
+    def test_navigation_groups_never_become_confirmed_cases(self):
+        source = payload([pair("A", "F", ["e1"])])
+        source["observed_case_groups"] = [{"proves_same_case": False, "resource_pointers": []}]
+        self.assertTrue(build_review_queue(source)["no_case_identity_inferred"])
+        for group in ({"proves_same_case": True}, {"resource_pointers": []}, None, "case"):
+            with self.subTest(group=group):
+                source["observed_case_groups"] = [group]
+                with self.assertRaisesRegex(ValueError, "provisional group must not assert case identity"):
+                    build_review_queue(source)
+
+    def test_group_container_is_bounded_and_typed(self):
+        source = payload([pair("A", "F", ["e1"])])
+        for groups in (None, {}, [{"proves_same_case": False}] * 25):
+            with self.subTest(groups=groups):
+                source["observed_case_groups"] = groups
+                with self.assertRaisesRegex(ValueError, "invalid or unbounded provisional case groups"):
+                    build_review_queue(source)
