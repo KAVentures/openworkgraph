@@ -695,6 +695,7 @@
     results.appendChild(conformanceSection((variants.variants||[])[0]));
     results.appendChild(clusterSection());
     results.appendChild(caseTagSection(names));
+    results.appendChild(caseAttributeSection());
     results.appendChild(caseExplainSection());
     results.appendChild(discoverySection());
     results.appendChild(driftSection());
@@ -1140,6 +1141,64 @@
         b.onclick=()=>{caseId.value=c.case_id;explainCase(c.case_id);};wrap.appendChild(b);});
       slowList.replaceChildren(wrap);
     }).catch(()=>{});
+    return box;
+  }
+
+  // Columns from a separate case table (customer, region, amount...) joined onto the cases by id.
+  function caseAttributeSection(){
+    const box=section('Case attributes from a table');box.id='owgCaseAttributes';
+    box.appendChild(el('div','Add columns such as region, segment or contract value from a separate CSV keyed by case ID. They become case attributes for filters, root cause and attribute profiles. Events are not changed, and an upload can be removed again.','muted'));
+    const base=()=>'/v1/event-logs/'+encodeURIComponent(state.logId)+'/case-attributes';
+    const list=el('div');list.id='owgCaseAttributeUploads';list.setAttribute('role','status');
+    const file=input('owgCaseAttributeFile','file');file.accept='.csv,.tsv,.txt';
+    const delimiter=select('owgCaseAttributeDelimiter',[[',','Comma'],[';','Semicolon'],['t','Tab'],['|','Pipe']]);
+    const idColumn=select('owgCaseAttributeId',[]);
+    const columns=select('owgCaseAttributeColumns',[]);columns.multiple=true;columns.size=4;
+    const replace=input('owgCaseAttributeReplace','checkbox');
+    const consent=input('owgCaseAttributeConsent','checkbox');
+    const add=button('Add to cases','secondary');add.id='owgCaseAttributeAdd';add.disabled=true;
+    const out=el('div');out.id='owgCaseAttributeResult';out.setAttribute('role','status');
+    const row=el('div',null,'row');row.style.alignItems='end';
+    row.append(field('Case table (CSV)',file),field('Delimiter',delimiter),field('Case ID column',idColumn),field('Columns to add',columns));
+    const checks=el('div',null,'row');
+    const replaceLabel=el('label',' Overwrite values the cases already have');replaceLabel.prepend(replace);
+    const consentLabel=el('label',' Store these values with the log on this computer');consentLabel.prepend(consent);
+    checks.append(replaceLabel,consentLabel);
+    box.append(list,row,checks,add,out);
+    const ready=()=>{add.disabled=!(file.files&&file.files[0]&&idColumn.value&&columns.selectedOptions.length&&consent.checked);};
+    const readHeader=async()=>{
+      const chosen=file.files&&file.files[0];setOptions(idColumn,[]);setOptions(columns,[]);ready();if(!chosen)return;
+      const header=csvHeader(await chosen.slice(0,65536).text(),delimiter.value==='t'?'\t':delimiter.value);
+      setOptions(idColumn,header.map(c=>[c,c]));
+      idColumn.value=header.find(c=>/case|order|ticket|^id$/i.test(c))||header[0]||'';
+      const others=()=>setOptions(columns,header.filter(c=>c!==idColumn.value).map(c=>[c,c]));
+      others();idColumn.onchange=()=>{others();ready();};ready();
+    };
+    file.onchange=()=>{consent.checked=false;readHeader();};delimiter.onchange=readHeader;
+    for(const control of [columns,consent])control.addEventListener('change',ready);
+    const generation=state.generation;
+    const render=r=>{
+      if(!r.uploads.length){list.replaceChildren(el('div','No case attributes added yet.','muted'));return;}
+      list.replaceChildren(table(['Added','Columns','Cases updated','Rows not in this log','Cases without a row',''],r.uploads.map(u=>{
+        const remove=button('Remove','secondary');remove.setAttribute('aria-label','Remove '+u.columns.join(', '));
+        remove.onclick=async()=>{if(!window.confirm('Remove '+u.columns.join(', ')+' from every case?'))return;
+          try{const r2=await (await api(base()+'/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({upload_id:u.upload_id})})).json();
+            out.replaceChildren(el('div','Removed '+r2.removed_columns.join(', ')+' from '+Number(r2.cases_changed).toLocaleString()+' cases.'));render(await getJSON(base()));}
+          catch(error){out.replaceChildren(el('div',error.message,'muted'));}};
+        return [String(u.added_at).slice(0,16).replace('T',' '),u.columns.join(', '),Number(u.cases_updated).toLocaleString(),Number(u.rows_not_in_log).toLocaleString(),Number(u.cases_without_row).toLocaleString(),remove];})));
+    };
+    add.onclick=async()=>{
+      const q=new URLSearchParams({id_column:idColumn.value,delimiter:delimiter.value});
+      [...columns.selectedOptions].forEach(o=>q.append('column',o.value));
+      if(state.caseType)q.set('object_type',state.caseType);if(replace.checked)q.set('replace','true');
+      add.disabled=true;out.replaceChildren(el('div','Adding…','muted'));
+      try{
+        const r=await (await api(base()+'?'+q,{method:'POST',body:file.files[0],headers:{'Content-Type':'text/csv','X-OWG-Local-Storage-Confirmed':'true'}})).json();
+        out.replaceChildren(el('div','Added '+r.columns.join(', ')+' to '+Number(r.cases_updated).toLocaleString()+' cases. '+Number(r.rows_not_in_log).toLocaleString()+' rows matched no case; '+Number(r.cases_without_row).toLocaleString()+' cases had no row.'));
+        consent.checked=false;render(await getJSON(base()));
+      }catch(error){out.replaceChildren(el('div',error.message,'muted'));ready();}
+    };
+    getJSON(base()).then(r=>{if(generation===state.generation)render(r);}).catch(error=>list.replaceChildren(el('div',error.message,'muted')));
     return box;
   }
 
