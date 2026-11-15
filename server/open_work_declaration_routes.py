@@ -2840,6 +2840,10 @@ async def bound_run_receipt_journal(request: Request, response: Response):
     actor = hashlib.sha256(request.headers["authorization"].encode("utf-8")).hexdigest()
 
     def guard():
+        # The receipt journal can perform SQLite I/O on a worker thread after
+        # the HTTP session has been revoked. Check inside its transactional
+        # guard, not only at route entry or before returning the response.
+        _dashboard_only(request)
         _operation_ledger_guard(scope, payload["work_item_ref"],
                                 payload["expected_revision"],
                                 payload["expected_edit_token"], signature)
@@ -2924,6 +2928,7 @@ async def bound_run_receipt_journal(request: Request, response: Response):
             KeyError, ValueError) as exc:
         raise _safe_error(exc) from None
     await _recheck_source(scope)
+    _dashboard_only(request)
     response.headers["Cache-Control"] = "no-store"
     return result
 

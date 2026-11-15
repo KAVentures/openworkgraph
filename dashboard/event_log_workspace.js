@@ -99,7 +99,7 @@
     card.appendChild(el('h2','Large event logs'));
     card.appendChild(el('div','Import a CSV, XES or OCEL 2.0 event log exported from your own systems and analyse it on this computer. Imported logs are stored locally until you delete them and are never readable by connected AI apps. Results describe the log; they are not verified business policy or causes.','muted'));
 
-    const file=input('owgEventLogFile','file');file.accept='.csv,.tsv,.txt,.xes,.json,.jsonocel,.xmlocel,.xml';
+    const file=input('owgEventLogFile','file');file.accept='.csv,.tsv,.txt,.xlsx,.xes,.json,.jsonocel,.xmlocel,.xml';
     const format=select('owgEventLogFormat',[['csv','CSV'],['xes','XES'],['ocel','OCEL 2.0 JSON'],['ocelxml','OCEL 2.0 XML']]);
     const name=input('owgEventLogName','text','Log name');name.maxLength=120;
     const row=el('div',null,'row');row.style.alignItems='end';row.append(field('File',file),field('Format',format),field('Name',name));
@@ -108,7 +108,12 @@
     const delimiter=select('owgEventLogDelimiter',[[',','Comma'],[';','Semicolon'],['t','Tab'],['|','Pipe']]);
     const extras=select('owgEventLogAttributes',[]);extras.multiple=true;extras.size=3;
     extras.title='Only the columns you choose are stored, for example a lifecycle (start/complete) or end-time column.';
-    mapping.append(field('Case column',cols.case),field('Activity column',cols.activity),field('Timestamp column (with timezone)',cols.time),field('Resource column',cols.resource),field('Extra columns to keep (optional)',extras),field('Delimiter',delimiter));
+    // Times written without an offset (always the case for Excel dates) are read with this offset.
+    const naiveOffset=input('owgEventLogNaiveOffset','text','none: reject them');naiveOffset.maxLength=6;naiveOffset.size=8;naiveOffset.pattern='[+-][0-9]{2}:[0-9]{2}';
+    naiveOffset.title='For timestamps without a time zone, e.g. +01:00 or -05:00. Leave empty to reject such rows.';
+    // Times such as 03/04/2024 14:05 need a declared format; the dashboard suggests one from the first rows.
+    const timeFormat=select('owgEventLogTimeFormat',[['','ISO 8601 (2024-03-04T14:05:00Z)']]);
+    mapping.append(field('Case column',cols.case),field('Activity column',cols.activity),field('Timestamp column (with timezone)',cols.time),field('Timestamp format',timeFormat),field('Resource column',cols.resource),field('Extra columns to keep (optional)',extras),field('Delimiter',delimiter),field('Offset for times without one',naiveOffset));
     const identity=el('fieldset');identity.id='owgEventLogIdentity';identity.append(el('legend','Supplied source-event IDs (optional)'));
     const useIdentity=input('owgEventLogUseIdentity','checkbox');
     const identityFields=el('div',null,'row');identityFields.style.alignItems='end';
@@ -131,7 +136,7 @@
     card.append(row,mapping,identity,consentLabel,keepLabel,importRow,statusLine);
 
     const pick=select('owgEventLogPick',[]);const caseType=select('owgEventLogCaseType',[]);
-    const exportFormat=select('owgEventLogExportFormat',[['csv','CSV'],['sourcecsv','Source-ID CSV (source_case only)'],['xes','XES'],['ocel','OCEL 2.0 JSON'],['ocelxml','OCEL 2.0 XML']]);
+    const exportFormat=select('owgEventLogExportFormat',[['csv','CSV (exact interchange)'],['csv-review','CSV for spreadsheet review'],['sourcecsv','Source-ID CSV (exact interchange)'],['sourcecsv-review','Source-ID CSV for spreadsheet review'],['xes','XES'],['ocel','OCEL 2.0 JSON'],['ocelxml','OCEL 2.0 XML']]);
     const analyze=button('Analyse');analyze.id='owgEventLogAnalyze';
     const exportButton=button('Export','secondary');exportButton.id='owgEventLogExport';
     const remove=button('Delete log','secondary');remove.id='owgEventLogDelete';
@@ -187,10 +192,13 @@
       q.set('case_column',cols.case.value);q.set('activity_column',cols.activity.value);q.set('timestamp_column',cols.time.value);q.set('resource_column',cols.resource.value);
       if(!(useIdentity.checked&&jsonColumn.value))[...extras.selectedOptions].forEach(o=>{if(![cols.case.value,cols.activity.value,cols.time.value,cols.resource.value].includes(o.value))q.append('attribute_column',o.value);});
       q.set('delimiter',delimiter.value);if(keep.checked)q.set('keep_rejected','true');
+      if(naiveOffset.value.trim())q.set('naive_timestamp_offset',naiveOffset.value.trim());
+      if(timeFormat.value)q.set('timestamp_format',timeFormat.value);
       if(useIdentity.checked)for(const [key,value] of Object.entries({event_id_column:eventId.value,source_namespace:sourceNamespace.value,source_namespace_column:sourceColumn.value,case_namespace:caseNamespace.value,case_namespace_column:caseColumn.value,attributes_json_column:jsonColumn.value}))if(value)q.set(key,value);
     }
     async function readColumns(){
       const sequence=++columnReadSequence;
+      const staleOffer=document.getElementById('owgEventLogReuse');if(staleOffer){staleOffer.hidden=true;staleOffer.replaceChildren();}
       const chosen=file.files&&file.files[0];
       columnsReady=false;
       if(!chosen||format.value!=='csv'){
@@ -221,15 +229,80 @@
         jsonColumn.value=columns.includes('attributes')?'attributes':'';
         columnsReady=!!(cols.case.value&&cols.activity.value&&cols.time.value);
         status(columnsReady?'File mapping ready. Review the selected columns before storing.':'Choose a CSV with case, activity and time columns.');
+        if(columnsReady)detectTimeFormat().then(()=>findReusableMapping(columns));
       }catch(_){
         if(sequence===columnReadSequence)status('Could not read the column names.');
       }finally{
         if(sequence===columnReadSequence){readingColumns=false;refreshImport();}
       }
     }
-    file.onchange=()=>{const chosen=file.files&&file.files[0];if(chosen){format.value=detectFormat(chosen.name);if(!name.value)name.value=chosen.name.replace(/\.[^.]+$/,'').slice(0,120);if(chosen.name.toLowerCase().endsWith('.tsv'))delimiter.value='t';}consent.checked=false;readColumns();};
+    // An Excel workbook is converted to CSV on this computer (nothing is stored), then imported like any CSV.
+    const localOffset=()=>{const m=-new Date().getTimezoneOffset(),a=Math.abs(m);return (m<0?'-':'+')+String(Math.floor(a/60)).padStart(2,'0')+':'+String(a%60).padStart(2,'0');};
+    // A workbook with several sheets: choose which one to import (the first by default).
+    const sheetSelect=select('owgEventLogSheet',[]),sheetField=field('Worksheet',sheetSelect);sheetField.hidden=true;mapping.prepend(sheetField);
+    let workbook=null;
+    async function convertWorkbook(chosen,sheet){
+      workbook=chosen;
+      columnReadSequence++;readingColumns=true;refreshImport();status('Reading '+(sheet?'worksheet \u201c'+sheet+'\u201d':'the first worksheet')+' of '+chosen.name+'…');
+      try{
+        const r=await (await api('/v1/event-logs/xlsx-to-csv'+(sheet?'?sheet='+encodeURIComponent(sheet):''),{method:'POST',body:chosen,headers:{'Content-Type':'application/octet-stream'}})).json();
+        setOptions(sheetSelect,r.sheets.map(n=>[n,n]));sheetSelect.value=r.sheet;sheetField.hidden=r.sheets.length<2;
+        const transfer=new DataTransfer();transfer.items.add(new File([r.csv],chosen.name.replace(/\.xlsx$/i,'')+'.csv',{type:'text/csv'}));
+        file.files=transfer.files;format.value='csv';delimiter.value=',';
+        if(r.dates_have_no_offset&&!naiveOffset.value.trim())naiveOffset.value=localOffset();
+        readingColumns=false;await readColumns();
+        status('Read worksheet “'+r.sheet+'”'+(r.sheets.length>1?' ('+(r.sheets.indexOf(r.sheet)+1)+' of '+r.sheets.length+'; choose another under Worksheet)':'')+': '+Number(r.rows).toLocaleString()+' rows.'+(r.dates_have_no_offset?' Excel dates have no time zone; they will be read with offset '+naiveOffset.value+' (change it under Offset for times without one).':''));
+      }catch(error){readingColumns=false;file.value='';refreshImport();status(error.message);}
+    }
+    file.onchange=()=>{const chosen=file.files&&file.files[0];if(chosen){if(!name.value)name.value=chosen.name.replace(/\.[^.]+$/,'').slice(0,120);if(chosen.name.toLowerCase().endsWith('.xlsx')){consent.checked=false;convertWorkbook(chosen);return;}workbook=null;sheetField.hidden=true;format.value=detectFormat(chosen.name);if(chosen.name.toLowerCase().endsWith('.tsv'))delimiter.value='t';}consent.checked=false;readColumns();};
     format.onchange=()=>{consent.checked=false;readColumns();};
+    sheetSelect.onchange=()=>{if(workbook){consent.checked=false;convertWorkbook(workbook,sheetSelect.value);}};
     delimiter.onchange=()=>{consent.checked=false;readColumns();};
+    // Suggest a timestamp format from the first rows of the chosen time column (sent to this computer only).
+    let formatSequence=0;
+    async function detectTimeFormat(){
+      const sequence=++formatSequence,chosen=file.files&&file.files[0],column=cols.time.value;
+      setOptions(timeFormat,[['','ISO 8601 (2024-03-04T14:05:00Z)']]);timeFormat.value='';
+      if(!chosen||format.value!=='csv'||!column)return;
+      try{
+        const q=new URLSearchParams({column,delimiter:delimiter.value});
+        const r=await (await api('/v1/event-logs/timestamp-formats?'+q,{method:'POST',body:await chosen.slice(0,256*1024).text(),headers:{'Content-Type':'text/plain'}})).json();
+        if(sequence!==formatSequence)return;
+        setOptions(timeFormat,[['','ISO 8601 (2024-03-04T14:05:00Z)'],...r.candidates.map(c=>[c.pattern,c.pattern+' \u2014 '+c.order+': '+c.first_value+' reads as '+c.first_value_reads_as])]);
+        if(r.suggested){
+          timeFormat.value=r.suggested;
+          const pick=r.candidates.find(c=>c.pattern===r.suggested);
+          if(!pick.has_offset&&!naiveOffset.value.trim())naiveOffset.value=localOffset();
+          status('Times look like '+pick.first_value+', read as '+pick.first_value_reads_as+' with format '+r.suggested+(pick.has_offset?'.':' at offset '+naiveOffset.value+'. Change the format or offset if that is wrong.'));
+        }else if(r.ambiguous)status('Times such as '+r.candidates[0].first_value+' fit both day-first and month-first formats. Choose the one your system uses under Timestamp format.');
+        else if(r.samples&&!r.candidates.length&&r.iso_with_offset+r.iso_without_offset<r.samples)status('Some times in the first rows are not ISO 8601 and match no known format; those rows will be rejected.');
+      }catch(_){/* detection is a convenience; the import still validates every row */}
+    }
+    cols.time.addEventListener('change',detectTimeFormat);
+    // Offer the mapping recorded with an earlier import whose columns this file also has.
+    const reuseRow=el('div',null,'row');reuseRow.id='owgEventLogReuse';reuseRow.hidden=true;mapping.appendChild(reuseRow);
+    let reuseSequence=0;
+    function applyMapping(m){
+      cols.case.value=m.case_column;cols.activity.value=m.activity_column;cols.time.value=m.timestamp_column;cols.resource.value=m.resource_column||'';
+      [...extras.options].forEach(o=>{o.selected=(m.attribute_columns||[]).includes(o.value);});
+      naiveOffset.value=m.naive_timestamp_offset||'';
+      if(m.timestamp_format&&![...timeFormat.options].some(o=>o.value===m.timestamp_format))timeFormat.appendChild(new Option(m.timestamp_format,m.timestamp_format));
+      timeFormat.value=m.timestamp_format||'';
+      columnsReady=true;consent.checked=false;refreshImport();
+    }
+    async function findReusableMapping(columns){
+      const sequence=++reuseSequence;reuseRow.hidden=true;reuseRow.replaceChildren();
+      try{
+        const r=await (await api('/v1/event-logs/mapping-matches',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({columns,delimiter:delimiter.value})})).json();
+        if(sequence!==reuseSequence||!r.matches.length)return;
+        // Appending to the selected log: its own mapping first.
+        const match=r.matches.find(x=>x.log_id===state.logId)||r.matches[0];
+        const use=button('Use the mapping from \u201c'+match.name+'\u201d');use.onclick=()=>{applyMapping(match.mapping);reuseRow.replaceChildren(el('span','Mapping from \u201c'+match.name+'\u201d applied. '+r.note+(match.missing_attribute_columns.length?' Not in this file: '+match.missing_attribute_columns.join(', ')+'.':''),'muted'));status('Mapping applied. Review the selected columns before storing.');};
+        use.id='owgEventLogReuseMapping';
+        reuseRow.append(use,el('span',' This file has the columns mapped when \u201c'+match.name+'\u201d was imported.','muted'));reuseRow.hidden=false;
+      }catch(_){/* a convenience only */}
+    }
+    timeFormat.onchange=()=>{const fmt=timeFormat.value;if(fmt&&!fmt.includes('%z')&&!naiveOffset.value.trim())naiveOffset.value=localOffset();};
     consent.onchange=refreshImport;name.oninput=refreshImport;
     importButton.onclick=async()=>{
       const chosen=file.files&&file.files[0];if(!chosen||!consent.checked)return;
@@ -271,13 +344,13 @@
     caseType.onchange=()=>{state.generation++;state.caseType=caseType.value;state.follows=[];results.replaceChildren();};
     analyze.onclick=()=>analyse().catch(error=>status(error.message));
     const relationshipExportNote=()=>{const log=state.logs.find(l=>l.log_id===state.logId);return log&&log.object_relationships&&!['ocel','ocelxml'].includes(exportFormat.value)?' This format omits supplied object relationships; OCEL JSON/XML preserve the retained assertions.':'';};
-    exportFormat.onchange=()=>{const note=relationshipExportNote();if(note)status(note.trim());};
+    exportFormat.onchange=()=>{const note=relationshipExportNote();const review=exportFormat.value.endsWith('-review')?'Review CSV changes formula-like text and column names; use the regular export for re-import.':'';if(review||note)status((review+note).trim());};
     exportButton.onclick=async()=>{
       try{
         status('Preparing export…');
         const response=await api(logPath('export',{format:exportFormat.value}));
         const url=URL.createObjectURL(await response.blob());
-        const link=el('a');link.href=url;link.download=state.logId+'.'+({sourcecsv:'csv',ocel:'jsonocel',ocelxml:'xmlocel'}[exportFormat.value]||exportFormat.value);
+        const link=el('a');link.href=url;link.download=state.logId+'.'+({sourcecsv:'csv','csv-review':'review.csv','sourcecsv-review':'review.csv',ocel:'jsonocel',ocelxml:'xmlocel'}[exportFormat.value]||exportFormat.value);
         document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
         status('Export ready.'+relationshipExportNote());
       }catch(error){status(error.message);}
@@ -1451,10 +1524,53 @@
           const choices={object_types:{},activities:{}},inputs={};
           const rows=[];
           for(const [kind,names] of [['object_types',installs.log_object_types],['activities',installs.log_activities]])for(const r of pack[kind]){
-            const s=select('owgDomainPackRole-'+r.role,[['',r.required?'Choose (required)':'Not in this log'],...names.map(n=>[n,n])]);
-            s.value=packGuess(r,names,installed&&installed.mapping[kind][r.role]);s.setAttribute('aria-label',r.label+(r.required?' (required)':' (optional)'));
-            s.onchange=()=>{choices[kind][r.role]=s.value;edited();};choices[kind][r.role]=s.value;
-            rows.push([kind==='object_types'?'Object type':'Activity',r.label+(r.required?'':' (optional)'),s]);
+            // Allow an exact source label beyond the bounded suggestions. Pick
+            // a sentinel that cannot collide with a real suggested label.
+            let custom='__owg_exact_label__';while(names.includes(custom))custom+='_';
+            const s=select('owgDomainPackRole-'+r.role,[['',r.required?'Choose (required)':'Not in this log'],...names.map(n=>[n,n]),[custom,'Enter exact label…']]);
+            const exact=input('owgDomainPackExact-'+r.role,'text');exact.maxLength=400; // HTML counts UTF-16 units; server enforces 200 Unicode characters.
+            exact.setAttribute('aria-label','Exact label for '+r.label);
+            const saved=installed&&installed.mapping[kind][r.role];
+            s.value=saved&&!names.includes(saved)?custom:packGuess(r,names,saved);
+            exact.value=s.value===custom?saved:'';exact.hidden=s.value!==custom;
+            s.setAttribute('aria-label',r.label+(r.required?' (required)':' (optional)'));
+            const selected=()=>s.value===custom?exact.value:s.value;
+            s.onchange=()=>{exact.hidden=s.value!==custom;choices[kind][r.role]=selected();edited();};
+            exact.oninput=()=>{choices[kind][r.role]=selected();edited();};
+            choices[kind][r.role]=selected();
+            const lookup=input('owgDomainPackLookup-'+r.role,'search');lookup.maxLength=400;
+            lookup.setAttribute('aria-label','Search labels for '+r.label);
+            const find=button('Find labels','secondary');find.setAttribute('aria-label','Find labels for '+r.label);
+            const more=button('More labels','secondary');more.hidden=true;more.setAttribute('aria-label','More labels for '+r.label);
+            const found=el('div');found.id='owgDomainPackMatches-'+r.role;
+            const hint=el('div',null,'muted');hint.setAttribute('role','status');
+            let lookupTurn=0,nextAfter=null;
+            const findPage=async after=>{
+              if(generation!==state.generation||!box.isConnected)return;
+              const q=lookup.value,request=++lookupTurn;find.disabled=true;more.hidden=true;
+              if(!q||Array.from(q).length>200){hint.textContent='Enter 1 to 200 characters.';find.disabled=false;return;}
+              hint.textContent='Searching…';found.replaceChildren();
+              try{
+                const url='/v1/event-logs/'+encodeURIComponent(logId)+'/domain-pack-labels';
+                const result=await (await post(url,{kind,search:q,after:after||''})).json();
+                if(!s.isConnected||generation!==state.generation||request!==lookupTurn)return;
+                for(const label of result.labels){
+                  const choose=button(label,'secondary');
+                  choose.onclick=()=>{s.value=custom;exact.value=label;exact.hidden=false;choices[kind][r.role]=label;edited();hint.textContent='Label selected.';};
+                  found.appendChild(choose);
+                }
+                nextAfter=result.next_after;more.hidden=!nextAfter;
+                hint.textContent=result.labels.length?result.labels.length+' labels found on this page.':'No labels found.';
+              }catch(error){if(s.isConnected&&generation===state.generation&&request===lookupTurn)hint.textContent=error.message;}
+              finally{if(s.isConnected&&generation===state.generation&&request===lookupTurn)find.disabled=false;}
+            };
+            lookup.oninput=()=>{lookupTurn++;find.disabled=false;more.hidden=true;nextAfter=null;found.replaceChildren();hint.textContent='';};
+            lookup.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();findPage('');}};
+            find.onclick=()=>findPage('');more.onclick=()=>findPage(nextAfter);
+            const finder=el('details');finder.id='owgDomainPackFinder-'+r.role;
+            finder.append(el('summary','Find a label'),lookup,find,more,hint,found);
+            const control=el('div');control.append(s,exact,finder);
+            rows.push([kind==='object_types'?'Object type':'Activity',r.label+(r.required?'':' (optional)'),control]);
           }
           const params=pack.parameters.map(p=>{const i=input('owgDomainPackParam-'+p.name,'number');i.min=String(p.min);i.max=String(p.max);i.value=String(installed?installed.parameters[p.name]:p.default);inputs[p.name]=i;i.oninput=()=>edited();return field(p.label,i);});
           const install=button(installed?'Install '+pack.latest_version+(installed.version===pack.latest_version?' again':' (upgrade from '+installed.version+')'):'Install '+pack.title+' '+pack.latest_version);install.id='owgDomainPackInstall';
@@ -1496,7 +1612,7 @@
           const actions=el('div',null,'row');actions.append(install,run,remove,exportReport,reviewHistory);
           const assumptions=el('ul');assumptions.className='muted';pack.assumptions.forEach(a=>assumptions.appendChild(el('li',a)));
           form.replaceChildren(field('Domain pack',chooser),el('h4',pack.title+' '+pack.latest_version),el('div',pack.description,'muted'),table(['Kind','Role','Name in this log'],rows),paramRow,actions,el('div','Report downloads include supplied case/object examples and mapped labels. Save and share them only where authorized.','muted'),el('h4','Assumptions'),assumptions);
-          status.textContent=(installed?'Installed: '+installed.version+' on '+String(installed.installed_at).slice(0,10)+'.':'Not installed on this log.')+(installs.names_truncated?' Only the 1,000 most frequent object types and activities are offered.':'');
+          status.textContent=(installed?'Installed: '+installed.version+' on '+String(installed.installed_at).slice(0,10)+'.':'Not installed on this log.')+(installs.names_truncated?' Suggestions show the 1,000 most frequent labels; enter an exact label for others.':'');
           install.onclick=async()=>{
             invalidate();const t2=++turn;install.disabled=true;run.disabled=true;historyTurn++;historyOut.replaceChildren();
             try{
@@ -2370,6 +2486,94 @@
         routeKind.onchange=()=>{show(pathsField,routeKind.value==='paths');showContext();};showContext();
         form.replaceChildren(top,calRow,arrivalRow,field('How cases move between activities',routeKind),contextField,attributeField,pathsField,wrap,addRowNode,poolRow,
           el('div','Measured times are median gaps before each activity and include waiting. '+coverage,'muted'),run);
+
+        // Compare 2–4 reviewed staffing proposals against ONE static calibration.
+        // This small visual entry point changes one mapped activity's staffing
+        // per alternative; the API also supports multi-activity configurations.
+        const portfolioPanel=el('div');portfolioPanel.id='owgEventLogSimPortfolio';
+        const portfolioChoices=el('div');
+        const portfolioCases=input('owgEventLogSimPortfolioCases','number');
+        portfolioCases.min='10';portfolioCases.max='5000';portfolioCases.step='1';portfolioCases.value='400';
+        const portfolioRows=[];
+        function addPortfolioChoice(){
+          if(portfolioRows.length>=4)return;
+          const n=portfolioRows.length+1;
+          const title=input('owgEventLogSimPortfolioName'+n,'text');
+          title.value='Alternative '+n;title.maxLength=80;
+          const activity=select('owgEventLogSimPortfolioActivity'+n,
+            Object.keys(cal.activities||{}).map(value=>[value,value]));
+          const staff=input('owgEventLogSimPortfolioStaff'+n,'number');
+          staff.min='1';staff.max='1000';staff.step='1';
+          const original=cal.activities[activity.value]?.resources||1;
+          staff.value=String(Math.min(1000,original+(n-1)));
+          activity.onchange=()=>{staff.value=String(cal.activities[activity.value]?.resources||1);};
+          const row=el('div',null,'row');row.style.alignItems='end';
+          row.append(field('Alternative name',title),field('Measured activity',activity),
+            field('People assigned',staff));
+          portfolioChoices.append(row);
+          portfolioRows.push({title,activity,staff});
+        }
+        addPortfolioChoice();addPortfolioChoice();
+        const addPortfolio=button('Add staffing alternative','secondary');
+        addPortfolio.id='owgEventLogSimPortfolioAdd';
+        addPortfolio.onclick=()=>{addPortfolioChoice();addPortfolio.disabled=portfolioRows.length>=4;};
+        const comparePortfolio=button('Compare staffing alternatives','secondary');
+        comparePortfolio.id='owgEventLogSimPortfolioRun';
+        const portfolioResult=el('div');portfolioResult.id='owgEventLogSimPortfolioResults';
+        portfolioResult.setAttribute('role','status');portfolioResult.setAttribute('aria-live','polite');
+        const compareToolbar=el('div',null,'row');
+        compareToolbar.style.alignItems='end';
+        compareToolbar.append(field('Cases per simulated run',portfolioCases),addPortfolio,comparePortfolio);
+        portfolioPanel.append(el('h4','Compare several staffing alternatives'),
+          el('p','Select two to four candidate staffing levels. The same observed paths, input calibration, random seed and sample count are used across every run. This is hypothetical process modeling, not a staffing recommendation, forecast or employee performance score.','muted'),
+          portfolioChoices,compareToolbar,portfolioResult);
+        form.append(portfolioPanel);
+        comparePortfolio.onclick=async()=>{
+          try{
+            const caseCount=Number(portfolioCases.value);
+            if(!Number.isInteger(caseCount)||caseCount<10||caseCount>5000)
+              throw new Error('Choose 10–5000 cases for the portfolio.');
+            const choices=portfolioRows.map(item=>{
+              const name=item.title.value.trim(),activity=item.activity.value,
+                staff=Number(item.staff.value);
+              if(!name||name.length>80||!activity||!Number.isInteger(staff)||staff<1||staff>1000)
+                throw new Error('Review each alternative name, activity and staffing level.');
+              // Object.create(null) prevents activity names like __proto__
+              // from changing any object's prototype during construction.
+              const overrides=Object.create(null);overrides[activity]={resources:staff};
+              return {label:name,activities:overrides};
+            });
+            if(new Set(choices.map(x=>x.label)).size!==choices.length)
+              throw new Error('Give every alternative a distinct name.');
+            const baseline={cases:caseCount,seed:1,activity_time_basis:timeBasis.value};
+            if(arrivals.value!=='')baseline.arrivals_per_hour=Number(arrivals.value);
+            if(days.value)baseline.calendar=simCalendar({
+              days:days.value,from:from.value,to:to.value,
+              timezone:zone.value,holidays:holidays.value});
+            const body={format:'openworkgraph.simulation-portfolio.v1',baseline,alternatives:choices};
+            comparePortfolio.disabled=true;portfolioResult.replaceChildren(el('p','Comparing the selected alternatives locally…','muted'));
+            const report=await(await api(logPath('simulation/portfolio'),{
+              method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)
+            })).json();
+            const cycle=result=>result.cycle_time_seconds?.p50===null?'—':duration(result.cycle_time_seconds?.p50);
+            const entries=[['Measured baseline',cycle(report.baseline),report.baseline.cases_measured,
+              report.baseline.unstable?'Overloaded':'Reference only']];
+            for(const item of report.alternatives){
+              entries.push([item.label,cycle(item.result),item.result.cases_measured,
+                item.descriptive_cycle_time_comparable?
+                  'Descriptive change '+(item.cycle_time_change_seconds.p50>=0?'+':'−')+
+                    duration(Math.abs(item.cycle_time_change_seconds.p50)):
+                  'No comparable delta: '+item.reasons_deltas_withheld.join(', ').replaceAll('_',' ')]);
+            }
+            portfolioResult.replaceChildren(
+              el('p','Shared source and calibration digest '+report.calibration_and_shared_inputs_sha256+
+                '. All numbers are simulations; a smaller median is not proof of savings.','muted'),
+              table(['Run','Median cycle time','Post-warm-up cases completed','Comparison status'],entries),
+              el('p','Runs with unstable queues or incomplete/abandoned cases have their deltas withheld. No winning option is selected or executed.','muted')
+            );
+          }catch(error){portfolioResult.replaceChildren(el('p',error.message,'muted'));}
+          finally{comparePortfolio.disabled=false;}
+        };
         run.onclick=async()=>{
           try{
             const activities=Object.create(null);
@@ -2770,7 +2974,7 @@
       pending=true;out.replaceChildren(el('div','Calculating current quality diagnostics…','muted'));
       getJSON('/v1/event-logs/'+encodeURIComponent(state.logId)+'/quality/overview').then(r=>{
       if(generation!==state.generation)return;
-      const d=r.current.diagnostics,short=h=>h?h.slice(0,12)+'…':'—';
+      const d=r.current.diagnostics,short=h=>typeof h==='string'&&h?h.slice(0,12)+'…':'—';
       // This is a live snapshot, not the historical import-time report.
       const futureReference=d.future_event_reference||null;
       const futureBasis=futureReference&&futureReference.basis==='report_created'?'report creation':
@@ -2785,16 +2989,33 @@
         d.attribute_coverage_truncated===false&&totalKeys!==null?
         'Showing all '+totalKeys.toLocaleString()+' attribute keys in the supplied rows.':
         'Showing up to '+coverage.length.toLocaleString()+' attribute keys; whether more were omitted was not recorded (legacy server).';
-      const reports=r.reports.map(p=>[p.batch===0?'Import':'Append '+p.batch,p.transform.format,Number(p.rows.accepted).toLocaleString(),
-        Number(p.rows.rejected).toLocaleString()+(p.rows.rejected?' ('+reasonText(p.rows.rejected_by_reason)+')':''),
-        p.rows.duplicates_skipped_on_append===undefined?'—':Number(p.rows.duplicates_skipped_on_append).toLocaleString(),
-        el('code',short(p.transform.transform_sha256)),el('code',short(p.content_sha256)),el('code',short(p.content_sha256_v2))]);
-      const mapping=(r.first_report&&r.first_report.transform.mapping)||{};
-      const mapRows=mapping.case_column!==undefined?[['Case column',mapping.case_column],['Activity column',mapping.activity_column],['Timestamp column',mapping.timestamp_column],['Resource column',mapping.resource_column||'(none)'],['Extra columns kept',(mapping.attribute_columns||[]).join(', ')||'(none)'],['Mapping version',mapping.mapping_version]]:[['Standard',mapping.standard||'—'],['Mapping version',mapping.mapping_version||'—']];
+      // Recovered or legacy report rows can lack metadata. Never hide the integrity
+      // verdict because a damaged historical report cannot populate this table.
+      const reports=(Array.isArray(r.reports)?r.reports:[]).map(p=>{
+        const report=p&&typeof p==='object'?p:{};
+        const transform=report.transform&&typeof report.transform==='object'?report.transform:{};
+        const rows=report.rows&&typeof report.rows==='object'?report.rows:{};
+        const count=v=>Number.isSafeInteger(v)&&v>=0?v.toLocaleString():'—';
+        return [report.batch===0?'Import':Number.isSafeInteger(report.batch)?'Append '+report.batch:'Unknown batch',
+          transform.format||'—',count(rows.accepted),count(rows.rejected)+(rows.rejected?' ('+reasonText(rows.rejected_by_reason)+')':''),
+          rows.duplicates_skipped_on_append===undefined?'—':count(rows.duplicates_skipped_on_append),
+          el('code',short(transform.transform_sha256)),el('code',short(report.content_sha256)),el('code',short(report.content_sha256_v2))];
+      });
+      const rawMapping=r.first_report?.transform?.mapping;
+      const mapping=rawMapping&&typeof rawMapping==='object'&&!Array.isArray(rawMapping)?rawMapping:{};
+      const integrity=r.integrity&&typeof r.integrity==='object'?r.integrity:{};
+      const integrityLabel=integrity.status==='verified'?'Verified: current saved content matches the recorded import digest.':
+        integrity.status==='mismatch'?'Mismatch: saved content differs from the recorded import digest. Investigate before relying on this log.':
+        'Not verifiable: the available reports cannot establish current saved-content integrity.';
+      const integrityStatus=el('p',integrityLabel,'muted');integrityStatus.id='owgQualityIntegrity';
+      integrityStatus.setAttribute('role','status');
+      integrityStatus.dataset.status=['verified','mismatch'].includes(integrity.status)?integrity.status:'not_verifiable';
+      const mapRows=mapping.case_column!==undefined?[['Case column',mapping.case_column],['Activity column',mapping.activity_column],['Timestamp column',mapping.timestamp_column],['Resource column',mapping.resource_column||'(none)'],['Extra columns kept',(Array.isArray(mapping.attribute_columns)?mapping.attribute_columns:[]).join(', ')||'(none)'],['Mapping version',mapping.mapping_version]]:[['Standard',mapping.standard||'—'],['Mapping version',mapping.mapping_version||'—']];
       if(mapping.source_identity)for(const [key,value] of Object.entries(mapping.source_identity))if(value)mapRows.push(['Source identity: '+key,value]);
       out.replaceChildren(
         ...(r.log.source_identity?[el('p','Source-ID deduplication compares declared namespace and supplied event ID. The content-duplicate diagnostic below compares payloads; distinct source IDs with identical payloads remain separate events. Neither establishes verified provider identity or complete history.')]:[]),
         el('div','Showing '+Number(r.window.batch_count).toLocaleString()+' of '+Number(r.window.total_batches).toLocaleString()+' batches. Use Compare batches below to browse older history.','muted'),
+        integrityStatus,
         table(['Batch','Format','Accepted','Rejected','Duplicates skipped','Transform','Content v1','Content v2'],reports),
         ...(r.batches_without_report.length?[el('div','No report was stored on this page for '+r.batches_without_report.map(b=>b?'append '+b:'the import').join(', ')+' (imported before reports existed, or the report could not be written).','muted')]:[]),
         table(['Mapping',''],mapRows),
@@ -2834,42 +3055,79 @@
       if(generation!==state.generation||(!r.rows_kept&&!r.decisions.length))return;
       show(wrap,true);
       const offset=input('owgQuarantineOffset','text','+01:00');offset.maxLength=6;
+      const batch=input('owgQuarantineBatch','number');batch.min='0';batch.max='2147483647';batch.step='1';
+      const rowStart=input('owgQuarantineRowStart','number');rowStart.min='0';rowStart.max='999999999';rowStart.step='1';
+      const rowEnd=input('owgQuarantineRowEnd','number');rowEnd.min='0';rowEnd.max='999999999';rowEnd.step='1';
+      const readScope=()=>{
+        const raw=[batch.value.trim(),rowStart.value.trim(),rowEnd.value.trim()];
+        if(raw.some(x=>x&&!/^\d+$/.test(x)))throw new Error('Use whole numbers for batch and row range.');
+        const nums=raw.map(x=>x?Number(x):null);
+        if(nums.some(x=>x!==null&&!Number.isSafeInteger(x))||nums[0]>2147483647||nums[1]>999999999||nums[2]>999999999)throw new Error('Use whole numbers within the allowed batch and row limits.');
+        if((nums[1]!==null||nums[2]!==null)&&(nums[0]===null||nums[1]===null||nums[2]===null||nums[2]<nums[1]))
+          throw new Error('Select a batch and both ends of an inclusive row range.');
+        return {...(nums[0]!==null?{batch:nums[0]}:{}),...(nums[1]!==null?{row_start:nums[1],row_end:nums[2]}:{})};
+      };
       const preview=button('Preview release','secondary');preview.id='owgQuarantinePreview';
       const release=button('Release rows','secondary');release.id='owgQuarantineRelease';
-      const discard=button('Discard kept rows','secondary');discard.id='owgQuarantineDiscard';
+      const discard=button('Discard all kept rows','secondary');discard.id='owgQuarantineDiscard';
       const message=el('div',null,'muted');message.id='owgQuarantineStatus';message.setAttribute('role','status');
       let reviewed=null;
       let previewGeneration=0;
       preview.disabled=discard.disabled=!r.rows_kept;
       release.disabled=true;
+      const pageHost=el('div');pageHost.id='owgQuarantineRows';
+      const firstPage=button('First rows','secondary');firstPage.id='owgQuarantineFirst';
+      const nextPage=button('Next rows','secondary');nextPage.id='owgQuarantineNext';
+      let pageTurn=0,nextCursor=null;
+      const renderPage=page=>{
+        pageHost.replaceChildren(...(page.rows.length?[table(['Batch','Row','Case','Activity','Time as supplied','Why rejected'],
+          page.rows.map(x=>[x.batch===0?'import (0)':x.batch,x.row,x.case,x.activity,x.time,x.reasons.map(k=>REASON_LABELS[k]||k).join(', ')]))]:[el('div','No retained rows in this batch.','muted')]));
+        nextCursor=page.next_after;nextPage.disabled=nextCursor===null||nextCursor===undefined;
+      };
+      const loadPage=async after=>{
+        const request=++pageTurn;nextPage.disabled=firstPage.disabled=true;
+        try{
+          const chosen=batch.value.trim();
+          if(chosen&&(!/^\d+$/.test(chosen)||!Number.isSafeInteger(Number(chosen))||Number(chosen)>2147483647))throw new Error('Use a valid batch number.');
+          const params=new URLSearchParams({limit:'20',after:String(after)});
+          if(chosen)params.set('batch',chosen);
+          const page=await getJSON(base+'?'+params);
+          if(generation!==state.generation||request!==pageTurn)return;
+          renderPage(page);
+        }catch(error){if(generation===state.generation&&request===pageTurn)message.textContent=error.message;}
+        finally{if(generation===state.generation&&request===pageTurn){firstPage.disabled=false;nextPage.disabled=nextCursor===null||nextCursor===undefined;}}
+      };
+      firstPage.onclick=()=>loadPage(0);nextPage.onclick=()=>{if(nextCursor!==null&&nextCursor!==undefined)loadPage(nextCursor);};
+      renderPage(r);
       const row=el('div',null,'row');row.style.alignItems='end';
-      row.append(field('UTC offset to assume for times written without one',offset),preview,release,discard);
+      row.append(field('UTC offset to assume for times written without one',offset),field('Batch (blank for all)',batch),field('First row (optional)',rowStart),field('Last row (optional)',rowEnd),preview,release,discard);
       wrap.append(el('h4','Rejected rows kept for review'),
         el('div',Number(r.rows_kept).toLocaleString()+' rows kept ('+reasonText(r.reasons)+'). '+r.note,'muted'),
-        ...(r.rows.length?[table(['Batch','Case','Activity','Time as supplied','Why rejected'],r.rows.map(x=>[x.batch||'import',x.case,x.activity,x.time,x.reasons.map(k=>REASON_LABELS[k]||k).join(', ')]))]:[]),
-        ...(r.rows_kept>r.rows.length?[el('div','Showing the first '+r.rows.length+'.','muted')]:[]),
-        row,message,
+        pageHost,firstPage,nextPage,
+        el('div','Batch and row range limit preview and release. Discard removes all kept rows.','muted'),row,message,
         ...(r.decisions.length?[table(['Decision','When','Result'],r.decisions.map(d=>[d.kind==='release'?'Released with offset '+d.naive_timestamp_offset:'Discarded',d.decided_at.slice(0,16).replace('T',' ')+' UTC',
           d.kind==='release'?d.rows_released+' of '+d.rows_considered+' rows released, '+(d.events_added||0)+' events added, '+(d.duplicates_skipped||0)+' already in the log':d.rows_discarded+' rows discarded']))]:[]));
-      offset.addEventListener('input',()=>{
+      for(const control of [offset,batch,rowStart,rowEnd])control.addEventListener('input',()=>{
         previewGeneration++;reviewed=null;release.disabled=true;
-        message.textContent='Offset changed. Preview again before releasing.';
+        message.textContent='Selection changed. Preview again before releasing.';
       });
+      batch.addEventListener('input',()=>{pageTurn++;nextCursor=null;nextPage.disabled=true;firstPage.disabled=false;if(!batch.value.trim()||/^\d+$/.test(batch.value.trim()))loadPage(0);});
       preview.onclick=async()=>{
         const requestId=++previewGeneration;
         reviewed=null;release.disabled=true;
         const chosen=offset.value.trim();
+        let scope;try{scope=readScope();}catch(error){message.textContent=error.message;return;}
         message.textContent='Checking retained rows without changing the log…';
         try{
           const result=await (await api(base+'/preview',{method:'POST',
             headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({naive_timestamp_offset:chosen})})).json();
+            body:JSON.stringify({naive_timestamp_offset:chosen,...scope})})).json();
           if(generation!==state.generation||requestId!==previewGeneration||offset.value.trim()!==chosen)return;
           if(result.naive_timestamp_offset!==chosen){
             message.textContent='Offset was normalized to '+result.naive_timestamp_offset+'. Enter that offset and preview again.';
             return;
           }
-          reviewed=result;
+          reviewed={...result,scope};
           release.disabled=!(Number.isSafeInteger(result.rows_eligible)&&result.rows_eligible>0);
           message.textContent='Preview: '+result.rows_eligible+' of '+result.rows_considered+
             ' retained rows parseable with UTC'+result.naive_timestamp_offset+'; '+
@@ -2885,7 +3143,7 @@
           const result=await (await api(base+'/release',{method:'POST',
             headers:{'Content-Type':'application/json'},
             body:JSON.stringify({naive_timestamp_offset:selected.naive_timestamp_offset,
-              expected_preview_sha256:selected.expected_preview_sha256})})).json();
+              ...selected.scope,expected_preview_sha256:selected.expected_preview_sha256})})).json();
           if(generation!==state.generation)return;
           const d=result.decision;
           await refreshLogs(state.logId);await analyse();
@@ -3451,7 +3709,9 @@
     const caseConsent=input('owgAnalysisCaseConsent','checkbox');const caseDownload=button('Download reviewed case dataset','secondary');caseDownload.id='owgAnalysisCaseDownload';caseDownload.disabled=true;
     casePane.append(el('p','This separate case file contains complete coded cases and within-case elapsed microseconds. Original case/activity/person labels, resources, attributes and absolute dates are omitted. Codes, topology and timings are still sensitive and are not anonymization. Codes apply only to this file; no group-row mapping or cross-case time order is disclosed. Review every timeline below. A separate case-read scope and explicit revision grant are required at the Gateway.'),caseTable,field('I reviewed the complete coded case timelines and intend this case-level disclosure',caseConsent),caseDownload);sharing.append(casePane);
     function resetSharing(){caseDownloadReady=false;casePacket=null;casePane.hidden=true;caseTable.replaceChildren();caseConsent.checked=false;caseDownload.disabled=true;sharingAttempt++;sharingSnapshot=null;sharing.hidden=true;sharingConsent.checked=false;sharingDownload.disabled=true;freshness.disabled=true;freshnessStatus.textContent='Freshness not checked.';freshnessStatus.dataset.stale='true';}
-    sharingConsent.onchange=()=>{sharingDownload.disabled=!sharingConsent.checked||!sharingSnapshot||freshnessStatus.dataset.stale==='true';};
+    // A consent withdrawal invalidates an in-flight authorization even if the box is rechecked before HTTP completes.
+    let sharingConsentRevision=0;
+    sharingConsent.onchange=()=>{sharingConsentRevision++;sharingDownload.disabled=!sharingConsent.checked||!sharingSnapshot||freshnessStatus.dataset.stale==='true';};
     async function prepareSharing(withCases=false){
       if(!lastSpec)return;
       resetSharing();const attempt=sharingAttempt;prepareShare.disabled=true;prepareCases.disabled=true;
@@ -3527,26 +3787,45 @@
     };
     sharingDownload.onclick=async()=>{
       if(!sharingConsent.checked||!sharingSnapshot||!lastSpec||freshnessStatus.dataset.stale==='true'||generation!==state.generation||sharingDownload.disabled)return;
-      // The earlier preview/check is not a download authorization: a saved log
-      // can change between checking freshness and pressing Download.
-      const attempt=sharingAttempt,snapshot=sharingSnapshot,spec=lastSpec,selectedGeneration=state.generation;
+      const attempt=sharingAttempt,snapshot=sharingSnapshot,spec=lastSpec,selectedGeneration=state.generation,consentRevision=sharingConsentRevision;
+      // A reviewed preview is single-use, even if the HTTP request fails or consent changes.
       sharingDownload.disabled=true;freshness.disabled=true;freshnessStatus.dataset.stale='true';
-      freshnessStatus.textContent='Revalidating the current saved log before download…';
+      freshnessStatus.textContent='Authorizing the reviewed export against the current saved log…';
       try{
-        const result=await(await api(base()+'/analysis-sharing-freshness',{method:'POST',headers:{'Content-Type':'application/json','X-OWG-Analysis-Sharing-Preview':'true'},body:JSON.stringify({spec,snapshot})})).json();
-        if(attempt!==sharingAttempt||selectedGeneration!==state.generation||snapshot!==sharingSnapshot||!sharingConsent.checked)return;
-        if(result.format!=='openworkgraph.analysis-snapshot-freshness.v1'||result.lineage_current!==true||result.current_results_match!==true){
-          freshnessStatus.textContent='Source, metric lineage or values changed. Prepare and review a new snapshot.';
-          return;
+        const reviewed={spec,source_content_sha256:snapshot.source_content_sha256,
+          analysis_spec_sha256:snapshot.analysis_spec_sha256,
+          metric_definition_sha256:snapshot.metric_definition_sha256};
+        const headers={'Content-Type':'application/json','X-OWG-Analysis-Sharing-Preview':'true'};
+        const authorization=await api(base()+'/analysis-sharing-authorize',{method:'POST',
+          headers,body:JSON.stringify(reviewed)});
+        if(!authorization.ok)throw new Error('Analysis authorization refused ('+authorization.status+').');
+        const grant=await authorization.json();
+        if(!grant.ticket||attempt!==sharingAttempt||selectedGeneration!==state.generation||
+           snapshot!==sharingSnapshot||!sharingConsent.checked||consentRevision!==sharingConsentRevision)return;
+        const response=await api(base()+'/analysis-sharing-download',{method:'POST',
+          headers,body:JSON.stringify({...reviewed,ticket:grant.ticket})});
+        if(!response.ok)throw new Error('Source-bound download refused ('+response.status+').');
+        const current=await response.json();
+        if(attempt!==sharingAttempt||selectedGeneration!==state.generation||snapshot!==sharingSnapshot||!sharingConsent.checked||consentRevision!==sharingConsentRevision)return;
+        // The server recomputes under the workspace lock; do not release changed
+        // minimized values even if their lineage is unexpectedly identical.
+        if(current.source_content_sha256!==snapshot.source_content_sha256||
+           current.analysis_spec_sha256!==snapshot.analysis_spec_sha256||
+           JSON.stringify(current.metric_definition_sha256)!==JSON.stringify(snapshot.metric_definition_sha256)||
+           JSON.stringify(current.columns)!==JSON.stringify(snapshot.columns)||
+           JSON.stringify(current.rows)!==JSON.stringify(snapshot.rows)){
+          throw new Error('Reviewed snapshot differs from the current recomputation.');
         }
-        // No local download is offered after failed/unknown server validation.
-        download('owg-analysis-snapshot.json',JSON.stringify(snapshot,null,2),'application/json');
+        download('owg-analysis-snapshot.json',JSON.stringify(current,null,2),'application/json');
         sharingConsent.checked=false;
-        freshnessStatus.textContent='Download validated against the current saved log. Source changes after this check cannot be ruled out.';
+        freshnessStatus.textContent='Downloaded the server-recomputed, source-bound snapshot. Prepare and review again for another export.';
       }catch(error){
-        if(attempt===sharingAttempt&&selectedGeneration===state.generation){freshnessStatus.textContent=error.message+' Download refused; recheck the snapshot.';}
+        if(attempt===sharingAttempt&&selectedGeneration===state.generation)
+          freshnessStatus.textContent=error.message+' Prepare and review a new snapshot.';
       }finally{
-        if(attempt===sharingAttempt&&selectedGeneration===state.generation){sharingDownload.disabled=true;freshness.disabled=false;}
+        if(attempt===sharingAttempt&&selectedGeneration===state.generation){
+          sharingDownload.disabled=true;freshness.disabled=true;
+        }
       }
     };
     const exports=exportButtons('owgAnalysis',()=>last,r=>[r.columns,...r.rows]);
