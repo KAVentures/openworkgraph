@@ -869,6 +869,32 @@ class CompletenessMetadataValidationTests(unittest.TestCase):
             }])
 
 
+
+class AmbiguityStratifiedScoringTests(unittest.TestCase):
+    def test_shared_event_error_is_visible_separately_from_single_pair_success(self):
+        source = payload([pair("A", "F", ["shared"]), pair("B", "C", ["shared", "only-b"])])
+        queue = build_review_queue(source)
+        annotations = []
+        for row in queue["event_reviews"]:
+            true_pairs = row["candidate_resource_pairs"]
+            if row["event_id"] == "shared":
+                # Reject the incorrect A/F link; keep the independently observed B/C link.
+                true_pairs = [candidate for candidate in true_pairs
+                              if {identity[2] for identity in candidate} != {"A", "F"}]
+            annotations.append({"window": row["window"], "event_id": row["event_id"],
+                                "true_resource_pairs": true_pairs})
+        scored = score_review_annotations(source, annotations)
+        cohorts = scored["per_ambiguity_metrics"]
+        self.assertEqual(cohorts["ambiguous_multiple_pairs"]["events"], 1)
+        self.assertEqual(cohorts["ambiguous_multiple_pairs"]["tp"], 1)
+        self.assertEqual(cohorts["ambiguous_multiple_pairs"]["fp"], 1)
+        self.assertEqual(cohorts["ambiguous_multiple_pairs"]["precision"], 0.5)
+        self.assertEqual(cohorts["single_pair"]["events"], 1)
+        self.assertEqual(cohorts["single_pair"]["fp"], 0)
+        self.assertEqual(cohorts["single_pair"]["f1"], 1.0)
+        self.assertFalse(scored["cross_case_contamination_measured"])
+        self.assertFalse(scored["held_out_verified"])
+
 if __name__ == "__main__":
     unittest.main()
 
