@@ -59,6 +59,8 @@ def transform(source_format: str, mapping: dict[str, Any] | None) -> dict[str, A
         if mapping.get("naive_timestamp_offset"):
             # An explicit decision changes what is stored, so it is part of the transform.
             declared["mapping"]["naive_timestamp_offset"] = mapping["naive_timestamp_offset"]
+        if mapping.get("timestamp_format"):
+            declared["mapping"]["timestamp_format"] = mapping["timestamp_format"]
         identity=workspace.source_identity.settings(mapping)
         if identity:
             declared['mapping']['source_identity']={'format':workspace.source_identity.FORMAT,**vars(identity)}
