@@ -52,3 +52,19 @@ def test_high_cardinality_legend_keeps_exact_other_counts_and_stable_colours(tmp
     assert filtered['coverage']['events'] == 2
     empty = dots.dotted_chart(log, cohort={'activity': 'not present'})
     assert empty['coverage']['events'] == 0 and all(item['events'] == 0 for item in empty['activities'])
+
+
+def test_empty_projection_has_no_legend_and_no_invalid_empty_array_query(tmp_path, monkeypatch):
+    monkeypatch.setattr(workspace, 'DATA_DIR', tmp_path)
+    mapping = {'case_column': 'case', 'activity_column': 'activity', 'timestamp_column': 'time'}
+    log = workspace.import_log(BytesIO(b'case,activity,time\n1,A,2024-01-01T00:00:00Z\n'),
+                               name='empty', source_format='csv', mapping=mapping)['log_id']
+    conn = workspace._connect()
+    try:
+        conn.execute('DELETE FROM event_objects WHERE log_id = ?', [log])
+        conn.execute('DELETE FROM events WHERE log_id = ?', [log])
+    finally:
+        conn.close()
+    result = dots.dotted_chart(log)
+    assert result['activities'] == [] and result['cases'] == []
+    assert result['coverage']['events'] == result['coverage']['points_shown'] == 0
