@@ -53,9 +53,10 @@ def test_first_review_live_http_revision_zero_and_conflict_recovery(monkeypatch,
                 "project_id": "p1", "idea_revision": 3,
                 "idea_revision_is_current": True,
                 "spec_sha256": evidence["digest"], "archive_sha256": "c" * 64,
-                "reported_specifications": [],
+                "reported_specifications": [{"status": "matching_reported_specification"}],
             }],
-            "projects_truncated": False, "dataset_origins": [],
+            "projects_truncated": False, "dataset_origins": [{"status": "current",
+                "source_content_sha256": "e" * 64, "selection_sha256": "f" * 64}],
             "dataset_origin_check_available": True,
         }
 
@@ -82,6 +83,7 @@ def test_first_review_live_http_revision_zero_and_conflict_recovery(monkeypatch,
         "dataset_origin_check_available": snapshot["dataset_origin_check_available"],
         "blockers": project["blockers"],
     }
+    assert basis["blockers"] == []  # Approval requires a genuinely unblocked basis.
     payload = {"basis": basis, "expected_review_revision": 0,
                "decision": "approved", "reviewer_notes": "first approval"}
     assert client.post(root + "/review", json=payload).status_code == 403
