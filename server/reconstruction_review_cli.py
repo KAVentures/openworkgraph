@@ -72,6 +72,15 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("response must be an object")
     if response.get("derived") is not True or response.get("authoritative") is not False:
         raise ValueError("expected derived non-authoritative resumption response")
+    # Navigation components are inspection aids, never proof of a shared case.
+    # Reject contradictory authority claims instead of scoring a misleading
+    # response whose top-level flag says non-authoritative.
+    groups = response.get("observed_case_groups", [])
+    if not isinstance(groups, list) or len(groups) > MAX_PAIRS:
+        raise ValueError("invalid or unbounded provisional case groups")
+    for group in groups:
+        if not isinstance(group, dict) or group.get("proves_same_case") is not False:
+            raise ValueError("provisional group must not assert case identity")
     pairs = response.get("observed_pair_event_assignments")
     if not isinstance(pairs, list) or len(pairs) > MAX_PAIRS:
         raise ValueError("missing or unbounded pair assignments")
