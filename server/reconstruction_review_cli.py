@@ -204,9 +204,18 @@ def build_review_queue(response: dict[str, Any]) -> dict[str, Any]:
         "identity_timelines": response.get("identity_timelines"),
         "event_reviews": rows,
     }
-    evidence_digest = hashlib.sha256(json.dumps(
-        fingerprint_basis, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")).hexdigest()
+    # All reviewer-visible context participates in the evidence binding. Reject
+    # malformed or excessive context before digesting; otherwise untrusted scan
+    # metadata can cause an uncaught serialization failure or resource exhaustion.
+    try:
+        evidence_bytes = json.dumps(
+            fingerprint_basis, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+    except (TypeError, ValueError, RecursionError) as exc:
+        raise ValueError("invalid review evidence context") from exc
+    if len(evidence_bytes) > 1048576:
+        raise ValueError("unbounded review evidence context")
+    evidence_digest = hashlib.sha256(evidence_bytes).hexdigest()
     return {"evidence_sha256": evidence_digest, "event_reviews": rows, "event_reviews_count": len(rows),
             "coverage_incomplete": incomplete,
             "unlisted_events_are_unassigned": False,
