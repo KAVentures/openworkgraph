@@ -556,3 +556,24 @@ def test_actual_http_operator_routes_preserve_review_commit_boundaries(monkeypat
                            params={"reviewed_csv_sha256": FIRST, **COMMIT_APPROVALS}
                            ).status_code == 403
         assert events.count("commit") == 1
+
+
+def test_identity_preflight_session_revocation_blocks_second_graph_read(monkeypatch):
+    """A session revoked during the first Graph request cannot authorize the second."""
+    configure(monkeypatch)
+    with (
+        patch("server.m365_operator_audit_routes.dashboard_session_valid",
+              side_effect=[True, False]) as session_valid,
+        patch("server.m365_outlook_mailbox_identity.preflight",
+              return_value={"status": "mailbox_identity_observed",
+                            "mailbox_identifier_matched": True,
+                            "tenant_id_verified": False}) as identity,
+        patch("server.m365_outlook_folder_preflight.preflight") as folder,
+    ):
+        with pytest.raises(HTTPException) as error:
+            operator_identity_folder_preflight(request(), True, True)
+    assert error.value.status_code == 409
+    assert "Do not retry" in str(error.value.detail)
+    assert session_valid.call_count == 2
+    identity.assert_called_once()
+    folder.assert_not_called()
