@@ -52,7 +52,11 @@ def _retention_loop() -> None:
     # open for months. No timer per HTTP request and no per-event cleanup.
     while not _retention_stop.wait(3600):
         try:
+            # A background retention pass can remove the observations that
+            # saved reviewer labels refer to. Purge those labels as well;
+            # otherwise they could survive until the next manual review read.
             cleanup_expired_history(startup=False)
+            clear_saved_reconstruction_review()
         except Exception:
             import logging
             logging.getLogger(__name__).exception("hourly local retention cleanup failed")
@@ -73,6 +77,8 @@ def _history_shutdown() -> None:
     if _retention_thread is not None:
         _retention_thread.join(timeout=2)
     cleanup_expired_history(startup=True)
+    # Startup/shutdown retention cleanup must not strand stale reviewer labels.
+    clear_saved_reconstruction_review()
 
 
 extend_lifespan(app, startup=_history_startup, shutdown=_history_shutdown)
